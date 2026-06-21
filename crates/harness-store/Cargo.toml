@@ -1,0 +1,16 @@
+[package]
+name = "harness-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "SQLite history store + JSONL export for oxen-harness"
+
+[dependencies]
+harness-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# Phase 3 adds: rusqlite (bundled), time/uuid, tempfile (dev).

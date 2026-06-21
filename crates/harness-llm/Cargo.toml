@@ -1,0 +1,16 @@
+[package]
+name = "harness-llm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Oxen.ai chat completions client (streaming + tool calling) for oxen-harness"
+
+[dependencies]
+harness-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# Phase 1 adds: reqwest (SSE streaming), liboxen (auth), tokio, async-trait.

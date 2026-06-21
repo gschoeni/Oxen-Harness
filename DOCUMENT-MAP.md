@@ -1,0 +1,69 @@
+# Document Map
+
+**Purpose:** Central index of all project files — structure, descriptions, and loading guidance.
+
+---
+
+## Directory Structure
+
+```
+oxen-harness/
+  00-project-brief.md        — Condensed project context. Load this first. (Tier 1)
+  02-status.md               — Phase status, TODOs, what's next. (Tier 2A)
+  03-decisions.md            — Working decisions & rationale. (Tier 2B)
+  04-backlog.md              — Ideas, links, future exploration. (Tier 2C)
+  DOCUMENT-MAP.md            — This file. File index and loading strategy.
+  AGENTS.md                  — The Ralph Wiggum dev loop + project conventions.
+  README.md                  — Public-facing repo README.
+  LICENSE                    — Apache-2.0.
+  Cargo.toml                 — Cargo workspace manifest.
+  rust-toolchain.toml        — Pinned toolchain + components.
+  crates/
+    harness-core/            — Message/role types, config, the agent (Ralph) loop.
+    harness-llm/             — Oxen.ai chat client: tool calling + SSE; auth via liboxen.
+    harness-tools/           — fs read/write/edit/search, sandboxed shell, git tools.
+    harness-store/           — SQLite history (verbatim) + JSONL export.
+    harness-cli/             — The `oxen-harness` interactive REPL binary.
+  plans/                     — Actionable execution docs. Pull in per-topic.
+    archive/                 — Deprecated plans, kept for historical reference.
+  reference/                 — Look-up material. Pull in when in the weeds.
+  output/                    — Finished or near-finished deliverables.
+  ongoing/                   — Operational runbooks. Living docs for recurring processes.
+  journal/                   — Historical archives & templates.
+  scratch/                   — Working artifacts. Graduate to plans/ or reference/ when complete.
+```
+
+## Loading Guide
+
+Context is finite. Load what's relevant, not everything.
+
+### Tier 1 — Always loaded
+
+| Document | Description |
+|----------|-------------|
+| `00-project-brief.md` | Vision, goals, architecture, current phase. Enough to orient any conversation. |
+
+### Tier 2 — Pull in for working sessions
+
+| Document | When to pull in |
+|----------|-----------------|
+| `02-status.md` | Any active work — phase status, TODOs, what's next |
+| `03-decisions.md` | Implementation work — current decisions with rationale |
+| `04-backlog.md` | Planning sessions — ideas, links, future exploration |
+| `AGENTS.md` | Any contribution — the dev loop and conventions to follow |
+
+### Plans — Pull in per-topic
+
+| Document | When to pull in |
+|----------|-----------------|
+| _(none yet)_ | Phase plans will be added here as work begins |
+
+### Reference — Pull in when you need specifics
+
+| Document | When to pull in |
+|----------|-----------------|
+| _(none yet)_ | API summaries / research land here |
+
+## Maintenance
+
+When adding a new file to the project, update this document map.

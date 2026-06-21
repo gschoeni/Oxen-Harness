@@ -1,0 +1,27 @@
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+
+# Harness runtime artifacts
+*.sqlite
+*.sqlite-journal
+*.db
+/exports
+*.jsonl
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# Tauri (added in a later phase)
+/app/target
+/app/dist
+/app/node_modules
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

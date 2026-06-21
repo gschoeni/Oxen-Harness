@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/harness-core",
+    "crates/harness-llm",
+    "crates/harness-tools",
+    "crates/harness-store",
+    "crates/harness-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/gschoeni/oxen-harness"
+authors = ["Greg Schoeninger"]
+description = "An open source, hackable agentic coding harness powered by Oxen.ai"
+
+[workspace.dependencies]
+harness-core = { path = "crates/harness-core" }
+harness-llm = { path = "crates/harness-llm" }
+harness-tools = { path = "crates/harness-tools" }
+harness-store = { path = "crates/harness-store" }
+
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
