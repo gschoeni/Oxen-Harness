@@ -1,6 +1,7 @@
 //! SQLite-backed history store.
 
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
@@ -25,8 +26,12 @@ pub struct SessionMeta {
 }
 
 /// A SQLite store of sessions and their verbatim message transcripts.
+///
+/// The connection is wrapped in a `Mutex` so the store is `Send + Sync` and can
+/// be shared across threads (e.g. via `Arc`) by the agent loop and, later, the
+/// Tauri app.
 pub struct HistoryStore {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl HistoryStore {
@@ -63,17 +68,24 @@ impl HistoryStore {
              CREATE INDEX IF NOT EXISTS idx_messages_session
                  ON messages(session_id, seq);",
         )?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Create a new session, returning its generated id.
     pub fn create_session(&self, meta: &SessionMeta) -> Result<String, HistoryError> {
         let id = uuid::Uuid::new_v4().to_string();
-        self.conn.execute(
+        let conn = self.lock();
+        conn.execute(
             "INSERT INTO sessions (id, workspace, model, created_at) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![id, meta.workspace, meta.model, now()],
         )?;
         Ok(id)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().expect("history store mutex poisoned")
     }
 
     /// Append a message to a session, stored verbatim.
@@ -98,7 +110,8 @@ impl HistoryStore {
             .map(|s| s.to_string());
         let raw_json = serde_json::to_string(&value)?;
 
-        let exists: i64 = self.conn.query_row(
+        let conn = self.lock();
+        let exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sessions WHERE id = ?1",
             [session_id],
             |row| row.get(0),
@@ -107,13 +120,13 @@ impl HistoryStore {
             return Err(HistoryError::SessionNotFound(session_id.to_string()));
         }
 
-        let next_seq: i64 = self.conn.query_row(
+        let next_seq: i64 = conn.query_row(
             "SELECT COALESCE(MAX(seq), -1) + 1 FROM messages WHERE session_id = ?1",
             [session_id],
             |row| row.get(0),
         )?;
 
-        self.conn.execute(
+        conn.execute(
             "INSERT INTO messages (session_id, seq, role, content, raw_json, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![session_id, next_seq, role, content, raw_json, now()],
@@ -123,9 +136,9 @@ impl HistoryStore {
 
     /// Return the verbatim message JSON values for a session, ordered by `seq`.
     pub fn messages(&self, session_id: &str) -> Result<Vec<serde_json::Value>, HistoryError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT raw_json FROM messages WHERE session_id = ?1 ORDER BY seq ASC")?;
+        let conn = self.lock();
+        let mut stmt =
+            conn.prepare("SELECT raw_json FROM messages WHERE session_id = ?1 ORDER BY seq ASC")?;
         let rows = stmt.query_map([session_id], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
         for row in rows {

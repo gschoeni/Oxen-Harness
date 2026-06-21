@@ -19,10 +19,11 @@ A single Cargo workspace of focused crates:
 
 | Crate | Responsibility |
 |-------|----------------|
-| `harness-core` | Domain types (messages, roles), config, and the agent (Ralph) loop |
-| `harness-llm` | Oxen.ai chat completions client: tool calling + SSE streaming, auth via `liboxen` |
+| `harness-core` | Shared domain types (messages, roles) and defaults |
+| `harness-llm` | Oxen.ai chat completions client: tool calling + SSE streaming, lightweight auth |
 | `harness-tools` | Built-in tools: read/write/edit/search files, sandboxed shell, git status/diff/log/commit |
 | `harness-store` | SQLite history (verbatim) + JSONL export for fine-tuning |
+| `harness-agent` | The agent (Ralph) loop, wiring the LLM, tools, and store together |
 | `harness-cli` | The `oxen-harness` interactive REPL binary |
 
 A `harness-tauri` desktop app is added once the core + CLI loop is stable.
@@ -30,8 +31,7 @@ A `harness-tauri` desktop app is added once the core + CLI loop is stable.
 ## Requirements
 
 - Rust (stable) via [rustup](https://www.rust-lang.org/tools/install)
-- `cmake` and a C/C++ toolchain — required to build the `liboxen` dependency (used in `harness-llm` for auth and, later, data versioning)
-- An Oxen.ai API key in `OXEN_API_KEY` (or configured via `liboxen`)
+- An Oxen.ai API key in `OXEN_API_KEY` — or log in with the [`oxen`](https://docs.oxen.ai/getting-started/cli) CLI, which writes `~/.config/oxen/auth_config.toml` (read automatically)
 
 ## Quick start
 
@@ -52,7 +52,7 @@ cargo nextest run   # or: cargo test
 
 | Setting | Source | Default |
 |---------|--------|---------|
-| API key | `OXEN_API_KEY` env or `liboxen` auth config | — (required) |
+| API key | `OXEN_API_KEY` env, or `~/.config/oxen/auth_config.toml` (`$OXEN_CONFIG_DIR` to override) | — (required) |
 | Base URL | config | `https://hub.oxen.ai/api/ai` |
 | Model | config / flag | `claude-opus-4-8` |
 

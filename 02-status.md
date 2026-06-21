@@ -12,14 +12,15 @@
 | **0** | Scaffold: workspace, crates, first green tests, KB, license | ✅ Complete |
 | **2** | `harness-tools`: fs read/write/edit/search, sandboxed shell, git | ✅ Complete |
 | **3** | `harness-store`: SQLite history (verbatim) + JSONL export | ✅ Complete |
-| **1** | `harness-llm`: Oxen client — tool-calling types, `liboxen` auth, SSE streaming | In progress |
-| **4** | `harness-core`: wire the agent (Ralph) loop together | Not started |
-| **5** | `harness-cli`: interactive streaming REPL | Not started |
+| **1** | `harness-llm`: Oxen client — tool-calling types, auth, SSE streaming | ✅ Complete |
+| **4** | `harness-agent`: the agent (Ralph) loop | ✅ Complete |
+| **5** | `harness-cli`: interactive streaming REPL | In progress |
 | **6** | `harness-tauri`: cross-platform desktop app | Not started |
 
-> Build order note: independent crates (tools, store) are built before the
-> `liboxen`-heavy LLM client to keep each phase fast to verify and to isolate
-> the heavy build.
+> Build order note: independent crates (tools, store) were built before the LLM
+> client to keep each phase fast to verify. The agent loop lives in its own
+> `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
+> **43 tests passing** across the workspace.
 
 ---
 
@@ -64,13 +65,25 @@
 
 ## Phase 1 — harness-llm
 
-**Status:** In progress
+**Status:** ✅ Complete (14 tests)
 
-- [ ] OpenAI-compatible request/response types (incl. `tools`, `tool_calls`, `tool_choice`)
-- [ ] Auth resolution via `liboxen` (`AuthConfig::auth_token_for_host`) + `OXEN_API_KEY` override
-- [ ] Non-streaming chat completion call (mocked with `mockito` in tests)
-- [ ] SSE streaming of assistant tokens
-- [ ] Tool-call parsing (`finish_reason == "tool_calls"`)
+- [x] OpenAI-compatible request/response types (incl. `tools`, `tool_calls`, `tool_choice`)
+- [x] Auth resolution: `OXEN_API_KEY` → parse `auth_config.toml` by host (no `liboxen`)
+- [x] Non-streaming chat completion call (mocked with `mockito`)
+- [x] SSE streaming of assistant tokens (`SseDecoder` + `StreamAssembler`)
+- [x] Tool-call parsing + streamed tool-call fragment merging
+
+---
+
+## Phase 4 — harness-agent
+
+**Status:** ✅ Complete (1 integration test exercising the full loop)
+
+- [x] `Agent` wires `OxenClient` + `ToolRegistry` + `HistoryStore`
+- [x] Ralph loop: stream model → run tool calls → append `tool` messages → repeat → stop
+- [x] `AgentEvent` surfaces tokens + tool start/end for live UIs
+- [x] Every message persisted verbatim as produced
+- [x] Scripted-mock integration test: tool call then final answer
 
 ---
 

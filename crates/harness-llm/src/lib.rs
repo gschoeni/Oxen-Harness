@@ -1,9 +1,35 @@
 //! Oxen.ai chat completions client for oxen-harness.
 //!
-//! Phase 1 fills this in with the OpenAI-compatible request/response types,
-//! `liboxen`-based auth resolution, SSE token streaming, and tool calling.
+//! Provides the OpenAI-compatible wire [`types`], API-key resolution via
+//! [`auth`] (env var or the Oxen `auth_config.toml`), an HTTP
+//! [`client::OxenClient`] with non-streaming and SSE [`stream`]ing calls, and
+//! tool-calling support.
+
+pub mod auth;
+pub mod client;
+pub mod stream;
+pub mod types;
+
+pub use client::OxenClient;
+pub use stream::{AssembledMessage, StreamEvent};
+pub use types::{ChatMessage, ChatRequest, ChatResponse, FunctionCall, ToolCall, ToolChoice};
 
 use harness_core::DEFAULT_BASE_URL;
+
+/// Errors returned by the LLM client.
+#[derive(Debug, thiserror::Error)]
+pub enum LlmError {
+    #[error("HTTP error: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("Oxen API error ({status}): {message}")]
+    Api { status: u16, message: String },
+    #[error("auth error: {0}")]
+    Auth(String),
+    #[error("decode error: {0}")]
+    Decode(#[from] serde_json::Error),
+    #[error("stream error: {0}")]
+    Stream(String),
+}
 
 /// Resolve the chat completions endpoint for a given API base URL.
 pub fn chat_completions_url(base_url: &str) -> String {

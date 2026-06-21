@@ -5,6 +5,7 @@ members = [
     "crates/harness-llm",
     "crates/harness-tools",
     "crates/harness-store",
+    "crates/harness-agent",
     "crates/harness-cli",
 ]
 
@@ -22,6 +23,7 @@ harness-core = { path = "crates/harness-core" }
 harness-llm = { path = "crates/harness-llm" }
 harness-tools = { path = "crates/harness-tools" }
 harness-store = { path = "crates/harness-store" }
+harness-agent = { path = "crates/harness-agent" }
 
 anyhow = "1.0"
 thiserror = "2.0"

@@ -13,8 +13,20 @@ The harness targets the Oxen.ai OpenAI-compatible chat completions API (`https:/
 
 ## Auth & Config
 
-**Depend on `liboxen` for auth** (2026-06-21)
-We use the `liboxen` crate's auth functions, with an `OXEN_API_KEY` env var as an override. Tradeoff: `liboxen` is heavy (pulls in duckdb/rocksdb/polars/aws-sdk and needs `cmake` + a C/C++ toolchain), so it is **isolated to `harness-llm`** to keep other crates light. The upside is consistency with the Oxen ecosystem and a path to data versioning later. Lightweight config-file parsing remains the fallback if build cost becomes painful.
+**Lightweight auth; no `liboxen` dependency** (2026-06-21, revised)
+Auth resolves from `OXEN_API_KEY`, falling back to parsing the Oxen
+`auth_config.toml` directly (`$OXEN_CONFIG_DIR` or `~/.config/oxen/`, looked up
+by host `hub.oxen.ai`). This is the same file the `oxen` CLI writes on login, so
+`oxen login` interoperates — without taking the dependency.
+
+*Why revised:* we initially chose a hard `liboxen` dependency, but empirically
+`liboxen` does not compile with `default-features = false` (its source imports
+`duckdb` unconditionally — 74 compile errors), so a real dependency forces the
+full bundled **DuckDB + RocksDB C++ build**: a multi-minute first compile plus a
+`cmake`/C++ toolchain prereq on every platform — all just to read an API token
+from a TOML file. We dropped it in favor of a ~40-line parser with identical
+behavior. `liboxen` can return later behind an optional feature for genuine data
+versioning (see `04-backlog.md`).
 
 ## History & Export
 
@@ -35,4 +47,17 @@ Ship a `claude`-style interactive REPL with live SSE token streaming first; add 
 ## Tooling
 
 **Single Cargo workspace, focused crates** (2026-06-21)
-`harness-core` / `harness-llm` / `harness-tools` / `harness-store` / `harness-cli`. Tests use `mockito` to fake the HTTP endpoint (deterministic, offline). `cargo nextest` is the preferred test runner.
+`harness-core` (base types) / `harness-llm` / `harness-tools` / `harness-store` /
+`harness-agent` (orchestration loop) / `harness-cli`. Tests use `mockito` to fake
+the HTTP endpoint (deterministic, offline). `cargo nextest` is the preferred test
+runner.
+
+**Orchestration lives in `harness-agent`, not `harness-core`** (2026-06-21)
+The loop depends on the llm/tools/store crates, which all depend on `harness-core`
+for shared types. Putting the loop in `core` would create a dependency cycle, so a
+dedicated `harness-agent` crate sits above them. `harness-core` stays a leaf of
+shared domain types.
+
+**`HistoryStore` is `Send + Sync`** (2026-06-21)
+The SQLite connection is wrapped in a `Mutex` so the store can be shared via `Arc`
+across threads (the agent loop today, the Tauri app later).

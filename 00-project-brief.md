@@ -21,22 +21,26 @@
 
 Single Cargo workspace of focused crates:
 
-- `harness-core` — message/role types, config, the agent (Ralph) loop.
-- `harness-llm` — Oxen.ai chat completions client (tool calling + SSE streaming); auth via `liboxen`.
+- `harness-core` — shared message/role types and defaults (leaf crate).
+- `harness-llm` — Oxen.ai chat completions client (tool calling + SSE streaming); lightweight auth (env var or `auth_config.toml`).
 - `harness-tools` — read/write/edit/search files, sandboxed shell, git status/diff/log/commit.
 - `harness-store` — SQLite history (verbatim) + JSONL export.
+- `harness-agent` — the agent (Ralph) loop, wiring llm + tools + store together.
 - `harness-cli` — the `oxen-harness` REPL binary.
 
 The agent loop: call model → if `finish_reason == tool_calls`, execute tools, append `tool` messages, repeat → stop on `stop`/`length`.
 
 ## Current Phase
 
-**Phase 0 — Scaffold (complete):** workspace, five crate skeletons, first green tests, Apache-2.0 license, knowledge base, and the Ralph loop documented in `AGENTS.md`. Next up: Phase 1 — the `harness-llm` Oxen client. See `02-status.md`.
+**Core loop working (Phases 0–4 complete):** the Oxen client (streaming + tool
+calling), the tool set (fs/shell/git, sandboxed), the verbatim SQLite store, and
+the agent loop are all built and tested (43 tests passing). Next up: Phase 5 —
+the interactive streaming CLI REPL. See `02-status.md`.
 
 ## Key Decisions
 
 - **Oxen.ai is the only provider** (OpenAI-compatible API); models are swappable, default `claude-opus-4-8`.
-- **Real `liboxen` dependency** for auth + future data versioning, isolated to `harness-llm`.
+- **Lightweight auth** (no `liboxen` dependency): `OXEN_API_KEY` or parse `auth_config.toml` directly. (`liboxen` won't build without its heavy DuckDB/RocksDB tree — see `03-decisions.md`.)
 - **SQLite history, stored verbatim**, with a JSONL exporter for fine-tuning.
 - **SSE streaming in the REPL from day one**; single working directory per session; cross-platform from day one.
 - Built with **The Ralph Wiggum loop** (tests-first, objective checks). Details in `03-decisions.md`.

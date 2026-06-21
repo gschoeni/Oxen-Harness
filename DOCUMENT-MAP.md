@@ -19,10 +19,11 @@ oxen-harness/
   Cargo.toml                 — Cargo workspace manifest.
   rust-toolchain.toml        — Pinned toolchain + components.
   crates/
-    harness-core/            — Message/role types, config, the agent (Ralph) loop.
-    harness-llm/             — Oxen.ai chat client: tool calling + SSE; auth via liboxen.
+    harness-core/            — Shared message/role types and defaults (leaf crate).
+    harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth.
     harness-tools/           — fs read/write/edit/search, sandboxed shell, git tools.
     harness-store/           — SQLite history (verbatim) + JSONL export.
+    harness-agent/           — The agent (Ralph) loop (llm + tools + store).
     harness-cli/             — The `oxen-harness` interactive REPL binary.
   plans/                     — Actionable execution docs. Pull in per-topic.
     archive/                 — Deprecated plans, kept for historical reference.
