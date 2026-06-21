@@ -111,6 +111,16 @@ impl Agent {
         &self.session_id
     }
 
+    /// The model the agent currently calls.
+    pub fn model(&self) -> &str {
+        &self.config.model
+    }
+
+    /// Switch the model used for subsequent turns.
+    pub fn set_model(&mut self, model: impl Into<String>) {
+        self.config.model = model.into();
+    }
+
     /// The current in-memory transcript.
     pub fn messages(&self) -> &[ChatMessage] {
         &self.messages

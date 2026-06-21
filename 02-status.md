@@ -14,13 +14,13 @@
 | **3** | `harness-store`: SQLite history (verbatim) + JSONL export | ✅ Complete |
 | **1** | `harness-llm`: Oxen client — tool-calling types, auth, SSE streaming | ✅ Complete |
 | **4** | `harness-agent`: the agent (Ralph) loop | ✅ Complete |
-| **5** | `harness-cli`: interactive streaming REPL | In progress |
-| **6** | `harness-tauri`: cross-platform desktop app | Not started |
+| **5** | `harness-cli`: interactive streaming REPL | ✅ Complete |
+| **6** | `harness-tauri`: cross-platform desktop app | In progress |
 
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **43 tests passing** across the workspace.
+> **50 tests passing** across the workspace.
 
 ---
 
@@ -84,6 +84,19 @@
 - [x] `AgentEvent` surfaces tokens + tool start/end for live UIs
 - [x] Every message persisted verbatim as produced
 - [x] Scripted-mock integration test: tool call then final answer
+
+---
+
+## Phase 5 — harness-cli
+
+**Status:** ✅ Complete (7 tests; binary verified)
+
+- [x] `oxen-harness` binary with clap args (`--model`, `--workspace`)
+- [x] Interactive REPL (rustyline) with live token streaming to stdout
+- [x] Tool activity rendered inline (`⚙ name(args)` / `✓ name → result`)
+- [x] Slash commands: `/help`, `/model [name]`, `/export [path]`, `/exit`
+- [x] Sessions persisted to `~/.oxen-harness/history.sqlite`
+- [x] Graceful, helpful exit when no API key is configured
 
 ---
 

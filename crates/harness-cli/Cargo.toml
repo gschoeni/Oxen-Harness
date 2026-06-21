@@ -17,5 +17,10 @@ harness-core = { workspace = true }
 harness-llm = { workspace = true }
 harness-tools = { workspace = true }
 harness-store = { workspace = true }
+harness-agent = { workspace = true }
 anyhow = { workspace = true }
-# Phase 5 adds: clap, rustyline (REPL), tokio, tracing-subscriber.
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+rustyline = "14"
+dirs = "5"
