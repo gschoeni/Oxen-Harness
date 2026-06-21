@@ -8,6 +8,9 @@ members = [
     "crates/harness-agent",
     "crates/harness-cli",
 ]
+# The Tauri desktop app is a separate project (its own Cargo workspace) so the
+# core verification loop stays fast and does not require the webview toolchain.
+exclude = ["app"]
 
 [workspace.package]
 version = "0.1.0"

@@ -25,6 +25,9 @@ oxen-harness/
     harness-store/           — SQLite history (verbatim) + JSONL export.
     harness-agent/           — The agent (Ralph) loop (llm + tools + store).
     harness-cli/             — The `oxen-harness` interactive REPL binary.
+  app/                       — Tauri v2 desktop app (separate project, excluded
+                               from the core workspace). src-tauri/ = Rust bridge,
+                               dist/ = chat UI. See app/README.md.
   plans/                     — Actionable execution docs. Pull in per-topic.
     archive/                 — Deprecated plans, kept for historical reference.
   reference/                 — Look-up material. Pull in when in the weeds.

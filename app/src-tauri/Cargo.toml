@@ -1,0 +1,28 @@
+[package]
+name = "oxen-harness-app"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Cross-platform desktop UI for oxen-harness"
+default-run = "oxen-harness-app"
+
+[lib]
+name = "oxen_harness_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync"] }
+
+# Reuse the core harness crates from the parent repo.
+harness-core = { path = "../../crates/harness-core" }
+harness-llm = { path = "../../crates/harness-llm" }
+harness-tools = { path = "../../crates/harness-tools" }
+harness-store = { path = "../../crates/harness-store" }
+harness-agent = { path = "../../crates/harness-agent" }

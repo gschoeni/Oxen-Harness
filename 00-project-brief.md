@@ -32,10 +32,11 @@ The agent loop: call model → if `finish_reason == tool_calls`, execute tools, 
 
 ## Current Phase
 
-**Core loop working (Phases 0–4 complete):** the Oxen client (streaming + tool
-calling), the tool set (fs/shell/git, sandboxed), the verbatim SQLite store, and
-the agent loop are all built and tested (43 tests passing). Next up: Phase 5 —
-the interactive streaming CLI REPL. See `02-status.md`.
+**All phases implemented (0–6):** the Oxen client (streaming + tool calling), the
+sandboxed tool set (fs/shell/git), the verbatim SQLite store, the agent loop, and
+the interactive streaming CLI are built and tested (50 tests passing). The Tauri
+v2 desktop app is scaffolded and its Rust bridge compiles. Remaining work is
+run-time GUI verification, a live end-to-end test, and CI. See `02-status.md`.
 
 ## Key Decisions
 

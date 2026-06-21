@@ -26,7 +26,7 @@ A single Cargo workspace of focused crates:
 | `harness-agent` | The agent (Ralph) loop, wiring the LLM, tools, and store together |
 | `harness-cli` | The `oxen-harness` interactive REPL binary |
 
-A `harness-tauri` desktop app is added once the core + CLI loop is stable.
+A cross-platform [Tauri v2](https://v2.tauri.app/) desktop app lives in [`app/`](app/) (a separate project, excluded from this workspace) and reuses `harness-agent`. See [`app/README.md`](app/README.md) to run it with `cargo tauri dev`.
 
 ## Requirements
 

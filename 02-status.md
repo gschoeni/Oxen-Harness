@@ -15,7 +15,7 @@
 | **1** | `harness-llm`: Oxen client — tool-calling types, auth, SSE streaming | ✅ Complete |
 | **4** | `harness-agent`: the agent (Ralph) loop | ✅ Complete |
 | **5** | `harness-cli`: interactive streaming REPL | ✅ Complete |
-| **6** | `harness-tauri`: cross-platform desktop app | In progress |
+| **6** | `app/`: Tauri v2 cross-platform desktop app | ✅ Scaffolded (compiles) |
 
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
@@ -100,16 +100,30 @@
 
 ---
 
-## Future Phases (Summary)
+## Phase 6 — Tauri v2 desktop app (`app/`)
 
-Tools (Phase 2) and the verbatim SQLite store (Phase 3) are independent and can
-be built in parallel after Phase 1. Phase 4 wires the loop; Phase 5 ships the
-REPL; Phase 6 adds the Tauri app.
+**Status:** ✅ Scaffolded; Rust bridge compiles + clippy-clean
+
+- [x] Separate Cargo project (excluded from the core workspace) so core stays fast
+- [x] `src-tauri` bridge: `run_turn` + `session_info` commands over `harness-agent`
+- [x] Live streaming to the UI via `agent://token` / `agent://tool` events
+- [x] Dependency-free chat frontend (Cursor-agents-style) using `withGlobalTauri`
+- [x] Tauri v2 capability granting `core:default`; valid app icon
+- [ ] Run-time GUI verification (needs a desktop session + API key; `cargo tauri dev`)
+- [ ] App icons for bundling + enable `bundle.active` for installers
+
+---
+
+## What's left / next
+
+- [ ] Run-time GUI smoke test of the desktop app (`cargo tauri dev`).
+- [ ] Live end-to-end test against the real Oxen endpoint with a key.
+- [ ] CI workflow running the verification loop (fmt + clippy + tests) on push.
+- [ ] `/model` validation + a config file (`~/.config/oxen-harness/config.toml`).
 
 ---
 
 ## Infrastructure TODOs (Cross-Phase)
 
 - [ ] CI workflow running the verification loop (fmt + clippy + tests) on push.
-- [ ] Document the `cmake` / C++ toolchain prereq prominently (needed by `liboxen`).
-- [ ] Decide config file location/format (`~/.config/oxen-harness/config.toml`).
+- [ ] Persist/restore previous sessions in the CLI and app (resume by id).
