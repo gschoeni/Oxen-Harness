@@ -11,8 +11,8 @@
 |-------|------|--------|
 | **0** | Scaffold: workspace, crates, first green tests, KB, license | ✅ Complete |
 | **2** | `harness-tools`: fs read/write/edit/search, sandboxed shell, git | ✅ Complete |
-| **3** | `harness-store`: SQLite history (verbatim) + JSONL export | In progress |
-| **1** | `harness-llm`: Oxen client — tool-calling types, `liboxen` auth, SSE streaming | Not started |
+| **3** | `harness-store`: SQLite history (verbatim) + JSONL export | ✅ Complete |
+| **1** | `harness-llm`: Oxen client — tool-calling types, `liboxen` auth, SSE streaming | In progress |
 | **4** | `harness-core`: wire the agent (Ralph) loop together | Not started |
 | **5** | `harness-cli`: interactive streaming REPL | Not started |
 | **6** | `harness-tauri`: cross-platform desktop app | Not started |
@@ -50,9 +50,21 @@
 
 ---
 
+## Phase 3 — harness-store
+
+**Status:** ✅ Complete (7 tests passing)
+
+- [x] SQLite schema: `sessions` + `messages` (verbatim `raw_json`, per-session `seq`)
+- [x] `create_session` / `append_message` (any serializable message) / `messages`
+- [x] Tool-call messages stored and read back verbatim
+- [x] `export_jsonl` (one verbatim message per line) for fine-tuning
+- [x] Persists across reopen
+
+---
+
 ## Phase 1 — harness-llm
 
-**Status:** Not started
+**Status:** In progress
 
 - [ ] OpenAI-compatible request/response types (incl. `tools`, `tool_calls`, `tool_choice`)
 - [ ] Auth resolution via `liboxen` (`AuthConfig::auth_token_for_host`) + `OXEN_API_KEY` override

@@ -1,18 +1,24 @@
 //! Conversation history store for oxen-harness.
 //!
-//! Phase 3 fills this in with a SQLite-backed store that records sessions,
-//! messages, and tool calls verbatim, plus a JSONL exporter that emits
-//! fine-tune-ready transcripts.
+//! Sessions and every message (including tool calls and tool results) are
+//! persisted **verbatim** in SQLite so transcripts are complete enough to build
+//! fine-tuning datasets from. The full JSON of each message is stored in a
+//! `raw_json` column; role/content are extracted alongside for querying.
+//!
+//! [`HistoryStore::export_jsonl`] emits one JSON object per line — the on-disk
+//! format used to build fine-tuning datasets.
 
-use harness_core::Message;
+pub mod store;
 
-/// Serialize a transcript to JSONL (one JSON message object per line).
-///
-/// This is the on-disk export format used to build fine-tuning datasets.
-pub fn to_jsonl(messages: &[Message]) -> Result<String, serde_json::Error> {
+pub use store::{HistoryError, HistoryStore, SessionMeta};
+
+use serde::Serialize;
+
+/// Serialize any sequence of serializable items to JSONL (one per line).
+pub fn to_jsonl<T: Serialize>(items: &[T]) -> Result<String, serde_json::Error> {
     let mut out = String::new();
-    for msg in messages {
-        out.push_str(&serde_json::to_string(msg)?);
+    for item in items {
+        out.push_str(&serde_json::to_string(item)?);
         out.push('\n');
     }
     Ok(out)
