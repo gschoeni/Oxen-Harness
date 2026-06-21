@@ -10,12 +10,16 @@
 | Phase | Goal | Status |
 |-------|------|--------|
 | **0** | Scaffold: workspace, crates, first green tests, KB, license | ✅ Complete |
+| **2** | `harness-tools`: fs read/write/edit/search, sandboxed shell, git | ✅ Complete |
+| **3** | `harness-store`: SQLite history (verbatim) + JSONL export | In progress |
 | **1** | `harness-llm`: Oxen client — tool-calling types, `liboxen` auth, SSE streaming | Not started |
-| **2** | `harness-tools`: fs read/write/edit/search, sandboxed shell, git | Not started |
-| **3** | `harness-store`: SQLite history (verbatim) + JSONL export | Not started |
 | **4** | `harness-core`: wire the agent (Ralph) loop together | Not started |
 | **5** | `harness-cli`: interactive streaming REPL | Not started |
 | **6** | `harness-tauri`: cross-platform desktop app | Not started |
+
+> Build order note: independent crates (tools, store) are built before the
+> `liboxen`-heavy LLM client to keep each phase fast to verify and to isolate
+> the heavy build.
 
 ---
 
@@ -34,12 +38,24 @@
 
 ---
 
-## Phase 1 — harness-llm (next)
+## Phase 2 — harness-tools
+
+**Status:** ✅ Complete (17 tests passing)
+
+- [x] `Workspace` sandbox: path resolution rejecting escapes outside the root
+- [x] `Tool` trait, `ToolRegistry` (dispatch by name), OpenAI tool definitions
+- [x] fs tools: `read_file`, `write_file`, `edit_file` (unique-match), `search_files`
+- [x] `run_shell`: command execution pinned to workspace root
+- [x] `git`: status / diff / log / commit
+
+---
+
+## Phase 1 — harness-llm
 
 **Status:** Not started
 
 - [ ] OpenAI-compatible request/response types (incl. `tools`, `tool_calls`, `tool_choice`)
-- [ ] Auth resolution via `liboxen` + `OXEN_API_KEY` override
+- [ ] Auth resolution via `liboxen` (`AuthConfig::auth_token_for_host`) + `OXEN_API_KEY` override
 - [ ] Non-streaming chat completion call (mocked with `mockito` in tests)
 - [ ] SSE streaming of assistant tokens
 - [ ] Tool-call parsing (`finish_reason == "tool_calls"`)
