@@ -2,9 +2,9 @@
 //!
 //! This crate defines the [`Tool`] trait every capability implements, a
 //! [`ToolRegistry`] for dispatching model tool calls by name, and the concrete
-//! tools the agent uses: file read/write/edit/search ([`fs`]), sandboxed shell
-//! execution ([`shell`]), and git operations ([`git`]). All file access is
-//! confined to a [`sandbox::Workspace`].
+//! tools the agent uses: file read/write/edit, glob file discovery, and regex
+//! content search ([`fs`]), sandboxed shell execution ([`shell`]), and git
+//! operations ([`git`]). All file access is confined to a [`sandbox::Workspace`].
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -116,13 +116,14 @@ impl ToolRegistry {
         tool.invoke(args).await
     }
 
-    /// Construct the default tool set rooted at a workspace: fs read/write/edit/
-    /// search, shell, and git.
+    /// Construct the default tool set rooted at a workspace: fs read/write/edit,
+    /// find (glob), search (grep), shell, and git.
     pub fn default_for_workspace(workspace: Workspace) -> Self {
         Self::new()
             .with(Arc::new(fs::ReadFileTool::new(workspace.clone())))
             .with(Arc::new(fs::WriteFileTool::new(workspace.clone())))
             .with(Arc::new(fs::EditFileTool::new(workspace.clone())))
+            .with(Arc::new(fs::FindFilesTool::new(workspace.clone())))
             .with(Arc::new(fs::SearchTool::new(workspace.clone())))
             .with(Arc::new(shell::ShellTool::new(workspace.clone())))
             .with(Arc::new(git::GitTool::new(workspace)))

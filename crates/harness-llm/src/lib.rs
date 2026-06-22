@@ -10,6 +10,7 @@ pub mod client;
 pub mod stream;
 pub mod types;
 
+pub use auth::{base_url_from_host, host_from_base_url, resolve_base_url};
 pub use client::OxenClient;
 pub use stream::{AssembledMessage, StreamEvent};
 pub use types::{ChatMessage, ChatRequest, ChatResponse, FunctionCall, ToolCall, ToolChoice};

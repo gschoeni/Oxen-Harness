@@ -20,7 +20,7 @@
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **50 tests passing** across the workspace.
+> **82 tests passing** across the workspace.
 
 ---
 
@@ -41,13 +41,23 @@
 
 ## Phase 2 — harness-tools
 
-**Status:** ✅ Complete (17 tests passing)
+**Status:** ✅ Complete (25 tests passing)
 
 - [x] `Workspace` sandbox: path resolution rejecting escapes outside the root
 - [x] `Tool` trait, `ToolRegistry` (dispatch by name), OpenAI tool definitions
 - [x] fs tools: `read_file`, `write_file`, `edit_file` (unique-match), `search_files`
 - [x] `run_shell`: command execution pinned to workspace root
 - [x] `git`: status / diff / log / commit
+
+**Tooling parity pass** (2026-06-21) — researched Claude Code's essential tool set
+and closed the obvious gaps (no MCP, no orchestration/network tools):
+
+- [x] `read_file` now returns `cat -n` line numbers + `offset`/`limit` + truncation caps
+- [x] `find_files` (Glob): find files by glob pattern, gitignore-aware, newest-first
+- [x] `search_files` (Grep): regex search with `content`/`files_with_matches`/`count`
+      output modes, `glob`/`path` filters, and `case_insensitive`
+- [x] `run_shell`: `timeout_ms` (default 120s) + 30k-char output cap to prevent hangs/blowups
+- [x] System prompt updated to steer toward dedicated tools + read-before-edit
 
 ---
 
@@ -89,13 +99,25 @@
 
 ## Phase 5 — harness-cli
 
-**Status:** ✅ Complete (7 tests; binary verified)
+**Status:** ✅ Complete (13 tests; binary verified)
 
-- [x] `oxen-harness` binary with clap args (`--model`, `--workspace`)
+- [x] `oxen-harness` binary with clap args (`--model`, `--workspace`, `--base-url`, `--host`)
 - [x] Interactive REPL (rustyline) with live token streaming to stdout
-- [x] Tool activity rendered inline (`⚙ name(args)` / `✓ name → result`)
-- [x] Slash commands: `/help`, `/model [name]`, `/export [path]`, `/exit`
+- [x] **Oregon-Trail themed UI** (`theme.rs`): 24-bit color, "OXEN TRAIL" ASCII
+      wordmark + covered-wagon banner, "size up the situation" trail journal
+- [x] In-place animated spinner with rotating trail verbs ("Fording the river…",
+      "Yoking the oxen…") + elapsed time, Claude-Code style (no flicker)
+- [x] **Streaming Markdown renderer** (`markdown.rs`): headings, bold/italic, inline
+      `code`, lists, blockquotes, rules, links, and fenced code blocks rendered live
+      (line granularity); GFM tables buffered + drawn as aligned box-drawn grids
+      (with `:--`/`--:`/`:-:` alignment); tombstone "you have died of…" screen on quit
+- [x] Themed tool lines (`◆ verb  name(args)` / `└─ result`) and death-message errors
+- [x] Color auto-disabled for non-TTY / `NO_COLOR` / `TERM=dumb` (piped output stays clean)
+- [x] Slash commands themed as the game menu: `/help`, `/model [name]`, `/export [path]`, `/exit`
 - [x] Sessions persisted to `~/.oxen-harness/history.sqlite`
+- [x] **Resume by id** (`--resume <SESSION_ID>`): the death screen engraves the
+      session id + resume command; resuming restores the saved transcript,
+      workspace, and model (overridable with `--workspace` / `--model`)
 - [x] Graceful, helpful exit when no API key is configured
 
 ---
@@ -126,4 +148,5 @@
 ## Infrastructure TODOs (Cross-Phase)
 
 - [ ] CI workflow running the verification loop (fmt + clippy + tests) on push.
-- [ ] Persist/restore previous sessions in the CLI and app (resume by id).
+- [x] Persist/restore previous sessions in the CLI (`--resume <id>`). App resume
+      still pending.

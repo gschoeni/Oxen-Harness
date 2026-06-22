@@ -16,6 +16,8 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 ignore = "0.4"
+regex = "1"
+globset = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

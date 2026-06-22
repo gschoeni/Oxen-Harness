@@ -23,7 +23,7 @@ Single Cargo workspace of focused crates:
 
 - `harness-core` — shared message/role types and defaults (leaf crate).
 - `harness-llm` — Oxen.ai chat completions client (tool calling + SSE streaming); lightweight auth (env var or `auth_config.toml`).
-- `harness-tools` — read/write/edit/search files, sandboxed shell, git status/diff/log/commit.
+- `harness-tools` — read (line-numbered)/write/edit files, glob find, regex search, sandboxed shell (with timeout), git status/diff/log/commit.
 - `harness-store` — SQLite history (verbatim) + JSONL export.
 - `harness-agent` — the agent (Ralph) loop, wiring llm + tools + store together.
 - `harness-cli` — the `oxen-harness` REPL binary.

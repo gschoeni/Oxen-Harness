@@ -49,15 +49,6 @@ pub fn parse_command(line: &str) -> Command {
     }
 }
 
-/// The help text shown for `/help`.
-pub const HELP_TEXT: &str = "\
-Commands:
-  /help                 Show this help
-  /model [name]         Show the current model, or switch to `name`
-  /export [path]        Export this session as JSONL (to `path`, or print a summary)
-  /exit, /quit          Leave the REPL
-Anything else is sent to the agent as a prompt.";
-
 #[cfg(test)]
 mod tests {
     use super::*;

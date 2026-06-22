@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::LlmError;
+use harness_core::DEFAULT_BASE_URL;
 
 /// Environment variable that overrides the configured Oxen API key.
 pub const API_KEY_ENV: &str = "OXEN_API_KEY";
@@ -20,10 +21,81 @@ pub const API_KEY_ENV: &str = "OXEN_API_KEY";
 /// Environment variable overriding the Oxen config directory.
 pub const CONFIG_DIR_ENV: &str = "OXEN_CONFIG_DIR";
 
+/// Environment variable overriding the full API base URL
+/// (e.g. `http://localhost:3001/api/ai`).
+pub const BASE_URL_ENV: &str = "OXEN_BASE_URL";
+
+/// Environment variable overriding just the host[:port]
+/// (e.g. `localhost:3001`); turned into a base URL via [`base_url_from_host`].
+pub const HOST_ENV: &str = "OXEN_HOST";
+
 /// The host whose auth token backs the default Oxen.ai inference API.
 pub const DEFAULT_OXEN_HOST: &str = "hub.oxen.ai";
 
 const AUTH_CONFIG_FILENAME: &str = "auth_config.toml";
+
+/// Resolve the API base URL: `OXEN_BASE_URL`, else `OXEN_HOST` (expanded), else
+/// the default Oxen.ai endpoint.
+pub fn resolve_base_url() -> String {
+    if let Ok(url) = std::env::var(BASE_URL_ENV) {
+        if !url.trim().is_empty() {
+            return normalize_base_url(url.trim());
+        }
+    }
+    if let Ok(host) = std::env::var(HOST_ENV) {
+        if !host.trim().is_empty() {
+            return base_url_from_host(host.trim());
+        }
+    }
+    DEFAULT_BASE_URL.to_string()
+}
+
+/// Turn a host (or full URL) into an API base URL.
+///
+/// - If the value already has a scheme (`http://`/`https://`), it is used as-is
+///   (a trailing slash is trimmed).
+/// - Otherwise it is treated as `host[:port]`: a `/api/ai` base is built, using
+///   `http` for local hosts (localhost / loopback / explicit non-443 port) and
+///   `https` elsewhere.
+pub fn base_url_from_host(host: &str) -> String {
+    let host = host.trim().trim_end_matches('/');
+    if host.contains("://") {
+        return host.to_string();
+    }
+    let scheme = if is_local_host(host) { "http" } else { "https" };
+    format!("{scheme}://{host}/api/ai")
+}
+
+/// Extract the `host[:port]` authority from a base URL, used to look up the
+/// matching auth token in the Oxen config.
+pub fn host_from_base_url(base_url: &str) -> String {
+    let without_scheme = base_url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(base_url);
+    without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(without_scheme)
+        .to_string()
+}
+
+fn is_local_host(host: &str) -> bool {
+    let bare = host.split(':').next().unwrap_or(host);
+    // An explicit port (other than 443) strongly implies a local/dev server.
+    let has_nondefault_port = host
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .is_some_and(|p| p != 443);
+    matches!(
+        bare,
+        "localhost" | "127.0.0.1" | "0.0.0.0" | "[::1]" | "::1"
+    ) || has_nondefault_port
+}
+
+fn normalize_base_url(url: &str) -> String {
+    url.trim_end_matches('/').to_string()
+}
 
 /// Mirror of the relevant parts of Oxen's `auth_config.toml`.
 #[derive(Debug, Deserialize)]
@@ -65,6 +137,11 @@ pub fn resolve_api_key(host: &str) -> Result<String, LlmError> {
 /// Resolve the API key for the default Oxen.ai host.
 pub fn resolve_default_api_key() -> Result<String, LlmError> {
     resolve_api_key(DEFAULT_OXEN_HOST)
+}
+
+/// Resolve the API key for whatever host backs `base_url`.
+pub fn resolve_api_key_for_base_url(base_url: &str) -> Result<String, LlmError> {
+    resolve_api_key(&host_from_base_url(base_url))
 }
 
 fn token_from_file(path: &Path, host: &str) -> Result<String, LlmError> {
@@ -134,5 +211,45 @@ mod tests {
             LlmError::Auth(msg) => assert!(msg.contains(API_KEY_ENV)),
             other => panic!("expected Auth error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn host_expands_to_local_http_base_url() {
+        assert_eq!(
+            base_url_from_host("localhost:3001"),
+            "http://localhost:3001/api/ai"
+        );
+        assert_eq!(
+            base_url_from_host("127.0.0.1:8080"),
+            "http://127.0.0.1:8080/api/ai"
+        );
+    }
+
+    #[test]
+    fn bare_remote_host_expands_to_https_base_url() {
+        assert_eq!(
+            base_url_from_host("hub.oxen.ai"),
+            "https://hub.oxen.ai/api/ai"
+        );
+    }
+
+    #[test]
+    fn host_with_scheme_is_used_as_is() {
+        assert_eq!(
+            base_url_from_host("http://my-server.internal/api/ai/"),
+            "http://my-server.internal/api/ai"
+        );
+    }
+
+    #[test]
+    fn extracts_host_from_base_url() {
+        assert_eq!(
+            host_from_base_url("http://localhost:3001/api/ai"),
+            "localhost:3001"
+        );
+        assert_eq!(
+            host_from_base_url("https://hub.oxen.ai/api/ai"),
+            "hub.oxen.ai"
+        );
     }
 }

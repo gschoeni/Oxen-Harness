@@ -88,6 +88,29 @@ impl HistoryStore {
         self.conn.lock().expect("history store mutex poisoned")
     }
 
+    /// Look up a session's metadata, erroring if it does not exist.
+    ///
+    /// Used to resume a previous session (restoring its workspace + model).
+    pub fn session_meta(&self, session_id: &str) -> Result<SessionMeta, HistoryError> {
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT workspace, model FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| {
+                Ok(SessionMeta {
+                    workspace: row.get(0)?,
+                    model: row.get(1)?,
+                })
+            },
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => {
+                HistoryError::SessionNotFound(session_id.to_string())
+            }
+            other => HistoryError::Sqlite(other),
+        })
+    }
+
     /// Append a message to a session, stored verbatim.
     ///
     /// `message` is serialized in full to the `raw_json` column. The `role` and
@@ -243,6 +266,18 @@ mod tests {
 
         let jsonl = store.export_jsonl(&session).unwrap();
         assert_eq!(jsonl.lines().count(), 2);
+    }
+
+    #[test]
+    fn session_meta_round_trips_and_errors_when_missing() {
+        let store = store();
+        let session = store.create_session(&meta()).unwrap();
+        let loaded = store.session_meta(&session).unwrap();
+        assert_eq!(loaded.workspace, "/tmp/proj");
+        assert_eq!(loaded.model, "claude-opus-4-8");
+
+        let err = store.session_meta("does-not-exist").unwrap_err();
+        assert!(matches!(err, HistoryError::SessionNotFound(_)));
     }
 
     #[test]

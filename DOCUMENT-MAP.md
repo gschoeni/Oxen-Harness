@@ -21,7 +21,7 @@ oxen-harness/
   crates/
     harness-core/            — Shared message/role types and defaults (leaf crate).
     harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth.
-    harness-tools/           — fs read/write/edit/search, sandboxed shell, git tools.
+    harness-tools/           — fs read/write/edit, glob find, regex search, sandboxed shell, git tools.
     harness-store/           — SQLite history (verbatim) + JSONL export.
     harness-agent/           — The agent (Ralph) loop (llm + tools + store).
     harness-cli/             — The `oxen-harness` interactive REPL binary.

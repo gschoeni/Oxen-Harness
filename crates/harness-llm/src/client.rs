@@ -6,7 +6,7 @@ use crate::auth;
 use crate::stream::{AssembledMessage, SseDecoder, StreamAssembler, StreamEvent};
 use crate::types::{ChatRequest, ChatResponse};
 use crate::{chat_completions_url, LlmError};
-use harness_core::{DEFAULT_BASE_URL, DEFAULT_MODEL};
+use harness_core::DEFAULT_MODEL;
 
 /// A client for one Oxen.ai inference endpoint and model.
 #[derive(Debug, Clone)]
@@ -32,15 +32,32 @@ impl OxenClient {
         }
     }
 
-    /// Build the default Oxen.ai client, resolving the API key from the
-    /// environment or `liboxen` config and defaulting to `claude-opus-4-8`.
+    /// Build a client from configuration: the base URL is resolved from
+    /// `OXEN_BASE_URL`/`OXEN_HOST` (falling back to the default Oxen.ai
+    /// endpoint), the API key from the environment or the Oxen config (keyed by
+    /// the base URL's host), and the model defaults to `claude-opus-4-8`.
     pub fn from_default_config() -> Result<Self, LlmError> {
-        let api_key = auth::resolve_default_api_key()?;
-        Ok(Self::new(DEFAULT_BASE_URL, api_key, DEFAULT_MODEL))
+        Self::connect(auth::resolve_base_url(), DEFAULT_MODEL)
+    }
+
+    /// Build a client against an explicit `base_url`, resolving the API key for
+    /// that base URL's host.
+    pub fn connect(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Result<Self, LlmError> {
+        let base_url = base_url.into();
+        let api_key = auth::resolve_api_key_for_base_url(&base_url)?;
+        Ok(Self::new(base_url, api_key, model))
     }
 
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    /// The API base URL this client targets.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     pub fn with_model(mut self, model: impl Into<String>) -> Self {

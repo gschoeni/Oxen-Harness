@@ -575,8 +575,10 @@ name = "harness-tools"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "globset",
  "harness-core",
  "ignore",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
