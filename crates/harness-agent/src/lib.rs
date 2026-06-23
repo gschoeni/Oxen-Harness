@@ -70,7 +70,8 @@ fn default_system_prompt() -> String {
      project directory. Available tools: `find_files` (locate files by glob), \
      `search_files` (regex content search), `read_file` (line-numbered, supports \
      offset/limit), `write_file`, `edit_file` (exact-string patch), `run_shell`, \
-     and `git`.\n\n\
+     `git`, `ask_user_question` (interview the user), and (when configured) \
+     `web_search` (Brave web search).\n\n\
      Guidelines:\n\
      - Prefer the dedicated tools over shell equivalents: use `find_files` not \
        `find`/`ls`, `search_files` not `grep`, `read_file` not `cat`, and \
@@ -78,6 +79,13 @@ fn default_system_prompt() -> String {
      - Always `read_file` before editing it; `edit_file` needs `old_string` to \
        match the real content exactly. Never include `read_file`'s line-number \
        and tab prefix in edit arguments.\n\
+     - Use `web_search` when something may be newer than your training or isn't in \
+       the workspace: library/API docs, current events, or an unfamiliar error.\n\
+     - When a product/design/implementation decision is genuinely ambiguous and \
+       has multiple reasonable approaches with real trade-offs, call \
+       `ask_user_question` to interview the user instead of guessing. Keep \
+       options concise and distinct; don't add an 'Other' option (the user can \
+       always type their own). Don't ask about trivia you can decide yourself.\n\
      - Work in small, verifiable steps. Run tests/builds and read the real output \
        rather than assuming success. Fix root causes, not symptoms.\n\
      - Make independent tool calls together when they don't depend on each other."
@@ -162,6 +170,20 @@ impl Agent {
         self.config.model = model.into();
     }
 
+    /// Run a one-shot completion that is *not* part of the session transcript
+    /// (no tools, nothing persisted). Used for side tasks like generating a
+    /// theme from a natural-language description, reusing the session's model
+    /// and endpoint.
+    pub async fn complete(&self, system: &str, user: &str) -> Result<String, AgentError> {
+        let messages = vec![
+            ChatMessage::system(system.to_string()),
+            ChatMessage::user(user.to_string()),
+        ];
+        let request = ChatRequest::new(&self.config.model, messages).streaming(true);
+        let assembled = self.client.stream_chat(&request, |_| {}).await?;
+        Ok(assembled.content)
+    }
+
     /// The current in-memory transcript.
     pub fn messages(&self) -> &[ChatMessage] {
         &self.messages
@@ -195,15 +217,10 @@ impl Agent {
                 })
                 .await?;
 
-            let assistant = ChatMessage {
-                role: "assistant".into(),
-                content: (!assembled.content.is_empty()).then(|| assembled.content.clone()),
-                tool_calls: (!assembled.tool_calls.is_empty())
-                    .then(|| assembled.tool_calls.clone()),
-                tool_call_id: None,
-                name: None,
-            };
-            self.push(assistant)?;
+            self.push(ChatMessage::assistant_with_tools(
+                assembled.content.clone(),
+                assembled.tool_calls.clone(),
+            ))?;
 
             if assembled.tool_calls.is_empty() {
                 return Ok(assembled.content);

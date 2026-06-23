@@ -1,8 +1,12 @@
 //! `oxen-harness` — an interactive, streaming agentic coding REPL.
 
+mod ask;
+mod local;
 mod markdown;
+mod picker;
 mod repl;
 mod theme;
+mod theme_cmd;
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -47,6 +51,29 @@ struct Args {
     /// quit). Restores that session's transcript, workspace, and model.
     #[arg(long, value_name = "SESSION_ID")]
     resume: Option<String>,
+
+    /// Run a local model with llama.cpp instead of a remote endpoint, by
+    /// catalog id (e.g. qwen3-8b). Downloads it if needed, then serves it
+    /// locally for the session. See `oxen-harness models list`.
+    #[arg(long, value_name = "MODEL_ID")]
+    local: Option<String>,
+
+    #[command(subcommand)]
+    command: Option<TopCommand>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum TopCommand {
+    /// Manage local models run with llama.cpp (list / pull / remove / path).
+    Models {
+        #[command(subcommand)]
+        action: local::ModelsAction,
+    },
+    /// Manage themes (list / use / export / import / new).
+    Theme {
+        #[command(subcommand)]
+        action: theme_cmd::ThemeAction,
+    },
 }
 
 #[tokio::main]
@@ -59,8 +86,18 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let ui = Ui::detect();
+    let theme = harness_theme::Store::open()
+        .map(|s| s.load_active())
+        .unwrap_or_default();
+    let mut ui = Ui::detect(Arc::new(theme));
     let args = Args::parse();
+
+    // Subcommands that manage state and exit before the REPL.
+    match args.command {
+        Some(TopCommand::Models { action }) => return local::run_models(action, &ui).await,
+        Some(TopCommand::Theme { action }) => return theme_cmd::run_theme(action, &ui).await,
+        None => {}
+    }
 
     let store = Arc::new(open_store()?);
 
@@ -80,12 +117,6 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    let model = args
-        .model
-        .clone()
-        .or_else(|| resume_meta.as_ref().map(|m| m.model.clone()))
-        .unwrap_or_else(|| DEFAULT_MODEL.to_string());
-
     let workspace_root = match args.workspace.clone() {
         Some(p) => p,
         None => match resume_meta.as_ref() {
@@ -96,30 +127,62 @@ async fn main() -> Result<()> {
     let workspace = Workspace::new(&workspace_root)
         .with_context(|| format!("opening workspace {}", workspace_root.display()))?;
 
-    // Precedence for the base URL: --base-url > --host > env (OXEN_BASE_URL /
-    // OXEN_HOST) > default Oxen.ai endpoint.
-    let base_url_override = args
-        .base_url
-        .clone()
-        .or_else(|| args.host.as_deref().map(harness_llm::base_url_from_host));
-    let client_result = match base_url_override {
-        Some(base_url) => OxenClient::connect(base_url, &model),
-        None => OxenClient::from_default_config().map(|c| c.with_model(&model)),
-    };
-    let client = match client_result {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("\n{}", ui.red(theme::death()));
-            eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
-            eprintln!(
-                "  {}",
-                ui.dim("Set OXEN_API_KEY, or log in with the `oxen` CLI, then set out again.")
-            );
-            std::process::exit(1);
+    // Keep a local llama-server alive for the whole session when `--local` is
+    // used; dropping it shuts the background process down.
+    let mut _local_server: Option<harness_local::LocalServer> = None;
+
+    // Resolve the model + client. `--local <id>` runs a model on this machine
+    // via llama.cpp; otherwise we connect to a remote Oxen.ai-style endpoint.
+    let (client, model) = if let Some(local_id) = args.local.clone() {
+        match local::start_for(&local_id, &ui).await {
+            Ok((server, alias)) => {
+                let client = OxenClient::new(server.base_url(), "local", &alias);
+                _local_server = Some(server);
+                (client, alias)
+            }
+            Err(e) => {
+                eprintln!("\n{}", ui.red(&ui.death()));
+                eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
+                std::process::exit(1);
+            }
         }
+    } else {
+        let model = args
+            .model
+            .clone()
+            .or_else(|| resume_meta.as_ref().map(|m| m.model.clone()))
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+
+        // Precedence for the base URL: --base-url > --host > env (OXEN_BASE_URL
+        // / OXEN_HOST) > default Oxen.ai endpoint.
+        let base_url_override = args
+            .base_url
+            .clone()
+            .or_else(|| args.host.as_deref().map(harness_llm::base_url_from_host));
+        let client_result = match base_url_override {
+            Some(base_url) => OxenClient::connect(base_url, &model),
+            None => OxenClient::from_default_config().map(|c| c.with_model(&model)),
+        };
+        let client = match client_result {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("\n{}", ui.red(&ui.death()));
+                eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
+                eprintln!(
+                    "  {}",
+                    ui.dim("Set OXEN_API_KEY, or log in with the `oxen` CLI, then set out again.")
+                );
+                std::process::exit(1);
+            }
+        };
+        (client, model)
     };
 
-    let tools = ToolRegistry::default_for_workspace(workspace.clone());
+    let mut tools = ToolRegistry::default_for_workspace(workspace.clone());
+    // Let the agent interview the user via the interactive terminal picker.
+    tools.register(Arc::new(harness_tools::AskUserTool::new(Arc::new(
+        ask::CliAsker::new(ui.clone()),
+    ))));
     let base_url = client.base_url().to_string();
     let config = AgentConfig {
         model: model.clone(),
@@ -163,13 +226,14 @@ async fn main() -> Result<()> {
         println!();
     }
 
-    let prompt = theme::prompt(&ui);
     let mut editor = DefaultEditor::new()?;
     loop {
+        // Recomputed each turn so a mid-session theme switch takes effect.
+        let prompt = theme::prompt(&ui);
         match editor.readline(&prompt) {
             Ok(line) => {
                 let _ = editor.add_history_entry(line.as_str());
-                if handle_line(&line, &mut agent, &store, &session, &ui).await? {
+                if handle_line(&line, &mut agent, &store, &session, &mut ui).await? {
                     break;
                 }
             }
@@ -191,7 +255,7 @@ async fn handle_line(
     agent: &mut Agent,
     store: &Arc<HistoryStore>,
     session: &str,
-    ui: &Ui,
+    ui: &mut Ui,
 ) -> Result<bool> {
     match parse_command(line) {
         Command::Empty => {}
@@ -200,6 +264,7 @@ async fn handle_line(
             return Ok(true);
         }
         Command::Help => print!("{}", theme::help(ui)),
+        Command::Theme(args) => theme_cmd::handle_repl(args, agent, ui).await?,
         Command::Model(None) => {
             println!("  {} {}", ui.brown("oxen yoked:"), ui.cream(agent.model()))
         }
@@ -246,12 +311,12 @@ impl TurnRenderer {
 
     fn begin_thinking(&mut self) {
         self.stop_spinner();
-        self.spinner = Some(theme::Spinner::start(&self.ui, theme::THINKING));
+        self.spinner = Some(theme::Spinner::start(&self.ui, self.ui.thinking()));
     }
 
     fn begin_working(&mut self, tool: &str) {
         self.stop_spinner();
-        self.spinner = Some(theme::Spinner::start(&self.ui, theme::tool_verbs(tool)));
+        self.spinner = Some(theme::Spinner::start(&self.ui, self.ui.tool_verbs(tool)));
     }
 
     fn stop_spinner(&mut self) {
@@ -266,7 +331,10 @@ impl TurnRenderer {
                 if self.md.is_none() {
                     self.stop_spinner();
                     println!();
-                    self.md = Some(markdown::MarkdownStream::new(self.ui, std::io::stdout()));
+                    self.md = Some(markdown::MarkdownStream::new(
+                        self.ui.clone(),
+                        std::io::stdout(),
+                    ));
                 }
                 if let Some(md) = self.md.as_mut() {
                     md.push(t);
@@ -275,10 +343,13 @@ impl TurnRenderer {
             AgentEvent::ToolStart { name, arguments } => {
                 self.stop_spinner();
                 self.end_markdown();
-                let verb = theme::tool_verbs(name)
-                    .first()
-                    .copied()
-                    .unwrap_or("Working the trail");
+                // The interactive picker draws its own UI and reads keys, so we
+                // suppress the tool line + spinner while it owns the screen.
+                if name == harness_tools::ASK_USER_TOOL {
+                    return;
+                }
+                let verbs = self.ui.tool_verbs(name);
+                let verb = verbs.first().map(String::as_str).unwrap_or("Working");
                 println!(
                     "  {} {}  {}",
                     self.ui.green("◆"),
@@ -288,8 +359,13 @@ impl TurnRenderer {
                 );
                 self.begin_working(name);
             }
-            AgentEvent::ToolEnd { name: _, result } => {
+            AgentEvent::ToolEnd { name, result } => {
                 self.stop_spinner();
+                // The picker already showed the chosen answer in place.
+                if name == harness_tools::ASK_USER_TOOL {
+                    self.begin_thinking();
+                    return;
+                }
                 println!(
                     "  {} {}",
                     self.ui.brown("└─"),
@@ -309,7 +385,7 @@ impl TurnRenderer {
 /// Run one turn, racing it against Ctrl-C. Returns `Ok(true)` if the user
 /// interrupted the stream (the caller should then end the session).
 async fn run_prompt(agent: &mut Agent, prompt: &str, ui: &Ui) -> Result<bool> {
-    let renderer = Rc::new(RefCell::new(TurnRenderer::new(*ui)));
+    let renderer = Rc::new(RefCell::new(TurnRenderer::new(ui.clone())));
     renderer.borrow_mut().begin_thinking();
 
     let cb = renderer.clone();
@@ -326,7 +402,7 @@ async fn run_prompt(agent: &mut Agent, prompt: &str, ui: &Ui) -> Result<bool> {
     match result {
         Ok(_) => Ok(false),
         Err(e) => {
-            println!("\n{}", ui.red(theme::death()));
+            println!("\n{}", ui.red(&ui.death()));
             println!("  {}", ui.dim(&format!("The trail guide says: {e}")));
             Ok(false)
         }

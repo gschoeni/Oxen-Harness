@@ -4,12 +4,12 @@ An open source, hackable agentic coding harness — like Claude Code or Codex, b
 
 `oxen-harness` runs an objective-check-driven agent loop against any model exposed through the Oxen.ai OpenAI-compatible chat completions API, with first-class tool calling for editing code, running commands, and driving git. Every turn is persisted so you can later export your sessions and fine-tune a model on your own coding traces.
 
-> **Status:** Early development (Phase 0 — scaffold). The interactive REPL, LLM client, tools, and history store land over the next phases. See [`02-status.md`](02-status.md).
+> **Status:** Core complete — streaming REPL, Oxen.ai client, sandboxed tools, verbatim SQLite history, the agent loop, local models (llama.cpp), and a scaffolded Tauri desktop app are all built and tested. See [`02-status.md`](02-status.md).
 
 ## Why
 
 - **Hackable & open source (Apache-2.0).** A small, readable Rust workspace you can fork and extend.
-- **Bring your own model.** Anything with a chat completions endpoint and tool calling — default is `claude-opus-4-8` via Oxen.ai.
+- **Bring your own model.** Anything with a chat completions endpoint and tool calling — default is `claude-opus-4-8` via Oxen.ai, or run Qwen3 **locally** with llama.cpp (`--local`).
 - **Your data, exportable.** Full conversation + tool-call history in SQLite, with a JSONL exporter for fine-tuning.
 - **Two front ends.** A `claude`-style interactive CLI first, then a cross-platform [Tauri v2](https://v2.tauri.app/) desktop app.
 
@@ -21,8 +21,10 @@ A single Cargo workspace of focused crates:
 |-------|----------------|
 | `harness-core` | Shared domain types (messages, roles) and defaults |
 | `harness-llm` | Oxen.ai chat completions client: tool calling + SSE streaming, lightweight auth |
-| `harness-tools` | Built-in tools: read/write/edit files, glob find, regex search, sandboxed shell, git status/diff/log/commit |
+| `harness-tools` | Built-in tools: read/write/edit files, glob find, regex search, sandboxed shell, git status/diff/log/commit, Brave web search, interactive multiple-choice questions |
 | `harness-store` | SQLite history (verbatim) + JSONL export for fine-tuning |
+| `harness-local` | Local models: curated Qwen3 GGUF catalog, downloads + disk tracking, `llama-server` launcher |
+| `harness-theme` | Configurable, shareable themes (palette + voice): built-ins, TOML/JSON load/save, partial overrides, the active-theme store |
 | `harness-agent` | The agent (Ralph) loop, wiring the LLM, tools, and store together |
 | `harness-cli` | The `oxen-harness` interactive REPL binary |
 
@@ -64,6 +66,9 @@ cargo nextest run   # or: cargo test
 | Base URL | `--base-url` flag, `OXEN_BASE_URL` env, or `--host`/`OXEN_HOST` (expanded) | `https://hub.oxen.ai/api/ai` |
 | Model | `--model` flag | `claude-opus-4-8` |
 | Resume | `--resume <SESSION_ID>` flag (id printed on the death screen) | new session |
+| Web search | `BRAVE_API_KEY` env (or `BRAVE_SEARCH_API_KEY`) | disabled if unset |
+| Local model | `--local <MODEL_ID>` flag (runs llama.cpp instead of a remote endpoint) | remote Oxen.ai |
+| Theme | `/theme` in the REPL or `oxen-harness theme use <name>` (persists to `~/.oxen-harness/config.toml`) | Oregon Trail |
 
 ### Pointing at a different Oxen host
 
@@ -83,6 +88,105 @@ Precedence: `--base-url` > `--host` > `OXEN_BASE_URL` > `OXEN_HOST` > default. T
 API key is looked up by the resolved host (e.g. `localhost:3001`), so `OXEN_API_KEY`
 or an `oxen` CLI login for that host works automatically. The desktop app honors
 the `OXEN_BASE_URL` / `OXEN_HOST` env vars.
+
+### Web search (Brave)
+
+The agent can search the web via the [Brave Search API](https://brave.com/search/api/).
+Set a key and the `web_search` tool is registered automatically; without one it is
+left out entirely, so the model is never offered a tool it can't use.
+
+```bash
+export BRAVE_API_KEY=brave-...   # or BRAVE_SEARCH_API_KEY
+oxen-harness
+```
+
+### Clarifying questions
+
+When a decision is genuinely ambiguous, the agent can interview you with the
+`ask_user_question` tool instead of guessing — mirroring Claude Code's
+`AskUserQuestion` (1–4 questions, each with a short header, 2–4 options, and an
+optional multi-select). In the CLI this renders an interactive picker: arrow keys
+(or `j`/`k`) move, number keys jump, `space` toggles in multi-select, `enter`
+confirms, a final row lets you type your own answer, and `esc` cancels. The
+desktop app shows the same choices as a question card. Piped/non-interactive
+sessions skip the prompt and the agent proceeds with sensible defaults.
+
+## Running models locally (llama.cpp)
+
+Instead of a remote endpoint, `oxen-harness` can run open-weight models on your
+own machine via [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
+`llama-server`, which speaks the same OpenAI-compatible API — so the agent (and
+all its tools) work identically, fully offline, with no API key.
+
+**1. Install `llama-server`** (one time):
+
+```bash
+brew install llama.cpp                       # macOS
+# Linux/Windows: a release from https://github.com/ggml-org/llama.cpp/releases
+# Or point at any build: export LLAMA_SERVER=/path/to/llama-server
+```
+
+**2. Browse and download a model.** The curated catalog is the Qwen3 family at
+`Q4_K_M` (the consumer sweet spot), from a 0.6B that runs anywhere up to the 32B
+and the 30B-A3B mixture-of-experts. Downloads are managed locally so you always
+see progress and how much disk each one uses:
+
+```bash
+oxen-harness models list            # table of models, sizes, what's downloaded + disk used
+oxen-harness models pull qwen3-8b   # download with a live progress bar
+oxen-harness models remove qwen3-8b # reclaim the disk
+oxen-harness models path            # where GGUFs are stored (~/.oxen-harness/models)
+```
+
+**3. Ride it.** `--local` starts `llama-server` for the session (auto-downloading
+the model first if needed) and points the agent at it:
+
+```bash
+oxen-harness --local qwen3-8b
+```
+
+Weights live in `~/.oxen-harness/models/`. Match the model to your hardware
+(roughly: 0.6B–4B on a CPU/small GPU, 8B–14B on an 8–12 GB machine, 32B or
+30B-A3B on a 24 GB card). The desktop app exposes the same catalog under
+**🐂 Local models** — download, see disk usage, and switch models from the UI.
+
+## Theming — make it yours
+
+The whole personality of the harness is a **theme**: a *palette* (named semantic
+colors) plus a *voice* (the prompt, spinner glyphs, "thinking" phrases, per-tool
+verbs, exit messages, banner art, labels, and help text). The CLI and the desktop
+app both render from the active theme. The default is **Oregon Trail**; **Midnight**
+and **Synthwave** ship alongside it.
+
+Themes are a single self-contained TOML file (also readable as JSON), so they're
+trivial to **export, import, and share**. Files can be *partial* — override just a
+few colors or phrases and the rest inherits the default. They live in
+`~/.oxen-harness/themes/`, and the active one is recorded in
+`~/.oxen-harness/config.toml`.
+
+```bash
+# Non-interactive (great for dotfiles / sharing)
+oxen-harness theme list
+oxen-harness theme use Synthwave
+oxen-harness theme export Synthwave ./synthwave.toml   # share this file
+oxen-harness theme import ./a-friends-theme.toml
+oxen-harness theme path
+```
+
+Inside the REPL, `/theme` opens an interactive picker; `/theme use <name>`,
+`/theme import <path>`, and `/theme export <path>` work too. To **vibe-code** a
+brand-new theme, run `/theme new` (optionally with a description): a short
+interview asks for the mood, color inspiration, and voice, then the model designs
+a complete theme, saves it, and activates it live. The desktop app has the same
+controls under **🎨 Theme**, including the generate-by-vibe and import/export flows.
+
+```
+🐂 trail ❯ /theme new a cozy autumn cabin, warm ambers and pine
+  [Mood]   What overall mood do you want?
+  ❯ 1. Cozy & warm   — soft, earthy, inviting
+  🎨 Designing your theme with claude-opus-4-8
+  ✓ created + activated: Amber Hearth
+```
 
 ## On the trail (the CLI experience)
 
@@ -109,7 +213,8 @@ You may:
   2. Learn about the trail   — /help
   3. See the Oregon Top Ten  — /export [path]  (save the journey as JSONL)
   4. Trade your oxen         — /model [name]
-  5. Make camp / End         — /exit  (or Ctrl-D)
+  5. Change your colors      — /theme  (select, create, import, export)
+  6. Make camp / End         — /exit  (or Ctrl-D)
 ```
 
 Assistant responses are rendered as **streaming Markdown** — headings, **bold**,

@@ -10,17 +10,19 @@
 | Phase | Goal | Status |
 |-------|------|--------|
 | **0** | Scaffold: workspace, crates, first green tests, KB, license | ✅ Complete |
-| **2** | `harness-tools`: fs read/write/edit/search, sandboxed shell, git | ✅ Complete |
+| **2** | `harness-tools`: fs read/write/edit/search, sandboxed shell, git, web search, ask_user_question | ✅ Complete |
 | **3** | `harness-store`: SQLite history (verbatim) + JSONL export | ✅ Complete |
 | **1** | `harness-llm`: Oxen client — tool-calling types, auth, SSE streaming | ✅ Complete |
 | **4** | `harness-agent`: the agent (Ralph) loop | ✅ Complete |
 | **5** | `harness-cli`: interactive streaming REPL | ✅ Complete |
 | **6** | `app/`: Tauri v2 cross-platform desktop app | ✅ Scaffolded (compiles) |
+| **7** | `harness-local`: local models via llama.cpp (Qwen3 GGUFs) | ✅ Complete |
+| **8** | `harness-theme`: configurable + shareable themes (palette + voice) | ✅ Complete |
 
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **82 tests passing** across the workspace.
+> **138 tests passing** across the workspace.
 
 ---
 
@@ -41,13 +43,19 @@
 
 ## Phase 2 — harness-tools
 
-**Status:** ✅ Complete (25 tests passing)
+**Status:** ✅ Complete (35 tests passing)
 
 - [x] `Workspace` sandbox: path resolution rejecting escapes outside the root
 - [x] `Tool` trait, `ToolRegistry` (dispatch by name), OpenAI tool definitions
+- [x] Shared `args` helpers for typed JSON argument extraction across all tools
 - [x] fs tools: `read_file`, `write_file`, `edit_file` (unique-match), `search_files`
 - [x] `run_shell`: command execution pinned to workspace root
 - [x] `git`: status / diff / log / commit
+- [x] `web_search`: Brave Search API (registered only when `BRAVE_API_KEY` is set)
+- [x] `ask_user_question`: interview the user with 1–4 multiple-choice questions
+      (Claude Code `AskUserQuestion` shape: `header`/`question`/`options`/`multiSelect`).
+      Rendering is host-specific via a `QuestionAsker` trait — the CLI draws an
+      interactive `crossterm` picker; the desktop app shows a question card.
 
 **Tooling parity pass** (2026-06-21) — researched Claude Code's essential tool set
 and closed the obvious gaps (no MCP, no orchestration/network tools):
@@ -99,9 +107,10 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
 
 ## Phase 5 — harness-cli
 
-**Status:** ✅ Complete (13 tests; binary verified)
+**Status:** ✅ Complete (39 tests; binary verified)
 
-- [x] `oxen-harness` binary with clap args (`--model`, `--workspace`, `--base-url`, `--host`)
+- [x] `oxen-harness` binary with clap args (`--model`, `--workspace`, `--base-url`,
+      `--host`, `--resume`, `--local`) + `models` subcommand group
 - [x] Interactive REPL (rustyline) with live token streaming to stdout
 - [x] **Oregon-Trail themed UI** (`theme.rs`): 24-bit color, "OXEN TRAIL" ASCII
       wordmark + covered-wagon banner, "size up the situation" trail journal
@@ -118,6 +127,18 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
 - [x] **Resume by id** (`--resume <SESSION_ID>`): the death screen engraves the
       session id + resume command; resuming restores the saved transcript,
       workspace, and model (overridable with `--workspace` / `--model`)
+- [x] **Local models**: `models list/pull/remove/path` subcommands (themed table +
+      Oregon-Trail download progress bar) and `--local <id>` to run a downloaded
+      model through `llama-server` for the session
+- [x] **Interactive clarifying questions**: a Claude-Code-style picker, now in a
+      reusable `picker.rs` module (single/multi-select, number jumps, "type my own
+      answer" row, `esc`/`Ctrl-C` cancel; raw mode via RAII guard; `spawn_blocking`;
+      non-TTY fallback). `ask.rs` delegates to it; `/theme` selection reuses it.
+- [x] **Themes** (`theme.rs` reads `harness_theme::Theme`; `theme_cmd.rs`): `/theme`
+      opens the picker, `/theme use|import|export`, and `/theme new [vibe]` runs a
+      short interview + model generation to vibe-code a theme. Top-level
+      `oxen-harness theme list|use|export|import|path|remove` for sharing/scripting.
+      Theme switches hot-swap the live UI.
 - [x] Graceful, helpful exit when no API key is configured
 
 ---
@@ -130,18 +151,76 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
 - [x] `src-tauri` bridge: `run_turn` + `session_info` commands over `harness-agent`
 - [x] Live streaming to the UI via `agent://token` / `agent://tool` events
 - [x] Dependency-free chat frontend (Cursor-agents-style) using `withGlobalTauri`
+- [x] **Local models in the UI**: `list_models` / `pull_model` / `remove_model` /
+      `use_local_model` commands; a "🐂 Local models" modal lists the catalog with
+      disk usage, downloads with a live progress bar (`models://progress`), and
+      switches the session to a local model
+- [x] **Clarifying questions in the UI**: `ask_user_question` emits an
+      `agent://question` event; the frontend shows a question card (radio /
+      checkbox options + a free-text row) and `answer_question` unblocks the
+      agent via a per-question channel
+- [x] **Themes in the UI**: `list_themes` / `active_theme` / `use_theme` /
+      `import_theme` / `export_theme` / `remove_theme` / `new_theme` commands; a
+      "🎨 Theme" panel selects themes (applying the palette to CSS variables and
+      using the voice phrases), vibe-codes a new theme via the model, and
+      imports/exports shareable theme files
 - [x] Tauri v2 capability granting `core:default`; valid app icon
 - [ ] Run-time GUI verification (needs a desktop session + API key; `cargo tauri dev`)
 - [ ] App icons for bundling + enable `bundle.active` for installers
 
 ---
 
+## Phase 7 — harness-local (local models via llama.cpp)
+
+**Status:** ✅ Complete (13 tests passing)
+
+- [x] `catalog`: curated Qwen3 GGUFs (`Q4_K_M`) from 0.6B → 32B + 30B-A3B MoE,
+      with HF repo/file, approx size, and a hardware note (URLs HEAD-verified)
+- [x] `ModelStore`: `~/.oxen-harness/models/` dir — installed status, per-model +
+      total disk usage, streaming download (atomic `.part` → rename) with progress,
+      and remove
+- [x] `LocalServer`: locate `llama-server` (`LLAMA_SERVER` override or `PATH`), pick
+      a free port, spawn against a GGUF (`--jinja` for tool calling), poll `/health`
+      until loaded, and kill on drop (no leaked background server)
+- [x] Talks to the agent as just another OpenAI-compatible endpoint
+      (`http://127.0.0.1:<port>/v1`, throwaway key) — no client changes needed
+- [x] Downloads managed in-process (not delegated to `llama-server --hf`) so both
+      the CLI and UI can show real progress + disk usage
+
+---
+
+## Phase 8 — harness-theme (configurable + shareable themes)
+
+**Status:** ✅ Complete (15 tests passing)
+
+- [x] `Theme` model: `Meta` + `Palette` (7 terminal colors + app bg/surface/border,
+      each a `#rrggbb` `Color`) + `Voice` (prompt, spinner glyphs, thinking phrases,
+      per-tool verbs, deaths, banner art/wordmark/labels, help items, exit art)
+- [x] TOML (and JSON) load/save with **partial overrides** via deep-merge over the
+      default, so a theme file (hand-written or model-generated) can set just a few
+      fields; `to_toml` for export; `from_model_output` tolerates fences/prose
+- [x] Built-ins: **Oregon Trail** (default), **Midnight**, **Synthwave**
+- [x] `Store` under `~/.oxen-harness/`: `config.toml` active slug + `themes/<slug>.toml`;
+      list (built-ins + installed, installed shadows built-in), resolve, set_active,
+      save, import, export, remove; filesystem-safe slugs
+- [x] Consumed by the CLI (`theme.rs` renders from the active `Theme`; `Ui` carries
+      `Arc<Theme>`) and the desktop app (palette → CSS variables, voice phrases)
+- [x] Vibe-coding: a short interview feeds the model `Theme::generation_system_prompt()`
+      (schema + default as reference); output parsed, saved, and activated
+
+---
+
 ## What's left / next
 
-- [ ] Run-time GUI smoke test of the desktop app (`cargo tauri dev`).
-- [ ] Live end-to-end test against the real Oxen endpoint with a key.
+- [ ] Run-time GUI smoke test of the desktop app (`cargo tauri dev`), incl. live
+      theme switching + vibe-code generation.
+- [ ] Live end-to-end test against the real Oxen endpoint with a key, and a real
+      `llama-server` run of a local model (this machine lacked the binary).
 - [ ] CI workflow running the verification loop (fmt + clippy + tests) on push.
-- [ ] `/model` validation + a config file (`~/.config/oxen-harness/config.toml`).
+- [ ] `/model` validation; broaden `~/.oxen-harness/config.toml` beyond the active
+      theme (model, host, defaults).
+- [ ] Switch local models mid-session (currently chosen at startup via `--local`).
+- [ ] Per-theme palette swatches in the app theme list; app session-resume.
 
 ---
 

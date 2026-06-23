@@ -3,19 +3,25 @@
 //! This crate defines the [`Tool`] trait every capability implements, a
 //! [`ToolRegistry`] for dispatching model tool calls by name, and the concrete
 //! tools the agent uses: file read/write/edit, glob file discovery, and regex
-//! content search ([`fs`]), sandboxed shell execution ([`shell`]), and git
-//! operations ([`git`]). All file access is confined to a [`sandbox::Workspace`].
+//! content search ([`fs`]), sandboxed shell execution ([`shell`]), git
+//! operations ([`git`]), Brave-backed web search ([`web`]), and asking the user
+//! structured multiple-choice questions ([`ask`]). All file access is confined
+//! to a [`sandbox::Workspace`].
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
+mod args;
+pub mod ask;
 pub mod fs;
 pub mod git;
 pub mod sandbox;
 pub mod shell;
+pub mod web;
 
+pub use ask::{AskUserTool, Choice, Question, QuestionAnswer, QuestionAsker, ASK_USER_TOOL};
 pub use sandbox::Workspace;
 
 /// Errors a tool can return while running.
@@ -117,16 +123,24 @@ impl ToolRegistry {
     }
 
     /// Construct the default tool set rooted at a workspace: fs read/write/edit,
-    /// find (glob), search (grep), shell, and git.
+    /// find (glob), search (grep), shell, and git — plus web search when a Brave
+    /// API key is configured.
     pub fn default_for_workspace(workspace: Workspace) -> Self {
-        Self::new()
+        let mut registry = Self::new()
             .with(Arc::new(fs::ReadFileTool::new(workspace.clone())))
             .with(Arc::new(fs::WriteFileTool::new(workspace.clone())))
             .with(Arc::new(fs::EditFileTool::new(workspace.clone())))
             .with(Arc::new(fs::FindFilesTool::new(workspace.clone())))
             .with(Arc::new(fs::SearchTool::new(workspace.clone())))
             .with(Arc::new(shell::ShellTool::new(workspace.clone())))
-            .with(Arc::new(git::GitTool::new(workspace)))
+            .with(Arc::new(git::GitTool::new(workspace)));
+
+        // Only advertise web search if it can actually run (key configured).
+        let web_search = web::WebSearchTool::new();
+        if web_search.is_configured() {
+            registry.register(Arc::new(web_search));
+        }
+        registry
     }
 }
 

@@ -1,24 +1,21 @@
 [package]
-name = "harness-tools"
+name = "harness-local"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Built-in agent tools (fs, shell, git) for oxen-harness"
+description = "Local LLM management (llama.cpp + GGUF download/serve) for oxen-harness"
 
 [dependencies]
 harness-core = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
-async-trait = { workspace = true }
 tokio = { workspace = true }
-ignore = "0.4"
-regex = "1"
-globset = "0.4"
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
+futures-util = "0.3"
+dirs = "5"
 
 [dev-dependencies]
 tempfile = "3"

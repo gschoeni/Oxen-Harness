@@ -42,6 +42,20 @@ impl ChatMessage {
         }
     }
 
+    /// Build an assistant message that may carry text, tool calls, or both.
+    ///
+    /// Empty `content`/`tool_calls` are normalized to `None` so the serialized
+    /// message stays minimal (the API treats absent and empty differently).
+    pub fn assistant_with_tools(content: String, tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: (!content.is_empty()).then_some(content),
+            tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
     /// Build a `tool` result message answering a specific tool call.
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
@@ -229,6 +243,27 @@ mod tests {
         assert_eq!(json["stream"], false);
         assert!(json.get("tools").is_none());
         assert!(json.get("temperature").is_none());
+    }
+
+    #[test]
+    fn assistant_with_tools_normalizes_empty_fields() {
+        // Text-only: empty tool calls are dropped.
+        let text = ChatMessage::assistant_with_tools("hi".into(), vec![]);
+        assert_eq!(text.content.as_deref(), Some("hi"));
+        assert!(text.tool_calls.is_none());
+
+        // Tool-call-only: empty content is dropped.
+        let call = ToolCall {
+            id: "c1".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+        };
+        let tools = ChatMessage::assistant_with_tools(String::new(), vec![call]);
+        assert!(tools.content.is_none());
+        assert_eq!(tools.tool_calls.unwrap().len(), 1);
     }
 
     #[test]

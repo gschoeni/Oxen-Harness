@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use globset::GlobBuilder;
 use regex::RegexBuilder;
 
+use crate::args::{opt_bool, opt_str, opt_usize, require_str};
 use crate::sandbox::Workspace;
 use crate::{Tool, ToolError};
 
@@ -20,20 +21,6 @@ const DEFAULT_READ_LIMIT: usize = 2000;
 const MAX_LINE_LEN: usize = 2000;
 /// Default cap on `find_files` / `search_files` results.
 const DEFAULT_MAX_RESULTS: usize = 200;
-
-fn require_str<'a>(args: &'a serde_json::Value, key: &str) -> Result<&'a str, ToolError> {
-    args.get(key)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArguments(format!("missing string `{key}`")))
-}
-
-fn opt_u64(args: &serde_json::Value, key: &str) -> Option<u64> {
-    args.get(key).and_then(|v| v.as_u64())
-}
-
-fn opt_bool(args: &serde_json::Value, key: &str) -> bool {
-    args.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
-}
 
 /// Read a UTF-8 text file with `cat -n`-style line numbers.
 pub struct ReadFileTool {
@@ -76,8 +63,8 @@ impl Tool for ReadFileTool {
             .map_err(|e| ToolError::Execution(format!("read {}: {e}", path.display())))?;
         Ok(number_lines(
             &contents,
-            opt_u64(&args, "offset").unwrap_or(1).max(1) as usize,
-            opt_u64(&args, "limit").unwrap_or(DEFAULT_READ_LIMIT as u64) as usize,
+            opt_usize(&args, "offset", 1).max(1),
+            opt_usize(&args, "limit", DEFAULT_READ_LIMIT),
         ))
     }
 }
@@ -265,8 +252,7 @@ impl Tool for FindFilesTool {
     }
     async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
         let pattern = require_str(&args, "pattern")?.to_string();
-        let max_results =
-            opt_u64(&args, "max_results").unwrap_or(DEFAULT_MAX_RESULTS as u64) as usize;
+        let max_results = opt_usize(&args, "max_results", DEFAULT_MAX_RESULTS);
         let root = self.workspace.root().to_path_buf();
 
         let results =
@@ -354,21 +340,13 @@ impl Tool for SearchTool {
     }
     async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
         let pattern = require_str(&args, "pattern")?.to_string();
-        let glob = args
-            .get("glob")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let mode = args
-            .get("output_mode")
-            .and_then(|v| v.as_str())
-            .unwrap_or("content")
-            .to_string();
+        let glob = opt_str(&args, "glob").map(str::to_string);
+        let mode = OutputMode::parse(opt_str(&args, "output_mode").unwrap_or("content"));
         let case_insensitive = opt_bool(&args, "case_insensitive");
-        let max_results =
-            opt_u64(&args, "max_results").unwrap_or(DEFAULT_MAX_RESULTS as u64) as usize;
+        let max_results = opt_usize(&args, "max_results", DEFAULT_MAX_RESULTS);
         let root = self.workspace.root().to_path_buf();
         // `path` is resolved through the sandbox so it cannot escape the workspace.
-        let search_root = match args.get("path").and_then(|v| v.as_str()) {
+        let search_root = match opt_str(&args, "path") {
             Some(p) => self.workspace.resolve(p)?,
             None => root.clone(),
         };
@@ -379,7 +357,7 @@ impl Tool for SearchTool {
                 search_root: &search_root,
                 pattern: &pattern,
                 glob: glob.as_deref(),
-                mode: &mode,
+                mode,
                 case_insensitive,
                 max_results,
             })
@@ -395,12 +373,33 @@ impl Tool for SearchTool {
     }
 }
 
+/// How `search_files` reports matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputMode {
+    /// `path:line:text` for every matching line (default).
+    Content,
+    /// Just the paths of files containing a match.
+    FilesWithMatches,
+    /// `path:count` of matching lines per file.
+    Count,
+}
+
+impl OutputMode {
+    fn parse(s: &str) -> Self {
+        match s {
+            "files_with_matches" => Self::FilesWithMatches,
+            "count" => Self::Count,
+            _ => Self::Content,
+        }
+    }
+}
+
 struct GrepOpts<'a> {
     root: &'a Path,
     search_root: &'a Path,
     pattern: &'a str,
     glob: Option<&'a str>,
-    mode: &'a str,
+    mode: OutputMode,
     case_insensitive: bool,
     max_results: usize,
 }
@@ -439,18 +438,18 @@ fn grep_blocking(opts: GrepOpts<'_>) -> Result<Vec<String>, ToolError> {
         };
 
         match opts.mode {
-            "files_with_matches" => {
+            OutputMode::FilesWithMatches => {
                 if contents.lines().any(|l| re.is_match(l)) {
                     out.push(rel.display().to_string());
                 }
             }
-            "count" => {
+            OutputMode::Count => {
                 let n = contents.lines().filter(|l| re.is_match(l)).count();
                 if n > 0 {
                     out.push(format!("{}:{n}", rel.display()));
                 }
             }
-            _ => {
+            OutputMode::Content => {
                 for (i, line) in contents.lines().enumerate() {
                     if re.is_match(line) {
                         out.push(format!("{}:{}:{}", rel.display(), i + 1, line.trim_end()));
@@ -461,7 +460,8 @@ fn grep_blocking(opts: GrepOpts<'_>) -> Result<Vec<String>, ToolError> {
                 }
             }
         }
-        if opts.mode != "content" && out.len() >= opts.max_results {
+        // Per-file modes append at most one line per file; cap once we have enough.
+        if opts.mode != OutputMode::Content && out.len() >= opts.max_results {
             return Ok(out);
         }
     }

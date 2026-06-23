@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 
+use crate::args::{opt_str, opt_u64, require_str};
 use crate::sandbox::Workspace;
 use crate::{Tool, ToolError};
 
@@ -71,26 +72,20 @@ impl Tool for GitTool {
         })
     }
     async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let operation = args
-            .get("operation")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidArguments("missing string `operation`".into()))?;
+        let operation = require_str(&args, "operation")?;
 
         match operation {
             "status" => self.run_git(&["status".into(), "--short".into()]).await,
             "diff" => self.run_git(&["diff".into()]).await,
             "log" => {
-                let n = args.get("max_count").and_then(|v| v.as_u64()).unwrap_or(20);
+                let n = opt_u64(&args, "max_count").unwrap_or(20);
                 self.run_git(&["log".into(), "--oneline".into(), "-n".into(), n.to_string()])
                     .await
             }
             "commit" => {
-                let message = args
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        ToolError::InvalidArguments("`commit` requires `message`".into())
-                    })?;
+                let message = opt_str(&args, "message").ok_or_else(|| {
+                    ToolError::InvalidArguments("`commit` requires `message`".into())
+                })?;
                 let add = self.run_git(&["add".into(), "-A".into()]).await?;
                 let commit = self
                     .run_git(&["commit".into(), "-m".into(), message.to_string()])

@@ -1327,6 +1327,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-local"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "futures-util",
+ "harness-core",
+ "reqwest 0.12.28",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "harness-store"
 version = "0.1.0"
 dependencies = [
@@ -1339,12 +1352,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-theme"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "harness-tools"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "globset",
  "harness-core",
  "ignore",
+ "regex",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2269,10 +2296,13 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 name = "oxen-harness-app"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "harness-agent",
  "harness-core",
  "harness-llm",
+ "harness-local",
  "harness-store",
+ "harness-theme",
  "harness-tools",
  "serde",
  "serde_json",

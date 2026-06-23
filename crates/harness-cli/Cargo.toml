@@ -17,10 +17,14 @@ harness-core = { workspace = true }
 harness-llm = { workspace = true }
 harness-tools = { workspace = true }
 harness-store = { workspace = true }
+harness-local = { workspace = true }
+harness-theme = { workspace = true }
 harness-agent = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 rustyline = "14"
+crossterm = "0.28"
 dirs = "5"
+async-trait = { workspace = true }

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use crate::args::{opt_u64, require_str};
 use crate::sandbox::Workspace;
 use crate::{Tool, ToolError};
 
@@ -51,14 +52,8 @@ impl Tool for ShellTool {
         })
     }
     async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let command = args
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidArguments("missing string `command`".into()))?;
-        let timeout_ms = args
-            .get("timeout_ms")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(DEFAULT_TIMEOUT_MS);
+        let command = require_str(&args, "command")?;
+        let timeout_ms = opt_u64(&args, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS);
 
         let mut cmd = shell_command(command);
         cmd.current_dir(self.workspace.root());

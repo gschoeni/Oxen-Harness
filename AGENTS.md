@@ -18,9 +18,27 @@ Each iteration:
 5. **Run the checks** (below) and *read the actual output*.
 6. **On failure, fix the root cause**, not the symptom; iterate.
 7. **Stop when all checks pass** and the requirement is met — then stop editing.
+8. **Commit the change** with a clear, concise message that explains the *why*,
+   not just the *what*. Keep commits small and logical — one coherent change each.
 
-Keep changes small and incremental; commit logically. When you add a capability,
-add the test in the same iteration.
+When you add a capability, add the test in the same iteration.
+
+## The end-of-feature polish pass
+
+A feature isn't done at the first green commit. Once the behavior is complete and
+committed, do **one dedicated review/refactor pass** before moving on:
+
+1. **Review** — have the LLM read the feature's diff and critique it for
+   **modularity, maintainability, readability, idiomatic Rust / frontend code, and
+   pragmatism** (simplicity over cleverness; no over-engineering). Produce a
+   concrete list of suggested changes.
+2. **Fix** — feed that review back to the agent and apply the changes that are
+   genuinely worth it (skip nitpicks that don't improve the code).
+3. **Re-verify** — run the full check suite again (`fmt`, `clippy`, tests) and read
+   the real output; everything must stay green.
+4. **Commit separately** — land this as its own commit (e.g.
+   `refactor: polish <feature>`), distinct from the feature commit(s), so the
+   behavioral change and the cleanup stay reviewable on their own.
 
 ## The checks (verification loop)
 

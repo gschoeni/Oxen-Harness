@@ -1,12 +1,11 @@
-//! Visual theme for the `oxen-harness` REPL.
+//! Visual theming for the `oxen-harness` REPL.
 //!
-//! The look borrows the *structure* of modern coding CLIs (Claude Code style:
-//! a welcome box, in-place spinners with status verbs, transparent tool lines)
-//! and the *voice* of the 1980s **Oregon Trail** game — because Oxen pull the
-//! wagons on the trail, and Oxen.ai powers this one. All the silly trail
-//! phrases live here so the rest of the CLI stays readable.
+//! The *structure* (welcome banner, in-place spinners, transparent tool lines,
+//! tombstone exit screen) lives here, but every color and phrase comes from the
+//! active [`harness_theme::Theme`], so the whole personality is configurable and
+//! shareable. The default theme is the 1980s **Oregon Trail** look.
 //!
-//! Color is emitted as 24-bit ("truecolor") ANSI and is disabled automatically
+//! Color is emitted as 24-bit ("truecolor") ANSI and disabled automatically
 //! when stdout is not a TTY, when `NO_COLOR` is set, or for `TERM=dumb`, so
 //! piped output stays clean.
 
@@ -16,103 +15,141 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use harness_theme::{Color, Theme};
+
 /// An RGB color for 24-bit ANSI.
 type Rgb = (u8, u8, u8);
 
-// The Oregon-Trail-on-a-CRT palette: tan title text, saddle brown flourishes,
-// prairie green, parchment cream, faded trail dust, and tombstone red.
-const TAN: Rgb = (240, 190, 140);
-const BROWN: Rgb = (170, 110, 60);
-const GREEN: Rgb = (96, 176, 96);
-const CREAM: Rgb = (236, 226, 206);
-const DIM: Rgb = (150, 140, 125);
-const RED: Rgb = (205, 84, 72);
-const SKY: Rgb = (120, 178, 214);
-
-/// Whether and how to render color. Cheap to copy; pass it around freely.
-#[derive(Clone, Copy, Debug)]
+/// Whether/how to render color, plus the active theme. Cheap to clone (the
+/// theme sits behind an `Arc`); pass it around freely.
+#[derive(Clone)]
 pub struct Ui {
     color: bool,
+    theme: Arc<Theme>,
 }
 
 impl Ui {
-    /// A color-disabled UI (used for non-TTY output and in tests).
+    /// Build a UI with an explicit color setting and theme (used in tests).
     #[cfg(test)]
-    pub fn plain() -> Self {
-        Ui { color: false }
+    pub fn with(color: bool, theme: Arc<Theme>) -> Self {
+        Ui { color, theme }
     }
 
-    /// Detect terminal capabilities for stdout.
-    pub fn detect() -> Self {
+    /// Detect terminal capabilities for stdout, using `theme` for styling.
+    pub fn detect(theme: Arc<Theme>) -> Self {
         let no_color = std::env::var_os("NO_COLOR").is_some();
         let dumb = std::env::var("TERM").map(|t| t == "dumb").unwrap_or(false);
         Ui {
             color: io::stdout().is_terminal() && !no_color && !dumb,
+            theme,
         }
     }
 
-    fn paint(&self, text: &str, rgb: Rgb) -> String {
+    /// A color-disabled UI on the default theme (used for non-TTY output/tests).
+    #[cfg(test)]
+    pub fn plain() -> Self {
+        Ui {
+            color: false,
+            theme: Arc::new(Theme::default()),
+        }
+    }
+
+    /// The active theme.
+    pub fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    /// A copy of this UI with a different theme, preserving color settings.
+    pub fn with_theme(&self, theme: Arc<Theme>) -> Ui {
+        Ui {
+            color: self.color,
+            theme,
+        }
+    }
+
+    /// Whether in-place animations (spinners, progress bars) should run. They
+    /// rely on ANSI control codes, so they're tied to color support.
+    pub fn animates(&self) -> bool {
+        self.color
+    }
+
+    fn paint(&self, text: &str, color: Color) -> String {
         if self.color {
-            paint(text, rgb)
+            paint(text, color.rgb())
         } else {
             text.to_string()
         }
     }
 
-    fn bold(&self, text: &str, rgb: Rgb) -> String {
+    fn bold(&self, text: &str, color: Color) -> String {
         if self.color {
-            let (r, g, b) = rgb;
+            let (r, g, b) = color.rgb();
             format!("\x1b[1;38;2;{r};{g};{b}m{text}\x1b[0m")
         } else {
             text.to_string()
         }
     }
 
-    // Semantic colors used across the CLI.
+    // Semantic colors, resolved from the active palette.
     pub fn title(&self, s: &str) -> String {
-        self.bold(s, TAN)
+        self.bold(s, self.theme.palette.title)
     }
     pub fn brown(&self, s: &str) -> String {
-        self.paint(s, BROWN)
+        self.paint(s, self.theme.palette.secondary)
     }
     pub fn green(&self, s: &str) -> String {
-        self.paint(s, GREEN)
+        self.paint(s, self.theme.palette.primary)
     }
     pub fn cream(&self, s: &str) -> String {
-        self.paint(s, CREAM)
+        self.paint(s, self.theme.palette.text)
     }
     pub fn dim(&self, s: &str) -> String {
-        self.paint(s, DIM)
+        self.paint(s, self.theme.palette.muted)
     }
     pub fn red(&self, s: &str) -> String {
-        self.paint(s, RED)
+        self.paint(s, self.theme.palette.danger)
     }
     pub fn accent(&self, s: &str) -> String {
-        self.bold(s, GREEN)
+        self.bold(s, self.theme.palette.primary)
     }
 
     // Inline markdown styles.
     pub fn strong(&self, s: &str) -> String {
-        self.bold(s, CREAM)
+        self.bold(s, self.theme.palette.text)
     }
     pub fn em(&self, s: &str) -> String {
         if self.color {
-            let (r, g, b) = CREAM;
+            let (r, g, b) = self.theme.palette.text.rgb();
             format!("\x1b[3;38;2;{r};{g};{b}m{s}\x1b[0m")
         } else {
             s.to_string()
         }
     }
     pub fn code(&self, s: &str) -> String {
-        self.paint(s, GREEN)
+        self.paint(s, self.theme.palette.primary)
     }
     pub fn link(&self, s: &str) -> String {
         if self.color {
-            let (r, g, b) = SKY;
+            let (r, g, b) = self.theme.palette.link.rgb();
             format!("\x1b[4;38;2;{r};{g};{b}m{s}\x1b[0m")
         } else {
             s.to_string()
         }
+    }
+
+    /// Phrases shown while the model is thinking.
+    pub fn thinking(&self) -> Vec<String> {
+        self.theme.voice.thinking.clone()
+    }
+
+    /// Spinner verbs that fit a given tool.
+    pub fn tool_verbs(&self, tool: &str) -> Vec<String> {
+        self.theme.tool_verbs(tool)
+    }
+
+    /// A flavorful "you died" line for a real agent error.
+    pub fn death(&self) -> String {
+        pick(&self.theme.voice.deaths).to_string()
     }
 }
 
@@ -123,72 +160,13 @@ fn paint(text: &str, rgb: Rgb) -> String {
 
 /// The REPL input prompt (mirrors the game's "What is your choice?").
 pub fn prompt(ui: &Ui) -> String {
-    format!("{} {} ", ui.brown("🐂"), ui.accent("trail ❯"))
+    let v = &ui.theme.voice;
+    format!(
+        "{} {} ",
+        ui.brown(&v.prompt_icon),
+        ui.accent(&v.prompt_label)
+    )
 }
-
-// ===========================================================================
-// Trail phrases — the whole point. Gerund verbs animate next to the spinner.
-// ===========================================================================
-
-/// Phrases shown while the model is thinking.
-pub const THINKING: &[&str] = &[
-    "Sizing up the situation",
-    "Consulting the trail guide",
-    "Fording the river",
-    "Caulking the wagon to float across",
-    "Yoking the oxen",
-    "Scouting the trail ahead",
-    "Greasing the wagon axles",
-    "Rationing the supplies",
-    "Checking the wagon for snakes",
-    "Reading the worn trail map",
-    "Asking a fellow traveler for directions",
-    "Resting the weary oxen",
-    "Setting a steady pace",
-    "Trading pelts at the fort",
-    "Looking for a shallow place to ford",
-    "Counting the remaining bullets",
-    "Pressing onward to Oregon",
-    "Watching for buffalo",
-    "Waiting for the river to drop",
-];
-
-/// Pick the gerund-verb pool that fits a tool, so the spinner stays on-theme.
-pub fn tool_verbs(tool: &str) -> &'static [&'static str] {
-    match tool {
-        "read_file" => &["Reading the trail guide", "Studying the worn map"],
-        "write_file" => &["Writing in the journal", "Etching a new tombstone"],
-        "edit_file" => &["Mending the wagon", "Patching the wagon canvas"],
-        "find_files" => &["Scouting for landmarks", "Surveying the trail"],
-        "search_files" => &["Hunting through the brush", "Tracking through the prairie"],
-        "run_shell" => &["Yoking the oxen", "Setting the wagon in motion"],
-        "git" => &["Caulking the wagon", "Fording the river"],
-        _ => &["Working the trail"],
-    }
-}
-
-/// The authentic Oregon Trail ways to die (1985 set + a few from other
-/// versions: diphtheria, pneumonia, blizzards, starvation, gunshots).
-const DEATHS: &[&str] = &[
-    "You have died of dysentery.",
-    "You have died of cholera.",
-    "You have died of typhoid fever.",
-    "You have died of measles.",
-    "You have died of diphtheria.",
-    "You have died of a fever.",
-    "You have died of exhaustion.",
-    "You have died of a snakebite.",
-    "You have died of pneumonia.",
-    "You have died of a broken leg.",
-    "You have died of a broken arm.",
-    "You have drowned while fording the river.",
-    "You have starved to death.",
-    "You have frozen to death in a blizzard.",
-    "You were accidentally shot while hunting.",
-    "Your oxen wandered off and you were stranded.",
-    "Thieves raided your wagon in the night.",
-    "A wagon wheel broke and you were left on the trail.",
-];
 
 // ===========================================================================
 // Pseudo-random selection (no `rand` dependency — a tiny time-seeded xorshift).
@@ -211,55 +189,33 @@ fn xorshift(state: &mut u64) -> u64 {
     x
 }
 
-fn pick(pool: &[&'static str]) -> &'static str {
+fn pick(pool: &[String]) -> &str {
     if pool.is_empty() {
         return "";
     }
     let mut s = seed();
     let idx = (xorshift(&mut s) as usize) % pool.len();
-    pool[idx]
-}
-
-/// A flavorful "you died" line for a real agent error.
-pub fn death() -> &'static str {
-    pick(DEATHS)
+    &pool[idx]
 }
 
 /// A tombstone "game over" screen shown when the user ends the session — a
-/// random, authentic Oregon Trail cause of death engraved on a gravestone.
-///
-/// The session id is engraved alongside the resume command so the pioneer can
-/// pick the trail back up where they left off.
+/// random cause of death from the theme, engraved alongside the resume command
+/// so the pioneer can pick the trail back up where they left off.
 pub fn death_screen(ui: &Ui, session: &str) -> String {
-    let cause = pick(DEATHS);
-    let stone = [
-        r"        _______________        ",
-        r"      .'               '.      ",
-        r"     /                   \     ",
-        r"    /       R. I. P.       \    ",
-        r"    |                      |    ",
-        r"    |      here lies a     |    ",
-        r"    |    weary  pioneer    |    ",
-        r"    |                      |    ",
-        r"    |                      |    ",
-    ];
+    let v = &ui.theme.voice;
+    let cause = pick(&v.deaths);
 
     let mut out = String::from("\n");
-    for line in stone {
+    for line in &v.exit_art {
         out.push_str(&format!("  {}\n", ui.dim(line)));
     }
-    // The grassy mound the stone sits in.
-    out.push_str(&format!(
-        "  {}\n",
-        ui.green("^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`")
-    ));
+    if !v.exit_ground.is_empty() {
+        out.push_str(&format!("  {}\n", ui.green(&v.exit_ground)));
+    }
     out.push('\n');
     out.push_str(&format!("  {}\n", ui.red(cause)));
     out.push('\n');
-    out.push_str(&format!(
-        "  {}\n",
-        ui.dim("Your trail journal was saved. Resume this expedition with:")
-    ));
+    out.push_str(&format!("  {}\n", ui.dim(&v.resume_message)));
     out.push_str(&format!(
         "    {}\n",
         ui.accent(&format!("oxen-harness --resume {session}"))
@@ -288,87 +244,87 @@ fn wordmark(word: &str) -> Vec<String> {
     rows
 }
 
-/// 6-wide, 5-tall block glyphs for the letters in "OXEN TRAIL".
+/// 6-wide, 5-tall block glyphs for A–Z (others render blank).
 fn glyph(ch: char) -> [&'static str; 5] {
     match ch.to_ascii_uppercase() {
-        'O' => ["██████", "██  ██", "██  ██", "██  ██", "██████"],
-        'X' => ["██  ██", " ████ ", "  ██  ", " ████ ", "██  ██"],
-        'E' => ["██████", "██    ", "█████ ", "██    ", "██████"],
-        'N' => ["██  ██", "███ ██", "██████", "██ ███", "██  ██"],
-        'T' => ["██████", "  ██  ", "  ██  ", "  ██  ", "  ██  "],
-        'R' => ["█████ ", "██  ██", "█████ ", "██ ██ ", "██  ██"],
         'A' => [" ████ ", "██  ██", "██████", "██  ██", "██  ██"],
+        'B' => ["█████ ", "██  ██", "█████ ", "██  ██", "█████ "],
+        'C' => [" █████", "██    ", "██    ", "██    ", " █████"],
+        'D' => ["█████ ", "██  ██", "██  ██", "██  ██", "█████ "],
+        'E' => ["██████", "██    ", "█████ ", "██    ", "██████"],
+        'F' => ["██████", "██    ", "█████ ", "██    ", "██    "],
+        'G' => [" █████", "██    ", "██ ███", "██  ██", " █████"],
+        'H' => ["██  ██", "██  ██", "██████", "██  ██", "██  ██"],
         'I' => ["██████", "  ██  ", "  ██  ", "  ██  ", "██████"],
+        'J' => ["██████", "   ██ ", "   ██ ", "██ ██ ", " ███  "],
+        'K' => ["██  ██", "██ ██ ", "████  ", "██ ██ ", "██  ██"],
         'L' => ["██    ", "██    ", "██    ", "██    ", "██████"],
+        'M' => ["██  ██", "██████", "██████", "██  ██", "██  ██"],
+        'N' => ["██  ██", "███ ██", "██████", "██ ███", "██  ██"],
+        'O' => ["██████", "██  ██", "██  ██", "██  ██", "██████"],
+        'P' => ["█████ ", "██  ██", "█████ ", "██    ", "██    "],
+        'Q' => [" ████ ", "██  ██", "██  ██", "██ ██ ", " ██ ██"],
+        'R' => ["█████ ", "██  ██", "█████ ", "██ ██ ", "██  ██"],
+        'S' => [" █████", "██    ", " ████ ", "    ██", "█████ "],
+        'T' => ["██████", "  ██  ", "  ██  ", "  ██  ", "  ██  "],
+        'U' => ["██  ██", "██  ██", "██  ██", "██  ██", "██████"],
+        'V' => ["██  ██", "██  ██", "██  ██", " ████ ", "  ██  "],
+        'W' => ["██  ██", "██  ██", "██████", "██████", "██  ██"],
+        'X' => ["██  ██", " ████ ", "  ██  ", " ████ ", "██  ██"],
+        'Y' => ["██  ██", " ████ ", "  ██  ", "  ██  ", "  ██  "],
+        'Z' => ["██████", "   ██ ", "  ██  ", " ██   ", "██████"],
         _ => ["      ", "      ", "      ", "      ", "      "],
     }
 }
 
-/// The covered-wagon scene printed above the wordmark.
-const WAGON: &str = r#"                  _______________
-                ,'               '.___
-   ____________,'    Oxen.ai        '.__
-  |  ~   ~   ~  |~   ~   ~   ~   ~    |  '.
-  |_____________|____________________|____\
-        (O)                    (O)
-^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`"#;
-
-/// Build the full startup banner.
+/// Build the full startup banner from the active theme.
 pub fn banner(ui: &Ui, base_url: &str, model: &str, workspace: &str, session: &str) -> String {
+    let v = &ui.theme.voice;
     let mut out = String::new();
     out.push('\n');
 
-    // Wagon scene: cream wagon riding a green prairie horizon.
-    for line in WAGON.lines() {
-        let (wagon, ground) = split_ground(line);
-        out.push_str(&ui.cream(wagon));
+    // ASCII scene: body in text color, trailing ground (`^~`-style) in primary.
+    for line in &v.banner_art {
+        let (body, ground) = split_ground(line);
+        out.push_str(&ui.cream(body));
         out.push_str(&ui.green(ground));
         out.push('\n');
     }
     out.push('\n');
 
-    // "THE OXEN TRAIL" wordmark.
-    out.push_str(&format!("    {}\n", ui.brown("～ The ～")));
-    for row in wordmark("OXEN TRAIL") {
+    if !v.pre_tagline.is_empty() {
+        out.push_str(&format!("    {}\n", ui.brown(&v.pre_tagline)));
+    }
+    for row in wordmark(&v.wordmark) {
         out.push_str(&format!("  {}\n", ui.title(&row)));
     }
-    out.push_str(&format!(
-        "  {}\n",
-        ui.dim("an open source agentic coding trail · powered by Oxen.ai")
-    ));
+    out.push_str(&format!("  {}\n", ui.dim(&v.subtitle)));
 
     out.push_str(&flourish(ui));
     out.push('\n');
 
-    // The "size up the situation" trail journal.
+    for [label, value] in &v.flavor_top {
+        out.push_str(&journal_row(ui, label, value));
+    }
     out.push_str(&journal_row(
         ui,
-        "Departing",
-        "Independence, Missouri · 1848",
-    ));
-    out.push_str(&journal_row(
-        ui,
-        "Provider",
+        &v.label_provider,
         &format!("Oxen.ai · {base_url}"),
     ));
-    out.push_str(&journal_row(ui, "Oxen (model)", model));
-    out.push_str(&journal_row(ui, "Wagon (workspace)", workspace));
-    out.push_str(&journal_row(ui, "Trail journal", session));
-    out.push_str(&journal_row(
-        ui,
-        "Weather",
-        "fair  ·  Health: good  ·  Pace: steady",
-    ));
+    out.push_str(&journal_row(ui, &v.label_model, model));
+    out.push_str(&journal_row(ui, &v.label_workspace, workspace));
+    out.push_str(&journal_row(ui, &v.label_session, session));
+    out.push_str(&journal_row(ui, "Theme", &ui.theme.meta.name));
+    for [label, value] in &v.flavor_bottom {
+        out.push_str(&journal_row(ui, label, value));
+    }
 
     out.push('\n');
-    out.push_str(&format!(
-        "  {}\n",
-        ui.dim("Type /help to size up your options · Ctrl-D to make camp")
-    ));
+    out.push_str(&format!("  {}\n", ui.dim(&v.bottom_hint)));
     out
 }
 
-/// The brown scrollwork divider, echoing the game's title screen.
+/// The scrollwork divider, echoing the game's title screen.
 fn flourish(ui: &Ui) -> String {
     format!(
         "  {}\n",
@@ -384,7 +340,7 @@ fn journal_row(ui: &Ui, label: &str, value: &str) -> String {
     )
 }
 
-/// Split a wagon-art line into its body and the trailing ground (`^`/`~`) run.
+/// Split an art line into its body and a trailing decorative-ground run.
 fn split_ground(line: &str) -> (&str, &str) {
     match line.find('^') {
         Some(idx)
@@ -398,41 +354,136 @@ fn split_ground(line: &str) -> (&str, &str) {
     }
 }
 
-/// The themed `/help` menu, modeled on the Oregon Trail main menu.
+/// The themed `/help` menu.
 pub fn help(ui: &Ui) -> String {
-    let item = |n: &str, title: &str, hint: &str| {
-        format!(
-            "    {} {}  {}\n",
-            ui.accent(n),
-            ui.cream(title),
-            ui.dim(hint)
-        )
-    };
+    let v = &ui.theme.voice;
     let mut out = String::new();
     out.push('\n');
-    out.push_str(&format!("  {}\n\n", ui.title("You may:")));
-    out.push_str(&item(
-        "1.",
-        "Travel the trail   ",
-        "— just type what you want done",
-    ));
-    out.push_str(&item("2.", "Learn about the trail", "— /help"));
-    out.push_str(&item(
-        "3.",
-        "See the Oregon Top Ten",
-        "— /export [path]  (save the journey as JSONL)",
-    ));
-    out.push_str(&item("4.", "Trade your oxen     ", "— /model [name]"));
-    out.push_str(&item("5.", "Make camp / End     ", "— /exit  (or Ctrl-D)"));
-    out.push_str(&format!("\n  {}\n", ui.brown("What is your choice?")));
+    out.push_str(&format!("  {}\n\n", ui.title(&v.help_header)));
+    for item in &v.help_items {
+        out.push_str(&format!(
+            "    {} {}  {}\n",
+            ui.accent(&item.key),
+            ui.cream(&format!("{:<22}", item.title)),
+            ui.dim(&item.hint),
+        ));
+    }
+    out.push_str(&format!("\n  {}\n", ui.brown(&v.help_footer)));
     out
+}
+
+// ===========================================================================
+// Local models — list table + download progress bar.
+// ===========================================================================
+
+/// One row in the `models list` table (a catalog model + its local status).
+pub struct ModelRow<'a> {
+    pub id: &'a str,
+    pub params: &'a str,
+    /// Pre-formatted size (actual when installed, else the estimate).
+    pub size: String,
+    pub installed: bool,
+    pub note: &'a str,
+}
+
+/// Render the local-model catalog as an aligned, themed table.
+pub fn models_table(ui: &Ui, rows: &[ModelRow], total_disk: &str, dir: &str) -> String {
+    let id_w = rows
+        .iter()
+        .map(|r| r.id.len())
+        .chain(std::iter::once("Model".len()))
+        .max()
+        .unwrap_or(5);
+    let par_w = rows
+        .iter()
+        .map(|r| r.params.len())
+        .chain(std::iter::once("Params".len()))
+        .max()
+        .unwrap_or(6);
+    let size_w = rows
+        .iter()
+        .map(|r| r.size.len())
+        .chain(std::iter::once("Size".len()))
+        .max()
+        .unwrap_or(4);
+
+    let mut out = String::from("\n");
+    out.push_str(&format!(
+        "  {}  {}  {}   {}\n",
+        ui.title(&format!("{:<id_w$}", "Model")),
+        ui.title(&format!("{:<par_w$}", "Params")),
+        ui.title(&format!("{:>size_w$}", "Size")),
+        ui.title("Status"),
+    ));
+    out.push_str(&flourish(ui));
+    for r in rows {
+        let status = if r.installed {
+            ui.green("● on disk")
+        } else {
+            ui.dim("○ not yet")
+        };
+        out.push_str(&format!(
+            "  {}  {}  {}   {}\n",
+            ui.cream(&format!("{:<id_w$}", r.id)),
+            ui.brown(&format!("{:<par_w$}", r.params)),
+            ui.cream(&format!("{:>size_w$}", r.size)),
+            status,
+        ));
+        out.push_str(&format!(
+            "  {}\n",
+            ui.dim(&format!("{:id_w$}   {}", "", r.note))
+        ));
+    }
+    out.push('\n');
+    out.push_str(&format!(
+        "  {} {}\n",
+        ui.brown(&ui.theme.voice.label_disk_used),
+        ui.cream(total_disk),
+    ));
+    out.push_str(&format!(
+        "  {} {}\n",
+        ui.brown(&ui.theme.voice.label_models_dir),
+        ui.dim(dir)
+    ));
+    out.push('\n');
+    out.push_str(&format!(
+        "  {}\n",
+        ui.dim(
+            "Pull one with  oxen-harness models pull <Model>   ·   ride it with  --local <Model>"
+        ),
+    ));
+    out
+}
+
+/// A single-line, in-place download progress bar with theme flavor.
+///
+/// `fraction` is `None` when the total size is unknown (the bar shows `?%`).
+/// Print it with a leading `\r`; finish with a newline once complete.
+pub fn progress_bar(ui: &Ui, fraction: Option<f64>, detail: &str) -> String {
+    const WIDTH: usize = 24;
+    let frac = fraction.unwrap_or(0.0).clamp(0.0, 1.0);
+    let filled = (frac * WIDTH as f64).round() as usize;
+    let bar: String = (0..WIDTH)
+        .map(|i| if i < filled { '▰' } else { '▱' })
+        .collect();
+    let pct = match fraction {
+        Some(f) => format!("{:>3.0}%", (f * 100.0).clamp(0.0, 100.0)),
+        None => "  ?%".to_string(),
+    };
+    format!(
+        "  {} {}  {}  {}",
+        ui.brown(&ui.theme.voice.progress_icon),
+        ui.green(&bar),
+        ui.accent(&pct),
+        ui.dim(detail),
+    )
 }
 
 // ===========================================================================
 // Spinner — an in-place animated status line (no-op when color is disabled).
 // ===========================================================================
 
-/// An animated trail-status spinner running on a background thread.
+/// An animated status spinner running on a background thread.
 ///
 /// Mirrors Claude Code's approach: it updates a single line in place with ANSI
 /// escapes (`\r` + clear-to-end-of-line) and hides the cursor while spinning,
@@ -446,16 +497,36 @@ struct Inner {
     handle: thread::JoinHandle<()>,
 }
 
+/// The colors + glyphs the spinner needs, captured so the background thread is
+/// self-contained (doesn't borrow the `Ui`).
+struct SpinnerStyle {
+    glyphs: Vec<String>,
+    glyph_rgb: Rgb,
+    text_rgb: Rgb,
+    dim_rgb: Rgb,
+}
+
 impl Spinner {
     /// Start spinning, cycling through `verbs`. Returns a no-op spinner when
-    /// color/animation is disabled (e.g. piped output).
-    pub fn start(ui: &Ui, verbs: &'static [&'static str]) -> Self {
+    /// color/animation is disabled (e.g. piped output) or there's nothing to show.
+    pub fn start(ui: &Ui, verbs: Vec<String>) -> Self {
         if !ui.color || verbs.is_empty() {
             return Spinner { inner: None };
         }
+        let pal = &ui.theme.palette;
+        let mut glyphs = ui.theme.voice.spinner_glyphs.clone();
+        if glyphs.is_empty() {
+            glyphs.push("✶".to_string());
+        }
+        let style = SpinnerStyle {
+            glyphs,
+            glyph_rgb: pal.title.rgb(),
+            text_rgb: pal.text.rgb(),
+            dim_rgb: pal.muted.rgb(),
+        };
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
-        let handle = thread::spawn(move || run_spinner(&stop_thread, verbs));
+        let handle = thread::spawn(move || run_spinner(&stop_thread, &verbs, &style));
         Spinner {
             inner: Some(Inner { stop, handle }),
         }
@@ -470,9 +541,7 @@ impl Spinner {
     }
 }
 
-fn run_spinner(stop: &AtomicBool, verbs: &[&str]) {
-    // Asterisk dingbats in the spirit of Claude Code's bespoke glyphs.
-    const GLYPHS: &[&str] = &["✶", "✸", "✺", "✹", "✷", "✦"];
+fn run_spinner(stop: &AtomicBool, verbs: &[String], style: &SpinnerStyle) {
     let mut out = io::stdout();
     let start = Instant::now();
     let mut s = seed();
@@ -486,12 +555,12 @@ fn run_spinner(stop: &AtomicBool, verbs: &[&str]) {
         if frame > 0 && frame % 16 == 0 {
             verb_idx = (verb_idx + 1) % verbs.len();
         }
-        let glyph = GLYPHS[frame % GLYPHS.len()];
+        let glyph = &style.glyphs[frame % style.glyphs.len()];
         let line = format!(
             "{}  {}  {}",
-            paint(glyph, TAN),
-            paint(&format!("{}…", verbs[verb_idx]), CREAM),
-            paint(&format!("({})", elapsed(start)), DIM),
+            paint(glyph, style.glyph_rgb),
+            paint(&format!("{}…", verbs[verb_idx]), style.text_rgb),
+            paint(&format!("({})", elapsed(start)), style.dim_rgb),
         );
         let _ = write!(out, "\r{line}\x1b[K");
         let _ = out.flush();
@@ -517,6 +586,10 @@ fn elapsed(start: Instant) -> String {
 mod tests {
     use super::*;
 
+    fn colored() -> Ui {
+        Ui::with(true, Arc::new(Theme::default()))
+    }
+
     #[test]
     fn wordmark_rows_are_aligned() {
         let rows = wordmark("OXEN TRAIL");
@@ -525,13 +598,12 @@ mod tests {
         for row in &rows {
             assert_eq!(row.chars().count(), width, "rows must be equal width");
         }
-        // 10 glyphs (incl. one space) * 6 wide + 9 single-space gutters.
         assert_eq!(width, 10 * 6 + 9);
     }
 
     #[test]
     fn no_color_paint_is_plain() {
-        let ui = Ui { color: false };
+        let ui = Ui::plain();
         assert_eq!(ui.title("hi"), "hi");
         assert_eq!(ui.dim("trail"), "trail");
         assert!(!help(&ui).contains("\x1b["));
@@ -541,7 +613,7 @@ mod tests {
 
     #[test]
     fn color_paint_wraps_in_ansi() {
-        let ui = Ui { color: true };
+        let ui = colored();
         let s = ui.green("go");
         assert!(s.starts_with("\x1b[38;2;"));
         assert!(s.ends_with("\x1b[0m"));
@@ -550,28 +622,33 @@ mod tests {
 
     #[test]
     fn elapsed_formats_minutes() {
-        assert_eq!(
-            elapsed(Instant::now() - Duration::from_secs(7)),
-            "7s".to_string()
-        );
-        assert_eq!(
-            elapsed(Instant::now() - Duration::from_secs(67)),
-            "1m07s".to_string()
-        );
+        assert_eq!(elapsed(Instant::now() - Duration::from_secs(7)), "7s");
+        assert_eq!(elapsed(Instant::now() - Duration::from_secs(67)), "1m07s");
     }
 
     #[test]
-    fn death_screen_has_tombstone_and_a_real_cause() {
-        let ui = Ui { color: false };
+    fn death_screen_has_a_real_cause_and_resume_hint() {
+        let ui = Ui::plain();
         let screen = death_screen(&ui, "sess-42");
-        assert!(screen.contains("R. I. P."));
-        assert!(DEATHS.iter().any(|d| screen.contains(d)));
-        // The resume hint surfaces the session id so the trail can be picked up.
+        assert!(Theme::default()
+            .voice
+            .deaths
+            .iter()
+            .any(|d| screen.contains(d)));
         assert!(screen.contains("oxen-harness --resume sess-42"));
     }
 
     #[test]
+    fn banner_includes_active_theme_name() {
+        let ui = Ui::plain();
+        let b = banner(&ui, "host", "model", "ws", "sess");
+        assert!(b.contains("Oregon Trail"));
+        assert!(b.contains("model"));
+    }
+
+    #[test]
     fn tool_verbs_are_themed_and_nonempty() {
+        let ui = Ui::plain();
         for tool in [
             "read_file",
             "write_file",
@@ -580,10 +657,50 @@ mod tests {
             "search_files",
             "run_shell",
             "git",
+            "web_search",
+            "ask_user_question",
             "wat",
         ] {
-            assert!(!tool_verbs(tool).is_empty());
+            assert!(!ui.tool_verbs(tool).is_empty());
         }
+    }
+
+    #[test]
+    fn progress_bar_tracks_fraction_and_handles_unknown() {
+        let ui = Ui::plain();
+        let half = progress_bar(&ui, Some(0.5), "2.5 GB / 5.0 GB");
+        assert!(half.contains("50%"));
+        assert!(half.contains("2.5 GB / 5.0 GB"));
+        assert!(half.contains('▰') && half.contains('▱'));
+        let unknown = progress_bar(&ui, None, "downloading");
+        assert!(unknown.contains("?%"));
+    }
+
+    #[test]
+    fn models_table_lists_rows_and_disk_usage() {
+        let ui = Ui::plain();
+        let rows = [
+            ModelRow {
+                id: "qwen3-8b",
+                params: "8B",
+                size: "5.0 GB".to_string(),
+                installed: true,
+                note: "all-rounder",
+            },
+            ModelRow {
+                id: "qwen3-32b",
+                params: "32B",
+                size: "20 GB".to_string(),
+                installed: false,
+                note: "heaviest",
+            },
+        ];
+        let table = models_table(&ui, &rows, "5.0 GB", "/home/me/.oxen-harness/models");
+        assert!(table.contains("qwen3-8b"));
+        assert!(table.contains("● on disk"));
+        assert!(table.contains("○ not yet"));
+        assert!(table.contains("5.0 GB"));
+        assert!(!table.contains("\x1b["));
     }
 
     #[test]
@@ -594,5 +711,20 @@ mod tests {
         let (body, ground) = split_ground("no terrain here");
         assert_eq!(body, "no terrain here");
         assert_eq!(ground, "");
+    }
+
+    #[test]
+    fn themes_change_phrases() {
+        let synth = Ui::with(
+            false,
+            Arc::new(harness_theme::builtins::by_name("synthwave").unwrap()),
+        );
+        assert!(prompt(&synth).contains("ride ❯"));
+        assert!(synth
+            .theme()
+            .voice
+            .deaths
+            .iter()
+            .any(|d| d.contains("GAME OVER")));
     }
 }

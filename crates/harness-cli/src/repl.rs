@@ -17,6 +17,8 @@ pub enum Command {
     Model(Option<String>),
     /// Export the current session transcript as JSONL (optional path).
     Export(Option<String>),
+    /// Theme command: the whitespace-split args after `/theme` (empty = open picker).
+    Theme(Vec<String>),
     /// A prompt to send to the agent.
     Prompt(String),
 }
@@ -43,6 +45,10 @@ pub fn parse_command(line: &str) -> Command {
         "/help" | "/?" => Command::Help,
         "/model" => Command::Model(rest),
         "/export" => Command::Export(rest),
+        "/theme" | "/themes" => Command::Theme(
+            rest.map(|r| r.split_whitespace().map(str::to_string).collect())
+                .unwrap_or_default(),
+        ),
         // Unknown slash command: treat the whole line as a prompt so users can
         // still send text that happens to start with a slash.
         _ => Command::Prompt(trimmed.to_string()),
@@ -88,6 +94,25 @@ mod tests {
         assert_eq!(
             parse_command("/export out.jsonl"),
             Command::Export(Some("out.jsonl".into()))
+        );
+    }
+
+    #[test]
+    fn theme_command_splits_args() {
+        assert_eq!(parse_command("/theme"), Command::Theme(vec![]));
+        assert_eq!(
+            parse_command("/theme use Midnight"),
+            Command::Theme(vec!["use".into(), "Midnight".into()])
+        );
+        assert_eq!(
+            parse_command("/theme new a cozy autumn vibe"),
+            Command::Theme(vec![
+                "new".into(),
+                "a".into(),
+                "cozy".into(),
+                "autumn".into(),
+                "vibe".into()
+            ])
         );
     }
 

@@ -54,9 +54,106 @@ primitives a strong coding agent needs and deliberately stopped there:
 - `run_shell` got a `timeout_ms` (default 120s) and a 30k-char output cap.
 
 *Deliberately skipped* to keep the codebase simple: `TodoWrite`/`Task` (orchestration
-+ session state), `WebFetch`/`WebSearch` (network + HTML parsing deps), `NotebookEdit`,
-and anything MCP. New deps were limited to `regex` + `globset` (both already in the
-`ignore` transitive tree). MCP remains a future opt-in (see `04-backlog.md`).
++ session state), `WebFetch`/`NotebookEdit`, and anything MCP. New deps were limited
+to `regex` + `globset` (both already in the `ignore` transitive tree). MCP remains a
+future opt-in (see `04-backlog.md`).
+
+**Web search via Brave (`web_search`)** (2026-06-21)
+Added a `web_search` tool backed by the [Brave Search API](https://brave.com/search/api/)
+so the agent can research docs, current events, and unfamiliar errors. Brave was chosen
+for a clean JSON API and a no-credit-card free tier. The key comes from `BRAVE_API_KEY`
+(or `BRAVE_SEARCH_API_KEY`); reqwest (already in the tree via `harness-llm`) was promoted
+to a workspace dependency rather than adding a new HTTP client. The tool is registered in
+`default_for_workspace` **only when a key is present**, so the model is never shown a
+capability it cannot use. We kept it to a single search call (no `WebFetch`/HTML scraping)
+to stay simple — snippet text is returned with Brave's `<strong>` highlight tags stripped.
+
+**Interview the user via `ask_user_question`** (2026-06-21)
+Added an `ask_user_question` tool so the agent can stop and ask the user to choose
+between genuinely ambiguous approaches instead of guessing. We mirrored Claude Code's
+`AskUserQuestion` shape — 1–4 questions, each with a short `header`, the full
+`question`, 2–4 `{label, description}` options, and a `multiSelect` flag — because it's
+a well-tested schema models already understand, and the host always supplies the
+free-text "type your own" escape hatch (so the model must **not** add an "Other" option).
+
+Rendering is host-specific, so `harness-tools` owns only the data types and a
+`QuestionAsker` trait; each front end implements it. The **CLI** asker (`harness-cli`)
+draws an interactive picker with `crossterm` — the one terminal dependency we added,
+since `rustyline` can't build arbitrary key-driven pickers and hand-rolling
+cross-platform raw-mode key parsing is error-prone. It runs on a `spawn_blocking`
+thread (so the async agent loop never stalls), restores the terminal via an RAII guard,
+treats `Ctrl-C` in raw mode as cancel, and returns `None` for non-TTY sessions so the
+tool tells the model to proceed with sensible defaults. The **desktop app** asker emits
+an `agent://question` event and parks on a `oneshot` channel until the `answer_question`
+command delivers the user's selection from the question card. The CLI renderer
+special-cases the tool name to suppress the usual tool line + spinner while the picker
+owns the screen.
+
+## Theming
+
+**Configurable, shareable themes (palette + voice) in `harness-theme`** (2026-06-21)
+The CLI/app personality was hardcoded Oregon Trail. We extracted a `harness-theme`
+crate so a **theme is data**, shared by both front ends. A `Theme` is `Meta` +
+`Palette` (7 terminal foreground colors + app `background`/`surface`/`border`, each
+a `#rrggbb` `Color`) + `Voice` (prompt icon/label, spinner glyphs, thinking phrases,
+per-tool verbs with a `default` fallback, "death"/quit lines, banner art/wordmark/
+labels, help items, and the exit screen). Built-ins: **Oregon Trail** (the `Default`,
+preserving the original look verbatim), **Midnight**, **Synthwave**.
+
+*Format & partial overrides:* themes serialize to a single self-contained **TOML**
+file (also readable as JSON) — trivial to export/import/share. Loading is tolerant:
+the file is parsed to a `serde_json::Value`, **deep-merged over the serialized
+default**, then deserialized — so a file may set only a few fields and inherit the
+rest. This makes hand-written and model-generated themes robust to omissions without
+per-field `serde` defaults or duplicate "patch" structs.
+
+*Persistence:* everything lives under `~/.oxen-harness/` (alongside history/models,
+not a separate `~/.config` tree): `config.toml` records the active theme slug;
+`themes/<slug>.toml` holds installed themes. An installed file **shadows** a built-in
+of the same slug, so users can fork a built-in by saving over its name.
+
+*CLI integration:* `Ui` now carries an `Arc<Theme>` (it became `Clone`, not `Copy`)
+and resolves all colors/phrases from it; the spinner owns `Vec<String>` verbs.
+`/theme` reuses the `ask_user_question` picker (extracted into a shared `picker.rs`).
+A top-level `oxen-harness theme …` subcommand covers list/use/export/import/path/remove
+for scripting and dotfiles; switches hot-swap the live UI.
+
+*Vibe-coding:* `/theme new` (CLI) and the app's 🎨 panel run a short interview, then
+ask the model — via `Theme::generation_system_prompt()` (schema + the default theme as
+a worked example) — to emit a complete theme. `Theme::from_model_output` strips code
+fences/prose, tries TOML then JSON, and only injects a fallback name when the model
+omitted one (so a nameless generation can't silently shadow a built-in). The CLI uses
+the session's `Agent` (a new `Agent::complete` one-shot that isn't persisted to the
+transcript); the app uses the same via a `new_theme` command. The app applies the
+palette to its CSS variables and uses the voice phrases for status + tool chips.
+
+## Local models (llama.cpp)
+
+**Run open-weight models locally via `llama-server`** (2026-06-21)
+Added a `harness-local` crate so the agent can run Qwen3 models on the user's own
+machine, fully offline. llama.cpp's `llama-server` was chosen because it exposes
+the *same* OpenAI-compatible chat-completions API the harness already speaks — so a
+local model is just `OxenClient::new("http://127.0.0.1:<port>/v1", "local", id)`
+with a throwaway key, **no client changes**. `--jinja` is passed so the model's
+chat template (and thus tool calling) works.
+
+- **Catalog** = curated Qwen3 GGUFs at `Q4_K_M` (the consumer sweet spot: ~4.5
+  bits/weight, near-FP16 quality at ~28% size), 0.6B → 32B plus the 30B-A3B MoE,
+  from the de-facto-standard `bartowski` repos. All repo/file URLs were
+  HEAD-verified against Hugging Face before shipping.
+- **Downloads are managed in-process** (streamed via `reqwest` to a `.part` file,
+  atomically renamed) rather than delegated to `llama-server --hf`, *specifically*
+  so the CLI and UI can show real download progress and per-model disk usage — the
+  feature the user asked for. Weights live in `~/.oxen-harness/models/`.
+- **`llama-server` is detected, not bundled** (`LLAMA_SERVER` override or `PATH`);
+  when missing we fail fast with a platform-specific install hint (`brew install
+  llama.cpp`, a release download, or the env override) instead of a cryptic error.
+- **Server lifecycle**: a free port is picked, the process spawned, `/health`
+  polled until the model loads, and the process killed on `Drop` so a session never
+  leaks a background server. Selected at startup via `--local`; mid-session
+  switching is deferred (see `04-backlog.md`).
+- New deps stayed minimal: `reqwest` (already in the tree) gained `stream`, plus
+  `futures-util` + `dirs`. `mockito` (dev) tests the streaming download loop.
 
 ## History & Export
 
@@ -66,7 +163,7 @@ Conversation messages and tool inputs/outputs are persisted verbatim (no truncat
 ## Agent Loop
 
 **Objective-check-driven (Ralph Wiggum) loop** (2026-06-21)
-Development follows a tight test-first loop: read spec → write/adjust a test → smallest change → write to disk → run `fmt`/`clippy`/tests → fix root cause → stop on green. The *runtime* agent loop mirrors this: call model → execute any `tool_calls` → append `tool` messages → repeat until `finish_reason` is `stop`/`length`.
+Development follows a tight test-first loop: read spec → write/adjust a test → smallest change → write to disk → run `fmt`/`clippy`/tests → fix root cause → stop on green → commit with a clear message. At the **end of each feature** there's a separate **review/refactor pass**: the LLM critiques the diff for modularity / maintainability / readability / idiomatic / pragmatic code, the agent applies the worthwhile fixes, the checks are re-run, and that cleanup lands as its own commit. The *runtime* agent loop mirrors the build loop: call model → execute any `tool_calls` → append `tool` messages → repeat until `finish_reason` is `stop`/`length`.
 -> *Full context: `AGENTS.md`*
 
 ## UX & Scope
@@ -88,9 +185,9 @@ Color auto-disables for non-TTY / `NO_COLOR` / `TERM=dumb` so piped output is cl
 
 **Single Cargo workspace, focused crates** (2026-06-21)
 `harness-core` (base types) / `harness-llm` / `harness-tools` / `harness-store` /
-`harness-agent` (orchestration loop) / `harness-cli`. Tests use `mockito` to fake
-the HTTP endpoint (deterministic, offline). `cargo nextest` is the preferred test
-runner.
+`harness-local` (local models) / `harness-agent` (orchestration loop) /
+`harness-cli`. Tests use `mockito` to fake HTTP endpoints (deterministic, offline).
+`cargo nextest` is the preferred test runner.
 
 **Orchestration lives in `harness-agent`, not `harness-core`** (2026-06-21)
 The loop depends on the llm/tools/store crates, which all depend on `harness-core`
