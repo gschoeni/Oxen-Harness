@@ -45,9 +45,13 @@ impl TurnRenderer {
         self.spinner = Some(theme::Spinner::start(&self.ui, self.ui.thinking()));
     }
 
-    fn begin_working(&mut self, tool: &str) {
+    fn begin_working(&mut self, tool: &str, target: Option<String>) {
         self.stop_spinner();
-        self.spinner = Some(theme::Spinner::start(&self.ui, self.ui.tool_verbs(tool)));
+        self.spinner = Some(theme::Spinner::start_with_target(
+            &self.ui,
+            self.ui.tool_verbs(tool),
+            target,
+        ));
     }
 
     fn stop_spinner(&mut self) {
@@ -81,7 +85,7 @@ impl TurnRenderer {
                     self.ui.green("📄"),
                     self.ui.dim("writing canvas…")
                 );
-                self.begin_working(name);
+                self.begin_working(name, None);
             }
             AgentEvent::ToolPending { .. } => {}
             AgentEvent::ToolStart { name, arguments } => {
@@ -92,6 +96,7 @@ impl TurnRenderer {
                 if name == harness_tools::ASK_USER_TOOL {
                     return;
                 }
+                let target = crate::live::tool_target(arguments);
                 // For a canvas, preview the document inline (the result line then
                 // reports where it was saved / that it opened in the browser).
                 if name == harness_tools::CANVAS_TOOL {
@@ -100,7 +105,7 @@ impl TurnRenderer {
                             println!("{line}");
                         }
                     }
-                    self.begin_working(name);
+                    self.begin_working(name, target);
                     return;
                 }
                 // For file writes/edits, show a colored diff instead of the
@@ -120,7 +125,7 @@ impl TurnRenderer {
                             .dim(&format!("{name}({})", truncate(arguments, 100))),
                     );
                 }
-                self.begin_working(name);
+                self.begin_working(name, target);
             }
             AgentEvent::ToolEnd { name, result } => {
                 self.stop_spinner();

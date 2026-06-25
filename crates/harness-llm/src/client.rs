@@ -144,15 +144,31 @@ impl OxenClient {
     }
 }
 
+/// Pull a human-readable reason out of an Oxen API error body, so callers show
+/// "You have run out of credits." rather than a wall of raw JSON. Oxen's shape is
+/// `{"error":{"type":..,"title":..},"status":..,"status_message":..}`, but other
+/// services vary, so we try the friendliest fields in priority order and fall
+/// back to the trimmed body when none are present.
 fn extract_api_error(body: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| {
-            v.get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(|m| m.as_str())
-                .map(|s| s.to_string())
-        })
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return body.trim().to_string();
+    };
+    // Walk a key path to a non-empty string, if present.
+    let at = |path: &[&str]| -> Option<String> {
+        let mut cur = &v;
+        for key in path {
+            cur = cur.get(*key)?;
+        }
+        cur.as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    at(&["error", "title"])
+        .or_else(|| at(&["error", "message"]))
+        .or_else(|| at(&["error", "description"]))
+        .or_else(|| at(&["error"])) // some APIs return `{"error": "message"}`
+        .or_else(|| at(&["status_message"]))
+        .or_else(|| at(&["message"]))
         .unwrap_or_else(|| body.trim().to_string())
 }
 
@@ -209,6 +225,32 @@ mod tests {
             }
             other => panic!("expected Api error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn extract_api_error_prefers_human_fields_over_raw_json() {
+        // Oxen's insufficient-credits shape → the human `error.title`.
+        let body = r#"{"error":{"type":"insufficient_credits","title":"You have run out of credits."},"status":"error","status_message":"insufficient_credits"}"#;
+        assert_eq!(extract_api_error(body), "You have run out of credits.");
+
+        // OpenAI-style `error.message`.
+        assert_eq!(
+            extract_api_error(r#"{"error":{"message":"Invalid API key"}}"#),
+            "Invalid API key"
+        );
+
+        // `error` as a bare string, and top-level `status_message` fallback.
+        assert_eq!(extract_api_error(r#"{"error":"nope"}"#), "nope");
+        assert_eq!(
+            extract_api_error(r#"{"status_message":"rate_limited"}"#),
+            "rate_limited"
+        );
+
+        // Non-JSON or shapeless bodies fall back to the trimmed text.
+        assert_eq!(
+            extract_api_error("  upstream timeout  "),
+            "upstream timeout"
+        );
     }
 
     #[tokio::test]

@@ -31,8 +31,11 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use crossterm::terminal;
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
+use crossterm::{execute, terminal};
 use harness_agent::{Agent, AgentError, AgentEvent};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -244,6 +247,23 @@ pub(crate) async fn read_idle(
     Ok(result)
 }
 
+/// Extract a short "target" from a tool's JSON `arguments` to show beside the
+/// spinner verb — the file being read/written, the shell command, the search
+/// query, etc. — so the activity line says *what* it's working on. Returns
+/// `None` when there's nothing useful (or the args don't parse), in which case
+/// the spinner just shows the verb + timer.
+pub(crate) fn tool_target(arguments: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    // Try the fields most tools use, in rough priority order.
+    let raw = ["path", "file", "command", "query", "pattern", "url"]
+        .iter()
+        .find_map(|k| v.get(*k).and_then(|x| x.as_str()))
+        .filter(|s| !s.is_empty())?;
+    // Keep it to a single line and bounded so the indicator never wraps.
+    let one_line = raw.split(['\n', '\r']).next().unwrap_or(raw).trim();
+    Some(truncate(one_line, 60))
+}
+
 /// What happened to a single turn in the live loop.
 enum TurnOutcome {
     /// The turn finished on its own (success or agent error).
@@ -387,12 +407,24 @@ async fn run_one_turn(
 struct LiveTerminal {
     cols: u16,
     rows: u16,
+    /// Whether we pushed keyboard-enhancement flags (so Drop pops them).
+    kbd_enhanced: bool,
 }
 
 impl LiveTerminal {
     fn new() -> Result<Self> {
         terminal::enable_raw_mode()?;
         let (cols, rows) = terminal::size().unwrap_or((80, 24));
+        // Ask the terminal to disambiguate modified keys (the kitty keyboard
+        // protocol) so Shift+Enter is reported distinctly from Enter. Harmless
+        // and skipped where unsupported — Alt+Enter / Ctrl-J still add a newline.
+        let kbd_enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
+        if kbd_enhanced {
+            let _ = execute!(
+                io::stdout(),
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            );
+        }
         let mut out = io::stdout();
         let bottom = region_bottom(rows);
         // Hide the cursor, enable bracketed paste (so a drag-dropped path arrives
@@ -401,12 +433,19 @@ impl LiveTerminal {
         // the bottom of that region so output scrolls upward.
         let _ = write!(out, "\x1b[?25l\x1b[?2004h\x1b[1;{bottom}r\x1b[{bottom};1H");
         let _ = out.flush();
-        Ok(Self { cols, rows })
+        Ok(Self {
+            cols,
+            rows,
+            kbd_enhanced,
+        })
     }
 }
 
 impl Drop for LiveTerminal {
     fn drop(&mut self) {
+        if self.kbd_enhanced {
+            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+        }
         let mut out = io::stdout();
         // Disable bracketed paste, reset the scroll region, clear the composer
         // row, show the cursor, and drop to a fresh line for the next cooked-mode
@@ -788,6 +827,43 @@ fn render_buffer(c: &Composer, avail: usize, caret: bool) -> (String, usize) {
     (body, width)
 }
 
+/// Word-wrap one logical line's chars into rows no wider than `width`, breaking
+/// after the last space where one fits (hard-splitting an over-long word).
+/// Returns each row's chars and the column (within the logical line) where it
+/// starts, so the caret can be mapped onto a wrapped row. An empty line yields a
+/// single empty row.
+fn wrap_line(chars: &[char], width: usize) -> Vec<(usize, Vec<char>)> {
+    let width = width.max(1);
+    if chars.is_empty() {
+        return vec![(0, Vec::new())];
+    }
+    let mut rows = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars.len() - i <= width {
+            rows.push((i, chars[i..].to_vec()));
+            break;
+        }
+        let hard = i + width;
+        // Prefer breaking just after the last space within the row's width.
+        let mut brk = hard;
+        let mut j = hard;
+        while j > i {
+            if chars[j - 1] == ' ' {
+                brk = j;
+                break;
+            }
+            j -= 1;
+        }
+        if brk == i {
+            brk = hard; // a single word longer than the row — hard split
+        }
+        rows.push((i, chars[i..brk].to_vec()));
+        i = brk;
+    }
+    rows
+}
+
 /// Render one line of text windowed to `avail` columns, optionally drawing a
 /// reverse-video caret at `caret` (a column within the line, or one past its
 /// end). Returns the painted body and its *visible* width (ANSI excluded) so the
@@ -973,10 +1049,29 @@ impl Live {
         self.draw_spinner();
     }
 
-    fn begin_working(&mut self, tool: &str) {
+    /// Start the indicator shown *while assistant text streams in*, so a pause
+    /// between tokens (or a long, not-yet-newline-terminated line like a code
+    /// block) keeps animating with a running timer instead of looking frozen.
+    fn begin_streaming(&mut self) {
         self.stop_spinner();
-        self.spinner = LiveSpinner::new(&self.ui, self.ui.tool_verbs(tool));
+        self.spinner = LiveSpinner::new(&self.ui, self.ui.writing());
         self.draw_spinner();
+    }
+
+    fn begin_working(&mut self, tool: &str, target: Option<String>) {
+        self.stop_spinner();
+        self.spinner = LiveSpinner::with_target(&self.ui, self.ui.tool_verbs(tool), target);
+        self.draw_spinner();
+    }
+
+    /// Erase the spinner's current line without dropping the spinner, so newly
+    /// completed streamed output can be written where the spinner sat (it's then
+    /// redrawn one line below via [`Live::draw_spinner`]).
+    fn clear_spinner_line(&mut self) {
+        if self.spinner.is_some() && !self.suspended {
+            let _ = write!(self.out, "\r\x1b[K");
+            let _ = self.out.flush();
+        }
     }
 
     fn stop_spinner(&mut self) {
@@ -1001,10 +1096,20 @@ impl Live {
                     self.stop_spinner();
                     self.write_region("\n");
                     self.md = Some(MarkdownStream::new(self.ui.clone(), CrlfWriter::new()));
+                    // Keep a live indicator going *below* the streamed text so a
+                    // pause mid-response (or a long, not-yet-complete line such as
+                    // a code block) never looks frozen.
+                    self.begin_streaming();
+                } else {
+                    // Clear the trailing spinner line before emitting newly
+                    // completed markdown lines, so output and spinner don't collide.
+                    self.clear_spinner_line();
                 }
                 if let Some(md) = self.md.as_mut() {
                     md.push(t);
                 }
+                // Redraw the spinner on the fresh line just below the output.
+                self.draw_spinner();
                 self.render_composer();
             }
             // The model started writing a canvas; surface it while its content
@@ -1017,7 +1122,7 @@ impl Live {
                     self.ui.green("📄"),
                     self.ui.dim("writing canvas…")
                 ));
-                self.begin_working(name);
+                self.begin_working(name, None);
                 self.render_composer();
             }
             AgentEvent::ToolPending { .. } => {}
@@ -1030,13 +1135,14 @@ impl Live {
                     self.suspend(paused);
                     return;
                 }
+                let target = tool_target(arguments);
                 // For a canvas, preview the document inline; the result line then
                 // reports the saved path / browser open.
                 if name == harness_tools::CANVAS_TOOL {
                     if let Some(block) = crate::canvas::render_canvas_block(&self.ui, arguments) {
                         self.write_region(&format!("{}\n", block.join("\n")));
                     }
-                    self.begin_working(name);
+                    self.begin_working(name, target);
                     self.render_composer();
                     return;
                 }
@@ -1056,7 +1162,7 @@ impl Live {
                     );
                     self.write_region(&format!("{line}\n"));
                 }
-                self.begin_working(name);
+                self.begin_working(name, target);
                 self.render_composer();
             }
             AgentEvent::ToolEnd { name, result } => {
@@ -1353,9 +1459,10 @@ impl Live {
         truncate(preview, width.saturating_sub(1))
     }
 
-    /// Render the input as a rounded bordered box, one entry per visual line, the
-    /// themed prompt on the first line and continuation lines aligned under it.
-    /// The box grows with the lines typed (capped at [`MAX_INPUT_ROWS`], windowing
+    /// Render the input as a rounded bordered box. Long lines **word-wrap** onto
+    /// the next visual row (rather than scrolling sideways); the themed prompt
+    /// sits on the first row and wrapped/continuation rows align under it. The
+    /// box grows with the rows typed (capped at [`MAX_INPUT_ROWS`], windowing
     /// around the caret beyond that). The caret (reverse-video cell) shows only
     /// when the composer holds focus — not while browsing/editing the queue.
     fn composer_box_lines(&self) -> Vec<String> {
@@ -1363,7 +1470,8 @@ impl Live {
         let (plain_prompt, styled_prompt) = composer_prompt(&self.ui, depth);
         let prompt_w = plain_prompt.chars().count();
         let box_w = self.queue_box_w();
-        // Leave a column for the caret so it never spills past the right border.
+        // Wrap width leaves a column for the caret so it never spills past the
+        // right border; every row is indented under the prompt for alignment.
         let avail = box_w.saturating_sub(prompt_w + 1).max(4);
         let caret_on = matches!(self.focus, Focus::Composer) && self.edit.is_none();
 
@@ -1375,12 +1483,32 @@ impl Live {
             .collect();
         let (caret_line, caret_col) = self.composer.line_col();
 
-        // Window the visible lines around the caret when there are more than fit.
-        let total = lines.len();
+        // Word-wrap each logical line into visual rows, tracking which visual row
+        // + column the caret lands on.
+        let mut vrows: Vec<Vec<char>> = Vec::new();
+        let mut caret_vrow = 0usize;
+        let mut caret_vcol = 0usize;
+        for (li, line) in lines.iter().enumerate() {
+            for (start, chunk) in wrap_line(line, avail) {
+                let len = chunk.len();
+                let owns_caret = caret_on
+                    && li == caret_line
+                    && ((caret_col >= start && caret_col < start + len)
+                        || (caret_col == start + len && start + len == line.len()));
+                if owns_caret {
+                    caret_vrow = vrows.len();
+                    caret_vcol = caret_col - start;
+                }
+                vrows.push(chunk);
+            }
+        }
+
+        // Window the visible rows around the caret when there are more than fit.
+        let total = vrows.len();
         let (lo, hi) = if total <= MAX_INPUT_ROWS {
             (0, total)
         } else {
-            let lo = caret_line
+            let lo = caret_vrow
                 .saturating_sub(MAX_INPUT_ROWS / 2)
                 .min(total - MAX_INPUT_ROWS);
             (lo, lo + MAX_INPUT_ROWS)
@@ -1391,10 +1519,10 @@ impl Live {
             "  {}",
             self.ui.brown(&format!("╭{}╮", "─".repeat(box_w + 2)))
         )];
-        for (i, line) in lines.iter().enumerate().take(hi).skip(lo) {
-            let caret = (caret_on && i == caret_line).then_some(caret_col);
-            let (body, width) = render_text_line(line, caret, avail);
-            let prefix = if i == 0 {
+        for (vi, row) in vrows.iter().enumerate().take(hi).skip(lo) {
+            let caret = (caret_on && vi == caret_vrow).then_some(caret_vcol);
+            let (body, width) = render_text_line(row, caret, avail);
+            let prefix = if vi == 0 {
                 styled_prompt.clone()
             } else {
                 " ".repeat(prompt_w)
@@ -1520,7 +1648,11 @@ impl Live {
     fn suspend(&mut self, paused: &Arc<AtomicBool>) {
         self.suspended = true;
         paused.store(true, Ordering::Relaxed);
-        let _ = write!(self.out, "{}", suspend_sequence(self.rows));
+        let _ = write!(
+            self.out,
+            "{}",
+            suspend_sequence(self.region_bottom, self.rows)
+        );
         let _ = self.out.flush();
         let _ = terminal::disable_raw_mode();
     }
@@ -1539,13 +1671,20 @@ impl Live {
 }
 
 /// Escape sequence that hands a clean screen to an interactive tool: reset the
-/// scroll region, then clear the composer row and drop onto a fresh line at the
-/// bottom (with the cursor shown) so the tool's first frame is fully visible
-/// immediately, with no keypress required.
-fn suspend_sequence(rows: u16) -> String {
-    // `\x1b[r` resets (and homes) the cursor, so we must reposition explicitly:
-    // jump to the composer row, clear it, then newline onto a blank bottom line.
-    format!("\x1b[r\x1b[{rows};1H\x1b[2K\r\n\x1b[?25h")
+/// scroll region, then **clear the whole reserved input area** (every row below
+/// `region_bottom` — the box, divider, spacer, and queue, not just one row) so
+/// no stale input UI lingers above the tool's output. The cursor is parked just
+/// below the conversation (and shown) so the tool draws in natural reading order.
+fn suspend_sequence(region_bottom: u16, rows: u16) -> String {
+    // `\x1b[r` resets (and may home) the cursor, so we reposition explicitly.
+    let mut seq = String::from("\x1b[r");
+    for r in region_bottom.saturating_add(1)..=rows {
+        seq.push_str(&format!("\x1b[{r};1H\x1b[2K"));
+    }
+    // Park on the first freed row, right after the conversation, cursor shown.
+    let start = region_bottom.saturating_add(1).min(rows);
+    seq.push_str(&format!("\x1b[{start};1H\x1b[?25h"));
+    seq
 }
 
 /// Escape sequence that re-establishes the live layout after an interactive tool
@@ -1849,27 +1988,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn suspend_sequence_clears_a_clean_bottom_line_for_the_picker() {
-        let seq = suspend_sequence(24);
+    fn suspend_sequence_clears_the_whole_reserved_area_for_the_picker() {
+        // region_bottom 20, rows 24 → the input area is rows 21..=24.
+        let seq = suspend_sequence(20, 24);
         // The scroll region must be reset before anything else so the picker
         // isn't confined to the old region.
         assert!(
             seq.starts_with("\x1b[r"),
             "region reset must come first: {seq:?}"
         );
-        // It repositions to the composer row and clears it (resetting the region
-        // homes the cursor to the top, so an explicit move is required).
-        assert!(
-            seq.contains("\x1b[24;1H"),
-            "must move to the bottom row: {seq:?}"
-        );
-        assert!(
-            seq.contains("\x1b[2K"),
-            "must clear the composer row: {seq:?}"
-        );
-        // And the cursor is shown so the picker draws on a visible line.
+        // Every reserved row below region_bottom is cleared (not just one), so a
+        // stale multi-row input box can't linger above the tool's output.
+        for r in 21..=24 {
+            assert!(
+                seq.contains(&format!("\x1b[{r};1H\x1b[2K")),
+                "must clear reserved row {r}: {seq:?}"
+            );
+        }
+        // The cursor is shown, parked just below the conversation.
         assert!(seq.contains("\x1b[?25h"), "must show the cursor: {seq:?}");
-        // The region reset precedes the absolute cursor move.
+        assert!(
+            seq.contains("\x1b[21;1H"),
+            "must park on the first freed row: {seq:?}"
+        );
         assert!(seq.find("\x1b[r").unwrap() < seq.find("\x1b[24;1H").unwrap());
     }
 
@@ -1894,7 +2035,7 @@ mod tests {
     #[test]
     fn suspend_sequence_handles_a_tiny_terminal() {
         // A 1-row terminal must not underflow when computing the region bottom.
-        let _ = suspend_sequence(1);
+        let _ = suspend_sequence(0, 1);
         assert!(resume_sequence(1).contains("\x1b[1;1r"));
     }
 
@@ -1970,6 +2111,29 @@ mod tests {
         assert_eq!(h.next().as_deref(), Some("typing…")); // draft restored
         assert_eq!(h.next(), None);
         assert_eq!(h.pos, h.entries.len()); // back at the live draft
+    }
+
+    #[test]
+    fn wrap_line_breaks_at_spaces_and_hard_splits_long_words() {
+        let chars: Vec<char> = "the quick brown fox".chars().collect();
+        let rows: Vec<String> = wrap_line(&chars, 10)
+            .into_iter()
+            .map(|(_, c)| c.into_iter().collect())
+            .collect();
+        // Breaks after a space, not mid-word.
+        assert_eq!(
+            rows,
+            vec!["the quick ".to_string(), "brown fox".to_string()]
+        );
+
+        // A single word longer than the width hard-splits.
+        let long: Vec<char> = "supercalifragilistic".chars().collect();
+        let rows = wrap_line(&long, 8);
+        assert_eq!(rows[0].1.iter().collect::<String>(), "supercal");
+        assert_eq!(rows.len(), 3);
+
+        // An empty line is one empty row (so the caret still has a row).
+        assert_eq!(wrap_line(&[], 10).len(), 1);
     }
 
     #[test]

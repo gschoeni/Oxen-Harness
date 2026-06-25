@@ -172,6 +172,19 @@ impl Ui {
         self.theme.voice.thinking.clone()
     }
 
+    /// Phrases shown while the model is actively streaming a written response
+    /// (so a pause mid-text still animates). Uses the theme's `write_file` verbs
+    /// when present — a natural "writing" feel — and otherwise falls back to the
+    /// thinking phrases so the indicator is never empty.
+    pub fn writing(&self) -> Vec<String> {
+        let verbs = self.theme.tool_verbs("write_file");
+        if verbs.is_empty() || verbs == ["Working"] {
+            self.thinking()
+        } else {
+            verbs
+        }
+    }
+
     /// Spinner verbs that fit a given tool.
     pub fn tool_verbs(&self, tool: &str) -> Vec<String> {
         self.theme.tool_verbs(tool)
@@ -211,6 +224,58 @@ pub fn divider(ui: &Ui) -> String {
 // ===========================================================================
 // Pseudo-random selection (no `rand` dependency — a tiny time-seeded xorshift).
 // ===========================================================================
+
+/// Today's date formatted like the journal's flavor ("March 21, 1848"), but for
+/// the present day. Derived from `SystemTime` (UTC) with a civil-date conversion
+/// so we avoid pulling in a date/time dependency.
+fn today() -> String {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    let days = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() / 86_400)
+        .unwrap_or(0) as i64;
+    let (year, month, day) = civil_from_days(days);
+    format!("{} {}, {}", MONTHS[(month - 1) as usize], day, year)
+}
+
+/// Convert a count of days since the Unix epoch (1970-01-01) into a
+/// (year, month, day) civil date. Algorithm from Howard Hinnant's `chrono`
+/// date library (`civil_from_days`), valid across the Gregorian calendar.
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// A random weather reading for the trail journal — Oregon Trail flavor, picked
+/// fresh each run from the same time-seeded PRNG used for the death screen.
+fn weather() -> &'static str {
+    const CONDITIONS: [&str; 10] = [
+        "warm", "hot", "cool", "cold", "freezing", "rainy", "snowy", "foggy", "windy", "clear",
+    ];
+    let mut s = seed();
+    CONDITIONS[(xorshift(&mut s) as usize) % CONDITIONS.len()]
+}
 
 fn seed() -> u64 {
     SystemTime::now()
@@ -367,10 +432,15 @@ pub fn banner(
     out.push_str(&journal_row(ui, &v.label_session, session));
     out.push_str(&journal_row(ui, "Theme", &ui.theme.meta.name));
     for [label, value] in &v.flavor_bottom {
-        // The "Total tokens used" row carries live state: substitute the real
-        // cumulative count for the static flavor value.
+        // A few rows carry live state, substituted for the static flavor value:
+        // "Total tokens used" gets the real cumulative count, and "Date" gets
+        // today's date so the trail journal opens on the present day.
         if label == "Total tokens used" {
             out.push_str(&journal_row(ui, label, &format!("{tokens_used} tokens")));
+        } else if label == "Date" {
+            out.push_str(&journal_row(ui, label, &today()));
+        } else if label == "Weather" {
+            out.push_str(&journal_row(ui, label, weather()));
         } else {
             out.push_str(&journal_row(ui, label, value));
         }
@@ -588,12 +658,19 @@ impl Spinner {
     /// Start spinning, cycling through `verbs`. Returns a no-op spinner when
     /// color/animation is disabled (e.g. piped output) or there's nothing to show.
     pub fn start(ui: &Ui, verbs: Vec<String>) -> Self {
+        Self::start_with_target(ui, verbs, None)
+    }
+
+    /// Like [`Spinner::start`] but pins a `target` (file/command/query) after the
+    /// verb, so a running tool shows *what* it's working on alongside the timer.
+    pub fn start_with_target(ui: &Ui, verbs: Vec<String>, target: Option<String>) -> Self {
         let Some(style) = SpinnerStyle::for_ui(ui).filter(|_| !verbs.is_empty()) else {
             return Spinner { inner: None };
         };
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
-        let handle = thread::spawn(move || run_spinner(&stop_thread, &verbs, &style));
+        let handle =
+            thread::spawn(move || run_spinner(&stop_thread, &verbs, target.as_deref(), &style));
         Spinner {
             inner: Some(Inner { stop, handle }),
         }
@@ -608,24 +685,31 @@ impl Spinner {
     }
 }
 
-/// Build one rendered spinner frame: `glyph  verb…  (elapsed)`, fully painted.
+/// Build one rendered spinner frame: `glyph  verb… target  (elapsed)`, fully
+/// painted. The `target` (a file/command/query) is shown dimmed after the verb
+/// when present, so a running tool says *what* it's acting on.
 fn spinner_frame(
     style: &SpinnerStyle,
     verbs: &[String],
+    target: Option<&str>,
     start: Instant,
     frame: usize,
     verb_idx: usize,
 ) -> String {
     let glyph = &style.glyphs[frame % style.glyphs.len()];
+    let verb = match target {
+        Some(t) if !t.is_empty() => format!("{}… {}", verbs[verb_idx], t),
+        _ => format!("{}…", verbs[verb_idx]),
+    };
     format!(
         "{}  {}  {}",
         paint(glyph, style.glyph_rgb),
-        paint(&format!("{}…", verbs[verb_idx]), style.text_rgb),
+        paint(&verb, style.text_rgb),
         paint(&format!("({})", elapsed(start)), style.dim_rgb),
     )
 }
 
-fn run_spinner(stop: &AtomicBool, verbs: &[String], style: &SpinnerStyle) {
+fn run_spinner(stop: &AtomicBool, verbs: &[String], target: Option<&str>, style: &SpinnerStyle) {
     let mut out = io::stdout();
     let start = Instant::now();
     let mut s = seed();
@@ -639,7 +723,7 @@ fn run_spinner(stop: &AtomicBool, verbs: &[String], style: &SpinnerStyle) {
         if frame > 0 && frame % 16 == 0 {
             verb_idx = (verb_idx + 1) % verbs.len();
         }
-        let line = spinner_frame(style, verbs, start, frame, verb_idx);
+        let line = spinner_frame(style, verbs, target, start, frame, verb_idx);
         let _ = write!(out, "\r{line}\x1b[K");
         let _ = out.flush();
         frame += 1;
@@ -657,6 +741,9 @@ fn run_spinner(stop: &AtomicBool, verbs: &[String], style: &SpinnerStyle) {
 pub(crate) struct LiveSpinner {
     style: SpinnerStyle,
     verbs: Vec<String>,
+    /// An optional target (a file path, command, query…) shown after the verb so
+    /// the indicator reads e.g. `Reading the trail guide… src/lib.rs (3s)`.
+    target: Option<String>,
     start: Instant,
     frame: usize,
     verb_idx: usize,
@@ -665,6 +752,12 @@ pub(crate) struct LiveSpinner {
 impl LiveSpinner {
     /// A spinner cycling `verbs`, or `None` when there's nothing to animate.
     pub(crate) fn new(ui: &Ui, verbs: Vec<String>) -> Option<Self> {
+        Self::with_target(ui, verbs, None)
+    }
+
+    /// Like [`LiveSpinner::new`] but pins a `target` (file/command/etc.) after the
+    /// verb, so a running tool shows *what* it's working on alongside the timer.
+    pub(crate) fn with_target(ui: &Ui, verbs: Vec<String>, target: Option<String>) -> Option<Self> {
         if verbs.is_empty() {
             return None;
         }
@@ -674,17 +767,19 @@ impl LiveSpinner {
         Some(LiveSpinner {
             style,
             verbs,
+            target,
             start: Instant::now(),
             frame: 0,
             verb_idx,
         })
     }
 
-    /// The current frame's status line (glyph + verb + elapsed), painted.
+    /// The current frame's status line (glyph + verb + target + elapsed), painted.
     pub(crate) fn line(&self) -> String {
         spinner_frame(
             &self.style,
             &self.verbs,
+            self.target.as_deref(),
             self.start,
             self.frame,
             self.verb_idx,
@@ -737,6 +832,31 @@ mod tests {
         assert!(!help(&ui).contains("\x1b["));
         assert!(!banner(&ui, "u", "m", "w", "s", 0).contains("\x1b["));
         assert!(!death_screen(&ui, "abc123").contains("\x1b["));
+    }
+
+    #[test]
+    fn civil_from_days_matches_known_dates() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1)); // Unix epoch
+        assert_eq!(civil_from_days(18_993), (2022, 1, 1));
+        assert_eq!(civil_from_days(59), (1970, 3, 1)); // non-leap year
+        assert_eq!(civil_from_days(-719_162), (1, 1, 1));
+    }
+
+    #[test]
+    fn banner_shows_a_live_date_not_the_static_flavor() {
+        let ui = colored();
+        let out = banner(&ui, "u", "m", "w", "s", 0);
+        // The static flavor year (1848) must be replaced by today's real date.
+        assert!(out.contains(&today()));
+        assert!(!out.contains("March 21, 1848"));
+    }
+
+    #[test]
+    fn weather_is_one_of_the_known_conditions() {
+        const CONDITIONS: [&str; 10] = [
+            "warm", "hot", "cool", "cold", "freezing", "rainy", "snowy", "foggy", "windy", "clear",
+        ];
+        assert!(CONDITIONS.contains(&weather()));
     }
 
     #[test]
