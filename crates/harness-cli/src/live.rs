@@ -1,22 +1,26 @@
-//! A live, sticky-bottom composer for the interactive REPL.
+//! The live, bottom-pinned input box for the interactive REPL.
 //!
-//! The classic prompt blocks on `rustyline`'s `readline()` until a turn ends, so
-//! the user can't type while the model streams. This module takes over a real
-//! terminal for the duration of a turn and pins an input line to the bottom row,
-//! letting the user stack follow-up messages onto the [`MessageQueue`] while the
-//! agent works. Queued messages drain in order as soon as the turn finishes.
+//! On an interactive terminal this replaces `rustyline`: the input is a rounded
+//! bordered box pinned to the bottom, with the themed prompt, **multi-line**
+//! editing (Alt/Shift+Enter or Ctrl-J adds a line), **history** recall (Up/Down at
+//! a line edge), and the stacked [`MessageQueue`] above it. The same box is used
+//! whether idle ([`read_idle`]) or mid-turn ([`run_prompt`]) — while the agent
+//! streams you can keep typing, and Enter stacks a follow-up onto the queue that
+//! drains when the turn finishes.
 //!
 //! How it stays out of the output's way: we put the terminal in raw mode, pin the
-//! composer to the bottom row, keep a blank spacer row just above it (so output
-//! never butts against the prompt — see [`SPACER_ROWS`]), and set a DECSTBM scroll
-//! region over the rows *above* that. All turn output (streamed Markdown, tool
-//! lines, the spinner) is written into that region — where it scrolls naturally —
-//! through a small adapter that turns `\n` into `\r\n` (mandatory in raw mode).
-//! The composer is redrawn on row `H` after every output event and keystroke,
-//! bracketed by save/restore-cursor so the output position is never disturbed.
+//! box to the bottom rows, keep a blank spacer + a faint divider just above it
+//! (so output never butts against the input — see [`SPACER_ROWS`]/[`DIVIDER_ROWS`]),
+//! and set a DECSTBM scroll region over the rows *above* that. All turn output
+//! (streamed Markdown, tool lines, the spinner) is written into that region —
+//! where it scrolls naturally — through a small adapter that turns `\n` into
+//! `\r\n` (mandatory in raw mode). The box is repainted after every output event
+//! and keystroke, bracketed by save/restore-cursor so the output is never
+//! disturbed; the box grows/shrinks with the lines typed, re-carving the region.
 //!
-//! This path is only ever entered for an interactive TTY (gated by the caller).
-//! Everything here is best-effort and always restored on drop.
+//! Entered only for an interactive TTY (the caller gates on it and on
+//! `OXEN_HARNESS_CLASSIC_INPUT`). Everything here is best-effort and always
+//! restored on drop.
 
 use std::cell::RefCell;
 use std::io::{self, Write};
@@ -123,6 +127,121 @@ pub(crate) async fn run_prompt(
         crate::brave::prompt_after_failed_search(ui);
     }
     Ok((exit, draft))
+}
+
+/// The result of reading one submission at the idle prompt.
+pub(crate) enum Idle {
+    /// The user submitted this (a prompt to run or a `/command`).
+    Submit(String),
+    /// Ctrl-D / Ctrl-C on an empty box — end the session.
+    Exit,
+}
+
+/// Read one submission at the idle prompt using the bordered box composer, then
+/// tear the terminal down so the caller can run a turn or a command in cooked
+/// mode. `seed` pre-fills the box (e.g. a draft carried over from a turn);
+/// `history` is loaded for Up/Down recall and updated with the submission.
+///
+/// Returns [`Idle::Submit`] with the trimmed text, or [`Idle::Exit`] to quit.
+pub(crate) async fn read_idle(
+    ui: &Ui,
+    queue: &mut MessageQueue,
+    history: &mut Vec<String>,
+    seed: &str,
+) -> Result<Idle> {
+    let term = LiveTerminal::new()?;
+    let (rows, cols) = (term.rows, term.cols);
+    let stop = Arc::new(AtomicBool::new(false));
+    let paused = Arc::new(AtomicBool::new(false));
+    let (mut rx, input) = spawn_input(&stop, &paused);
+
+    let state = Rc::new(RefCell::new(Live::new(ui.clone(), cols, rows)));
+    {
+        let mut s = state.borrow_mut();
+        s.history = History::with_entries(history.clone());
+        if !seed.is_empty() {
+            s.composer = Composer::seeded(seed);
+        }
+        s.sync_queue(queue.items());
+        s.render();
+    }
+
+    let result = loop {
+        match rx.recv().await {
+            Some(Event::Key(key)) => {
+                let action = state.borrow_mut().handle_key(key, queue.len());
+                match action {
+                    KeyAction::None => {}
+                    KeyAction::Redraw => state.borrow_mut().render(),
+                    KeyAction::Submit(line) => {
+                        // At idle, Enter sends (vs. queueing during a turn).
+                        let trimmed = line.trim().to_string();
+                        if trimmed.is_empty() {
+                            state.borrow_mut().render();
+                        } else {
+                            break Idle::Submit(trimmed);
+                        }
+                    }
+                    KeyAction::BeginEdit => {
+                        let mut s = state.borrow_mut();
+                        if let Some(i) = s.focused_item() {
+                            if let Some(text) = queue.items().get(i) {
+                                s.begin_edit(text);
+                            }
+                        }
+                        s.render();
+                    }
+                    KeyAction::SaveEdit => {
+                        let mut s = state.borrow_mut();
+                        if let Some((idx, text)) = s.take_edit() {
+                            let _ = queue.edit(idx + 1, text);
+                            s.sync_queue(queue.items());
+                        }
+                        s.render();
+                    }
+                    KeyAction::CancelEdit => {
+                        let mut s = state.borrow_mut();
+                        s.cancel_edit();
+                        s.render();
+                    }
+                    KeyAction::DeleteFocused => {
+                        let mut s = state.borrow_mut();
+                        if let Some(i) = s.focused_item() {
+                            let _ = queue.remove(i + 1);
+                        }
+                        s.sync_queue(queue.items());
+                        s.render();
+                    }
+                    KeyAction::Interrupt | KeyAction::Exit => break Idle::Exit,
+                }
+            }
+            Some(Event::Resize(c, r)) => {
+                state.borrow_mut().handle_resize(c, r, queue.items());
+            }
+            Some(Event::Paste(text)) => {
+                let mut s = state.borrow_mut();
+                s.insert_paste(&text);
+                s.render();
+            }
+            Some(_) => {}
+            None => break Idle::Exit,
+        }
+    };
+
+    *history = state.borrow().history.entries().to_vec();
+    stop.store(true, Ordering::Relaxed);
+    let _ = input.join();
+    drop(state);
+    drop(term);
+
+    // Echo the submission into the scrollback (cooked mode) so it stays above
+    // whatever output the turn/command prints next — mirroring how a typed
+    // prompt used to remain on screen.
+    if let Idle::Submit(text) = &result {
+        let (_, styled) = composer_prompt(ui, queue.len());
+        println!("{styled}{}", ui.cream(text));
+    }
+    Ok(result)
 }
 
 /// What happened to a single turn in the live loop.
@@ -388,6 +507,10 @@ const SPACER_ROWS: usize = 1;
 /// idle prompt's separator).
 const DIVIDER_ROWS: usize = 1;
 
+/// Most input lines shown inside the box at once; beyond this it windows around
+/// the caret so a long paste can't push the conversation off-screen.
+const MAX_INPUT_ROWS: usize = 8;
+
 /// Display previews are capped to this many characters when snapshotting the
 /// queue, then windowed to the terminal width at paint time.
 const PREVIEW_CAP: usize = 256;
@@ -550,7 +673,14 @@ enum KeyIntent {
     Interrupt,
     Exit,
     Compose(BufOp),
+    /// Insert a hard line break in the composer (Alt/Shift+Enter, Ctrl+J).
+    ComposeNewline,
     ComposerSubmit,
+    /// Up in the composer: move a line up, else recall older history / focus the
+    /// queue (resolved against composer + history + queue state in `handle_key`).
+    ComposeUp,
+    /// Down in the composer: move a line down, else recall newer history.
+    ComposeDown,
     FocusUp,
     FocusDown,
     BeginEdit,
@@ -569,14 +699,21 @@ fn classify_key(code: KeyCode, mods: KeyModifiers, mode: Mode, composer_empty: b
         return match code {
             KeyCode::Char('c') => KeyIntent::Interrupt,
             KeyCode::Char('d') if mode == Mode::Compose && composer_empty => KeyIntent::Exit,
+            // Ctrl-J is a portable "insert newline" that survives terminals which
+            // don't distinguish Shift/Alt+Enter.
+            KeyCode::Char('j') if mode == Mode::Compose => KeyIntent::ComposeNewline,
             _ => KeyIntent::Ignore,
         };
     }
     match mode {
         Mode::Compose => match code {
+            // Alt/Shift+Enter add a line; plain Enter sends (or queues).
+            KeyCode::Enter if alt || mods.contains(KeyModifiers::SHIFT) => {
+                KeyIntent::ComposeNewline
+            }
             KeyCode::Enter => KeyIntent::ComposerSubmit,
-            KeyCode::Up => KeyIntent::FocusUp,
-            KeyCode::Down => KeyIntent::FocusDown,
+            KeyCode::Up => KeyIntent::ComposeUp,
+            KeyCode::Down => KeyIntent::ComposeDown,
             KeyCode::Backspace => KeyIntent::Compose(BufOp::Backspace),
             KeyCode::Delete => KeyIntent::Compose(BufOp::Delete),
             KeyCode::Left => KeyIntent::Compose(BufOp::Left),
@@ -651,6 +788,35 @@ fn render_buffer(c: &Composer, avail: usize, caret: bool) -> (String, usize) {
     (body, width)
 }
 
+/// Render one line of text windowed to `avail` columns, optionally drawing a
+/// reverse-video caret at `caret` (a column within the line, or one past its
+/// end). Returns the painted body and its *visible* width (ANSI excluded) so the
+/// box can pad to a fixed cell. Like [`render_buffer`] but for a single line.
+fn render_text_line(chars: &[char], caret: Option<usize>, avail: usize) -> (String, usize) {
+    let cur = caret.unwrap_or(0);
+    let start = cur.saturating_sub(avail);
+    let end = (start + avail).min(chars.len());
+    let mut body = String::new();
+    let mut width = 0;
+    for (i, ch) in chars.iter().enumerate().take(end).skip(start) {
+        if caret == Some(i) {
+            body.push_str("\x1b[7m");
+            body.push(*ch);
+            body.push_str("\x1b[0m");
+        } else {
+            body.push(*ch);
+        }
+        width += 1;
+    }
+    if let Some(c) = caret {
+        if c >= chars.len() {
+            body.push_str("\x1b[7m \x1b[0m");
+            width += 1;
+        }
+    }
+    (body, width)
+}
+
 /// The composer prompt as `(plain, styled)`: the plain form measures width, the
 /// styled form is what's drawn. Uses the same themed icon + label as the idle
 /// prompt so typing looks identical whether or not the agent is working; shows
@@ -697,6 +863,8 @@ struct Live {
     suspended: bool,
     /// The bottom composer's edit buffer.
     composer: Composer,
+    /// Recallable input history (Up/Down at a line edge walk it).
+    history: History,
     /// Where keyboard focus currently sits.
     focus: Focus,
     /// `Some` while inline-editing the focused item (loaded with its full text).
@@ -722,6 +890,7 @@ impl Live {
             spinner: None,
             suspended: false,
             composer: Composer::new(),
+            history: History::default(),
             focus: Focus::Composer,
             edit: None,
             previews: Vec::new(),
@@ -969,16 +1138,12 @@ impl Live {
 
     // --- composer + queue list painting ------------------------------------
 
-    /// Repaint only the composer row. Used during streaming, where the queue
-    /// list is unchanged and protected from scrolling output by the DECSTBM
-    /// region, so only the composer needs refreshing.
+    /// Repaint the input area (used during streaming and after each keystroke).
+    /// The box can change height as lines are added/removed, which re-carves the
+    /// scroll region, so this defers to the full [`Live::paint`] — bracketed by
+    /// save/restore-cursor, it leaves the streaming output position untouched.
     fn render_composer(&mut self) {
-        if self.suspended {
-            return;
-        }
-        let line = self.composer_line();
-        let _ = write!(self.out, "\x1b7\x1b[{};1H\x1b[2K{line}\x1b8", self.rows);
-        let _ = self.out.flush();
+        self.paint(false);
     }
 
     /// Repaint the whole bottom area — the stacked queue list plus the composer
@@ -1004,10 +1169,14 @@ impl Live {
         let frame = if len == 0 { 0 } else { QUEUE_FRAME_ROWS };
         let plan = queue_rows(len, self.focus, self.rows, MAX_QUEUE_ROWS, frame);
         let chrome = if plan.is_empty() { 0 } else { QUEUE_FRAME_ROWS };
+        // The input is a bordered box whose height grows with the lines typed.
+        let box_lines = self.composer_box_lines();
+        let box_h = box_lines.len() as u16;
         // Between the agent's output and the pinned input area: a blank spacer
         // then a faint divider rule, matching the idle prompt (output · blank ·
         // rule · input), so the prompt always has breathing room and a clear edge.
-        let reserved = (plan.len() + chrome + SPACER_ROWS + DIVIDER_ROWS + 1) as u16;
+        let reserved =
+            (plan.len() + chrome) as u16 + SPACER_ROWS as u16 + DIVIDER_ROWS as u16 + box_h;
         let new_bottom = self.rows.saturating_sub(reserved).max(1);
 
         let mut buf = String::new();
@@ -1052,11 +1221,12 @@ impl Live {
             r += 1;
             buf.push_str(&format!("\x1b[{r};1H\x1b[2K{}", self.queue_footer(box_w)));
         }
-        buf.push_str(&format!(
-            "\x1b[{};1H\x1b[2K{}",
-            self.rows,
-            self.composer_line()
-        ));
+        // The input box occupies the bottom `box_h` rows, pinned to row H.
+        let box_start = self.rows.saturating_sub(box_h).saturating_add(1);
+        for (i, line) in box_lines.iter().enumerate() {
+            let row = box_start + i as u16;
+            buf.push_str(&format!("\x1b[{row};1H\x1b[2K{line}"));
+        }
         buf.push_str("\x1b8");
         let _ = write!(self.out, "{buf}");
         let _ = self.out.flush();
@@ -1183,19 +1353,60 @@ impl Live {
         truncate(preview, width.saturating_sub(1))
     }
 
-    /// Build the styled composer line, windowed to the terminal width. The caret
-    /// shows only when the composer holds focus (not while browsing/editing).
-    fn composer_line(&self) -> String {
+    /// Render the input as a rounded bordered box, one entry per visual line, the
+    /// themed prompt on the first line and continuation lines aligned under it.
+    /// The box grows with the lines typed (capped at [`MAX_INPUT_ROWS`], windowing
+    /// around the caret beyond that). The caret (reverse-video cell) shows only
+    /// when the composer holds focus — not while browsing/editing the queue.
+    fn composer_box_lines(&self) -> Vec<String> {
         let depth = self.previews.len();
         let (plain_prompt, styled_prompt) = composer_prompt(&self.ui, depth);
         let prompt_w = plain_prompt.chars().count();
-        let avail = (self.cols as usize)
-            .saturating_sub(prompt_w)
-            .saturating_sub(1)
-            .max(8);
-        let caret = matches!(self.focus, Focus::Composer) && self.edit.is_none();
-        let (body, _) = render_buffer(&self.composer, avail, caret);
-        format!("{styled_prompt}{body}")
+        let box_w = self.queue_box_w();
+        // Leave a column for the caret so it never spills past the right border.
+        let avail = box_w.saturating_sub(prompt_w + 1).max(4);
+        let caret_on = matches!(self.focus, Focus::Composer) && self.edit.is_none();
+
+        let lines: Vec<Vec<char>> = self
+            .composer
+            .lines()
+            .into_iter()
+            .map(|l| l.chars().collect())
+            .collect();
+        let (caret_line, caret_col) = self.composer.line_col();
+
+        // Window the visible lines around the caret when there are more than fit.
+        let total = lines.len();
+        let (lo, hi) = if total <= MAX_INPUT_ROWS {
+            (0, total)
+        } else {
+            let lo = caret_line
+                .saturating_sub(MAX_INPUT_ROWS / 2)
+                .min(total - MAX_INPUT_ROWS);
+            (lo, lo + MAX_INPUT_ROWS)
+        };
+
+        let bar = self.ui.brown("│");
+        let mut out = vec![format!(
+            "  {}",
+            self.ui.brown(&format!("╭{}╮", "─".repeat(box_w + 2)))
+        )];
+        for (i, line) in lines.iter().enumerate().take(hi).skip(lo) {
+            let caret = (caret_on && i == caret_line).then_some(caret_col);
+            let (body, width) = render_text_line(line, caret, avail);
+            let prefix = if i == 0 {
+                styled_prompt.clone()
+            } else {
+                " ".repeat(prompt_w)
+            };
+            let pad = box_w.saturating_sub(prompt_w + width);
+            out.push(format!("  {bar} {prefix}{body}{} {bar}", " ".repeat(pad)));
+        }
+        out.push(format!(
+            "  {}",
+            self.ui.brown(&format!("╰{}╯", "─".repeat(box_w + 2)))
+        ));
+        out
     }
 
     /// Translate a keystroke into a [`KeyAction`], mutating the composer / focus
@@ -1216,9 +1427,45 @@ impl Live {
             KeyIntent::Exit => KeyAction::Exit,
             KeyIntent::Compose(op) => {
                 apply_buf(&mut self.composer, op);
+                // Editing leaves history recall — keep the buffer as the draft.
+                self.history.reset();
                 KeyAction::Redraw
             }
-            KeyIntent::ComposerSubmit => KeyAction::Submit(self.composer.take()),
+            KeyIntent::ComposeNewline => {
+                self.composer.insert_newline();
+                self.history.reset();
+                KeyAction::Redraw
+            }
+            KeyIntent::ComposerSubmit => {
+                let text = self.composer.take();
+                self.history.push(&text);
+                KeyAction::Submit(text)
+            }
+            KeyIntent::ComposeUp => {
+                // Move up a line if there is one; on the first line, either focus
+                // the queue (empty box) or recall the previous history entry.
+                if self.composer.move_up() {
+                    self.history.reset();
+                } else if self.composer.is_empty() && queue_len > 0 {
+                    self.focus = self.focus.up(queue_len);
+                } else {
+                    let draft = self.composer.text();
+                    if let Some(prev) = self.history.prev(&draft) {
+                        self.composer.set_text(&prev);
+                    }
+                }
+                KeyAction::Redraw
+            }
+            KeyIntent::ComposeDown => {
+                // Move down a line if there is one; on the last line, recall the
+                // next history entry (eventually restoring the stashed draft).
+                if self.composer.move_down() {
+                    self.history.reset();
+                } else if let Some(next) = self.history.next() {
+                    self.composer.set_text(&next);
+                }
+                KeyAction::Redraw
+            }
             KeyIntent::FocusUp => {
                 self.focus = self.focus.up(queue_len);
                 KeyAction::Redraw
@@ -1352,9 +1599,12 @@ fn spawn_input(
 // Composer — a pure, testable line editor
 // ===========================================================================
 
-/// The composer's edit buffer: a line of text and a caret position. Pure and
-/// terminal-free so the editing rules can be unit-tested in isolation. The caret
-/// is a character index in `0..=buf.len()`.
+/// The composer's edit buffer: text (which may contain `\n` for multi-line
+/// input) and a caret position. Pure and terminal-free so the editing rules can
+/// be unit-tested in isolation. The caret is a character index in `0..=buf.len()`.
+///
+/// Single-line behavior is unchanged when the buffer holds no `\n`: `move_home`
+/// / `move_end` and the line helpers all collapse to the whole buffer.
 struct Composer {
     buf: Vec<char>,
     cursor: usize,
@@ -1369,7 +1619,7 @@ impl Composer {
     }
 
     /// A buffer pre-loaded with `text`, caret at the end — used to seed inline
-    /// editing of an existing queued message.
+    /// editing of a queued message and history recall.
     fn seeded(text: &str) -> Self {
         let buf: Vec<char> = text.chars().collect();
         let cursor = buf.len();
@@ -1380,7 +1630,7 @@ impl Composer {
         self.buf.is_empty()
     }
 
-    /// The buffer's contents as a string.
+    /// The buffer's contents as a string (newlines included).
     fn text(&self) -> String {
         self.buf.iter().collect()
     }
@@ -1393,10 +1643,59 @@ impl Composer {
         self.cursor
     }
 
+    /// The buffer split into its visual lines (on `\n`).
+    fn lines(&self) -> Vec<String> {
+        self.text().split('\n').map(str::to_string).collect()
+    }
+
+    /// How many lines the buffer spans (at least 1).
+    fn line_count(&self) -> usize {
+        1 + self.buf.iter().filter(|&&c| c == '\n').count()
+    }
+
+    /// The caret's `(line, column)`, both 0-based.
+    fn line_col(&self) -> (usize, usize) {
+        let mut line = 0;
+        let mut col = 0;
+        for &c in &self.buf[..self.cursor] {
+            if c == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
+
+    /// Buffer index where each line begins.
+    fn line_starts(&self) -> Vec<usize> {
+        let mut starts = vec![0];
+        for (i, &c) in self.buf.iter().enumerate() {
+            if c == '\n' {
+                starts.push(i + 1);
+            }
+        }
+        starts
+    }
+
+    /// Length (in chars) of line `n`, excluding its trailing newline.
+    fn line_len(&self, n: usize) -> usize {
+        let starts = self.line_starts();
+        let start = starts[n];
+        let end = starts.get(n + 1).map(|s| s - 1).unwrap_or(self.buf.len());
+        end - start
+    }
+
     /// Insert `c` at the caret and advance past it.
     fn insert_char(&mut self, c: char) {
         self.buf.insert(self.cursor, c);
         self.cursor += 1;
+    }
+
+    /// Insert a hard line break at the caret (multi-line input).
+    fn insert_newline(&mut self) {
+        self.insert_char('\n');
     }
 
     /// Delete the character before the caret (Backspace).
@@ -1424,19 +1723,124 @@ impl Composer {
         }
     }
 
+    /// Move to the start of the current line.
     fn move_home(&mut self) {
-        self.cursor = 0;
+        let (line, _) = self.line_col();
+        self.cursor = self.line_starts()[line];
     }
 
+    /// Move to the end of the current line.
     fn move_end(&mut self) {
+        let (line, _) = self.line_col();
+        self.cursor = self.line_starts()[line] + self.line_len(line);
+    }
+
+    /// Move the caret up one line, keeping the column where possible. Returns
+    /// `false` when already on the first line (the caller then recalls history
+    /// or focuses the queue).
+    fn move_up(&mut self) -> bool {
+        let (line, col) = self.line_col();
+        if line == 0 {
+            return false;
+        }
+        let target = line - 1;
+        let col = col.min(self.line_len(target));
+        self.cursor = self.line_starts()[target] + col;
+        true
+    }
+
+    /// Move the caret down one line, keeping the column where possible. Returns
+    /// `false` when already on the last line (the caller then recalls history).
+    fn move_down(&mut self) -> bool {
+        let (line, col) = self.line_col();
+        if line + 1 >= self.line_count() {
+            return false;
+        }
+        let target = line + 1;
+        let col = col.min(self.line_len(target));
+        self.cursor = self.line_starts()[target] + col;
+        true
+    }
+
+    /// Replace the whole buffer (history recall), caret at the end.
+    fn set_text(&mut self, text: &str) {
+        self.buf = text.chars().collect();
         self.cursor = self.buf.len();
     }
 
-    /// Take the current line, clearing the buffer and resetting the caret.
+    /// Take the buffer's contents, clearing it and resetting the caret.
     fn take(&mut self) -> String {
         let line: String = self.buf.drain(..).collect();
         self.cursor = 0;
         line
+    }
+}
+
+/// Recallable input history: past submissions plus a scratch slot for the
+/// in-progress draft, so Up/Down walk into the past and back without losing what
+/// you were typing. `pos == entries.len()` means "the live draft" (not recalling).
+#[derive(Default)]
+struct History {
+    entries: Vec<String>,
+    pos: usize,
+    /// The live draft stashed when stepping back into history, restored on return.
+    draft: String,
+}
+
+impl History {
+    /// Seed history with prior entries (newest last), recall positioned at the
+    /// live draft. Used to carry `prompt_history.txt` into the session.
+    fn with_entries(entries: Vec<String>) -> Self {
+        let pos = entries.len();
+        Self {
+            entries,
+            pos,
+            draft: String::new(),
+        }
+    }
+
+    /// The entries, newest last (for persisting back to disk).
+    fn entries(&self) -> &[String] {
+        &self.entries
+    }
+
+    /// Record a submitted line (de-duped against the most recent) and reset the
+    /// recall position back to the live draft.
+    fn push(&mut self, line: &str) {
+        if !line.is_empty() && self.entries.last().map(String::as_str) != Some(line) {
+            self.entries.push(line.to_string());
+        }
+        self.pos = self.entries.len();
+    }
+
+    /// Recall the previous entry, stashing the live `draft` the first time we
+    /// step off it. Returns the text to show, or `None` at the oldest entry.
+    fn prev(&mut self, draft: &str) -> Option<String> {
+        if self.pos == 0 || self.entries.is_empty() {
+            return None;
+        }
+        if self.pos == self.entries.len() {
+            self.draft = draft.to_string();
+        }
+        self.pos -= 1;
+        self.entries.get(self.pos).cloned()
+    }
+
+    /// Recall the next entry; stepping past the newest restores the stashed draft.
+    fn next(&mut self) -> Option<String> {
+        if self.pos >= self.entries.len() {
+            return None;
+        }
+        self.pos += 1;
+        if self.pos == self.entries.len() {
+            Some(std::mem::take(&mut self.draft))
+        } else {
+            self.entries.get(self.pos).cloned()
+        }
+    }
+
+    fn reset(&mut self) {
+        self.pos = self.entries.len();
     }
 }
 
@@ -1508,6 +1912,77 @@ mod tests {
         assert_eq!(c.chars().iter().collect::<String>(), "hi");
         assert_eq!(c.cursor(), 2);
         assert!(!c.is_empty());
+    }
+
+    #[test]
+    fn newline_splits_into_lines() {
+        let mut c = typed("ab");
+        c.insert_newline();
+        c.insert_char('c');
+        assert_eq!(c.text(), "ab\nc");
+        assert_eq!(c.lines(), vec!["ab".to_string(), "c".to_string()]);
+        assert_eq!(c.line_count(), 2);
+        assert_eq!(c.line_col(), (1, 1));
+    }
+
+    #[test]
+    fn up_down_move_between_lines_and_keep_column() {
+        let mut c = typed("hello");
+        c.insert_newline();
+        c.insert_char('h');
+        c.insert_char('i'); // "hello\nhi", caret (1,2)
+        assert_eq!(c.line_col(), (1, 2));
+        assert!(c.move_up());
+        assert_eq!(c.line_col(), (0, 2));
+        assert!(!c.move_up()); // first line — caller recalls history
+        assert!(c.move_down());
+        assert_eq!(c.line_col(), (1, 2));
+        assert!(!c.move_down()); // last line
+    }
+
+    #[test]
+    fn home_end_line_relative_and_single_line_unchanged() {
+        let mut c = typed("ab");
+        c.insert_newline();
+        c.insert_char('c');
+        c.insert_char('d'); // "ab\ncd"
+        c.move_home();
+        assert_eq!(c.line_col(), (1, 0));
+        c.move_end();
+        assert_eq!(c.line_col(), (1, 2));
+
+        let mut s = typed("hello");
+        s.move_home();
+        assert_eq!(s.cursor(), 0);
+        s.move_end();
+        assert_eq!(s.cursor(), 5);
+        assert!(!s.move_up());
+        assert!(!s.move_down());
+    }
+
+    #[test]
+    fn history_walks_back_and_restores_the_draft() {
+        let mut h = History::with_entries(vec!["first".into(), "second".into()]);
+        assert_eq!(h.prev("typing…").as_deref(), Some("second"));
+        assert_eq!(h.prev("typing…").as_deref(), Some("first"));
+        assert_eq!(h.prev("typing…"), None); // oldest
+        assert_eq!(h.next().as_deref(), Some("second"));
+        assert_eq!(h.next().as_deref(), Some("typing…")); // draft restored
+        assert_eq!(h.next(), None);
+        assert_eq!(h.pos, h.entries.len()); // back at the live draft
+    }
+
+    #[test]
+    fn history_dedupes_consecutive_and_resets() {
+        let mut h = History::default();
+        h.push("a");
+        h.push("a");
+        h.push("b");
+        assert_eq!(h.entries, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(h.pos, h.entries.len());
+        h.prev("");
+        h.reset();
+        assert_eq!(h.pos, h.entries.len());
     }
 
     #[test]
@@ -1686,13 +2161,32 @@ mod tests {
             classify_key(KeyCode::Enter, n, Mode::Compose, false),
             KeyIntent::ComposerSubmit
         );
+        // Shift/Alt+Enter and Ctrl-J insert a newline instead of sending.
+        assert_eq!(
+            classify_key(KeyCode::Enter, KeyModifiers::SHIFT, Mode::Compose, false),
+            KeyIntent::ComposeNewline
+        );
+        assert_eq!(
+            classify_key(KeyCode::Enter, KeyModifiers::ALT, Mode::Compose, false),
+            KeyIntent::ComposeNewline
+        );
+        assert_eq!(
+            classify_key(
+                KeyCode::Char('j'),
+                KeyModifiers::CONTROL,
+                Mode::Compose,
+                false
+            ),
+            KeyIntent::ComposeNewline
+        );
+        // Up/Down are resolved (line move vs history vs queue) in handle_key.
         assert_eq!(
             classify_key(KeyCode::Up, n, Mode::Compose, false),
-            KeyIntent::FocusUp
+            KeyIntent::ComposeUp
         );
         assert_eq!(
             classify_key(KeyCode::Down, n, Mode::Compose, true),
-            KeyIntent::FocusDown
+            KeyIntent::ComposeDown
         );
         assert_eq!(
             classify_key(KeyCode::Char('a'), n, Mode::Compose, false),

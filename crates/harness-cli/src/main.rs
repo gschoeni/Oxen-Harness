@@ -298,6 +298,22 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Interactive TTYs use the bordered, bottom-pinned box composer (multi-line,
+    // history, queue) for both idle and in-turn input. Pipes, dumb terminals, and
+    // an explicit `OXEN_HARNESS_CLASSIC_INPUT` fall back to the classic readline.
+    let use_box = live_enabled(&ui) && std::env::var_os("OXEN_HARNESS_CLASSIC_INPUT").is_none();
+    if use_box {
+        return run_box_repl(
+            &mut agent,
+            &mut ui,
+            &store,
+            &session,
+            workspace.root(),
+            &base_url,
+        )
+        .await;
+    }
+
     // A persistent prompt history: Up-arrow recalls prompts from earlier
     // sessions, not just this one. Load whatever's on disk, then append each new
     // prompt so the history survives across runs (and a crash mid-session).
@@ -383,6 +399,95 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The interactive REPL for a live terminal: a bordered, bottom-pinned box
+/// composer (multi-line, history, queue) for both idle input and in-turn
+/// queueing. Reads one submission at idle via [`live::read_idle`], then dispatches
+/// it (a `/command` or a prompt) through [`handle_line`] in cooked mode.
+async fn run_box_repl(
+    agent: &mut Agent,
+    ui: &mut Ui,
+    store: &Arc<HistoryStore>,
+    session: &str,
+    workspace_root: &Path,
+    base_url: &str,
+) -> Result<()> {
+    let history_path = prompt_history_path();
+    let mut history = load_prompt_history(history_path.as_deref());
+    let mut queue = MessageQueue::default();
+    // A half-typed message left in the live composer when a turn ends, seeding
+    // the next idle box so typing continues uninterrupted.
+    let mut seed = String::new();
+    loop {
+        if !queue.is_empty() {
+            println!(
+                "  {} {}",
+                ui.brown(&format!("⛺ {} stacked in the wagon", queue.len())),
+                ui.dim("— /queue to review, /queue run to send"),
+            );
+        }
+        let idle = live::read_idle(ui, &mut queue, &mut history, &seed).await?;
+        match idle {
+            live::Idle::Exit => {
+                print!("{}", theme::death_screen(ui, session));
+                break;
+            }
+            live::Idle::Submit(line) => {
+                let mut carryover = String::new();
+                let exit = handle_line(
+                    &line,
+                    agent,
+                    store,
+                    session,
+                    ui,
+                    &mut queue,
+                    workspace_root,
+                    base_url,
+                    &mut carryover,
+                )
+                .await?;
+                seed = carryover;
+                // Fold any prompts queued during the turn into the recallable
+                // history too, then persist (survives an abrupt exit).
+                for authored in queue.take_authored() {
+                    if history.last() != Some(&authored) {
+                        history.push(authored);
+                    }
+                }
+                save_prompt_history(history_path.as_deref(), &history);
+                if exit {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Load the flat prompt-history file (one entry per line) for box-mode recall.
+fn load_prompt_history(path: Option<&Path>) -> Vec<String> {
+    path.and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| {
+            s.lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Persist the prompt history, flattening newlines so the one-line-per-entry
+/// file stays valid (a recalled multi-line entry returns single-line next run).
+fn save_prompt_history(path: Option<&Path>, entries: &[String]) {
+    if let Some(p) = path {
+        let body = entries
+            .iter()
+            .map(|e| e.replace('\n', " "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = std::fs::write(p, body);
+    }
 }
 
 /// Handle one line of input. Returns `Ok(true)` when the REPL should exit.
