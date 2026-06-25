@@ -384,6 +384,10 @@ const MAX_QUEUE_ROWS: usize = 6;
 /// area, so the prompt always has at least one full line of breathing room.
 const SPACER_ROWS: usize = 1;
 
+/// Rows for the faint divider rule drawn just above the input area (matching the
+/// idle prompt's separator).
+const DIVIDER_ROWS: usize = 1;
+
 /// Display previews are capped to this many characters when snapshotting the
 /// queue, then windowed to the terminal width at paint time.
 const PREVIEW_CAP: usize = 256;
@@ -648,19 +652,28 @@ fn render_buffer(c: &Composer, avail: usize, caret: bool) -> (String, usize) {
 }
 
 /// The composer prompt as `(plain, styled)`: the plain form measures width, the
-/// styled form is what's drawn. Shows the queue depth when non-empty.
+/// styled form is what's drawn. Uses the same themed icon + label as the idle
+/// prompt so typing looks identical whether or not the agent is working; shows
+/// the queue depth when messages are stacked.
 fn composer_prompt(ui: &Ui, depth: usize) -> (String, String) {
+    let v = &ui.theme().voice;
+    let (icon, label) = (v.prompt_icon.as_str(), v.prompt_label.as_str());
     if depth > 0 {
+        let tag = format!("[{depth} queued]");
         (
-            format!("[{depth} queued] ❯ "),
+            format!("{icon} {tag} {label} "),
             format!(
-                "{} {} ",
-                ui.brown(&format!("[{depth} queued]")),
-                ui.accent("❯"),
+                "{} {} {} ",
+                ui.brown(icon),
+                ui.brown(&tag),
+                ui.accent(label)
             ),
         )
     } else {
-        ("❯ ".to_string(), format!("{} ", ui.accent("❯")))
+        (
+            format!("{icon} {label} "),
+            format!("{} {} ", ui.brown(icon), ui.accent(label)),
+        )
     }
 }
 
@@ -991,9 +1004,10 @@ impl Live {
         let frame = if len == 0 { 0 } else { QUEUE_FRAME_ROWS };
         let plan = queue_rows(len, self.focus, self.rows, MAX_QUEUE_ROWS, frame);
         let chrome = if plan.is_empty() { 0 } else { QUEUE_FRAME_ROWS };
-        // One blank row between the agent's output (the scroll region) and the
-        // pinned input area below, so the prompt always has breathing room.
-        let reserved = (plan.len() + chrome + SPACER_ROWS + 1) as u16;
+        // Between the agent's output and the pinned input area: a blank spacer
+        // then a faint divider rule, matching the idle prompt (output · blank ·
+        // rule · input), so the prompt always has breathing room and a clear edge.
+        let reserved = (plan.len() + chrome + SPACER_ROWS + DIVIDER_ROWS + 1) as u16;
         let new_bottom = self.rows.saturating_sub(reserved).max(1);
 
         let mut buf = String::new();
@@ -1018,9 +1032,15 @@ impl Live {
         for s in 0..SPACER_ROWS as u16 {
             buf.push_str(&format!("\x1b[{};1H\x1b[2K", new_bottom + 1 + s));
         }
+        // Then a faint full-width divider rule, just above the input area.
+        let divider_row = new_bottom + 1 + SPACER_ROWS as u16;
+        buf.push_str(&format!(
+            "\x1b[{divider_row};1H\x1b[2K{}",
+            self.ui.dim(&"─".repeat(self.cols as usize))
+        ));
         if !plan.is_empty() {
             let box_w = self.queue_box_w();
-            let mut r = new_bottom + 1 + SPACER_ROWS as u16;
+            let mut r = new_bottom + 1 + SPACER_ROWS as u16 + DIVIDER_ROWS as u16;
             buf.push_str(&format!("\x1b[{r};1H\x1b[2K{}", self.queue_header(box_w)));
             for row in &plan {
                 r += 1;
