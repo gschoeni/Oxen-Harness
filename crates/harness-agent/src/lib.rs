@@ -453,6 +453,7 @@ mod tests {
             .create_session(&SessionMeta {
                 workspace: "/tmp/proj".into(),
                 model: "claude-opus-4-8".into(),
+                ..Default::default()
             })
             .unwrap();
         store
@@ -486,6 +487,7 @@ mod tests {
             .create_session(&SessionMeta {
                 workspace: "/tmp/proj".into(),
                 model: "claude-opus-4-8".into(),
+                ..Default::default()
             })
             .unwrap();
         // A 1-token window can't fit any real prompt, so the budget check trips

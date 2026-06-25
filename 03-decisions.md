@@ -57,6 +57,32 @@ The `~/.oxen-harness` base dir and every file under it (`history.sqlite`,
   plaintext keys out of `connection.json` lands with the runtime extraction.)
 -> *Why `.env` over the OS keychain: portable across the CLI + desktop app + cloud/headless runs, and trivially scriptable, without a platform-specific secret-store dependency.*
 
+## History & Storage
+
+**Versioned history DB via `rusqlite_migration`** (2026-06-25)
+The history store no longer creates its schema with bare `CREATE TABLE IF NOT
+EXISTS`; it runs an ordered migration chain tracked by SQLite's `user_version`.
+- *M1* is the original schema, declared with `IF NOT EXISTS` so a database
+  created before migrations existed (tables present, `user_version` still 0)
+  adopts the chain without error rather than colliding.
+- *M2* replaces the plain `(session_id, seq)` index with a **UNIQUE** one
+  (one row per sequence number) and adds session-metadata columns: `provider`,
+  `base_url`, `mode` (local/cloud), `context_window`, `system_prompt_version`,
+  `theme`, `transcript_version`. New columns default to empty/NULL so existing
+  rows migrate without backfill.
+-> *Why: changing `ChatMessage`, adding columns, or repairing derived fields was
+  unsafe once users had real history; and resuming an old session was ambiguous
+  with only `workspace` + `model` recorded as local models/tools/providers evolve.*
+
+**Derived `content`/title handles multimodal messages** (2026-06-25)
+`append_message` populated the queryable `content` column only when the
+top-level `content` was a JSON string, so a user message with an attachment
+(content serialized as a `Parts` array) recorded `NULL` and lost its title.
+`derive_content_text` now flattens the `text` parts of an array so titles come
+from the words the user typed. Kept as a JSON walk in `harness-store` rather than
+calling `ChatMessage::content_text()` so the store stays decoupled from
+`harness-llm`.
+
 ## Tooling parity
 
 **Essential tool set modeled on Claude Code (no MCP, no orchestration/network)** (2026-06-21)

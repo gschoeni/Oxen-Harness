@@ -81,6 +81,7 @@ async fn loop_calls_tool_then_returns_final_answer() {
         .create_session(&harness_store::SessionMeta {
             workspace: "/tmp/proj".into(),
             model: "claude-opus-4-8".into(),
+            ..Default::default()
         })
         .unwrap();
 

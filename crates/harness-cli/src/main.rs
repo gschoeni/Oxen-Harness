@@ -245,6 +245,10 @@ async fn main() -> Result<()> {
             let session = store.create_session(&SessionMeta {
                 workspace: workspace.root().display().to_string(),
                 model: model.clone(),
+                provider: "oxen".into(),
+                base_url: base_url.clone(),
+                context_window: context_window.map(|w| w as i64),
+                ..Default::default()
             })?;
             let agent = Agent::new(client, tools, store.clone(), session.clone(), config)?;
             (agent, session, None)

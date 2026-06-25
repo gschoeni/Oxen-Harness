@@ -293,6 +293,10 @@ fn new_agent(
         .create_session(&SessionMeta {
             workspace: workspace_root.display().to_string(),
             model: model_label.to_string(),
+            provider: "oxen".into(),
+            base_url: client.base_url().to_string(),
+            context_window: context_window.map(|w| w as i64),
+            ..Default::default()
         })
         .map_err(|e| e.to_string())?;
     register_canvas(&mut tools, app, &session);
