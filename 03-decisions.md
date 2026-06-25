@@ -38,6 +38,25 @@ scheme is used as-is. The auth token is looked up by the *resolved* host (e.g.
 servers work with `OXEN_API_KEY` or a per-host login. Helpers live in
 `harness-llm::auth` (`resolve_base_url`, `base_url_from_host`, `host_from_base_url`).
 
+**Config lives in `harness-config`; secrets live in `.env`** (2026-06-25)
+The `~/.oxen-harness` base dir and every file under it (`history.sqlite`,
+`connection.json`, `projects.json`, `config.toml`, `themes/`, `loops/`,
+`models/`, `canvas/`, `.env`) is resolved in one place — `harness-config::paths`
+— overridable with `OXEN_HARNESS_DIR` for tests/sandboxes. It previously lived in
+~8 copies across crates and the two front-ends and could drift.
+- *JSON config is atomic + versioned.* Writes go through a temp-file+rename
+  (`atomic_write`) so an interrupted write never leaves a torn file, and each
+  file carries a `schema_version` via a flattened `Versioned<T>` envelope. Files
+  written before versioning read back as version `0` (`UNVERSIONED`), so a future
+  migration can detect and upgrade them. `#[serde(flatten)]` keeps the JSON shape
+  backward compatible (the CLI's raw-JSON reads of `connection.json` still work).
+- *Secrets are not versioned.* API keys move out of `connection.json` into
+  `~/.oxen-harness/.env`, loaded into the process env at startup with `dotenvy`
+  (never overriding a var already set). This keeps the JSON config safe to commit
+  to an Oxen repo and share. The `.env` is written `0600`. (Migration of existing
+  plaintext keys out of `connection.json` lands with the runtime extraction.)
+-> *Why `.env` over the OS keychain: portable across the CLI + desktop app + cloud/headless runs, and trivially scriptable, without a platform-specific secret-store dependency.*
+
 ## Tooling parity
 
 **Essential tool set modeled on Claude Code (no MCP, no orchestration/network)** (2026-06-21)

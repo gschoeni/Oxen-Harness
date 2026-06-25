@@ -15,7 +15,7 @@ use crate::theme::Ui;
 
 /// `~/.oxen-harness/connection.json`, shared with the desktop app.
 fn config_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".oxen-harness").join("connection.json"))
+    harness_config::paths::connection_file().ok()
 }
 
 /// At startup, seed `BRAVE_API_KEY` from the saved config when it isn't already

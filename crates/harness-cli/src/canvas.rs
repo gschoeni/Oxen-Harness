@@ -15,7 +15,7 @@ const PREVIEW_CAP: usize = 40;
 
 /// Where canvas documents are written (`~/.oxen-harness/canvas/`).
 fn canvas_dir() -> Option<PathBuf> {
-    let dir = dirs::home_dir()?.join(".oxen-harness").join("canvas");
+    let dir = harness_config::paths::canvas_dir().ok()?;
     let _ = std::fs::create_dir_all(&dir);
     Some(dir)
 }

@@ -67,9 +67,8 @@ pub struct Store {
 impl Store {
     /// Open the standard store at `~/.oxen-harness/`, creating it if needed.
     pub fn open() -> Result<Self, ThemeError> {
-        #[allow(deprecated)]
-        let home = std::env::home_dir().ok_or(ThemeError::NoConfigDir)?;
-        Self::with_root(home.join(".oxen-harness"))
+        let base = harness_config::base_dir().map_err(|_| ThemeError::NoConfigDir)?;
+        Self::with_root(base)
     }
 
     /// Open a store rooted at an explicit directory (used in tests).

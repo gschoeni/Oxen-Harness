@@ -20,6 +20,7 @@ oxen-harness/
   rust-toolchain.toml        — Pinned toolchain + components.
   crates/
     harness-core/            — Shared message/role types and defaults (leaf crate).
+    harness-config/          — Single source for ~/.oxen-harness paths; atomic + schema-versioned config IO; .env secrets (dotenvy).
     harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth.
     harness-tools/           — fs read/write/edit, glob find, regex search, sandboxed shell, git, Brave web search, ask_user_question (clarifying questions).
     harness-store/           — SQLite history (verbatim) + JSONL export.

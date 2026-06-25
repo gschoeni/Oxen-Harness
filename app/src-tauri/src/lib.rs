@@ -255,10 +255,8 @@ fn agent_parts(
     // the model never calls a tool the registry would reject as unknown.
     let web_search = tools.get("web_search").is_some();
 
-    let dir = dirs_home()?.join(".oxen-harness");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let store =
-        Arc::new(HistoryStore::open(dir.join("history.sqlite")).map_err(|e| e.to_string())?);
+    let history_path = harness_config::paths::history_db().map_err(|e| e.to_string())?;
+    let store = Arc::new(HistoryStore::open(history_path).map_err(|e| e.to_string())?);
 
     let config = AgentConfig {
         model: model_label.to_string(),
@@ -319,11 +317,6 @@ fn resume_agent(
     Agent::resume_from_store(client, tools, store, session_id, config).map_err(|e| e.to_string())
 }
 
-fn dirs_home() -> Result<std::path::PathBuf, String> {
-    #[allow(deprecated)]
-    std::env::home_dir().ok_or_else(|| "could not determine home directory".to_string())
-}
-
 // ===========================================================================
 // Projects — chats are grouped by their working directory. A "project" is a
 // directory the agent runs in; entering one roots new chats there. The set of
@@ -374,25 +367,23 @@ struct ProjectView {
     active: bool,
 }
 
+/// Schema version for `projects.json` (bump when the shape changes).
+const PROJECTS_SCHEMA_VERSION: u32 = 1;
+
 fn projects_config_path() -> Result<PathBuf, String> {
-    Ok(dirs_home()?.join(".oxen-harness").join("projects.json"))
+    harness_config::paths::projects_file().map_err(|e| e.to_string())
 }
 
 fn read_projects_config() -> ProjectsConfig {
-    projects_config_path()
-        .ok()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    match projects_config_path() {
+        Ok(path) => harness_config::read_versioned::<ProjectsConfig>(&path).1,
+        Err(_) => ProjectsConfig::default(),
+    }
 }
 
 fn write_projects_config(cfg: &ProjectsConfig) -> Result<(), String> {
     let path = projects_config_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| e.to_string())
+    harness_config::write_versioned(&path, PROJECTS_SCHEMA_VERSION, cfg).map_err(|e| e.to_string())
 }
 
 /// Record `path` as a known project and make it active (persisted).
@@ -441,26 +432,25 @@ struct ConnectionView {
     env_key_available: bool,
 }
 
+/// Schema version for `connection.json` (bump when the shape changes).
+const CONNECTION_SCHEMA_VERSION: u32 = 1;
+
 fn connection_config_path() -> Result<std::path::PathBuf, String> {
-    Ok(dirs_home()?.join(".oxen-harness").join("connection.json"))
+    harness_config::paths::connection_file().map_err(|e| e.to_string())
 }
 
 /// Read the saved overrides, treating a missing or unparseable file as "none".
 fn read_connection_config() -> ConnectionConfig {
-    connection_config_path()
-        .ok()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    match connection_config_path() {
+        Ok(path) => harness_config::read_versioned::<ConnectionConfig>(&path).1,
+        Err(_) => ConnectionConfig::default(),
+    }
 }
 
 fn write_connection_config(cfg: &ConnectionConfig) -> Result<(), String> {
     let path = connection_config_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| e.to_string())
+    harness_config::write_versioned(&path, CONNECTION_SCHEMA_VERSION, cfg)
+        .map_err(|e| e.to_string())
 }
 
 /// Resolve the effective base URL from the saved host override (or env/default).
@@ -768,7 +758,7 @@ async fn session_info(app: AppHandle, state: State<'_, AppState>) -> Result<Sess
 
 /// Open the shared on-disk history store (same DB the agents persist to).
 fn open_history_store() -> Result<HistoryStore, String> {
-    let path = dirs_home()?.join(".oxen-harness").join("history.sqlite");
+    let path = harness_config::paths::history_db().map_err(|e| e.to_string())?;
     HistoryStore::open(path).map_err(|e| e.to_string())
 }
 
@@ -1136,6 +1126,9 @@ async fn answer_question(
 /// Entry point shared by the binary and mobile targets.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Load ~/.oxen-harness/.env so saved API keys reach the environment before
+    // any agent or tool reads them.
+    harness_config::secrets::load();
     // Start in the last active project (or the launch directory on first run).
     let initial_project = read_projects_config()
         .active

@@ -31,9 +31,8 @@ pub struct LoopStore {
 impl LoopStore {
     /// Open the standard store at `~/.oxen-harness/loops/`, creating it if needed.
     pub fn open() -> Result<Self, LoopError> {
-        #[allow(deprecated)]
-        let home = std::env::home_dir().ok_or(LoopError::NoHome)?;
-        Self::with_root(home.join(".oxen-harness").join("loops"))
+        let dir = harness_config::paths::loops_dir().map_err(|_| LoopError::NoHome)?;
+        Self::with_root(dir)
     }
 
     /// Open a store rooted at an explicit directory (used in tests).

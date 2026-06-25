@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/harness-core",
+    "crates/harness-config",
     "crates/harness-llm",
     "crates/harness-tools",
     "crates/harness-store",
@@ -26,6 +27,7 @@ description = "An open source, hackable agentic coding harness powered by Oxen.a
 
 [workspace.dependencies]
 harness-core = { path = "crates/harness-core" }
+harness-config = { path = "crates/harness-config" }
 harness-llm = { path = "crates/harness-llm" }
 harness-tools = { path = "crates/harness-tools" }
 harness-store = { path = "crates/harness-store" }
@@ -45,6 +47,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 base64 = "0.22"
+dotenvy = "0.15"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [profile.release]

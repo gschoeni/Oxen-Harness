@@ -101,6 +101,10 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    // Load ~/.oxen-harness/.env into the environment (without overriding vars
+    // already set) so saved API keys are available before anything reads them.
+    harness_config::secrets::load();
+
     let theme = harness_theme::Store::open()
         .map(|s| s.load_active())
         .unwrap_or_default();
@@ -696,20 +700,15 @@ fn export(store: &Arc<HistoryStore>, session: &str, dest: Option<String>, ui: &U
 }
 
 fn open_store() -> Result<HistoryStore> {
-    let dir = dirs::home_dir()
-        .map(|h| h.join(".oxen-harness"))
-        .context("could not determine home directory")?;
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let path = dir.join("history.sqlite");
+    let path = harness_config::paths::history_db()
+        .map_err(|e| anyhow::anyhow!("resolving history path: {e}"))?;
     HistoryStore::open(&path).with_context(|| format!("opening history at {}", path.display()))
 }
 
 /// File backing the readline prompt history, so Up-arrow recalls prompts typed
 /// in previous CLI sessions (separate from the SQLite chat transcript store).
 fn prompt_history_path() -> Option<std::path::PathBuf> {
-    let dir = dirs::home_dir()?.join(".oxen-harness");
-    let _ = std::fs::create_dir_all(&dir);
-    Some(dir.join("prompt_history.txt"))
+    harness_config::paths::prompt_history_file().ok()
 }
 
 #[cfg(test)]
