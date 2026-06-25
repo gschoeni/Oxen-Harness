@@ -278,7 +278,8 @@ async fn main() -> Result<()> {
             &base_url,
             &model,
             &workspace.root().display().to_string(),
-            &session
+            &session,
+            agent.tokens_used(),
         )
     );
     println!();
@@ -436,6 +437,7 @@ async fn handle_line(
                     agent.model(),
                     &workspace_root.display().to_string(),
                     session,
+                    agent.tokens_used(),
                 )
             );
             println!();

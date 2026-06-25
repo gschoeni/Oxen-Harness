@@ -318,7 +318,18 @@ fn glyph(ch: char) -> [&'static str; 5] {
 }
 
 /// Build the full startup banner from the active theme.
-pub fn banner(ui: &Ui, base_url: &str, model: &str, workspace: &str, session: &str) -> String {
+///
+/// `tokens_used` is the cumulative token count for the live session; it
+/// replaces the value of any `flavor_bottom` row labelled "Total tokens used"
+/// so the banner reflects real usage rather than static flavor text.
+pub fn banner(
+    ui: &Ui,
+    base_url: &str,
+    model: &str,
+    workspace: &str,
+    session: &str,
+    tokens_used: usize,
+) -> String {
     let v = &ui.theme.voice;
     let mut out = String::new();
     out.push('\n');
@@ -356,7 +367,13 @@ pub fn banner(ui: &Ui, base_url: &str, model: &str, workspace: &str, session: &s
     out.push_str(&journal_row(ui, &v.label_session, session));
     out.push_str(&journal_row(ui, "Theme", &ui.theme.meta.name));
     for [label, value] in &v.flavor_bottom {
-        out.push_str(&journal_row(ui, label, value));
+        // The "Total tokens used" row carries live state: substitute the real
+        // cumulative count for the static flavor value.
+        if label == "Total tokens used" {
+            out.push_str(&journal_row(ui, label, &format!("{tokens_used} tokens")));
+        } else {
+            out.push_str(&journal_row(ui, label, value));
+        }
     }
 
     out.push('\n');
@@ -718,7 +735,7 @@ mod tests {
         assert_eq!(ui.title("hi"), "hi");
         assert_eq!(ui.dim("trail"), "trail");
         assert!(!help(&ui).contains("\x1b["));
-        assert!(!banner(&ui, "u", "m", "w", "s").contains("\x1b["));
+        assert!(!banner(&ui, "u", "m", "w", "s", 0).contains("\x1b["));
         assert!(!death_screen(&ui, "abc123").contains("\x1b["));
     }
 
@@ -733,7 +750,16 @@ mod tests {
         assert_eq!(returned, "Departing");
         assert_eq!(ui.departing(), Some(("Departing", "Fort Laramie, Wyoming")));
         // The banner reflects the new location.
-        assert!(banner(&ui, "u", "m", "w", "s").contains("Fort Laramie, Wyoming"));
+        assert!(banner(&ui, "u", "m", "w", "s", 0).contains("Fort Laramie, Wyoming"));
+    }
+
+    #[test]
+    fn banner_shows_live_token_count() {
+        let ui = Ui::plain();
+        let b = banner(&ui, "u", "m", "w", "s", 1234);
+        // The live cumulative count replaces the static flavor value.
+        assert!(b.contains("Total tokens used"));
+        assert!(b.contains("1234 tokens"));
     }
 
     #[test]
@@ -766,7 +792,7 @@ mod tests {
     #[test]
     fn banner_includes_active_theme_name() {
         let ui = Ui::plain();
-        let b = banner(&ui, "host", "model", "ws", "sess");
+        let b = banner(&ui, "host", "model", "ws", "sess", 0);
         assert!(b.contains("Oregon Trail"));
         assert!(b.contains("model"));
     }

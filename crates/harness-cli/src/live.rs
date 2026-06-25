@@ -6,13 +6,14 @@
 //! letting the user stack follow-up messages onto the [`MessageQueue`] while the
 //! agent works. Queued messages drain in order as soon as the turn finishes.
 //!
-//! How it stays out of the output's way: we put the terminal in raw mode, reserve
-//! the bottom row for the composer, and set a DECSTBM scroll region over the rows
-//! *above* it. All turn output (streamed Markdown, tool lines, the spinner) is
-//! written into that region — where it scrolls naturally — through a small
-//! adapter that turns `\n` into `\r\n` (mandatory in raw mode). The composer is
-//! redrawn on row `H` after every output event and keystroke, bracketed by
-//! save/restore-cursor so the output position is never disturbed.
+//! How it stays out of the output's way: we put the terminal in raw mode, pin the
+//! composer to the bottom row, keep a blank spacer row just above it (so output
+//! never butts against the prompt — see [`SPACER_ROWS`]), and set a DECSTBM scroll
+//! region over the rows *above* that. All turn output (streamed Markdown, tool
+//! lines, the spinner) is written into that region — where it scrolls naturally —
+//! through a small adapter that turns `\n` into `\r\n` (mandatory in raw mode).
+//! The composer is redrawn on row `H` after every output event and keystroke,
+//! bracketed by save/restore-cursor so the output position is never disturbed.
 //!
 //! This path is only ever entered for an interactive TTY (gated by the caller).
 //! Everything here is best-effort and always restored on drop.
@@ -378,6 +379,10 @@ enum KeyAction {
 /// The most queued rows we ever render at once; beyond this the list windows
 /// around the focused item with `…(+k more)` markers.
 const MAX_QUEUE_ROWS: usize = 6;
+
+/// Blank rows kept between the agent's scrolling output and the pinned input
+/// area, so the prompt always has at least one full line of breathing room.
+const SPACER_ROWS: usize = 1;
 
 /// Display previews are capped to this many characters when snapshotting the
 /// queue, then windowed to the terminal width at paint time.
@@ -986,7 +991,9 @@ impl Live {
         let frame = if len == 0 { 0 } else { QUEUE_FRAME_ROWS };
         let plan = queue_rows(len, self.focus, self.rows, MAX_QUEUE_ROWS, frame);
         let chrome = if plan.is_empty() { 0 } else { QUEUE_FRAME_ROWS };
-        let reserved = (plan.len() + chrome + 1) as u16;
+        // One blank row between the agent's output (the scroll region) and the
+        // pinned input area below, so the prompt always has breathing room.
+        let reserved = (plan.len() + chrome + SPACER_ROWS + 1) as u16;
         let new_bottom = self.rows.saturating_sub(reserved).max(1);
 
         let mut buf = String::new();
@@ -1007,9 +1014,13 @@ impl Live {
         // Paint the framed queue table + composer below the region, bracketed by
         // save/restore so the output cursor inside the region is left undisturbed.
         buf.push_str("\x1b7");
+        // Keep the spacer row(s) directly below the output region blank.
+        for s in 0..SPACER_ROWS as u16 {
+            buf.push_str(&format!("\x1b[{};1H\x1b[2K", new_bottom + 1 + s));
+        }
         if !plan.is_empty() {
             let box_w = self.queue_box_w();
-            let mut r = new_bottom + 1;
+            let mut r = new_bottom + 1 + SPACER_ROWS as u16;
             buf.push_str(&format!("\x1b[{r};1H\x1b[2K{}", self.queue_header(box_w)));
             for row in &plan {
                 r += 1;
