@@ -10,10 +10,9 @@ import type { ChatMessage, MessageContent } from "../../lib/types";
 function contentText(content: MessageContent | null | undefined): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
-    return content
-      .filter((p) => p.type === "text" && p.text)
-      .map((p) => p.text)
-      .join("");
+    // ContentPart is a discriminated union; narrow to text parts in the closure
+    // so we only read `.text` where it exists.
+    return content.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("");
   }
   return "";
 }

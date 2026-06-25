@@ -1,6 +1,29 @@
 // Wire types — kept in sync with the Tauri commands in src-tauri/src/lib.rs and
 // the Rust crates they return. Field names match Rust serde output (snake_case
 // unless a struct renames, e.g. `multiSelect`).
+//
+// The chat-message wire types (ChatMessage/MessageContent/ContentPart/…) are
+// GENERATED from the Rust source of truth in crates/harness-llm/src/types.rs.
+// Don't hand-edit them; regenerate bindings.ts with:
+//   cargo test -p harness-llm --features ts -- --ignored generate_bindings
+import type {
+  ChatMessage,
+  MessageContent,
+  ContentPart,
+  ImageUrl,
+  FileData,
+  ToolCall,
+  FunctionCall,
+} from "./bindings";
+export type {
+  ChatMessage,
+  MessageContent,
+  ContentPart,
+  ImageUrl,
+  FileData,
+  ToolCall,
+  FunctionCall,
+};
 
 export interface SessionInfo {
   model: string;
@@ -15,33 +38,6 @@ export interface SessionSummary {
   created_at: number;
   title: string | null;
   message_count: number;
-}
-
-/** A function/tool call inside an assistant message (OpenAI tool-calling shape). */
-export interface ToolCall {
-  id: string;
-  type: string;
-  function: { name: string; arguments: string };
-}
-
-/** One part of a multimodal message (text, image, or file). Matches the Rust
- *  `ContentPart` (untagged) — only text parts carry displayable text. */
-export interface ContentPart {
-  type: string;
-  text?: string;
-}
-
-/** A message's content: a plain string, or — for messages with attachments —
- *  an array of parts (the Rust `MessageContent` enum serializes untagged). */
-export type MessageContent = string | ContentPart[];
-
-/** One stored transcript message (harness-llm ChatMessage). */
-export interface ChatMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content: MessageContent | null;
-  tool_calls?: ToolCall[] | null;
-  tool_call_id?: string | null;
-  name?: string | null;
 }
 
 export interface SessionView {

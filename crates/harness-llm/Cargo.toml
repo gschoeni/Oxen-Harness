@@ -20,6 +20,11 @@ futures-util = "0.3"
 reqwest = { workspace = true, features = ["stream"] }
 toml = "0.8"
 dirs = "5"
+ts-rs = { version = "10", optional = true, features = ["serde-compat"] }
+
+[features]
+# Generate TypeScript bindings for the wire types (see types.rs bindings tests).
+ts = ["dep:ts-rs"]
 
 [dev-dependencies]
 mockito = "1"

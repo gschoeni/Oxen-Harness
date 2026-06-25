@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 /// byte-identical to before multimodal support; only messages that actually
 /// carry attachments serialize as the OpenAI-style content-part array.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(untagged)]
 pub enum MessageContent {
     Text(String),
@@ -79,6 +80,7 @@ impl From<&str> for MessageContent {
 
 /// One part of a multimodal message body (OpenAI-compatible content parts).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
     /// A run of text.
@@ -114,6 +116,7 @@ impl ContentPart {
 
 /// The `image_url` payload of an image content part.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ImageUrl {
     /// An `http(s)` URL or a `data:<mime>;base64,<...>` URI.
     pub url: String,
@@ -121,6 +124,7 @@ pub struct ImageUrl {
 
 /// The `file` payload of a document content part.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct FileData {
     pub filename: String,
     /// A `data:<mime>;base64,<...>` URI carrying the document bytes.
@@ -130,15 +134,22 @@ pub struct FileData {
 /// A message in a chat transcript. Supports plain text, multimodal content
 /// (text + images/files), assistant tool calls, and `tool` result messages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ChatMessage {
     pub role: String,
+    // `#[ts(optional)]` mirrors `skip_serializing_if`: these keys are omitted
+    // (not sent as null) when None, so the generated TS uses `field?: T`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub content: Option<MessageContent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub name: Option<String>,
 }
 
@@ -208,6 +219,7 @@ impl ChatMessage {
 
 /// A tool call requested by the assistant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ToolCall {
     pub id: String,
     #[serde(rename = "type", default = "default_tool_type")]
@@ -221,6 +233,7 @@ fn default_tool_type() -> String {
 
 /// The function name + JSON-string arguments of a tool call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct FunctionCall {
     pub name: String,
     /// Arguments as a JSON string (per the OpenAI tool-calling format).
@@ -373,6 +386,72 @@ pub struct Delta {
 mod tests {
     use super::*;
 
+    // ---- Wire-format golden tests -----------------------------------------
+    // Pin the exact JSON shapes the desktop UI and stored transcripts depend
+    // on. The untagged `MessageContent` is the fragile one: text must serialize
+    // as a bare string, attachments as a tagged-part array. If these change, the
+    // hand-mirrored TS in app/src and any consumer parsing break — so a wire
+    // change must update these (and regenerate bindings.ts) deliberately.
+
+    #[test]
+    fn text_message_serializes_content_as_a_bare_string() {
+        let json = serde_json::to_value(ChatMessage::user("hi")).unwrap();
+        assert_eq!(json, serde_json::json!({ "role": "user", "content": "hi" }));
+    }
+
+    #[test]
+    fn multimodal_message_serializes_content_as_a_tagged_part_array() {
+        let msg = ChatMessage::user_parts(vec![
+            ContentPart::text("look"),
+            ContentPart::image("data:image/png;base64,AAAA"),
+            ContentPart::file("a.pdf", "data:application/pdf;base64,BBBB"),
+        ]);
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "look" },
+                    { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } },
+                    { "type": "file", "file": { "filename": "a.pdf", "file_data": "data:application/pdf;base64,BBBB" } }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn assistant_tool_call_uses_type_field_and_omits_empty_content() {
+        let msg = ChatMessage::assistant_with_tools(
+            String::new(),
+            vec![ToolCall {
+                id: "call_1".into(),
+                kind: "function".into(),
+                function: FunctionCall {
+                    name: "read_file".into(),
+                    arguments: "{\"path\":\"a.rs\"}".into(),
+                },
+            }],
+        );
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["tool_calls"][0]["type"], "function");
+        assert_eq!(json["tool_calls"][0]["function"]["name"], "read_file");
+        // Empty assistant text is dropped, not sent as "".
+        assert!(json.get("content").is_none());
+    }
+
+    #[test]
+    fn tool_result_round_trips_with_tool_call_id() {
+        let msg = ChatMessage::tool_result("call_1".to_string(), "42".to_string());
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["role"], "tool");
+        assert_eq!(json["tool_call_id"], "call_1");
+        assert_eq!(json["content"], "42");
+        // Re-parsing yields the same message (the wire format is lossless).
+        let back: ChatMessage = serde_json::from_value(json).unwrap();
+        assert_eq!(back, msg);
+    }
+
     #[test]
     fn request_omits_empty_tools_and_none_fields() {
         let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
@@ -508,5 +587,67 @@ mod tests {
         let line = r#"{"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}"#;
         let chunk: ChatChunk = serde_json::from_str(line).unwrap();
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("hello"));
+    }
+}
+
+/// TypeScript binding generation for the wire types, behind the `ts` feature.
+///
+/// `app/src/lib/types.ts` re-exports the generated `bindings.ts`, so the desktop
+/// UI's view of these types is derived from the Rust source of truth rather than
+/// hand-mirrored. Regenerate after changing a wire type with:
+///
+/// ```text
+/// cargo test -p harness-llm --features ts -- --ignored generate_bindings
+/// ```
+///
+/// `bindings_are_up_to_date` then guards against forgetting to (run it with the
+/// `ts` feature in CI).
+#[cfg(all(test, feature = "ts"))]
+mod bindings {
+    use super::*;
+    use ts_rs::TS;
+
+    const BINDINGS_PATH: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../app/src/lib/bindings.ts");
+
+    /// The full generated `bindings.ts` contents: a header plus each wire type's
+    /// TypeScript declaration.
+    fn generated() -> String {
+        let mut out = String::from(
+            "// @generated by harness-llm — DO NOT EDIT.\n\
+             // Regenerate: cargo test -p harness-llm --features ts -- --ignored generate_bindings\n\
+             // The Rust wire types in crates/harness-llm/src/types.rs are the source of truth.\n\n",
+        );
+        for decl in [
+            ChatMessage::decl(),
+            MessageContent::decl(),
+            ContentPart::decl(),
+            ImageUrl::decl(),
+            FileData::decl(),
+            ToolCall::decl(),
+            FunctionCall::decl(),
+        ] {
+            out.push_str("export ");
+            out.push_str(&decl);
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    #[ignore = "writes app/src/lib/bindings.ts; run explicitly to regenerate"]
+    fn generate_bindings() {
+        std::fs::write(BINDINGS_PATH, generated()).expect("writing bindings.ts");
+    }
+
+    #[test]
+    fn bindings_are_up_to_date() {
+        let on_disk = std::fs::read_to_string(BINDINGS_PATH).unwrap_or_default();
+        assert_eq!(
+            on_disk,
+            generated(),
+            "bindings.ts is out of date — regenerate with: \
+             cargo test -p harness-llm --features ts -- --ignored generate_bindings"
+        );
     }
 }

@@ -146,6 +146,28 @@ were deleted in favor of it.
   worthwhile follow-up but was left out of this pass to avoid a blind refactor of
   the desktop session manager (no headless way to runtime-test it here).
 
+## Wire contracts
+
+**Rust↔TS wire types: ts-rs codegen + serde golden tests** (2026-06-25)
+`app/src/lib/types.ts` hand-mirrored the `harness-llm` wire types (`ChatMessage`,
+the untagged `MessageContent`, the tagged `ContentPart`, …), which was brittle —
+exactly the fragile boundary the review flagged.
+- *Codegen:* the wire types derive `ts_rs::TS` behind an optional `ts` feature
+  (so normal builds don't pull `ts-rs`). `cargo test -p harness-llm --features ts
+  -- --ignored generate_bindings` writes `app/src/lib/bindings.ts`; `types.ts`
+  re-exports from it instead of declaring its own. A `bindings_are_up_to_date`
+  test (run under `--features ts`) fails if a Rust type changed without
+  regenerating. The generated `ContentPart` is now an accurate discriminated
+  union (the old hand TS was `{type, text?}`); `thread.ts` narrows on it.
+- *Golden serde tests* (always on, no feature) pin the exact JSON: text content
+  as a bare string, attachments as a tagged-part array, tool calls using the
+  `type` field with content omitted, tool results round-tripping. These guard the
+  wire shape regardless of the TS toolchain.
+- *Scope:* only the `harness-llm` message types are generated (the fragile,
+  shared boundary). Other TS types (Theme, ModelStatus, Tauri payloads) stay
+  hand-written; generating them would mean `ts-rs` derives across many crates for
+  little gain.
+
 ## Tooling parity
 
 **Essential tool set modeled on Claude Code (no MCP, no orchestration/network)** (2026-06-21)
