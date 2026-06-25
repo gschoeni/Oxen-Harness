@@ -3,59 +3,12 @@
 //! When the agent calls `web_search` without a key configured, the turn renderer
 //! flags it and we offer the user a friendly prompt to paste one. The key is set
 //! in the process environment (so the rest of the session works immediately) and
-//! persisted to `~/.oxen-harness/connection.json` — the same file the desktop app
-//! uses — so it carries across runs and between the two front-ends.
+//! persisted to `~/.oxen-harness/.env` via the shared runtime — the same place
+//! the desktop app stores it — so it carries across runs and front-ends.
 
 use std::io::Write;
-use std::path::PathBuf;
-
-use harness_tools::web::BRAVE_API_KEY_ENV;
 
 use crate::theme::Ui;
-
-/// `~/.oxen-harness/connection.json`, shared with the desktop app.
-fn config_path() -> Option<PathBuf> {
-    harness_config::paths::connection_file().ok()
-}
-
-/// At startup, seed `BRAVE_API_KEY` from the saved config when it isn't already
-/// set in the environment, so a key configured in either front-end just works.
-pub(crate) fn load_into_env() {
-    if std::env::var(BRAVE_API_KEY_ENV).is_ok_and(|v| !v.trim().is_empty()) {
-        return;
-    }
-    if let Some(key) = saved_key() {
-        if !key.trim().is_empty() {
-            std::env::set_var(BRAVE_API_KEY_ENV, key);
-        }
-    }
-}
-
-fn saved_key() -> Option<String> {
-    let raw = std::fs::read_to_string(config_path()?).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    value.get("brave_api_key")?.as_str().map(str::to_string)
-}
-
-/// Persist `key` into the shared config, preserving any other settings.
-fn persist(key: &str) -> std::io::Result<()> {
-    let Some(path) = config_path() else {
-        return Ok(());
-    };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut value: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if !value.is_object() {
-        value = serde_json::json!({});
-    }
-    value["brave_api_key"] = serde_json::Value::String(key.to_string());
-    let pretty = serde_json::to_string_pretty(&value).unwrap_or_default();
-    std::fs::write(&path, pretty)
-}
 
 /// Offer the user a friendly prompt to paste a Brave Search API key after a web
 /// search failed for the lack of one. Applies it immediately (env) and persists
@@ -87,8 +40,8 @@ pub(crate) fn prompt_after_failed_search(ui: &Ui) {
         return;
     }
 
-    std::env::set_var(BRAVE_API_KEY_ENV, key);
-    match persist(key) {
+    // set_brave_key persists to .env and sets it in this process.
+    match harness_runtime::connection::set_brave_key(key) {
         Ok(()) => println!(
             "  {} {}",
             ui.green("✓ saved"),

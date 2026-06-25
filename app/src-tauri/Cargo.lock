@@ -1359,6 +1359,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-oxen"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "harness-runtime"
+version = "0.1.0"
+dependencies = [
+ "harness-config",
+ "harness-llm",
+ "harness-oxen",
+ "harness-tools",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "harness-store"
 version = "0.1.0"
 dependencies = [
@@ -2324,6 +2343,7 @@ dependencies = [
  "harness-core",
  "harness-llm",
  "harness-local",
+ "harness-runtime",
  "harness-store",
  "harness-theme",
  "harness-tools",

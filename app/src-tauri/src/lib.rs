@@ -215,23 +215,15 @@ async fn client_for(state: &AppState) -> Result<(OxenClient, String, Option<usiz
             id.clone(),
             Some(s.context_size() as usize),
         )),
-        _ => Ok((configured_client()?, DEFAULT_MODEL.to_string(), None)),
+        _ => Ok((build_client()?, DEFAULT_MODEL.to_string(), None)),
     }
 }
 
-/// Build an Oxen client honoring the user's saved connection overrides, falling
-/// back to the `OXEN_*` env vars / the `oxen` CLI login / the default endpoint
-/// for any field left blank.
-fn configured_client() -> Result<OxenClient, String> {
-    let cfg = read_connection_config();
-    let base_url = match cfg.host.trim() {
-        "" => harness_llm::resolve_base_url(),
-        host => harness_llm::base_url_from_host(host),
-    };
-    match cfg.api_key.trim() {
-        "" => OxenClient::connect(base_url, DEFAULT_MODEL).map_err(|e| e.to_string()),
-        key => Ok(OxenClient::new(base_url, key, DEFAULT_MODEL)),
-    }
+/// Build an Oxen client honoring the user's saved connection settings, falling
+/// back to env / the `oxen` CLI login / the default endpoint. Delegates to the
+/// shared runtime so the CLI and desktop resolve the client identically.
+fn build_client() -> Result<OxenClient, String> {
+    harness_runtime::connection::build_client(DEFAULT_MODEL).map_err(|e| e.to_string())
 }
 
 /// Shared agent dependencies — the tool registry (with the question bridge), the
@@ -245,7 +237,7 @@ fn agent_parts(
     workspace_root: &Path,
 ) -> Result<(ToolRegistry, Arc<HistoryStore>, AgentConfig), String> {
     let workspace = Workspace::new(workspace_root).map_err(|e| e.to_string())?;
-    let brave_key = brave_key_override(&read_connection_config());
+    let brave_key = harness_runtime::connection::brave_key_override();
     let mut tools = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
     tools.register(Arc::new(AskUserTool::new(Arc::new(TauriAsker {
         app: app.clone(),
@@ -388,7 +380,10 @@ fn read_projects_config() -> ProjectsConfig {
 
 fn write_projects_config(cfg: &ProjectsConfig) -> Result<(), String> {
     let path = projects_config_path()?;
-    harness_config::write_versioned(&path, PROJECTS_SCHEMA_VERSION, cfg).map_err(|e| e.to_string())
+    harness_config::write_versioned(&path, PROJECTS_SCHEMA_VERSION, cfg)
+        .map_err(|e| e.to_string())?;
+    harness_runtime::config_repo::snapshot("Update projects");
+    Ok(())
 }
 
 /// Record `path` as a known project and make it active (persisted).
@@ -406,128 +401,25 @@ fn remember_project(path: &str) -> Result<(), String> {
 // from the desktop Settings page. Blank fields fall back to env / CLI login.
 // ===========================================================================
 
-/// Persisted Oxen connection overrides (`~/.oxen-harness/connection.json`). An
-/// empty `host` or `api_key` means "fall back to `OXEN_*` env vars, the `oxen`
-/// CLI login, or the default endpoint".
-#[derive(Default, Serialize, Deserialize)]
-struct ConnectionConfig {
-    #[serde(default)]
-    host: String,
-    #[serde(default)]
-    api_key: String,
-    /// Brave Search API key enabling the `web_search` tool. Blank = fall back to
-    /// the `BRAVE_API_KEY` environment variable (web search off if neither set).
-    #[serde(default)]
-    brave_api_key: String,
-}
-
-/// What the Settings page shows: the saved overrides plus context so the UI can
-/// render helpful placeholders and tell the user whether they're already
-/// authenticated without typing a key.
-#[derive(Serialize)]
-struct ConnectionView {
-    host: String,
-    api_key: String,
-    /// Effective Brave Search API key in use (override, else `BRAVE_API_KEY`).
-    brave_api_key: String,
-    /// The default Oxen host, shown as the host field's placeholder.
-    default_host: String,
-    /// Whether a key already resolves from the environment / `oxen` CLI login
-    /// for the effective host, so a blank key field still works.
-    env_key_available: bool,
-}
-
-/// Schema version for `connection.json` (bump when the shape changes).
-const CONNECTION_SCHEMA_VERSION: u32 = 1;
-
-fn connection_config_path() -> Result<std::path::PathBuf, String> {
-    harness_config::paths::connection_file().map_err(|e| e.to_string())
-}
-
-/// Read the saved overrides, treating a missing or unparseable file as "none".
-fn read_connection_config() -> ConnectionConfig {
-    match connection_config_path() {
-        Ok(path) => harness_config::read_versioned::<ConnectionConfig>(&path).1,
-        Err(_) => ConnectionConfig::default(),
-    }
-}
-
-fn write_connection_config(cfg: &ConnectionConfig) -> Result<(), String> {
-    let path = connection_config_path()?;
-    harness_config::write_versioned(&path, CONNECTION_SCHEMA_VERSION, cfg)
-        .map_err(|e| e.to_string())
-}
-
-/// Resolve the effective base URL from the saved host override (or env/default).
-fn effective_base_url(cfg: &ConnectionConfig) -> String {
-    match cfg.host.trim() {
-        "" => harness_llm::resolve_base_url(),
-        host => harness_llm::base_url_from_host(host),
-    }
-}
-
-/// Resolve the API key actually in use: the saved override if set, otherwise
-/// whatever resolves from `OXEN_API_KEY` / the `oxen` CLI login for `base_url`'s
-/// host (empty if nothing resolves).
-fn effective_api_key(cfg: &ConnectionConfig, base_url: &str) -> String {
-    match cfg.api_key.trim() {
-        "" => harness_llm::auth::resolve_api_key_for_base_url(base_url).unwrap_or_default(),
-        key => key.to_string(),
-    }
-}
-
-/// Return the connection settings for the Settings page, pre-filled with the
-/// values actually in use — so the fields reflect the resolved host and key
-/// (from env / the `oxen` CLI login / the default endpoint), not just whatever
-/// override happens to be saved.
-/// The Brave Search API key actually in use: the saved override, else whatever
-/// `BRAVE_API_KEY` provides (empty if neither is set, i.e. web search is off).
-fn effective_brave_key(cfg: &ConnectionConfig) -> String {
-    match cfg.brave_api_key.trim() {
-        "" => harness_tools::web::brave_api_key().unwrap_or_default(),
-        key => key.to_string(),
-    }
-}
-
-/// Build the Brave key option passed to the tool registry: the saved override
-/// if set, else `None` (which lets the tool fall back to `BRAVE_API_KEY`).
-fn brave_key_override(cfg: &ConnectionConfig) -> Option<String> {
-    match cfg.brave_api_key.trim() {
-        "" => None,
-        key => Some(key.to_string()),
-    }
-}
+// Connection settings live in `harness_runtime::connection`: the non-secret host
+// in `connection.json`, the API/Brave keys in `~/.oxen-harness/.env`. The
+// commands below are thin wrappers so the CLI and desktop resolve a client the
+// same way (no drift) and secrets stay out of the versioned config.
 
 #[tauri::command]
-fn get_connection() -> ConnectionView {
-    let cfg = read_connection_config();
-    let base_url = effective_base_url(&cfg);
-    let api_key = effective_api_key(&cfg, &base_url);
-    ConnectionView {
-        host: harness_llm::host_from_base_url(&base_url),
-        env_key_available: !api_key.is_empty(),
-        api_key,
-        brave_api_key: effective_brave_key(&cfg),
-        default_host: harness_llm::auth::DEFAULT_OXEN_HOST.to_string(),
-    }
+fn get_connection() -> harness_runtime::connection::ConnectionView {
+    harness_runtime::connection::view()
 }
 
 /// Save just the Brave Search API key and apply it to the running agent.
 ///
 /// Unlike [`set_connection`], this does **not** rebuild the agent or start a new
-/// session — it persists the key and sets `BRAVE_API_KEY` in the process so the
-/// already-registered `web_search` tool picks it up on its next call. Lets the
-/// user fix a failed web search inline and immediately retry in the same chat.
+/// session — it persists the key (to `.env`) and sets `BRAVE_API_KEY` in the
+/// process so the already-registered `web_search` tool picks it up on its next
+/// call. Lets the user fix a failed web search inline and retry in the same chat.
 #[tauri::command]
 fn configure_brave_key(key: String) -> Result<(), String> {
-    let key = key.trim().to_string();
-    let mut cfg = read_connection_config();
-    cfg.brave_api_key = key.clone();
-    write_connection_config(&cfg)?;
-    if !key.is_empty() {
-        std::env::set_var(harness_tools::web::BRAVE_API_KEY_ENV, &key);
-    }
-    Ok(())
+    harness_runtime::connection::set_brave_key(&key).map_err(|e| e.to_string())
 }
 
 /// Save the Oxen API key + host and rebuild the agent against the new endpoint.
@@ -543,17 +435,14 @@ async fn set_connection(
     api_key: String,
     brave_api_key: String,
 ) -> Result<SessionInfo, String> {
-    write_connection_config(&ConnectionConfig {
-        host: host.trim().to_string(),
-        api_key: api_key.trim().to_string(),
-        brave_api_key: brave_api_key.trim().to_string(),
-    })?;
+    harness_runtime::connection::save(&host, &api_key, &brave_api_key)
+        .map_err(|e| e.to_string())?;
 
     let root = active_root(&state).await;
     let agent = new_agent(
         &app,
         state.pending.clone(),
-        configured_client()?,
+        build_client()?,
         DEFAULT_MODEL,
         None,
         &root,
@@ -1132,8 +1021,10 @@ async fn answer_question(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Load ~/.oxen-harness/.env so saved API keys reach the environment before
-    // any agent or tool reads them.
+    // any agent or tool reads them, then migrate any legacy plaintext keys out
+    // of connection.json into the .env.
     harness_config::secrets::load();
+    let _ = harness_runtime::connection::load();
     // Start in the last active project (or the launch directory on first run).
     let initial_project = read_projects_config()
         .active

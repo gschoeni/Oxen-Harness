@@ -9,6 +9,7 @@ mod live;
 mod local;
 mod loop_cmd;
 mod markdown;
+mod oxen_cmd;
 mod picker;
 mod queue;
 mod render;
@@ -95,6 +96,11 @@ enum TopCommand {
         #[command(subcommand)]
         action: trace_cmd::TraceAction,
     },
+    /// Version your harness config (~/.oxen-harness) with Oxen (init/snapshot/status).
+    Oxen {
+        #[command(subcommand)]
+        action: oxen_cmd::OxenAction,
+    },
 }
 
 #[tokio::main]
@@ -129,6 +135,7 @@ async fn main() -> Result<()> {
             loop_cmd::Dispatch::Run(spec) => pending_loop = Some(*spec),
         },
         Some(TopCommand::Trace { action }) => return trace_cmd::run_trace(action, &ui),
+        Some(TopCommand::Oxen { action }) => return oxen_cmd::run_oxen(action, &ui),
         None => {}
     }
 
@@ -215,9 +222,10 @@ async fn main() -> Result<()> {
         (client, model)
     };
 
-    // Seed BRAVE_API_KEY from the saved config (shared with the desktop app) so
-    // web search works without re-entering the key each run.
-    brave::load_into_env();
+    // Migrate any legacy plaintext keys out of connection.json into .env (the
+    // shared store, already loaded into the env above) so web search and auth
+    // work without re-entering keys.
+    let _ = harness_runtime::connection::load();
     let mut tools = ToolRegistry::default_for_workspace(workspace.clone());
     // Let the agent interview the user via the interactive terminal picker.
     tools.register(Arc::new(harness_tools::AskUserTool::new(Arc::new(

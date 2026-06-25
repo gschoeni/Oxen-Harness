@@ -10,6 +10,7 @@ members = [
     "crates/harness-local",
     "crates/harness-theme",
     "crates/harness-agent",
+    "crates/harness-runtime",
     "crates/harness-loop",
     "crates/harness-cli",
 ]
@@ -36,6 +37,7 @@ harness-oxen = { path = "crates/harness-oxen" }
 harness-local = { path = "crates/harness-local" }
 harness-theme = { path = "crates/harness-theme" }
 harness-agent = { path = "crates/harness-agent" }
+harness-runtime = { path = "crates/harness-runtime" }
 harness-loop = { path = "crates/harness-loop" }
 
 anyhow = "1.0"

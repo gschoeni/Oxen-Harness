@@ -123,6 +123,29 @@ push/share.
 - *Config-dir versioning* (committing `~/.oxen-harness`) reuses `Oxen::snapshot`
   and is wired where config writes are centralized — the runtime layer.
 
+**Shared runtime for connection/secrets; agent loop stays in `harness-agent`** (2026-06-25)
+The review flagged the Tauri bridge accreting app logic that could drift from the
+CLI. The genuinely duplicated, drift-prone piece was *connection resolution*: the
+CLI (`brave.rs`) and desktop each parsed `connection.json` and built clients
+their own way. `harness-runtime::connection` now owns it — one resolution path
+both front ends call (`build_client`, `brave_key_override`, `view`) — and the
+desktop's `ConnectionConfig`/`ConnectionView`/`configured_client`/`effective_*`
+were deleted in favor of it.
+- *Secrets moved to `.env`:* keys no longer live in `connection.json`.
+  `connection::load()` (run at startup by both front ends) migrates any legacy
+  plaintext keys into `~/.oxen-harness/.env` and scrubs them from the JSON, so
+  the versioned config is safe to share. `save()` writes the host to JSON and the
+  keys to `.env`.
+- *Config versioning:* `config_repo` snapshots `~/.oxen-harness` with Oxen after
+  connection/projects writes (no-op until opted in via `oxen-harness oxen init`).
+- *Scope:* the agent **loop** is already shared (`Agent::run_turn_with_attachments`
+  — both front ends call it), so it can't drift. The desktop's concurrent
+  per-session agent *cache* (the agents map / evict / current) stays in the Tauri
+  layer because it's a desktop concern (the CLI is single-session); it isn't
+  duplicated logic. Unifying agent *construction* (tools+config+session) is a
+  worthwhile follow-up but was left out of this pass to avoid a blind refactor of
+  the desktop session manager (no headless way to runtime-test it here).
+
 ## Tooling parity
 
 **Essential tool set modeled on Claude Code (no MCP, no orchestration/network)** (2026-06-21)

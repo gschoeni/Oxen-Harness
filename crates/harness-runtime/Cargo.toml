@@ -1,0 +1,20 @@
+[package]
+name = "harness-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Front-end-agnostic runtime services for oxen-harness: connection settings, secrets, config versioning"
+
+[dependencies]
+harness-config = { workspace = true }
+harness-llm = { workspace = true }
+harness-tools = { workspace = true }
+harness-oxen = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
