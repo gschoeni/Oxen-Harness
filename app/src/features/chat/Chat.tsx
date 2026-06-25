@@ -28,7 +28,8 @@ export function Chat() {
   // Read the current chat's thread / queue / run state straight from the store —
   // it owns them so they persist while this chat streams in the background.
   const items = useStore((s) => (s.session ? s.threads[s.session.session_id] : undefined)) ?? NO_ITEMS;
-  const queue = useStore((s) => (s.session ? s.queues[s.session.session_id] : undefined)) ?? NO_QUEUE;
+  const queueEntries = useStore((s) => (s.session ? s.queues[s.session.session_id] : undefined));
+  const queue = queueEntries?.map((q) => q.text) ?? NO_QUEUE;
   const running = useStore((s) => !!s.session && s.runStatus[s.session.session_id] === "running");
   const send = useStore((s) => s.send);
   const setQueue = useStore((s) => s.setQueue);
@@ -119,14 +120,10 @@ export function Chat() {
   }
 
   // Send now (with any staged attachments) or, if this chat is mid-turn, queue
-  // it — leaving staged attachments in place for when the turn frees up.
+  // the prompt and the same attachment set so the eventual turn is identical.
   function submit(text: string) {
     stick.current = true;
     setAtBottom(true);
-    if (running) {
-      send(text);
-      return;
-    }
     const paths = attachments.map((a) => a.path);
     setAttachments([]);
     send(text, paths);

@@ -42,6 +42,23 @@ import type {
 
 const MODE_KEY = "oxen-ui-mode";
 
+export interface QueuedPrompt {
+  text: string;
+  attachments: string[];
+}
+
+function reconcileQueueTexts(previous: QueuedPrompt[] = [], texts: string[]): QueuedPrompt[] {
+  const remaining = [...previous];
+  return texts.map((text) => {
+    const existing = remaining.findIndex((q) => q.text === text);
+    if (existing >= 0) {
+      const [prompt] = remaining.splice(existing, 1);
+      return prompt;
+    }
+    return { text, attachments: [] };
+  });
+}
+
 interface AppState {
   mode: Mode;
   theme: Theme | null;
@@ -59,7 +76,7 @@ interface AppState {
   /** Per-session run state driving the sidebar indicator (absent = idle/read). */
   runStatus: Record<string, RunStatus>;
   /** Prompts queued while a session is mid-turn, sent in order as it frees up. */
-  queues: Record<string, string[]>;
+  queues: Record<string, QueuedPrompt[]>;
   /** Documents the agent showed in the canvas, per session (ordered, by id). */
   canvases: Record<string, CanvasDoc[]>;
   /** The canvas doc id currently open in the side panel per session (null/absent
@@ -135,7 +152,7 @@ export const useStore = create<AppState>((set, get) => {
         const next = (get().queues[id] ?? [])[0];
         if (next !== undefined) {
           set((s) => ({ queues: { ...s.queues, [id]: (s.queues[id] ?? []).slice(1) } }));
-          setTimeout(() => runTurnFor(id, next, []), 0); // let state settle first
+          setTimeout(() => runTurnFor(id, next.text, next.attachments), 0); // let state settle first
         } else {
           set((s) => {
             const runStatus = { ...s.runStatus };
@@ -256,7 +273,8 @@ export const useStore = create<AppState>((set, get) => {
       const id = get().session?.session_id;
       if (!id) return;
       if (get().runStatus[id] === "running") {
-        set((s) => ({ queues: { ...s.queues, [id]: [...(s.queues[id] ?? []), text] } }));
+        const prompt = { text, attachments };
+        set((s) => ({ queues: { ...s.queues, [id]: [...(s.queues[id] ?? []), prompt] } }));
         return;
       }
       runTurnFor(id, text, attachments);
@@ -265,7 +283,7 @@ export const useStore = create<AppState>((set, get) => {
     setQueue: (items) =>
       set((s) => {
         const id = s.session?.session_id;
-        return id ? { queues: { ...s.queues, [id]: items } } : {};
+        return id ? { queues: { ...s.queues, [id]: reconcileQueueTexts(s.queues[id], items) } } : {};
       }),
 
     ingestToken: (session, token) =>

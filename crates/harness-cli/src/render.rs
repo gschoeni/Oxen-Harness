@@ -76,7 +76,11 @@ impl TurnRenderer {
             AgentEvent::ToolPending { name } if name == harness_tools::CANVAS_TOOL => {
                 self.stop_spinner();
                 self.end_markdown();
-                println!("  {} {}", self.ui.green("📄"), self.ui.dim("writing canvas…"));
+                println!(
+                    "  {} {}",
+                    self.ui.green("📄"),
+                    self.ui.dim("writing canvas…")
+                );
                 self.begin_working(name);
             }
             AgentEvent::ToolPending { .. } => {}
@@ -112,7 +116,8 @@ impl TurnRenderer {
                         "  {} {}  {}",
                         self.ui.green("◆"),
                         self.ui.accent(verb),
-                        self.ui.dim(&format!("{name}({})", truncate(arguments, 100))),
+                        self.ui
+                            .dim(&format!("{name}({})", truncate(arguments, 100))),
                     );
                 }
                 self.begin_working(name);
@@ -131,7 +136,8 @@ impl TurnRenderer {
                     println!(
                         "  {} {}",
                         self.ui.brown("└─"),
-                        self.ui.dim("no Brave API key — set one below to enable web search"),
+                        self.ui
+                            .dim("no Brave API key — set one below to enable web search"),
                     );
                     self.begin_thinking();
                     return;

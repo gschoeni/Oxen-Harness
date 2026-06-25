@@ -240,7 +240,10 @@ fn render(
 
     let active = cursor_row == options.len();
     let pointer = if active { ui.accent("❯") } else { " ".into() };
-    lines.push(format!("  {bar}  {pointer}   {}", ui.dim("✎ Type my own answer…")));
+    lines.push(format!(
+        "  {bar}  {pointer}   {}",
+        ui.dim("✎ Type my own answer…")
+    ));
 
     lines.push(format!("  {bar}"));
     let hint = if multi {
@@ -263,9 +266,15 @@ fn card_rules(ui: &Ui, header: &str, width: usize) -> (String, String) {
     };
     let span = width.saturating_sub(4).clamp(24, 76);
     let head = format!("╭─ {label} ");
-    let top = format!("{head}{}", "─".repeat(span.saturating_sub(head.chars().count())));
+    let top = format!(
+        "{head}{}",
+        "─".repeat(span.saturating_sub(head.chars().count()))
+    );
     let bottom = format!("╰{}", "─".repeat(span.saturating_sub(1)));
-    (format!("  {}", ui.accent(&top)), format!("  {}", ui.accent(&bottom)))
+    (
+        format!("  {}", ui.accent(&top)),
+        format!("  {}", ui.accent(&bottom)),
+    )
 }
 
 fn finish(
@@ -389,11 +398,21 @@ mod tests {
     #[test]
     fn render_frames_the_question_as_a_card() {
         let ui = Ui::plain();
-        let lines = render(&ui, "Storage", "Which backend?", &options(), false, 0, &[false, false]);
+        let lines = render(
+            &ui,
+            "Storage",
+            "Which backend?",
+            &options(),
+            false,
+            0,
+            &[false, false],
+        );
         // Top + bottom rules and a left bar on the content make it a distinct card.
         assert!(lines.first().unwrap().contains("╭─"));
         assert!(lines.last().unwrap().contains('╰'));
-        assert!(lines.iter().any(|l| l.contains("│") && l.contains("Which backend?")));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("│") && l.contains("Which backend?")));
     }
 
     #[test]

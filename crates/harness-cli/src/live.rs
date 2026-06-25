@@ -78,7 +78,7 @@ pub(crate) async fn run_prompt(
                 // Auto-drain: send the next stacked message (more may still be
                 // typed while it runs — they just keep stacking onto the queue).
                 if !queue.is_empty() {
-                    let msg = queue.remove(1).expect("queue is non-empty");
+                    let msg = queue.pop_front().expect("queue is non-empty");
                     let mut s = state.borrow_mut();
                     s.sync_queue(queue.items());
                     s.print_line(&format!(
@@ -145,7 +145,11 @@ async fn run_one_turn(
         }
         if !attachments.is_empty() {
             let names: Vec<&str> = attachments.iter().map(|a| a.filename.as_str()).collect();
-            st.print_line(&format!("  {} {}", ui.green("📎 attached:"), ui.cream(&names.join(", "))));
+            st.print_line(&format!(
+                "  {} {}",
+                ui.green("📎 attached:"),
+                ui.cream(&names.join(", "))
+            ));
         }
     }
 
@@ -842,7 +846,8 @@ impl Live {
                         "  {} {}  {}",
                         self.ui.green("◆"),
                         self.ui.accent(verb),
-                        self.ui.dim(&format!("{name}({})", truncate(arguments, 100))),
+                        self.ui
+                            .dim(&format!("{name}({})", truncate(arguments, 100))),
                     );
                     self.write_region(&format!("{line}\n"));
                 }
@@ -865,7 +870,8 @@ impl Live {
                     let line = format!(
                         "  {} {}",
                         self.ui.brown("└─"),
-                        self.ui.dim("no Brave API key — you'll be prompted to add one below"),
+                        self.ui
+                            .dim("no Brave API key — you'll be prompted to add one below"),
                     );
                     self.write_region(&format!("{line}\n"));
                     self.begin_thinking();
@@ -1044,7 +1050,7 @@ impl Live {
             Mode::Browse => "enter edit · d delete",
             Mode::Compose => "↑ edit queued",
         };
-        if hint.chars().count() + 1 <= box_w {
+        if hint.chars().count() < box_w {
             let fill = box_w.saturating_sub(1 + hint.chars().count());
             format!(
                 "  {}{}{}",
@@ -1096,7 +1102,8 @@ impl Live {
                     format!("  {bar} \x1b[7m{plain}{}\x1b[0m {bar}", " ".repeat(pad))
                 } else {
                     let prefix = format!("{num}. ");
-                    let preview = self.item_preview(idx, box_w.saturating_sub(prefix.chars().count()));
+                    let preview =
+                        self.item_preview(idx, box_w.saturating_sub(prefix.chars().count()));
                     let pad =
                         box_w.saturating_sub(prefix.chars().count() + preview.chars().count());
                     format!(
@@ -1821,7 +1828,11 @@ mod tests {
     #[test]
     fn queue_table_header_shows_title_and_aligns_with_rows() {
         let mut l = plain_live(60, 24);
-        l.sync_queue(&["fix the parser".into(), "add tests".into(), "write docs".into()]);
+        l.sync_queue(&[
+            "fix the parser".into(),
+            "add tests".into(),
+            "write docs".into(),
+        ]);
         let box_w = l.queue_box_w();
 
         let header = l.queue_header(box_w);

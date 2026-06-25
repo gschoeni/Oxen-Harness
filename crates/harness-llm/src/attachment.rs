@@ -135,7 +135,10 @@ impl Attachment {
     }
 
     /// Build from a filename and raw bytes already in memory (e.g. a UI drop).
-    pub fn from_bytes(filename: impl Into<String>, bytes: Vec<u8>) -> Result<Self, AttachmentError> {
+    pub fn from_bytes(
+        filename: impl Into<String>,
+        bytes: Vec<u8>,
+    ) -> Result<Self, AttachmentError> {
         let filename = filename.into();
         if bytes.is_empty() {
             return Err(AttachmentError::Empty(filename));
@@ -248,11 +251,17 @@ mod tests {
     #[test]
     fn classifies_by_extension() {
         assert_eq!(AttachmentKind::from_extension("PNG"), AttachmentKind::Image);
-        assert_eq!(AttachmentKind::from_extension("jpeg"), AttachmentKind::Image);
+        assert_eq!(
+            AttachmentKind::from_extension("jpeg"),
+            AttachmentKind::Image
+        );
         assert_eq!(AttachmentKind::from_extension("pdf"), AttachmentKind::Pdf);
         assert_eq!(AttachmentKind::from_extension("mov"), AttachmentKind::Video);
         assert_eq!(AttachmentKind::from_extension("txt"), AttachmentKind::Other);
-        assert_eq!(AttachmentKind::from_path(Path::new("a/b/photo.JPG")), AttachmentKind::Image);
+        assert_eq!(
+            AttachmentKind::from_path(Path::new("a/b/photo.JPG")),
+            AttachmentKind::Image
+        );
     }
 
     #[test]
@@ -263,7 +272,9 @@ mod tests {
         let uri = a.data_uri();
         assert!(uri.starts_with("data:image/png;base64,"));
         match a.to_content_part() {
-            ContentPart::ImageUrl { image_url } => assert!(image_url.url.starts_with("data:image/png;base64,")),
+            ContentPart::ImageUrl { image_url } => {
+                assert!(image_url.url.starts_with("data:image/png;base64,"))
+            }
             other => panic!("expected image part, got {other:?}"),
         }
     }

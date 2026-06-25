@@ -500,7 +500,7 @@ async fn run_queue(queue: &mut MessageQueue, agent: &mut Agent, ui: &Ui) -> Resu
         println!("  {}", ui.dim("the wagon is empty — nothing to send"));
         return Ok(false);
     }
-    let first = queue.remove(1).expect("queue is non-empty");
+    let first = queue.pop_front().expect("queue is non-empty");
     println!(
         "  {} {}",
         ui.brown("▶ rolling the wagon:"),
@@ -534,7 +534,7 @@ async fn run_turn_and_drain(
         return Ok(true);
     }
     while !queue.is_empty() {
-        let next = queue.remove(1).expect("queue is non-empty");
+        let next = queue.pop_front().expect("queue is non-empty");
         println!(
             "  {} {}",
             ui.brown("▶ rolling the wagon:"),
@@ -597,7 +597,11 @@ async fn run_prompt(agent: &mut Agent, prompt: &str, ui: &Ui) -> Result<bool> {
     }
     if !attachments.is_empty() {
         let names: Vec<&str> = attachments.iter().map(|a| a.filename.as_str()).collect();
-        println!("  {} {}", ui.green("📎 attached:"), ui.cream(&names.join(", ")));
+        println!(
+            "  {} {}",
+            ui.green("📎 attached:"),
+            ui.cream(&names.join(", "))
+        );
     }
 
     let renderer = Rc::new(RefCell::new(TurnRenderer::new(ui.clone())));

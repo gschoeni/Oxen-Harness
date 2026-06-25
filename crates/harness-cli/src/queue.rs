@@ -56,6 +56,15 @@ impl MessageQueue {
         Ok(self.items.remove(idx))
     }
 
+    /// Remove and return the next message to execute.
+    pub fn pop_front(&mut self) -> Option<String> {
+        if self.items.is_empty() {
+            None
+        } else {
+            Some(self.items.remove(0))
+        }
+    }
+
     /// Swap the message at 1-based `pos` with its neighbour in `dir`
     /// (`-1` = up, `+1` = down). Out-of-range moves are a no-op error.
     pub fn move_by(&mut self, pos: usize, dir: i64) -> Result<(), String> {
@@ -141,15 +150,16 @@ mod tests {
     #[test]
     fn stacking_then_front_draining_preserves_order() {
         // Mirrors the live composer: each submitted line is `add`ed (stacked),
-        // and the turn loop drains the front with `remove(1)` — even when more
+        // and the turn loop drains the front with `pop_front` — even when more
         // are stacked between drains, earlier messages still send first.
         let mut q = MessageQueue::default();
         q.add("first");
         q.add("second");
-        assert_eq!(q.remove(1).unwrap(), "first");
+        assert_eq!(q.pop_front(), Some("first".to_string()));
         q.add("third"); // stacked mid-drain
-        assert_eq!(q.remove(1).unwrap(), "second");
-        assert_eq!(q.remove(1).unwrap(), "third");
+        assert_eq!(q.pop_front(), Some("second".to_string()));
+        assert_eq!(q.pop_front(), Some("third".to_string()));
+        assert_eq!(q.pop_front(), None);
         assert!(q.is_empty());
     }
 
@@ -160,8 +170,11 @@ mod tests {
         q.add("two");
         // Draining items for execution must not lose the authored history — the
         // REPL still needs to fold both prompts into readline history.
-        let _ = q.remove(1);
-        assert_eq!(q.take_authored(), vec!["one".to_string(), "two".to_string()]);
+        let _ = q.pop_front();
+        assert_eq!(
+            q.take_authored(),
+            vec!["one".to_string(), "two".to_string()]
+        );
         // Taking is one-shot: nothing left to fold in next time.
         assert!(q.take_authored().is_empty());
     }

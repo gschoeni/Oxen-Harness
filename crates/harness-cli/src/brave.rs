@@ -34,15 +34,14 @@ pub(crate) fn load_into_env() {
 fn saved_key() -> Option<String> {
     let raw = std::fs::read_to_string(config_path()?).ok()?;
     let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    value
-        .get("brave_api_key")?
-        .as_str()
-        .map(str::to_string)
+    value.get("brave_api_key")?.as_str().map(str::to_string)
 }
 
 /// Persist `key` into the shared config, preserving any other settings.
 fn persist(key: &str) -> std::io::Result<()> {
-    let Some(path) = config_path() else { return Ok(()) };
+    let Some(path) = config_path() else {
+        return Ok(());
+    };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -63,7 +62,11 @@ fn persist(key: &str) -> std::io::Result<()> {
 /// it. A blank line skips. Called between turns, with the terminal in cooked mode.
 pub(crate) fn prompt_after_failed_search(ui: &Ui) {
     println!();
-    println!("  {} {}", ui.accent("🔑"), ui.cream("Web search needs a Brave Search API key."));
+    println!(
+        "  {} {}",
+        ui.accent("🔑"),
+        ui.cream("Web search needs a Brave Search API key.")
+    );
     println!(
         "  {}",
         ui.dim("Get a free key at https://brave.com/search/api/ — paste it to enable web search."),
@@ -77,7 +80,10 @@ pub(crate) fn prompt_after_failed_search(ui: &Ui) {
     }
     let key = line.trim();
     if key.is_empty() {
-        println!("  {}", ui.dim("Skipped — set BRAVE_API_KEY anytime to enable web search."));
+        println!(
+            "  {}",
+            ui.dim("Skipped — set BRAVE_API_KEY anytime to enable web search.")
+        );
         return;
     }
 

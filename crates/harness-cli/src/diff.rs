@@ -35,7 +35,12 @@ pub fn render_file_change(ui: &Ui, name: &str, args: &str) -> Option<Vec<String>
 /// A new/overwritten file: every line is an addition.
 fn render_write(ui: &Ui, path: &str, contents: &str) -> Vec<String> {
     let total = contents.lines().count();
-    let mut lines = vec![header(ui, "Write", path, &format!("+{total} {}", noun(total)))];
+    let mut lines = vec![header(
+        ui,
+        "Write",
+        path,
+        &format!("+{total} {}", noun(total)),
+    )];
     for (i, line) in contents.lines().take(MAX_LINES).enumerate() {
         lines.push(added(ui, Some(i + 1), line));
     }

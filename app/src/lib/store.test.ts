@@ -99,6 +99,46 @@ describe("store: sessions", () => {
     await vi.waitFor(() => expect(useStore.getState().runStatus["bg"]).toBe("unread"));
   });
 
+  it("preserves attachments on prompts queued behind a running turn", async () => {
+    let finishFirst!: (v: string) => void;
+    ipc.runTurn
+      .mockImplementationOnce(() => new Promise((r) => (finishFirst = r)))
+      .mockResolvedValueOnce("Queued done.");
+
+    useStore.setState({
+      session: { ...ipc.sampleSession, session_id: "s1" },
+      infos: { s1: { ...ipc.sampleSession, session_id: "s1" } },
+      threads: { s1: [] },
+    });
+
+    useStore.getState().send("first");
+    useStore.getState().send("second", ["/tmp/diagram.png"]);
+
+    expect(useStore.getState().queues["s1"]).toEqual([
+      { text: "second", attachments: ["/tmp/diagram.png"] },
+    ]);
+
+    finishFirst("First done.");
+    await vi.waitFor(() =>
+      expect(ipc.runTurn).toHaveBeenLastCalledWith("s1", "second", ["/tmp/diagram.png"]),
+    );
+  });
+
+  it("keeps hidden queue attachments when the visible text list is unchanged", () => {
+    useStore.setState({
+      session: { ...ipc.sampleSession, session_id: "s1" },
+      queues: {
+        s1: [
+          { text: "with file", attachments: ["/tmp/file.pdf"] },
+          { text: "plain", attachments: [] },
+        ],
+      },
+    });
+
+    useStore.getState().setQueue(["with file", "plain"]);
+    expect(useStore.getState().queues["s1"][0].attachments).toEqual(["/tmp/file.pdf"]);
+  });
+
   it("resume is a no-op when the target is already the active session", async () => {
     useStore.setState({ session: { ...ipc.sampleSession, session_id: "same" } });
     await useStore.getState().resume("same");

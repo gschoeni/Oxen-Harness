@@ -261,11 +261,12 @@ fn new_york_times() -> Theme {
     t.meta.name = "New York Times".into();
     t.meta.author = "oxen-harness".into();
     t.meta.description =
-        "A broadsheet newspaper — hairline rules, high-contrast serif, blackletter masthead.".into();
+        "A broadsheet newspaper — hairline rules, high-contrast serif, blackletter masthead."
+            .into();
 
     t.palette = crate::Palette {
         title: Color::new(20, 18, 16),
-        primary: Color::new(150, 42, 36),  // a restrained press red for accents
+        primary: Color::new(150, 42, 36), // a restrained press red for accents
         secondary: Color::new(94, 90, 82),
         text: Color::new(26, 24, 22),
         muted: Color::new(120, 114, 104),
@@ -290,14 +291,23 @@ fn new_york_times() -> Theme {
         "Holding the front page",
     ]);
     t.voice.tool_verbs = verbs(&[
-        ("read_file", &["Reading the wire", "Reviewing the clippings"]),
+        (
+            "read_file",
+            &["Reading the wire", "Reviewing the clippings"],
+        ),
         ("write_file", &["Filing the story", "Typing the copy"]),
         ("edit_file", &["Editing the copy", "Marking up the galley"]),
-        ("find_files", &["Combing the archives", "Searching the morgue"]),
+        (
+            "find_files",
+            &["Combing the archives", "Searching the morgue"],
+        ),
         ("search_files", &["Chasing the lead", "Working the beat"]),
         ("run_shell", &["Running the presses", "Going to press"]),
         ("git", &["Putting the edition to bed"]),
-        ("web_search", &["Calling the newsroom", "Working the sources"]),
+        (
+            "web_search",
+            &["Calling the newsroom", "Working the sources"],
+        ),
         ("ask_user_question", &["Interviewing the editor"]),
         ("default", &["On the beat"]),
     ]);

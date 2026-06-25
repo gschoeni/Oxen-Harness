@@ -58,9 +58,9 @@ impl MessageContent {
     pub fn is_text_only(&self) -> bool {
         match self {
             MessageContent::Text(_) => true,
-            MessageContent::Parts(parts) => parts
-                .iter()
-                .all(|p| matches!(p, ContentPart::Text { .. })),
+            MessageContent::Parts(parts) => {
+                parts.iter().all(|p| matches!(p, ContentPart::Text { .. }))
+            }
         }
     }
 }
@@ -444,7 +444,10 @@ mod tests {
         let json = serde_json::to_value(&part).unwrap();
         assert_eq!(json["type"], "file");
         assert_eq!(json["file"]["filename"], "paper.pdf");
-        assert_eq!(json["file"]["file_data"], "data:application/pdf;base64,JVBER");
+        assert_eq!(
+            json["file"]["file_data"],
+            "data:application/pdf;base64,JVBER"
+        );
     }
 
     #[test]

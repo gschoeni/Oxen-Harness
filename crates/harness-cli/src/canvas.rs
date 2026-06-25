@@ -62,8 +62,14 @@ impl CanvasSink for CliCanvasSink {
 /// both the classic and live renderers can drop it in place of the generic line.
 pub fn render_canvas_block(ui: &Ui, arguments: &str) -> Option<Vec<String>> {
     let v: serde_json::Value = serde_json::from_str(arguments).ok()?;
-    let title = v.get("title").and_then(|x| x.as_str()).unwrap_or("Document");
-    let format = v.get("format").and_then(|x| x.as_str()).unwrap_or("markdown");
+    let title = v
+        .get("title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("Document");
+    let format = v
+        .get("format")
+        .and_then(|x| x.as_str())
+        .unwrap_or("markdown");
     let language = v.get("language").and_then(|x| x.as_str());
     let content = v.get("content").and_then(|x| x.as_str()).unwrap_or("");
 
@@ -96,7 +102,10 @@ pub fn render_canvas_block(ui: &Ui, arguments: &str) -> Option<Vec<String>> {
         }
         // code / mermaid / anything else: show the source, dimmed.
         _ => {
-            push_capped(&mut out, content.lines().map(|l| format!("  {}", ui.dim(l))));
+            push_capped(
+                &mut out,
+                content.lines().map(|l| format!("  {}", ui.dim(l))),
+            );
         }
     }
     Some(out)

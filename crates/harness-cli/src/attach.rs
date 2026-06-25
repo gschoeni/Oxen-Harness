@@ -136,15 +136,24 @@ mod tests {
     #[test]
     fn tokenize_handles_quotes_and_escaped_spaces() {
         assert_eq!(tokenize("a b c"), ["a", "b", "c"]);
-        assert_eq!(tokenize(r"describe /tmp/My\ File.png"), ["describe", "/tmp/My File.png"]);
-        assert_eq!(tokenize(r#"look "/tmp/a b.png" now"#), ["look", "/tmp/a b.png", "now"]);
+        assert_eq!(
+            tokenize(r"describe /tmp/My\ File.png"),
+            ["describe", "/tmp/My File.png"]
+        );
+        assert_eq!(
+            tokenize(r#"look "/tmp/a b.png" now"#),
+            ["look", "/tmp/a b.png", "now"]
+        );
     }
 
     #[test]
     fn extracts_existing_image_and_keeps_text() {
         let dir = tempfile::tempdir().unwrap();
         let img = dir.path().join("shot.png");
-        std::fs::File::create(&img).unwrap().write_all(&[1, 2, 3]).unwrap();
+        std::fs::File::create(&img)
+            .unwrap()
+            .write_all(&[1, 2, 3])
+            .unwrap();
 
         let line = format!("describe this {}", img.display());
         let (text, attachments, warnings) = extract_attachments(&line);

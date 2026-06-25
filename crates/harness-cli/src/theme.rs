@@ -721,10 +721,7 @@ mod tests {
 
         let returned = ui.set_departing("Fort Laramie, Wyoming");
         assert_eq!(returned, "Departing");
-        assert_eq!(
-            ui.departing(),
-            Some(("Departing", "Fort Laramie, Wyoming"))
-        );
+        assert_eq!(ui.departing(), Some(("Departing", "Fort Laramie, Wyoming")));
         // The banner reflects the new location.
         assert!(banner(&ui, "u", "m", "w", "s").contains("Fort Laramie, Wyoming"));
     }
