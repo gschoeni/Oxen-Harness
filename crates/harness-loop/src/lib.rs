@@ -32,6 +32,7 @@ pub use journal::{Attempt, LoopJournal, VerifyOutcome};
 pub use runner::{LoopEvent, LoopRunner, StopReason};
 pub use spec::{
     slug, LoopSpec, Verify, DEFAULT_MAX_ITERATIONS, DEFAULT_THRESHOLD, DEFAULT_VERIFY_TIMEOUT_MS,
+    LOOP_SCHEMA_VERSION,
 };
 pub use store::{LoopStore, LoopSummary};
 

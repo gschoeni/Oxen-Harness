@@ -168,6 +168,31 @@ exactly the fragile boundary the review flagged.
   hand-written; generating them would mean `ts-rs` derives across many crates for
   little gain.
 
+## File formats & safety
+
+**Theme & loop files are versioned and validated** (2026-06-25)
+Themes and loops are public, shareable, and (for themes) model-generated, so
+both now carry a `schema_version` (`THEME_SCHEMA_VERSION` / `LOOP_SCHEMA_VERSION`,
+`#[serde(default)]` so older files still load). On load, `Style::sanitize` clamps
+the enum-ish style fields (`display_transform`, `shadow`, `hero`, `scene`) to
+known values and validates CSS lengths (`radius`, `border_width`,
+`display_spacing`), falling back to the default for anything malformed — so a
+hand-written or LLM-generated theme can't quietly produce broken UI.
+
+**The workspace sandbox is policy, not a security boundary** (2026-06-25)
+`sandbox.rs`'s module docs now say this plainly. `Workspace::resolve` is
+*lexical* (normalizes `.`/`..` textually, no `canonicalize`), so a symlink inside
+the root pointing outside it is not caught; `run_shell` is only cwd-pinned, not
+confined. It's a guardrail against an honest agent wandering, not a sandbox
+against a malicious one. Real isolation (containers/seccomp, a permission layer)
+is tracked separately in `04-backlog.md`.
+
+**Web-search docs reconciled with code** (2026-06-25)
+The registry always registers `web_search`; without a key the call returns the
+recognizable `WEB_SEARCH_NO_KEY` error the front ends turn into an inline "add
+your Brave key" prompt. `web.rs`, the registry doc comment, and the README
+(which all still said the tool was *omitted* without a key) were corrected.
+
 ## Tooling parity
 
 **Essential tool set modeled on Claude Code (no MCP, no orchestration/network)** (2026-06-21)

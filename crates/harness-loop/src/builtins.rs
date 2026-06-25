@@ -4,7 +4,7 @@
 //! same slug to override it). The flagship is the **default coding loop**: the
 //! exact "make the checks green" job this project uses on itself.
 
-use crate::spec::{LoopSpec, Verify};
+use crate::spec::{LoopSpec, Verify, LOOP_SCHEMA_VERSION};
 
 /// The slug of the loop used when none is named.
 pub const DEFAULT_SLUG: &str = "default";
@@ -25,6 +25,7 @@ pub fn by_slug(slug: &str) -> Option<LoopSpec> {
 /// This is the "Ralph Wiggum loop" gate this repo runs on itself.
 pub fn default_coding_loop() -> LoopSpec {
     LoopSpec {
+        schema_version: LOOP_SCHEMA_VERSION,
         name: "default".into(),
         description: "Work until formatting, lint, and tests are all green.".into(),
         goal: "Make the requested change and leave the project with formatting, \
@@ -49,6 +50,7 @@ pub fn default_coding_loop() -> LoopSpec {
 /// Just the test suite, green.
 pub fn green_tests() -> LoopSpec {
     LoopSpec {
+        schema_version: LOOP_SCHEMA_VERSION,
         name: "green-tests".into(),
         description: "Make the test suite pass.".into(),
         goal: "Make every test in the project pass.".into(),
@@ -65,6 +67,7 @@ pub fn green_tests() -> LoopSpec {
 /// Zero clippy warnings.
 pub fn clean_clippy() -> LoopSpec {
     LoopSpec {
+        schema_version: LOOP_SCHEMA_VERSION,
         name: "clean-clippy".into(),
         description: "Drive clippy to zero warnings.".into(),
         goal: "Make `cargo clippy` report zero warnings across the workspace.".into(),

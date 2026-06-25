@@ -450,6 +450,7 @@ fn new_interactive(ui: &Ui, store: &LoopStore) -> Result<()> {
         .collect();
 
     let spec = LoopSpec {
+        schema_version: harness_loop::LOOP_SCHEMA_VERSION,
         name: name.clone(),
         description: String::new(),
         goal,

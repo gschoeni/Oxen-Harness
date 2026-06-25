@@ -7,6 +7,13 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Current loop file schema version. Bump on incompatible changes; files
+/// written before versioning read back as this default.
+pub const LOOP_SCHEMA_VERSION: u32 = 1;
+fn default_loop_schema_version() -> u32 {
+    LOOP_SCHEMA_VERSION
+}
+
 /// Default ceiling on iterations before a loop gives up and reports.
 pub const DEFAULT_MAX_ITERATIONS: u32 = 8;
 /// Default rubric pass threshold (each criterion must score at least this).
@@ -72,6 +79,9 @@ impl Verify {
 /// A reusable, shareable loop definition.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopSpec {
+    /// File-format version (see [`LOOP_SCHEMA_VERSION`]).
+    #[serde(default = "default_loop_schema_version")]
+    pub schema_version: u32,
     /// Human name (also the basis for the on-disk slug).
     pub name: String,
     /// One-line description for listings.
@@ -97,6 +107,7 @@ impl LoopSpec {
     /// A minimal ad-hoc loop from a goal, using a rubric gate and defaults.
     pub fn from_goal(goal: impl Into<String>) -> Self {
         Self {
+            schema_version: LOOP_SCHEMA_VERSION,
             name: "ad-hoc".to_string(),
             description: String::new(),
             goal: goal.into(),
@@ -161,6 +172,7 @@ mod tests {
     #[test]
     fn command_verify_round_trips_through_toml() {
         let spec = LoopSpec {
+            schema_version: LOOP_SCHEMA_VERSION,
             name: "Green tests".into(),
             description: "all tests pass".into(),
             goal: "make the test suite green".into(),

@@ -1,9 +1,22 @@
-//! Workspace sandbox: confines tool file access to a single working directory.
+//! Workspace scoping: keeps tool file access pointed at one working directory.
 //!
 //! Sessions are scoped to one working directory. Every path a tool touches is
-//! resolved through [`Workspace::resolve`], which rejects escapes outside the
+//! resolved through [`Workspace::resolve`], which rejects paths that escape the
 //! root (e.g. `../../etc/passwd`). The model still decides *what* to do; this
-//! just guarantees it stays inside the project the user opened.
+//! keeps it pointed at the project the user opened.
+//!
+//! **This is a policy, not a security boundary.** Treat it as a guardrail
+//! against an honest agent wandering, not a sandbox against a malicious one:
+//!
+//! - [`Workspace::resolve`] is **lexical** — it normalizes `.`/`..` textually and
+//!   does not call `canonicalize`, so a **symlink inside the root that points
+//!   outside it is not detected**: reads/writes through that link land wherever
+//!   it targets. (The root itself is canonicalized in [`Workspace::new`].)
+//! - `run_shell` is only cwd-pinned to the root; a shell command can still `cd`
+//!   elsewhere, read absolute paths, or reach the network. It is not confined.
+//!
+//! Real isolation (containers, seccomp, a permission/approval layer) is a
+//! separate concern layered above this; see `04-backlog.md`.
 
 use std::path::{Component, Path, PathBuf};
 

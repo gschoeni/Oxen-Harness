@@ -265,9 +265,80 @@ impl Default for Style {
     }
 }
 
+impl Style {
+    /// Replace any out-of-range enum value or malformed CSS length with the
+    /// default for that field, so a hand-written or model-generated theme can't
+    /// quietly produce broken UI (an unknown `shadow`, a `radius` of `"huge"`).
+    fn sanitize(&mut self) {
+        let d = Style::default();
+        clamp(
+            &mut self.display_transform,
+            &["uppercase", "lowercase", "capitalize", "none"],
+            &d.display_transform,
+        );
+        clamp(
+            &mut self.shadow,
+            &["pixel", "soft", "glow", "none"],
+            &d.shadow,
+        );
+        clamp(&mut self.hero, &["pixel", "newspaper", "minimal"], &d.hero);
+        clamp(&mut self.scene, &["trail", "grid", "none"], &d.scene);
+        if !is_css_length(&self.radius) {
+            self.radius = d.radius;
+        }
+        if !is_css_length(&self.border_width) {
+            self.border_width = d.border_width;
+        }
+        if !is_css_length(&self.display_spacing) {
+            self.display_spacing = d.display_spacing;
+        }
+    }
+}
+
+/// If `value` isn't one of `allowed`, reset it to `fallback`.
+fn clamp(value: &mut String, allowed: &[&str], fallback: &str) {
+    if !allowed.contains(&value.as_str()) {
+        *value = fallback.to_string();
+    }
+}
+
+/// Whether `s` is a plausible CSS length: `"0"`, or a (possibly signed/decimal)
+/// number followed by a known unit. Deliberately conservative — anything it
+/// rejects falls back to a safe default rather than reaching the stylesheet.
+fn is_css_length(s: &str) -> bool {
+    let s = s.trim();
+    if s == "0" {
+        return true;
+    }
+    const UNITS: [&str; 13] = [
+        "px", "em", "rem", "%", "vh", "vw", "vmin", "vmax", "ch", "ex", "pt", "cm", "mm",
+    ];
+    let Some(unit_start) = UNITS
+        .iter()
+        .filter(|u| s.ends_with(*u))
+        .max_by_key(|u| u.len())
+        .map(|u| s.len() - u.len())
+    else {
+        return false;
+    };
+    let num = &s[..unit_start];
+    !num.is_empty() && num.parse::<f64>().is_ok()
+}
+
+/// Current theme file schema version. Bump when the shape changes
+/// incompatibly; files written before versioning read back as this default.
+pub const THEME_SCHEMA_VERSION: u32 = 1;
+
+fn default_theme_schema_version() -> u32 {
+    THEME_SCHEMA_VERSION
+}
+
 /// A complete theme: identity, palette, voice, and visual style.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Theme {
+    /// File-format version (see [`THEME_SCHEMA_VERSION`]).
+    #[serde(default = "default_theme_schema_version")]
+    pub schema_version: u32,
     pub meta: Meta,
     pub palette: Palette,
     pub voice: Voice,
@@ -308,7 +379,11 @@ impl Theme {
     fn from_patch(patch: serde_json::Value) -> Result<Theme, ThemeError> {
         let base = serde_json::to_value(Theme::default())?;
         let merged = deep_merge(base, patch);
-        Ok(serde_json::from_value(merged)?)
+        let mut theme: Theme = serde_json::from_value(merged)?;
+        // Loaded/imported themes (incl. model-generated ones) may carry invalid
+        // style values; clamp them so they can't break the UI.
+        theme.style.sanitize();
+        Ok(theme)
     }
 
     /// Parse a theme from a model's raw response: tolerate surrounding prose and
@@ -434,6 +509,7 @@ fn list(xs: &[&str]) -> Vec<String> {
 
 /// The original Oregon-Trail-on-a-CRT theme — the default.
 fn oregon_trail() -> Theme {
+    let schema_version = THEME_SCHEMA_VERSION;
     let mut tool_verbs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     tool_verbs.insert(
         s("read_file"),
@@ -471,6 +547,7 @@ fn oregon_trail() -> Theme {
     tool_verbs.insert(s("default"), list(&["Working the trail"]));
 
     Theme {
+        schema_version,
         meta: Meta {
             name: s("Oregon Trail"),
             author: s("oxen-harness"),
@@ -639,6 +716,47 @@ fn oregon_trail() -> Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_style_values_are_clamped_on_load() {
+        // A model-generated theme with bad enum + length values.
+        let toml = r#"
+            [meta]
+            name = "Bad"
+            author = "model"
+            description = "x"
+            [style]
+            shadow = "explode"
+            hero = "spaceship"
+            scene = "lava"
+            display_transform = "rainbow"
+            radius = "huge"
+            border_width = "2px"
+        "#;
+        let theme = Theme::from_toml_str(toml).unwrap();
+        let d = Style::default();
+        assert_eq!(theme.style.shadow, d.shadow);
+        assert_eq!(theme.style.hero, d.hero);
+        assert_eq!(theme.style.scene, d.scene);
+        assert_eq!(theme.style.display_transform, d.display_transform);
+        assert_eq!(theme.style.radius, d.radius); // "huge" rejected
+        assert_eq!(theme.style.border_width, "2px"); // valid, preserved
+    }
+
+    #[test]
+    fn css_length_validator_accepts_lengths_and_rejects_junk() {
+        for ok in ["0", "3px", "0.02em", "-0.01em", "100%", "1.5rem"] {
+            assert!(is_css_length(ok), "{ok} should be valid");
+        }
+        for bad in ["", "huge", "px", "10", "3 px", "red"] {
+            assert!(!is_css_length(bad), "{bad} should be invalid");
+        }
+    }
+
+    #[test]
+    fn theme_carries_schema_version() {
+        assert_eq!(Theme::default().schema_version, THEME_SCHEMA_VERSION);
+    }
 
     #[test]
     fn color_round_trips_through_hex() {

@@ -133,8 +133,10 @@ impl ToolRegistry {
 
     /// Like [`Self::default_for_workspace`], but with an explicit Brave Search
     /// API key for web search (e.g. one configured in a UI). A `None`/blank key
-    /// falls back to the `BRAVE_API_KEY` environment variable; web search is
-    /// only registered when a key resolves one way or the other.
+    /// falls back to the `BRAVE_API_KEY` environment variable. Web search is
+    /// *always* registered; if no key resolves, the call fails with the
+    /// recognizable [`web::WEB_SEARCH_NO_KEY`] error the front ends turn into an
+    /// inline "add your API key" prompt.
     pub fn default_for_workspace_with_web_key(
         workspace: Workspace,
         brave_key: Option<String>,

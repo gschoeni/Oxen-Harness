@@ -66,7 +66,7 @@ cargo nextest run   # or: cargo test
 | Base URL | `--base-url` flag, `OXEN_BASE_URL` env, or `--host`/`OXEN_HOST` (expanded) | `https://hub.oxen.ai/api/ai` |
 | Model | `--model` flag | `claude-opus-4-8` |
 | Resume | `--resume <SESSION_ID>` flag (id printed on the death screen) | new session |
-| Web search | `BRAVE_API_KEY` env (or `BRAVE_SEARCH_API_KEY`) | disabled if unset |
+| Web search | `BRAVE_API_KEY` env (or `BRAVE_SEARCH_API_KEY`), or `~/.oxen-harness/.env` | always offered; key enables results |
 | Local model | `--local <MODEL_ID>` flag (runs llama.cpp instead of a remote endpoint) | remote Oxen.ai |
 | Theme | `/theme` in the REPL or `oxen-harness theme use <name>` (persists to `~/.oxen-harness/config.toml`) | Oregon Trail |
 
@@ -92,13 +92,18 @@ the `OXEN_BASE_URL` / `OXEN_HOST` env vars.
 ### Web search (Brave)
 
 The agent can search the web via the [Brave Search API](https://brave.com/search/api/).
-Set a key and the `web_search` tool is registered automatically; without one it is
-left out entirely, so the model is never offered a tool it can't use.
+The `web_search` tool is always available; without a key a call fails with a
+recognizable error that the CLI and desktop app turn into an inline "add your
+Brave key" prompt, so you can enable it mid-conversation and retry. The key is
+read from the environment, an explicit override, or `~/.oxen-harness/.env`.
 
 ```bash
 export BRAVE_API_KEY=brave-...   # or BRAVE_SEARCH_API_KEY
 oxen-harness
 ```
+
+You can also paste a key when prompted after a failed search; it's saved to
+`~/.oxen-harness/.env` and shared with the desktop app.
 
 ### Clarifying questions
 

@@ -5,9 +5,11 @@
 //! Brave's web search endpoint (<https://brave.com/search/api/>) and returns
 //! ranked results as `title / url / snippet` text.
 //!
-//! The API key is read from `BRAVE_API_KEY` (or `BRAVE_SEARCH_API_KEY`). When no
-//! key is configured the tool is left out of the default registry, so the model
-//! is never offered a capability it cannot use.
+//! The API key is read from `BRAVE_API_KEY` (or `BRAVE_SEARCH_API_KEY`), or from
+//! an explicit override passed by the host. The tool is *always* registered so
+//! the model can attempt a search; when no key is configured the call fails with
+//! the recognizable [`WEB_SEARCH_NO_KEY`] error, which the CLI and desktop app
+//! turn into an inline "add your Brave key" prompt instead of a dead end.
 
 use async_trait::async_trait;
 use serde::Deserialize;
