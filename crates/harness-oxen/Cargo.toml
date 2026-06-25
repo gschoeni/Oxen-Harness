@@ -1,0 +1,15 @@
+[package]
+name = "harness-oxen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Version data, config, and shareable traces with Oxen (shells out to the `oxen` CLI)"
+
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

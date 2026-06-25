@@ -18,6 +18,7 @@ harness-config = { workspace = true }
 harness-llm = { workspace = true }
 harness-tools = { workspace = true }
 harness-store = { workspace = true }
+harness-oxen = { workspace = true }
 harness-local = { workspace = true }
 harness-theme = { workspace = true }
 harness-agent = { workspace = true }

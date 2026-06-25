@@ -24,11 +24,12 @@ oxen-harness/
     harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth; attachment store (content-addressed on-disk files) + hydration.
     harness-tools/           — fs read/write/edit, glob find, regex search, sandboxed shell, git, Brave web search, ask_user_question (clarifying questions).
     harness-store/           — SQLite history (verbatim) + JSONL export; rusqlite_migration schema versioning; rich session metadata.
+    harness-oxen/            — Version config/data + export/share traces via the `oxen` CLI (testable Runner shell-out; no liboxen).
     harness-local/           — Local models: Qwen3 GGUF catalog, downloads + disk tracking, llama-server launcher.
     harness-theme/           — Configurable themes (palette + voice): built-ins, TOML/JSON load/save with partial overrides, active-theme store.
     harness-agent/           — The agent (Ralph) loop (llm + tools + store).
     harness-loop/            — Goal-driven, self-verifying loops (discover→verify→iterate): LoopSpec/Verify, runner, journal, shareable store + built-ins.
-    harness-cli/             — The `oxen-harness` interactive REPL binary (incl. picker, live sticky-bottom composer, /theme + theme subcommand, /loop + loop subcommand).
+    harness-cli/             — The `oxen-harness` interactive REPL binary (incl. picker, live sticky-bottom composer, /theme + theme subcommand, /loop + loop subcommand, `trace export` to share a conversation via Oxen).
   app/                       — Tauri v2 desktop app (separate project, excluded
                                from the core workspace). src-tauri/ = Rust bridge,
                                dist/ = chat UI. See app/README.md.

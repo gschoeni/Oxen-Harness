@@ -609,6 +609,7 @@ dependencies = [
  "harness-llm",
  "harness-local",
  "harness-loop",
+ "harness-oxen",
  "harness-store",
  "harness-theme",
  "harness-tools",
@@ -687,6 +688,14 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "harness-oxen"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

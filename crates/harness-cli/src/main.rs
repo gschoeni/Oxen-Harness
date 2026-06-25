@@ -15,6 +15,7 @@ mod render;
 mod repl;
 mod theme;
 mod theme_cmd;
+mod trace_cmd;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -89,6 +90,11 @@ enum TopCommand {
         #[command(subcommand)]
         action: loop_cmd::LoopAction,
     },
+    /// Export or share a conversation as an Oxen repo (transcript + attachments).
+    Trace {
+        #[command(subcommand)]
+        action: trace_cmd::TraceAction,
+    },
 }
 
 #[tokio::main]
@@ -122,6 +128,7 @@ async fn main() -> Result<()> {
             loop_cmd::Dispatch::Done => return Ok(()),
             loop_cmd::Dispatch::Run(spec) => pending_loop = Some(*spec),
         },
+        Some(TopCommand::Trace { action }) => return trace_cmd::run_trace(action, &ui),
         None => {}
     }
 

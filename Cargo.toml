@@ -6,6 +6,7 @@ members = [
     "crates/harness-llm",
     "crates/harness-tools",
     "crates/harness-store",
+    "crates/harness-oxen",
     "crates/harness-local",
     "crates/harness-theme",
     "crates/harness-agent",
@@ -31,6 +32,7 @@ harness-config = { path = "crates/harness-config" }
 harness-llm = { path = "crates/harness-llm" }
 harness-tools = { path = "crates/harness-tools" }
 harness-store = { path = "crates/harness-store" }
+harness-oxen = { path = "crates/harness-oxen" }
 harness-local = { path = "crates/harness-local" }
 harness-theme = { path = "crates/harness-theme" }
 harness-agent = { path = "crates/harness-agent" }

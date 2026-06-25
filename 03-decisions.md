@@ -103,6 +103,26 @@ provider request, so the wire format to the model is unchanged.
 - Neither front end displayed attachment images inline (the desktop `ContentPart`
   is text-only; the terminal can't show images), so storing paths is display-neutral.
 
+**Oxen versioning via the `oxen` CLI, not `liboxen`** (2026-06-25)
+`harness-oxen` versions everything outside the history DB — config, project
+data, and shareable conversation traces — by shelling out to the `oxen` binary
+(`init`/`add`/`commit`/`set-remote`/`push`/`clone`), confirming the earlier
+"no `liboxen` dependency" call: `liboxen` drags in Polars + Arrow + the AWS SDK +
+a bundled DuckDB C++ build, while the verbs we need are the stable CLI surface,
+and the CLI shares `~/.config/oxen` auth so `oxen config --auth` already enables
+push/share.
+- *Testability:* all commands go through a `Runner` trait; tests inject a
+  `FakeRunner` to assert the exact argv and parse scripted exits without the
+  binary installed. `SystemRunner` is the production `std::process::Command`.
+- *Graceful degradation:* a missing binary surfaces as `OxenError::NotInstalled`
+  with an install hint; callers treat versioning as optional, never fatal.
+- *Traces:* `oxen-harness trace export <session> [--out DIR] [--push URL]`
+  bundles the session's JSONL transcript with the attachment files it references
+  (kept at their project-relative paths so the clone hydrates), commits, and
+  optionally pushes to an Oxen hub repo to share.
+- *Config-dir versioning* (committing `~/.oxen-harness`) reuses `Oxen::snapshot`
+  and is wired where config writes are centralized — the runtime layer.
+
 ## Tooling parity
 
 **Essential tool set modeled on Claude Code (no MCP, no orchestration/network)** (2026-06-21)
