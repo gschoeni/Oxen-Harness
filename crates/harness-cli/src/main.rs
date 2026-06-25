@@ -311,6 +311,9 @@ async fn main() -> Result<()> {
         let _ = editor.load_history(path);
     }
     let mut queue = MessageQueue::default();
+    // A half-typed message left in the live composer when a turn ends; it seeds
+    // the next idle prompt so typing isn't wiped when the agent finishes.
+    let mut carryover = String::new();
     loop {
         // Remind the user about stacked messages waiting to be sent.
         if !queue.is_empty() {
@@ -322,7 +325,20 @@ async fn main() -> Result<()> {
         }
         // Recomputed each turn so a mid-session theme switch takes effect.
         let prompt = theme::prompt(&ui);
-        match editor.readline(&prompt) {
+        // A faint rule + blank line set the input apart from the output above.
+        // Only on an interactive terminal — piped/scripted runs stay clean.
+        if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            println!("\n{}", theme::divider(&ui));
+        }
+        // Seed the line with any draft carried over from the live composer, so a
+        // message typed while the agent was finishing continues uninterrupted.
+        let seed = std::mem::take(&mut carryover);
+        let read = if seed.is_empty() {
+            editor.readline(&prompt)
+        } else {
+            editor.readline_with_initial(&prompt, (&seed, ""))
+        };
+        match read {
             Ok(line) => {
                 let mut new_history = editor.add_history_entry(line.as_str()).unwrap_or(false);
                 let exit = handle_line(
@@ -334,6 +350,7 @@ async fn main() -> Result<()> {
                     &mut queue,
                     workspace.root(),
                     &base_url,
+                    &mut carryover,
                 )
                 .await?;
                 // Fold any prompts queued during the turn — typed into the live
@@ -378,6 +395,7 @@ async fn handle_line(
     queue: &mut MessageQueue,
     workspace_root: &Path,
     base_url: &str,
+    carryover: &mut String,
 ) -> Result<bool> {
     match parse_command(line) {
         Command::Empty => {}
@@ -389,7 +407,7 @@ async fn handle_line(
         Command::Theme(args) => theme_cmd::handle_repl(args, agent, ui).await?,
         Command::Queue(rest) => {
             // `/queue run` may stream turns that the user can Ctrl-C to quit.
-            if handle_queue(rest, queue, agent, ui).await? {
+            if handle_queue(rest, queue, agent, ui, carryover).await? {
                 print!("{}", theme::death_screen(ui, session));
                 return Ok(true);
             }
@@ -437,7 +455,7 @@ async fn handle_line(
         Command::Export(dest) => export(store, session, dest, ui)?,
         Command::Prompt(prompt) => {
             // Ctrl-C mid-stream ends the expedition just like quitting does.
-            if run_turn_and_drain(agent, &prompt, ui, queue).await? {
+            if run_turn_and_drain(agent, &prompt, ui, queue, carryover).await? {
                 print!("{}", theme::death_screen(ui, session));
                 return Ok(true);
             }
@@ -453,6 +471,7 @@ async fn handle_queue(
     queue: &mut MessageQueue,
     agent: &mut Agent,
     ui: &Ui,
+    carryover: &mut String,
 ) -> Result<bool> {
     let rest = rest.unwrap_or_default();
     let mut parts = rest.splitn(2, char::is_whitespace);
@@ -508,7 +527,7 @@ async fn handle_queue(
             queue.clear();
             println!("  {}", ui.brown("🧹 Emptied the wagon"));
         }
-        "run" | "go" => return run_queue(queue, agent, ui).await,
+        "run" | "go" => return run_queue(queue, agent, ui, carryover).await,
         _ => println!(
             "  {}",
             ui.dim("queue: list | add <msg> | edit <n> <msg> | up <n> | down <n> | rm <n> | clear | run"),
@@ -519,7 +538,12 @@ async fn handle_queue(
 
 /// Run every queued prompt in order, draining the queue. Returns `Ok(true)` if
 /// the user interrupted (Ctrl-C) mid-run.
-async fn run_queue(queue: &mut MessageQueue, agent: &mut Agent, ui: &Ui) -> Result<bool> {
+async fn run_queue(
+    queue: &mut MessageQueue,
+    agent: &mut Agent,
+    ui: &Ui,
+    carryover: &mut String,
+) -> Result<bool> {
     if queue.is_empty() {
         println!("  {}", ui.dim("the wagon is empty — nothing to send"));
         return Ok(false);
@@ -530,7 +554,7 @@ async fn run_queue(queue: &mut MessageQueue, agent: &mut Agent, ui: &Ui) -> Resu
         ui.brown("▶ rolling the wagon:"),
         ui.cream(&truncate(&first, 80)),
     );
-    run_turn_and_drain(agent, &first, ui, queue).await
+    run_turn_and_drain(agent, &first, ui, queue, carryover).await
 }
 
 /// Whether the sticky-bottom live composer should drive this turn: only for an
@@ -550,9 +574,14 @@ async fn run_turn_and_drain(
     prompt: &str,
     ui: &Ui,
     queue: &mut MessageQueue,
+    carryover: &mut String,
 ) -> Result<bool> {
     if live_enabled(ui) {
-        return live::run_prompt(agent, prompt, ui, queue).await;
+        // The live composer hands back any half-typed next message so the idle
+        // prompt can keep it instead of wiping it when the turn ends.
+        let (exit, draft) = live::run_prompt(agent, prompt, ui, queue).await?;
+        *carryover = draft;
+        return Ok(exit);
     }
     if run_prompt(agent, prompt, ui).await? {
         return Ok(true);

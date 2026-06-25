@@ -198,6 +198,16 @@ pub fn prompt(ui: &Ui) -> String {
     )
 }
 
+/// A faint full-width horizontal rule, drawn above the input prompt to set the
+/// typing area apart from the agent's output above it (à la Claude Code).
+pub fn divider(ui: &Ui) -> String {
+    let width = crossterm::terminal::size()
+        .map(|(cols, _)| cols as usize)
+        .unwrap_or(80)
+        .clamp(8, 200);
+    ui.dim(&"─".repeat(width))
+}
+
 // ===========================================================================
 // Pseudo-random selection (no `rand` dependency — a tiny time-seeded xorshift).
 // ===========================================================================

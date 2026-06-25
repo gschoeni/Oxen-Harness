@@ -38,13 +38,17 @@ use crate::theme::{LiveSpinner, Ui};
 
 /// Run `first_prompt`, then drain any queued prompts in order, all under a single
 /// owned live terminal so the composer stays pinned across the whole sequence.
-/// Returns `Ok(true)` when the user asked to end the session (Ctrl-C / Ctrl-D).
+///
+/// Returns `(end_session, draft)`: `end_session` is true when the user asked to
+/// quit (Ctrl-C / Ctrl-D); `draft` is whatever unsent text was left in the
+/// composer, so the caller can seed the idle prompt with it (a half-typed next
+/// message isn't lost when the turn ends).
 pub(crate) async fn run_prompt(
     agent: &mut Agent,
     first_prompt: &str,
     ui: &Ui,
     queue: &mut MessageQueue,
-) -> Result<bool> {
+) -> Result<(bool, String)> {
     let term = LiveTerminal::new()?;
     let (rows, cols) = (term.rows, term.cols);
 
@@ -102,6 +106,13 @@ pub(crate) async fn run_prompt(
     stop.store(true, Ordering::Relaxed);
     let _ = input.join();
     let needs_brave_key = state.borrow().needs_brave_key;
+    // Capture any half-typed message so the idle prompt can keep it (unless the
+    // session is ending, where it's moot).
+    let draft = if exit {
+        String::new()
+    } else {
+        state.borrow().composer_draft()
+    };
     drop(state);
     drop(term);
 
@@ -110,7 +121,7 @@ pub(crate) async fn run_prompt(
     if needs_brave_key {
         crate::brave::prompt_after_failed_search(ui);
     }
-    Ok(exit)
+    Ok((exit, draft))
 }
 
 /// What happened to a single turn in the live loop.
@@ -702,6 +713,13 @@ impl Live {
     }
 
     // --- queue snapshot + focus -------------------------------------------
+
+    /// The unsent text currently in the bottom composer. Carried back to the
+    /// idle prompt when the composer hands off, so a half-typed next message
+    /// survives the turn ending instead of being wiped.
+    fn composer_draft(&self) -> String {
+        self.composer.text()
+    }
 
     /// Refresh the preview snapshot from the authoritative queue, then re-clamp
     /// focus (and drop any inline edit that lost its item).
@@ -1329,6 +1347,11 @@ impl Composer {
 
     fn is_empty(&self) -> bool {
         self.buf.is_empty()
+    }
+
+    /// The buffer's contents as a string.
+    fn text(&self) -> String {
+        self.buf.iter().collect()
     }
 
     fn chars(&self) -> &[char] {

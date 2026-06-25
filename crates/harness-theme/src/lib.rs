@@ -640,7 +640,7 @@ fn oregon_trail() -> Theme {
             ],
             bottom_hint: s("Type /help to size up your options · Ctrl-D to make camp"),
             label_provider: s("Provider"),
-            label_model: s("Oxen (model)"),
+            label_model: s("Model"),
             label_workspace: s("Wagon (workspace)"),
             label_session: s("Trail journal"),
             label_disk_used: s("Supplies on hand (disk used):"),
