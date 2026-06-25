@@ -87,14 +87,34 @@
 }
 
 .history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-family: var(--font-display);
   font-size: var(--label-size);
   text-transform: var(--label-transform);
   letter-spacing: var(--label-spacing);
   color: var(--text-tertiary);
   padding: 0 var(--space-2);
-  margin-bottom: calc(-1 * var(--space-2));
+  margin-bottom: calc(-1 * var(--space-1));
   flex-shrink: 0;
+}
+/* A small icon button used in the header and on each folder. */
+.head-action {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.head-action:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .history {
@@ -103,9 +123,77 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   margin: 0 calc(-1 * var(--space-1));
   padding: 0 var(--space-1);
+}
+
+/* --- Project folders --- */
+.project-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--radius-sm);
+}
+.project-head:hover {
+  background: var(--surface-2);
+}
+.project.active > .project-head .project-name {
+  color: var(--text);
+}
+.project-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: transparent;
+  border: none;
+  padding: var(--space-2) var(--space-2);
+  color: var(--text-secondary);
+  text-align: left;
+}
+.project-chevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.project-chevron.open {
+  transform: rotate(90deg);
+}
+.project.active > .project-head .project-chevron {
+  color: var(--accent);
+}
+.project-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-count {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  background: var(--surface-2);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+}
+.project-chats {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  /* Indent the chats under their folder and draw a guide line. */
+  margin: 1px 0 var(--space-2) var(--space-4);
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--separator);
+}
+.project-empty {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-2);
 }
 
 .history-item {

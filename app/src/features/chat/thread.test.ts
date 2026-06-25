@@ -43,10 +43,15 @@ describe("thread: tools", () => {
     expect(items[items.length - 1]).toMatchObject({ kind: "assistant", streaming: true });
   });
 
-  it("keeps a non-empty assistant bubble when a tool starts", () => {
-    let items = appendToken(startTurn([], "go"), "partial");
+  it("finalizes a non-empty preamble bubble when a tool starts", () => {
+    // e.g. the model says "I'll read that file…" then calls a tool.
+    let items = appendToken(startTurn([], "go"), "I'll read that file");
     items = toolStart(items, "read_file", "", 0);
     expect(items.map((i) => i.kind)).toEqual(["user", "assistant", "tool"]);
+    // The preamble bubble stops streaming so its activity indicator hands off to
+    // the tool chip (rather than two indicators showing at once).
+    const preamble = items[1] as Extract<Item, { kind: "assistant" }>;
+    expect(preamble).toMatchObject({ text: "I'll read that file", streaming: false });
   });
 });
 

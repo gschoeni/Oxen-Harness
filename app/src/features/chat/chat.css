@@ -402,6 +402,12 @@
   gap: 5px;
   height: 1.2em;
 }
+/* When it trails streamed text (e.g. a preamble before a tool call), sit it on
+   its own line just below the text. */
+.thinking.trailing {
+  display: flex;
+  margin-top: var(--space-2);
+}
 .thinking > span {
   width: 6px;
   height: 6px;

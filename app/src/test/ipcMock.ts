@@ -7,6 +7,7 @@ import { vi } from "vitest";
 import type {
   ConnectionView,
   ModelsView,
+  Project,
   SessionInfo,
   SessionView,
   Theme,
@@ -160,6 +161,15 @@ export const sessionInfo = vi.fn(async () => sampleSession);
 export const listSessions = vi.fn(async () => []);
 export const newSession = vi.fn(async () => ({ ...sampleSession, session_id: "new-session-id" }));
 export const resumeSession = vi.fn(async () => emptyView);
+export const listProjects = vi.fn(async () => [] as Project[]);
+export const openProject = vi.fn(async (path: string) => ({
+  path,
+  name: path,
+  session_count: 0,
+  active: true,
+}));
+export const setActiveProject = vi.fn(async () => {});
+export const pickFolder = vi.fn(async () => null as string | null);
 export const runTurn = vi.fn(async () => "Done.");
 export const onToken = listener("token");
 export const onTool = listener("tool");
@@ -195,6 +205,15 @@ export function resetIpc() {
   listSessions.mockReset().mockResolvedValue([]);
   newSession.mockReset().mockResolvedValue({ ...sampleSession, session_id: "new-session-id" });
   resumeSession.mockReset().mockResolvedValue(emptyView);
+  listProjects.mockReset().mockResolvedValue([]);
+  openProject.mockReset().mockImplementation(async (path: string) => ({
+    path,
+    name: path,
+    session_count: 0,
+    active: true,
+  }));
+  setActiveProject.mockReset().mockResolvedValue(undefined);
+  pickFolder.mockReset().mockResolvedValue(null);
   runTurn.mockReset().mockResolvedValue("Done.");
   pickAttachments.mockReset().mockResolvedValue([]);
   answerQuestion.mockReset().mockResolvedValue(undefined);

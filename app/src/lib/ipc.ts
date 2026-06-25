@@ -14,6 +14,7 @@ import type {
   SessionInfo,
   SessionSummary,
   CanvasEvent,
+  Project,
   SessionView,
   Theme,
   ThemeSummary,
@@ -27,6 +28,20 @@ export const sessionInfo = () => invoke<SessionInfo>("session_info");
 export const listSessions = () => invoke<SessionSummary[]>("list_sessions");
 export const newSession = () => invoke<SessionInfo>("new_session");
 export const resumeSession = (id: string) => invoke<SessionView>("resume_session", { id });
+
+// ---- projects (chats grouped by working directory) -------------------------
+
+export const listProjects = () => invoke<Project[]>("list_projects");
+/** Add a folder as a project and make it active; new chats root there. */
+export const openProject = (path: string) => invoke<Project>("open_project", { path });
+/** Switch the active project to an already-known directory. */
+export const setActiveProject = (path: string) => invoke<void>("set_active_project", { path });
+
+/** Open a native folder picker, returning the chosen directory (or null). */
+export async function pickFolder(): Promise<string | null> {
+  const selected = await open({ directory: true, multiple: false, title: "Open a project folder" });
+  return typeof selected === "string" ? selected : null;
+}
 
 /** Run one user turn in `session`; streams via session-tagged `agent://token` /
  *  `agent://tool` events. Resolves with the assistant's final text. Multiple

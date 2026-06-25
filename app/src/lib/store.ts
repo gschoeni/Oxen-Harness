@@ -7,7 +7,17 @@
 
 import { create } from "zustand";
 import { lighten, readableOn, withAlpha } from "./color";
-import { listSessions, newSession, resumeSession, runTurn, sessionInfo } from "./ipc";
+import {
+  listProjects,
+  listSessions,
+  newSession,
+  openProject,
+  pickFolder,
+  resumeSession,
+  runTurn,
+  sessionInfo,
+  setActiveProject,
+} from "./ipc";
 import {
   appendToken,
   finalizeAssistant,
@@ -21,6 +31,7 @@ import type {
   CanvasDoc,
   CanvasEvent,
   Mode,
+  Project,
   QuestionPayload,
   RunStatus,
   SessionInfo,
@@ -37,6 +48,10 @@ interface AppState {
   /** The chat currently shown. */
   session: SessionInfo | null;
   sessions: SessionSummary[];
+  /** Known projects (working directories), refreshed alongside history. */
+  projects: Project[];
+  /** Whether the projects screen overlay is open. */
+  projectsOpen: boolean;
   /** Known session infos by id, so switching to a live chat keeps its header. */
   infos: Record<string, SessionInfo>;
   /** Live thread items per session id. */
@@ -65,6 +80,11 @@ interface AppState {
   loadSession: () => Promise<void>;
   startNewSession: () => Promise<void>;
   resume: (id: string) => Promise<void>;
+  setProjectsOpen: (open: boolean) => void;
+  /** Switch to a known project and start a fresh chat in it. */
+  enterProject: (path: string) => Promise<void>;
+  /** Pick a folder, register it as a project, and start a fresh chat in it. */
+  createProject: () => Promise<void>;
   /** Adopt a fresh session created by a model/connection switch as the current
    *  chat (it starts empty on a new endpoint). */
   adoptSession: (info: SessionInfo) => void;
@@ -132,6 +152,8 @@ export const useStore = create<AppState>((set, get) => {
     theme: null,
     session: null,
     sessions: [],
+    projects: [],
+    projectsOpen: false,
     infos: {},
     threads: {},
     runStatus: {},
@@ -159,9 +181,11 @@ export const useStore = create<AppState>((set, get) => {
 
     refreshHistory: async () => {
       try {
-        set({ sessions: await listSessions() });
+        // Projects derive from sessions' workspaces, so refresh both together.
+        const [sessions, projects] = await Promise.all([listSessions(), listProjects()]);
+        set({ sessions, projects });
       } catch {
-        /* leave the previous list in place on a transient error */
+        /* leave the previous lists in place on a transient error */
       }
     },
 
@@ -201,6 +225,24 @@ export const useStore = create<AppState>((set, get) => {
         return { session: infos[id] ?? view.info, threads, infos, runStatus };
       });
       get().refreshHistory();
+    },
+
+    setProjectsOpen: (projectsOpen) => set({ projectsOpen }),
+
+    enterProject: async (path) => {
+      await setActiveProject(path);
+      set({ projectsOpen: false });
+      // A fresh chat in the entered project; its existing chats stay in the
+      // sidebar folder. startNewSession refreshes history + projects.
+      await get().startNewSession();
+    },
+
+    createProject: async () => {
+      const path = await pickFolder();
+      if (!path) return;
+      await openProject(path); // registers + makes active on the backend
+      set({ projectsOpen: false });
+      await get().startNewSession();
     },
 
     adoptSession: (info) =>

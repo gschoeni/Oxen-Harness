@@ -16,8 +16,13 @@ export function ThreadItem({ item, now }: { item: Item; now: number }) {
         <div className="role">Oxen</div>
         {item.text ? (
           item.error ? <div className="body">{item.text}</div> : <Markdown text={item.text} />
-        ) : (
-          <span className="thinking">
+        ) : null}
+        {/* Keep an activity indicator visible the whole time the bubble is
+            streaming — including the silent stretch while the model writes a
+            tool call's arguments (a canvas document, clarifying questions) after
+            a short preamble, when the bubble already has text. */}
+        {item.streaming && (
+          <span className={`thinking ${item.text ? "trailing" : ""}`}>
             <span />
             <span />
             <span />

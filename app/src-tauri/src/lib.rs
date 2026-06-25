@@ -7,6 +7,7 @@
 //! API key configured.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -44,6 +45,10 @@ pub struct AppState {
     local_server: Mutex<Option<LocalServer>>,
     /// The local model id in use, so new sessions reuse it instead of the cloud.
     local_model: Mutex<Option<String>>,
+    /// The active project's directory — new chats are rooted here (the agent's
+    /// workspace), so each project's chats run against its own codebase. Empty
+    /// means "the launch directory" (resolved lazily by [`active_root`]).
+    active_project: Mutex<PathBuf>,
     /// Questions the agent is currently waiting on the user to answer.
     pending: Pending,
 }
@@ -199,13 +204,6 @@ struct SessionView {
     running: bool,
 }
 
-/// The current workspace directory as a display string (best-effort).
-fn workspace_string() -> String {
-    std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default()
-}
-
 /// The client, model label, and context window for a new agent: the selected
 /// local model + server if one is active, otherwise the configured cloud client.
 async fn client_for(state: &AppState) -> Result<(OxenClient, String, Option<usize>), String> {
@@ -244,9 +242,9 @@ fn agent_parts(
     pending: Pending,
     model_label: &str,
     context_window: Option<usize>,
+    workspace_root: &Path,
 ) -> Result<(ToolRegistry, Arc<HistoryStore>, AgentConfig), String> {
-    let workspace_root = std::env::current_dir().map_err(|e| e.to_string())?;
-    let workspace = Workspace::new(&workspace_root).map_err(|e| e.to_string())?;
+    let workspace = Workspace::new(workspace_root).map_err(|e| e.to_string())?;
     let brave_key = brave_key_override(&read_connection_config());
     let mut tools = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
     tools.register(Arc::new(AskUserTool::new(Arc::new(TauriAsker {
@@ -289,11 +287,13 @@ fn new_agent(
     client: OxenClient,
     model_label: &str,
     context_window: Option<usize>,
+    workspace_root: &Path,
 ) -> Result<Agent, String> {
-    let (mut tools, store, config) = agent_parts(app, pending, model_label, context_window)?;
+    let (mut tools, store, config) =
+        agent_parts(app, pending, model_label, context_window, workspace_root)?;
     let session = store
         .create_session(&SessionMeta {
-            workspace: workspace_string(),
+            workspace: workspace_root.display().to_string(),
             model: model_label.to_string(),
         })
         .map_err(|e| e.to_string())?;
@@ -303,6 +303,7 @@ fn new_agent(
 
 /// Build an agent bound to an *existing* session, loading its transcript — used
 /// to resume a cold history session without leaking a throwaway session row.
+/// Rooted at `workspace_root` (the session's own recorded directory).
 fn resume_agent(
     app: &AppHandle,
     pending: Pending,
@@ -310,8 +311,10 @@ fn resume_agent(
     model_label: &str,
     context_window: Option<usize>,
     session_id: String,
+    workspace_root: &Path,
 ) -> Result<Agent, String> {
-    let (mut tools, store, config) = agent_parts(app, pending, model_label, context_window)?;
+    let (mut tools, store, config) =
+        agent_parts(app, pending, model_label, context_window, workspace_root)?;
     register_canvas(&mut tools, app, &session_id);
     Agent::resume_from_store(client, tools, store, session_id, config).map_err(|e| e.to_string())
 }
@@ -319,6 +322,87 @@ fn resume_agent(
 fn dirs_home() -> Result<std::path::PathBuf, String> {
     #[allow(deprecated)]
     std::env::home_dir().ok_or_else(|| "could not determine home directory".to_string())
+}
+
+// ===========================================================================
+// Projects — chats are grouped by their working directory. A "project" is a
+// directory the agent runs in; entering one roots new chats there. The set of
+// known projects (plus the active one) is persisted to `projects.json`, and
+// merged with the distinct workspaces found across existing chats so directories
+// that already have history always show up.
+// ===========================================================================
+
+/// The directory the app was launched from — the default/initial project.
+fn launch_dir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// The active project's directory, falling back to the launch directory.
+async fn active_root(state: &AppState) -> PathBuf {
+    let p = state.active_project.lock().await.clone();
+    if p.as_os_str().is_empty() {
+        launch_dir()
+    } else {
+        p
+    }
+}
+
+/// A friendly display name for a project directory (its last path segment).
+fn project_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| path.to_string())
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct ProjectsConfig {
+    #[serde(default)]
+    paths: Vec<String>,
+    #[serde(default)]
+    active: Option<String>,
+}
+
+/// A project shown in the UI: its directory, display name, chat count, whether
+/// it's the active one.
+#[derive(Clone, Serialize)]
+struct ProjectView {
+    path: String,
+    name: String,
+    session_count: usize,
+    active: bool,
+}
+
+fn projects_config_path() -> Result<PathBuf, String> {
+    Ok(dirs_home()?.join(".oxen-harness").join("projects.json"))
+}
+
+fn read_projects_config() -> ProjectsConfig {
+    projects_config_path()
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_projects_config(cfg: &ProjectsConfig) -> Result<(), String> {
+    let path = projects_config_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())
+}
+
+/// Record `path` as a known project and make it active (persisted).
+fn remember_project(path: &str) -> Result<(), String> {
+    let mut cfg = read_projects_config();
+    if !cfg.paths.iter().any(|p| p == path) {
+        cfg.paths.push(path.to_string());
+    }
+    cfg.active = Some(path.to_string());
+    write_projects_config(&cfg)
 }
 
 // ===========================================================================
@@ -470,32 +554,37 @@ async fn set_connection(
         brave_api_key: brave_api_key.trim().to_string(),
     })?;
 
+    let root = active_root(&state).await;
     let agent = new_agent(
         &app,
         state.pending.clone(),
         configured_client()?,
         DEFAULT_MODEL,
         None,
+        &root,
     )?;
     *state.local_server.lock().await = None;
     *state.local_model.lock().await = None;
     Ok(install_agent(&state, agent).await)
 }
 
-/// Build a fresh agent for a new session, reusing the active local model if any.
-async fn build_fresh_agent(app: &AppHandle, state: &AppState) -> Result<Agent, String> {
+/// Build a fresh agent for a new session rooted at `root`, reusing the active
+/// local model if any.
+async fn build_fresh_agent(app: &AppHandle, state: &AppState, root: &Path) -> Result<Agent, String> {
     let (client, label, ctx) = client_for(state).await?;
-    new_agent(app, state.pending.clone(), client, &label, ctx)
+    new_agent(app, state.pending.clone(), client, &label, ctx, root)
 }
 
-/// Build an agent bound to an existing session id (no throwaway session row).
+/// Build an agent bound to an existing session id, rooted at `root` (its own
+/// recorded workspace), without leaking a throwaway session row.
 async fn build_resumed_agent(
     app: &AppHandle,
     state: &AppState,
     session_id: String,
+    root: &Path,
 ) -> Result<Agent, String> {
     let (client, label, ctx) = client_for(state).await?;
-    resume_agent(app, state.pending.clone(), client, &label, ctx, session_id)
+    resume_agent(app, state.pending.clone(), client, &label, ctx, session_id, root)
 }
 
 /// The agent handle for a session id, if one is live in memory.
@@ -503,11 +592,21 @@ async fn agent_for(state: &AppState, id: &str) -> Option<Arc<Mutex<Agent>>> {
     state.agents.lock().await.get(id).cloned()
 }
 
+/// A session's recorded working directory (its project), read from the store;
+/// falls back to the launch directory when unknown.
+fn session_workspace(id: &str) -> PathBuf {
+    open_history_store()
+        .ok()
+        .and_then(|s| s.session_meta(id).ok())
+        .map(|m| PathBuf::from(m.workspace))
+        .unwrap_or_else(launch_dir)
+}
+
 /// The live agent for a session, rehydrating it from the database if it isn't
 /// cached (e.g. it was evicted, or this is the first turn after a cold resume).
 /// The DB is the source of truth — every message was persisted as it was made —
-/// so a rebuilt agent continues the exact conversation. Inserts via the map
-/// entry so a concurrent build for the same id can't leave a duplicate.
+/// so a rebuilt agent continues the exact conversation, in the session's own
+/// workspace. Inserts via the map entry so a concurrent build can't duplicate.
 async fn agent_or_build(
     app: &AppHandle,
     state: &AppState,
@@ -516,7 +615,8 @@ async fn agent_or_build(
     if let Some(a) = agent_for(state, session).await {
         return Ok(a);
     }
-    let agent = build_resumed_agent(app, state, session.to_string()).await?;
+    let root = session_workspace(session);
+    let agent = build_resumed_agent(app, state, session.to_string(), &root).await?;
     let arc = Arc::new(Mutex::new(agent));
     Ok(state
         .agents
@@ -530,7 +630,7 @@ async fn agent_or_build(
 fn info_for(agent: &Agent) -> SessionInfo {
     SessionInfo {
         model: agent.model().to_string(),
-        workspace: workspace_string(),
+        workspace: session_workspace(agent.session_id()).display().to_string(),
         session_id: agent.session_id().to_string(),
     }
 }
@@ -574,7 +674,8 @@ async fn current_agent(app: &AppHandle, state: &AppState) -> Result<Arc<Mutex<Ag
             return Ok(a);
         }
     }
-    let agent = build_fresh_agent(app, state).await?;
+    let root = active_root(state).await;
+    let agent = build_fresh_agent(app, state, &root).await?;
     let arc = Arc::new(Mutex::new(agent));
     let id = arc.lock().await.session_id().to_string();
     state.agents.lock().await.insert(id.clone(), arc.clone());
@@ -681,7 +782,8 @@ async fn list_sessions() -> Result<Vec<SessionSummary>, String> {
 /// in the background — this never disturbs them. Returns the new session's info.
 #[tauri::command]
 async fn new_session(app: AppHandle, state: State<'_, AppState>) -> Result<SessionInfo, String> {
-    let agent = build_fresh_agent(&app, &state).await?;
+    let root = active_root(&state).await;
+    let agent = build_fresh_agent(&app, &state, &root).await?;
     Ok(install_agent(&state, agent).await)
 }
 
@@ -696,13 +798,19 @@ async fn resume_session(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<SessionView, String> {
+    // The session belongs to its own project; opening it enters that project so
+    // new chats land in the same directory.
+    let workspace = session_workspace(&id);
+    *state.active_project.lock().await = workspace.clone();
+    let _ = remember_project(&workspace.display().to_string());
+
     let arc = match agent_for(&state, &id).await {
         Some(a) => a,
         None => {
             // Cold resume: build an agent bound to the existing session (no
-            // throwaway row), then insert via the map entry so a concurrent
-            // resume of the same id can't leave two agents behind.
-            let agent = build_resumed_agent(&app, &state, id.clone()).await?;
+            // throwaway row), rooted at the session's own workspace, then insert
+            // via the map entry so a concurrent resume can't leave two behind.
+            let agent = build_resumed_agent(&app, &state, id.clone(), &workspace).await?;
             let arc = Arc::new(Mutex::new(agent));
             let winner = state
                 .agents
@@ -737,7 +845,7 @@ async fn resume_session(
         Err(_) => SessionView {
             info: SessionInfo {
                 model: String::new(),
-                workspace: workspace_string(),
+                workspace: workspace.display().to_string(),
                 session_id: id,
             },
             messages: vec![],
@@ -824,12 +932,14 @@ async fn use_local_model(
         .await
         .map_err(|e| e.to_string())?;
     let context_window = Some(server.context_size() as usize);
+    let root = active_root(&state).await;
     let agent = new_agent(
         &app,
         state.pending.clone(),
         OxenClient::new(server.base_url(), "local", &id),
         &id,
         context_window,
+        &root,
     )?;
 
     // Remember the local server + model so new sessions reuse it, then install
@@ -837,6 +947,83 @@ async fn use_local_model(
     *state.local_server.lock().await = Some(server);
     *state.local_model.lock().await = Some(id.clone());
     Ok(install_agent(&state, agent).await)
+}
+
+// ===========================================================================
+// Projects — list, open a folder as a project, switch the active one.
+// ===========================================================================
+
+/// List known projects — the persisted set unioned with every directory that
+/// already has chats — with chat counts and the active one flagged.
+#[tauri::command]
+async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectView>, String> {
+    let active = active_root(&state).await.display().to_string();
+
+    // Chats per workspace, so each directory with history shows up as a project.
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    if let Ok(store) = open_history_store() {
+        if let Ok(sessions) = store.list_sessions() {
+            for s in sessions {
+                *counts.entry(s.workspace).or_default() += 1;
+            }
+        }
+    }
+
+    let mut paths = read_projects_config().paths;
+    for k in counts.keys() {
+        if !paths.contains(k) {
+            paths.push(k.clone());
+        }
+    }
+    if !paths.contains(&active) {
+        paths.push(active.clone());
+    }
+
+    let mut projects: Vec<ProjectView> = paths
+        .into_iter()
+        .map(|p| ProjectView {
+            name: project_name(&p),
+            session_count: counts.get(&p).copied().unwrap_or(0),
+            active: p == active,
+            path: p,
+        })
+        .collect();
+    // Active first, then busiest, then alphabetical.
+    projects.sort_by(|a, b| {
+        b.active
+            .cmp(&a.active)
+            .then(b.session_count.cmp(&a.session_count))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(projects)
+}
+
+/// Add a directory as a project and make it active. New chats root here.
+#[tauri::command]
+async fn open_project(state: State<'_, AppState>, path: String) -> Result<ProjectView, String> {
+    let dir = PathBuf::from(&path);
+    if !dir.is_dir() {
+        return Err(format!("not a directory: {path}"));
+    }
+    let canonical = dir
+        .canonicalize()
+        .map(|c| c.display().to_string())
+        .unwrap_or(path);
+    remember_project(&canonical)?;
+    *state.active_project.lock().await = PathBuf::from(&canonical);
+    Ok(ProjectView {
+        name: project_name(&canonical),
+        session_count: 0,
+        active: true,
+        path: canonical,
+    })
+}
+
+/// Switch the active project to an already-known directory.
+#[tauri::command]
+async fn set_active_project(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    *state.active_project.lock().await = PathBuf::from(&path);
+    remember_project(&path)
 }
 
 // ===========================================================================
@@ -949,15 +1136,26 @@ async fn answer_question(
 /// Entry point shared by the binary and mobile targets.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Start in the last active project (or the launch directory on first run).
+    let initial_project = read_projects_config()
+        .active
+        .map(PathBuf::from)
+        .unwrap_or_else(launch_dir);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::default())
+        .manage(AppState {
+            active_project: Mutex::new(initial_project),
+            ..AppState::default()
+        })
         .invoke_handler(tauri::generate_handler![
             run_turn,
             session_info,
             list_sessions,
             new_session,
             resume_session,
+            list_projects,
+            open_project,
+            set_active_project,
             get_connection,
             set_connection,
             configure_brave_key,

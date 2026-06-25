@@ -7,6 +7,7 @@ import { ThreadItem } from "./ThreadItem";
 import { Composer } from "./Composer";
 import { Queue } from "./Queue";
 import { Hero } from "./Hero";
+import { QuestionPrompt } from "../questions/QuestionPrompt";
 import { type Item } from "./thread";
 import "./chat.css";
 
@@ -187,6 +188,7 @@ export function Chat() {
           ))}
         </div>
       )}
+      <QuestionPrompt />
       <Composer busy={running} onSend={submit} onAttach={attach} />
     </main>
   );

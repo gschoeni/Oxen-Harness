@@ -96,13 +96,18 @@ export function appendToken(prev: Item[], token: string): Item[] {
   return next;
 }
 
-/** Begin a tool chip with the call's arguments, retiring an empty "thinking"
- *  bubble that it supersedes. */
+/** Begin a tool chip with the call's arguments. Retire an empty "thinking"
+ *  bubble it supersedes, or finalize a non-empty preamble bubble (e.g. "I'll
+ *  build that…") so its activity indicator hands off to the tool chip. */
 export function toolStart(prev: Item[], name: string, args: string, startedAt: number): Item[] {
   let next = [...prev];
   const last = next[next.length - 1];
-  if (last && last.kind === "assistant" && last.streaming && last.text === "") {
-    next = next.slice(0, -1);
+  if (last && last.kind === "assistant" && last.streaming) {
+    if (last.text === "") {
+      next = next.slice(0, -1);
+    } else {
+      next[next.length - 1] = { ...last, streaming: false };
+    }
   }
   next.push({ id: uid(), kind: "tool", name, args, result: "", running: true, startedAt });
   return next;

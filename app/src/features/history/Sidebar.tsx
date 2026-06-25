@@ -1,34 +1,76 @@
-import { Plus, Settings as SettingsIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronRight, FolderPlus, Plus, Settings as SettingsIcon } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { relativeTime } from "../../lib/format";
-import type { SessionSummary } from "../../lib/types";
+import type { Project, RunStatus, SessionSummary } from "../../lib/types";
 import "./sidebar.css";
+
+/** One project's chats. */
+interface Group {
+  project: Project;
+  rows: SessionSummary[];
+}
 
 export function Sidebar() {
   const theme = useStore((s) => s.theme);
   const sessions = useStore((s) => s.sessions);
+  const projects = useStore((s) => s.projects);
   const session = useStore((s) => s.session);
   const runStatus = useStore((s) => s.runStatus);
   const startNewSession = useStore((s) => s.startNewSession);
+  const enterProject = useStore((s) => s.enterProject);
   const resume = useStore((s) => s.resume);
+  const setProjectsOpen = useStore((s) => s.setProjectsOpen);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
 
   const icon = theme?.voice.prompt_icon || "🐂";
   const currentId = session?.session_id ?? null;
+  const activePath = session?.workspace ?? projects.find((p) => p.active)?.path ?? null;
 
-  // A brand-new active session isn't persisted with a title yet — pin it on top
-  // so the user can always see which chat they're in.
-  const rows: SessionSummary[] = [...sessions];
-  if (currentId && !sessions.some((s) => s.id === currentId)) {
-    rows.unshift({
-      id: currentId,
-      workspace: "",
-      model: "",
-      created_at: 0,
-      title: null,
-      message_count: 0,
+  // Group chats under their project (working directory). Every known project
+  // shows even when empty; a brand-new untitled chat is pinned into its project.
+  const groups = useMemo<Group[]>(() => {
+    const rowsByPath = new Map<string, SessionSummary[]>();
+    for (const p of projects) rowsByPath.set(p.path, []);
+    for (const s of sessions) {
+      if (!rowsByPath.has(s.workspace)) rowsByPath.set(s.workspace, []);
+      rowsByPath.get(s.workspace)!.push(s);
+    }
+    // The active chat may be new (no title/row yet) — surface it in its project.
+    if (currentId && session && !sessions.some((s) => s.id === currentId)) {
+      const list = rowsByPath.get(session.workspace) ?? [];
+      list.unshift({
+        id: currentId,
+        workspace: session.workspace,
+        model: session.model,
+        created_at: 0,
+        title: null,
+        message_count: 0,
+      });
+      rowsByPath.set(session.workspace, list);
+    }
+    // Keep the backend's order (active first, busiest), then any extra paths.
+    const known = new Map(projects.map((p) => [p.path, p]));
+    const ordered: Group[] = projects.map((p) => ({ project: p, rows: rowsByPath.get(p.path) ?? [] }));
+    for (const [path, rows] of rowsByPath) {
+      if (!known.has(path)) {
+        ordered.push({ project: { path, name: path.split("/").pop() || path, session_count: rows.length, active: path === activePath }, rows });
+      }
+    }
+    return ordered;
+  }, [projects, sessions, session, currentId, activePath]);
+
+  // Which folders are expanded — the active project opens by default.
+  const [open, setOpen] = useState<Set<string>>(() => new Set(activePath ? [activePath] : []));
+  useEffect(() => {
+    if (activePath) setOpen((s) => (s.has(activePath) ? s : new Set(s).add(activePath)));
+  }, [activePath]);
+  const toggle = (path: string) =>
+    setOpen((s) => {
+      const next = new Set(s);
+      next.has(path) ? next.delete(path) : next.add(path);
+      return next;
     });
-  }
 
   return (
     <aside className="sidebar">
@@ -45,42 +87,36 @@ export function Sidebar() {
         New chat
       </button>
 
-      <div className="history-head">Chats</div>
+      <div className="history-head">
+        <span>Projects</span>
+        <button
+          className="head-action"
+          onClick={() => setProjectsOpen(true)}
+          title="Manage projects"
+          aria-label="Manage projects"
+        >
+          <FolderPlus size={15} />
+        </button>
+      </div>
+
       <div className="history">
-        {rows.length === 0 ? (
-          <div className="history-empty">
-            No chats yet — your conversations will appear here.
-          </div>
+        {groups.length === 0 ? (
+          <div className="history-empty">No projects yet.</div>
         ) : (
-          rows.map((s) => {
-            const status = runStatus[s.id];
-            return (
-              <button
-                key={s.id}
-                className={`history-item ${s.id === currentId ? "active" : ""}`}
-                onClick={() => resume(s.id)}
-              >
-                <span className="history-text">
-                  <span className="history-title">{s.title?.trim() || "New chat"}</span>
-                  <span className="history-sub">
-                    {s.created_at ? relativeTime(s.created_at) : "Not started yet"}
-                  </span>
-                </span>
-                {status === "running" ? (
-                  <span className="chat-status running" title="Running" aria-label="Running">
-                    <span className="run-dot" />
-                  </span>
-                ) : status === "unread" && s.id !== currentId ? (
-                  // Never dot the chat you're already viewing (you've seen it).
-                  <span
-                    className="chat-status unread"
-                    title="Done — unread"
-                    aria-label="Done, unread"
-                  />
-                ) : null}
-              </button>
-            );
-          })
+          groups.map(({ project, rows }) => (
+            <ProjectFolder
+              key={project.path}
+              project={project}
+              rows={rows}
+              active={project.path === activePath}
+              expanded={open.has(project.path)}
+              currentId={currentId}
+              runStatus={runStatus}
+              onToggle={() => toggle(project.path)}
+              onNewChat={() => enterProject(project.path)}
+              onOpenChat={resume}
+            />
+          ))
         )}
       </div>
 
@@ -91,5 +127,98 @@ export function Sidebar() {
         </button>
       </div>
     </aside>
+  );
+}
+
+/** A collapsible project folder with its nested chats. */
+function ProjectFolder({
+  project,
+  rows,
+  active,
+  expanded,
+  currentId,
+  runStatus,
+  onToggle,
+  onNewChat,
+  onOpenChat,
+}: {
+  project: Project;
+  rows: SessionSummary[];
+  active: boolean;
+  expanded: boolean;
+  currentId: string | null;
+  runStatus: Record<string, RunStatus>;
+  onToggle: () => void;
+  onNewChat: () => void;
+  onOpenChat: (id: string) => void;
+}) {
+  return (
+    <div className={`project ${active ? "active" : ""}`}>
+      <div className="project-head">
+        <button className="project-toggle" onClick={onToggle} aria-expanded={expanded}>
+          <ChevronRight className={`project-chevron ${expanded ? "open" : ""}`} size={14} />
+          <span className="project-name" title={project.path}>
+            {project.name}
+          </span>
+          {project.session_count > 0 && <span className="project-count">{project.session_count}</span>}
+        </button>
+        <button
+          className="head-action"
+          onClick={onNewChat}
+          title={`New chat in ${project.name}`}
+          aria-label={`New chat in ${project.name}`}
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+      {expanded && (
+        <div className="project-chats">
+          {rows.length === 0 ? (
+            <div className="project-empty">No chats yet</div>
+          ) : (
+            rows.map((s) => (
+              <ChatRow
+                key={s.id}
+                row={s}
+                current={s.id === currentId}
+                status={runStatus[s.id]}
+                onOpen={() => onOpenChat(s.id)}
+              />
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A single chat entry with its run indicator. */
+function ChatRow({
+  row,
+  current,
+  status,
+  onOpen,
+}: {
+  row: SessionSummary;
+  current: boolean;
+  status: RunStatus | undefined;
+  onOpen: () => void;
+}) {
+  return (
+    <button className={`history-item ${current ? "active" : ""}`} onClick={onOpen}>
+      <span className="history-text">
+        <span className="history-title">{row.title?.trim() || "New chat"}</span>
+        <span className="history-sub">
+          {row.created_at ? relativeTime(row.created_at) : "Not started yet"}
+        </span>
+      </span>
+      {status === "running" ? (
+        <span className="chat-status running" title="Running" aria-label="Running">
+          <span className="run-dot" />
+        </span>
+      ) : status === "unread" && !current ? (
+        <span className="chat-status unread" title="Done — unread" aria-label="Done, unread" />
+      ) : null}
+    </button>
   );
 }

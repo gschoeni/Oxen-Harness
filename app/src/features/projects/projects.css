@@ -1,0 +1,85 @@
+.projects-intro {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  margin: 0 0 var(--space-4);
+  line-height: 1.5;
+}
+
+.projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.project-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow);
+  padding: var(--space-3) var(--space-4);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.project-card:hover {
+  border-color: var(--accent);
+  transform: translateY(var(--lift));
+  box-shadow: var(--frame-shadow-hover);
+}
+.project-card > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.project-card.new {
+  border-style: dashed;
+  color: var(--text-secondary);
+}
+.project-card.active {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--separator-strong));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.project-card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.project-card-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.project-card-badge {
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--space-2);
+}
+.project-card-path {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-card-count {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}

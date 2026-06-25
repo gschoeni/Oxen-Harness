@@ -1,89 +1,174 @@
-.question-modal {
-  width: min(560px, 100%);
+/* The clarifying-question prompt: a compact card pinned just above the composer,
+   showing one question at a time. */
+.qprompt {
+  flex-shrink: 0;
+  padding: 0 var(--space-5);
 }
-.question-form {
+.qprompt-card {
+  max-width: 740px;
+  margin: 0 auto var(--space-2);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  padding: var(--space-5);
+  gap: var(--space-3);
+  max-height: 52vh;
   overflow-y: auto;
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow), 0 -8px 24px rgba(0, 0, 0, 0.12);
+  padding: var(--space-4);
+  animation: qprompt-in var(--dur) var(--ease);
 }
-.question-block {
-  border: 1px solid var(--separator);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4) var(--space-4);
-  margin: 0;
+@keyframes qprompt-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
-.question-legend {
-  padding: 0 var(--space-2);
+
+.qprompt-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.qchip {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--on-accent);
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+}
+.qprompt-question {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.qprompt-progress {
+  flex-shrink: 0;
+  font-family: var(--font-readout);
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+
+.qprompt-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.qopt {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--separator);
+  border-radius: var(--frame-radius);
+  padding: var(--space-3);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.qopt:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--separator-strong));
+  background: var(--surface-2);
+}
+.qopt.checked {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+/* The selection marker — a radio dot (single) or a checkbox (multi). */
+.qopt-mark {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border: 2px solid var(--separator-strong);
+  display: grid;
+  place-items: center;
+}
+.qopt-mark.dot {
+  border-radius: var(--radius-pill);
+}
+.qopt-mark.box {
+  border-radius: 4px;
+}
+.qopt-mark.on {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.qopt-mark.dot.on::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--on-accent);
+}
+.qopt-mark.box.on::after {
+  content: "✓";
+  font-size: 11px;
+  line-height: 1;
+  color: var(--on-accent);
+}
+.qopt-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.qopt-label {
+  font-size: var(--text-md);
+  font-weight: 500;
+}
+.qopt-desc {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  line-height: 1.45;
+}
+
+.qprompt-other {
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
-.qchip {
-  font-size: var(--text-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--on-accent);
-  background: var(--accent);
-  border-radius: var(--radius-xs);
-  padding: 2px 7px;
-}
-.qoption {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
-}
-.qoption:hover {
-  background: var(--surface-2);
-}
-.qoption.checked {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--separator));
-  background: var(--accent-soft);
-}
-.qoption input {
-  margin-top: 3px;
-  accent-color: var(--accent);
-}
-.qoption-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.qoption-label {
-  font-weight: 500;
-}
-.qoption-desc {
-  color: var(--text-tertiary);
+.qother-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--separator);
+  border-radius: var(--frame-radius);
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
   font-size: var(--text-sm);
 }
-.qother {
-  align-items: center;
+.qother-input::placeholder {
+  color: var(--text-tertiary);
 }
-.qother-text {
-  flex: 1;
-  background: var(--bg);
-  border: 1px solid var(--separator);
-  border-radius: var(--radius-xs);
-  padding: var(--space-2) var(--space-3);
-  color: inherit;
-  font: inherit;
-  font-size: var(--text-md);
-}
-.qother-text:focus {
+.qother-input:focus {
   outline: none;
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--separator-strong));
+  border-color: var(--accent);
 }
-.question-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
+.qother-send {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.qother-send:disabled {
+  opacity: 0.4;
+  cursor: default;
 }

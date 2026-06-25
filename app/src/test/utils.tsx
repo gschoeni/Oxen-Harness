@@ -11,6 +11,8 @@ export function resetAll() {
     theme: null,
     session: null,
     sessions: [],
+    projects: [],
+    projectsOpen: false,
     infos: {},
     threads: {},
     runStatus: {},

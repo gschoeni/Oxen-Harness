@@ -5,7 +5,7 @@ import { Canvas } from "./features/canvas/Canvas";
 import { Settings } from "./features/settings/Settings";
 import { ModelsModal } from "./features/models/ModelsModal";
 import { ThemesModal } from "./features/themes/ThemesModal";
-import { QuestionModal } from "./features/questions/QuestionModal";
+import { ProjectsModal } from "./features/projects/ProjectsModal";
 import { activeTheme, onCanvas, onCanvasWriting, onQuestion, onToken, onTool } from "./lib/ipc";
 import { useStore } from "./lib/store";
 import "./app.css";
@@ -22,7 +22,7 @@ export default function App() {
   const settingsOpen = useStore((s) => s.settingsOpen);
   const modelsOpen = useStore((s) => s.modelsOpen);
   const themesOpen = useStore((s) => s.themesOpen);
-  const question = useStore((s) => s.question);
+  const projectsOpen = useStore((s) => s.projectsOpen);
   // Show the canvas column when the current chat has an open document OR is
   // mid-write (so the panel appears the moment the model starts a canvas).
   const canvasOpen = useStore((s) => {
@@ -105,7 +105,7 @@ export default function App() {
       {settingsOpen && <Settings />}
       {modelsOpen && <ModelsModal />}
       {themesOpen && <ThemesModal />}
-      {question && <QuestionModal />}
+      {projectsOpen && <ProjectsModal />}
     </div>
   );
 }

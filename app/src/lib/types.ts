@@ -51,6 +51,14 @@ export interface SessionView {
   running: boolean;
 }
 
+/** A project = a working directory the agent runs in. Chats are grouped by it. */
+export interface Project {
+  path: string;
+  name: string;
+  session_count: number;
+  active: boolean;
+}
+
 // ---- connection settings ---------------------------------------------------
 
 export interface ConnectionView {
