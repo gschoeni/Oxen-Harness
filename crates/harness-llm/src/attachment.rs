@@ -78,22 +78,29 @@ impl AttachmentKind {
 
     /// The MIME type to advertise in the data URI.
     fn mime(self, ext: &str) -> &'static str {
-        match ext.to_ascii_lowercase().as_str() {
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            "bmp" => "image/bmp",
-            "tiff" => "image/tiff",
-            "heic" => "image/heic",
-            "pdf" => "application/pdf",
-            "mp4" | "m4v" => "video/mp4",
-            "mov" => "video/quicktime",
-            "webm" => "video/webm",
-            "mkv" => "video/x-matroska",
-            "avi" => "video/x-msvideo",
-            _ => "application/octet-stream",
-        }
+        mime_for_extension(ext)
+    }
+}
+
+/// The MIME type for a file extension, used when building `data:` URIs (both for
+/// fresh attachments and when [hydrating](hydrate_content) stored ones). Defaults
+/// to `application/octet-stream` for anything unrecognized.
+pub fn mime_for_extension(ext: &str) -> &'static str {
+    match ext.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "tiff" => "image/tiff",
+        "heic" => "image/heic",
+        "pdf" => "application/pdf",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        _ => "application/octet-stream",
     }
 }
 
@@ -173,6 +180,16 @@ impl Attachment {
     pub fn data_uri(&self) -> String {
         let b64 = base64::engine::general_purpose::STANDARD.encode(&self.bytes);
         format!("data:{};base64,{}", self.mime, b64)
+    }
+
+    /// The lower-cased file extension (without the dot), e.g. `png`. Empty if the
+    /// filename has none.
+    pub fn extension(&self) -> String {
+        Path::new(&self.filename)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default()
     }
 
     /// The content part to send to the model. Images become `image_url` parts and

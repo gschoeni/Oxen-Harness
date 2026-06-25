@@ -264,6 +264,7 @@ fn agent_parts(
         // advertise it in the prompt.
         system_prompt: Some(harness_agent::system_prompt_with(web_search, true)),
         context_window,
+        attachment_root: Some(workspace_root.to_path_buf()),
         ..AgentConfig::default()
     };
     Ok((tools, store, config))

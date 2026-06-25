@@ -6,12 +6,14 @@
 //! tool-calling support.
 
 pub mod attachment;
+pub mod attachment_store;
 pub mod auth;
 pub mod client;
 pub mod stream;
 pub mod types;
 
-pub use attachment::{Attachment, AttachmentError, AttachmentKind};
+pub use attachment::{mime_for_extension, Attachment, AttachmentError, AttachmentKind};
+pub use attachment_store::{hydrate_content, AttachmentStore};
 pub use auth::{base_url_from_host, host_from_base_url, resolve_base_url};
 pub use client::OxenClient;
 pub use stream::{AssembledMessage, StreamEvent};

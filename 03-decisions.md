@@ -83,6 +83,26 @@ from the words the user typed. Kept as a JSON walk in `harness-store` rather tha
 calling `ChatMessage::content_text()` so the store stays decoupled from
 `harness-llm`.
 
+**Attachments stored on disk, hydrated for sending** (2026-06-25)
+Image/PDF attachments were base64-encoded inline in the message JSON, so
+`history.sqlite` and JSONL exports ballooned with every screenshot. They now go
+through `AttachmentStore`: bytes are written content-addressed (sha256) to
+`<project_root>/.oxen-harness/attachments/<hash>.<ext>` and the message records
+only a path *relative to the project root*. `Agent::outbound_messages`
+re-inflates those references to `data:` URIs (`hydrate_content`) just before each
+provider request, so the wire format to the model is unchanged.
+- *Why under the project root:* attachments are versioned by Oxen alongside the
+  code the conversation is about, and the relative path stays stable across
+  machines/clones.
+- *Back-compat:* references already inline (`data:`) or remote (`http(s):`) — old
+  transcripts — pass through hydration untouched; a missing file becomes a short
+  text note rather than a broken request.
+- *Gated by `AgentConfig::attachment_root`:* `None` keeps the legacy inline
+  behavior (used by tests). Text/video/opaque attachments are still inlined as
+  before (their content is small text or just a note).
+- Neither front end displayed attachment images inline (the desktop `ContentPart`
+  is text-only; the terminal can't show images), so storing paths is display-neutral.
+
 ## Tooling parity
 
 **Essential tool set modeled on Claude Code (no MCP, no orchestration/network)** (2026-06-21)

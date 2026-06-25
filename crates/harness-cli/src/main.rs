@@ -231,6 +231,7 @@ async fn main() -> Result<()> {
             tools.get("web_search").is_some(),
             true,
         )),
+        attachment_root: Some(workspace.root().to_path_buf()),
         ..AgentConfig::default()
     };
 

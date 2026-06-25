@@ -21,7 +21,7 @@ oxen-harness/
   crates/
     harness-core/            — Shared message/role types and defaults (leaf crate).
     harness-config/          — Single source for ~/.oxen-harness paths; atomic + schema-versioned config IO; .env secrets (dotenvy).
-    harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth.
+    harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth; attachment store (content-addressed on-disk files) + hydration.
     harness-tools/           — fs read/write/edit, glob find, regex search, sandboxed shell, git, Brave web search, ask_user_question (clarifying questions).
     harness-store/           — SQLite history (verbatim) + JSONL export; rusqlite_migration schema versioning; rich session metadata.
     harness-local/           — Local models: Qwen3 GGUF catalog, downloads + disk tracking, llama-server launcher.

@@ -12,12 +12,15 @@
 //! Every message (user, assistant, tool) is persisted verbatim to the history
 //! store as it is produced.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use harness_core::DEFAULT_MODEL;
 use harness_llm::stream::StreamEvent;
 use harness_llm::types::{ChatMessage, ContentPart};
-use harness_llm::{Attachment, ChatRequest, LlmError, OxenClient, ToolCall};
+use harness_llm::{
+    hydrate_content, Attachment, AttachmentStore, ChatRequest, LlmError, OxenClient, ToolCall,
+};
 use harness_store::{HistoryError, HistoryStore, SessionMeta};
 use harness_tools::{ToolError, ToolRegistry};
 
@@ -32,6 +35,8 @@ pub enum AgentError {
     Tool(#[from] ToolError),
     #[error(transparent)]
     History(#[from] HistoryError),
+    #[error("attachment IO failed: {0}")]
+    Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(
@@ -68,6 +73,10 @@ pub struct AgentConfig {
     pub context_window: Option<usize>,
     /// Tokens to keep free for the model's reply when budgeting the prompt.
     pub response_reserve: usize,
+    /// Project root under which image/PDF attachments are stored on disk (so the
+    /// transcript records a relative path, not inline base64). `None` keeps the
+    /// legacy behavior of inlining attachments as data URIs.
+    pub attachment_root: Option<PathBuf>,
 }
 
 impl Default for AgentConfig {
@@ -79,6 +88,7 @@ impl Default for AgentConfig {
             system_prompt: Some(default_system_prompt(false)),
             context_window: None,
             response_reserve: 4096,
+            attachment_root: None,
         }
     }
 }
@@ -154,6 +164,9 @@ pub struct Agent {
     session_id: String,
     config: AgentConfig,
     messages: Vec<ChatMessage>,
+    /// Where attachments are persisted + resolved, derived from
+    /// [`AgentConfig::attachment_root`]. `None` inlines attachments instead.
+    attachments: Option<AttachmentStore>,
     /// Cumulative estimated tokens sent + generated this run (see [`budget`]).
     tokens_used: usize,
 }
@@ -174,6 +187,7 @@ impl Agent {
             store.append_message(&session_id, &system)?;
             messages.push(system);
         }
+        let attachments = config.attachment_root.clone().map(AttachmentStore::new);
         Ok(Self {
             client,
             tools,
@@ -181,6 +195,7 @@ impl Agent {
             session_id,
             config,
             messages,
+            attachments,
             tokens_used: 0,
         })
     }
@@ -203,6 +218,7 @@ impl Agent {
         for value in raw {
             messages.push(serde_json::from_value::<ChatMessage>(value)?);
         }
+        let attachments = config.attachment_root.clone().map(AttachmentStore::new);
         Ok(Self {
             client,
             tools,
@@ -210,6 +226,7 @@ impl Agent {
             session_id,
             config,
             messages,
+            attachments,
             tokens_used: 0,
         })
     }
@@ -326,7 +343,11 @@ impl Agent {
     where
         F: FnMut(&AgentEvent),
     {
-        self.push(user_message(user_input.into(), &attachments))?;
+        self.push(build_user_message(
+            user_input.into(),
+            &attachments,
+            self.attachments.as_ref(),
+        )?)?;
 
         // Tool definitions are fixed for the turn; compute once.
         let tool_defs = self.tools.definitions();
@@ -345,7 +366,7 @@ impl Agent {
                 });
             }
 
-            let request = ChatRequest::new(&self.config.model, self.messages.clone())
+            let request = ChatRequest::new(&self.config.model, self.outbound_messages())
                 .with_tools(tool_defs.clone())
                 .streaming(true);
 
@@ -409,21 +430,51 @@ impl Agent {
         self.messages.push(message);
         Ok(())
     }
+
+    /// The transcript prepared for sending: a clone of the in-memory messages
+    /// with any on-disk attachment references hydrated back into inline data
+    /// URIs the provider can consume. When no attachment store is configured the
+    /// messages already carry inline content, so this is just the clone.
+    fn outbound_messages(&self) -> Vec<ChatMessage> {
+        let mut messages = self.messages.clone();
+        if let Some(store) = &self.attachments {
+            for message in &mut messages {
+                if let Some(content) = message.content.as_mut() {
+                    hydrate_content(content, store.root());
+                }
+            }
+        }
+        messages
+    }
 }
 
 /// Build the user message for a turn: a plain-text message when there are no
 /// attachments, otherwise a multimodal message with the text followed by each
 /// attachment's content part.
-fn user_message(text: String, attachments: &[Attachment]) -> ChatMessage {
+///
+/// When `store` is `Some`, image/PDF attachments are persisted to disk and the
+/// message records a project-relative path; otherwise they're inlined as data
+/// URIs (legacy behavior). Returns an error only if writing an attachment fails.
+fn build_user_message(
+    text: String,
+    attachments: &[Attachment],
+    store: Option<&AttachmentStore>,
+) -> Result<ChatMessage, AgentError> {
     if attachments.is_empty() {
-        return ChatMessage::user(text);
+        return Ok(ChatMessage::user(text));
     }
     let mut parts = Vec::with_capacity(attachments.len() + 1);
     if !text.is_empty() {
         parts.push(ContentPart::text(text));
     }
-    parts.extend(attachments.iter().map(Attachment::to_content_part));
-    ChatMessage::user_parts(parts)
+    for att in attachments {
+        let part = match store {
+            Some(store) => store.store_part(att)?,
+            None => att.to_content_part(),
+        };
+        parts.push(part);
+    }
+    Ok(ChatMessage::user_parts(parts))
 }
 
 #[cfg(test)]
@@ -435,14 +486,69 @@ mod tests {
     fn user_message_is_plain_without_attachments_and_multimodal_with() {
         use harness_llm::types::MessageContent;
 
-        let plain = user_message("hi".into(), &[]);
+        let plain = build_user_message("hi".into(), &[], None).unwrap();
         assert!(matches!(plain.content, Some(MessageContent::Text(_))));
 
         let img = Attachment::from_bytes("a.png", vec![1, 2, 3]).unwrap();
-        let multi = user_message("look".into(), std::slice::from_ref(&img));
+        let multi = build_user_message("look".into(), std::slice::from_ref(&img), None).unwrap();
         match multi.content {
             Some(MessageContent::Parts(parts)) => assert_eq!(parts.len(), 2), // text + image
             other => panic!("expected multimodal parts, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stored_attachment_is_referenced_by_path_then_hydrated_for_sending() {
+        use harness_llm::types::{ContentPart, MessageContent};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = store
+            .create_session(&SessionMeta {
+                workspace: dir.path().display().to_string(),
+                model: "claude-opus-4-8".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let client = OxenClient::new("http://localhost/api/ai", "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            attachment_root: Some(dir.path().to_path_buf()),
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        let img = Attachment::from_bytes("a.png", vec![9, 8, 7]).unwrap();
+        let msg = build_user_message(
+            "look".into(),
+            std::slice::from_ref(&img),
+            agent.attachments.as_ref(),
+        )
+        .unwrap();
+        agent.push(msg).unwrap();
+
+        // Persisted/in-memory form references a project-relative path (small).
+        let stored = agent.messages().last().unwrap();
+        match &stored.content {
+            Some(MessageContent::Parts(parts)) => match &parts[1] {
+                ContentPart::ImageUrl { image_url } => {
+                    assert!(image_url.url.starts_with(".oxen-harness/attachments/"));
+                    assert!(!image_url.url.contains("base64"));
+                }
+                other => panic!("expected image part, got {other:?}"),
+            },
+            other => panic!("expected parts, got {other:?}"),
+        }
+
+        // Outbound form hydrates that reference back to an inline data URI.
+        let outbound = agent.outbound_messages();
+        match &outbound.last().unwrap().content {
+            Some(MessageContent::Parts(parts)) => match &parts[1] {
+                ContentPart::ImageUrl { image_url } => {
+                    assert!(image_url.url.starts_with("data:image/png;base64,"))
+                }
+                other => panic!("expected image part, got {other:?}"),
+            },
+            other => panic!("expected parts, got {other:?}"),
         }
     }
 
@@ -497,6 +603,7 @@ mod tests {
             system_prompt: None,
             context_window: Some(1),
             response_reserve: 0,
+            ..AgentConfig::default()
         };
         let client = OxenClient::new("http://127.0.0.1:1/api/ai", "key", "claude-opus-4-8");
         let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();

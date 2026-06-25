@@ -9,6 +9,9 @@
 *.db
 /exports
 *.jsonl
+# Per-project harness state (chat attachments etc.) written when the harness
+# runs against this repo. Versioned via Oxen, not git.
+.oxen-harness/
 
 # Secrets / local config
 .env
