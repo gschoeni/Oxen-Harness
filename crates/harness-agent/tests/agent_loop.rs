@@ -87,7 +87,7 @@ async fn loop_calls_tool_then_returns_final_answer() {
     let config = AgentConfig {
         model: "claude-opus-4-8".into(),
         system_prompt: None,
-        max_iterations: 5,
+        ..AgentConfig::default()
     };
     let mut agent = Agent::new(client, tools, store.clone(), session.clone(), config).unwrap();
 

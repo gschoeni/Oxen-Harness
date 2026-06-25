@@ -1,0 +1,72 @@
+/* The skin layer — typography + framing that the active theme drives.
+ *
+ * A theme ships a `[style]` block (fonts, corner radius, border weight, shadow
+ * treatment, hero layout). The store maps it onto the semantic tokens below, so
+ * the same components render as a chunky 8-bit trail, a hairline newspaper, a
+ * soft Apple-style app, or a neon synth grid — purely from data. The values
+ * here are the Oregon Trail defaults, used until a theme resolves. */
+
+@font-face { font-family: "PixelHead"; src: url("/fonts/PressStart2P.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "PixelRead"; src: url("/fonts/VT323.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Playfair"; src: url("/fonts/PlayfairDisplay.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "Masthead"; src: url("/fonts/UnifrakturCook.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "Orbitron"; src: url("/fonts/Orbitron.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "PlexSans"; src: url("/fonts/IBMPlexSans.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "PlexMono"; src: url("/fonts/IBMPlexMono.woff2") format("woff2"); font-display: swap; }
+
+:root {
+  /* Type roles — overwritten per theme by the store. */
+  --font-display: "PixelHead", "Courier New", monospace;
+  --font-body: var(--font-ui);
+  --font-readout: "PixelRead", "SF Mono", ui-monospace, monospace;
+
+  /* Framing — overwritten per theme. */
+  --frame-border-w: 2px;
+  --frame-radius: 3px;
+  --pixel-edge: rgba(0, 0, 0, 0.5);
+  --frame-shadow: 3px 3px 0 var(--pixel-edge);
+  --frame-shadow-hover: 4px 4px 0 var(--pixel-edge);
+  --frame-shadow-lg: 5px 5px 0 var(--pixel-edge);
+  --lift: -1px; /* hover translate; 0 disables the lift for flat themes */
+
+  /* Label + wordmark treatment — overwritten per theme. */
+  --label-transform: uppercase;
+  --label-spacing: 0.04em;
+  --label-size: 9px;
+  --wordmark-spacing: 0.02em;
+  --wordmark-size: clamp(15px, 4.4vw, 24px);
+}
+
+[data-theme="light"] {
+  --pixel-edge: rgba(20, 18, 14, 0.22);
+}
+
+/* Crisp scaling for pixel-art imagery (the trail scene). */
+.pixelated {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  shape-rendering: crispEdges;
+}
+
+/* Blinking block caret from the original "Press RETURN" prompts. */
+@keyframes pixel-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.pixel-caret {
+  display: inline-block;
+  width: 0.6em;
+  height: 1em;
+  margin-left: 0.15em;
+  vertical-align: -0.12em;
+  background: currentColor;
+  animation: pixel-blink 1.1s steps(1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pixel-caret { animation: none; }
+}
+
+/* Shared lift interaction for framed, interactive surfaces. */
+.lift-hover { transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease); }
+.lift-hover:hover:not(:disabled) { transform: translateY(var(--lift)); box-shadow: var(--frame-shadow-hover); }
+.lift-hover:active:not(:disabled) { transform: translateY(0); box-shadow: var(--frame-shadow); }

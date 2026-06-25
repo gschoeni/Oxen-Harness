@@ -1,0 +1,115 @@
+/* Design tokens — the single source of visual truth. Components reference these;
+   never hardcode color/space/radius. Neutrals are warm (Claude-style) and come
+   in light + dark variants driven by [data-theme]. The accent family is driven
+   at runtime by the active harness *theme* (see applyThemePalette in store.ts),
+   so the app is both mode-aware and theme-extensible. */
+
+:root {
+  /* Type */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    Inter, Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14.5px;
+  --text-lg: 17px;
+  --text-xl: 21px;
+  --text-2xl: 28px;
+
+  /* Spacing — 4pt scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* Radius */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+
+  /* Motion */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-fast: 150ms;
+  --dur: 220ms;
+
+  /* Accent family — overridden at runtime from the active theme's palette.
+     Defaults to a neutral blue so the app is presentable before a theme loads. */
+  --accent: #4f8cff;
+  --accent-hover: #6aa6ff;
+  --accent-soft: rgba(79, 140, 255, 0.16);
+  --on-accent: #ffffff;
+  --link: #6aa6ff;
+  --danger: #ff5d57;
+  --green: #36b37e;
+  --green-soft: rgba(54, 179, 126, 0.18);
+  --focus: rgba(79, 140, 255, 0.5);
+  --scrim: rgba(0, 0, 0, 0.5);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
+  --shadow-2: 0 8px 40px rgba(0, 0, 0, 0.16);
+}
+
+/* --- Light mode — warm paper neutrals --- */
+:root,
+[data-theme="light"] {
+  --bg: #ffffff;
+  --surface: #f6f5ef;
+  --surface-2: #efede4;
+  --surface-3: #e7e4d9;
+  --surface-hover: #ebe9df;
+  --separator: rgba(20, 18, 14, 0.1);
+  --separator-strong: rgba(20, 18, 14, 0.16);
+  --text: #1d1b16;
+  --text-secondary: #59564d;
+  --text-tertiary: #8a867b;
+  --shadow-1: 0 1px 2px rgba(20, 18, 14, 0.08);
+  --shadow-2: 0 24px 60px rgba(20, 18, 14, 0.18);
+  --scrim: rgba(20, 18, 14, 0.28);
+  color-scheme: light;
+}
+
+/* --- Dark mode — warm near-black neutrals --- */
+[data-theme="dark"] {
+  --bg: #1a1917;
+  --surface: #211f1d;
+  --surface-2: #2a2826;
+  --surface-3: #322f2c;
+  --surface-hover: #2e2c29;
+  --separator: rgba(255, 255, 255, 0.09);
+  --separator-strong: rgba(255, 255, 255, 0.15);
+  --text: #f6f4ef;
+  --text-secondary: #b6b2a9;
+  --text-tertiary: #888379;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 24px 60px rgba(0, 0, 0, 0.55);
+  --scrim: rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+/* Follow the OS when no explicit mode is set. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1a1917;
+    --surface: #211f1d;
+    --surface-2: #2a2826;
+    --surface-3: #322f2c;
+    --surface-hover: #2e2c29;
+    --separator: rgba(255, 255, 255, 0.09);
+    --separator-strong: rgba(255, 255, 255, 0.15);
+    --text: #f6f4ef;
+    --text-secondary: #b6b2a9;
+    --text-tertiary: #888379;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 24px 60px rgba(0, 0, 0, 0.55);
+    --scrim: rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}

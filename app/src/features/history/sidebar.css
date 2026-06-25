@@ -1,0 +1,226 @@
+.sidebar {
+  background: var(--surface);
+  border-right: 1px solid var(--separator);
+  /* Top padding clears the macOS traffic-light buttons (overlay title bar). */
+  padding: 38px var(--space-4) var(--space-4);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  /* Grid items default to min-height: auto; reset so the history list can
+     scroll internally and the footer stays pinned at any window height. */
+  min-height: 0;
+}
+
+/* Drag strip filling the top padding (over the traffic lights). The native
+   buttons sit above the webview so they stay clickable through it. */
+.sidebar-titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  z-index: 1;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-family: var(--font-readout);
+  font-size: 23px;
+  line-height: 1;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  padding-left: 2px;
+  flex-shrink: 0;
+}
+.brand-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: var(--frame-border-w) solid color-mix(in srgb, var(--accent) 35%, var(--separator-strong));
+  border-radius: var(--frame-radius);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.new-chat {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow);
+  padding: var(--space-3);
+  font-size: var(--text-md);
+  font-weight: 500;
+  text-align: left;
+  flex-shrink: 0;
+  transition: transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.new-chat svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.new-chat:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  transform: translateY(var(--lift));
+  box-shadow: var(--frame-shadow-hover);
+}
+.new-chat:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: var(--frame-shadow);
+}
+.new-chat:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.history-head {
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+  color: var(--text-tertiary);
+  padding: 0 var(--space-2);
+  margin-bottom: calc(-1 * var(--space-2));
+  flex-shrink: 0;
+}
+
+.history {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 calc(-1 * var(--space-1));
+  padding: 0 var(--space-1);
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.history-text {
+  flex: 1;
+  min-width: 0;
+}
+.history-item:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.history-item:disabled {
+  cursor: default;
+}
+.history-item.active {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--separator));
+  color: var(--text);
+}
+.history-title {
+  display: block;
+  font-size: var(--text-md);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.history-sub {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  margin-top: 1px;
+}
+.history-empty {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  padding: var(--space-3) var(--space-2);
+  line-height: 1.5;
+}
+
+/* --- Per-chat run indicators --- */
+.chat-status {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+/* Running: a breathing accent dot with an expanding ripple — alive but quiet. */
+.run-dot {
+  position: relative;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  animation: run-breathe 1.5s ease-in-out infinite;
+}
+.run-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-pill);
+  border: 1.5px solid var(--accent);
+  animation: run-ripple 1.5s var(--ease) infinite;
+}
+@keyframes run-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.18); opacity: 1; }
+}
+@keyframes run-ripple {
+  0% { transform: scale(1); opacity: 0.55; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+/* Done but unread: a small solid dot, no motion. */
+.chat-status.unread {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.sidebar-foot {
+  flex-shrink: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--separator);
+}
+.foot-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  font-size: var(--text-md);
+  font-weight: 500;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.foot-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}

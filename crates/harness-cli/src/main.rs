@@ -1,27 +1,37 @@
 //! `oxen-harness` — an interactive, streaming agentic coding REPL.
 
 mod ask;
+mod attach;
+mod brave;
+mod canvas;
+mod diff;
+mod live;
 mod local;
+mod loop_cmd;
 mod markdown;
 mod picker;
+mod queue;
+mod render;
 mod repl;
 mod theme;
 mod theme_cmd;
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use harness_agent::{Agent, AgentConfig, AgentEvent};
+use harness_agent::{Agent, AgentConfig};
 use harness_core::DEFAULT_MODEL;
 use harness_llm::OxenClient;
 use harness_store::{HistoryStore, SessionMeta};
 use harness_tools::{ToolRegistry, Workspace};
 use rustyline::DefaultEditor;
 
+use crate::queue::MessageQueue;
+use crate::render::{truncate, TurnRenderer};
 use crate::repl::{parse_command, Command};
 use crate::theme::Ui;
 
@@ -74,6 +84,11 @@ enum TopCommand {
         #[command(subcommand)]
         action: theme_cmd::ThemeAction,
     },
+    /// Run and manage self-verifying agent loops (run / list / new / show ...).
+    Loop {
+        #[command(subcommand)]
+        action: loop_cmd::LoopAction,
+    },
 }
 
 #[tokio::main]
@@ -90,12 +105,19 @@ async fn main() -> Result<()> {
         .map(|s| s.load_active())
         .unwrap_or_default();
     let mut ui = Ui::detect(Arc::new(theme));
-    let args = Args::parse();
+    let mut args = Args::parse();
 
-    // Subcommands that manage state and exit before the REPL.
-    match args.command {
+    // Subcommands that manage state and exit before the REPL. `loop run` is the
+    // exception: it needs a live agent, so it falls through and runs once the
+    // session is built (instead of entering the interactive REPL).
+    let mut pending_loop: Option<harness_loop::LoopSpec> = None;
+    match args.command.take() {
         Some(TopCommand::Models { action }) => return local::run_models(action, &ui).await,
         Some(TopCommand::Theme { action }) => return theme_cmd::run_theme(action, &ui).await,
+        Some(TopCommand::Loop { action }) => match loop_cmd::handle_cli(action, &ui).await? {
+            loop_cmd::Dispatch::Done => return Ok(()),
+            loop_cmd::Dispatch::Run(spec) => pending_loop = Some(*spec),
+        },
         None => {}
     }
 
@@ -130,6 +152,9 @@ async fn main() -> Result<()> {
     // Keep a local llama-server alive for the whole session when `--local` is
     // used; dropping it shuts the background process down.
     let mut _local_server: Option<harness_local::LocalServer> = None;
+    // For a local model, budget prompts against the server's actual context size
+    // (smaller than the model's max); `None` lets the agent derive it by name.
+    let mut context_window: Option<usize> = None;
 
     // Resolve the model + client. `--local <id>` runs a model on this machine
     // via llama.cpp; otherwise we connect to a remote Oxen.ai-style endpoint.
@@ -137,6 +162,7 @@ async fn main() -> Result<()> {
         match local::start_for(&local_id, &ui).await {
             Ok((server, alias)) => {
                 let client = OxenClient::new(server.base_url(), "local", &alias);
+                context_window = Some(server.context_size() as usize);
                 _local_server = Some(server);
                 (client, alias)
             }
@@ -178,14 +204,29 @@ async fn main() -> Result<()> {
         (client, model)
     };
 
+    // Seed BRAVE_API_KEY from the saved config (shared with the desktop app) so
+    // web search works without re-entering the key each run.
+    brave::load_into_env();
     let mut tools = ToolRegistry::default_for_workspace(workspace.clone());
     // Let the agent interview the user via the interactive terminal picker.
     tools.register(Arc::new(harness_tools::AskUserTool::new(Arc::new(
         ask::CliAsker::new(ui.clone()),
     ))));
+    // Show documents in the canvas: write them to disk, open web docs in the
+    // browser, and preview text docs inline.
+    tools.register(Arc::new(harness_tools::CanvasTool::new(Arc::new(
+        canvas::CliCanvasSink,
+    ))));
     let base_url = client.base_url().to_string();
     let config = AgentConfig {
         model: model.clone(),
+        context_window,
+        // Advertise web search only when it actually registered (Brave key set);
+        // the canvas tool is always registered above.
+        system_prompt: Some(harness_agent::system_prompt_with(
+            tools.get("web_search").is_some(),
+            true,
+        )),
         ..AgentConfig::default()
     };
 
@@ -226,14 +267,67 @@ async fn main() -> Result<()> {
         println!();
     }
 
-    let mut editor = DefaultEditor::new()?;
+    // `oxen-harness loop run ...`: run the loop once, then exit (no REPL).
+    if let Some(spec) = pending_loop {
+        loop_cmd::run(spec, &mut agent, &ui, workspace.root()).await?;
+        return Ok(());
+    }
+
+    // A persistent prompt history: Up-arrow recalls prompts from earlier
+    // sessions, not just this one. Load whatever's on disk, then append each new
+    // prompt so the history survives across runs (and a crash mid-session).
+    let history_config = rustyline::Config::builder()
+        .max_history_size(1000)
+        .map_err(|e| anyhow::anyhow!(e))?
+        .build();
+    let mut editor: DefaultEditor = rustyline::Editor::with_config(history_config)?;
+    let history_path = prompt_history_path();
+    if let Some(path) = &history_path {
+        // Missing file on first run is expected — ignore it.
+        let _ = editor.load_history(path);
+    }
+    let mut queue = MessageQueue::default();
     loop {
+        // Remind the user about stacked messages waiting to be sent.
+        if !queue.is_empty() {
+            println!(
+                "  {} {}",
+                ui.brown(&format!("⛺ {} stacked in the wagon", queue.len())),
+                ui.dim("— /queue to review, /queue run to send"),
+            );
+        }
         // Recomputed each turn so a mid-session theme switch takes effect.
         let prompt = theme::prompt(&ui);
         match editor.readline(&prompt) {
             Ok(line) => {
-                let _ = editor.add_history_entry(line.as_str());
-                if handle_line(&line, &mut agent, &store, &session, &mut ui).await? {
+                let mut new_history = editor.add_history_entry(line.as_str()).unwrap_or(false);
+                let exit = handle_line(
+                    &line,
+                    &mut agent,
+                    &store,
+                    &session,
+                    &mut ui,
+                    &mut queue,
+                    workspace.root(),
+                    &base_url,
+                )
+                .await?;
+                // Fold any prompts queued during the turn — typed into the live
+                // composer or added via `/queue add` — into the history too, so
+                // queued prompts are recallable next session, not just ones typed
+                // at the idle prompt.
+                for prompt in queue.take_authored() {
+                    if editor.add_history_entry(prompt.as_str()).unwrap_or(false) {
+                        new_history = true;
+                    }
+                }
+                // Persist once per turn so prompts survive even an abrupt exit.
+                if new_history {
+                    if let Some(path) = &history_path {
+                        let _ = editor.append_history(path);
+                    }
+                }
+                if exit {
                     break;
                 }
             }
@@ -250,12 +344,16 @@ async fn main() -> Result<()> {
 }
 
 /// Handle one line of input. Returns `Ok(true)` when the REPL should exit.
+#[allow(clippy::too_many_arguments)]
 async fn handle_line(
     line: &str,
     agent: &mut Agent,
     store: &Arc<HistoryStore>,
     session: &str,
     ui: &mut Ui,
+    queue: &mut MessageQueue,
+    workspace_root: &Path,
+    base_url: &str,
 ) -> Result<bool> {
     match parse_command(line) {
         Command::Empty => {}
@@ -265,6 +363,46 @@ async fn handle_line(
         }
         Command::Help => print!("{}", theme::help(ui)),
         Command::Theme(args) => theme_cmd::handle_repl(args, agent, ui).await?,
+        Command::Queue(rest) => {
+            // `/queue run` may stream turns that the user can Ctrl-C to quit.
+            if handle_queue(rest, queue, agent, ui).await? {
+                print!("{}", theme::death_screen(ui, session));
+                return Ok(true);
+            }
+        }
+        Command::Loop(rest) => {
+            // A running loop streams turns the user can Ctrl-C to quit.
+            if loop_cmd::handle_repl(rest, agent, ui, workspace_root).await? {
+                print!("{}", theme::death_screen(ui, session));
+                return Ok(true);
+            }
+        }
+        Command::Departing(None) => match ui.departing() {
+            Some((label, value)) => {
+                println!("  {} {}", ui.brown(&format!("{label}:")), ui.cream(value))
+            }
+            None => println!("  {}", ui.dim("no departing location set")),
+        },
+        Command::Departing(Some(place)) => {
+            let label = ui.set_departing(&place);
+            // Reprint the whole welcome banner so the new row shows in context.
+            print!(
+                "{}",
+                theme::banner(
+                    ui,
+                    base_url,
+                    agent.model(),
+                    &workspace_root.display().to_string(),
+                    session,
+                )
+            );
+            println!();
+            println!(
+                "  {} {}",
+                ui.green(&format!("⛺ {label} set:")),
+                ui.cream(&place),
+            );
+        }
         Command::Model(None) => {
             println!("  {} {}", ui.brown("oxen yoked:"), ui.cream(agent.model()))
         }
@@ -275,7 +413,7 @@ async fn handle_line(
         Command::Export(dest) => export(store, session, dest, ui)?,
         Command::Prompt(prompt) => {
             // Ctrl-C mid-stream ends the expedition just like quitting does.
-            if run_prompt(agent, &prompt, ui).await? {
+            if run_turn_and_drain(agent, &prompt, ui, queue).await? {
                 print!("{}", theme::death_screen(ui, session));
                 return Ok(true);
             }
@@ -284,107 +422,184 @@ async fn handle_line(
     Ok(false)
 }
 
-/// Renders one turn's live progress: a trail-status spinner while the model
-/// thinks or a tool runs, assistant text streamed through the Markdown
-/// renderer, and themed tool lines.
-struct TurnRenderer {
-    ui: Ui,
-    spinner: Option<theme::Spinner>,
-    md: Option<markdown::MarkdownStream<std::io::Stdout>>,
-}
+/// Handle a `/queue ...` command: stack, list, edit, reorder, remove, clear, or
+/// run the queued prompts. Returns `Ok(true)` if the user interrupted a run.
+async fn handle_queue(
+    rest: Option<String>,
+    queue: &mut MessageQueue,
+    agent: &mut Agent,
+    ui: &Ui,
+) -> Result<bool> {
+    let rest = rest.unwrap_or_default();
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let sub = parts.next().unwrap_or("");
+    let payload = parts.next().map(str::trim).unwrap_or("");
 
-impl TurnRenderer {
-    fn new(ui: Ui) -> Self {
-        Self {
-            ui,
-            spinner: None,
-            md: None,
-        }
-    }
-
-    /// Flush and drop the active Markdown segment, if any.
-    fn end_markdown(&mut self) {
-        if let Some(mut md) = self.md.take() {
-            md.finish();
-        }
-    }
-
-    fn begin_thinking(&mut self) {
-        self.stop_spinner();
-        self.spinner = Some(theme::Spinner::start(&self.ui, self.ui.thinking()));
-    }
-
-    fn begin_working(&mut self, tool: &str) {
-        self.stop_spinner();
-        self.spinner = Some(theme::Spinner::start(&self.ui, self.ui.tool_verbs(tool)));
-    }
-
-    fn stop_spinner(&mut self) {
-        if let Some(s) = self.spinner.take() {
-            s.stop();
-        }
-    }
-
-    fn on_event(&mut self, event: &AgentEvent) {
-        match event {
-            AgentEvent::Token(t) => {
-                if self.md.is_none() {
-                    self.stop_spinner();
-                    println!();
-                    self.md = Some(markdown::MarkdownStream::new(
-                        self.ui.clone(),
-                        std::io::stdout(),
-                    ));
-                }
-                if let Some(md) = self.md.as_mut() {
-                    md.push(t);
-                }
-            }
-            AgentEvent::ToolStart { name, arguments } => {
-                self.stop_spinner();
-                self.end_markdown();
-                // The interactive picker draws its own UI and reads keys, so we
-                // suppress the tool line + spinner while it owns the screen.
-                if name == harness_tools::ASK_USER_TOOL {
-                    return;
-                }
-                let verbs = self.ui.tool_verbs(name);
-                let verb = verbs.first().map(String::as_str).unwrap_or("Working");
-                println!(
-                    "  {} {}  {}",
-                    self.ui.green("◆"),
-                    self.ui.accent(verb),
-                    self.ui
-                        .dim(&format!("{name}({})", truncate(arguments, 100))),
-                );
-                self.begin_working(name);
-            }
-            AgentEvent::ToolEnd { name, result } => {
-                self.stop_spinner();
-                // The picker already showed the chosen answer in place.
-                if name == harness_tools::ASK_USER_TOOL {
-                    self.begin_thinking();
-                    return;
-                }
+    match sub {
+        "" | "list" | "ls" => print_queue(queue, ui),
+        "add" | "push" => {
+            if payload.is_empty() {
+                println!("  {}", ui.dim("usage: /queue add <message>"));
+            } else {
+                let n = queue.add(payload);
                 println!(
                     "  {} {}",
-                    self.ui.brown("└─"),
-                    self.ui.dim(&truncate(result, 140)),
+                    ui.green(&format!("＋ Loaded wagon #{n}:")),
+                    ui.dim(&truncate(payload, 80)),
                 );
-                self.begin_thinking();
             }
         }
+        "edit" => {
+            let (pos, text) = split_pos(payload);
+            match (pos, text) {
+                (Some(pos), Some(text)) => match queue.edit(pos, text) {
+                    Ok(()) => println!("  {}", ui.green(&format!("✎ Repacked wagon #{pos}"))),
+                    Err(e) => println!("  {}", ui.red(&e)),
+                },
+                _ => println!("  {}", ui.dim("usage: /queue edit <n> <new message>")),
+            }
+        }
+        "rm" | "remove" | "del" => match parse_pos(payload) {
+            Some(pos) => match queue.remove(pos) {
+                Ok(msg) => println!(
+                    "  {} {}",
+                    ui.brown(&format!("✗ Dropped wagon #{pos}:")),
+                    ui.dim(&truncate(&msg, 80)),
+                ),
+                Err(e) => println!("  {}", ui.red(&e)),
+            },
+            None => println!("  {}", ui.dim("usage: /queue rm <n>")),
+        },
+        "up" | "down" => match parse_pos(payload) {
+            Some(pos) => {
+                let dir = if sub == "up" { -1 } else { 1 };
+                match queue.move_by(pos, dir) {
+                    Ok(()) => print_queue(queue, ui),
+                    Err(e) => println!("  {}", ui.red(&e)),
+                }
+            }
+            None => println!("  {}", ui.dim(&format!("usage: /queue {sub} <n>"))),
+        },
+        "clear" => {
+            queue.clear();
+            println!("  {}", ui.brown("🧹 Emptied the wagon"));
+        }
+        "run" | "go" => return run_queue(queue, agent, ui).await,
+        _ => println!(
+            "  {}",
+            ui.dim("queue: list | add <msg> | edit <n> <msg> | up <n> | down <n> | rm <n> | clear | run"),
+        ),
     }
+    Ok(false)
+}
 
-    fn finish(&mut self) {
-        self.stop_spinner();
-        self.end_markdown();
+/// Run every queued prompt in order, draining the queue. Returns `Ok(true)` if
+/// the user interrupted (Ctrl-C) mid-run.
+async fn run_queue(queue: &mut MessageQueue, agent: &mut Agent, ui: &Ui) -> Result<bool> {
+    if queue.is_empty() {
+        println!("  {}", ui.dim("the wagon is empty — nothing to send"));
+        return Ok(false);
     }
+    let first = queue.remove(1).expect("queue is non-empty");
+    println!(
+        "  {} {}",
+        ui.brown("▶ rolling the wagon:"),
+        ui.cream(&truncate(&first, 80)),
+    );
+    run_turn_and_drain(agent, &first, ui, queue).await
+}
+
+/// Whether the sticky-bottom live composer should drive this turn: only for an
+/// interactive, animating TTY. Pipes, tests, `NO_COLOR`, and `TERM=dumb` fall
+/// back to the classic blocking prompt with unchanged behavior.
+fn live_enabled(ui: &Ui) -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal() && ui.animates()
+}
+
+/// Run `prompt`, then auto-drain any stacked messages in order. On a live TTY
+/// this hands off to the sticky composer (which lets the user keep stacking
+/// while turns run); otherwise it runs the classic prompt and drains after.
+/// Returns `Ok(true)` when the session should end.
+async fn run_turn_and_drain(
+    agent: &mut Agent,
+    prompt: &str,
+    ui: &Ui,
+    queue: &mut MessageQueue,
+) -> Result<bool> {
+    if live_enabled(ui) {
+        return live::run_prompt(agent, prompt, ui, queue).await;
+    }
+    if run_prompt(agent, prompt, ui).await? {
+        return Ok(true);
+    }
+    while !queue.is_empty() {
+        let next = queue.remove(1).expect("queue is non-empty");
+        println!(
+            "  {} {}",
+            ui.brown("▶ rolling the wagon:"),
+            ui.cream(&truncate(&next, 80)),
+        );
+        if run_prompt(agent, &next, ui).await? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn print_queue(queue: &MessageQueue, ui: &Ui) {
+    if queue.is_empty() {
+        println!(
+            "  {}",
+            ui.dim("the wagon is empty — /queue add <message> to stack one up"),
+        );
+        return;
+    }
+    println!(
+        "  {}",
+        ui.brown(&format!("⛺ {} stacked in the wagon:", queue.len())),
+    );
+    for (i, msg) in queue.items().iter().enumerate() {
+        println!(
+            "    {} {}",
+            ui.accent(&format!("{}.", i + 1)),
+            ui.cream(&truncate(msg, 90)),
+        );
+    }
+    println!(
+        "  {}",
+        ui.dim("/queue run to send · /queue edit <n> <msg> · /queue rm <n>")
+    );
+}
+
+/// Parse a leading 1-based position from `s` (the whole string is the number).
+fn parse_pos(s: &str) -> Option<usize> {
+    s.trim().parse::<usize>().ok()
+}
+
+/// Split `"<n> <rest>"` into the position and the remaining text.
+fn split_pos(s: &str) -> (Option<usize>, Option<String>) {
+    let mut parts = s.trim().splitn(2, char::is_whitespace);
+    let pos = parts.next().and_then(|p| p.parse::<usize>().ok());
+    let text = parts
+        .next()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    (pos, text)
 }
 
 /// Run one turn, racing it against Ctrl-C. Returns `Ok(true)` if the user
 /// interrupted the stream (the caller should then end the session).
 async fn run_prompt(agent: &mut Agent, prompt: &str, ui: &Ui) -> Result<bool> {
+    let (text, attachments, warnings) = attach::extract_attachments(prompt);
+    for w in &warnings {
+        println!("  {} {}", ui.red("⚠"), ui.dim(w));
+    }
+    if !attachments.is_empty() {
+        let names: Vec<&str> = attachments.iter().map(|a| a.filename.as_str()).collect();
+        println!("  {} {}", ui.green("📎 attached:"), ui.cream(&names.join(", ")));
+    }
+
     let renderer = Rc::new(RefCell::new(TurnRenderer::new(ui.clone())));
     renderer.borrow_mut().begin_thinking();
 
@@ -395,17 +610,61 @@ async fn run_prompt(agent: &mut Agent, prompt: &str, ui: &Ui) -> Result<bool> {
             renderer.borrow_mut().finish();
             return Ok(true);
         }
-        result = agent.run_turn(prompt, move |event| cb.borrow_mut().on_event(event)) => result,
+        result = agent.run_turn_with_attachments(text, attachments, move |event| cb.borrow_mut().on_event(event)) => result,
     };
     renderer.borrow_mut().finish();
+    let needs_brave_key = renderer.borrow().needs_brave_key();
 
     match result {
-        Ok(_) => Ok(false),
+        Ok(_) => {
+            print_context_usage(agent, ui);
+            // Offer to set up web search if the model tried it without a key.
+            if needs_brave_key {
+                brave::prompt_after_failed_search(ui);
+            }
+            Ok(false)
+        }
         Err(e) => {
             println!("\n{}", ui.red(&ui.death()));
             println!("  {}", ui.dim(&format!("The trail guide says: {e}")));
             Ok(false)
         }
+    }
+}
+
+/// A subtle trailer showing how full the model's context window is.
+fn print_context_usage(agent: &Agent, ui: &Ui) {
+    println!("{}", context_usage_line(agent, ui));
+}
+
+/// The context-usage trailer as a (themed, indented) line — shared by the
+/// classic prompt and the live composer (which writes it into its scroll region).
+pub(crate) fn context_usage_line(agent: &Agent, ui: &Ui) -> String {
+    let used = agent.context_tokens();
+    let window = agent.context_window();
+    let pct = if window > 0 {
+        (used * 100 / window).min(100)
+    } else {
+        0
+    };
+    format!(
+        "  {}",
+        ui.dim(&format!(
+            "🧭 context {} / {} tokens ({pct}%)",
+            human_tokens(used),
+            human_tokens(window),
+        )),
+    )
+}
+
+/// Human-friendly token count: `980`, `12.3k`, `1.2M`.
+fn human_tokens(n: usize) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
     }
 }
 
@@ -441,26 +700,40 @@ fn open_store() -> Result<HistoryStore> {
     HistoryStore::open(&path).with_context(|| format!("opening history at {}", path.display()))
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    let s = s.replace('\n', " ");
-    if s.chars().count() <= max {
-        s
-    } else {
-        let kept: String = s.chars().take(max).collect();
-        format!("{kept}…")
-    }
+/// File backing the readline prompt history, so Up-arrow recalls prompts typed
+/// in previous CLI sessions (separate from the SQLite chat transcript store).
+fn prompt_history_path() -> Option<std::path::PathBuf> {
+    let dir = dirs::home_dir()?.join(".oxen-harness");
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("prompt_history.txt"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::truncate;
+    use super::{human_tokens, parse_pos, split_pos};
 
     #[test]
-    fn truncate_collapses_newlines_and_caps_length() {
-        assert_eq!(truncate("a\nb", 10), "a b");
-        let long = "x".repeat(50);
-        let out = truncate(&long, 10);
-        assert!(out.ends_with('…'));
-        assert_eq!(out.chars().count(), 11);
+    fn human_tokens_scales_units() {
+        assert_eq!(human_tokens(980), "980");
+        assert_eq!(human_tokens(12_300), "12.3k");
+        assert_eq!(human_tokens(1_200_000), "1.2M");
+    }
+
+    #[test]
+    fn parse_pos_reads_a_bare_number() {
+        assert_eq!(parse_pos("3"), Some(3));
+        assert_eq!(parse_pos("  2 "), Some(2));
+        assert_eq!(parse_pos("x"), None);
+        assert_eq!(parse_pos(""), None);
+    }
+
+    #[test]
+    fn split_pos_separates_index_from_message_text() {
+        assert_eq!(
+            split_pos("2 fix the bug"),
+            (Some(2), Some("fix the bug".to_string()))
+        );
+        assert_eq!(split_pos("5"), (Some(5), None));
+        assert_eq!(split_pos("nope"), (None, None));
     }
 }

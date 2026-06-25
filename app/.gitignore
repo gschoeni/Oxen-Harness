@@ -1,9 +1,9 @@
 # Node
 node_modules/
 
+# Vite / frontend build output
+dist/
+
 # Rust / Tauri build output
 src-tauri/target/
 src-tauri/gen/
-
-# Tauri build artifacts
-dist/.vite/

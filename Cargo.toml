@@ -8,6 +8,7 @@ members = [
     "crates/harness-local",
     "crates/harness-theme",
     "crates/harness-agent",
+    "crates/harness-loop",
     "crates/harness-cli",
 ]
 # The Tauri desktop app is a separate project (its own Cargo workspace) so the
@@ -31,6 +32,7 @@ harness-store = { path = "crates/harness-store" }
 harness-local = { path = "crates/harness-local" }
 harness-theme = { path = "crates/harness-theme" }
 harness-agent = { path = "crates/harness-agent" }
+harness-loop = { path = "crates/harness-loop" }
 
 anyhow = "1.0"
 thiserror = "2.0"
@@ -42,6 +44,7 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
+base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [profile.release]

@@ -13,28 +13,37 @@ use std::sync::{Arc, Mutex as StdMutex};
 use async_trait::async_trait;
 use harness_agent::{Agent, AgentConfig, AgentEvent};
 use harness_core::DEFAULT_MODEL;
-use harness_llm::OxenClient;
+use harness_llm::{Attachment, ChatMessage, ChatRequest, OxenClient};
 use harness_local::{
     can_auto_install, install_hint, install_llama_server, llama_server_path, LocalServer,
     ModelStatus, ModelStore,
 };
-use harness_store::{HistoryStore, SessionMeta};
+use harness_store::{HistoryStore, SessionMeta, SessionSummary};
 use harness_tools::{
-    AskUserTool, Question, QuestionAnswer, QuestionAsker, ToolError, ToolRegistry, Workspace,
+    AskUserTool, CanvasDoc, CanvasSink, CanvasTool, Question, QuestionAnswer, QuestionAsker,
+    ToolError, ToolRegistry, Workspace,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::{oneshot, Mutex};
 
 /// Outstanding `ask_user_question` prompts awaiting a UI answer, keyed by id.
 type Pending = Arc<StdMutex<HashMap<String, oneshot::Sender<Vec<QuestionAnswer>>>>>;
 
-/// Lazily-initialized agent shared across commands.
+/// Per-session agents, each behind its own lock so turns in different chats run
+/// concurrently — a background chat keeps streaming while you start or read
+/// another. The map lock is held only briefly to look an agent up; the turn
+/// itself holds just that session's lock.
 #[derive(Default)]
 pub struct AppState {
-    agent: Mutex<Option<Agent>>,
+    agents: Mutex<HashMap<String, Arc<Mutex<Agent>>>>,
+    /// The session the UI currently shows. Commands that act on "this" chat
+    /// (session_info, new_theme, model/connection switches) use it.
+    current: Mutex<Option<String>>,
     /// A local `llama-server` kept alive while a local model is selected.
     local_server: Mutex<Option<LocalServer>>,
+    /// The local model id in use, so new sessions reuse it instead of the cloud.
+    local_model: Mutex<Option<String>>,
     /// Questions the agent is currently waiting on the user to answer.
     pending: Pending,
 }
@@ -88,6 +97,53 @@ impl QuestionAsker for TauriAsker {
     }
 }
 
+/// A session-only event payload (e.g. `agent://canvas-writing`).
+#[derive(Clone, Serialize)]
+struct SessionPayload {
+    session: String,
+}
+
+/// The `agent://canvas` payload: a document for the UI's side panel, tagged with
+/// the session it belongs to so a background chat's canvas doesn't pop into view.
+#[derive(Clone, Serialize)]
+struct CanvasPayload {
+    session: String,
+    id: String,
+    title: String,
+    format: String,
+    language: Option<String>,
+    content: String,
+}
+
+/// Bridges the agent's `canvas` tool to the desktop side panel: emits an
+/// `agent://canvas` event with the document. One sink per agent, so it carries
+/// that agent's session id.
+struct TauriCanvasSink {
+    app: AppHandle,
+    session: String,
+}
+
+#[async_trait]
+impl CanvasSink for TauriCanvasSink {
+    async fn show(&self, doc: &CanvasDoc) -> Result<Option<String>, ToolError> {
+        self.app
+            .emit(
+                "agent://canvas",
+                CanvasPayload {
+                    session: self.session.clone(),
+                    id: doc.id.clone(),
+                    title: doc.title.clone(),
+                    format: doc.format.clone(),
+                    language: doc.language.clone(),
+                    content: doc.content.clone(),
+                },
+            )
+            .map_err(|e| ToolError::Execution(e.to_string()))?;
+        // The panel itself is the user-visible result; no extra note needed.
+        Ok(None)
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct ModelsView {
     models: Vec<ModelStatus>,
@@ -109,8 +165,17 @@ struct DownloadEvent {
     fraction: Option<f64>,
 }
 
+/// A streamed assistant token, tagged with the session it belongs to so the UI
+/// can route it to the right chat thread (even one running in the background).
+#[derive(Clone, Serialize)]
+struct TokenPayload {
+    session: String,
+    token: String,
+}
+
 #[derive(Clone, Serialize)]
 struct ToolEventPayload {
+    session: String,
     phase: &'static str,
     name: String,
     detail: String,
@@ -123,43 +188,132 @@ struct SessionInfo {
     session_id: String,
 }
 
-fn build_agent(app: &AppHandle, pending: Pending) -> Result<Agent, String> {
-    let client = OxenClient::from_default_config().map_err(|e| e.to_string())?;
-    new_agent(app, pending, client, DEFAULT_MODEL)
+/// A resumed session: its info plus the verbatim transcript for the UI to
+/// re-render (user/assistant bubbles and tool activity). When `running` is true
+/// the chat is mid-turn and couldn't be read; `messages` is empty and the UI
+/// keeps the live thread it already streamed.
+#[derive(Serialize)]
+struct SessionView {
+    info: SessionInfo,
+    messages: Vec<serde_json::Value>,
+    running: bool,
 }
 
-/// Build an agent around an already-configured client, recording `model_label`
-/// as the session's model and the request model.
-fn new_agent(
+/// The current workspace directory as a display string (best-effort).
+fn workspace_string() -> String {
+    std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
+}
+
+/// The client, model label, and context window for a new agent: the selected
+/// local model + server if one is active, otherwise the configured cloud client.
+async fn client_for(state: &AppState) -> Result<(OxenClient, String, Option<usize>), String> {
+    let server = state.local_server.lock().await;
+    let model = state.local_model.lock().await;
+    match (server.as_ref(), model.as_ref()) {
+        (Some(s), Some(id)) => Ok((
+            OxenClient::new(s.base_url(), "local", id),
+            id.clone(),
+            Some(s.context_size() as usize),
+        )),
+        _ => Ok((configured_client()?, DEFAULT_MODEL.to_string(), None)),
+    }
+}
+
+/// Build an Oxen client honoring the user's saved connection overrides, falling
+/// back to the `OXEN_*` env vars / the `oxen` CLI login / the default endpoint
+/// for any field left blank.
+fn configured_client() -> Result<OxenClient, String> {
+    let cfg = read_connection_config();
+    let base_url = match cfg.host.trim() {
+        "" => harness_llm::resolve_base_url(),
+        host => harness_llm::base_url_from_host(host),
+    };
+    match cfg.api_key.trim() {
+        "" => OxenClient::connect(base_url, DEFAULT_MODEL).map_err(|e| e.to_string()),
+        key => Ok(OxenClient::new(base_url, key, DEFAULT_MODEL)),
+    }
+}
+
+/// Shared agent dependencies — the tool registry (with the question bridge), the
+/// history store, and the run config. Fresh and resumed agents build these the
+/// same way; only how they bind a session differs.
+fn agent_parts(
     app: &AppHandle,
     pending: Pending,
-    client: OxenClient,
     model_label: &str,
-) -> Result<Agent, String> {
+    context_window: Option<usize>,
+) -> Result<(ToolRegistry, Arc<HistoryStore>, AgentConfig), String> {
     let workspace_root = std::env::current_dir().map_err(|e| e.to_string())?;
     let workspace = Workspace::new(&workspace_root).map_err(|e| e.to_string())?;
-    let mut tools = ToolRegistry::default_for_workspace(workspace.clone());
+    let brave_key = brave_key_override(&read_connection_config());
+    let mut tools = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
     tools.register(Arc::new(AskUserTool::new(Arc::new(TauriAsker {
         app: app.clone(),
         pending,
     }))));
+    // Only advertise web search in the prompt when it actually registered, so
+    // the model never calls a tool the registry would reject as unknown.
+    let web_search = tools.get("web_search").is_some();
 
     let dir = dirs_home()?.join(".oxen-harness");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let store =
         Arc::new(HistoryStore::open(dir.join("history.sqlite")).map_err(|e| e.to_string())?);
-    let session = store
-        .create_session(&SessionMeta {
-            workspace: workspace.root().display().to_string(),
-            model: model_label.to_string(),
-        })
-        .map_err(|e| e.to_string())?;
 
     let config = AgentConfig {
         model: model_label.to_string(),
+        // The host always registers the `canvas` tool (per session, below), so
+        // advertise it in the prompt.
+        system_prompt: Some(harness_agent::system_prompt_with(web_search, true)),
+        context_window,
         ..AgentConfig::default()
     };
+    Ok((tools, store, config))
+}
+
+/// Register the session-scoped `canvas` tool on a registry. Done once the
+/// session id is known so canvas events can be tagged with it.
+fn register_canvas(tools: &mut ToolRegistry, app: &AppHandle, session: &str) {
+    tools.register(Arc::new(CanvasTool::new(Arc::new(TauriCanvasSink {
+        app: app.clone(),
+        session: session.to_string(),
+    }))));
+}
+
+/// Build an agent for a brand-new session (creates the session row).
+fn new_agent(
+    app: &AppHandle,
+    pending: Pending,
+    client: OxenClient,
+    model_label: &str,
+    context_window: Option<usize>,
+) -> Result<Agent, String> {
+    let (mut tools, store, config) = agent_parts(app, pending, model_label, context_window)?;
+    let session = store
+        .create_session(&SessionMeta {
+            workspace: workspace_string(),
+            model: model_label.to_string(),
+        })
+        .map_err(|e| e.to_string())?;
+    register_canvas(&mut tools, app, &session);
     Agent::new(client, tools, store, session, config).map_err(|e| e.to_string())
+}
+
+/// Build an agent bound to an *existing* session, loading its transcript — used
+/// to resume a cold history session without leaking a throwaway session row.
+fn resume_agent(
+    app: &AppHandle,
+    pending: Pending,
+    client: OxenClient,
+    model_label: &str,
+    context_window: Option<usize>,
+    session_id: String,
+) -> Result<Agent, String> {
+    let (mut tools, store, config) = agent_parts(app, pending, model_label, context_window)?;
+    register_canvas(&mut tools, app, &session_id);
+    Agent::resume_from_store(client, tools, store, session_id, config).map_err(|e| e.to_string())
 }
 
 fn dirs_home() -> Result<std::path::PathBuf, String> {
@@ -167,74 +321,430 @@ fn dirs_home() -> Result<std::path::PathBuf, String> {
     std::env::home_dir().ok_or_else(|| "could not determine home directory".to_string())
 }
 
-/// Lazily build the shared agent on first use, returning a mutable handle.
-///
-/// Initializing on demand (rather than at startup) means the window always
-/// opens even when no API key is configured — the error surfaces on the first
-/// command instead of blocking launch.
-fn ensure_initialized<'a>(
-    app: &AppHandle,
-    pending: Pending,
-    slot: &'a mut Option<Agent>,
-) -> Result<&'a mut Agent, String> {
-    if slot.is_none() {
-        *slot = Some(build_agent(app, pending)?);
-    }
-    Ok(slot.as_mut().expect("agent initialized above"))
+// ===========================================================================
+// Connection settings — a persisted Oxen API key + host override, editable
+// from the desktop Settings page. Blank fields fall back to env / CLI login.
+// ===========================================================================
+
+/// Persisted Oxen connection overrides (`~/.oxen-harness/connection.json`). An
+/// empty `host` or `api_key` means "fall back to `OXEN_*` env vars, the `oxen`
+/// CLI login, or the default endpoint".
+#[derive(Default, Serialize, Deserialize)]
+struct ConnectionConfig {
+    #[serde(default)]
+    host: String,
+    #[serde(default)]
+    api_key: String,
+    /// Brave Search API key enabling the `web_search` tool. Blank = fall back to
+    /// the `BRAVE_API_KEY` environment variable (web search off if neither set).
+    #[serde(default)]
+    brave_api_key: String,
 }
 
-/// Run one user turn, streaming events to the UI; returns the final text.
+/// What the Settings page shows: the saved overrides plus context so the UI can
+/// render helpful placeholders and tell the user whether they're already
+/// authenticated without typing a key.
+#[derive(Serialize)]
+struct ConnectionView {
+    host: String,
+    api_key: String,
+    /// Effective Brave Search API key in use (override, else `BRAVE_API_KEY`).
+    brave_api_key: String,
+    /// The default Oxen host, shown as the host field's placeholder.
+    default_host: String,
+    /// Whether a key already resolves from the environment / `oxen` CLI login
+    /// for the effective host, so a blank key field still works.
+    env_key_available: bool,
+}
+
+fn connection_config_path() -> Result<std::path::PathBuf, String> {
+    Ok(dirs_home()?.join(".oxen-harness").join("connection.json"))
+}
+
+/// Read the saved overrides, treating a missing or unparseable file as "none".
+fn read_connection_config() -> ConnectionConfig {
+    connection_config_path()
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_connection_config(cfg: &ConnectionConfig) -> Result<(), String> {
+    let path = connection_config_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())
+}
+
+/// Resolve the effective base URL from the saved host override (or env/default).
+fn effective_base_url(cfg: &ConnectionConfig) -> String {
+    match cfg.host.trim() {
+        "" => harness_llm::resolve_base_url(),
+        host => harness_llm::base_url_from_host(host),
+    }
+}
+
+/// Resolve the API key actually in use: the saved override if set, otherwise
+/// whatever resolves from `OXEN_API_KEY` / the `oxen` CLI login for `base_url`'s
+/// host (empty if nothing resolves).
+fn effective_api_key(cfg: &ConnectionConfig, base_url: &str) -> String {
+    match cfg.api_key.trim() {
+        "" => harness_llm::auth::resolve_api_key_for_base_url(base_url).unwrap_or_default(),
+        key => key.to_string(),
+    }
+}
+
+/// Return the connection settings for the Settings page, pre-filled with the
+/// values actually in use — so the fields reflect the resolved host and key
+/// (from env / the `oxen` CLI login / the default endpoint), not just whatever
+/// override happens to be saved.
+/// The Brave Search API key actually in use: the saved override, else whatever
+/// `BRAVE_API_KEY` provides (empty if neither is set, i.e. web search is off).
+fn effective_brave_key(cfg: &ConnectionConfig) -> String {
+    match cfg.brave_api_key.trim() {
+        "" => harness_tools::web::brave_api_key().unwrap_or_default(),
+        key => key.to_string(),
+    }
+}
+
+/// Build the Brave key option passed to the tool registry: the saved override
+/// if set, else `None` (which lets the tool fall back to `BRAVE_API_KEY`).
+fn brave_key_override(cfg: &ConnectionConfig) -> Option<String> {
+    match cfg.brave_api_key.trim() {
+        "" => None,
+        key => Some(key.to_string()),
+    }
+}
+
+#[tauri::command]
+fn get_connection() -> ConnectionView {
+    let cfg = read_connection_config();
+    let base_url = effective_base_url(&cfg);
+    let api_key = effective_api_key(&cfg, &base_url);
+    ConnectionView {
+        host: harness_llm::host_from_base_url(&base_url),
+        env_key_available: !api_key.is_empty(),
+        api_key,
+        brave_api_key: effective_brave_key(&cfg),
+        default_host: harness_llm::auth::DEFAULT_OXEN_HOST.to_string(),
+    }
+}
+
+/// Save just the Brave Search API key and apply it to the running agent.
+///
+/// Unlike [`set_connection`], this does **not** rebuild the agent or start a new
+/// session — it persists the key and sets `BRAVE_API_KEY` in the process so the
+/// already-registered `web_search` tool picks it up on its next call. Lets the
+/// user fix a failed web search inline and immediately retry in the same chat.
+#[tauri::command]
+fn configure_brave_key(key: String) -> Result<(), String> {
+    let key = key.trim().to_string();
+    let mut cfg = read_connection_config();
+    cfg.brave_api_key = key.clone();
+    write_connection_config(&cfg)?;
+    if !key.is_empty() {
+        std::env::set_var(harness_tools::web::BRAVE_API_KEY_ENV, &key);
+    }
+    Ok(())
+}
+
+/// Save the Oxen API key + host and rebuild the agent against the new endpoint.
+///
+/// Rebuilding validates that a key resolves (a blank key must be backed by env /
+/// CLI login), drops any active local-model server, and — since the endpoint may
+/// have changed — starts a fresh session. Returns the new session info.
+#[tauri::command]
+async fn set_connection(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    host: String,
+    api_key: String,
+    brave_api_key: String,
+) -> Result<SessionInfo, String> {
+    write_connection_config(&ConnectionConfig {
+        host: host.trim().to_string(),
+        api_key: api_key.trim().to_string(),
+        brave_api_key: brave_api_key.trim().to_string(),
+    })?;
+
+    let agent = new_agent(
+        &app,
+        state.pending.clone(),
+        configured_client()?,
+        DEFAULT_MODEL,
+        None,
+    )?;
+    *state.local_server.lock().await = None;
+    *state.local_model.lock().await = None;
+    Ok(install_agent(&state, agent).await)
+}
+
+/// Build a fresh agent for a new session, reusing the active local model if any.
+async fn build_fresh_agent(app: &AppHandle, state: &AppState) -> Result<Agent, String> {
+    let (client, label, ctx) = client_for(state).await?;
+    new_agent(app, state.pending.clone(), client, &label, ctx)
+}
+
+/// Build an agent bound to an existing session id (no throwaway session row).
+async fn build_resumed_agent(
+    app: &AppHandle,
+    state: &AppState,
+    session_id: String,
+) -> Result<Agent, String> {
+    let (client, label, ctx) = client_for(state).await?;
+    resume_agent(app, state.pending.clone(), client, &label, ctx, session_id)
+}
+
+/// The agent handle for a session id, if one is live in memory.
+async fn agent_for(state: &AppState, id: &str) -> Option<Arc<Mutex<Agent>>> {
+    state.agents.lock().await.get(id).cloned()
+}
+
+/// The live agent for a session, rehydrating it from the database if it isn't
+/// cached (e.g. it was evicted, or this is the first turn after a cold resume).
+/// The DB is the source of truth — every message was persisted as it was made —
+/// so a rebuilt agent continues the exact conversation. Inserts via the map
+/// entry so a concurrent build for the same id can't leave a duplicate.
+async fn agent_or_build(
+    app: &AppHandle,
+    state: &AppState,
+    session: &str,
+) -> Result<Arc<Mutex<Agent>>, String> {
+    if let Some(a) = agent_for(state, session).await {
+        return Ok(a);
+    }
+    let agent = build_resumed_agent(app, state, session.to_string()).await?;
+    let arc = Arc::new(Mutex::new(agent));
+    Ok(state
+        .agents
+        .lock()
+        .await
+        .entry(session.to_string())
+        .or_insert(arc)
+        .clone())
+}
+
+fn info_for(agent: &Agent) -> SessionInfo {
+    SessionInfo {
+        model: agent.model().to_string(),
+        workspace: workspace_string(),
+        session_id: agent.session_id().to_string(),
+    }
+}
+
+/// Release cached agents we don't need in memory: everything except the current
+/// chat and any whose turn is still running (whose per-session lock is held).
+/// The dropped chats live on in SQLite and rehydrate via [`agent_or_build`], so
+/// resident memory tracks concurrency (running turns + the open chat), never the
+/// number of chats in history.
+async fn evict_idle(state: &AppState) {
+    let current = { state.current.lock().await.clone() };
+    state
+        .agents
+        .lock()
+        .await
+        .retain(|id, arc| Some(id.as_str()) == current.as_deref() || arc.try_lock().is_err());
+}
+
+/// Register an agent under its session id, make it the current chat, then evict
+/// any now-idle background agents.
+async fn install_agent(state: &AppState, agent: Agent) -> SessionInfo {
+    let info = info_for(&agent);
+    state
+        .agents
+        .lock()
+        .await
+        .insert(info.session_id.clone(), Arc::new(Mutex::new(agent)));
+    *state.current.lock().await = Some(info.session_id.clone());
+    evict_idle(state).await;
+    info
+}
+
+/// The current chat's agent, lazily building one on first use so the window
+/// always opens even without an API key configured.
+async fn current_agent(app: &AppHandle, state: &AppState) -> Result<Arc<Mutex<Agent>>, String> {
+    // Read + drop the `current` guard before locking `agents` — never hold both,
+    // so the two maps can't form a lock-ordering cycle.
+    let current = { state.current.lock().await.clone() };
+    if let Some(id) = current {
+        if let Some(a) = agent_for(state, &id).await {
+            return Ok(a);
+        }
+    }
+    let agent = build_fresh_agent(app, state).await?;
+    let arc = Arc::new(Mutex::new(agent));
+    let id = arc.lock().await.session_id().to_string();
+    state.agents.lock().await.insert(id.clone(), arc.clone());
+    *state.current.lock().await = Some(id);
+    Ok(arc)
+}
+
+/// Run one user turn for a specific chat, streaming session-tagged events to the
+/// UI; returns the final text. Holds only that session's lock, so turns in other
+/// chats keep running concurrently.
 #[tauri::command]
 async fn run_turn(
     app: AppHandle,
     state: State<'_, AppState>,
+    session: String,
     prompt: String,
+    attachments: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let mut guard = state.agent.lock().await;
-    let agent = ensure_initialized(&app, state.pending.clone(), &mut guard)?;
+    // Read any dropped file paths into attachments, skipping unreadable ones so
+    // a bad path never blocks the turn (the agent just sends what loaded).
+    let attachments: Vec<Attachment> = attachments
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|p| Attachment::from_path(p).ok())
+        .collect();
 
-    agent
-        .run_turn(prompt, |event| match event {
-            AgentEvent::Token(t) => {
-                let _ = app.emit("agent://token", t.clone());
-            }
-            AgentEvent::ToolStart { name, arguments } => {
-                let _ = app.emit(
-                    "agent://tool",
-                    ToolEventPayload {
-                        phase: "start",
-                        name: name.clone(),
-                        detail: arguments.clone(),
-                    },
-                );
-            }
-            AgentEvent::ToolEnd { name, result } => {
-                let _ = app.emit(
-                    "agent://tool",
-                    ToolEventPayload {
-                        phase: "end",
-                        name: name.clone(),
-                        detail: result.clone(),
-                    },
-                );
-            }
-        })
-        .await
-        .map_err(|e| e.to_string())
+    // Get the live agent or rehydrate it from the database. The agents map is a
+    // cache, not the source of truth, so an evicted chat simply rebuilds here.
+    let arc = agent_or_build(&app, &state, &session).await?;
+
+    let sid = session.clone();
+    let result = {
+        let mut agent = arc.lock().await;
+        agent
+            .run_turn_with_attachments(prompt, attachments, move |event| match event {
+                AgentEvent::Token(t) => {
+                    let _ = app.emit(
+                        "agent://token",
+                        TokenPayload {
+                            session: sid.clone(),
+                            token: t.clone(),
+                        },
+                    );
+                }
+                // The model started writing a canvas; open the panel in a
+                // "writing" state while its content streams in as tool args.
+                AgentEvent::ToolPending { name } if name == harness_tools::CANVAS_TOOL => {
+                    let _ = app.emit("agent://canvas-writing", SessionPayload { session: sid.clone() });
+                }
+                AgentEvent::ToolPending { .. } => {}
+                AgentEvent::ToolStart { name, arguments } => {
+                    let _ = app.emit(
+                        "agent://tool",
+                        ToolEventPayload {
+                            session: sid.clone(),
+                            phase: "start",
+                            name: name.clone(),
+                            detail: arguments.clone(),
+                        },
+                    );
+                }
+                AgentEvent::ToolEnd { name, result } => {
+                    let _ = app.emit(
+                        "agent://tool",
+                        ToolEventPayload {
+                            session: sid.clone(),
+                            phase: "end",
+                            name: name.clone(),
+                            detail: result.clone(),
+                        },
+                    );
+                }
+            })
+            .await
+    };
+    // The turn is persisted message-by-message, so once it's done the agent is
+    // just a cache. Release idle background agents (keeping the current chat and
+    // any still-running turns) so memory tracks concurrency, not chat count.
+    evict_idle(&state).await;
+    result.map_err(|e| e.to_string())
 }
 
 /// Report the current session info, initializing the agent if needed.
 #[tauri::command]
 async fn session_info(app: AppHandle, state: State<'_, AppState>) -> Result<SessionInfo, String> {
-    let mut guard = state.agent.lock().await;
-    let agent = ensure_initialized(&app, state.pending.clone(), &mut guard)?;
-    Ok(SessionInfo {
-        model: agent.model().to_string(),
-        workspace: std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default(),
-        session_id: agent.session_id().to_string(),
-    })
+    let arc = current_agent(&app, &state).await?;
+    let agent = arc.lock().await;
+    Ok(info_for(&agent))
+}
+
+/// Open the shared on-disk history store (same DB the agents persist to).
+fn open_history_store() -> Result<HistoryStore, String> {
+    let path = dirs_home()?.join(".oxen-harness").join("history.sqlite");
+    HistoryStore::open(path).map_err(|e| e.to_string())
+}
+
+/// List past chat sessions (those with at least one user message), newest first.
+#[tauri::command]
+async fn list_sessions() -> Result<Vec<SessionSummary>, String> {
+    open_history_store()?.list_sessions().map_err(|e| e.to_string())
+}
+
+/// Start a fresh chat session as its own agent. Any in-flight chats keep running
+/// in the background — this never disturbs them. Returns the new session's info.
+#[tauri::command]
+async fn new_session(app: AppHandle, state: State<'_, AppState>) -> Result<SessionInfo, String> {
+    let agent = build_fresh_agent(&app, &state).await?;
+    Ok(install_agent(&state, agent).await)
+}
+
+/// Switch to an existing session, returning its info and full transcript so the
+/// UI can re-render the conversation. Reuses the session's live agent if one
+/// exists (e.g. a chat that finished in the background); otherwise loads it cold
+/// from history. A chat still mid-turn can't be locked, so its transcript comes
+/// back empty — the UI keeps the live thread it already streamed.
+#[tauri::command]
+async fn resume_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<SessionView, String> {
+    let arc = match agent_for(&state, &id).await {
+        Some(a) => a,
+        None => {
+            // Cold resume: build an agent bound to the existing session (no
+            // throwaway row), then insert via the map entry so a concurrent
+            // resume of the same id can't leave two agents behind.
+            let agent = build_resumed_agent(&app, &state, id.clone()).await?;
+            let arc = Arc::new(Mutex::new(agent));
+            let winner = state
+                .agents
+                .lock()
+                .await
+                .entry(id.clone())
+                .or_insert(arc)
+                .clone();
+            winner
+        }
+    };
+    *state.current.lock().await = Some(id.clone());
+    evict_idle(&state).await;
+
+    // Bind to a local so the try_lock guard drops before `arc` at block end.
+    let view = match arc.try_lock() {
+        Ok(agent) => {
+            let messages = agent
+                .messages()
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            SessionView {
+                info: info_for(&agent),
+                messages,
+                running: false,
+            }
+        }
+        // Mid-turn: can't read it. The UI keeps its live in-memory thread; the
+        // explicit `running` flag tells it not to touch the transcript.
+        Err(_) => SessionView {
+            info: SessionInfo {
+                model: String::new(),
+                workspace: workspace_string(),
+                session_id: id,
+            },
+            messages: vec![],
+            running: true,
+        },
+    };
+    Ok(view)
 }
 
 /// List local models with their on-disk status and total disk usage.
@@ -313,25 +823,20 @@ async fn use_local_model(
     let server = LocalServer::start(&store.path_for(spec), &id)
         .await
         .map_err(|e| e.to_string())?;
+    let context_window = Some(server.context_size() as usize);
     let agent = new_agent(
         &app,
         state.pending.clone(),
         OxenClient::new(server.base_url(), "local", &id),
         &id,
+        context_window,
     )?;
-    let session_id = agent.session_id().to_string();
 
-    // Swap in the new server + agent (dropping any previous local server).
+    // Remember the local server + model so new sessions reuse it, then install
+    // the agent as the current chat.
     *state.local_server.lock().await = Some(server);
-    *state.agent.lock().await = Some(agent);
-
-    Ok(SessionInfo {
-        model: id,
-        workspace: std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default(),
-        session_id,
-    })
+    *state.local_model.lock().await = Some(id.clone());
+    Ok(install_agent(&state, agent).await)
 }
 
 // ===========================================================================
@@ -340,6 +845,26 @@ async fn use_local_model(
 
 fn theme_store() -> Result<harness_theme::Store, String> {
     harness_theme::Store::open().map_err(|e| e.to_string())
+}
+
+/// A one-shot, agent-free model completion using the active model + endpoint.
+/// Used for side tasks (theme generation) so they never block — or wait on — a
+/// chat's agent, which may be mid-turn.
+async fn complete_oneshot(state: &AppState, system: &str, user: &str) -> Result<String, String> {
+    let (client, model, _) = client_for(state).await?;
+    let request = ChatRequest::new(
+        &model,
+        vec![
+            ChatMessage::system(system.to_string()),
+            ChatMessage::user(user.to_string()),
+        ],
+    )
+    .streaming(true);
+    let assembled = client
+        .stream_chat(&request, |_| {})
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(assembled.content)
 }
 
 /// All available themes (built-in + installed), with the active one marked.
@@ -389,18 +914,11 @@ async fn remove_theme(name: String) -> Result<(), String> {
 /// and activate it. Reuses the session's model + endpoint.
 #[tauri::command]
 async fn new_theme(
-    app: AppHandle,
     state: State<'_, AppState>,
     brief: String,
 ) -> Result<harness_theme::Theme, String> {
-    let raw = {
-        let mut guard = state.agent.lock().await;
-        let agent = ensure_initialized(&app, state.pending.clone(), &mut guard)?;
-        agent
-            .complete(&harness_theme::Theme::generation_system_prompt(), &brief)
-            .await
-            .map_err(|e| e.to_string())?
-    };
+    let raw =
+        complete_oneshot(&state, &harness_theme::Theme::generation_system_prompt(), &brief).await?;
     let theme = harness_theme::Theme::from_model_output(&raw).map_err(|e| e.to_string())?;
     let store = theme_store()?;
     store.save(&theme).map_err(|e| e.to_string())?;
@@ -432,10 +950,17 @@ async fn answer_question(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             run_turn,
             session_info,
+            list_sessions,
+            new_session,
+            resume_session,
+            get_connection,
+            set_connection,
+            configure_brave_key,
             list_models,
             install_llama,
             pull_model,

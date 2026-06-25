@@ -67,6 +67,36 @@ impl Ui {
         }
     }
 
+    /// Update the "Departing" location shown in the main-menu banner.
+    ///
+    /// The departing location is the first `flavor_top` row of the active
+    /// theme. Because the theme sits behind an `Arc`, this clones it, rewrites
+    /// that row's value (preserving its themed label, e.g. "Departing" or
+    /// "Location"), and swaps in the modified copy. The label used for a
+    /// freshly-created row is returned so callers can report what changed.
+    pub fn set_departing(&mut self, value: &str) -> String {
+        let mut theme = (*self.theme).clone();
+        match theme.voice.flavor_top.first_mut() {
+            Some(row) => row[1] = value.to_string(),
+            None => theme
+                .voice
+                .flavor_top
+                .push(["Departing".to_string(), value.to_string()]),
+        }
+        let label = theme.voice.flavor_top[0][0].clone();
+        self.theme = Arc::new(theme);
+        label
+    }
+
+    /// The current "Departing" location (first `flavor_top` row value), if any.
+    pub fn departing(&self) -> Option<(&str, &str)> {
+        self.theme
+            .voice
+            .flavor_top
+            .first()
+            .map(|row| (row[0].as_str(), row[1].as_str()))
+    }
+
     /// Whether in-place animations (spinners, progress bars) should run. They
     /// rely on ANSI control codes, so they're tied to color support.
     pub fn animates(&self) -> bool {
@@ -506,23 +536,33 @@ struct SpinnerStyle {
     dim_rgb: Rgb,
 }
 
-impl Spinner {
-    /// Start spinning, cycling through `verbs`. Returns a no-op spinner when
-    /// color/animation is disabled (e.g. piped output) or there's nothing to show.
-    pub fn start(ui: &Ui, verbs: Vec<String>) -> Self {
-        if !ui.color || verbs.is_empty() {
-            return Spinner { inner: None };
+impl SpinnerStyle {
+    /// Capture the colors + glyphs for a UI, or `None` when color/animation is
+    /// disabled (piped output, `NO_COLOR`, `TERM=dumb`).
+    fn for_ui(ui: &Ui) -> Option<SpinnerStyle> {
+        if !ui.color {
+            return None;
         }
         let pal = &ui.theme.palette;
         let mut glyphs = ui.theme.voice.spinner_glyphs.clone();
         if glyphs.is_empty() {
             glyphs.push("✶".to_string());
         }
-        let style = SpinnerStyle {
+        Some(SpinnerStyle {
             glyphs,
             glyph_rgb: pal.title.rgb(),
             text_rgb: pal.text.rgb(),
             dim_rgb: pal.muted.rgb(),
+        })
+    }
+}
+
+impl Spinner {
+    /// Start spinning, cycling through `verbs`. Returns a no-op spinner when
+    /// color/animation is disabled (e.g. piped output) or there's nothing to show.
+    pub fn start(ui: &Ui, verbs: Vec<String>) -> Self {
+        let Some(style) = SpinnerStyle::for_ui(ui).filter(|_| !verbs.is_empty()) else {
+            return Spinner { inner: None };
         };
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
@@ -541,6 +581,23 @@ impl Spinner {
     }
 }
 
+/// Build one rendered spinner frame: `glyph  verb…  (elapsed)`, fully painted.
+fn spinner_frame(
+    style: &SpinnerStyle,
+    verbs: &[String],
+    start: Instant,
+    frame: usize,
+    verb_idx: usize,
+) -> String {
+    let glyph = &style.glyphs[frame % style.glyphs.len()];
+    format!(
+        "{}  {}  {}",
+        paint(glyph, style.glyph_rgb),
+        paint(&format!("{}…", verbs[verb_idx]), style.text_rgb),
+        paint(&format!("({})", elapsed(start)), style.dim_rgb),
+    )
+}
+
 fn run_spinner(stop: &AtomicBool, verbs: &[String], style: &SpinnerStyle) {
     let mut out = io::stdout();
     let start = Instant::now();
@@ -555,13 +612,7 @@ fn run_spinner(stop: &AtomicBool, verbs: &[String], style: &SpinnerStyle) {
         if frame > 0 && frame % 16 == 0 {
             verb_idx = (verb_idx + 1) % verbs.len();
         }
-        let glyph = &style.glyphs[frame % style.glyphs.len()];
-        let line = format!(
-            "{}  {}  {}",
-            paint(glyph, style.glyph_rgb),
-            paint(&format!("{}…", verbs[verb_idx]), style.text_rgb),
-            paint(&format!("({})", elapsed(start)), style.dim_rgb),
-        );
+        let line = spinner_frame(style, verbs, start, frame, verb_idx);
         let _ = write!(out, "\r{line}\x1b[K");
         let _ = out.flush();
         frame += 1;
@@ -570,6 +621,56 @@ fn run_spinner(stop: &AtomicBool, verbs: &[String], style: &SpinnerStyle) {
 
     let _ = write!(out, "\r\x1b[K\x1b[?25h"); // clear line, show cursor
     let _ = out.flush();
+}
+
+/// A spinner driven a single frame at a time from an async loop, for the live
+/// composer (where a background thread writing to stdout would fight the
+/// composer for the cursor). It produces a status line on demand instead of
+/// owning a thread; the caller decides when to draw and advance it.
+pub(crate) struct LiveSpinner {
+    style: SpinnerStyle,
+    verbs: Vec<String>,
+    start: Instant,
+    frame: usize,
+    verb_idx: usize,
+}
+
+impl LiveSpinner {
+    /// A spinner cycling `verbs`, or `None` when there's nothing to animate.
+    pub(crate) fn new(ui: &Ui, verbs: Vec<String>) -> Option<Self> {
+        if verbs.is_empty() {
+            return None;
+        }
+        let style = SpinnerStyle::for_ui(ui)?;
+        let mut s = seed();
+        let verb_idx = (xorshift(&mut s) as usize) % verbs.len();
+        Some(LiveSpinner {
+            style,
+            verbs,
+            start: Instant::now(),
+            frame: 0,
+            verb_idx,
+        })
+    }
+
+    /// The current frame's status line (glyph + verb + elapsed), painted.
+    pub(crate) fn line(&self) -> String {
+        spinner_frame(
+            &self.style,
+            &self.verbs,
+            self.start,
+            self.frame,
+            self.verb_idx,
+        )
+    }
+
+    /// Advance one frame, rotating the verb on the same cadence as the thread.
+    pub(crate) fn tick(&mut self) {
+        self.frame += 1;
+        if self.frame % 16 == 0 {
+            self.verb_idx = (self.verb_idx + 1) % self.verbs.len();
+        }
+    }
 }
 
 /// Format an elapsed duration like `7s` or `1m07s`.
@@ -609,6 +710,23 @@ mod tests {
         assert!(!help(&ui).contains("\x1b["));
         assert!(!banner(&ui, "u", "m", "w", "s").contains("\x1b["));
         assert!(!death_screen(&ui, "abc123").contains("\x1b["));
+    }
+
+    #[test]
+    fn set_departing_updates_first_flavor_row_and_banner() {
+        let mut ui = Ui::plain();
+        // The default Oregon Trail theme ships a "Departing" flavor row.
+        let (label, _) = ui.departing().expect("default theme has a flavor row");
+        assert_eq!(label, "Departing");
+
+        let returned = ui.set_departing("Fort Laramie, Wyoming");
+        assert_eq!(returned, "Departing");
+        assert_eq!(
+            ui.departing(),
+            Some(("Departing", "Fort Laramie, Wyoming"))
+        );
+        // The banner reflects the new location.
+        assert!(banner(&ui, "u", "m", "w", "s").contains("Fort Laramie, Wyoming"));
     }
 
     #[test]

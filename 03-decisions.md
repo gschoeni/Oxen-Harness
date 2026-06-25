@@ -1,7 +1,7 @@
 # Working Decisions & Rationale
 
 **Purpose:** Currently relevant decisions with enough "why" to be useful during implementation. For full deep-dive analysis, cite the source in each entry.
-**Updated:** 2026-06-21
+**Updated:** 2026-06-23
 
 ---
 
@@ -89,6 +89,38 @@ command delivers the user's selection from the question card. The CLI renderer
 special-cases the tool name to suppress the usual tool line + spinner while the picker
 owns the screen.
 
+## Attachments (drag-and-drop)
+
+**Dropped files become content parts; text documents are inlined** (2026-06-23)
+Both front ends let the user drag files into the chat. `harness-llm::Attachment`
+reads a file, classifies it, and serializes it the way the model expects: images
+as `image_url` data URIs, PDFs as `file` data URIs, **text documents inlined as
+text**, and anything the model can't read natively (video, opaque binaries) as a
+short text note so the transcript still records the drop. Files are capped at
+20 MiB; inlined document text is further capped at `MAX_TEXT_CHARS` (100k chars)
+so a large file can't swamp the context window.
+
+- *Text vs binary is sniffed, not extension-mapped.* `from_extension` only names
+  the media types; any other file is decided by `from_bytes` via a cheap
+  text/binary heuristic (valid UTF-8 + no NUL byte). This catches Markdown, CSV,
+  JSON, source, and extension-less files (a bare `README`) without a brittle
+  allowlist, and treats true binaries as opaque notes.
+- *CLI extraction is path-shaped to avoid hijacking edit prompts.* The CLI has
+  no separate attach affordance, so `harness-cli::attach` tokenizes the prompt
+  line (shell-style, honoring quotes/escaped spaces) and pulls out file paths.
+  **Media** files attach however they're referenced, but a non-media file is only
+  attached when written as an **absolute path** — the signature of a terminal
+  drag-and-drop — so typed *relative* references like `README.md` or
+  `src/main.rs` stay in the prompt for the agent's file tools instead of being
+  swallowed. The desktop app passes dropped paths explicitly, so it has no such
+  ambiguity.
+- *Live composer uses bracketed paste.* The sticky-bottom composer runs the
+  terminal in raw mode, where a drag-drop would otherwise arrive as a fragile
+  burst of keystrokes. It enables bracketed paste (`\x1b[?2004h`, disabled on
+  drop) and handles `Event::Paste` by inserting the block into the focused
+  single-line editor (newlines flattened to spaces), so a dropped path lands
+  intact in one event.
+
 ## Theming
 
 **Configurable, shareable themes (palette + voice) in `harness-theme`** (2026-06-21)
@@ -166,6 +198,49 @@ Conversation messages and tool inputs/outputs are persisted verbatim (no truncat
 Development follows a tight test-first loop: read spec → write/adjust a test → smallest change → write to disk → run `fmt`/`clippy`/tests → fix root cause → stop on green → commit with a clear message. At the **end of each feature** there's a separate **review/refactor pass**: the LLM critiques the diff for modularity / maintainability / readability / idiomatic / pragmatic code, the agent applies the worthwhile fixes, the checks are re-run, and that cleanup lands as its own commit. The *runtime* agent loop mirrors the build loop: call model → execute any `tool_calls` → append `tool` messages → repeat until `finish_reason` is `stop`/`length`.
 -> *Full context: `AGENTS.md`*
 
+**Bounded by context window, not a fixed iteration cap** (2026-06-22, revised)
+The runtime loop has **no max-iterations limit**. Instead it budgets against the
+model's **context window**: before each model call it estimates the prompt's
+token cost (transcript + tool definitions) and stops with `ContextWindowExceeded`
+if it would overflow `window − response_reserve`. Token counts are estimated
+client-side (`harness-agent::budget`, ~4 chars/token) so it works for every
+endpoint — remote or local — without bundling a tokenizer. The window is derived
+from the model name (`context_window_for`), or set explicitly via
+`AgentConfig.context_window` — local `llama-server` sessions pass the server's
+real `--ctx-size` (`LocalServer::context_size`), which is far smaller than the
+model's theoretical maximum. The agent tracks cumulative `tokens_used`, and the
+CLI prints a subtle `🧭 context X / Y tokens (Z%)` trailer after each turn.
+
+*Why revised:* a hard 25-iteration cap killed long-but-legitimate tool-heavy
+turns ("died of measles: reached max iterations"). The real constraint on a
+chat-completions loop is the context window, so we bound on that instead.
+
+**Goal-driven loops live in their own `harness-loop` crate** (2026-06-22)
+A *loop* (distinct from a single agent turn) hands the agent a job, a gate that
+decides when it's done, and a give-up rule, then drives DISCOVER → QUESTION →
+PLAN → EXECUTE → VERIFY → ITERATE. Design choices:
+
+- **The gate is the point.** [`Verify`] is either a **command** (shell exit 0 =
+  pass — objective, the model can't talk past it) or a **rubric** (a *separate*
+  strict checker turn via `Agent::complete` scores 1–10 against the criteria;
+  passes only if every score clears the threshold). When a loop has no command,
+  it falls back to the rubric but the CLI nudges toward a command. We deliberately
+  recompute pass/fail from the scores rather than trusting the checker's own
+  "pass" field, and fail *closed* on unparseable checker output (never a silent pass).
+- **State that learns.** A [`LoopJournal`] records each pass (summary + verify
+  outcome) and is fed back as a digest so the agent doesn't repeat a failed
+  approach; it's persisted per-iteration under `loops/runs/<slug>.json` for resume.
+- **Two stop conditions** beyond success: an iteration cap (default 8) and an
+  optional cumulative token budget — so a loop can't run all night for nothing.
+- **Reuse, not a parallel stack.** The runner drives the existing `Agent`
+  (tools + `ask_user_question` already work for the QUESTION phase) and forwards
+  `AgentEvent`s wrapped in `LoopEvent`, so the CLI renders a loop identically to a
+  normal turn (shared `render::TurnRenderer`). Loops are shareable TOML in
+  `harness-loop`'s `LoopStore`, mirroring the theme store; built-ins ship with the
+  `default` "make the checks green" loop this repo runs on itself.
+- **Scope:** core engine + CLI now (`oxen-harness loop …` and in-REPL `/loop …`);
+  Tauri UI is a follow-up.
+
 ## UX & Scope
 
 **CLI first, Tauri later; stream from day one** (2026-06-21)
@@ -185,7 +260,8 @@ Color auto-disables for non-TTY / `NO_COLOR` / `TERM=dumb` so piped output is cl
 
 **Single Cargo workspace, focused crates** (2026-06-21)
 `harness-core` (base types) / `harness-llm` / `harness-tools` / `harness-store` /
-`harness-local` (local models) / `harness-agent` (orchestration loop) /
+`harness-local` (local models) / `harness-theme` / `harness-agent` (orchestration
+loop) / `harness-loop` (goal-driven self-verifying loops, atop `harness-agent`) /
 `harness-cli`. Tests use `mockito` to fake HTTP endpoints (deterministic, offline).
 `cargo nextest` is the preferred test runner.
 

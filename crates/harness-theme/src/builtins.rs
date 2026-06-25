@@ -7,11 +7,17 @@
 
 use std::collections::BTreeMap;
 
-use crate::{Color, Theme};
+use crate::{s, Color, Style, Theme};
 
 /// Every built-in theme, default first.
 pub fn all() -> Vec<Theme> {
-    vec![Theme::default(), midnight(), synthwave()]
+    vec![
+        Theme::default(),
+        midnight(),
+        synthwave(),
+        new_york_times(),
+        cupertino(),
+    ]
 }
 
 /// The built-in theme names, default first.
@@ -37,6 +43,39 @@ fn verbs(pairs: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
 fn lines(xs: &[&str]) -> Vec<String> {
     xs.iter().map(|x| x.to_string()).collect()
 }
+
+/// Build a [`Style`] from its fields without the struct-literal noise.
+#[allow(clippy::too_many_arguments)]
+fn style(
+    display: &str,
+    body: &str,
+    mono: &str,
+    transform: &str,
+    spacing: &str,
+    radius: &str,
+    border: &str,
+    shadow: &str,
+    hero: &str,
+    scene: &str,
+) -> Style {
+    Style {
+        font_display: display.into(),
+        font_body: body.into(),
+        font_mono: mono.into(),
+        display_transform: transform.into(),
+        display_spacing: spacing.into(),
+        radius: radius.into(),
+        border_width: border.into(),
+        shadow: shadow.into(),
+        hero: hero.into(),
+        scene: scene.into(),
+    }
+}
+
+// Common system stacks reused across themes.
+const SYS_SANS: &str = "-apple-system, BlinkMacSystemFont, \"SF Pro Text\", \"Segoe UI\", Inter, Roboto, Helvetica, Arial, sans-serif";
+const SYS_SERIF: &str = "Georgia, \"Times New Roman\", \"PT Serif\", serif";
+const SYS_MONO: &str = "\"SF Mono\", ui-monospace, Menlo, Consolas, monospace";
 
 /// A calm, modern dark theme — cool blues and slate.
 fn midnight() -> Theme {
@@ -111,6 +150,19 @@ fn midnight() -> Theme {
     ]);
     t.voice.exit_ground = "· · · · · · · · · · · · · · · · ·".into();
     t.voice.progress_icon = "🌙".into();
+    // Calm and modern: IBM Plex, soft shadows, generous radius, a clean splash.
+    t.style = style(
+        "\"PlexSans\", -apple-system, sans-serif",
+        "\"PlexSans\", -apple-system, sans-serif",
+        "\"PlexMono\", ui-monospace, monospace",
+        "none",
+        "-0.01em",
+        "10px",
+        "1px",
+        "soft",
+        "minimal",
+        "trail",
+    );
     t
 }
 
@@ -185,6 +237,191 @@ fn synthwave() -> Theme {
     ]);
     t.voice.exit_ground = "═══════════════════════════════".into();
     t.voice.progress_icon = "🚗".into();
+    // Neon retro: wide-tracked Orbitron caps, VT323 readouts, accent glow. The
+    // pixel hero stays — a recolored neon wagon is right at home on the grid.
+    t.style = style(
+        "\"Orbitron\", \"PixelHead\", sans-serif",
+        SYS_SANS,
+        "\"PixelRead\", \"SF Mono\", monospace",
+        "uppercase",
+        "0.12em",
+        "2px",
+        "2px",
+        "glow",
+        "pixel",
+        "grid",
+    );
+    t
+}
+
+/// A broadsheet newspaper — hairline rules, high-contrast serif, a blackletter
+/// masthead. "All the code that's fit to commit."
+fn new_york_times() -> Theme {
+    let mut t = Theme::default();
+    t.meta.name = "New York Times".into();
+    t.meta.author = "oxen-harness".into();
+    t.meta.description =
+        "A broadsheet newspaper — hairline rules, high-contrast serif, blackletter masthead.".into();
+
+    t.palette = crate::Palette {
+        title: Color::new(20, 18, 16),
+        primary: Color::new(150, 42, 36),  // a restrained press red for accents
+        secondary: Color::new(94, 90, 82),
+        text: Color::new(26, 24, 22),
+        muted: Color::new(120, 114, 104),
+        danger: Color::new(150, 42, 36),
+        link: Color::new(42, 70, 130),
+        background: Color::new(247, 245, 238), // newsprint
+        surface: Color::new(241, 238, 230),
+        border: Color::new(210, 205, 194),
+    };
+
+    t.voice.prompt_icon = "📰".into();
+    t.voice.prompt_label = "file ❯".into();
+    t.voice.spinner_glyphs = lines(&["·", "‥", "…", "—", "–", "·"]);
+    t.voice.thinking = lines(&[
+        "Going to press",
+        "Checking the facts",
+        "Consulting the wire",
+        "Editing the copy",
+        "Setting the type",
+        "Proofing the galley",
+        "Calling the newsroom",
+        "Holding the front page",
+    ]);
+    t.voice.tool_verbs = verbs(&[
+        ("read_file", &["Reading the wire", "Reviewing the clippings"]),
+        ("write_file", &["Filing the story", "Typing the copy"]),
+        ("edit_file", &["Editing the copy", "Marking up the galley"]),
+        ("find_files", &["Combing the archives", "Searching the morgue"]),
+        ("search_files", &["Chasing the lead", "Working the beat"]),
+        ("run_shell", &["Running the presses", "Going to press"]),
+        ("git", &["Putting the edition to bed"]),
+        ("web_search", &["Calling the newsroom", "Working the sources"]),
+        ("ask_user_question", &["Interviewing the editor"]),
+        ("default", &["On the beat"]),
+    ]);
+    t.voice.deaths = lines(&[
+        "STOP THE PRESSES.",
+        "The edition has gone to bed.",
+        "The presses have stopped.",
+        "30. — the end.",
+        "The newsroom has gone dark.",
+    ]);
+    t.voice.wordmark = "The Oxen Times".into();
+    t.voice.pre_tagline = "Est. 1848 · Independence, MO".into();
+    t.voice.subtitle = "All the code that's fit to commit".into();
+    t.voice.flavor_top = vec![[s("Vol. CLXXIII"), s("No. 1 · Late Edition")]];
+    t.voice.flavor_bottom = vec![
+        [s("Weather"), s("Fair, scattered merges")],
+        [s("Markets"), s("Diffs up, bugs down")],
+        [s("Index"), s("Tests · Commits · Reviews")],
+    ];
+    t.voice.bottom_hint = "Read all about it — type to file a story".into();
+    t.voice.label_provider = "Bureau".into();
+    t.voice.label_model = "Correspondent (model)".into();
+    t.voice.label_workspace = "Desk (workspace)".into();
+    t.voice.label_session = "Edition".into();
+    t.voice.resume_message = "Your edition was saved. Resume the run with:".into();
+    t.voice.exit_art = lines(&[
+        r"  ┌───────────────────────┐  ",
+        r"  │   — THE OXEN TIMES —   │  ",
+        r"  │      F I N A L         │  ",
+        r"  └───────────────────────┘  ",
+    ]);
+    t.voice.exit_ground = "────────────────────────────".into();
+    t.voice.progress_icon = "📰".into();
+    t.style = style(
+        "\"Playfair\", Georgia, serif",
+        SYS_SERIF,
+        SYS_MONO,
+        "none",
+        "0",
+        "0px",
+        "1px",
+        "none",
+        "newspaper",
+        "none",
+    );
+    t
+}
+
+/// Modern, sleek, and minimal — system SF, soft neutrals, generous radius.
+fn cupertino() -> Theme {
+    let mut t = Theme::default();
+    t.meta.name = "Cupertino".into();
+    t.meta.author = "oxen-harness".into();
+    t.meta.description = "Modern, sleek, and minimal — soft neutrals and the system font.".into();
+
+    t.palette = crate::Palette {
+        title: Color::new(28, 28, 30),
+        primary: Color::new(0, 122, 255), // system blue
+        secondary: Color::new(142, 142, 147),
+        text: Color::new(28, 28, 30),
+        muted: Color::new(142, 142, 147),
+        danger: Color::new(255, 59, 48),
+        link: Color::new(0, 122, 255),
+        background: Color::new(255, 255, 255),
+        surface: Color::new(245, 245, 247),
+        border: Color::new(210, 210, 215),
+    };
+
+    t.voice.prompt_icon = "✦".into();
+    t.voice.prompt_label = "ask ❯".into();
+    t.voice.spinner_glyphs = lines(&["◜", "◠", "◝", "◞", "◡", "◟"]);
+    t.voice.thinking = lines(&[
+        "Thinking",
+        "Working on it",
+        "Putting it together",
+        "Looking into it",
+        "Just a moment",
+        "Almost there",
+    ]);
+    t.voice.tool_verbs = verbs(&[
+        ("read_file", &["Reading"]),
+        ("write_file", &["Writing"]),
+        ("edit_file", &["Editing"]),
+        ("find_files", &["Finding files"]),
+        ("search_files", &["Searching"]),
+        ("run_shell", &["Running"]),
+        ("git", &["Working with git"]),
+        ("web_search", &["Searching the web"]),
+        ("ask_user_question", &["Checking in"]),
+        ("default", &["Working"]),
+    ]);
+    t.voice.deaths = lines(&[
+        "Session ended.",
+        "See you soon.",
+        "That's a wrap.",
+        "Signing off.",
+        "Until next time.",
+    ]);
+    t.voice.wordmark = "Oxen Harness".into();
+    t.voice.pre_tagline = "".into();
+    t.voice.subtitle = "Your agentic coding companion".into();
+    t.voice.flavor_top = vec![];
+    t.voice.flavor_bottom = vec![];
+    t.voice.bottom_hint = "What should we build?".into();
+    t.voice.label_provider = "Provider".into();
+    t.voice.label_model = "Model".into();
+    t.voice.label_workspace = "Workspace".into();
+    t.voice.label_session = "Session".into();
+    t.voice.resume_message = "Your session was saved. Resume it with:".into();
+    t.voice.exit_art = lines(&[r"   ·  ·  ·   ", r"   see you    ", r"   ·  ·  ·   "]);
+    t.voice.exit_ground = "".into();
+    t.voice.progress_icon = "✦".into();
+    t.style = style(
+        "-apple-system, BlinkMacSystemFont, \"SF Pro Display\", sans-serif",
+        SYS_SANS,
+        SYS_MONO,
+        "none",
+        "-0.02em",
+        "14px",
+        "1px",
+        "soft",
+        "minimal",
+        "none",
+    );
     t
 }
 

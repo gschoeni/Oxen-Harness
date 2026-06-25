@@ -15,6 +15,10 @@ use crate::types::{ChatChunk, FunctionCall, ToolCall};
 pub enum StreamEvent {
     /// An incremental piece of assistant text.
     Token(String),
+    /// The model began emitting a tool call — surfaced as soon as the tool's
+    /// name is known, before its (possibly long) arguments finish streaming, so
+    /// the UI can react while a tool like `canvas` is still being written.
+    ToolCallStart { name: String },
     /// The stream finished, with the model's finish reason if provided.
     Done { finish_reason: Option<String> },
 }
@@ -118,27 +122,39 @@ impl StreamAssembler {
             }
             if let Some(tool_deltas) = choice.delta.tool_calls {
                 for delta in tool_deltas {
-                    self.merge_tool_delta(&delta);
+                    // Surface the tool name the first time we see it, so a long
+                    // tool call (e.g. a canvas document) signals its start early.
+                    if let Some(name) = self.merge_tool_delta(&delta) {
+                        emitted = Some(StreamEvent::ToolCallStart { name });
+                    }
                 }
             }
         }
         emitted
     }
 
-    fn merge_tool_delta(&mut self, delta: &serde_json::Value) {
+    /// Merge a tool-call delta into its fragment, returning the tool's name iff
+    /// this delta is the one that first named it.
+    fn merge_tool_delta(&mut self, delta: &serde_json::Value) -> Option<String> {
         let index = delta.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
         let frag = self.tool_fragments.entry(index).or_default();
         if let Some(id) = delta.get("id").and_then(|v| v.as_str()) {
             frag.id = id.to_string();
         }
+        let mut started = None;
         if let Some(func) = delta.get("function") {
             if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                let was_unnamed = frag.name.is_empty();
                 frag.name.push_str(name);
+                if was_unnamed && !frag.name.is_empty() {
+                    started = Some(frag.name.clone());
+                }
             }
             if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
                 frag.arguments.push_str(args);
             }
         }
+        started
     }
 
     /// Finalize the stream into the assembled message.

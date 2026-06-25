@@ -1,0 +1,192 @@
+/* Design-system primitives. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  background: var(--surface-2);
+  color: var(--text);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow);
+  padding: calc(var(--space-2) - 1px) var(--space-4);
+  font-size: var(--text-md);
+  font-weight: 500;
+  transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease),
+    filter var(--dur-fast) var(--ease);
+}
+.btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  transform: translateY(var(--lift));
+  box-shadow: var(--frame-shadow-hover);
+}
+.btn:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: var(--frame-shadow);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn.sm {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+}
+.btn.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--accent);
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--text-secondary);
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+  transform: none;
+  box-shadow: none;
+}
+.btn.danger {
+  background: transparent;
+  border-color: var(--separator-strong);
+  color: var(--danger);
+}
+.btn.danger:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  border-radius: var(--radius-sm);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.icon-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--separator-strong);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: var(--space-4);
+  padding: var(--space-7);
+}
+.empty-icon {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border: var(--frame-border-w) solid color-mix(in srgb, var(--accent) 35%, var(--separator-strong));
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  font-size: 32px;
+}
+.empty-title {
+  font-size: var(--text-2xl);
+  letter-spacing: -0.02em;
+}
+.empty-sub {
+  color: var(--text-tertiary);
+  font-size: var(--text-md);
+  max-width: 420px;
+}
+
+/* --- Modal --- */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--scrim);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  animation: scrim-in var(--dur-fast) var(--ease);
+}
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+.modal {
+  width: min(560px, 100%);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow-lg), var(--shadow-2);
+  overflow: hidden;
+  animation: modal-in var(--dur) var(--ease);
+}
+.modal.wide {
+  width: min(680px, 100%);
+}
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--separator);
+}
+.modal-title {
+  font-family: var(--font-display);
+  /* Keeps the squat pixel face compact while letting serif/sans titles breathe. */
+  font-size: calc(var(--label-size) + 4px);
+  letter-spacing: var(--label-spacing);
+}
+.modal-body {
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
+.muted {
+  color: var(--text-tertiary);
+}

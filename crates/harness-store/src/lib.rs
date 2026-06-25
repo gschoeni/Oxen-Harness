@@ -10,7 +10,7 @@
 
 pub mod store;
 
-pub use store::{HistoryError, HistoryStore, SessionMeta};
+pub use store::{HistoryError, HistoryStore, SessionMeta, SessionSummary};
 
 use serde::Serialize;
 

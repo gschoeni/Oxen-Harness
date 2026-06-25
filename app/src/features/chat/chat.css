@@ -1,0 +1,726 @@
+.chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Reset the grid item's auto min-height so the messages area scrolls and the
+     composer stays pinned to the bottom regardless of window height. */
+  min-height: 0;
+  background: var(--bg);
+  position: relative;
+}
+
+/* Transparent strip across the top that drags the window (overlay title bar). */
+.chat-titlebar {
+  height: 38px;
+  flex-shrink: 0;
+  z-index: 2;
+}
+
+/* Positioning context for the floating jump-to-bottom button so it sits just
+   above the composer (not over it) and tracks the messages region's height. */
+.messages-wrap {
+  flex: 1;
+  min-height: 0;
+  /* Without this, a wide child (e.g. a code block) keeps the flex item from
+     shrinking, so the chat column won't narrow when the canvas opens and text
+     spills under it instead of wrapping. */
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.messages {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+/* Appears when the user scrolls up out of the live tail. */
+.scroll-bottom {
+  position: absolute;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  background: var(--surface);
+  color: var(--accent);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--frame-shadow), var(--shadow-1);
+  cursor: pointer;
+  animation: scroll-btn-in var(--dur-fast) var(--ease);
+  transition: transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.scroll-bottom:hover {
+  border-color: var(--accent);
+  transform: translateX(-50%) translateY(var(--lift));
+  box-shadow: var(--frame-shadow-hover), var(--shadow-1);
+}
+.scroll-bottom:active {
+  transform: translateX(-50%);
+}
+@keyframes scroll-btn-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(6px);
+  }
+}
+
+.thread {
+  max-width: 740px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* --- Empty state: the "size up the situation" hero --- */
+/* Lives in normal flow inside the scrollable `.messages` so it can never overlap
+   the composer (which is its sibling, outside `.messages`). `min-height: 100%`
+   + `margin: auto` on the hero centers it when it fits and lets `.messages`
+   scroll from the top when the window is too short to hold it. */
+.chat-empty {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-6) var(--space-5) var(--space-7);
+  /* Let presses fall through for text selection; only the chips are clickable. */
+  pointer-events: none;
+}
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 480px;
+  margin: auto;
+}
+
+.hero-pretag {
+  font-family: var(--font-readout);
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+.hero-wordmark {
+  font-family: var(--font-display);
+  font-size: var(--wordmark-size);
+  line-height: 1.25;
+  letter-spacing: var(--wordmark-spacing);
+  text-transform: var(--label-transform);
+  color: var(--accent);
+  margin: var(--space-1) 0 var(--space-2);
+}
+/* Only the chunky 8-bit display face wants the stamped hard shadow. */
+[data-hero="pixel"] .hero-wordmark {
+  text-shadow: 2px 2px 0 var(--pixel-edge);
+}
+
+/* The CRT "monitor": a true-black bezel framing the scene + prompt line, the way
+   the game always rendered its world on black regardless of the machine. */
+.hero-screen {
+  width: 100%;
+  background: #000;
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow-lg);
+  overflow: hidden;
+}
+.trail-scene {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+/* The white-on-black "Press RETURN to size up the situation" bar. */
+.hero-prompt {
+  font-family: var(--font-readout);
+  font-size: 19px;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+  color: #f4f1e8;
+  background: #000;
+  border-top: var(--frame-border-w) solid rgba(255, 255, 255, 0.14);
+  padding: var(--space-2) var(--space-3) calc(var(--space-2) + 1px);
+}
+
+.hero-sub {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  max-width: 380px;
+  margin: var(--space-1) 0 var(--space-2);
+  line-height: 1.5;
+}
+
+/* Example prompts as the game's numbered menu of choices. */
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+  width: 100%;
+  pointer-events: auto;
+}
+.example-chip {
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  color: var(--text-secondary);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  box-shadow: var(--frame-shadow);
+  transition: transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.example-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+  transform: translateY(var(--lift));
+  box-shadow: var(--frame-shadow-hover);
+}
+.example-chip:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: var(--frame-shadow);
+}
+.example-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- Trail status panel — framed "Label: value" readout --- */
+.status-panel {
+  width: 100%;
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow);
+  padding: var(--space-3) var(--space-4);
+}
+.status-rows {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.status-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: var(--space-3);
+  align-items: baseline;
+  font-family: var(--font-readout);
+  font-size: 18px;
+  line-height: 1.15;
+}
+.status-row dt {
+  text-align: right;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.status-row dd {
+  text-align: left;
+  margin: 0;
+  color: var(--text);
+  font-weight: 400;
+}
+
+/* --- Minimal hero (Apple / Midnight): a clean app splash --- */
+.hero-min {
+  gap: var(--space-4);
+  max-width: 460px;
+}
+.hero-glyph {
+  width: 88px;
+  height: 88px;
+  display: grid;
+  place-items: center;
+  font-size: 46px;
+  border-radius: calc(var(--frame-radius) + 8px);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border: var(--frame-border-w) solid color-mix(in srgb, var(--accent) 22%, var(--separator));
+  box-shadow: var(--frame-shadow-lg);
+}
+.hero-min .hero-wordmark {
+  color: var(--text);
+  margin: 0;
+}
+.hero-min .hero-sub {
+  font-size: var(--text-lg);
+  color: var(--text-secondary);
+  max-width: 420px;
+  margin: 0;
+}
+.hero-hint-min {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  margin: var(--space-2) 0 0;
+}
+
+/* --- Newspaper hero (NYT): a broadsheet masthead --- */
+.hero-news {
+  max-width: 600px;
+  gap: var(--space-2);
+}
+.news-rule {
+  width: 100%;
+  height: 0;
+  border: 0;
+  border-top: 1px solid var(--text);
+}
+.news-rule-bottom {
+  border-top: 3px double var(--text);
+}
+.news-dateline {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-family: var(--font-body);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  padding: var(--space-1) 0;
+}
+.news-dot {
+  color: var(--accent);
+}
+.masthead {
+  font-family: "Masthead", "Playfair", Georgia, serif;
+  font-size: clamp(36px, 9vw, 62px);
+  line-height: 1.04;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+  margin: var(--space-2) 0;
+  text-wrap: balance;
+}
+.news-deck {
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: var(--text-lg);
+  color: var(--text-secondary);
+  max-width: 460px;
+  margin: var(--space-2) 0 var(--space-3);
+  line-height: 1.4;
+}
+.news-index {
+  width: 100%;
+  border: 1px solid var(--separator-strong);
+  padding: var(--space-2) var(--space-4) var(--space-3);
+}
+.news-index-head {
+  display: block;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: var(--text-sm);
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  text-align: center;
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--separator);
+}
+/* Strip the framed-panel chrome so the index reads as plain newsprint columns. */
+.news-index .status-panel {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+}
+.news-index .status-row {
+  font-family: var(--font-body);
+  font-size: var(--text-md);
+}
+.hero-news .hero-hint {
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  margin: var(--space-3) 0 0;
+}
+
+/* --- Messages --- */
+.msg {
+  max-width: 100%;
+  /* Flex item in the thread column — let it shrink so its content wraps to the
+     chat width instead of forcing the column wider than the canvas allows. */
+  min-width: 0;
+  line-height: 1.62;
+  overflow-wrap: anywhere;
+  word-wrap: break-word;
+}
+.msg.user {
+  align-self: flex-end;
+  max-width: 82%;
+  white-space: pre-wrap;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border: var(--frame-border-w) solid color-mix(in srgb, var(--accent) 40%, var(--separator-strong));
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow);
+  padding: var(--space-3) var(--space-4);
+}
+.msg.assistant {
+  align-self: stretch;
+}
+.msg.assistant .role {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  font-weight: 400;
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+  color: var(--text-tertiary);
+  margin-bottom: var(--space-3);
+}
+.msg.assistant .role::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+.msg.assistant.error .body {
+  color: var(--danger);
+}
+
+/* Thinking dots */
+.thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 1.2em;
+}
+.thinking > span {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 60%, var(--text-tertiary));
+  animation: bounce 1.2s var(--ease) infinite;
+}
+.thinking > span:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.thinking > span:nth-child(3) {
+  animation-delay: 0.36s;
+}
+@keyframes bounce {
+  0%, 80%, 100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* --- Tool chips --- */
+.tool {
+  align-self: stretch;
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator);
+  border-radius: var(--frame-radius);
+  padding: var(--space-3) var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.tname {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  font-weight: 600;
+}
+.tname::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+.tool.running .tname::before {
+  animation: pulse 1.4s var(--ease) infinite;
+}
+.tool.done .tname::before {
+  background: var(--green);
+}
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.telapsed {
+  margin-left: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.tdetail {
+  margin-top: var(--space-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- Queue --- */
+.queue {
+  max-width: 740px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 0 var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.queue-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  font-weight: 400;
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+  color: var(--text-tertiary);
+  padding: 0 var(--space-1);
+}
+.queue-note {
+  font-family: var(--font-ui);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  font-size: var(--text-sm);
+}
+.queue-clear {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-xs);
+}
+.queue-clear:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+}
+.queue-idx {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.queue-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.queue-x {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-xs);
+  padding: 2px 6px;
+}
+.queue-x:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* --- Pending attachments --- */
+.attachments {
+  max-width: 740px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 0 var(--space-5);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.attachment-x {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-pill);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.attachment-x:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* --- Composer --- */
+.composer {
+  flex-shrink: 0;
+  padding: var(--space-3) var(--space-5) var(--space-5);
+}
+.composer-inner {
+  max-width: 740px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  padding: var(--space-2);
+  box-shadow: var(--frame-shadow);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.composer-inner:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--frame-shadow), 0 0 0 3px var(--accent-soft);
+}
+.composer textarea {
+  flex: 1;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  padding: var(--space-2) 0;
+  font: inherit;
+  line-height: 1.5;
+  max-height: 200px;
+}
+.composer textarea::placeholder {
+  color: var(--text-tertiary);
+}
+.composer textarea:focus {
+  outline: none;
+}
+.attach {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  border: none;
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.attach:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.attach:active {
+  transform: scale(0.94);
+}
+.send {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  border-radius: var(--radius-pill);
+  transition: filter var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.send:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.send:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.send.queueing {
+  background: var(--surface-2);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--separator-strong));
+}
+
+/* Reopen the chat's canvas after the panel was closed (top-right of messages). */
+.reopen-canvas {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-4);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 240px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--frame-shadow), var(--shadow-1);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  animation: scroll-btn-in var(--dur-fast) var(--ease);
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.reopen-canvas:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.reopen-canvas svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.reopen-canvas span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

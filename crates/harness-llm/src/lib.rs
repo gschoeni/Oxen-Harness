@@ -5,15 +5,20 @@
 //! [`client::OxenClient`] with non-streaming and SSE [`stream`]ing calls, and
 //! tool-calling support.
 
+pub mod attachment;
 pub mod auth;
 pub mod client;
 pub mod stream;
 pub mod types;
 
+pub use attachment::{Attachment, AttachmentError, AttachmentKind};
 pub use auth::{base_url_from_host, host_from_base_url, resolve_base_url};
 pub use client::OxenClient;
 pub use stream::{AssembledMessage, StreamEvent};
-pub use types::{ChatMessage, ChatRequest, ChatResponse, FunctionCall, ToolCall, ToolChoice};
+pub use types::{
+    ChatMessage, ChatRequest, ChatResponse, ContentPart, FileData, FunctionCall, ImageUrl,
+    MessageContent, ToolCall, ToolChoice,
+};
 
 use harness_core::DEFAULT_BASE_URL;
 

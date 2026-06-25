@@ -1,7 +1,7 @@
 # Project Status & Roadmap
 
 **Purpose:** Where we are, what's next, what's done. Pull this in for any working session.
-**Updated:** 2026-06-21
+**Updated:** 2026-06-22
 
 ---
 
@@ -18,11 +18,12 @@
 | **6** | `app/`: Tauri v2 cross-platform desktop app | ✅ Scaffolded (compiles) |
 | **7** | `harness-local`: local models via llama.cpp (Qwen3 GGUFs) | ✅ Complete |
 | **8** | `harness-theme`: configurable + shareable themes (palette + voice) | ✅ Complete |
+| **9** | `harness-loop`: goal-driven, self-verifying loops (discover→verify→iterate) | ✅ Complete |
 
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **138 tests passing** across the workspace.
+> **174 tests passing** across the workspace.
 
 ---
 
@@ -140,6 +141,13 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
       `oxen-harness theme list|use|export|import|path|remove` for sharing/scripting.
       Theme switches hot-swap the live UI.
 - [x] Graceful, helpful exit when no API key is configured
+- [x] **Live sticky-bottom composer** (`live.rs`): on an interactive TTY, a
+      composer pinned to the bottom row lets the user type while a turn streams.
+      Turn output scrolls inside a DECSTBM region above it; submitted lines stack
+      onto the `MessageQueue` (prompt shows `[n queued]`) and auto-drain in order
+      when the turn ends. Raw-mode Ctrl-C interrupts, Ctrl-D exits. Gated behind
+      `is_terminal() && animates()`; pipes/`NO_COLOR`/`TERM=dumb` keep the classic
+      blocking prompt. Composer line-editing is a pure, unit-tested `Composer`.
 
 ---
 
@@ -207,6 +215,28 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
       `Arc<Theme>`) and the desktop app (palette → CSS variables, voice phrases)
 - [x] Vibe-coding: a short interview feeds the model `Theme::generation_system_prompt()`
       (schema + default as reference); output parsed, saved, and activated
+
+---
+
+## Phase 9 — harness-loop (goal-driven, self-verifying loops)
+
+**Status:** ✅ Complete (16 tests passing; CLI wired)
+
+- [x] `LoopSpec` + `Verify` (TOML): a **command** gate (shell exit 0 = pass) or a
+      strict **rubric** gate (separate-checker scores 1–10 vs. criteria, threshold);
+      `success_criteria`, `max_iterations` (default 8), optional `token_budget`
+- [x] `LoopRunner`: drives DISCOVER→QUESTION→PLAN→EXECUTE→VERIFY→ITERATE — each
+      pass composes goal + criteria + a journal digest of prior attempts, runs one
+      agent turn (tools + `ask_user_question`), then runs the gate; stops on success,
+      iteration cap, token budget, or agent error. The gate (not the model) decides.
+- [x] `LoopJournal`: per-iteration record (summary + verify outcome), persisted to
+      `~/.oxen-harness/loops/runs/<slug>.json` after each pass for resumability
+- [x] `LoopStore`: shareable loops as `~/.oxen-harness/loops/<slug>.toml` (installed
+      shadows built-in); built-ins `default` (fmt+clippy+test), `green-tests`, `clean-clippy`
+- [x] CLI: `oxen-harness loop run|list|new|show|import|export|remove|path` and in-REPL
+      `/loop run|goal|list|new|show|…`, reusing the shared `render::TurnRenderer`
+      (extracted from `main.rs`) with Ctrl-C interrupt support
+- [ ] Loop support in the Tauri desktop app (follow-up pass)
 
 ---
 

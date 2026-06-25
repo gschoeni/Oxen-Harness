@@ -20,6 +20,7 @@ harness-store = { workspace = true }
 harness-local = { workspace = true }
 harness-theme = { workspace = true }
 harness-agent = { workspace = true }
+harness-loop = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -28,3 +29,7 @@ rustyline = "14"
 crossterm = "0.28"
 dirs = "5"
 async-trait = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

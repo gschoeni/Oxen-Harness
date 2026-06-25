@@ -16,10 +16,12 @@ use std::sync::Arc;
 
 use harness_core::DEFAULT_MODEL;
 use harness_llm::stream::StreamEvent;
-use harness_llm::types::ChatMessage;
-use harness_llm::{ChatRequest, LlmError, OxenClient, ToolCall};
-use harness_store::{HistoryError, HistoryStore};
+use harness_llm::types::{ChatMessage, ContentPart};
+use harness_llm::{Attachment, ChatRequest, LlmError, OxenClient, ToolCall};
+use harness_store::{HistoryError, HistoryStore, SessionMeta};
 use harness_tools::{ToolError, ToolRegistry};
+
+pub mod budget;
 
 /// Errors that can arise while running the agent loop.
 #[derive(Debug, thiserror::Error)]
@@ -32,8 +34,12 @@ pub enum AgentError {
     History(#[from] HistoryError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error("reached max iterations ({0}) without a final response")]
-    MaxIterations(usize),
+    #[error(
+        "the conversation grew past the model's context window \
+         (~{used} prompt tokens, limit ~{window}); start a fresh session, \
+         or switch to a model with a larger context window"
+    )]
+    ContextWindowExceeded { used: usize, window: usize },
 }
 
 /// Events surfaced to the caller (e.g. the REPL) as a turn progresses.
@@ -41,6 +47,10 @@ pub enum AgentError {
 pub enum AgentEvent {
     /// An incremental piece of assistant text from the stream.
     Token(String),
+    /// The model has started emitting a tool call (name known, arguments still
+    /// streaming). Fires before [`AgentEvent::ToolStart`], letting the UI show
+    /// progress while a long call — like writing a `canvas` document — streams.
+    ToolPending { name: String },
     /// A tool is about to run, with its name and JSON arguments.
     ToolStart { name: String, arguments: String },
     /// A tool finished, with its (possibly truncated for display) result.
@@ -52,44 +62,88 @@ pub enum AgentEvent {
 pub struct AgentConfig {
     pub model: String,
     pub system_prompt: Option<String>,
-    pub max_iterations: usize,
+    /// Context window in tokens. `None` derives it from the model name; set it
+    /// explicitly for locally-served models whose `llama-server` context is
+    /// smaller than the model's theoretical maximum.
+    pub context_window: Option<usize>,
+    /// Tokens to keep free for the model's reply when budgeting the prompt.
+    pub response_reserve: usize,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             model: DEFAULT_MODEL.to_string(),
-            system_prompt: Some(default_system_prompt()),
-            max_iterations: 25,
+            // Web search off by default: only callers that actually register the
+            // tool should advertise it (see `default_system_prompt`).
+            system_prompt: Some(default_system_prompt(false)),
+            context_window: None,
+            response_reserve: 4096,
         }
     }
 }
 
-fn default_system_prompt() -> String {
-    "You are oxen-harness, an open source coding agent working in the user's \
-     project directory. Available tools: `find_files` (locate files by glob), \
-     `search_files` (regex content search), `read_file` (line-numbered, supports \
-     offset/limit), `write_file`, `edit_file` (exact-string patch), `run_shell`, \
-     `git`, `ask_user_question` (interview the user), and (when configured) \
-     `web_search` (Brave web search).\n\n\
-     Guidelines:\n\
-     - Prefer the dedicated tools over shell equivalents: use `find_files` not \
-       `find`/`ls`, `search_files` not `grep`, `read_file` not `cat`, and \
-       `edit_file`/`write_file` not `sed`/redirects.\n\
-     - Always `read_file` before editing it; `edit_file` needs `old_string` to \
-       match the real content exactly. Never include `read_file`'s line-number \
-       and tab prefix in edit arguments.\n\
-     - Use `web_search` when something may be newer than your training or isn't in \
-       the workspace: library/API docs, current events, or an unfamiliar error.\n\
-     - When a product/design/implementation decision is genuinely ambiguous and \
-       has multiple reasonable approaches with real trade-offs, call \
-       `ask_user_question` to interview the user instead of guessing. Keep \
-       options concise and distinct; don't add an 'Other' option (the user can \
-       always type their own). Don't ask about trivia you can decide yourself.\n\
-     - Work in small, verifiable steps. Run tests/builds and read the real output \
-       rather than assuming success. Fix root causes, not symptoms.\n\
-     - Make independent tool calls together when they don't depend on each other."
-        .to_string()
+/// Build the default system prompt. `web_search` controls whether the
+/// `web_search` tool is advertised — pass whether it's actually registered, so
+/// the model is never offered (and never tries to call) a tool that the
+/// registry would reject as unknown.
+pub fn default_system_prompt(web_search: bool) -> String {
+    system_prompt_with(web_search, false)
+}
+
+/// The system prompt, advertising the optional `web_search` and `canvas` tools
+/// only when the host actually registered them.
+pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
+    let web_tool = if web_search {
+        ", `web_search` (Brave web search)"
+    } else {
+        ""
+    };
+    let canvas_tool = if canvas {
+        ", and `canvas` (show a document in a side panel)"
+    } else {
+        ""
+    };
+    let web_guideline = if web_search {
+        "\n- Use `web_search` when something may be newer than your training or \
+         isn't in the workspace: library/API docs, current events, or an \
+         unfamiliar error."
+    } else {
+        ""
+    };
+    let canvas_guideline = if canvas {
+        "\n- When you produce a substantial, self-contained deliverable the user \
+         will read, iterate on, or keep — a report/article (markdown), a rendered \
+         web page or interactive demo (html), a sizeable code file (code), a \
+         diagram (mermaid), or a vector graphic (svg) — show it with `canvas` \
+         instead of a long fenced block in chat. Reuse the same `id` to revise an \
+         open document. Don't use `canvas` for short answers or quick snippets; \
+         opening a panel for those is disruptive."
+    } else {
+        ""
+    };
+    format!(
+        "You are oxen-harness, an open source coding agent working in the user's \
+         project directory. Available tools: `find_files` (locate files by glob), \
+         `search_files` (regex content search), `read_file` (line-numbered, supports \
+         offset/limit), `write_file`, `edit_file` (exact-string patch), `run_shell`, \
+         `git`, `ask_user_question` (interview the user){web_tool}{canvas_tool}.\n\n\
+         Guidelines:\n\
+         - Prefer the dedicated tools over shell equivalents: use `find_files` not \
+           `find`/`ls`, `search_files` not `grep`, `read_file` not `cat`, and \
+           `edit_file`/`write_file` not `sed`/redirects.\n\
+         - Always `read_file` before editing it; `edit_file` needs `old_string` to \
+           match the real content exactly. Never include `read_file`'s line-number \
+           and tab prefix in edit arguments.{web_guideline}\n\
+         - When a product/design/implementation decision is genuinely ambiguous and \
+           has multiple reasonable approaches with real trade-offs, call \
+           `ask_user_question` to interview the user instead of guessing. Keep \
+           options concise and distinct; don't add an 'Other' option (the user can \
+           always type their own). Don't ask about trivia you can decide yourself.{canvas_guideline}\n\
+         - Work in small, verifiable steps. Run tests/builds and read the real output \
+           rather than assuming success. Fix root causes, not symptoms.\n\
+         - Make independent tool calls together when they don't depend on each other."
+    )
 }
 
 /// A running agent bound to a model, tool set, and history session.
@@ -100,6 +154,8 @@ pub struct Agent {
     session_id: String,
     config: AgentConfig,
     messages: Vec<ChatMessage>,
+    /// Cumulative estimated tokens sent + generated this run (see [`budget`]).
+    tokens_used: usize,
 }
 
 impl Agent {
@@ -125,6 +181,7 @@ impl Agent {
             session_id,
             config,
             messages,
+            tokens_used: 0,
         })
     }
 
@@ -153,11 +210,44 @@ impl Agent {
             session_id,
             config,
             messages,
+            tokens_used: 0,
         })
     }
 
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// Start a fresh session on this live agent, reusing its client, tools, and
+    /// config. Creates a new session row, re-seeds the system prompt, and clears
+    /// the in-memory transcript so the next turn begins a new conversation.
+    pub fn start_new_session(&mut self, meta: &SessionMeta) -> Result<(), AgentError> {
+        let session_id = self.store.create_session(meta)?;
+        let mut messages = Vec::new();
+        if let Some(prompt) = &self.config.system_prompt {
+            let system = ChatMessage::system(prompt.clone());
+            self.store.append_message(&session_id, &system)?;
+            messages.push(system);
+        }
+        self.session_id = session_id;
+        self.messages = messages;
+        self.tokens_used = 0;
+        Ok(())
+    }
+
+    /// Switch this live agent to an existing session, loading its persisted
+    /// transcript into memory. Reuses the current client, tools, and config so
+    /// subsequent turns continue the loaded conversation.
+    pub fn load_session(&mut self, session_id: String) -> Result<(), AgentError> {
+        let raw = self.store.messages(&session_id)?;
+        let mut messages = Vec::with_capacity(raw.len());
+        for value in raw {
+            messages.push(serde_json::from_value::<ChatMessage>(value)?);
+        }
+        self.session_id = session_id;
+        self.messages = messages;
+        self.tokens_used = 0;
+        Ok(())
     }
 
     /// The model the agent currently calls.
@@ -168,6 +258,25 @@ impl Agent {
     /// Switch the model used for subsequent turns.
     pub fn set_model(&mut self, model: impl Into<String>) {
         self.config.model = model.into();
+    }
+
+    /// The effective context window (tokens): the configured override, else a
+    /// best-effort size derived from the model name.
+    pub fn context_window(&self) -> usize {
+        self.config
+            .context_window
+            .unwrap_or_else(|| budget::context_window_for(&self.config.model))
+    }
+
+    /// Estimated tokens the current transcript (+ tool definitions) occupies —
+    /// i.e. how full the context window is right now.
+    pub fn context_tokens(&self) -> usize {
+        budget::estimate_prompt_tokens(&self.messages, &self.tools.definitions())
+    }
+
+    /// Cumulative estimated tokens sent + generated this run.
+    pub fn tokens_used(&self) -> usize {
+        self.tokens_used
     }
 
     /// Run a one-shot completion that is *not* part of the session transcript
@@ -196,26 +305,64 @@ impl Agent {
     pub async fn run_turn<F>(
         &mut self,
         user_input: impl Into<String>,
+        on_event: F,
+    ) -> Result<String, AgentError>
+    where
+        F: FnMut(&AgentEvent),
+    {
+        self.run_turn_with_attachments(user_input, Vec::new(), on_event)
+            .await
+    }
+
+    /// Run one user turn that may carry attachments (images/PDFs/videos dropped
+    /// into the chat). Attachments become content parts on the user message;
+    /// with none, this is identical to [`Agent::run_turn`].
+    pub async fn run_turn_with_attachments<F>(
+        &mut self,
+        user_input: impl Into<String>,
+        attachments: Vec<Attachment>,
         mut on_event: F,
     ) -> Result<String, AgentError>
     where
         F: FnMut(&AgentEvent),
     {
-        self.push(ChatMessage::user(user_input.into()))?;
+        self.push(user_message(user_input.into(), &attachments))?;
 
-        for _ in 0..self.config.max_iterations {
+        // Tool definitions are fixed for the turn; compute once.
+        let tool_defs = self.tools.definitions();
+        let window = self.context_window();
+        let budget = budget::prompt_budget(window, self.config.response_reserve);
+
+        // No fixed iteration cap: the loop runs until the model returns a final
+        // answer, bounded only by how much fits in the context window.
+        loop {
+            // Stop before sending a request we know would overflow the window.
+            let prompt_tokens = budget::estimate_prompt_tokens(&self.messages, &tool_defs);
+            if prompt_tokens > budget {
+                return Err(AgentError::ContextWindowExceeded {
+                    used: prompt_tokens,
+                    window,
+                });
+            }
+
             let request = ChatRequest::new(&self.config.model, self.messages.clone())
-                .with_tools(self.tools.definitions())
+                .with_tools(tool_defs.clone())
                 .streaming(true);
 
             let assembled = self
                 .client
-                .stream_chat(&request, |event| {
-                    if let StreamEvent::Token(t) = event {
-                        on_event(&AgentEvent::Token(t.clone()));
+                .stream_chat(&request, |event| match event {
+                    StreamEvent::Token(t) => on_event(&AgentEvent::Token(t.clone())),
+                    StreamEvent::ToolCallStart { name } => {
+                        on_event(&AgentEvent::ToolPending { name: name.clone() })
                     }
+                    StreamEvent::Done { .. } => {}
                 })
                 .await?;
+
+            // Account for this round's prompt + generated tokens.
+            self.tokens_used += prompt_tokens
+                + budget::estimate_completion_tokens(&assembled.content, &assembled.tool_calls);
 
             self.push(ChatMessage::assistant_with_tools(
                 assembled.content.clone(),
@@ -231,8 +378,6 @@ impl Agent {
                 self.push(ChatMessage::tool_result(call.id.clone(), result))?;
             }
         }
-
-        Err(AgentError::MaxIterations(self.config.max_iterations))
     }
 
     async fn run_tool<F>(&self, call: &ToolCall, on_event: &mut F) -> String
@@ -266,10 +411,40 @@ impl Agent {
     }
 }
 
+/// Build the user message for a turn: a plain-text message when there are no
+/// attachments, otherwise a multimodal message with the text followed by each
+/// attachment's content part.
+fn user_message(text: String, attachments: &[Attachment]) -> ChatMessage {
+    if attachments.is_empty() {
+        return ChatMessage::user(text);
+    }
+    let mut parts = Vec::with_capacity(attachments.len() + 1);
+    if !text.is_empty() {
+        parts.push(ContentPart::text(text));
+    }
+    parts.extend(attachments.iter().map(Attachment::to_content_part));
+    ChatMessage::user_parts(parts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use harness_store::SessionMeta;
+
+    #[test]
+    fn user_message_is_plain_without_attachments_and_multimodal_with() {
+        use harness_llm::types::MessageContent;
+
+        let plain = user_message("hi".into(), &[]);
+        assert!(matches!(plain.content, Some(MessageContent::Text(_))));
+
+        let img = Attachment::from_bytes("a.png", vec![1, 2, 3]).unwrap();
+        let multi = user_message("look".into(), std::slice::from_ref(&img));
+        match multi.content {
+            Some(MessageContent::Parts(parts)) => assert_eq!(parts.len(), 2), // text + image
+            other => panic!("expected multimodal parts, got {other:?}"),
+        }
+    }
 
     #[test]
     fn resume_loads_persisted_transcript_without_reseeding() {
@@ -301,6 +476,33 @@ mod tests {
         assert_eq!(agent.session_id(), session);
         assert_eq!(agent.messages().len(), 2);
         assert_eq!(agent.messages()[0].role, "system");
-        assert_eq!(agent.messages()[1].content.as_deref(), Some("hello"));
+        assert_eq!(agent.messages()[1].content_text().as_deref(), Some("hello"));
+    }
+
+    #[tokio::test]
+    async fn run_turn_stops_when_context_window_is_exhausted() {
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = store
+            .create_session(&SessionMeta {
+                workspace: "/tmp/proj".into(),
+                model: "claude-opus-4-8".into(),
+            })
+            .unwrap();
+        // A 1-token window can't fit any real prompt, so the budget check trips
+        // on the first iteration — before any network call is attempted.
+        let config = AgentConfig {
+            model: "claude-opus-4-8".into(),
+            system_prompt: None,
+            context_window: Some(1),
+            response_reserve: 0,
+        };
+        let client = OxenClient::new("http://127.0.0.1:1/api/ai", "key", "claude-opus-4-8");
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        let err = agent
+            .run_turn("please do something that needs more than one token", |_| {})
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AgentError::ContextWindowExceeded { .. }));
     }
 }

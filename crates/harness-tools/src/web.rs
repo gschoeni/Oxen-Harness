@@ -24,6 +24,11 @@ const BRAVE_ENDPOINT: &str = "https://api.search.brave.com/res/v1/web/search";
 const DEFAULT_RESULTS: usize = 5;
 const MAX_RESULTS: usize = 20;
 
+/// Stable leading sentence of the error returned when web search is called
+/// without an API key. The desktop app and CLI match on it to offer the user an
+/// inline "add your Brave key" prompt instead of a generic failure.
+pub const WEB_SEARCH_NO_KEY: &str = "Web search needs a Brave Search API key.";
+
 /// Resolve the Brave API key from the environment, if configured.
 pub fn brave_api_key() -> Option<String> {
     [BRAVE_API_KEY_ENV, BRAVE_API_KEY_ENV_ALT]
@@ -49,9 +54,26 @@ impl WebSearchTool {
         }
     }
 
-    /// Whether an API key is configured (and thus the tool can run).
+    /// Build the tool with an explicit API key (e.g. one saved in the desktop
+    /// app's settings). A `None`/blank key is resolved from the environment at
+    /// call time instead — so the tool is always registered, and a key supplied
+    /// after construction (env set at runtime) is picked up on the next call.
+    pub fn with_key(api_key: Option<String>) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            endpoint: BRAVE_ENDPOINT.to_string(),
+            api_key: api_key.filter(|k| !k.trim().is_empty()),
+        }
+    }
+
+    /// The API key to use for a call: the explicit one, else the environment.
+    fn resolve_key(&self) -> Option<String> {
+        self.api_key.clone().or_else(brave_api_key)
+    }
+
+    /// Whether an API key is available (explicit or via the environment).
     pub fn is_configured(&self) -> bool {
-        self.api_key.is_some()
+        self.resolve_key().is_some()
     }
 
     #[cfg(test)]
@@ -98,10 +120,10 @@ impl Tool for WebSearchTool {
     async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
         let query = require_str(&args, "query")?;
         let count = opt_usize(&args, "count", DEFAULT_RESULTS).clamp(1, MAX_RESULTS);
-        let api_key = self.api_key.as_deref().ok_or_else(|| {
+        let api_key = self.resolve_key().ok_or_else(|| {
             ToolError::Execution(format!(
-                "web search is unavailable: set {BRAVE_API_KEY_ENV} \
-                 (get a key at https://brave.com/search/api/)"
+                "{WEB_SEARCH_NO_KEY} Add one in Settings, or set {BRAVE_API_KEY_ENV} \
+                 (free at https://brave.com/search/api/)."
             ))
         })?;
 

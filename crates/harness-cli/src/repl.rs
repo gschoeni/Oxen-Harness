@@ -19,6 +19,16 @@ pub enum Command {
     Export(Option<String>),
     /// Theme command: the whitespace-split args after `/theme` (empty = open picker).
     Theme(Vec<String>),
+    /// Queue command: the raw text after `/queue` (e.g. `add fix the bug`), or
+    /// `None` to list the queue. Kept raw so message text keeps its spaces.
+    Queue(Option<String>),
+    /// Loop command: the raw text after `/loop` (e.g. `run default` or
+    /// `goal make tests pass`), or `None` to list loops. Kept raw so goal text
+    /// keeps its spaces.
+    Loop(Option<String>),
+    /// Set (or, with `None`, show) the "Departing" location shown in the main
+    /// menu banner. Kept raw so multi-word place names keep their spaces.
+    Departing(Option<String>),
     /// A prompt to send to the agent.
     Prompt(String),
 }
@@ -49,6 +59,9 @@ pub fn parse_command(line: &str) -> Command {
             rest.map(|r| r.split_whitespace().map(str::to_string).collect())
                 .unwrap_or_default(),
         ),
+        "/queue" => Command::Queue(rest),
+        "/loop" | "/loops" => Command::Loop(rest),
+        "/departing" => Command::Departing(rest),
         // Unknown slash command: treat the whole line as a prompt so users can
         // still send text that happens to start with a slash.
         _ => Command::Prompt(trimmed.to_string()),
@@ -113,6 +126,39 @@ mod tests {
                 "autumn".into(),
                 "vibe".into()
             ])
+        );
+    }
+
+    #[test]
+    fn queue_keeps_raw_remainder() {
+        assert_eq!(parse_command("/queue"), Command::Queue(None));
+        assert_eq!(
+            parse_command("/queue add fix the bug"),
+            Command::Queue(Some("add fix the bug".into()))
+        );
+        // `/q` stays an exit alias, not a queue command.
+        assert_eq!(parse_command("/q"), Command::Exit);
+    }
+
+    #[test]
+    fn loop_keeps_raw_remainder() {
+        assert_eq!(parse_command("/loop"), Command::Loop(None));
+        assert_eq!(
+            parse_command("/loop run default"),
+            Command::Loop(Some("run default".into()))
+        );
+        assert_eq!(
+            parse_command("/loop goal make every test pass"),
+            Command::Loop(Some("goal make every test pass".into()))
+        );
+    }
+
+    #[test]
+    fn departing_keeps_raw_remainder() {
+        assert_eq!(parse_command("/departing"), Command::Departing(None));
+        assert_eq!(
+            parse_command("/departing Independence, Missouri"),
+            Command::Departing(Some("Independence, Missouri".into()))
         );
     }
 

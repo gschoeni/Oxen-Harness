@@ -1,0 +1,178 @@
+//! Live rendering of an agent turn: a trail-status spinner while the model
+//! thinks or a tool runs, assistant text streamed through the Markdown
+//! renderer, and themed tool lines. Shared by the REPL prompt flow and the
+//! loop runner so both surfaces feel identical.
+
+use harness_agent::AgentEvent;
+
+use crate::markdown;
+use crate::theme::{self, Ui};
+
+/// Renders one turn's live progress.
+pub(crate) struct TurnRenderer {
+    ui: Ui,
+    spinner: Option<theme::Spinner>,
+    md: Option<markdown::MarkdownStream<std::io::Stdout>>,
+    /// Set when a `web_search` call failed for a missing Brave API key, so the
+    /// caller can offer a key prompt once the turn ends.
+    needs_brave_key: bool,
+}
+
+impl TurnRenderer {
+    pub(crate) fn new(ui: Ui) -> Self {
+        Self {
+            ui,
+            spinner: None,
+            md: None,
+            needs_brave_key: false,
+        }
+    }
+
+    /// Whether the turn hit a web search with no API key configured.
+    pub(crate) fn needs_brave_key(&self) -> bool {
+        self.needs_brave_key
+    }
+
+    /// Flush and drop the active Markdown segment, if any.
+    fn end_markdown(&mut self) {
+        if let Some(mut md) = self.md.take() {
+            md.finish();
+        }
+    }
+
+    pub(crate) fn begin_thinking(&mut self) {
+        self.stop_spinner();
+        self.spinner = Some(theme::Spinner::start(&self.ui, self.ui.thinking()));
+    }
+
+    fn begin_working(&mut self, tool: &str) {
+        self.stop_spinner();
+        self.spinner = Some(theme::Spinner::start(&self.ui, self.ui.tool_verbs(tool)));
+    }
+
+    fn stop_spinner(&mut self) {
+        if let Some(s) = self.spinner.take() {
+            s.stop();
+        }
+    }
+
+    pub(crate) fn on_event(&mut self, event: &AgentEvent) {
+        match event {
+            AgentEvent::Token(t) => {
+                if self.md.is_none() {
+                    self.stop_spinner();
+                    println!();
+                    self.md = Some(markdown::MarkdownStream::new(
+                        self.ui.clone(),
+                        std::io::stdout(),
+                    ));
+                }
+                if let Some(md) = self.md.as_mut() {
+                    md.push(t);
+                }
+            }
+            // The model started writing a canvas; show progress while its content
+            // streams in (the full preview prints on ToolStart).
+            AgentEvent::ToolPending { name } if name == harness_tools::CANVAS_TOOL => {
+                self.stop_spinner();
+                self.end_markdown();
+                println!("  {} {}", self.ui.green("📄"), self.ui.dim("writing canvas…"));
+                self.begin_working(name);
+            }
+            AgentEvent::ToolPending { .. } => {}
+            AgentEvent::ToolStart { name, arguments } => {
+                self.stop_spinner();
+                self.end_markdown();
+                // The interactive picker draws its own UI and reads keys, so we
+                // suppress the tool line + spinner while it owns the screen.
+                if name == harness_tools::ASK_USER_TOOL {
+                    return;
+                }
+                // For a canvas, preview the document inline (the result line then
+                // reports where it was saved / that it opened in the browser).
+                if name == harness_tools::CANVAS_TOOL {
+                    if let Some(block) = crate::canvas::render_canvas_block(&self.ui, arguments) {
+                        for line in block {
+                            println!("{line}");
+                        }
+                    }
+                    self.begin_working(name);
+                    return;
+                }
+                // For file writes/edits, show a colored diff instead of the
+                // generic one-line tool preview.
+                if let Some(block) = crate::diff::render_file_change(&self.ui, name, arguments) {
+                    for line in block {
+                        println!("{line}");
+                    }
+                } else {
+                    let verbs = self.ui.tool_verbs(name);
+                    let verb = verbs.first().map(String::as_str).unwrap_or("Working");
+                    println!(
+                        "  {} {}  {}",
+                        self.ui.green("◆"),
+                        self.ui.accent(verb),
+                        self.ui.dim(&format!("{name}({})", truncate(arguments, 100))),
+                    );
+                }
+                self.begin_working(name);
+            }
+            AgentEvent::ToolEnd { name, result } => {
+                self.stop_spinner();
+                // The picker already showed the chosen answer in place.
+                if name == harness_tools::ASK_USER_TOOL {
+                    self.begin_thinking();
+                    return;
+                }
+                // A web search with no key configured: flag it (so the caller can
+                // prompt for one) and show a friendlier line than the raw error.
+                if name == "web_search" && result.contains(harness_tools::web::WEB_SEARCH_NO_KEY) {
+                    self.needs_brave_key = true;
+                    println!(
+                        "  {} {}",
+                        self.ui.brown("└─"),
+                        self.ui.dim("no Brave API key — set one below to enable web search"),
+                    );
+                    self.begin_thinking();
+                    return;
+                }
+                println!(
+                    "  {} {}",
+                    self.ui.brown("└─"),
+                    self.ui.dim(&truncate(result, 140)),
+                );
+                self.begin_thinking();
+            }
+        }
+    }
+
+    pub(crate) fn finish(&mut self) {
+        self.stop_spinner();
+        self.end_markdown();
+    }
+}
+
+/// Collapse newlines and cap a string to `max` characters, adding an ellipsis.
+pub(crate) fn truncate(s: &str, max: usize) -> String {
+    let s = s.replace('\n', " ");
+    if s.chars().count() <= max {
+        s
+    } else {
+        let kept: String = s.chars().take(max).collect();
+        format!("{kept}…")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate;
+
+    #[test]
+    fn truncate_collapses_newlines_and_caps_length() {
+        assert_eq!(truncate("a\nb", 10), "a b");
+        let long = "x".repeat(50);
+        let out = truncate(&long, 10);
+        assert!(out.ends_with('…'));
+        assert_eq!(out.chars().count(), 11);
+    }
+}

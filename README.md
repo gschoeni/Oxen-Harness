@@ -153,14 +153,25 @@ Weights live in `~/.oxen-harness/models/`. Match the model to your hardware
 ## Theming — make it yours
 
 The whole personality of the harness is a **theme**: a *palette* (named semantic
-colors) plus a *voice* (the prompt, spinner glyphs, "thinking" phrases, per-tool
-verbs, exit messages, banner art, labels, and help text). The CLI and the desktop
-app both render from the active theme. The default is **Oregon Trail**; **Midnight**
-and **Synthwave** ship alongside it.
+colors), a *voice* (the prompt, spinner glyphs, "thinking" phrases, per-tool
+verbs, exit messages, banner art, labels, and help text), and a *style* (the
+desktop app's typography and framing). The CLI and the desktop app both render
+from the active theme. Five ship built in: **Oregon Trail** (default, 8-bit
+pixel), **Synthwave** (neon outrun grid), **Midnight** (calm IBM Plex),
+**New York Times** (broadsheet serif + blackletter masthead), and **Cupertino**
+(clean system SF) — and they look genuinely different, not just recolored.
+
+The `[style]` block makes the desktop UI fully themeable: `font_display` /
+`font_body` / `font_mono` (any of the bundled faces — PixelHead, PixelRead,
+Playfair, Masthead, Orbitron, PlexSans, PlexMono — or a system stack), plus
+`radius`, `border_width`, `shadow` (`pixel`/`soft`/`glow`/`none`), `hero`
+(`pixel`/`newspaper`/`minimal`), and `scene` (`trail`/`grid`/`none`, the art the
+pixel hero draws). Adding a new scene is a one-function drop-in to the scene
+registry in `app/src/features/chat/scenes.tsx`.
 
 Themes are a single self-contained TOML file (also readable as JSON), so they're
 trivial to **export, import, and share**. Files can be *partial* — override just a
-few colors or phrases and the rest inherits the default. They live in
+few colors, phrases, or a font and the rest inherits the default. They live in
 `~/.oxen-harness/themes/`, and the active one is recorded in
 `~/.oxen-harness/config.toml`.
 
@@ -214,8 +225,109 @@ You may:
   3. See the Oregon Top Ten  — /export [path]  (save the journey as JSONL)
   4. Trade your oxen         — /model [name]
   5. Change your colors      — /theme  (select, create, import, export)
-  6. Make camp / End         — /exit  (or Ctrl-D)
+  6. Pack the wagon          — /queue add <msg> … then /queue run
+  7. Set the wagon rolling   — /loop run [name]  (work until the gate is green)
+  8. Make camp / End         — /exit  (or Ctrl-D)
 ```
+
+### Queuing messages
+
+Instead of waiting for one turn to finish before lining up the next, you can
+**stack messages and edit them before they run**.
+
+In an interactive terminal the CLI is **live**: while the agent is thinking,
+streaming, or running tools, a composer stays pinned to the bottom row. Keep
+typing and press Enter to **stack** each message — the prompt shows the depth
+(`[2 queued] ❯ `) — and queued messages **drain automatically, in order**, as
+soon as the current turn finishes (you can keep stacking while they run).
+
+Stacked messages render as a **navigable list right above the composer**, each a
+one-line preview:
+
+```
+  1. write a failing test for the parser
+  2. now make it pass, minimally
+  3. then refactor for readability
+  [3 queued] ❯ ▏
+```
+
+Press **↑** to step up into the list (and **↓** to come back down to the
+composer); the focused row is highlighted. On a focused row, **Enter** or **e**
+opens it for **inline editing** (Enter saves, **Esc** cancels and restores the
+original), and **d**, **Delete**, or **Backspace** removes it. The list windows
+with an `…(+k more)` indicator when it's taller than the screen allows, and
+collapses to just the composer + count on very short terminals. Ctrl-C
+interrupts the turn and Ctrl-D (on an empty line) ends the session.
+
+Piped / non-interactive usage is unchanged: it falls back to the classic
+blocking prompt, so you still stack and send batches explicitly:
+
+```
+/queue add write a failing test for the parser
+/queue add now make it pass
+/queue                       # list what's stacked
+/queue edit 2 now make it pass, minimally
+/queue up 2                  # reorder (also: /queue down <n>, /queue rm <n>)
+/queue run                   # send them all, in order
+```
+
+In the desktop app it's live: keep typing while the agent works and each message
+**stacks into a queue above the composer**. Reorder them with ↑/↓, **Edit** any
+message inline, or remove it — the next queued message sends automatically as
+soon as the current turn finishes.
+
+### Loops (goal → verify → iterate)
+
+A prompt hands the agent an instruction. A **loop** hands it a *job*, a way to
+know when the job is done, and a rule for when to give up. Each pass runs:
+
+```
+DISCOVER → QUESTION → PLAN → EXECUTE → VERIFY → ITERATE
+```
+
+The heart of a loop is **VERIFY** — a gate that can actually *fail* the work, so
+the agent makes real progress instead of agreeing with itself on repeat. A loop
+also keeps **state** (a journal of what's been tried, fed into the next pass and
+saved for resuming) and **stop conditions** (success *and* a hard iteration cap
+plus an optional token budget).
+
+Two kinds of gate are supported:
+
+- **Command** — runs a shell command in the workspace; **exit 0 = pass**. The
+  strongest, most objective gate (e.g. `cargo test`).
+- **Rubric** — a separate, strict checker scores the work 1–10 against your
+  criteria and passes only if every score clears a threshold. Used when "done"
+  can't be reduced to an exit code (the checker is a fresh turn, so the maker
+  isn't grading its own homework).
+
+Run the built-in `default` loop — the exact "make the checks green" gate this
+repo runs on itself — straight from the shell, or from inside the REPL:
+
+```bash
+# one-shot from the command line (runs, then exits)
+oxen-harness loop run default
+oxen-harness loop run --goal "make every test in crates/parser pass" --max-iterations 6
+
+# manage your loop library
+oxen-harness loop list
+oxen-harness loop new            # short interview → saved TOML you can share
+oxen-harness loop show green-tests
+oxen-harness loop export green-tests ./green.toml
+```
+
+```
+# inside the REPL
+/loop                 # list available loops
+/loop run default     # keep working until fmt + clippy + tests are green
+/loop goal make the README table render correctly   # ad-hoc, rubric-gated
+/loop new             # build + save your own
+/loop show default
+```
+
+Loops live as shareable TOML under `~/.oxen-harness/loops/` (saving one with a
+built-in's name overrides it), and each run's journal is saved alongside so a
+later run can pick up where it left off. A few ship built in: `default`,
+`green-tests`, and `clean-clippy`.
 
 Assistant responses are rendered as **streaming Markdown** — headings, **bold**,
 *italics*, `inline code`, bullet/numbered lists, blockquotes, links, and fenced
@@ -248,3 +360,7 @@ This project is built with **The Ralph Wiggum loop** — a tight, objective-chec
 ## License
 
 [Apache-2.0](LICENSE).
+
+---
+
+<p align="center">Powered by <a href="https://oxen.ai">Oxen.ai</a> 🐂</p>

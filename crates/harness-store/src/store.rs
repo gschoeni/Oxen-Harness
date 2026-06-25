@@ -25,6 +25,19 @@ pub struct SessionMeta {
     pub model: String,
 }
 
+/// A session as shown in the chat-history list: its metadata plus a derived
+/// title (the first user message) and how many messages it holds.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionSummary {
+    pub id: String,
+    pub workspace: String,
+    pub model: String,
+    pub created_at: i64,
+    /// The first user message's text, used as the conversation title.
+    pub title: Option<String>,
+    pub message_count: i64,
+}
+
 /// A SQLite store of sessions and their verbatim message transcripts.
 ///
 /// The connection is wrapped in a `Mutex` so the store is `Send + Sync` and can
@@ -109,6 +122,44 @@ impl HistoryStore {
             }
             other => HistoryError::Sqlite(other),
         })
+    }
+
+    /// List sessions that hold at least one user message, newest first.
+    ///
+    /// Each summary carries the first user message as a title so the UI can show
+    /// a readable label. Brand-new sessions that only contain the seeded system
+    /// prompt are omitted — they have no user turn to title them with.
+    pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT s.id, s.workspace, s.model, s.created_at,
+                    (SELECT m.content FROM messages m
+                       WHERE m.session_id = s.id AND m.role = 'user'
+                         AND m.content IS NOT NULL
+                       ORDER BY m.seq ASC LIMIT 1) AS title,
+                    (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count
+             FROM sessions s
+             ORDER BY s.created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SessionSummary {
+                id: row.get(0)?,
+                workspace: row.get(1)?,
+                model: row.get(2)?,
+                created_at: row.get(3)?,
+                title: row.get(4)?,
+                message_count: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let summary = row?;
+            // Skip sessions with no user turn (e.g. opened but never used).
+            if summary.title.is_some() {
+                out.push(summary);
+            }
+        }
+        Ok(out)
     }
 
     /// Append a message to a session, stored verbatim.
@@ -278,6 +329,35 @@ mod tests {
 
         let err = store.session_meta("does-not-exist").unwrap_err();
         assert!(matches!(err, HistoryError::SessionNotFound(_)));
+    }
+
+    #[test]
+    fn list_sessions_titles_by_first_user_message_and_skips_empty() {
+        let store = store();
+
+        // An untouched session (system prompt only) is omitted from the list.
+        let empty = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&empty, &Message::system("be helpful"))
+            .unwrap();
+
+        // A used session is listed and titled by its first user message.
+        let used = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&used, &Message::system("be helpful"))
+            .unwrap();
+        store
+            .append_message(&used, &Message::user("build a parser"))
+            .unwrap();
+        store
+            .append_message(&used, &Message::user("now add tests"))
+            .unwrap();
+
+        let sessions = store.list_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, used);
+        assert_eq!(sessions[0].title.as_deref(), Some("build a parser"));
+        assert_eq!(sessions[0].message_count, 3);
     }
 
     #[test]

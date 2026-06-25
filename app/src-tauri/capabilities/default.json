@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Default capability for the main window: core APIs, events, and invoke.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
+    "dialog:allow-open"
+  ]
 }

@@ -192,6 +192,9 @@ fn collect_custom(
     Ok(Some(selected))
 }
 
+/// Render the question as a framed "card" so it stands out from the surrounding
+/// conversation: an accent top rule labelled with the question's header, an
+/// accent bar down the left of every line, and a matching bottom rule.
 fn render(
     ui: &Ui,
     header: &str,
@@ -202,15 +205,12 @@ fn render(
     checked: &[bool],
 ) -> Vec<String> {
     let width = terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
-    let mut lines = Vec::new();
+    let (top, bottom) = card_rules(ui, header, width);
+    let bar = ui.accent("│");
+    let mut lines = vec![top, format!("  {bar}")];
 
-    let chip = if header.trim().is_empty() {
-        String::new()
-    } else {
-        format!("{} ", ui.accent(&format!("[{header}]")))
-    };
-    lines.push(format!("  {chip}{}", ui.strong(question)));
-    lines.push(String::new());
+    lines.push(format!("  {bar}  {}", ui.strong(question)));
+    lines.push(format!("  {bar}"));
 
     for (i, opt) in options.iter().enumerate() {
         let active = i == cursor_row;
@@ -232,24 +232,40 @@ fn render(
         let desc = if opt.description.trim().is_empty() {
             String::new()
         } else {
-            let budget = width.saturating_sub(opt.label.len() + 12);
+            let budget = width.saturating_sub(opt.label.len() + 16);
             ui.dim(&format!("— {}", truncate(&opt.description, budget.max(8))))
         };
-        lines.push(format!("  {pointer} {marker} {label}  {desc}"));
+        lines.push(format!("  {bar}  {pointer} {marker} {label}  {desc}"));
     }
 
     let active = cursor_row == options.len();
     let pointer = if active { ui.accent("❯") } else { " ".into() };
-    lines.push(format!("  {pointer}   {}", ui.dim("✎ Type my own answer…")));
+    lines.push(format!("  {bar}  {pointer}   {}", ui.dim("✎ Type my own answer…")));
 
-    lines.push(String::new());
+    lines.push(format!("  {bar}"));
     let hint = if multi {
         "↑/↓ move · space toggle · enter submit · esc cancel"
     } else {
         "↑/↓ move · 1-9 jump · enter select · esc cancel"
     };
-    lines.push(format!("  {}", ui.dim(hint)));
+    lines.push(format!("  {bar}  {}", ui.dim(hint)));
+    lines.push(bottom);
     lines
+}
+
+/// The accent-colored top (labelled with the header) and bottom rules that frame
+/// the question card, sized to the terminal width.
+fn card_rules(ui: &Ui, header: &str, width: usize) -> (String, String) {
+    let label = if header.trim().is_empty() {
+        "Question".to_string()
+    } else {
+        format!("[{header}]")
+    };
+    let span = width.saturating_sub(4).clamp(24, 76);
+    let head = format!("╭─ {label} ");
+    let top = format!("{head}{}", "─".repeat(span.saturating_sub(head.chars().count())));
+    let bottom = format!("╰{}", "─".repeat(span.saturating_sub(1)));
+    (format!("  {}", ui.accent(&top)), format!("  {}", ui.accent(&bottom)))
 }
 
 fn finish(
@@ -276,14 +292,16 @@ fn print_question_line(
     } else {
         format!("{} ", ui.accent(&format!("[{header}]")))
     };
-    write!(out, "  {chip}{}\r\n", ui.cream(question))?;
+    // Keep the accent bar so the collapsed result still reads as the same card.
+    write!(out, "  {} {chip}{}\r\n", ui.accent("│"), ui.cream(question))?;
     out.flush()
 }
 
 fn print_chosen(ui: &Ui, out: &mut io::Stdout, selected: &[String]) -> io::Result<()> {
     write!(
         out,
-        "  {} {}\r\n",
+        "  {} {} {}\r\n",
+        ui.accent("│"),
         ui.green("✓ chosen:"),
         ui.cream(&selected.join(", "))
     )?;
@@ -366,6 +384,16 @@ mod tests {
         assert!(lines
             .iter()
             .any(|l| l.contains('❯') && l.contains("SQLite")));
+    }
+
+    #[test]
+    fn render_frames_the_question_as_a_card() {
+        let ui = Ui::plain();
+        let lines = render(&ui, "Storage", "Which backend?", &options(), false, 0, &[false, false]);
+        // Top + bottom rules and a left bar on the content make it a distinct card.
+        assert!(lines.first().unwrap().contains("╭─"));
+        assert!(lines.last().unwrap().contains('╰'));
+        assert!(lines.iter().any(|l| l.contains("│") && l.contains("Which backend?")));
     }
 
     #[test]

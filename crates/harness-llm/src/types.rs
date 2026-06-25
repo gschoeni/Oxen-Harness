@@ -6,13 +6,134 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A message in a chat transcript. Supports plain text, assistant tool calls,
-/// and `tool` result messages.
+/// The body of a chat message: either plain text or an ordered list of content
+/// parts (text interleaved with images/files).
+///
+/// Serializing text-only messages as a bare JSON string keeps the wire format
+/// byte-identical to before multimodal support; only messages that actually
+/// carry attachments serialize as the OpenAI-style content-part array.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+impl MessageContent {
+    /// The plain text of this content: the string for `Text`, or the
+    /// concatenation of any text parts for `Parts` (attachments contribute no
+    /// text). Used for display, budgeting, and persistence-derived previews.
+    pub fn as_text(&self) -> String {
+        match self {
+            MessageContent::Text(s) => s.clone(),
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+        }
+    }
+
+    /// Approximate character weight for token budgeting. Text contributes its
+    /// length; each image/file part adds a flat nominal cost, since the model
+    /// charges attachments by image tiles — not by their (huge) data-URI length.
+    pub fn budget_len(&self) -> usize {
+        const ATTACHMENT_WEIGHT: usize = 1024;
+        match self {
+            MessageContent::Text(s) => s.len(),
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .map(|p| match p {
+                    ContentPart::Text { text } => text.len(),
+                    _ => ATTACHMENT_WEIGHT,
+                })
+                .sum(),
+        }
+    }
+
+    /// True if this is text-only (no image/file parts).
+    pub fn is_text_only(&self) -> bool {
+        match self {
+            MessageContent::Text(_) => true,
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .all(|p| matches!(p, ContentPart::Text { .. })),
+        }
+    }
+}
+
+impl From<String> for MessageContent {
+    fn from(s: String) -> Self {
+        MessageContent::Text(s)
+    }
+}
+
+impl From<&str> for MessageContent {
+    fn from(s: &str) -> Self {
+        MessageContent::Text(s.to_string())
+    }
+}
+
+/// One part of a multimodal message body (OpenAI-compatible content parts).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    /// A run of text.
+    Text { text: String },
+    /// An image, carried as a URL or `data:` URI.
+    ImageUrl { image_url: ImageUrl },
+    /// A document (e.g. a PDF), carried as a `data:` URI under `file_data`.
+    File { file: FileData },
+}
+
+impl ContentPart {
+    pub fn text(text: impl Into<String>) -> Self {
+        ContentPart::Text { text: text.into() }
+    }
+
+    /// An image part from a URL or `data:` URI.
+    pub fn image(url: impl Into<String>) -> Self {
+        ContentPart::ImageUrl {
+            image_url: ImageUrl { url: url.into() },
+        }
+    }
+
+    /// A file part (e.g. a PDF) from a filename and `data:` URI.
+    pub fn file(filename: impl Into<String>, file_data: impl Into<String>) -> Self {
+        ContentPart::File {
+            file: FileData {
+                filename: filename.into(),
+                file_data: file_data.into(),
+            },
+        }
+    }
+}
+
+/// The `image_url` payload of an image content part.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageUrl {
+    /// An `http(s)` URL or a `data:<mime>;base64,<...>` URI.
+    pub url: String,
+}
+
+/// The `file` payload of a document content part.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileData {
+    pub filename: String,
+    /// A `data:<mime>;base64,<...>` URI carrying the document bytes.
+    pub file_data: String,
+}
+
+/// A message in a chat transcript. Supports plain text, multimodal content
+/// (text + images/files), assistant tool calls, and `tool` result messages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<MessageContent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -35,11 +156,28 @@ impl ChatMessage {
     fn text(role: &str, content: impl Into<String>) -> Self {
         Self {
             role: role.into(),
-            content: Some(content.into()),
+            content: Some(MessageContent::Text(content.into())),
             tool_calls: None,
             tool_call_id: None,
             name: None,
         }
+    }
+
+    /// Build a `user` message from an ordered list of content parts (text +
+    /// attachments). Empty parts collapse to no content.
+    pub fn user_parts(parts: Vec<ContentPart>) -> Self {
+        Self {
+            role: "user".into(),
+            content: (!parts.is_empty()).then_some(MessageContent::Parts(parts)),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    /// The message body as plain text (text parts only), if any.
+    pub fn content_text(&self) -> Option<String> {
+        self.content.as_ref().map(MessageContent::as_text)
     }
 
     /// Build an assistant message that may carry text, tool calls, or both.
@@ -49,7 +187,7 @@ impl ChatMessage {
     pub fn assistant_with_tools(content: String, tool_calls: Vec<ToolCall>) -> Self {
         Self {
             role: "assistant".into(),
-            content: (!content.is_empty()).then_some(content),
+            content: (!content.is_empty()).then_some(MessageContent::Text(content)),
             tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
             tool_call_id: None,
             name: None,
@@ -60,7 +198,7 @@ impl ChatMessage {
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: "tool".into(),
-            content: Some(content.into()),
+            content: Some(MessageContent::Text(content.into())),
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
             name: None,
@@ -249,7 +387,7 @@ mod tests {
     fn assistant_with_tools_normalizes_empty_fields() {
         // Text-only: empty tool calls are dropped.
         let text = ChatMessage::assistant_with_tools("hi".into(), vec![]);
-        assert_eq!(text.content.as_deref(), Some("hi"));
+        assert_eq!(text.content_text().as_deref(), Some("hi"));
         assert!(text.tool_calls.is_none());
 
         // Tool-call-only: empty content is dropped.
@@ -273,6 +411,67 @@ mod tests {
         assert_eq!(json["role"], "tool");
         assert_eq!(json["tool_call_id"], "call_1");
         assert!(json.get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn text_message_content_serializes_as_a_bare_string() {
+        // The wire format for text-only messages must stay a JSON string so the
+        // representation is unchanged from before multimodal support.
+        let msg = ChatMessage::user("hello ox");
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["content"], "hello ox");
+        assert!(json["content"].is_string());
+    }
+
+    #[test]
+    fn multimodal_user_message_serializes_as_content_parts() {
+        let msg = ChatMessage::user_parts(vec![
+            ContentPart::text("describe this"),
+            ContentPart::image("data:image/png;base64,AAAA"),
+        ]);
+        let json = serde_json::to_value(&msg).unwrap();
+        let parts = json["content"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[0]["text"], "describe this");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(parts[1]["image_url"]["url"], "data:image/png;base64,AAAA");
+    }
+
+    #[test]
+    fn file_content_part_serializes_with_filename_and_data() {
+        let part = ContentPart::file("paper.pdf", "data:application/pdf;base64,JVBER");
+        let json = serde_json::to_value(&part).unwrap();
+        assert_eq!(json["type"], "file");
+        assert_eq!(json["file"]["filename"], "paper.pdf");
+        assert_eq!(json["file"]["file_data"], "data:application/pdf;base64,JVBER");
+    }
+
+    #[test]
+    fn content_round_trips_through_json_for_both_shapes() {
+        for msg in [
+            ChatMessage::user("plain text"),
+            ChatMessage::user_parts(vec![
+                ContentPart::text("look"),
+                ContentPart::image("data:image/jpeg;base64,ZZ"),
+            ]),
+        ] {
+            let json = serde_json::to_string(&msg).unwrap();
+            let back: ChatMessage = serde_json::from_str(&json).unwrap();
+            assert_eq!(msg, back);
+        }
+    }
+
+    #[test]
+    fn content_text_extracts_text_parts_only() {
+        let parts = MessageContent::Parts(vec![
+            ContentPart::text("a"),
+            ContentPart::image("data:image/png;base64,QQ"),
+            ContentPart::text("b"),
+        ]);
+        assert_eq!(parts.as_text(), "ab");
+        assert!(!parts.is_text_only());
+        assert!(MessageContent::Text("x".into()).is_text_only());
     }
 
     #[test]

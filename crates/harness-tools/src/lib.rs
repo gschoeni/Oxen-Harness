@@ -15,6 +15,7 @@ use async_trait::async_trait;
 
 mod args;
 pub mod ask;
+pub mod canvas;
 pub mod fs;
 pub mod git;
 pub mod sandbox;
@@ -22,6 +23,7 @@ pub mod shell;
 pub mod web;
 
 pub use ask::{AskUserTool, Choice, Question, QuestionAnswer, QuestionAsker, ASK_USER_TOOL};
+pub use canvas::{CanvasDoc, CanvasSink, CanvasTool, CANVAS_FORMATS, CANVAS_TOOL};
 pub use sandbox::Workspace;
 
 /// Errors a tool can return while running.
@@ -123,9 +125,20 @@ impl ToolRegistry {
     }
 
     /// Construct the default tool set rooted at a workspace: fs read/write/edit,
-    /// find (glob), search (grep), shell, and git — plus web search when a Brave
-    /// API key is configured.
+    /// find (glob), search (grep), shell, git, and web search (which prompts for
+    /// a Brave API key on first use if none is configured).
     pub fn default_for_workspace(workspace: Workspace) -> Self {
+        Self::default_for_workspace_with_web_key(workspace, None)
+    }
+
+    /// Like [`Self::default_for_workspace`], but with an explicit Brave Search
+    /// API key for web search (e.g. one configured in a UI). A `None`/blank key
+    /// falls back to the `BRAVE_API_KEY` environment variable; web search is
+    /// only registered when a key resolves one way or the other.
+    pub fn default_for_workspace_with_web_key(
+        workspace: Workspace,
+        brave_key: Option<String>,
+    ) -> Self {
         let mut registry = Self::new()
             .with(Arc::new(fs::ReadFileTool::new(workspace.clone())))
             .with(Arc::new(fs::WriteFileTool::new(workspace.clone())))
@@ -135,11 +148,10 @@ impl ToolRegistry {
             .with(Arc::new(shell::ShellTool::new(workspace.clone())))
             .with(Arc::new(git::GitTool::new(workspace)));
 
-        // Only advertise web search if it can actually run (key configured).
-        let web_search = web::WebSearchTool::new();
-        if web_search.is_configured() {
-            registry.register(Arc::new(web_search));
-        }
+        // Always register web search so the model can use it; when no Brave key
+        // is configured the call fails with a recognizable error that the UIs
+        // turn into an inline "add your API key" prompt.
+        registry.register(Arc::new(web::WebSearchTool::with_key(brave_key)));
         registry
     }
 }

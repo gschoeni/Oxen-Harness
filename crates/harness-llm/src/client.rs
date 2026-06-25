@@ -182,7 +182,7 @@ mod tests {
         let resp = client.chat(&req).await.unwrap();
 
         assert_eq!(
-            resp.message().unwrap().content.as_deref(),
+            resp.message().unwrap().content_text().as_deref(),
             Some("Beauregard")
         );
         assert_eq!(resp.finish_reason(), Some("stop"));

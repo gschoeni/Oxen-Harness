@@ -22,7 +22,7 @@ pub const LLAMA_SERVER_ENV: &str = "LLAMA_SERVER";
 
 /// Default context window passed to `llama-server` (keeps KV-cache memory
 /// reasonable; the model can be configured for more).
-const DEFAULT_CONTEXT: u32 = 8192;
+pub const DEFAULT_CONTEXT: u32 = 8192;
 /// How long to wait for the model to load and the server to report healthy.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -194,6 +194,7 @@ pub struct LocalServer {
     child: Child,
     base_url: String,
     port: u16,
+    context: u32,
 }
 
 impl LocalServer {
@@ -225,6 +226,7 @@ impl LocalServer {
             child,
             base_url: format!("http://127.0.0.1:{port}/v1"),
             port,
+            context: DEFAULT_CONTEXT,
         };
         server.await_healthy().await?;
         Ok(server)
@@ -238,6 +240,13 @@ impl LocalServer {
     /// The port the server is listening on.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// The context window (in tokens) the server was started with. The agent
+    /// uses this to budget prompts, since the local window is typically far
+    /// smaller than the model's theoretical maximum.
+    pub fn context_size(&self) -> u32 {
+        self.context
     }
 
     async fn await_healthy(&mut self) -> Result<(), LocalError> {

@@ -211,12 +211,68 @@ pub struct Voice {
     pub progress_icon: String,
 }
 
-/// A complete theme: identity, palette, and voice.
+/// Visual styling for the desktop app — typography and framing. The CLI is
+/// bound to the terminal's own font, so these fields shape the desktop UI only;
+/// the store maps them onto CSS tokens so the same components can render as a
+/// chunky 8-bit trail, a hairline newspaper, a soft Apple-style app, or a neon
+/// synth grid. Font families name faces the app bundles (see `pixel.css`):
+/// `PixelHead`, `PixelRead`, `Playfair`, `Masthead`, `Orbitron`, `PlexSans`,
+/// `PlexMono` — plus system stacks like `-apple-system` and `Georgia`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Style {
+    /// CSS font-family stack for the wordmark, headings, and micro-labels.
+    pub font_display: String,
+    /// CSS font-family stack for body / message text.
+    pub font_body: String,
+    /// CSS font-family stack for code blocks and status readouts.
+    pub font_mono: String,
+    /// `"uppercase"` or `"none"` — applied to the wordmark and labels.
+    pub display_transform: String,
+    /// letter-spacing for display text + labels, e.g. `"0.02em"`, `"-0.01em"`.
+    pub display_spacing: String,
+    /// Corner radius for cards/inputs, a CSS length, e.g. `"3px"`, `"14px"`.
+    pub radius: String,
+    /// Border width for framed surfaces, e.g. `"2px"`, `"1px"`.
+    pub border_width: String,
+    /// Depth treatment: `"pixel"` (hard offset), `"soft"` (blurred), `"glow"`
+    /// (neon accent), or `"none"` (flat).
+    pub shadow: String,
+    /// Hero layout for the empty state: `"pixel"` (a framed retro screen),
+    /// `"newspaper"` (a masthead), or `"minimal"` (a clean app splash).
+    pub hero: String,
+    /// Which scene the `"pixel"` hero draws: `"trail"` (covered wagon), `"grid"`
+    /// (synthwave outrun grid), or `"none"`. Ignored by other hero layouts.
+    pub scene: String,
+}
+
+impl Default for Style {
+    /// The Oregon Trail look: pixel display face, hard-edged framing.
+    fn default() -> Self {
+        Style {
+            font_display: s("\"PixelHead\", \"Courier New\", monospace"),
+            font_body: s(
+                "-apple-system, BlinkMacSystemFont, \"SF Pro Text\", \"Segoe UI\", Inter, Roboto, Helvetica, Arial, sans-serif",
+            ),
+            font_mono: s("\"PixelRead\", \"SF Mono\", ui-monospace, monospace"),
+            display_transform: s("uppercase"),
+            display_spacing: s("0.02em"),
+            radius: s("3px"),
+            border_width: s("2px"),
+            shadow: s("pixel"),
+            hero: s("pixel"),
+            scene: s("trail"),
+        }
+    }
+}
+
+/// A complete theme: identity, palette, voice, and visual style.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Theme {
     pub meta: Meta,
     pub palette: Palette,
     pub voice: Voice,
+    #[serde(default)]
+    pub style: Style,
 }
 
 impl Theme {
@@ -294,8 +350,8 @@ impl Theme {
             .to_toml()
             .unwrap_or_else(|_| "<error>".to_string());
         format!(
-            "A theme is a TOML document with `[meta]`, `[palette]`, and `[voice]` \
-             sections.\n\n\
+            "A theme is a TOML document with `[meta]`, `[palette]`, `[voice]`, \
+             and `[style]` sections.\n\n\
              - Colors in `[palette]` are `#rrggbb` hex strings: title, primary, \
              secondary, text, muted, danger, link (terminal foreground colors), \
              plus background, surface, border (used by the desktop app).\n\
@@ -304,7 +360,15 @@ impl Theme {
              tool name with a `default` fallback), deaths (quit lines), wordmark \
              (UPPERCASE block letters), banner_art (lines of ASCII art), \
              subtitle, flavor_top/flavor_bottom ([label, value] rows), help_items, \
-             exit_art, and assorted labels.\n\n\
+             exit_art, and assorted labels.\n\
+             - `[style]` shapes the desktop app's typography and framing: \
+             font_display/font_body/font_mono (CSS font-family stacks; bundled \
+             faces are PixelHead, PixelRead, Playfair, Masthead, Orbitron, \
+             PlexSans, PlexMono, plus system stacks), display_transform \
+             (uppercase|none), display_spacing (letter-spacing), radius, \
+             border_width, shadow (pixel|soft|glow|none), hero \
+             (pixel|newspaper|minimal), and scene (trail|grid|none — the art the \
+             pixel hero draws).\n\n\
              Any omitted field inherits the default. Here is the default theme as \
              a complete reference:\n\n```toml\n{example}\n```"
         )
@@ -472,6 +536,9 @@ fn oregon_trail() -> Theme {
             ]),
             wordmark: s("OXEN TRAIL"),
             banner_art: list(&[
+                r"      /\          /\          /\         ",
+                r"     /  \   /\   /  \   /\   /  \         ",
+                r"  __/    \_/  \_/    \_/  \_/    \___     ",
                 r"                  _______________",
                 r"                ,'               '.___",
                 r"   ____________,'    Oxen.ai        '.__",
@@ -483,7 +550,17 @@ fn oregon_trail() -> Theme {
             pre_tagline: s("～ The ～"),
             subtitle: s("an open source agentic coding trail · powered by Oxen.ai"),
             flavor_top: vec![[s("Departing"), s("Independence, Missouri · 1848")]],
-            flavor_bottom: vec![[s("Weather"), s("fair  ·  Health: good  ·  Pace: steady")]],
+            // The franchise's iconic status panel. These are flavor (static), but
+            // they recreate the screen the moment a fresh trail begins — and feed
+            // both the CLI banner footer and the desktop hero's status panel.
+            flavor_bottom: vec![
+                [s("Date"), s("March 21, 1848")],
+                [s("Weather"), s("warm")],
+                [s("Health"), s("good")],
+                [s("Food"), s("1009 pounds")],
+                [s("Next landmark"), s("47 miles")],
+                [s("Miles traveled"), s("257 miles")],
+            ],
             bottom_hint: s("Type /help to size up your options · Ctrl-D to make camp"),
             label_provider: s("Provider"),
             label_model: s("Oxen (model)"),
@@ -521,6 +598,21 @@ fn oregon_trail() -> Theme {
                 },
                 HelpItem {
                     key: s("6."),
+                    title: s("Pack the wagon"),
+                    hint: s("— /queue add <msg> … then /queue run"),
+                },
+                HelpItem {
+                    key: s("7."),
+                    title: s("Set the wagon rolling"),
+                    hint: s("— /loop run [name]  (work until the gate is green)"),
+                },
+                HelpItem {
+                    key: s("8."),
+                    title: s("Choose your departure"),
+                    hint: s("— /departing <place>  (set where the trail begins)"),
+                },
+                HelpItem {
+                    key: s("9."),
                     title: s("Make camp / End"),
                     hint: s("— /exit  (or Ctrl-D)"),
                 },
@@ -540,6 +632,7 @@ fn oregon_trail() -> Theme {
             resume_message: s("Your trail journal was saved. Resume this expedition with:"),
             progress_icon: s("🐂"),
         },
+        style: Style::default(),
     }
 }
 
