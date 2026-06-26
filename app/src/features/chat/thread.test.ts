@@ -92,4 +92,34 @@ describe("thread: transcriptToItems", () => {
     expect(items.map((i) => i.kind)).toEqual(["user", "assistant", "tool"]);
     expect(items[2]).toMatchObject({ kind: "tool", name: "run_command", running: false });
   });
+
+  it("extracts image attachments from a multimodal user message", () => {
+    const items = transcriptToItems([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is in this image?" },
+          { type: "image_url", image_url: { url: ".oxen-harness/attachments/abc.png" } },
+        ],
+      },
+    ]);
+    expect(items[0]).toMatchObject({
+      kind: "user",
+      text: "What is in this image?",
+      images: [".oxen-harness/attachments/abc.png"],
+    });
+  });
+});
+
+describe("thread: startTurn attachments", () => {
+  it("attaches only image paths to the user bubble", () => {
+    const [user] = startTurn([], "look", ["/abs/fox.png", "/abs/notes.pdf", "/abs/a.JPG"]);
+    expect(user).toMatchObject({ kind: "user", images: ["/abs/fox.png", "/abs/a.JPG"] });
+  });
+
+  it("leaves images undefined when there are no image attachments", () => {
+    const [user] = startTurn([], "hi", ["/abs/notes.pdf"]);
+    expect(user).toMatchObject({ kind: "user" });
+    expect((user as { images?: string[] }).images).toBeUndefined();
+  });
 });

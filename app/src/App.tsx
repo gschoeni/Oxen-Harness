@@ -6,7 +6,8 @@ import { Settings } from "./features/settings/Settings";
 import { ModelsModal } from "./features/models/ModelsModal";
 import { ThemesModal } from "./features/themes/ThemesModal";
 import { ProjectsModal } from "./features/projects/ProjectsModal";
-import { activeTheme, onCanvas, onCanvasWriting, onQuestion, onToken, onTool } from "./lib/ipc";
+import { DevView } from "./features/dev/DevView";
+import { activeTheme } from "./lib/ipc";
 import { useStore } from "./lib/store";
 import "./app.css";
 
@@ -14,14 +15,11 @@ export default function App() {
   const applyTheme = useStore((s) => s.applyTheme);
   const loadSession = useStore((s) => s.loadSession);
   const refreshHistory = useStore((s) => s.refreshHistory);
-  const setQuestion = useStore((s) => s.setQuestion);
-  const ingestToken = useStore((s) => s.ingestToken);
-  const ingestTool = useStore((s) => s.ingestTool);
-  const ingestCanvas = useStore((s) => s.ingestCanvas);
-  const setCanvasWriting = useStore((s) => s.setCanvasWriting);
+  const refreshTotalTokens = useStore((s) => s.refreshTotalTokens);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const modelsOpen = useStore((s) => s.modelsOpen);
   const themesOpen = useStore((s) => s.themesOpen);
+  const devViewOpen = useStore((s) => s.devViewOpen);
   const projectsOpen = useStore((s) => s.projectsOpen);
   // Show the canvas column when the current chat has an open document OR is
   // mid-write (so the panel appears the moment the model starts a canvas).
@@ -69,30 +67,12 @@ export default function App() {
     activeTheme().then(applyTheme).catch(() => {});
     loadSession().catch(() => {});
     refreshHistory();
-  }, [applyTheme, loadSession, refreshHistory]);
+    refreshTotalTokens();
+  }, [applyTheme, loadSession, refreshHistory, refreshTotalTokens]);
 
-  // Route streamed tokens / tool activity into their session's thread at the app
-  // level, so a background chat keeps updating even while its view is unmounted.
-  useEffect(() => {
-    const unToken = onToken((e) => ingestToken(e.session, e.token));
-    const unTool = onTool(ingestTool);
-    const unCanvas = onCanvas(ingestCanvas);
-    const unCanvasWriting = onCanvasWriting((session) => setCanvasWriting(session, true));
-    return () => {
-      unToken.then((fn) => fn());
-      unTool.then((fn) => fn());
-      unCanvas.then((fn) => fn());
-      unCanvasWriting.then((fn) => fn());
-    };
-  }, [ingestToken, ingestTool, ingestCanvas, setCanvasWriting]);
-
-  // The agent's clarifying-question tool emits globally; surface it as a modal.
-  useEffect(() => {
-    const unlisten = onQuestion(setQuestion);
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [setQuestion]);
+  // Agent event subscriptions (tokens, tools, usage, canvas, questions) are set
+  // up once in `startAgentEventBridge` (see main.tsx) — outside React's lifecycle
+  // so StrictMode can't register duplicate listeners.
 
   return (
     <div
@@ -105,6 +85,7 @@ export default function App() {
       {settingsOpen && <Settings />}
       {modelsOpen && <ModelsModal />}
       {themesOpen && <ThemesModal />}
+      {devViewOpen && <DevView />}
       {projectsOpen && <ProjectsModal />}
     </div>
   );

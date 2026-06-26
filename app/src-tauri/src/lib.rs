@@ -186,11 +186,39 @@ struct ToolEventPayload {
     detail: String,
 }
 
+/// An `agent://tool-delta` payload: an incremental fragment of a tool call's
+/// JSON arguments, so the UI can stream the in-progress content (a file being
+/// written, a canvas document being authored).
+#[derive(Clone, Serialize)]
+struct ToolDeltaPayload {
+    session: String,
+    name: String,
+    delta: String,
+}
+
 #[derive(Clone, Serialize)]
 struct SessionInfo {
     model: String,
     workspace: String,
     session_id: String,
+    /// Cumulative tokens used in this session, so the UI dashboard reflects real
+    /// consumption rather than static flavor text.
+    tokens_used: usize,
+    /// Tokens the current transcript occupies (how full the context window is).
+    context_tokens: usize,
+    /// The model's effective context window, for a "% of context" readout.
+    context_window: usize,
+}
+
+/// An `agent://usage` payload: the session's cumulative token count plus current
+/// context fill, emitted around each model call within a turn so the UI tracks
+/// usage live. (The all-time grand total is a separate, turn-end concern.)
+#[derive(Clone, Serialize)]
+struct UsagePayload {
+    session: String,
+    tokens_used: usize,
+    context_tokens: usize,
+    context_window: usize,
 }
 
 /// A resumed session: its info plus the verbatim transcript for the UI to
@@ -516,6 +544,9 @@ fn info_for(agent: &Agent) -> SessionInfo {
         model: agent.model().to_string(),
         workspace: session_workspace(agent.session_id()).display().to_string(),
         session_id: agent.session_id().to_string(),
+        tokens_used: agent.tokens_used(),
+        context_tokens: agent.context_tokens(),
+        context_window: agent.context_window(),
     }
 }
 
@@ -591,9 +622,16 @@ async fn run_turn(
     let arc = agent_or_build(&app, &state, &session).await?;
 
     let sid = session.clone();
+    // The context window is fixed for the turn; capture it once so the live usage
+    // events emitted from inside the turn can report "% of context".
+    let context_window = arc.lock().await.context_window();
+    // Track the session's cumulative count before/after the turn so we can roll
+    // just this turn's throughput into the all-time total.
+    let turn_delta;
     let result = {
         let mut agent = arc.lock().await;
-        agent
+        let before = agent.tokens_used();
+        let r = agent
             .run_turn_with_attachments(prompt, attachments, move |event| match event {
                 AgentEvent::Token(t) => {
                     let _ = app.emit(
@@ -610,6 +648,18 @@ async fn run_turn(
                     let _ = app.emit("agent://canvas-writing", SessionPayload { session: sid.clone() });
                 }
                 AgentEvent::ToolPending { .. } => {}
+                // Stream the tool call's arguments as they arrive so the UI can
+                // show the file/canvas content being written in real time.
+                AgentEvent::ToolDelta { name, delta } => {
+                    let _ = app.emit(
+                        "agent://tool-delta",
+                        ToolDeltaPayload {
+                            session: sid.clone(),
+                            name: name.clone(),
+                            delta: delta.clone(),
+                        },
+                    );
+                }
                 AgentEvent::ToolStart { name, arguments } => {
                     let _ = app.emit(
                         "agent://tool",
@@ -632,9 +682,31 @@ async fn run_turn(
                         },
                     );
                 }
+                // Live token usage, surfaced around each model call within the
+                // turn so the meter tracks real consumption as it accrues rather
+                // than jumping only at the end.
+                AgentEvent::Usage {
+                    tokens_used,
+                    context_tokens,
+                } => {
+                    let _ = app.emit(
+                        "agent://usage",
+                        UsagePayload {
+                            session: sid.clone(),
+                            tokens_used: *tokens_used,
+                            context_tokens: *context_tokens,
+                            context_window,
+                        },
+                    );
+                }
             })
-            .await
+            .await;
+        turn_delta = agent.tokens_used().saturating_sub(before);
+        r
     };
+    // Roll this turn's throughput into the all-time running total (a cheap
+    // persisted counter); the hero refreshes that grand total after the turn.
+    let _ = bump_total_tokens(turn_delta);
     // The turn is persisted message-by-message, so once it's done the agent is
     // just a cache. Release idle background agents (keeping the current chat and
     // any still-running turns) so memory tracks concurrency, not chat count.
@@ -660,6 +732,124 @@ fn open_history_store() -> Result<HistoryStore, String> {
 #[tauri::command]
 async fn list_sessions() -> Result<Vec<SessionSummary>, String> {
     open_history_store()?.list_sessions().map_err(|e| e.to_string())
+}
+
+/// Read a session's raw, persisted transcript (every message, verbatim — system
+/// prompt, tool calls, and tool results included) straight from the history
+/// store, for the developer inspector. Read-only and never touches the live
+/// agent, so it works even while a turn is mid-flight.
+#[tauri::command]
+async fn session_messages(id: String) -> Result<Vec<serde_json::Value>, String> {
+    open_history_store()?.messages(&id).map_err(|e| e.to_string())
+}
+
+/// Permanently delete a chat session: remove it (and its messages) from history,
+/// drop any cached live agent, and clear it as the current chat if it was active.
+#[tauri::command]
+async fn delete_session(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    open_history_store()?
+        .delete_session(&id)
+        .map_err(|e| e.to_string())?;
+    state.agents.lock().await.remove(&id);
+    let mut current = state.current.lock().await;
+    if current.as_deref() == Some(id.as_str()) {
+        *current = None;
+    }
+    Ok(())
+}
+
+/// Load an attachment as a `data:` URI for display in the UI (composer preview
+/// and chat history). `path` is either an absolute path (a freshly picked file)
+/// or a path relative to a session's workspace (how persisted image attachments
+/// are stored, under `.oxen-harness/attachments/`). Returning a data URI keeps
+/// rendering CSP-safe — no asset-protocol or file:// access needed.
+#[tauri::command]
+async fn attachment_data_uri(path: String, session: Option<String>) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else if let Some(s) = session {
+        session_workspace(&s).join(p)
+    } else {
+        p.to_path_buf()
+    };
+    let attachment = Attachment::from_path(&abs).map_err(|e| e.to_string())?;
+    Ok(attachment.data_uri())
+}
+
+/// The tool definitions (JSON schemas) the current session's agent advertises to
+/// the model on every call — surfaced in the developer view so the full request
+/// (transcript + tools) is inspectable. These aren't persisted per-message, so
+/// we read them from the live agent.
+#[tauri::command]
+async fn tool_definitions(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let arc = current_agent(&app, &state).await?;
+    let agent = arc.lock().await;
+    Ok(agent.tool_definitions())
+}
+
+/// The `app_meta` key holding the all-time running total of tokens used.
+const TOTAL_TOKENS_KEY: &str = "total_tokens_used";
+
+/// The all-time total tokens used across every session — a running grand total
+/// for the hero's "Total tokens used" stat. Read from a cheap persisted counter
+/// (backfilled once from history), not by rescanning transcripts each call.
+#[tauri::command]
+async fn total_tokens_used() -> Result<usize, String> {
+    let store = open_history_store()?;
+    Ok(ensure_total_tokens(&store)?.max(0) as usize)
+}
+
+/// Ensure the running token counter exists, seeding it once from existing
+/// history if it was never set, and return the current total. The expensive
+/// transcript scan runs at most once (the first time); afterwards each turn just
+/// increments the counter, so reads and updates stay O(1).
+fn ensure_total_tokens(store: &HistoryStore) -> Result<i64, String> {
+    if let Some(v) = store.meta_get_i64(TOTAL_TOKENS_KEY).map_err(|e| e.to_string())? {
+        return Ok(v);
+    }
+    let seeded = estimate_all_tokens(store) as i64;
+    store
+        .meta_set_i64(TOTAL_TOKENS_KEY, seeded)
+        .map_err(|e| e.to_string())?;
+    Ok(seeded)
+}
+
+/// One-time backfill: estimate tokens across every stored transcript. We don't
+/// keep exact historical per-turn counts, so this is a best-effort seed for the
+/// running counter; new turns add their real throughput on top.
+fn estimate_all_tokens(store: &HistoryStore) -> usize {
+    let Ok(sessions) = store.list_sessions() else {
+        return 0;
+    };
+    let mut total = 0usize;
+    for s in sessions {
+        let Ok(raw) = store.messages(&s.id) else {
+            continue;
+        };
+        let messages: Vec<ChatMessage> = raw
+            .into_iter()
+            .filter_map(|v| serde_json::from_value(v).ok())
+            .collect();
+        total += harness_agent::budget::estimate_prompt_tokens(&messages, &[]);
+    }
+    total
+}
+
+/// Add a turn's token throughput to the all-time counter (backfilling once if
+/// needed) and return the new grand total. Best-effort: never fails a turn.
+fn bump_total_tokens(delta: usize) -> usize {
+    let Ok(store) = open_history_store() else {
+        return 0;
+    };
+    let _ = ensure_total_tokens(&store);
+    store
+        .meta_add_i64(TOTAL_TOKENS_KEY, delta as i64)
+        .map(|v| v.max(0) as usize)
+        .unwrap_or(0)
 }
 
 /// Start a fresh chat session as its own agent. Any in-flight chats keep running
@@ -731,6 +921,9 @@ async fn resume_session(
                 model: String::new(),
                 workspace: workspace.display().to_string(),
                 session_id: id,
+                tokens_used: 0,
+                context_tokens: 0,
+                context_window: 0,
             },
             messages: vec![],
             running: true,
@@ -1040,6 +1233,11 @@ pub fn run() {
             run_turn,
             session_info,
             list_sessions,
+            session_messages,
+            delete_session,
+            attachment_data_uri,
+            tool_definitions,
+            total_tokens_used,
             new_session,
             resume_session,
             list_projects,

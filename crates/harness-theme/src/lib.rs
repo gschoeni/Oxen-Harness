@@ -638,7 +638,7 @@ fn oregon_trail() -> Theme {
                 [s("Next landmark"), s("128000 tokens")],
                 [s("Total tokens used"), s("0 tokens")],
             ],
-            bottom_hint: s("Type /help to size up your options · Ctrl-D to make camp"),
+            bottom_hint: s("Send a message to begin on your trail"),
             label_provider: s("Provider"),
             label_model: s("Model"),
             label_workspace: s("Wagon (workspace)"),

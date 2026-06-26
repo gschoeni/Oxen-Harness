@@ -1,0 +1,69 @@
+/* Live file-write preview shown in the thread while a write_file/edit_file
+   tool call's arguments stream in. */
+.streaming-write {
+  border: 1px solid var(--separator);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+  margin: var(--space-2) 0;
+  animation: streaming-write-in var(--dur-fast) var(--ease);
+}
+@keyframes streaming-write-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.streaming-write-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-secondary);
+}
+.streaming-write-verb {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.streaming-write-path {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.streaming-write-spinner {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  animation: streaming-write-spin 0.7s linear infinite;
+}
+@keyframes streaming-write-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.streaming-write-code {
+  margin: 0;
+  border-top: 1px solid var(--separator);
+  background: var(--surface-2);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+  max-height: 260px;
+  color: var(--text);
+}
+.streaming-write-code code {
+  background: none;
+  padding: 0;
+}

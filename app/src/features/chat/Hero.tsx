@@ -26,6 +26,9 @@ function Chips({ examples, busy, onPick }: HeroProps) {
 
 export function Hero(props: HeroProps) {
   const theme = useStore((s) => s.theme);
+  // The hero's "Total tokens used" shows the all-time grand total across every
+  // session, so a fresh chat opens with your running tally rather than 0.
+  const tokensUsed = useStore((s) => s.totalTokensUsed);
   const v = theme?.voice;
   const hero = theme?.style?.hero || "pixel";
 
@@ -34,7 +37,12 @@ export function Hero(props: HeroProps) {
   const subtitle = v?.subtitle || "an open source agentic coding harness · powered by Oxen.ai";
   const hint = v?.bottom_hint || "Press RETURN to size up the situation";
   const icon = v?.prompt_icon || "🐂";
-  const statusRows = [...(v?.flavor_top || []), ...(v?.flavor_bottom || [])];
+  // Themes carry a static "Total tokens used" flavor row; swap in the live count
+  // for the current session so the dashboard reflects real consumption.
+  const statusRows: [string, string][] = [...(v?.flavor_top || []), ...(v?.flavor_bottom || [])].map(
+    ([label, value]) =>
+      label === "Total tokens used" ? [label, `${tokensUsed.toLocaleString()} tokens`] : [label, value],
+  );
 
   if (hero === "newspaper") {
     return (

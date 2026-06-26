@@ -56,10 +56,23 @@ pub enum AgentEvent {
     /// streaming). Fires before [`AgentEvent::ToolStart`], letting the UI show
     /// progress while a long call — like writing a `canvas` document — streams.
     ToolPending { name: String },
+    /// An incremental fragment of a tool call's arguments (raw JSON), tagged with
+    /// the tool name — lets a UI stream the in-progress content (a file being
+    /// written, a canvas document) before the call is complete.
+    ToolDelta { name: String, delta: String },
     /// A tool is about to run, with its name and JSON arguments.
     ToolStart { name: String, arguments: String },
     /// A tool finished, with its (possibly truncated for display) result.
     ToolEnd { name: String, result: String },
+    /// The session's cumulative token usage and current context fill, surfaced
+    /// around each model call so a UI can track usage live *within* a turn (each
+    /// tool-loop iteration re-sends the growing context, which this captures)
+    /// rather than only at the end. Fired before a call (reflecting the prompt
+    /// about to be sent) and after it (the exact figure, including the reply).
+    Usage {
+        tokens_used: usize,
+        context_tokens: usize,
+    },
 }
 
 /// Configuration for an [`Agent`].
@@ -150,6 +163,9 @@ pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
            `ask_user_question` to interview the user instead of guessing. Keep \
            options concise and distinct; don't add an 'Other' option (the user can \
            always type their own). Don't ask about trivia you can decide yourself.{canvas_guideline}\n\
+         - The user can attach images and PDFs to a message, and you receive their \
+           actual visual content — look at them directly and answer from what you \
+           see. Never claim you can't view images or that one wasn't provided.\n\
          - Work in small, verifiable steps. Run tests/builds and read the real output \
            rather than assuming success. Fix root causes, not symptoms.\n\
          - Make independent tool calls together when they don't depend on each other."
@@ -219,6 +235,9 @@ impl Agent {
             messages.push(serde_json::from_value::<ChatMessage>(value)?);
         }
         let attachments = config.attachment_root.clone().map(AttachmentStore::new);
+        // Seed the cumulative count from the loaded transcript so a resumed
+        // session's dashboard reflects prior usage instead of starting at 0.
+        let tokens_used = budget::estimate_prompt_tokens(&messages, &tools.definitions());
         Ok(Self {
             client,
             tools,
@@ -227,7 +246,7 @@ impl Agent {
             config,
             messages,
             attachments,
-            tokens_used: 0,
+            tokens_used,
         })
     }
 
@@ -263,7 +282,9 @@ impl Agent {
         }
         self.session_id = session_id;
         self.messages = messages;
-        self.tokens_used = 0;
+        // Seed the cumulative count from the loaded transcript so a resumed
+        // session's dashboard reflects prior usage instead of starting at 0.
+        self.tokens_used = self.context_tokens();
         Ok(())
     }
 
@@ -294,6 +315,12 @@ impl Agent {
     /// Cumulative estimated tokens sent + generated this run.
     pub fn tokens_used(&self) -> usize {
         self.tokens_used
+    }
+
+    /// The tool definitions (JSON schemas) advertised to the model on every
+    /// call this turn — i.e. the tools the agent currently has available.
+    pub fn tool_definitions(&self) -> Vec<serde_json::Value> {
+        self.tools.definitions()
     }
 
     /// Run a one-shot completion that is *not* part of the session transcript
@@ -366,6 +393,15 @@ impl Agent {
                 });
             }
 
+            // Reflect this call's prompt cost the moment it's sent (the transcript
+            // is `prompt_tokens` of context), so a live meter accounts for it now
+            // rather than jumping when the reply finishes. The reply then streams
+            // on top, and the post-call event below snaps to the exact figure.
+            on_event(&AgentEvent::Usage {
+                tokens_used: self.tokens_used + prompt_tokens,
+                context_tokens: prompt_tokens,
+            });
+
             let request = ChatRequest::new(&self.config.model, self.outbound_messages())
                 .with_tools(tool_defs.clone())
                 .streaming(true);
@@ -377,6 +413,12 @@ impl Agent {
                     StreamEvent::ToolCallStart { name } => {
                         on_event(&AgentEvent::ToolPending { name: name.clone() })
                     }
+                    StreamEvent::ToolCallDelta { name, arguments } => on_event(
+                        &AgentEvent::ToolDelta {
+                            name: name.clone(),
+                            delta: arguments.clone(),
+                        },
+                    ),
                     StreamEvent::Done { .. } => {}
                 })
                 .await?;
@@ -389,6 +431,13 @@ impl Agent {
                 assembled.content.clone(),
                 assembled.tool_calls.clone(),
             ))?;
+
+            // The exact cumulative + context now that the reply is in the
+            // transcript; the UI snaps its live estimate to this.
+            on_event(&AgentEvent::Usage {
+                tokens_used: self.tokens_used,
+                context_tokens: self.context_tokens(),
+            });
 
             if assembled.tool_calls.is_empty() {
                 return Ok(assembled.content);

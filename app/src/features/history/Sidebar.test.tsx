@@ -87,4 +87,22 @@ describe("Sidebar", () => {
     expect(first.querySelector(".chat-status.running")).not.toBeNull();
     expect(second.querySelector(".chat-status.unread")).not.toBeNull();
   });
+
+  it("deletes a chat only after confirming in the modal", async () => {
+    render(<Sidebar />);
+    // The delete icon opens a confirmation modal rather than deleting outright.
+    await userEvent.click(screen.getByRole("button", { name: "Delete chat: Second chat" }));
+    expect(ipc.deleteSession).not.toHaveBeenCalled();
+    expect(screen.getByText("Delete chat?")).toBeInTheDocument();
+
+    // Cancelling closes the modal and deletes nothing.
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(screen.queryByText("Delete chat?")).toBeNull();
+    expect(ipc.deleteSession).not.toHaveBeenCalled();
+
+    // Confirming deletes the right session.
+    await userEvent.click(screen.getByRole("button", { name: "Delete chat: Second chat" }));
+    await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    expect(ipc.deleteSession).toHaveBeenCalledWith("s2");
+  });
 });

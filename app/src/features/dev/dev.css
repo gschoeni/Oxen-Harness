@@ -1,0 +1,326 @@
+/* Developer view — raw LLM input/output inspector. */
+
+.dev {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* ---- summary header ------------------------------------------------------ */
+
+.dev-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--space-2);
+}
+.dev-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+.dev-stat-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+.dev-stat-value {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.dev-stat-value.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.dev-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.dev-tools-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+.dev-tool-chip {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--space-2);
+  color: var(--text-secondary);
+}
+.dev-tool-chip b {
+  color: var(--accent);
+}
+
+/* ---- controls (rendered in the modal header bar) ------------------------- */
+
+.dev-live {
+  font-size: var(--text-xs);
+  color: var(--green);
+}
+.dev-segmented {
+  display: inline-flex;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+.dev-segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  border: none;
+  border-radius: var(--radius-xs);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.dev-segmented button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+.dev-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-xs);
+  padding: 3px var(--space-2);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.dev-copy:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.dev-copy.dev-icon-only {
+  padding: 5px;
+}
+
+/* ---- message list -------------------------------------------------------- */
+
+.dev-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.dev-msg {
+  border: 1px solid var(--separator);
+  border-left: 3px solid var(--separator);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface);
+}
+.dev-system {
+  border-left-color: var(--text-tertiary);
+}
+.dev-user {
+  border-left-color: var(--accent);
+}
+.dev-assistant {
+  border-left-color: var(--green);
+}
+.dev-msg.dev-tool {
+  border-left-color: var(--orange, #d98a3d);
+}
+
+.dev-msg-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  text-align: left;
+}
+.dev-msg-head:hover {
+  background: var(--surface-2);
+}
+.dev-chevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.dev-chevron.open {
+  transform: rotate(90deg);
+}
+.dev-role {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+.dev-idx {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.dev-tag {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+}
+.dev-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dev-msg-tokens {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.dev-msg-body {
+  padding: var(--space-3);
+  border-top: 1px solid var(--separator);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.dev-text {
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+.dev-attach {
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.dev-msg-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* nested tool-call block inside an assistant message */
+.dev-toolcall {
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.dev-tool-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-secondary);
+}
+.dev-tool-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.dev-tool-id {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.dev-tool-head .dev-copy {
+  margin-left: auto;
+}
+.dev-tool-ref {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+/* tool-definitions panel (a distinct, neutral-accented card) */
+.dev-tools-panel {
+  border-left-color: var(--accent-soft, var(--separator-strong));
+}
+.dev-tooldef-head {
+  width: 100%;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+}
+.dev-tooldef-head:hover {
+  background: var(--surface-3, var(--surface));
+}
+.dev-tooldef-desc {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-sans, inherit);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dev-code {
+  margin: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--separator);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* ---- raw json ------------------------------------------------------------ */
+
+.dev-rawjson {
+  margin: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+  color: var(--text);
+}
+
+.dev-error {
+  color: var(--danger);
+  font-size: var(--text-sm);
+}

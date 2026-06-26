@@ -131,7 +131,7 @@ impl OxenClient {
             let bytes = bytes?;
             let text = String::from_utf8_lossy(&bytes);
             for payload in decoder.push(&text) {
-                if let Some(event) = assembler.accept(&payload) {
+                for event in assembler.accept(&payload) {
                     on_event(&event);
                 }
                 if assembler.is_done() {

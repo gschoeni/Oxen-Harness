@@ -84,6 +84,9 @@ export const sampleSession: SessionInfo = {
   model: "claude-opus-4-8",
   workspace: "/Users/dev/project",
   session_id: "current-session-id",
+  tokens_used: 0,
+  context_tokens: 0,
+  context_window: 128000,
 };
 
 export const sampleModels: ModelsView = {
@@ -159,8 +162,13 @@ const emptyView: SessionView = { info: sampleSession, messages: [], running: fal
 
 export const sessionInfo = vi.fn(async () => sampleSession);
 export const listSessions = vi.fn(async () => []);
+export const totalTokensUsed = vi.fn(async () => 0);
+export const sessionMessages = vi.fn(async () => [] as unknown[]);
+export const toolDefinitions = vi.fn(async () => [] as unknown[]);
+export const attachmentDataUri = vi.fn(async () => "data:image/png;base64,AAAA");
 export const newSession = vi.fn(async () => ({ ...sampleSession, session_id: "new-session-id" }));
 export const resumeSession = vi.fn(async () => emptyView);
+export const deleteSession = vi.fn(async () => {});
 export const listProjects = vi.fn(async () => [] as Project[]);
 export const openProject = vi.fn(async (path: string) => ({
   path,
@@ -205,6 +213,7 @@ export function resetIpc() {
   listSessions.mockReset().mockResolvedValue([]);
   newSession.mockReset().mockResolvedValue({ ...sampleSession, session_id: "new-session-id" });
   resumeSession.mockReset().mockResolvedValue(emptyView);
+  deleteSession.mockReset().mockResolvedValue(undefined);
   listProjects.mockReset().mockResolvedValue([]);
   openProject.mockReset().mockImplementation(async (path: string) => ({
     path,
@@ -232,6 +241,10 @@ export function resetIpc() {
   exportTheme.mockReset().mockResolvedValue('name = "Oregon Trail"');
   removeTheme.mockReset().mockResolvedValue(undefined);
   newTheme.mockReset().mockResolvedValue(sampleTheme);
+  totalTokensUsed.mockReset().mockResolvedValue(0);
+  sessionMessages.mockReset().mockResolvedValue([]);
+  toolDefinitions.mockReset().mockResolvedValue([]);
+  attachmentDataUri.mockReset().mockResolvedValue("data:image/png;base64,AAAA");
   [onToken, onTool, onQuestion, onFileDrop, onModelProgress, onLlamaInstall].forEach((fn) =>
     fn.mockClear(),
   );

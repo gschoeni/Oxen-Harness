@@ -29,6 +29,12 @@ export interface SessionInfo {
   model: string;
   workspace: string;
   session_id: string;
+  /** Cumulative tokens used in this session (drives the dashboard's count). */
+  tokens_used: number;
+  /** Tokens the current transcript occupies (how full the context window is). */
+  context_tokens: number;
+  /** The model's effective context window, for a "% of context" readout. */
+  context_window: number;
 }
 
 export interface SessionSummary {
@@ -45,6 +51,13 @@ export interface SessionView {
   messages: ChatMessage[];
   /** True when the chat is mid-turn and couldn't be read; keep the live thread. */
   running: boolean;
+}
+
+/** A tool definition (JSON schema) as advertised to the model on each call.
+ *  Loosely typed — the schema is provider JSON, inspected raw in the dev view. */
+export interface ToolDefinition {
+  type?: string;
+  function?: { name?: string; description?: string; parameters?: unknown };
 }
 
 /** A project = a working directory the agent runs in. Chats are grouped by it. */
@@ -206,6 +219,24 @@ export interface ToolEvent {
   phase: "start" | "end";
   name: string;
   detail: string;
+}
+
+/** `agent://tool-delta` payload — a fragment of a tool call's JSON arguments,
+ *  tagged with the tool name, streamed so the UI can show content as it's
+ *  written (a file, a canvas document). */
+export interface ToolDeltaEvent {
+  session: string;
+  name: string;
+  delta: string;
+}
+
+/** `agent://usage` payload — a session's live usage, emitted around each model
+ *  call within a turn so the meter tracks consumption as it accrues. */
+export interface UsageEvent {
+  session: string;
+  tokens_used: number;
+  context_tokens: number;
+  context_window: number;
 }
 
 export type Mode = "light" | "dark";

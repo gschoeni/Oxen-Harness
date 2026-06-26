@@ -52,6 +52,14 @@ fn migrations() -> Migrations<'static> {
              ALTER TABLE sessions ADD COLUMN theme TEXT NOT NULL DEFAULT '';
              ALTER TABLE sessions ADD COLUMN transcript_version INTEGER NOT NULL DEFAULT 1;",
         ),
+        // M3 — an app-wide key/value counter table for cheap running aggregates
+        // (e.g. all-time total tokens used), so we never rescan every transcript.
+        M::up(
+            "CREATE TABLE IF NOT EXISTS app_meta (
+                 key    TEXT PRIMARY KEY,
+                 value  INTEGER NOT NULL
+             );",
+        ),
     ])
 }
 
@@ -165,6 +173,46 @@ impl HistoryStore {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().expect("history store mutex poisoned")
+    }
+
+    /// Read an app-wide counter (`app_meta`), or `None` if it was never set.
+    pub fn meta_get_i64(&self, key: &str) -> Result<Option<i64>, HistoryError> {
+        use rusqlite::OptionalExtension;
+        let conn = self.lock();
+        let value = conn
+            .query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |row| {
+                row.get::<_, i64>(0)
+            })
+            .optional()?;
+        Ok(value)
+    }
+
+    /// Set an app-wide counter (`app_meta`) to an absolute value.
+    pub fn meta_set_i64(&self, key: &str, value: i64) -> Result<(), HistoryError> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO app_meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Atomically add `delta` to an app-wide counter (`app_meta`), creating it at
+    /// `delta` if absent, and return the new total. Keeps running aggregates cheap
+    /// to update without read-modify-write races across sessions.
+    pub fn meta_add_i64(&self, key: &str, delta: i64) -> Result<i64, HistoryError> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO app_meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = value + excluded.value",
+            rusqlite::params![key, delta],
+        )?;
+        let value =
+            conn.query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |row| {
+                row.get::<_, i64>(0)
+            })?;
+        Ok(value)
     }
 
     /// Look up a session's metadata, erroring if it does not exist.
@@ -291,6 +339,18 @@ impl HistoryStore {
             out.push(serde_json::from_str(&raw)?);
         }
         Ok(out)
+    }
+
+    /// Permanently delete a session and its messages. Idempotent: deleting a
+    /// session that doesn't exist is a no-op. Messages are removed first to
+    /// respect the foreign key, both in one transaction so it's all-or-nothing.
+    pub fn delete_session(&self, session_id: &str) -> Result<(), HistoryError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM messages WHERE session_id = ?1", [session_id])?;
+        tx.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Export a session's transcript as JSONL (one verbatim message per line).
@@ -484,6 +544,36 @@ mod tests {
     }
 
     #[test]
+    fn delete_session_removes_it_and_its_messages() {
+        let store = store();
+        let session = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&session, &Message::user("hello"))
+            .unwrap();
+        assert_eq!(store.list_sessions().unwrap().len(), 1);
+
+        store.delete_session(&session).unwrap();
+        assert!(store.list_sessions().unwrap().is_empty());
+        assert!(store.messages(&session).unwrap().is_empty());
+        // Idempotent: deleting again is fine.
+        store.delete_session(&session).unwrap();
+    }
+
+    #[test]
+    fn meta_counter_starts_absent_then_adds_and_sets() {
+        let store = store();
+        // Absent until first written.
+        assert_eq!(store.meta_get_i64("total_tokens_used").unwrap(), None);
+        // Add creates it at the delta and returns the new total.
+        assert_eq!(store.meta_add_i64("total_tokens_used", 100).unwrap(), 100);
+        assert_eq!(store.meta_add_i64("total_tokens_used", 50).unwrap(), 150);
+        assert_eq!(store.meta_get_i64("total_tokens_used").unwrap(), Some(150));
+        // Set overwrites to an absolute value.
+        store.meta_set_i64("total_tokens_used", 7).unwrap();
+        assert_eq!(store.meta_get_i64("total_tokens_used").unwrap(), Some(7));
+    }
+
+    #[test]
     fn migrations_are_valid_and_reach_latest_version() {
         // rusqlite_migration checks the chain round-trips and the final
         // user_version matches the migration count.
@@ -493,7 +583,7 @@ mod tests {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(user_version, 2);
+        assert_eq!(user_version, 3);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 // React) makes the streaming behavior easy to read, reuse, and unit-test.
 
 import type { ChatMessage, MessageContent } from "../../lib/types";
+import { isImagePath } from "../../lib/attachments";
 
 /** The displayable text of a message's content. A plain string passes through;
  *  a multimodal Parts array (from an attachment message) contributes only its
@@ -17,8 +18,16 @@ function contentText(content: MessageContent | null | undefined): string {
   return "";
 }
 
+/** Image attachment references on a message (the stored relative path or URL). */
+function imageRefs(content: MessageContent | null | undefined): string[] {
+  if (Array.isArray(content)) {
+    return content.flatMap((p) => (p.type === "image_url" ? [p.image_url.url] : []));
+  }
+  return [];
+}
+
 export type Item =
-  | { id: string; kind: "user"; text: string }
+  | { id: string; kind: "user"; text: string; images?: string[] }
   | { id: string; kind: "assistant"; text: string; streaming: boolean; error?: boolean }
   | {
       id: string;
@@ -51,7 +60,9 @@ export function transcriptToItems(messages: ChatMessage[]): Item[] {
   for (const m of messages) {
     if (m.role === "user") {
       const text = contentText(m.content);
-      if (text) items.push({ id: uid(), kind: "user", text });
+      const images = imageRefs(m.content);
+      if (text || images.length)
+        items.push({ id: uid(), kind: "user", text, images: images.length ? images : undefined });
     } else if (m.role === "assistant") {
       const text = contentText(m.content);
       if (text) items.push({ id: uid(), kind: "assistant", text, streaming: false });
@@ -71,11 +82,13 @@ export function transcriptToItems(messages: ChatMessage[]): Item[] {
   return items;
 }
 
-/** The user's prompt plus an empty in-flight assistant bubble for its reply. */
-export function startTurn(prev: Item[], prompt: string): Item[] {
+/** The user's prompt (with any image attachments) plus an empty in-flight
+ *  assistant bubble for its reply. */
+export function startTurn(prev: Item[], prompt: string, attachments: string[] = []): Item[] {
+  const images = attachments.filter(isImagePath);
   return [
     ...prev,
-    { id: uid(), kind: "user", text: prompt },
+    { id: uid(), kind: "user", text: prompt, images: images.length ? images : undefined },
     { id: uid(), kind: "assistant", text: "", streaming: true },
   ];
 }

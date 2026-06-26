@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, FileText } from "lucide-react";
+import { ArrowDown, Code2, FileText } from "lucide-react";
 import { onFileDrop, pickAttachments } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
@@ -7,6 +7,10 @@ import { ThreadItem } from "./ThreadItem";
 import { Composer } from "./Composer";
 import { Queue } from "./Queue";
 import { Hero } from "./Hero";
+import { TokenMeter } from "./TokenMeter";
+import { StreamingWrite } from "./StreamingWrite";
+import { AttachmentImage } from "./AttachmentImage";
+import { isImagePath } from "../../lib/attachments";
 import { QuestionPrompt } from "../questions/QuestionPrompt";
 import { type Item } from "./thread";
 import "./chat.css";
@@ -33,6 +37,7 @@ export function Chat() {
   const running = useStore((s) => !!s.session && s.runStatus[s.session.session_id] === "running");
   const send = useStore((s) => s.send);
   const setQueue = useStore((s) => s.setQueue);
+  const setDevViewOpen = useStore((s) => s.setDevViewOpen);
   // The most recent canvas in this chat, and whether the panel is currently
   // showing it — used to offer a one-click "reopen canvas" when it's closed.
   const sessionCanvases = useStore((s) => (s.session ? s.canvases[s.session.session_id] : undefined));
@@ -131,7 +136,17 @@ export function Chat() {
 
   return (
     <main className="chat">
-      <div className="chat-titlebar" data-tauri-drag-region />
+      <div className="chat-titlebar" data-tauri-drag-region>
+        <button
+          className="dev-view-btn"
+          onClick={() => setDevViewOpen(true)}
+          disabled={!sessionId}
+          title="Developer view — inspect the raw LLM inputs and outputs for this session"
+          aria-label="Open developer view"
+        >
+          <Code2 size={16} />
+        </button>
+      </div>
       <div className="messages-wrap">
         {showReopenCanvas && lastCanvas && (
           <button
@@ -153,6 +168,7 @@ export function Chat() {
               {items.map((it) => (
                 <ThreadItem key={it.id} item={it} now={now} />
               ))}
+              <StreamingWrite />
             </div>
           )}
         </div>
@@ -171,21 +187,29 @@ export function Chat() {
       <Queue items={queue} onChange={setQueue} />
       {attachments.length > 0 && (
         <div className="attachments">
-          {attachments.map((a, i) => (
-            <span className="attachment-chip" key={`${a.path}-${i}`}>
-              📎 {a.name}
-              <button
-                className="attachment-x"
-                aria-label={`Remove ${a.name}`}
-                onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-              >
-                ✕
-              </button>
-            </span>
-          ))}
+          {attachments.map((a, i) => {
+            const remove = () => setAttachments((prev) => prev.filter((_, j) => j !== i));
+            return isImagePath(a.path) ? (
+              <span className="attachment-thumb" key={`${a.path}-${i}`} title={a.name}>
+                <AttachmentImage src={a.path} alt={a.name} className="attachment-thumb-img" />
+                <span className="attachment-thumb-name">{a.name}</span>
+                <button className="attachment-x" aria-label={`Remove ${a.name}`} onClick={remove}>
+                  ✕
+                </button>
+              </span>
+            ) : (
+              <span className="attachment-chip" key={`${a.path}-${i}`}>
+                📎 {a.name}
+                <button className="attachment-x" aria-label={`Remove ${a.name}`} onClick={remove}>
+                  ✕
+                </button>
+              </span>
+            );
+          })}
         </div>
       )}
       <QuestionPrompt />
+      {items.length > 0 && <TokenMeter />}
       <Composer busy={running} onSend={submit} onAttach={attach} />
     </main>
   );

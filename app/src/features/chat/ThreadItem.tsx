@@ -1,5 +1,6 @@
 import { Markdown } from "../../components/ui/Markdown";
 import { ToolCall } from "./ToolCall";
+import { AttachmentImage } from "./AttachmentImage";
 import type { Item } from "./thread";
 
 /** Render one thread item: a user bubble, an assistant message (Markdown, or a
@@ -7,7 +8,18 @@ import type { Item } from "./thread";
  *  running cards re-time as the parent ticks. */
 export function ThreadItem({ item, now }: { item: Item; now: number }) {
   if (item.kind === "user") {
-    return <div className="msg user">{item.text}</div>;
+    return (
+      <div className="msg user">
+        {item.images && item.images.length > 0 && (
+          <div className="msg-attachments">
+            {item.images.map((src, i) => (
+              <AttachmentImage key={`${src}-${i}`} src={src} className="msg-attachment-img" />
+            ))}
+          </div>
+        )}
+        {item.text && <div className="msg-user-text">{item.text}</div>}
+      </div>
+    );
   }
 
   if (item.kind === "assistant") {

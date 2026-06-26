@@ -20,14 +20,30 @@ import type {
   ThemeSummary,
   TokenEvent,
   ToolEvent,
+  ToolDeltaEvent,
+  UsageEvent,
+  ChatMessage,
+  ToolDefinition,
 } from "./types";
 
 // ---- session / agent -------------------------------------------------------
 
 export const sessionInfo = () => invoke<SessionInfo>("session_info");
 export const listSessions = () => invoke<SessionSummary[]>("list_sessions");
+/** All-time total tokens used across every stored session (a running grand total). */
+export const totalTokensUsed = () => invoke<number>("total_tokens_used");
+/** A session's raw persisted transcript (verbatim, read-only) for the dev inspector. */
+export const sessionMessages = (id: string) => invoke<ChatMessage[]>("session_messages", { id });
+/** The tool definitions (JSON schemas) the current agent advertises to the model. */
+export const toolDefinitions = () => invoke<ToolDefinition[]>("tool_definitions");
+/** Load an attachment (absolute path, or relative to a session's workspace) as a
+ *  data: URI for display — used by the composer preview and chat history. */
+export const attachmentDataUri = (path: string, session?: string) =>
+  invoke<string>("attachment_data_uri", { path, session });
 export const newSession = () => invoke<SessionInfo>("new_session");
 export const resumeSession = (id: string) => invoke<SessionView>("resume_session", { id });
+/** Permanently delete a chat session and its messages. */
+export const deleteSession = (id: string) => invoke<void>("delete_session", { id });
 
 // ---- projects (chats grouped by working directory) -------------------------
 
@@ -77,6 +93,14 @@ export const onToken = (handler: (e: TokenEvent) => void) =>
 
 export const onTool = (handler: (e: ToolEvent) => void) =>
   listen<ToolEvent>("agent://tool", (e) => handler(e.payload));
+
+/** Streamed fragments of a tool call's JSON args (file/canvas content forming). */
+export const onToolDelta = (handler: (e: ToolDeltaEvent) => void) =>
+  listen<ToolDeltaEvent>("agent://tool-delta", (e) => handler(e.payload));
+
+/** Fires at the end of each turn with the session's cumulative token count. */
+export const onUsage = (handler: (e: UsageEvent) => void) =>
+  listen<UsageEvent>("agent://usage", (e) => handler(e.payload));
 
 export const onQuestion = (handler: (q: QuestionPayload) => void) =>
   listen<QuestionPayload>("agent://question", (e) => handler(e.payload));

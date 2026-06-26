@@ -8,6 +8,7 @@ import { useEffect, useState, type PointerEvent } from "react";
 import { X } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { Markdown } from "../../components/ui/Markdown";
+import { HighlightedCode } from "../../components/ui/HighlightedCode";
 import type { CanvasDoc } from "../../lib/types";
 import "./canvas.css";
 
@@ -35,9 +36,13 @@ export function Canvas({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =>
   const docs = useStore((s) => (s.session ? s.canvases[s.session.session_id] : undefined));
   const activeId = useStore((s) => (s.session ? s.activeCanvas[s.session.session_id] : undefined));
   const writing = useStore((s) => (s.session ? !!s.canvasWriting[s.session.session_id] : false));
+  const streaming = useStore((s) => (s.session ? s.streamingCanvas[s.session.session_id] : undefined));
   const setActiveCanvas = useStore((s) => s.setActiveCanvas);
 
-  const doc = docs?.find((d) => d.id === activeId) ?? null;
+  const committed = docs?.find((d) => d.id === activeId) ?? null;
+  // Prefer the committed doc; while a new one is still being written, show the
+  // provisional doc built from the streaming args so the panel fills in live.
+  const doc = committed ?? (writing ? streaming ?? null : null);
   // The panel can be open with no doc yet (the model just started writing one).
   if (!doc && !writing) return null;
 
@@ -81,9 +86,12 @@ export function Canvas({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =>
         </button>
       </header>
       <div className="canvas-body">
-        {doc ? (
+        {committed ? (
           // Key on id+content so a switch or update fully remounts the view.
-          <CanvasView key={`${doc.id}:${doc.content.length}`} doc={doc} />
+          <CanvasView key={`${committed.id}:${committed.content.length}`} doc={committed} />
+        ) : doc ? (
+          // Still streaming: render the document in place as it forms.
+          <CanvasStreamingView doc={doc} />
         ) : (
           <div className="canvas-placeholder">
             <span className="canvas-spinner" />
@@ -117,6 +125,32 @@ function CanvasView({ doc }: { doc: CanvasDoc }) {
         </pre>
       );
   }
+}
+
+/** The document as it streams in (before it's committed). Markdown and code
+ *  render live; html/svg/mermaid show their source while writing, since rendering
+ *  a half-written document would error or flicker — the formatted view appears
+ *  the moment the call completes. */
+function CanvasStreamingView({ doc }: { doc: CanvasDoc }) {
+  if (doc.format === "markdown") {
+    return (
+      <div className="canvas-md">
+        <Markdown text={doc.content} />
+      </div>
+    );
+  }
+  if (doc.format === "code") {
+    return (
+      <pre className="canvas-code">
+        <HighlightedCode code={doc.content} language={doc.language} />
+      </pre>
+    );
+  }
+  return (
+    <pre className="canvas-code">
+      <code>{doc.content}</code>
+    </pre>
+  );
 }
 
 /** Syntax-highlighted code (highlighting is theme-styled via canvas.css). Shows

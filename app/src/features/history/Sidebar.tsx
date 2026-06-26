@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, FolderPlus, Plus, Settings as SettingsIcon } from "lucide-react";
+import { ChevronRight, FolderPlus, Plus, Settings as SettingsIcon, Trash2 } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { relativeTime } from "../../lib/format";
+import { Button, Modal } from "../../components/ui";
 import type { Project, RunStatus, SessionSummary } from "../../lib/types";
 import "./sidebar.css";
 
@@ -20,8 +21,25 @@ export function Sidebar() {
   const startNewSession = useStore((s) => s.startNewSession);
   const enterProject = useStore((s) => s.enterProject);
   const resume = useStore((s) => s.resume);
+  const removeSession = useStore((s) => s.removeSession);
   const setProjectsOpen = useStore((s) => s.setProjectsOpen);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
+
+  // The chat queued for deletion (drives the confirm modal), and whether the
+  // delete request is in flight.
+  const [pendingDelete, setPendingDelete] = useState<SessionSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await removeSession(pendingDelete.id);
+      setPendingDelete(null);
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   const icon = theme?.voice.prompt_icon || "🐂";
   const currentId = session?.session_id ?? null;
@@ -115,6 +133,7 @@ export function Sidebar() {
               onToggle={() => toggle(project.path)}
               onNewChat={() => enterProject(project.path)}
               onOpenChat={resume}
+              onDeleteChat={setPendingDelete}
             />
           ))
         )}
@@ -126,6 +145,24 @@ export function Sidebar() {
           Settings
         </button>
       </div>
+
+      {pendingDelete && (
+        <Modal title="Delete chat?" onClose={() => !deleting && setPendingDelete(null)}>
+          <p className="delete-confirm-text">
+            Permanently delete{" "}
+            <strong>{pendingDelete.title?.trim() || "this chat"}</strong> and its messages? This
+            can’t be undone.
+          </p>
+          <div className="delete-confirm-actions">
+            <Button variant="ghost" onClick={() => setPendingDelete(null)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={confirmDelete} disabled={deleting}>
+              {deleting ? "Deleting…" : "Delete"}
+            </Button>
+          </div>
+        </Modal>
+      )}
     </aside>
   );
 }
@@ -141,6 +178,7 @@ function ProjectFolder({
   onToggle,
   onNewChat,
   onOpenChat,
+  onDeleteChat,
 }: {
   project: Project;
   rows: SessionSummary[];
@@ -151,6 +189,7 @@ function ProjectFolder({
   onToggle: () => void;
   onNewChat: () => void;
   onOpenChat: (id: string) => void;
+  onDeleteChat: (row: SessionSummary) => void;
 }) {
   return (
     <div className={`project ${active ? "active" : ""}`}>
@@ -183,6 +222,7 @@ function ProjectFolder({
                 current={s.id === currentId}
                 status={runStatus[s.id]}
                 onOpen={() => onOpenChat(s.id)}
+                onDelete={() => onDeleteChat(s)}
               />
             ))
           )}
@@ -192,33 +232,49 @@ function ProjectFolder({
   );
 }
 
-/** A single chat entry with its run indicator. */
+/** A single chat entry with its run indicator and a hover-revealed delete icon. */
 function ChatRow({
   row,
   current,
   status,
   onOpen,
+  onDelete,
 }: {
   row: SessionSummary;
   current: boolean;
   status: RunStatus | undefined;
   onOpen: () => void;
+  onDelete: () => void;
 }) {
+  const title = row.title?.trim() || "New chat";
   return (
-    <button className={`history-item ${current ? "active" : ""}`} onClick={onOpen}>
-      <span className="history-text">
-        <span className="history-title">{row.title?.trim() || "New chat"}</span>
-        <span className="history-sub">
-          {row.created_at ? relativeTime(row.created_at) : "Not started yet"}
+    <div className={`history-item ${current ? "active" : ""}`}>
+      <button className="history-open" onClick={onOpen}>
+        <span className="history-text">
+          <span className="history-title">{title}</span>
+          <span className="history-sub">
+            {row.created_at ? relativeTime(row.created_at) : "Not started yet"}
+          </span>
         </span>
-      </span>
-      {status === "running" ? (
-        <span className="chat-status running" title="Running" aria-label="Running">
-          <span className="run-dot" />
-        </span>
-      ) : status === "unread" && !current ? (
-        <span className="chat-status unread" title="Done — unread" aria-label="Done, unread" />
-      ) : null}
-    </button>
+        {status === "running" ? (
+          <span className="chat-status running" title="Running" aria-label="Running">
+            <span className="run-dot" />
+          </span>
+        ) : status === "unread" && !current ? (
+          <span className="chat-status unread" title="Done — unread" aria-label="Done, unread" />
+        ) : null}
+      </button>
+      <button
+        className="history-delete"
+        title="Delete chat"
+        aria-label={`Delete chat: ${title}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+      >
+        <Trash2 size={14} />
+      </button>
+    </div>
   );
 }

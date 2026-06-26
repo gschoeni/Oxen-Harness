@@ -49,26 +49,34 @@ export function Modal({
   title,
   onClose,
   wide,
+  xwide,
+  actions,
   children,
 }: {
   title: string;
   onClose: () => void;
   wide?: boolean;
+  xwide?: boolean;
+  /** Optional controls rendered in the header, left of the close button. */
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="modal-scrim" onClick={onClose}>
       <div
-        className={`modal ${wide ? "wide" : ""}`}
+        className={["modal", wide ? "wide" : "", xwide ? "xwide" : ""].filter(Boolean).join(" ")}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
         <div className="modal-header">
           <h2 className="modal-title">{title}</h2>
-          <IconButton onClick={onClose} aria-label="Close">
-            <X size={20} />
-          </IconButton>
+          <div className="modal-header-right">
+            {actions}
+            <IconButton onClick={onClose} aria-label="Close">
+              <X size={20} />
+            </IconButton>
+          </div>
         </div>
         <div className="modal-body">{children}</div>
       </div>

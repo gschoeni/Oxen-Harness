@@ -1,0 +1,52 @@
+/* highlight.js token theme mapped onto our design tokens, so code coloring
+   follows the active theme + light/dark mode. Scoped to a `.hljs-theme` wrapper
+   so it only applies where a caller opts in (never leaking into prose). */
+.hljs-theme code.hljs,
+.hljs-theme .hljs {
+  color: var(--text);
+  background: transparent;
+}
+.hljs-theme .hljs-comment,
+.hljs-theme .hljs-quote {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+.hljs-theme .hljs-keyword,
+.hljs-theme .hljs-selector-tag,
+.hljs-theme .hljs-literal,
+.hljs-theme .hljs-built_in,
+.hljs-theme .hljs-name,
+.hljs-theme .hljs-tag {
+  color: var(--accent);
+}
+.hljs-theme .hljs-string,
+.hljs-theme .hljs-attr,
+.hljs-theme .hljs-template-tag,
+.hljs-theme .hljs-addition {
+  color: var(--green);
+}
+.hljs-theme .hljs-number,
+.hljs-theme .hljs-meta,
+.hljs-theme .hljs-link {
+  color: var(--link);
+}
+.hljs-theme .hljs-title,
+.hljs-theme .hljs-section,
+.hljs-theme .hljs-type,
+.hljs-theme .hljs-attribute {
+  color: var(--text-secondary);
+}
+.hljs-theme .hljs-variable,
+.hljs-theme .hljs-symbol,
+.hljs-theme .hljs-bullet {
+  color: var(--text-secondary);
+}
+.hljs-theme .hljs-deletion {
+  color: var(--danger);
+}
+.hljs-theme .hljs-emphasis {
+  font-style: italic;
+}
+.hljs-theme .hljs-strong {
+  font-weight: 600;
+}

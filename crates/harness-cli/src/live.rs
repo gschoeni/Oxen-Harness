@@ -1198,6 +1198,10 @@ impl Live {
                 self.begin_thinking();
                 self.render_composer();
             }
+            // Usage is surfaced in the banner/status, not inline during a turn.
+            AgentEvent::Usage { .. } => {}
+            // Streaming tool-argument fragments drive the desktop UI only.
+            AgentEvent::ToolDelta { .. } => {}
         }
     }
 

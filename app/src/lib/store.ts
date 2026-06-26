@@ -8,6 +8,7 @@
 import { create } from "zustand";
 import { lighten, readableOn, withAlpha } from "./color";
 import {
+  deleteSession,
   listProjects,
   listSessions,
   newSession,
@@ -17,6 +18,7 @@ import {
   runTurn,
   sessionInfo,
   setActiveProject,
+  totalTokensUsed,
 } from "./ipc";
 import {
   appendToken,
@@ -27,6 +29,7 @@ import {
   transcriptToItems,
   type Item,
 } from "../features/chat/thread";
+import { partialCanvasDoc } from "./streamingArgs";
 import type {
   CanvasDoc,
   CanvasEvent,
@@ -38,9 +41,15 @@ import type {
   SessionSummary,
   Theme,
   ToolEvent,
+  ToolDeltaEvent,
+  UsageEvent,
 } from "./types";
 
 const MODE_KEY = "oxen-ui-mode";
+
+/** Mirrors the backend's chars-per-token budgeting heuristic (budget.rs), so the
+ *  live streaming estimate lines up with the authoritative count at turn end. */
+const CHARS_PER_TOKEN = 4;
 
 export interface QueuedPrompt {
   text: string;
@@ -64,6 +73,8 @@ interface AppState {
   theme: Theme | null;
   /** The chat currently shown. */
   session: SessionInfo | null;
+  /** All-time total tokens used across every session (drives the hero's stat). */
+  totalTokensUsed: number;
   sessions: SessionSummary[];
   /** Known projects (working directories), refreshed alongside history. */
   projects: Project[];
@@ -73,6 +84,10 @@ interface AppState {
   infos: Record<string, SessionInfo>;
   /** Live thread items per session id. */
   threads: Record<string, Item[]>;
+  /** Estimated tokens streamed in the current in-flight turn, per session — lets
+   *  the usage meter tick up live before the authoritative count lands at turn
+   *  end. Reset to 0 when that turn's `agent://usage` arrives. */
+  liveTokens: Record<string, number>;
   /** Per-session run state driving the sidebar indicator (absent = idle/read). */
   runStatus: Record<string, RunStatus>;
   /** Prompts queued while a session is mid-turn, sent in order as it frees up. */
@@ -85,9 +100,17 @@ interface AppState {
   /** True while the model is writing/updating a canvas for a session (before its
    *  content arrives), so the panel can show a "writing…" state. */
   canvasWriting: Record<string, boolean>;
+  /** The tool call whose arguments are currently streaming in, per session —
+   *  drives the live file-write preview. `args` is the accumulated raw JSON. */
+  streamingTool: Record<string, { name: string; args: string } | undefined>;
+  /** A provisional canvas doc built from the in-flight canvas call's streaming
+   *  args, so the panel shows the document forming before it's committed. */
+  streamingCanvas: Record<string, CanvasDoc | undefined>;
   settingsOpen: boolean;
   modelsOpen: boolean;
   themesOpen: boolean;
+  /** The developer view (raw LLM inputs/outputs inspector) overlay. */
+  devViewOpen: boolean;
   question: QuestionPayload | null;
 
   setMode: (m: Mode) => void;
@@ -97,6 +120,8 @@ interface AppState {
   loadSession: () => Promise<void>;
   startNewSession: () => Promise<void>;
   resume: (id: string) => Promise<void>;
+  /** Permanently delete a chat; if it was the current one, open a fresh chat. */
+  removeSession: (id: string) => Promise<void>;
   setProjectsOpen: (open: boolean) => void;
   /** Switch to a known project and start a fresh chat in it. */
   enterProject: (path: string) => Promise<void>;
@@ -112,6 +137,13 @@ interface AppState {
   /** Route a streamed token / tool event into its session's thread. */
   ingestToken: (session: string, token: string) => void;
   ingestTool: (e: ToolEvent) => void;
+  /** Accumulate a streaming tool-args fragment (live file/canvas preview). */
+  ingestToolDelta: (e: ToolDeltaEvent) => void;
+  /** Update a session's live usage (per-session count + context fill) as it
+   *  accrues within a turn. */
+  ingestUsage: (e: UsageEvent) => void;
+  /** Refresh the all-time total tokens used from the backend. */
+  refreshTotalTokens: () => Promise<void>;
   /** Upsert a canvas document and open it in the side panel. */
   ingestCanvas: (e: CanvasEvent) => void;
   /** Show a specific canvas doc (or close the panel with null) for the current chat. */
@@ -124,6 +156,7 @@ interface AppState {
   setSettingsOpen: (open: boolean) => void;
   setModelsOpen: (open: boolean) => void;
   setThemesOpen: (open: boolean) => void;
+  setDevViewOpen: (open: boolean) => void;
   setQuestion: (q: QuestionPayload | null) => void;
 }
 
@@ -132,8 +165,11 @@ export const useStore = create<AppState>((set, get) => {
   // the run status (read if the chat is in view, unread if it finished offscreen).
   function runTurnFor(id: string, text: string, paths: string[]) {
     set((s) => ({
-      threads: { ...s.threads, [id]: startTurn(s.threads[id] ?? [], text) },
+      threads: { ...s.threads, [id]: startTurn(s.threads[id] ?? [], text, paths) },
       runStatus: { ...s.runStatus, [id]: "running" },
+      // Clear any stale live estimate so this turn's meter starts from the
+      // authoritative base (the usage event normally resets it, but be safe).
+      liveTokens: { ...s.liveTokens, [id]: 0 },
     }));
     runTurn(id, text, paths)
       .then((final) =>
@@ -146,9 +182,15 @@ export const useStore = create<AppState>((set, get) => {
       )
       .finally(() => {
         // A canvas "writing" signal that never produced a doc (or errored) must
-        // not leave the panel stuck in the writing state.
-        set((s) => ({ canvasWriting: { ...s.canvasWriting, [id]: false } }));
+        // not leave the panel stuck in the writing state. Also drop any leftover
+        // streaming previews so nothing lingers after the turn.
+        set((s) => ({
+          canvasWriting: { ...s.canvasWriting, [id]: false },
+          streamingTool: { ...s.streamingTool, [id]: undefined },
+          streamingCanvas: { ...s.streamingCanvas, [id]: undefined },
+        }));
         get().refreshHistory(); // the first turn gives a new session its title
+        get().refreshTotalTokens(); // the turn bumped the all-time total
         const next = (get().queues[id] ?? [])[0];
         if (next !== undefined) {
           set((s) => ({ queues: { ...s.queues, [id]: (s.queues[id] ?? []).slice(1) } }));
@@ -168,19 +210,24 @@ export const useStore = create<AppState>((set, get) => {
     mode: initialMode(),
     theme: null,
     session: null,
+    totalTokensUsed: 0,
     sessions: [],
     projects: [],
     projectsOpen: false,
     infos: {},
     threads: {},
+    liveTokens: {},
     runStatus: {},
     queues: {},
     canvases: {},
     activeCanvas: {},
     canvasWriting: {},
+    streamingTool: {},
+    streamingCanvas: {},
     settingsOpen: false,
     modelsOpen: false,
     themesOpen: false,
+    devViewOpen: false,
     question: null,
 
     setMode: (mode) => {
@@ -244,6 +291,35 @@ export const useStore = create<AppState>((set, get) => {
       get().refreshHistory();
     },
 
+    removeSession: async (id) => {
+      await deleteSession(id);
+      const wasCurrent = get().session?.session_id === id;
+      // Forget every per-session slice so nothing lingers for the deleted chat.
+      set((s) => {
+        const drop = <T,>(rec: Record<string, T>) => {
+          const copy = { ...rec };
+          delete copy[id];
+          return copy;
+        };
+        return {
+          session: wasCurrent ? null : s.session,
+          threads: drop(s.threads),
+          infos: drop(s.infos),
+          runStatus: drop(s.runStatus),
+          queues: drop(s.queues),
+          canvases: drop(s.canvases),
+          activeCanvas: drop(s.activeCanvas),
+          canvasWriting: drop(s.canvasWriting),
+          streamingTool: drop(s.streamingTool),
+          streamingCanvas: drop(s.streamingCanvas),
+          liveTokens: drop(s.liveTokens),
+        };
+      });
+      await get().refreshHistory();
+      // If we deleted the chat in view, drop into a fresh one so the UI isn't empty.
+      if (wasCurrent) await get().startNewSession();
+    },
+
     setProjectsOpen: (projectsOpen) => set({ projectsOpen }),
 
     enterProject: async (path) => {
@@ -290,7 +366,15 @@ export const useStore = create<AppState>((set, get) => {
       set((s) =>
         s.threads[session] === undefined
           ? {}
-          : { threads: { ...s.threads, [session]: appendToken(s.threads[session], token) } },
+          : {
+              threads: { ...s.threads, [session]: appendToken(s.threads[session], token) },
+              // Tick the usage meter up live as the reply streams, matching the
+              // backend's ~4-chars-per-token estimate; snapped exact at turn end.
+              liveTokens: {
+                ...s.liveTokens,
+                [session]: (s.liveTokens[session] ?? 0) + token.length / CHARS_PER_TOKEN,
+              },
+            },
       ),
 
     ingestTool: (e) =>
@@ -300,8 +384,57 @@ export const useStore = create<AppState>((set, get) => {
           e.phase === "start"
             ? toolStart(s.threads[e.session], e.name, e.detail, Date.now())
             : toolEnd(s.threads[e.session], e.name, e.detail, Date.now());
-        return { threads: { ...s.threads, [e.session]: updated } };
+        // The call's args are fully assembled now (the real tool chip takes
+        // over), so drop the streaming file preview. Canvas keeps its provisional
+        // doc until the committed version lands via ingestCanvas.
+        return {
+          threads: { ...s.threads, [e.session]: updated },
+          streamingTool: { ...s.streamingTool, [e.session]: undefined },
+        };
       }),
+
+    ingestToolDelta: (e) =>
+      set((s) => {
+        const prev = s.streamingTool[e.session];
+        const args = prev && prev.name === e.name ? prev.args + e.delta : e.delta;
+        const update: Partial<AppState> = {
+          streamingTool: { ...s.streamingTool, [e.session]: { name: e.name, args } },
+        };
+        // Canvas streams into the side panel: build a provisional doc so the
+        // panel shows the document forming before the committed version lands.
+        if (e.name === "canvas") {
+          const doc = partialCanvasDoc(args);
+          if (doc) update.streamingCanvas = { ...s.streamingCanvas, [e.session]: doc };
+        }
+        return update;
+      }),
+
+    ingestUsage: (e) =>
+      set((s) => {
+        const info = s.infos[e.session];
+        if (!info) return {};
+        const updated = {
+          ...info,
+          tokens_used: e.tokens_used,
+          context_tokens: e.context_tokens,
+          context_window: e.context_window,
+        };
+        return {
+          infos: { ...s.infos, [e.session]: updated },
+          session: s.session?.session_id === e.session ? updated : s.session,
+          // This event carries the exact count up to the current model call, so
+          // drop the live streaming estimate to avoid double-counting.
+          liveTokens: { ...s.liveTokens, [e.session]: 0 },
+        };
+      }),
+
+    refreshTotalTokens: async () => {
+      try {
+        set({ totalTokensUsed: await totalTokensUsed() });
+      } catch {
+        /* leave the previous total in place on a transient error */
+      }
+    },
 
     ingestCanvas: ({ session, ...doc }) =>
       set((s) => {
@@ -314,6 +447,8 @@ export const useStore = create<AppState>((set, get) => {
           canvases: { ...s.canvases, [session]: next },
           activeCanvas: { ...s.activeCanvas, [session]: doc.id },
           canvasWriting: { ...s.canvasWriting, [session]: false },
+          // The committed doc supersedes the streaming preview.
+          streamingCanvas: { ...s.streamingCanvas, [session]: undefined },
         };
       }),
 
@@ -342,6 +477,7 @@ export const useStore = create<AppState>((set, get) => {
     setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
     setModelsOpen: (modelsOpen) => set({ modelsOpen }),
     setThemesOpen: (themesOpen) => set({ themesOpen }),
+    setDevViewOpen: (devViewOpen) => set({ devViewOpen }),
     setQuestion: (question) => set({ question }),
   };
 });

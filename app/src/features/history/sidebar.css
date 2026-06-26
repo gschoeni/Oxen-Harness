@@ -213,17 +213,66 @@
   flex: 1;
   min-width: 0;
 }
-.history-item:hover:not(:disabled) {
+.history-item:hover {
   background: var(--surface-2);
   color: var(--text);
-}
-.history-item:disabled {
-  cursor: default;
 }
 .history-item.active {
   background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
   border-color: color-mix(in srgb, var(--accent) 30%, var(--separator));
   color: var(--text);
+}
+/* The main clickable area of a chat row (everything but the delete icon). */
+.history-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+/* Subtle delete icon, revealed on row hover / focus (and on the active row). */
+.history-delete {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--text-tertiary);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.history-item:hover .history-delete,
+.history-item.active .history-delete,
+.history-delete:focus-visible {
+  opacity: 1;
+}
+.history-delete:hover {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+/* Delete-confirmation modal. */
+.delete-confirm-text {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1.6;
+}
+.delete-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
 }
 .history-title {
   display: block;

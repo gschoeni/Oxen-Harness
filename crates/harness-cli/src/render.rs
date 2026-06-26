@@ -154,6 +154,11 @@ impl TurnRenderer {
                 );
                 self.begin_thinking();
             }
+            // Usage is surfaced in the banner/status, not inline during a turn.
+            AgentEvent::Usage { .. } => {}
+            // Streaming tool-argument fragments drive the desktop UI; the CLI
+            // shows the assembled call when it starts, so ignore the deltas.
+            AgentEvent::ToolDelta { .. } => {}
         }
     }
 

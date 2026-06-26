@@ -9,11 +9,40 @@
   position: relative;
 }
 
-/* Transparent strip across the top that drags the window (overlay title bar). */
+/* Transparent strip across the top that drags the window (overlay title bar).
+   The dev-view button sits at the right; the rest stays a drag handle. */
 .chat-titlebar {
   height: 38px;
   flex-shrink: 0;
   z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 var(--space-3);
+}
+/* Developer-view toggle, pinned to the upper-right of the chat window. */
+.dev-view-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  color: var(--text-tertiary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.dev-view-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--separator);
+}
+.dev-view-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 /* Positioning context for the floating jump-to-bottom button so it sits just
@@ -609,6 +638,57 @@
   color: var(--text);
 }
 
+/* Image attachment staged in the composer: a thumbnail with its name + remove. */
+.attachment-thumb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  max-width: 100%;
+}
+.attachment-thumb-img,
+.attachment-thumb .attach-img-loading {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-xs);
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--surface-2);
+  display: block;
+}
+.attachment-thumb-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+/* Image attachments shown above a user message in the thread. */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.msg-attachment-img,
+.msg-attachments .attach-img-loading {
+  max-width: 260px;
+  max-height: 260px;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+  display: block;
+  background: var(--surface-2);
+}
+.msg-attachments .attach-img-loading {
+  width: 160px;
+  height: 120px;
+}
+
 /* --- Composer --- */
 .composer {
   flex-shrink: 0;
@@ -729,4 +809,23 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Live usage readout, pinned just above the composer during a chat (the hero —
+   which carries the all-time total — is gone once messages exist). Matches the
+   composer's centered column so it sits flush above the input. */
+.token-meter {
+  max-width: 740px;
+  margin: 0 auto;
+  padding: 0 var(--space-2) var(--space-1);
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  user-select: none;
+}
+.token-meter-dot {
+  opacity: 0.6;
 }
