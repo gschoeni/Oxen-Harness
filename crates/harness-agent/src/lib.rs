@@ -137,8 +137,8 @@ pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
     let canvas_guideline = if canvas {
         "\n- When you produce a substantial, self-contained deliverable the user \
          will read, iterate on, or keep — a report/article (markdown), a rendered \
-         web page or interactive demo (html), a sizeable code file (code), a \
-         diagram (mermaid), or a vector graphic (svg) — show it with `canvas` \
+         web page or interactive demo (html), a sizeable code file (code), or a \
+         vector graphic (svg) — show it with `canvas` \
          instead of a long fenced block in chat. Reuse the same `id` to revise an \
          open document. Don't use `canvas` for short answers or quick snippets; \
          opening a panel for those is disruptive."

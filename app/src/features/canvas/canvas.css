@@ -222,14 +222,3 @@
   border: 0;
   background: #fff; /* a neutral page ground for arbitrary documents */
 }
-
-.canvas-mermaid {
-  display: grid;
-  place-items: center;
-  padding: var(--space-6);
-  min-height: 100%;
-}
-.canvas-mermaid svg {
-  max-width: 100%;
-  height: auto;
-}

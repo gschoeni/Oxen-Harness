@@ -1,6 +1,6 @@
 //! CLI side of the `canvas` tool. A terminal can't host a live web view, so we
 //! write the document to disk, open web documents (html/svg) in the browser, and
-//! render a preview of text documents (markdown/code/mermaid) inline.
+//! render a preview of text documents (markdown/code) inline.
 
 use std::path::{Path, PathBuf};
 
@@ -100,7 +100,7 @@ pub fn render_canvas_block(ui: &Ui, arguments: &str) -> Option<Vec<String>> {
         "html" | "svg" => {
             out.push(format!("  {}", ui.dim("→ opening in your browser…")));
         }
-        // code / mermaid / anything else: show the source, dimmed.
+        // code / anything else: show the source, dimmed.
         _ => {
             push_capped(
                 &mut out,

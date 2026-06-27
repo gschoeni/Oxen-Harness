@@ -246,7 +246,7 @@ export type RunStatus = "running" | "unread";
 
 // ---- canvas (side-panel documents) -----------------------------------------
 
-export type CanvasFormat = "markdown" | "html" | "code" | "svg" | "mermaid";
+export type CanvasFormat = "markdown" | "html" | "code" | "svg";
 
 /** A document the agent showed in the side-panel canvas. Addressed by `id` so a
  *  later update with the same id replaces it. */

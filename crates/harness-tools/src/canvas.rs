@@ -2,8 +2,8 @@
 //! the chat (like Claude Artifacts / ChatGPT Canvas).
 //!
 //! The model calls this when it produces a deliverable the user will read,
-//! iterate on, or keep — a report, a rendered web page, a diagram, a sizeable
-//! code file — rather than burying it in the chat. The document is addressed by
+//! iterate on, or keep — a report, a rendered web page, a vector graphic, a
+//! sizeable code file — rather than burying it in the chat. The document is addressed by
 //! a stable `id`: calling `canvas` again with the same `id` *updates* the open
 //! document in place.
 //!
@@ -23,7 +23,7 @@ use crate::{Tool, ToolError};
 pub const CANVAS_TOOL: &str = "canvas";
 
 /// The document formats a canvas can render.
-pub const CANVAS_FORMATS: &[&str] = &["markdown", "html", "code", "svg", "mermaid"];
+pub const CANVAS_FORMATS: &[&str] = &["markdown", "html", "code", "svg"];
 
 /// A document to display in the canvas. Addressed by [`CanvasDoc::id`] so a
 /// later call with the same id updates the same panel.
@@ -33,7 +33,7 @@ pub struct CanvasDoc {
     pub id: String,
     /// Short human title shown above the document.
     pub title: String,
-    /// One of [`CANVAS_FORMATS`]: `markdown`, `html`, `code`, `svg`, `mermaid`.
+    /// One of [`CANVAS_FORMATS`]: `markdown`, `html`, `code`, `svg`.
     pub format: String,
     /// For `format = "code"`, the language hint (e.g. `"python"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -49,7 +49,6 @@ impl CanvasDoc {
         match self.format.as_str() {
             "html" => "html",
             "svg" => "svg",
-            "mermaid" => "mmd",
             "code" => code_extension(self.language.as_deref()),
             _ => "md",
         }
@@ -160,8 +159,8 @@ impl Tool for CanvasTool {
          or update one you already opened. Use this for substantial, \
          self-contained deliverables the user will read, iterate on, or keep — \
          a report or article (markdown), a rendered web page or interactive demo \
-         (html), a sizeable code file (code), a diagram (mermaid), or a vector \
-         graphic (svg). Prefer it over a long fenced block in chat for anything \
+         (html), a sizeable code file (code), or a vector graphic (svg). Prefer \
+         it over a long fenced block in chat for anything \
          roughly 15+ lines or that stands on its own. Do NOT use it for short \
          answers, quick snippets, or conversational replies — opening a panel for \
          those is disruptive. To revise a document you already showed, call \
@@ -182,8 +181,8 @@ impl Tool for CanvasTool {
                 },
                 "format": {
                     "type": "string",
-                    "enum": ["markdown", "html", "code", "svg", "mermaid"],
-                    "description": "markdown = rich text/report; html = a rendered web page or interactive experience; code = a source file (set `language`); svg = a vector image; mermaid = a diagram from mermaid syntax."
+                    "enum": ["markdown", "html", "code", "svg"],
+                    "description": "markdown = rich text/report; html = a rendered web page or interactive experience; code = a source file (set `language`); svg = a vector image."
                 },
                 "language": {
                     "type": "string",
