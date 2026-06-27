@@ -116,7 +116,11 @@ fn format_answers(answers: &[QuestionAnswer]) -> String {
         };
         out.push_str(&format!("- {label}\n  → {}\n", a.selected.join(", ")));
     }
-    out.push_str("\nProceed using these decisions.");
+    out.push_str(
+        "\nNow act on these decisions by making the appropriate tool call in this same turn \
+         (e.g. open a `canvas`, write or edit files, run a command). Do not reply with only a \
+         description of what you are about to do.",
+    );
     out
 }
 

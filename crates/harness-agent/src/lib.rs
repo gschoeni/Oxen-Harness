@@ -432,6 +432,14 @@ impl Agent {
         let window = self.context_window();
         let budget = budget::prompt_budget(window, self.config.response_reserve);
 
+        // A one-shot corrective for the "announce a plan, then stop" failure: if
+        // the model returns a text-only reply that reads as intent-to-act, we
+        // append this nudge to the *next* request only and let the loop run once
+        // more. It's never persisted, so it stays out of both the stored
+        // transcript and the visible chat. Capped at one nudge per turn.
+        let mut nudge: Option<ChatMessage> = None;
+        let mut nudged = false;
+
         // No fixed iteration cap: the loop runs until the model returns a final
         // answer, bounded only by how much fits in the context window.
         loop {
@@ -453,7 +461,11 @@ impl Agent {
                 context_tokens: prompt_tokens,
             });
 
-            let request = ChatRequest::new(&self.config.model, self.outbound_messages())
+            let mut outbound = self.outbound_messages();
+            if let Some(n) = &nudge {
+                outbound.push(n.clone());
+            }
+            let request = ChatRequest::new(&self.config.model, outbound)
                 .with_tools(tool_defs.clone())
                 .streaming(true);
 
@@ -491,8 +503,19 @@ impl Agent {
             });
 
             if assembled.tool_calls.is_empty() {
+                // The model replied with prose and no tool call. If it reads as
+                // an announced-but-unperformed action, nudge it once to actually
+                // emit the call; otherwise this is its final answer.
+                if !nudged && looks_like_unfulfilled_intent(&assembled.content) {
+                    nudged = true;
+                    nudge = Some(ChatMessage::user(INTENT_NUDGE.to_string()));
+                    continue;
+                }
                 return Ok(assembled.content);
             }
+
+            // A tool call landed; the corrective (if any) served its purpose.
+            nudge = None;
 
             for call in &assembled.tool_calls {
                 let result = self.run_tool(call, &mut on_event).await;
@@ -581,6 +604,28 @@ fn build_user_message(
 mod tests {
     use super::*;
     use harness_store::SessionMeta;
+
+    #[test]
+    fn system_prompt_forbids_ending_on_intent_in_every_variant() {
+        // The guardrail against the "announce the plan, then stop" failure mode
+        // must be present regardless of which optional tools are advertised.
+        let needle = "Never end a turn with only a statement of intent";
+        for web_search in [false, true] {
+            for canvas in [false, true] {
+                let prompt = system_prompt_with(web_search, canvas);
+                assert!(
+                    prompt.contains(needle),
+                    "guardrail missing for web_search={web_search}, canvas={canvas}"
+                );
+            }
+        }
+        // ...and via the public convenience wrapper the host uses by default.
+        assert!(default_system_prompt(false).contains(needle));
+        assert!(AgentConfig::default()
+            .system_prompt
+            .unwrap()
+            .contains(needle));
+    }
 
     #[test]
     fn user_message_is_plain_without_attachments_and_multimodal_with() {
