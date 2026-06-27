@@ -51,6 +51,24 @@ const MODE_KEY = "oxen-ui-mode";
  *  live streaming estimate lines up with the authoritative count at turn end. */
 const CHARS_PER_TOKEN = 4;
 
+/** Backstop on a chat's pending send queue. Realistic queues are a few prompts;
+ *  this only bounds pathological growth (e.g. submit held down) so the queue
+ *  can't grow without limit in memory. */
+const MAX_QUEUE = 50;
+
+/** How many canvas docs to keep in memory per session. The full content of each
+ *  also lives in the chat transcript (the canvas tool-call chip rebuilds the doc
+ *  via `openCanvasDoc`), so evicting the oldest beyond this cap frees memory
+ *  without losing anything — a stale tab is just re-added when its chip is
+ *  clicked. Set well above any realistic session so it never trims in practice. */
+const MAX_CANVASES = 12;
+
+/** Keep only the newest `MAX_CANVASES` docs. The just-touched doc is appended
+ *  last (and is the active one), so it always survives the trim. */
+function capCanvases(list: CanvasDoc[]): CanvasDoc[] {
+  return list.length > MAX_CANVASES ? list.slice(list.length - MAX_CANVASES) : list;
+}
+
 export interface QueuedPrompt {
   text: string;
   attachments: string[];
@@ -350,7 +368,13 @@ export const useStore = create<AppState>((set, get) => {
       if (!id) return;
       if (get().runStatus[id] === "running") {
         const prompt = { text, attachments };
-        set((s) => ({ queues: { ...s.queues, [id]: [...(s.queues[id] ?? []), prompt] } }));
+        set((s) => {
+          const q = s.queues[id] ?? [];
+          // Bounded backstop: once the queue is saturated, ignore further sends
+          // rather than letting it grow unbounded in memory.
+          if (q.length >= MAX_QUEUE) return {};
+          return { queues: { ...s.queues, [id]: [...q, prompt] } };
+        });
         return;
       }
       runTurnFor(id, text, attachments);
@@ -440,15 +464,17 @@ export const useStore = create<AppState>((set, get) => {
       set((s) => {
         const list = s.canvases[session] ?? [];
         const i = list.findIndex((d) => d.id === doc.id);
-        // Update in place if the id exists, else append. Opening it focuses the
-        // panel on this doc for that session and clears the "writing" state.
-        const next = i >= 0 ? list.map((d, j) => (j === i ? doc : d)) : [...list, doc];
+        // Update in place if the id exists, else append (capped). Opening it
+        // focuses the panel on this doc for that session and clears "writing".
+        const next = capCanvases(i >= 0 ? list.map((d, j) => (j === i ? doc : d)) : [...list, doc]);
         return {
           canvases: { ...s.canvases, [session]: next },
           activeCanvas: { ...s.activeCanvas, [session]: doc.id },
           canvasWriting: { ...s.canvasWriting, [session]: false },
-          // The committed doc supersedes the streaming preview.
+          // The committed doc supersedes both streaming buffers; release the raw
+          // arg string too so a large doc isn't held twice once it lands.
           streamingCanvas: { ...s.streamingCanvas, [session]: undefined },
+          streamingTool: { ...s.streamingTool, [session]: undefined },
         };
       }),
 
@@ -464,7 +490,7 @@ export const useStore = create<AppState>((set, get) => {
         if (!session) return {};
         const list = s.canvases[session] ?? [];
         const i = list.findIndex((d) => d.id === doc.id);
-        const next = i >= 0 ? list.map((d, j) => (j === i ? doc : d)) : [...list, doc];
+        const next = capCanvases(i >= 0 ? list.map((d, j) => (j === i ? doc : d)) : [...list, doc]);
         return {
           canvases: { ...s.canvases, [session]: next },
           activeCanvas: { ...s.activeCanvas, [session]: doc.id },
