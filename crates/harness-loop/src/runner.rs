@@ -301,12 +301,15 @@ impl LoopRunner {
 
 const PROTOCOL: &str =
     "You are running an autonomous work LOOP toward a goal. Follow this protocol:\n\
-     1. DISCOVER — explore the codebase/docs to work out what actually needs doing.\n\
+     1. DISCOVER — read the relevant code/docs (fully, not skimmed) to work out what \
+        actually needs doing, and copy the patterns and libraries already in use.\n\
      2. QUESTION — only if, after discovering, something is genuinely ambiguous or you're \
         missing context the user has, call `ask_user_question`. Don't ask about things you \
         can decide yourself.\n\
-     3. PLAN — decide the approach.\n\
-     4. EXECUTE — do the work with your tools; make real changes.\n\
+     3. PLAN — decide the approach and a concrete success criterion before you write code.\n\
+     4. EXECUTE — do the work with your tools; make real changes. Keep them surgical and \
+        simple: the smallest diff that solves the problem now, fixing root causes rather \
+        than papering over symptoms. Don't reformat or touch code outside the task.\n\
      5. VERIFY — a gate checks the result after your turn (you don't grade yourself).\n\
      6. ITERATE — if it doesn't pass, you'll get the failure and try again.";
 

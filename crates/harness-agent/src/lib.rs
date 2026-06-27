@@ -155,21 +155,72 @@ pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
          - Prefer the dedicated tools over shell equivalents: use `find_files` not \
            `find`/`ls`, `search_files` not `grep`, `read_file` not `cat`, and \
            `edit_file`/`write_file` not `sed`/redirects.\n\
-         - Always `read_file` before editing it; `edit_file` needs `old_string` to \
-           match the real content exactly. Never include `read_file`'s line-number \
-           and tab prefix in edit arguments.{web_guideline}\n\
+         - Read before you write. Read the files you're about to touch — fully, not \
+           skimmed — and copy the patterns already there (naming, error handling, the \
+           libraries the project actually uses). Always `read_file` before editing it; \
+           `edit_file` needs `old_string` to match the real content exactly. Never \
+           include `read_file`'s line-number and tab prefix in edit arguments.{web_guideline}\n\
+         - Think before you code. When a request is ambiguous, name the assumption \
+           you're acting on and the trade-off you're making rather than filling the gap \
+           with plausible-looking code. For anything multi-step, state the plan and a \
+           concrete success criterion first so a wrong approach is caught early.\n\
          - When a product/design/implementation decision is genuinely ambiguous and \
            has multiple reasonable approaches with real trade-offs, call \
            `ask_user_question` to interview the user instead of guessing. Keep \
            options concise and distinct; don't add an 'Other' option (the user can \
            always type their own). Don't ask about trivia you can decide yourself.{canvas_guideline}\n\
+         - Keep changes surgical and simple. Write the minimum code that solves the \
+           problem in front of you — resist premature abstraction and configuration you \
+           don't need yet. Make the smallest diff the task allows: match the existing \
+           style, don't reformat, and don't touch code you weren't asked to. If you \
+           can't justify a changed line by the task, revert it.\n\
+         - Before adding a dependency, check whether the project or the standard library \
+           already does the job — a dependency is permanent code you don't control. When \
+           you do add one, say why.\n\
          - The user can attach images and PDFs to a message, and you receive their \
            actual visual content — look at them directly and answer from what you \
            see. Never claim you can't view images or that one wasn't provided.\n\
          - Work in small, verifiable steps. Run tests/builds and read the real output \
-           rather than assuming success. Fix root causes, not symptoms.\n\
+           rather than assuming success. When fixing a bug, reproduce it first and add a \
+           failing test, then fix the root cause — not the symptom. Investigate rather \
+           than guess: read the whole error, change one thing at a time, and don't paper \
+           over an unexpected null with a null check.\n\
+         - Say what you did and why, and be precise about uncertainty — name what you're \
+           unsure of and what to verify rather than vaguely claiming it should work.\n\
+         - Never end a turn with only a statement of intent. If you say you will \
+           create, edit, run, or look at something, emit the tool call that does it \
+           in the same turn — don't stop after announcing the plan and wait.\n\
          - Make independent tool calls together when they don't depend on each other."
     )
+}
+
+/// The one-shot corrective appended when the model announces an action but
+/// doesn't call a tool (see [`looks_like_unfulfilled_intent`]). Sent only on the
+/// retry request and never persisted.
+const INTENT_NUDGE: &str = "You described what you'll do but didn't actually call a tool to do it. \
+     If you intended to take an action — open a `canvas`, write or edit a file, run a command — \
+     make that tool call now. If you were genuinely finished, reply with your final answer.";
+
+/// Heuristic: does a text-only reply read as "I'm about to do X" rather than a
+/// finished answer? Used at most once per turn to nudge the model into emitting
+/// the tool call it announced instead of ending the turn on the plan.
+/// Deliberately conservative — a false positive only costs one extra model
+/// round-trip, since the nudge is capped at one per turn.
+fn looks_like_unfulfilled_intent(text: &str) -> bool {
+    let t = text.to_lowercase();
+    const SIGNALS: &[&str] = &[
+        "i'll ",
+        "i will ",
+        "i'm going to",
+        "i am going to",
+        "i'm gonna",
+        "let me ",
+        "now i'll",
+        "next, i",
+        "i'll go ahead",
+    ];
+    // "let me know" is a sign-off, not an unperformed action — don't nudge on it.
+    SIGNALS.iter().any(|s| t.contains(s)) && !t.contains("let me know")
 }
 
 /// A running agent bound to a model, tool set, and history session.
