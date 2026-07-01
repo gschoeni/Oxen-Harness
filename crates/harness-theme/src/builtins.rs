@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{s, Color, Style, Theme};
+use crate::{s, Color, HelpItem, Meta, Palette, Style, Theme, Voice, THEME_SCHEMA_VERSION};
 
 /// Every built-in theme, default first.
 pub fn all() -> Vec<Theme> {
@@ -76,6 +76,216 @@ fn style(
 const SYS_SANS: &str = "-apple-system, BlinkMacSystemFont, \"SF Pro Text\", \"Segoe UI\", Inter, Roboto, Helvetica, Arial, sans-serif";
 const SYS_SERIF: &str = "Georgia, \"Times New Roman\", \"PT Serif\", serif";
 const SYS_MONO: &str = "\"SF Mono\", ui-monospace, Menlo, Consolas, monospace";
+
+/// The original Oregon-Trail-on-a-CRT theme — the harness default
+/// ([`Theme::default`](crate::Theme::default) returns this).
+pub(crate) fn oregon_trail() -> Theme {
+    let schema_version = THEME_SCHEMA_VERSION;
+    let mut tool_verbs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    tool_verbs.insert(
+        s("read_file"),
+        lines(&["Reading the trail guide", "Studying the worn map"]),
+    );
+    tool_verbs.insert(
+        s("write_file"),
+        lines(&["Writing in the journal", "Etching a new tombstone"]),
+    );
+    tool_verbs.insert(
+        s("edit_file"),
+        lines(&["Mending the wagon", "Patching the wagon canvas"]),
+    );
+    tool_verbs.insert(
+        s("find_files"),
+        lines(&["Scouting for landmarks", "Surveying the trail"]),
+    );
+    tool_verbs.insert(
+        s("search_files"),
+        lines(&["Hunting through the brush", "Tracking through the prairie"]),
+    );
+    tool_verbs.insert(
+        s("run_shell"),
+        lines(&["Yoking the oxen", "Setting the wagon in motion"]),
+    );
+    tool_verbs.insert(
+        s("git"),
+        lines(&["Caulking the wagon", "Fording the river"]),
+    );
+    tool_verbs.insert(
+        s("web_search"),
+        lines(&["Wiring the telegraph", "Asking at the telegraph office"]),
+    );
+    tool_verbs.insert(
+        s("ask_user_question"),
+        lines(&["Holding a trail council", "Consulting the wagon party"]),
+    );
+    tool_verbs.insert(s("default"), lines(&["Working the trail"]));
+
+    Theme {
+        schema_version,
+        meta: Meta {
+            name: s("Oregon Trail"),
+            author: s("oxen-harness"),
+            description: s("1980s Oregon Trail on a CRT: tan titles, saddle brown, prairie green."),
+        },
+        palette: Palette {
+            title: Color::new(240, 190, 140),
+            primary: Color::new(96, 176, 96),
+            secondary: Color::new(170, 110, 60),
+            text: Color::new(236, 226, 206),
+            muted: Color::new(150, 140, 125),
+            danger: Color::new(205, 84, 72),
+            link: Color::new(120, 178, 214),
+            background: Color::new(15, 17, 21),
+            surface: Color::new(22, 25, 34),
+            border: Color::new(38, 44, 58),
+        },
+        voice: Voice {
+            prompt_icon: s("🐂"),
+            prompt_label: s("trail ❯"),
+            spinner_glyphs: lines(&["✶", "✸", "✺", "✹", "✷", "✦"]),
+            thinking: lines(&[
+                "Sizing up the situation",
+                "Consulting the trail guide",
+                "Fording the river",
+                "Caulking the wagon to float across",
+                "Yoking the oxen",
+                "Scouting the trail ahead",
+                "Greasing the wagon axles",
+                "Rationing the supplies",
+                "Checking the wagon for snakes",
+                "Reading the worn trail map",
+                "Asking a fellow traveler for directions",
+                "Resting the weary oxen",
+                "Setting a steady pace",
+                "Trading pelts at the fort",
+                "Looking for a shallow place to ford",
+                "Counting the remaining bullets",
+                "Pressing onward to Oregon",
+                "Watching for buffalo",
+                "Waiting for the river to drop",
+            ]),
+            tool_verbs,
+            deaths: lines(&[
+                "You have died of dysentery.",
+                "You have died of cholera.",
+                "You have died of typhoid fever.",
+                "You have died of measles.",
+                "You have died of diphtheria.",
+                "You have died of a fever.",
+                "You have died of exhaustion.",
+                "You have died of a snakebite.",
+                "You have died of pneumonia.",
+                "You have died of a broken leg.",
+                "You have died of a broken arm.",
+                "You have drowned while fording the river.",
+                "You have starved to death.",
+                "You have frozen to death in a blizzard.",
+                "You were accidentally shot while hunting.",
+                "Your oxen wandered off and you were stranded.",
+                "Thieves raided your wagon in the night.",
+                "A wagon wheel broke and you were left on the trail.",
+            ]),
+            wordmark: s("OXEN TRAIL"),
+            banner_art: lines(&[
+                r"      /\          /\          /\         ",
+                r"     /  \   /\   /  \   /\   /  \         ",
+                r"  __/    \_/  \_/    \_/  \_/    \___     ",
+                r"                  _______________",
+                r"                ,'               '.___",
+                r"   ____________,'    Oxen.ai        '.__",
+                r"  |  ~   ~   ~  |~   ~   ~   ~   ~    |  '.",
+                r"  |_____________|____________________|____\",
+                r"        (O)                    (O)",
+                r"^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`",
+            ]),
+            pre_tagline: s("～ The ～"),
+            subtitle: s("an open source agentic coding trail · powered by Oxen.ai"),
+            flavor_top: vec![[s("Departing"), s("Independence, Missouri · 1848")]],
+            // The franchise's iconic status panel. These are flavor (static), but
+            // they recreate the screen the moment a fresh trail begins — and feed
+            // both the CLI banner footer and the desktop hero's status panel.
+            flavor_bottom: vec![
+                [s("Date"), s("March 21, 1848")],
+                [s("Weather"), s("warm")],
+                [s("Health"), s("good")],
+                [s("Food"), s("1009 pounds")],
+                [s("Next landmark"), s("128000 tokens")],
+                [s("Total tokens used"), s("0 tokens")],
+            ],
+            bottom_hint: s("Send a message to begin on your trail"),
+            label_provider: s("Provider"),
+            label_model: s("Model"),
+            label_workspace: s("Wagon (workspace)"),
+            label_session: s("Trail journal"),
+            label_disk_used: s("Supplies on hand (disk used):"),
+            label_models_dir: s("Wagon stores (dir):"),
+            help_header: s("You may:"),
+            help_footer: s("What is your choice?"),
+            help_items: vec![
+                HelpItem {
+                    key: s("1."),
+                    title: s("Travel the trail"),
+                    hint: s("— just type what you want done"),
+                },
+                HelpItem {
+                    key: s("2."),
+                    title: s("Learn about the trail"),
+                    hint: s("— /help"),
+                },
+                HelpItem {
+                    key: s("3."),
+                    title: s("See the Oregon Top Ten"),
+                    hint: s("— /export [path]  (save the journey as JSONL)"),
+                },
+                HelpItem {
+                    key: s("4."),
+                    title: s("Trade your oxen"),
+                    hint: s("— /model [name]"),
+                },
+                HelpItem {
+                    key: s("5."),
+                    title: s("Change your colors"),
+                    hint: s("— /theme  (select, create, import, export)"),
+                },
+                HelpItem {
+                    key: s("6."),
+                    title: s("Pack the wagon"),
+                    hint: s("— /queue add <msg> … then /queue run"),
+                },
+                HelpItem {
+                    key: s("7."),
+                    title: s("Set the wagon rolling"),
+                    hint: s("— /loop run [name]  (work until the gate is green)"),
+                },
+                HelpItem {
+                    key: s("8."),
+                    title: s("Choose your departure"),
+                    hint: s("— /departing <place>  (set where the trail begins)"),
+                },
+                HelpItem {
+                    key: s("9."),
+                    title: s("Make camp / End"),
+                    hint: s("— /exit  (or Ctrl-D)"),
+                },
+            ],
+            exit_art: lines(&[
+                r"        _______________        ",
+                r"      .'               '.      ",
+                r"     /                   \     ",
+                r"    /       R. I. P.       \    ",
+                r"    |                      |    ",
+                r"    |      here lies a     |    ",
+                r"    |    weary  pioneer    |    ",
+                r"    |                      |    ",
+                r"    |                      |    ",
+            ]),
+            exit_ground: s("^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`^~`"),
+            resume_message: s("Your trail journal was saved. Resume this expedition with:"),
+            progress_icon: s("🐂"),
+        },
+        style: Style::default(),
+    }
+}
 
 /// A calm, modern dark theme — cool blues and slate.
 fn midnight() -> Theme {
