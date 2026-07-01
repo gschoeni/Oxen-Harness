@@ -1,5 +1,8 @@
 # oxen-harness 🐂
 
+[![CI](https://github.com/gschoeni/oxen-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/gschoeni/oxen-harness/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 An open source, hackable agentic coding harness — like Claude Code or Codex, built in Rust and powered by [Oxen.ai](https://oxen.ai).
 
 `oxen-harness` runs an objective-check-driven agent loop against any model exposed through the Oxen.ai OpenAI-compatible chat completions API, with first-class tool calling for editing code, running commands, and driving git. Every turn is persisted so you can later export your sessions and fine-tune a model on your own coding traces.
