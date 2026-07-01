@@ -13,17 +13,13 @@ import {
 import {
   detectHardware,
   downloadModel,
-  hfTokenPresent,
   installRuntime,
   installedLocalModels,
   listModelCatalog,
   onModelProgress,
   onRuntimeInstall,
   removeModel,
-  resolveHfModel,
   runtimeStatus,
-  searchHfModels,
-  setHfToken,
 } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { formatBytes } from "../../lib/format";
@@ -31,11 +27,11 @@ import type {
   CatalogModel,
   Fit,
   HardwareProfile,
-  HfHit,
   InstalledView,
   QuantOption,
   RuntimeStatus,
 } from "../../lib/types";
+import { looksLikeRepo, useHfSearch } from "./useHfSearch";
 import "./models.css";
 
 type Tab = "recommended" | "huggingface" | "oxen";
@@ -48,14 +44,6 @@ const FIT_LABEL: Record<Fit, string> = {
 
 function FitBadge({ fit }: { fit: Fit }) {
   return <span className={`fit-badge fit-${fit}`}>{FIT_LABEL[fit]}</span>;
-}
-
-/** Does the input look like a directly-loadable repo (`owner/name`) or HF URL,
- *  rather than a free-text search term? */
-function looksLikeRepo(input: string): boolean {
-  const s = input.trim();
-  if (s.includes("huggingface.co")) return true;
-  return /^[\w.-]+\/[\w.-]+/.test(s);
 }
 
 /** Local-model setup, embedded as the "Local models" settings subpage: detect
@@ -86,19 +74,29 @@ export function LocalSetup() {
   const [usingId, setUsingId] = useState<string | null>(null);
 
   // Hugging Face — one smart input: type to autocomplete GGUF repos, or paste a
-  // repo / .gguf link and load it directly.
-  const [hfInput, setHfInput] = useState("");
-  const [hfResults, setHfResults] = useState<HfHit[]>([]);
-  const [hfSearching, setHfSearching] = useState(false);
-  const [hfOpen, setHfOpen] = useState(false);
-  const [hfActive, setHfActive] = useState(-1);
-  const [resolving, setResolving] = useState(false);
-  const [hasToken, setHasToken] = useState(false);
-  const [tokenInput, setTokenInput] = useState("");
-  const [showToken, setShowToken] = useState(false);
+  // repo / .gguf link and load it directly. Its state + search live in the hook.
+  const {
+    input: hfInput,
+    setInput: setHfInput,
+    results: hfResults,
+    searching: hfSearching,
+    open: hfOpen,
+    setOpen: setHfOpen,
+    active: hfActive,
+    setActive: setHfActive,
+    resolving,
+    hasToken,
+    tokenInput,
+    setTokenInput,
+    showToken,
+    setShowToken,
+    boxRef: hfBoxRef,
+    resolve: doResolve,
+    onKeyDown: onHfKeyDown,
+    saveToken,
+  } = useHfSearch({ onResolved: setSelected, onError: setError });
 
   const logRef = useRef<HTMLPreElement>(null);
-  const hfBoxRef = useRef<HTMLDivElement>(null);
 
   const refreshAll = () => {
     listModelCatalog().then(setCatalog).catch((e) => setError(String(e)));
@@ -108,7 +106,6 @@ export function LocalSetup() {
 
   useEffect(() => {
     detectHardware().then(setHardware).catch(() => {});
-    hfTokenPresent().then(setHasToken).catch(() => {});
     refreshAll();
     const unProg = onModelProgress((p) =>
       setProgress((prev) => ({ ...prev, [p.id]: p.fraction ?? 0 })),
@@ -126,44 +123,6 @@ export function LocalSetup() {
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [runtimeLog]);
-
-  // Live autocomplete: debounce the input and search Hugging Face for GGUF repos
-  // as the user types. A stale request can't clobber a newer one (cancelled flag).
-  useEffect(() => {
-    const q = hfInput.trim();
-    if (q.length < 2) {
-      setHfResults([]);
-      setHfSearching(false);
-      return;
-    }
-    let cancelled = false;
-    setHfSearching(true);
-    const t = setTimeout(() => {
-      searchHfModels(q)
-        .then((r) => {
-          if (cancelled) return;
-          setHfResults(r);
-          setHfOpen(true);
-          setHfActive(-1);
-        })
-        .catch(() => !cancelled && setHfResults([]))
-        .finally(() => !cancelled && setHfSearching(false));
-    }, 220);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [hfInput]);
-
-  // Close the suggestions dropdown on an outside click.
-  useEffect(() => {
-    if (!hfOpen) return;
-    function onDown(e: MouseEvent) {
-      if (hfBoxRef.current && !hfBoxRef.current.contains(e.target as Node)) setHfOpen(false);
-    }
-    window.addEventListener("mousedown", onDown);
-    return () => window.removeEventListener("mousedown", onDown);
-  }, [hfOpen]);
 
   const runtimeReady = !!runtime?.binary;
 
@@ -231,53 +190,6 @@ export function LocalSetup() {
       }
     } catch (e) {
       setError(`Remove failed: ${e}`);
-    }
-  }
-
-  async function doResolve(input: string) {
-    if (!input.trim()) return;
-    setResolving(true);
-    setHfOpen(false);
-    setError(null);
-    try {
-      const cm = await resolveHfModel(input.trim());
-      setSelected(cm);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setResolving(false);
-    }
-  }
-
-  // Pick the suggestion at index `i` (or the input itself if it's a repo/URL).
-  function chooseHf(i: number) {
-    if (i >= 0 && i < hfResults.length) doResolve(hfResults[i].repo);
-    else if (looksLikeRepo(hfInput)) doResolve(hfInput);
-  }
-
-  function onHfKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setHfOpen(true);
-      setHfActive((a) => Math.min(a + 1, hfResults.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setHfActive((a) => Math.max(a - 1, -1));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      chooseHf(hfActive);
-    } else if (e.key === "Escape") {
-      setHfOpen(false);
-    }
-  }
-
-  async function saveToken() {
-    try {
-      await setHfToken(tokenInput.trim());
-      setHasToken(!!tokenInput.trim());
-      setShowToken(false);
-    } catch (e) {
-      setError(`Could not save token: ${e}`);
     }
   }
 
