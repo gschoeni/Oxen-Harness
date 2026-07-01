@@ -122,4 +122,38 @@ mod tests {
         let resolved = ws.resolve("a/b/../c.txt").unwrap();
         assert!(resolved.ends_with("a/c.txt"));
     }
+
+    #[test]
+    fn allows_an_absolute_path_that_is_inside_the_root() {
+        // The agent sometimes passes the absolute path it was shown; one that
+        // genuinely lives under the root must resolve, not be rejected.
+        let (_dir, ws) = workspace();
+        let inside = ws.root().join("src/main.rs");
+        assert_eq!(ws.resolve(&inside).unwrap(), inside);
+    }
+
+    #[test]
+    fn rejects_absolute_path_that_climbs_back_out_of_the_root() {
+        let (_dir, ws) = workspace();
+        let sneaky = ws.root().join("../../etc/passwd");
+        assert!(matches!(
+            ws.resolve(sneaky).unwrap_err(),
+            ToolError::InvalidArguments(_)
+        ));
+    }
+
+    #[test]
+    fn rejects_sibling_dir_sharing_a_name_prefix() {
+        // Classic path-sandbox trap: "root-evil" shares the "root" string prefix
+        // but is a different directory. A lexical string-prefix check would wrongly
+        // allow it; the component-wise starts_with must reject it.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("root")).unwrap();
+        std::fs::create_dir(dir.path().join("root-evil")).unwrap();
+        let ws = Workspace::new(dir.path().join("root")).unwrap();
+        assert!(matches!(
+            ws.resolve("../root-evil/secret.txt").unwrap_err(),
+            ToolError::InvalidArguments(_)
+        ));
+    }
 }
