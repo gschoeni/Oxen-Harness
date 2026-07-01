@@ -169,117 +169,24 @@ async fn main() -> Result<()> {
     let workspace = Workspace::new(&workspace_root)
         .with_context(|| format!("opening workspace {}", workspace_root.display()))?;
 
-    // Keep a local llama-server alive for the whole session when `--local` is
-    // used; dropping it shuts the background process down.
-    let mut _local_server: Option<harness_local::LocalServer> = None;
-    // For a local model, budget prompts against the server's actual context size
-    // (smaller than the model's max); `None` lets the agent derive it by name.
-    let mut context_window: Option<usize> = None;
-
-    // Build a cloud client + model, honoring the persisted dropdown selection
-    // when nothing is given on the CLI. Used directly, and as the fallback when a
-    // restored local model can't start.
-    let cloud_client = |ui: &Ui| -> (OxenClient, String) {
-        let model = args
-            .model
-            .clone()
-            .or_else(|| resume_meta.as_ref().map(|m| m.model.clone()))
-            .unwrap_or_else(harness_runtime::models::selected);
-
-        // Precedence for the base URL: --base-url > --host > env (OXEN_BASE_URL
-        // / OXEN_HOST) > default Oxen.ai endpoint.
-        let base_url_override = args
-            .base_url
-            .clone()
-            .or_else(|| args.host.as_deref().map(harness_llm::base_url_from_host));
-        let client_result = match base_url_override {
-            Some(base_url) => OxenClient::connect(base_url, &model),
-            None => OxenClient::from_default_config().map(|c| c.with_model(&model)),
-        };
-        let client = match client_result {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("\n{}", ui.red(&ui.death()));
-                eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
-                eprintln!(
-                    "  {}",
-                    ui.dim("Set OXEN_API_KEY, or log in with the `oxen` CLI, then set out again.")
-                );
-                std::process::exit(1);
-            }
-        };
-        (client, model)
-    };
-
-    // Resolve the model + client. `--local <id>` runs a model on this machine via
-    // llama.cpp; absent any explicit choice we restore the last local model the
-    // user activated (in the desktop dropdown or a prior `--local` run). Anything
-    // else connects to a remote Oxen.ai-style endpoint.
-    let explicit_local = args.local.clone();
-    let local_id = explicit_local.clone().or_else(|| {
-        if args.model.is_none() && args.resume.is_none() {
-            harness_runtime::models::active_local()
-        } else {
-            None
-        }
-    });
-    let (client, model) = if let Some(local_id) = local_id {
-        match local::start_for(&local_id, &ui).await {
-            Ok((server, alias)) => {
-                let client = OxenClient::new(server.base_url(), "local", &alias);
-                context_window = Some(server.context_size() as usize);
-                _local_server = Some(server);
-                (client, alias)
-            }
-            // An explicit `--local` failure is fatal; a *restored* local model that
-            // can't start (e.g. runtime not installed here) falls back to cloud.
-            Err(e) if explicit_local.is_some() => {
-                eprintln!("\n{}", ui.red(&ui.death()));
-                eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
-                std::process::exit(1);
-            }
-            Err(e) => {
-                eprintln!(
-                    "  {}",
-                    ui.dim(&format!(
-                        "Local model {local_id} unavailable ({e}); using the cloud model."
-                    ))
-                );
-                cloud_client(&ui)
-            }
-        }
-    } else {
-        cloud_client(&ui)
-    };
+    // Resolve which model to run and how to reach it (cloud or a local
+    // llama-server). The server guard is kept alive for the whole session —
+    // dropping it shuts the background process down.
+    let Endpoint {
+        client,
+        model,
+        context_window,
+        local_server: _local_server,
+    } = resolve_endpoint(&args, resume_meta.as_ref(), &ui).await;
 
     // Migrate any legacy plaintext keys out of connection.json into .env (the
     // shared store, already loaded into the env above) so web search and auth
     // work without re-entering keys.
     let _ = harness_runtime::connection::load();
-    let mut tools = ToolRegistry::default_for_workspace(workspace.clone());
-    // Let the agent interview the user via the interactive terminal picker.
-    tools.register(Arc::new(harness_tools::AskUserTool::new(Arc::new(
-        ask::CliAsker::new(ui.clone()),
-    ))));
-    // Show documents in the canvas: write them to disk, open web docs in the
-    // browser, and preview text docs inline.
-    tools.register(Arc::new(harness_tools::CanvasTool::new(Arc::new(
-        canvas::CliCanvasSink,
-    ))));
+
+    let tools = build_tool_registry(&workspace, &ui);
     let base_url = client.base_url().to_string();
-    let config = AgentConfig {
-        model: model.clone(),
-        context_window,
-        // Advertise web search only when it actually registered (Brave key set);
-        // the canvas tool is always registered above.
-        system_prompt: Some(harness_agent::system_prompt_with_env(
-            tools.get(harness_tools::WEB_SEARCH_TOOL).is_some(),
-            true,
-            workspace.root(),
-        )),
-        attachment_root: Some(workspace.root().to_path_buf()),
-        ..AgentConfig::default()
-    };
+    let config = agent_config(&model, context_window, &tools, &workspace);
 
     // Resume an existing transcript, or strike out on a fresh session.
     let (mut agent, session, resumed_entries) = match &args.resume {
@@ -340,9 +247,160 @@ async fn main() -> Result<()> {
         base_url: &base_url,
     };
     if use_box {
-        return run_box_repl(&mut agent, &mut ui, &ctx).await;
+        run_box_repl(&mut agent, &mut ui, &ctx).await
+    } else {
+        run_classic_repl(&mut agent, &mut ui, &ctx).await
     }
+}
 
+/// The resolved inference endpoint for a session: the model, a client bound to
+/// it, the context window to budget against (a local server's real size, else
+/// derived from the model name), and — for `--local` — the llama-server process
+/// to keep alive for the session's lifetime.
+struct Endpoint {
+    client: OxenClient,
+    model: String,
+    context_window: Option<usize>,
+    local_server: Option<harness_local::LocalServer>,
+}
+
+/// Resolve which model to run and how to reach it.
+///
+/// `--local <id>` runs a model on this machine via llama.cpp; absent any
+/// explicit choice we restore the last local model the user activated (in the
+/// desktop dropdown or a prior `--local` run). Anything else connects to a
+/// remote Oxen.ai-style endpoint. A *restored* (non-explicit) local model that
+/// can't start here falls back to the cloud, while an explicit `--local` failure
+/// — or an unreachable cloud endpoint — prints the death screen and exits.
+async fn resolve_endpoint(args: &Args, resume_meta: Option<&SessionMeta>, ui: &Ui) -> Endpoint {
+    // A cloud client + model, honoring the persisted dropdown selection when
+    // nothing is given on the CLI. Used directly, and as the fallback when a
+    // restored local model can't start.
+    let cloud = |ui: &Ui| -> Endpoint {
+        let model = args
+            .model
+            .clone()
+            .or_else(|| resume_meta.map(|m| m.model.clone()))
+            .unwrap_or_else(harness_runtime::models::selected);
+
+        // Precedence for the base URL: --base-url > --host > env (OXEN_BASE_URL
+        // / OXEN_HOST) > default Oxen.ai endpoint.
+        let base_url_override = args
+            .base_url
+            .clone()
+            .or_else(|| args.host.as_deref().map(harness_llm::base_url_from_host));
+        let client_result = match base_url_override {
+            Some(base_url) => OxenClient::connect(base_url, &model),
+            None => OxenClient::from_default_config().map(|c| c.with_model(&model)),
+        };
+        let client = match client_result {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("\n{}", ui.red(&ui.death()));
+                eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
+                eprintln!(
+                    "  {}",
+                    ui.dim("Set OXEN_API_KEY, or log in with the `oxen` CLI, then set out again.")
+                );
+                std::process::exit(1);
+            }
+        };
+        Endpoint {
+            client,
+            model,
+            context_window: None,
+            local_server: None,
+        }
+    };
+
+    let explicit_local = args.local.clone();
+    let local_id = explicit_local.clone().or_else(|| {
+        if args.model.is_none() && args.resume.is_none() {
+            harness_runtime::models::active_local()
+        } else {
+            None
+        }
+    });
+    let Some(local_id) = local_id else {
+        return cloud(ui);
+    };
+
+    match local::start_for(&local_id, ui).await {
+        Ok((server, alias)) => {
+            let client = OxenClient::new(server.base_url(), "local", &alias);
+            Endpoint {
+                client,
+                model: alias,
+                // Budget against the server's actual context size (smaller than
+                // the model's theoretical max).
+                context_window: Some(server.context_size() as usize),
+                local_server: Some(server),
+            }
+        }
+        // An explicit `--local` failure is fatal; a *restored* local model that
+        // can't start (e.g. runtime not installed here) falls back to cloud.
+        Err(e) if explicit_local.is_some() => {
+            eprintln!("\n{}", ui.red(&ui.death()));
+            eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!(
+                "  {}",
+                ui.dim(&format!(
+                    "Local model {local_id} unavailable ({e}); using the cloud model."
+                ))
+            );
+            cloud(ui)
+        }
+    }
+}
+
+/// The CLI's tool set: the workspace file/shell/git/web tools, plus the
+/// interactive question picker and the canvas document viewer wired to their CLI
+/// front ends.
+fn build_tool_registry(workspace: &Workspace, ui: &Ui) -> ToolRegistry {
+    let mut tools = ToolRegistry::default_for_workspace(workspace.clone());
+    // Let the agent interview the user via the interactive terminal picker.
+    tools.register(Arc::new(harness_tools::AskUserTool::new(Arc::new(
+        ask::CliAsker::new(ui.clone()),
+    ))));
+    // Show documents in the canvas: write them to disk, open web docs in the
+    // browser, and preview text docs inline.
+    tools.register(Arc::new(harness_tools::CanvasTool::new(Arc::new(
+        canvas::CliCanvasSink,
+    ))));
+    tools
+}
+
+/// The agent configuration for a CLI session: model + window, a system prompt
+/// that advertises web search only when the Brave key enabled it (the canvas
+/// tool is always registered), and an attachment root so images/PDFs are stored
+/// on disk rather than inlined.
+fn agent_config(
+    model: &str,
+    context_window: Option<usize>,
+    tools: &ToolRegistry,
+    workspace: &Workspace,
+) -> AgentConfig {
+    AgentConfig {
+        model: model.to_string(),
+        context_window,
+        system_prompt: Some(harness_agent::system_prompt_with_env(
+            tools.get(harness_tools::WEB_SEARCH_TOOL).is_some(),
+            true,
+            workspace.root(),
+        )),
+        attachment_root: Some(workspace.root().to_path_buf()),
+        ..AgentConfig::default()
+    }
+}
+
+/// The classic readline REPL for pipes, dumb terminals, and
+/// `OXEN_HARNESS_CLASSIC_INPUT`: a blocking line prompt with persistent,
+/// cross-session Up-arrow history, dispatching each line through [`handle_line`].
+/// The live-terminal counterpart is [`run_box_repl`].
+async fn run_classic_repl(agent: &mut Agent, ui: &mut Ui, ctx: &ReplContext<'_>) -> Result<()> {
     // A persistent prompt history: Up-arrow recalls prompts from earlier
     // sessions, not just this one. Load whatever's on disk, then append each new
     // prompt so the history survives across runs (and a crash mid-session).
@@ -370,11 +428,11 @@ async fn main() -> Result<()> {
             );
         }
         // Recomputed each turn so a mid-session theme switch takes effect.
-        let prompt = theme::prompt(&ui);
+        let prompt = theme::prompt(ui);
         // A faint rule + blank line set the input apart from the output above.
         // Only on an interactive terminal — piped/scripted runs stay clean.
         if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-            println!("\n{}", theme::divider(&ui));
+            println!("\n{}", theme::divider(ui));
         }
         // Seed the line with any draft carried over from the live composer, so a
         // message typed while the agent was finishing continues uninterrupted.
@@ -387,9 +445,7 @@ async fn main() -> Result<()> {
         match read {
             Ok(line) => {
                 let mut new_history = editor.add_history_entry(line.as_str()).unwrap_or(false);
-                let exit =
-                    handle_line(&line, &mut agent, &mut ui, &mut queue, &mut carryover, &ctx)
-                        .await?;
+                let exit = handle_line(&line, agent, ui, &mut queue, &mut carryover, ctx).await?;
                 // Fold any prompts queued during the turn — typed into the live
                 // composer or added via `/queue add` — into the history too, so
                 // queued prompts are recallable next session, not just ones typed
@@ -412,7 +468,7 @@ async fn main() -> Result<()> {
             // Ctrl-C / Ctrl-D: leave cleanly.
             Err(rustyline::error::ReadlineError::Interrupted)
             | Err(rustyline::error::ReadlineError::Eof) => {
-                print!("{}", theme::death_screen(&ui, &session));
+                print!("{}", theme::death_screen(ui, ctx.session));
                 break;
             }
             Err(e) => return Err(e.into()),
