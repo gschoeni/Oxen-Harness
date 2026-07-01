@@ -73,11 +73,16 @@ pub struct QuantCandidate {
     pub weight_bytes: u64,
 }
 
-/// KV-cache + runtime overhead (bytes) for serving `context` tokens. ~128 KB per
-/// token covers a GQA model's fp16 KV conservatively, plus ~1.2 GB for compute
-/// buffers and the runtime itself.
+/// Bytes of KV cache per context token — 128 KiB, a conservative cover for a
+/// GQA model's fp16 key/value cache.
+const KV_BYTES_PER_TOKEN: u64 = 128 * 1024;
+/// Fixed overhead (bytes) for compute buffers and the runtime itself, on top of
+/// weights and KV cache — ~1.2 GB.
+const RUNTIME_OVERHEAD_BYTES: u64 = 1_200_000_000;
+
+/// KV-cache + runtime overhead (bytes) for serving `context` tokens.
 pub fn kv_overhead(context: u32) -> u64 {
-    context as u64 * 131_072 + 1_200_000_000
+    context as u64 * KV_BYTES_PER_TOKEN + RUNTIME_OVERHEAD_BYTES
 }
 
 /// Total memory (bytes) to run `weight_bytes` of weights at `context` tokens.
