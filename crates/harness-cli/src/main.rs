@@ -55,7 +55,7 @@ struct Args {
     #[arg(long)]
     base_url: Option<String>,
 
-    /// API host[:port], e.g. localhost:3001. Expanded to a base URL
+    /// API host\[:port\], e.g. localhost:3001. Expanded to a base URL
     /// (http for local hosts, https otherwise, with an /api/ai path).
     #[arg(long)]
     host: Option<String>,

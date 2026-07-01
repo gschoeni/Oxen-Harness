@@ -84,7 +84,7 @@ impl AttachmentKind {
 }
 
 /// The MIME type for a file extension, used when building `data:` URIs (both for
-/// fresh attachments and when [hydrating](hydrate_content) stored ones). Defaults
+/// fresh attachments and when [hydrating](crate::hydrate_content) stored ones). Defaults
 /// to `application/octet-stream` for anything unrecognized.
 pub fn mime_for_extension(ext: &str) -> &'static str {
     match ext.to_ascii_lowercase().as_str() {

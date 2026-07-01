@@ -260,7 +260,7 @@ impl Agent {
 
     /// Swap the underlying inference client (e.g. to move a live conversation
     /// from a local `llama-server` to the cloud endpoint, or vice-versa) without
-    /// disturbing the transcript or session. Pair with [`set_model`] so the
+    /// disturbing the transcript or session. Pair with [`Self::set_model`] so the
     /// request's model matches the new endpoint.
     pub fn set_client(&mut self, client: OxenClient) {
         self.client = client;

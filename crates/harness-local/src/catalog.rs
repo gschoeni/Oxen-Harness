@@ -126,7 +126,7 @@ pub fn find(id: &str) -> Option<&'static ModelSpec> {
 /// exist in the bartowski Qwen3 GGUF repos this catalog draws from.
 const CURATED_QUANTS: &[&str] = &["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "Q3_K_M"];
 
-/// The installable [`ModelRef`]s for a curated model — one per quant, with
+/// The installable [`ModelRef`](crate::source::ModelRef)s for a curated model — one per quant, with
 /// filenames derived from the published `Q4_K_M` file and sizes scaled by
 /// bits-per-weight. Largest-first so quant auto-pick takes the best that fits.
 pub fn quant_refs(spec: &ModelSpec) -> Vec<crate::source::ModelRef> {

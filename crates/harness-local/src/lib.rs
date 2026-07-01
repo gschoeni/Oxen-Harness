@@ -5,7 +5,7 @@
 //! speaks the same OpenAI-compatible API the rest of the harness already uses.
 //! The flow is:
 //!
-//! 1. Pick a model from the [`catalog`] (curated Qwen3 GGUFs with sizes).
+//! 1. Pick a model from the [`catalog`](mod@catalog) (curated Qwen3 GGUFs with sizes).
 //! 2. [`ModelStore`] downloads the GGUF into `~/.oxen-harness/models/`,
 //!    reporting progress and tracking on-disk usage.
 //! 3. [`server::LocalServer`] launches `llama-server` against that file and

@@ -25,7 +25,7 @@ pub const CONFIG_DIR_ENV: &str = "OXEN_CONFIG_DIR";
 /// (e.g. `http://localhost:3001/api/ai`).
 pub const BASE_URL_ENV: &str = "OXEN_BASE_URL";
 
-/// Environment variable overriding just the host[:port]
+/// Environment variable overriding just the host\[:port\]
 /// (e.g. `localhost:3001`); turned into a base URL via [`base_url_from_host`].
 pub const HOST_ENV: &str = "OXEN_HOST";
 
