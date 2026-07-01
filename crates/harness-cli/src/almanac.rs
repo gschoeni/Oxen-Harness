@@ -113,6 +113,9 @@ mod tests {
     fn pick_is_empty_for_empty_pool_and_in_bounds_otherwise() {
         assert_eq!(pick(&[]), "");
         let pool = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-        assert!(pool.iter().any(|x| x == pick(&pool)));
+        // Capture one pick: re-calling `pick` per element would reseed each time
+        // and compare against a *different* random entry, making the test flaky.
+        let choice = pick(&pool);
+        assert!(pool.iter().any(|x| x == choice));
     }
 }
