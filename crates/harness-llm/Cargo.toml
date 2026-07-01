@@ -30,3 +30,6 @@ ts = ["dep:ts-rs"]
 [dev-dependencies]
 mockito = "1"
 tempfile = "3"
+
+[lints]
+workspace = true

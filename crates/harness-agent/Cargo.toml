@@ -24,3 +24,6 @@ tracing = { workspace = true }
 mockito = "1"
 async-trait = { workspace = true }
 tempfile = "3"
+
+[lints]
+workspace = true

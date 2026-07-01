@@ -55,6 +55,16 @@ base64 = "0.22"
 dotenvy = "0.15"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
+# A shared, deliberately small lint policy every crate inherits via
+# `[lints] workspace = true`. The bar: no unsafe outside audited, annotated
+# spots, and no debugging leftovers (`dbg!`, `todo!`) in committed code.
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

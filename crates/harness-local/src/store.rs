@@ -196,6 +196,7 @@ impl ModelStore {
 /// show free space and warn before a download won't fit. `None` if it can't be
 /// determined (or on platforms without `statvfs`).
 #[cfg(unix)]
+#[allow(unsafe_code)] // the one audited FFI call in the workspace; see SAFETY below
 pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
     use std::os::unix::ffi::OsStrExt;
     let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;

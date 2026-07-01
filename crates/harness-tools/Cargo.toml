@@ -23,3 +23,6 @@ reqwest = { workspace = true }
 [dev-dependencies]
 tempfile = "3"
 mockito = "1"
+
+[lints]
+workspace = true
