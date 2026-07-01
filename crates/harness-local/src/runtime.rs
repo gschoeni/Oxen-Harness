@@ -13,7 +13,6 @@
 
 use std::path::{Path, PathBuf};
 
-use futures_util::StreamExt;
 use serde::Serialize;
 
 use crate::LocalError;
@@ -183,31 +182,14 @@ where
     F: FnMut(RuntimeInstallEvent),
 {
     let client = reqwest::Client::new();
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| LocalError::Download(format!("request failed: {e}")))?;
-    if !resp.status().is_success() {
-        return Err(LocalError::Download(format!(
-            "HTTP {} fetching {url}",
-            resp.status().as_u16()
-        )));
-    }
-    let total = resp.content_length();
-    let mut file = tokio::fs::File::create(dest).await?;
-    let mut downloaded: u64 = 0;
-    on_event(RuntimeInstallEvent::Progress { downloaded, total });
-
-    let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| LocalError::Download(format!("stream error: {e}")))?;
-        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
-        downloaded += chunk.len() as u64;
-        on_event(RuntimeInstallEvent::Progress { downloaded, total });
-    }
-    tokio::io::AsyncWriteExt::flush(&mut file).await?;
-    Ok(())
+    crate::download::fetch_to_file(
+        &client,
+        url,
+        dest,
+        crate::download::FetchOpts::default(),
+        |downloaded, total| on_event(RuntimeInstallEvent::Progress { downloaded, total }),
+    )
+    .await
 }
 
 /// Extract a `.tar.gz` into `dest` (pure-Rust, no system `tar` needed).

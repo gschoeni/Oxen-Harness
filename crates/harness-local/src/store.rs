@@ -7,8 +7,6 @@
 
 use std::path::{Path, PathBuf};
 
-use futures_util::StreamExt;
-
 use crate::source::ModelRef;
 use crate::LocalError;
 
@@ -253,45 +251,19 @@ async fn stream_to_file<F>(
 where
     F: FnMut(DownloadProgress),
 {
-    let mut req = client.get(url).header("User-Agent", "oxen-harness");
-    if let Some(t) = token.filter(|t| !t.trim().is_empty()) {
-        req = req.bearer_auth(t.trim());
-    }
-    let response = req
-        .send()
-        .await
-        .map_err(|e| LocalError::Download(format!("request failed: {e}")))?;
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED
-        || response.status() == reqwest::StatusCode::FORBIDDEN
-    {
-        return Err(LocalError::Download(
-            "access denied — this model may be gated or private; add a token".to_string(),
-        ));
-    }
-    if !response.status().is_success() {
-        return Err(LocalError::Download(format!(
-            "HTTP {} fetching {}",
-            response.status().as_u16(),
-            url
-        )));
-    }
-    let total = response.content_length();
-
     let part_path = dest.with_extension("gguf.part");
-    let mut file = tokio::fs::File::create(&part_path).await?;
-    let mut downloaded: u64 = 0;
-    on_progress(DownloadProgress { downloaded, total });
-
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| LocalError::Download(format!("stream error: {e}")))?;
-        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
-        downloaded += chunk.len() as u64;
-        on_progress(DownloadProgress { downloaded, total });
-    }
-    tokio::io::AsyncWriteExt::flush(&mut file).await?;
-    drop(file);
-
+    crate::download::fetch_to_file(
+        client,
+        url,
+        &part_path,
+        crate::download::FetchOpts {
+            token,
+            user_agent: Some("oxen-harness"),
+            gated_message: Some("access denied — this model may be gated or private; add a token"),
+        },
+        |downloaded, total| on_progress(DownloadProgress { downloaded, total }),
+    )
+    .await?;
     tokio::fs::rename(&part_path, dest).await?;
     Ok(())
 }

@@ -17,6 +17,7 @@
 //! disk space each model occupies.
 
 pub mod catalog;
+mod download;
 pub mod fit;
 pub mod gguf;
 pub mod hardware;
