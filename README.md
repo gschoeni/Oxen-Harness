@@ -363,9 +363,65 @@ that session's working directory and model. Override either with `--workspace` o
 Color uses 24-bit ANSI and is auto-disabled when output isn't a TTY, when
 `NO_COLOR` is set, or for `TERM=dumb`, so piped/redirected output stays clean.
 
-## Development
+## Contributing
 
-This project is built with **The Ralph Wiggum loop** — a tight, objective-check-driven cycle where tests and files (not conversation) hold state. See [`AGENTS.md`](AGENTS.md) for the full contributor protocol, and the knowledge base ([`DOCUMENT-MAP.md`](DOCUMENT-MAP.md)) for project context.
+New here? This is a small, layered Rust workspace — you can hold the whole thing
+in your head in an afternoon. Here's the fast path in.
+
+### Get it running
+
+```bash
+git clone https://github.com/gschoeni/oxen-harness && cd oxen-harness
+export OXEN_API_KEY=sk-...        # or log in with the `oxen` CLI
+cargo run -p harness-cli          # build, then drop into the REPL
+```
+
+No key handy? `cargo run -p harness-cli -- --local qwen3-0.6b` runs a tiny model
+fully offline (see [Running models locally](#running-models-locally-llamacpp)).
+
+### Where to look first
+
+Read these in order — it follows a single prompt from keypress to reply, and by
+the last file the architecture clicks:
+
+1. **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — the map: how the crates stack, the
+   lifecycle of a turn, and a table of "to add X, touch Y". **Start here.**
+2. **[`crates/harness-tools/src/lib.rs`](crates/harness-tools/src/lib.rs)** — the
+   `Tool` trait and `ToolRegistry`. The smallest complete concept in the codebase,
+   and the thing you're most likely to extend; each tool (fs, shell, git, web,
+   canvas, …) lives in its own file beside it.
+3. **[`crates/harness-agent/src/lib.rs`](crates/harness-agent/src/lib.rs)** —
+   `Agent::run_turn`, the loop that wires the LLM client, the tools, and the
+   history store together. This is the heart, and it reads top-to-bottom: *make
+   room in the context → stream the reply → run any tool calls → repeat*.
+4. **[`crates/harness-llm/src/types.rs`](crates/harness-llm/src/types.rs)** — the
+   wire types (`ChatMessage`, `ToolCall`, streaming events) that flow through
+   that loop.
+5. **[`crates/harness-cli/src/main.rs`](crates/harness-cli/src/main.rs)** — how a
+   real session boots: resolve the model + endpoint, build the tools, create the
+   agent, then hand off to the REPL. The desktop front end in [`app/`](app/)
+   drives the *same* `harness-agent` (see [`app/README.md`](app/README.md)).
+
+Every crate's `src/lib.rs` opens with a `//!` comment stating what it owns, and
+[`DOCUMENT-MAP.md`](DOCUMENT-MAP.md) is the one-line-per-file index for the full
+layering. Tests live in a `#[cfg(test)] mod tests` right beside the code they
+cover, so they double as usage examples.
+
+### The dev loop
+
+This project is built with **The Ralph Wiggum loop** — a tight,
+objective-check-driven cycle where tests and files (not conversation) hold state.
+A change is "green" only when all three checks pass:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo nextest run          # or: cargo test --workspace
+```
+
+See [`AGENTS.md`](AGENTS.md) for the full contributor protocol — write the test
+in the same change, keep commits small and reasoned, and do a polish pass before
+moving on.
 
 ## License
 
