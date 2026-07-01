@@ -9,14 +9,13 @@
 //! CLI login / the default endpoint; a blank key resolves from the environment
 //! (which [`harness_config::secrets::load`] populates from `.env` at startup).
 
-use harness_config::io::{read_versioned, write_versioned};
 use harness_config::{paths, secrets};
 use harness_llm::auth::{self, DEFAULT_OXEN_HOST};
 use harness_llm::OxenClient;
 use harness_tools::web::BRAVE_API_KEY_ENV;
 use serde::{Deserialize, Serialize};
 
-use crate::{config_repo, RuntimeError};
+use crate::RuntimeError;
 
 /// Schema version for `connection.json`.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -54,10 +53,7 @@ pub struct ConnectionView {
 /// the way (a one-time effect). Call once at startup so the migration runs and
 /// the keys reach the process environment.
 pub fn load() -> ConnectionConfig {
-    let Ok(path) = paths::connection_file() else {
-        return ConnectionConfig::default();
-    };
-    let (_version, mut cfg) = read_versioned::<ConnectionConfig>(&path);
+    let mut cfg: ConnectionConfig = crate::config::load_or_default(paths::connection_file());
 
     let mut migrated = false;
     if !cfg.api_key.trim().is_empty() {
@@ -78,10 +74,12 @@ pub fn load() -> ConnectionConfig {
 
 /// Atomically persist the (non-secret) settings and snapshot the config repo.
 pub fn write(cfg: &ConnectionConfig) -> Result<(), RuntimeError> {
-    let path = paths::connection_file()?;
-    write_versioned(&path, SCHEMA_VERSION, cfg)?;
-    config_repo::snapshot("Update connection settings");
-    Ok(())
+    crate::config::write_and_snapshot(
+        &paths::connection_file()?,
+        SCHEMA_VERSION,
+        cfg,
+        "Update connection settings",
+    )
 }
 
 /// Save the host (non-secret) and the keys (to `.env`). An empty key clears it.
@@ -155,23 +153,7 @@ pub fn view() -> ConnectionView {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // connection.json + .env + the secret env vars are process-global; serialize
-    // against every other env-touching test in the crate.
-    fn with_temp_home<T>(f: impl FnOnce() -> T) -> T {
-        let _lock = crate::TEST_ENV_GUARD
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var(paths::BASE_DIR_ENV, tmp.path());
-        std::env::remove_var(auth::API_KEY_ENV);
-        std::env::remove_var(BRAVE_API_KEY_ENV);
-        let out = f();
-        std::env::remove_var(paths::BASE_DIR_ENV);
-        std::env::remove_var(auth::API_KEY_ENV);
-        std::env::remove_var(BRAVE_API_KEY_ENV);
-        out
-    }
+    use crate::with_temp_home;
 
     #[test]
     fn migrates_legacy_plaintext_keys_into_env_and_clears_them() {

@@ -13,12 +13,11 @@
 
 use std::collections::BTreeMap;
 
-use harness_config::io::{read_versioned, write_versioned};
 use harness_config::paths;
 use harness_tools::ToolRegistry;
 use serde::{Deserialize, Serialize};
 
-use crate::{config_repo, RuntimeError};
+use crate::RuntimeError;
 
 /// Schema version for `tools.json`.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -103,19 +102,17 @@ pub struct ToolInfo {
 /// Read the saved tool preferences (defaults to "everything enabled" on a fresh
 /// install or unreadable file).
 pub fn load() -> ToolPrefs {
-    let Ok(path) = paths::tools_file() else {
-        return ToolPrefs::default();
-    };
-    let (_version, prefs) = read_versioned::<ToolPrefs>(&path);
-    prefs
+    crate::config::load_or_default(paths::tools_file())
 }
 
 /// Atomically persist the tool preferences and snapshot the config repo.
 pub fn save(prefs: &ToolPrefs) -> Result<(), RuntimeError> {
-    let path = paths::tools_file()?;
-    write_versioned(&path, SCHEMA_VERSION, prefs)?;
-    config_repo::snapshot("Update tool preferences");
-    Ok(())
+    crate::config::write_and_snapshot(
+        &paths::tools_file()?,
+        SCHEMA_VERSION,
+        prefs,
+        "Update tool preferences",
+    )
 }
 
 /// Enumerate every built-in tool with its current enabled/override state, for the

@@ -11,6 +11,7 @@
 //! - [`config_repo`] — opt-in Oxen versioning of `~/.oxen-harness`, snapshotted
 //!   after config changes.
 
+mod config;
 pub mod config_repo;
 pub mod connection;
 pub mod models;
@@ -22,6 +23,28 @@ pub mod tools;
 /// race on that env var.
 #[cfg(test)]
 pub(crate) static TEST_ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Run `f` against a fresh, isolated `~/.oxen-harness` (a tempdir) with the
+/// secret env vars cleared, holding [`TEST_ENV_GUARD`] for the duration so the
+/// process-global env doesn't race with other tests. Shared by the `connection`
+/// and `models` test suites, which both persist to that directory.
+#[cfg(test)]
+pub(crate) fn with_temp_home<T>(f: impl FnOnce() -> T) -> T {
+    use harness_config::paths::BASE_DIR_ENV;
+    use harness_llm::auth::API_KEY_ENV;
+    use harness_tools::web::BRAVE_API_KEY_ENV;
+
+    let _lock = TEST_ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var(BASE_DIR_ENV, tmp.path());
+    std::env::remove_var(API_KEY_ENV);
+    std::env::remove_var(BRAVE_API_KEY_ENV);
+    let out = f();
+    std::env::remove_var(BASE_DIR_ENV);
+    std::env::remove_var(API_KEY_ENV);
+    std::env::remove_var(BRAVE_API_KEY_ENV);
+    out
+}
 
 /// Errors from the runtime services.
 #[derive(Debug, thiserror::Error)]

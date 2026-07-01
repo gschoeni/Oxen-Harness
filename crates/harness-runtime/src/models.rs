@@ -8,11 +8,10 @@
 //! Built-ins are merged in at read time rather than written to disk, so the set
 //! the app ships with can change without rewriting every user's file.
 
-use harness_config::io::{read_versioned, write_versioned};
 use harness_config::paths;
 use serde::{Deserialize, Serialize};
 
-use crate::{config_repo, RuntimeError};
+use crate::RuntimeError;
 
 /// Schema version for `models.json`.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -71,18 +70,12 @@ pub fn builtins() -> Vec<ModelEntry> {
 
 /// Read the persisted config (empty if the file is absent or unreadable).
 pub fn load() -> ModelsConfig {
-    match paths::models_file() {
-        Ok(p) => read_versioned::<ModelsConfig>(&p).1,
-        Err(_) => ModelsConfig::default(),
-    }
+    crate::config::load_or_default(paths::models_file())
 }
 
 /// Atomically persist the config and snapshot the config repo.
 fn write(cfg: &ModelsConfig) -> Result<(), RuntimeError> {
-    let path = paths::models_file()?;
-    write_versioned(&path, SCHEMA_VERSION, cfg)?;
-    config_repo::snapshot("Update models");
-    Ok(())
+    crate::config::write_and_snapshot(&paths::models_file()?, SCHEMA_VERSION, cfg, "Update models")
 }
 
 /// The selected default model id, falling back to the first built-in when none
@@ -197,17 +190,7 @@ pub fn set_active_local(id: &str) -> Result<(), RuntimeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn with_temp_home<T>(f: impl FnOnce() -> T) -> T {
-        let _lock = crate::TEST_ENV_GUARD
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var(paths::BASE_DIR_ENV, tmp.path());
-        let out = f();
-        std::env::remove_var(paths::BASE_DIR_ENV);
-        out
-    }
+    use crate::with_temp_home;
 
     #[test]
     fn defaults_to_first_builtin_and_lists_builtins() {
