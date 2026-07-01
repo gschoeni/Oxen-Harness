@@ -629,132 +629,145 @@ impl Live {
 
     fn on_event(&mut self, event: &AgentEvent, paused: &Arc<AtomicBool>) {
         match event {
-            AgentEvent::Token(t) => {
-                if self.md.is_none() {
-                    self.stop_spinner();
-                    self.write_region("\n");
-                    self.md = Some(MarkdownStream::new(self.ui.clone(), CrlfWriter::new()));
-                    // Keep a live indicator going *below* the streamed text so a
-                    // pause mid-response (or a long, not-yet-complete line such as
-                    // a code block) never looks frozen.
-                    self.begin_streaming();
-                } else {
-                    // Clear the trailing spinner line before emitting newly
-                    // completed markdown lines, so output and spinner don't collide.
-                    self.clear_spinner_line();
-                }
-                if let Some(md) = self.md.as_mut() {
-                    md.push(t);
-                }
-                // Redraw the spinner on the fresh line just below the output.
-                self.draw_spinner();
-                self.render_composer();
-            }
+            AgentEvent::Token(t) => self.on_token(t),
             // The model started writing a canvas; surface it while its content
             // streams in (the full preview prints on ToolStart).
             AgentEvent::ToolPending { name } if name == harness_tools::CANVAS_TOOL => {
-                self.stop_spinner();
-                self.end_markdown();
-                self.write_region(&format!(
-                    "  {} {}\n",
-                    self.ui.green("📄"),
-                    self.ui.dim("writing canvas…")
-                ));
-                self.begin_working(name, None);
-                self.render_composer();
+                self.on_canvas_pending(name)
             }
             AgentEvent::ToolPending { .. } => {}
             AgentEvent::ToolStart { name, arguments } => {
-                self.stop_spinner();
-                self.end_markdown();
-                // The picker draws its own UI and reads keys, so hand the screen
-                // over to it instead of printing a tool line + spinner.
-                if name == harness_tools::ASK_USER_TOOL {
-                    self.suspend(paused);
-                    return;
-                }
-                let target = tool_target(arguments);
-                // For a canvas, preview the document inline; the result line then
-                // reports the saved path / browser open.
-                if name == harness_tools::CANVAS_TOOL {
-                    if let Some(block) = crate::canvas::render_canvas_block(&self.ui, arguments) {
-                        self.write_region(&format!("{}\n", block.join("\n")));
-                    }
-                    self.begin_working(name, target);
-                    self.render_composer();
-                    return;
-                }
-                // For file writes/edits, show a colored diff instead of the
-                // generic one-line tool preview.
-                if let Some(block) = crate::diff::render_file_change(&self.ui, name, arguments) {
-                    self.write_region(&format!("{}\n", block.join("\n")));
-                } else {
-                    let verbs = self.ui.tool_verbs(name);
-                    let verb = verbs.first().map(String::as_str).unwrap_or("Working");
-                    let line = format!(
-                        "  {} {}  {}",
-                        self.ui.green("◆"),
-                        self.ui.accent(verb),
-                        self.ui
-                            .dim(&format!("{name}({})", truncate(arguments, 100))),
-                    );
-                    self.write_region(&format!("{line}\n"));
-                }
-                self.begin_working(name, target);
-                self.render_composer();
+                self.on_tool_start(name, arguments, paused)
             }
-            AgentEvent::ToolEnd { name, result } => {
-                self.stop_spinner();
-                if name == harness_tools::ASK_USER_TOOL {
-                    self.resume(paused);
-                    self.begin_thinking();
-                    // Repaint the full list: the picker drew over the screen.
-                    self.render_forcing_region();
-                    return;
-                }
-                // Web search with no key: flag it for a prompt once the composer
-                // hands back to cooked mode, and show a friendlier line.
-                if name == harness_tools::WEB_SEARCH_TOOL
-                    && result.contains(harness_tools::web::WEB_SEARCH_NO_KEY)
-                {
-                    self.needs_brave_key = true;
-                    let line = format!(
-                        "  {} {}",
-                        self.ui.brown("└─"),
-                        self.ui
-                            .dim("no Brave API key — you'll be prompted to add one below"),
-                    );
-                    self.write_region(&format!("{line}\n"));
-                    self.begin_thinking();
-                    self.render_composer();
-                    return;
-                }
-                let line = format!(
-                    "  {} {}",
-                    self.ui.brown("└─"),
-                    self.ui.dim(&truncate(result, 140)),
-                );
-                self.write_region(&format!("{line}\n"));
-                self.begin_thinking();
-                self.render_composer();
-            }
+            AgentEvent::ToolEnd { name, result } => self.on_tool_end(name, result, paused),
             // Usage is surfaced in the banner/status, not inline during a turn.
             AgentEvent::Usage { .. } => {}
-            // The context filled and was compacted to keep the session going.
-            AgentEvent::Compacted { detail } => {
-                self.stop_spinner();
-                let line = format!(
-                    "  {} {}",
-                    self.ui.brown("⊙"),
-                    self.ui.dim(&format!("compacted context — {detail}")),
-                );
-                self.write_region(&format!("{line}\n"));
-                self.begin_thinking();
-                self.render_composer();
-            }
+            AgentEvent::Compacted { detail } => self.on_compacted(detail),
             // Streaming tool-argument fragments drive the desktop UI only.
             AgentEvent::ToolDelta { .. } => {}
         }
+    }
+
+    fn on_token(&mut self, t: &str) {
+        if self.md.is_none() {
+            self.stop_spinner();
+            self.write_region("\n");
+            self.md = Some(MarkdownStream::new(self.ui.clone(), CrlfWriter::new()));
+            // Keep a live indicator going *below* the streamed text so a pause
+            // mid-response (or a long, not-yet-complete line such as a code block)
+            // never looks frozen.
+            self.begin_streaming();
+        } else {
+            // Clear the trailing spinner line before emitting newly completed
+            // markdown lines, so output and spinner don't collide.
+            self.clear_spinner_line();
+        }
+        if let Some(md) = self.md.as_mut() {
+            md.push(t);
+        }
+        // Redraw the spinner on the fresh line just below the output.
+        self.draw_spinner();
+        self.render_composer();
+    }
+
+    fn on_canvas_pending(&mut self, name: &str) {
+        self.stop_spinner();
+        self.end_markdown();
+        self.write_region(&format!(
+            "  {} {}\n",
+            self.ui.green("📄"),
+            self.ui.dim("writing canvas…")
+        ));
+        self.begin_working(name, None);
+        self.render_composer();
+    }
+
+    fn on_tool_start(&mut self, name: &str, arguments: &str, paused: &Arc<AtomicBool>) {
+        self.stop_spinner();
+        self.end_markdown();
+        // The picker draws its own UI and reads keys, so hand the screen over to
+        // it instead of printing a tool line + spinner.
+        if name == harness_tools::ASK_USER_TOOL {
+            self.suspend(paused);
+            return;
+        }
+        let target = tool_target(arguments);
+        // For a canvas, preview the document inline; the result line then reports
+        // the saved path / browser open.
+        if name == harness_tools::CANVAS_TOOL {
+            if let Some(block) = crate::canvas::render_canvas_block(&self.ui, arguments) {
+                self.write_region(&format!("{}\n", block.join("\n")));
+            }
+            self.begin_working(name, target);
+            self.render_composer();
+            return;
+        }
+        // For file writes/edits, show a colored diff instead of the generic
+        // one-line tool preview.
+        if let Some(block) = crate::diff::render_file_change(&self.ui, name, arguments) {
+            self.write_region(&format!("{}\n", block.join("\n")));
+        } else {
+            let verbs = self.ui.tool_verbs(name);
+            let verb = verbs.first().map(String::as_str).unwrap_or("Working");
+            let line = format!(
+                "  {} {}  {}",
+                self.ui.green("◆"),
+                self.ui.accent(verb),
+                self.ui
+                    .dim(&format!("{name}({})", truncate(arguments, 100))),
+            );
+            self.write_region(&format!("{line}\n"));
+        }
+        self.begin_working(name, target);
+        self.render_composer();
+    }
+
+    fn on_tool_end(&mut self, name: &str, result: &str, paused: &Arc<AtomicBool>) {
+        self.stop_spinner();
+        if name == harness_tools::ASK_USER_TOOL {
+            self.resume(paused);
+            self.begin_thinking();
+            // Repaint the full list: the picker drew over the screen.
+            self.render_forcing_region();
+            return;
+        }
+        // Web search with no key: flag it for a prompt once the composer hands
+        // back to cooked mode, and show a friendlier line.
+        if name == harness_tools::WEB_SEARCH_TOOL
+            && result.contains(harness_tools::web::WEB_SEARCH_NO_KEY)
+        {
+            self.needs_brave_key = true;
+            let line = format!(
+                "  {} {}",
+                self.ui.brown("└─"),
+                self.ui
+                    .dim("no Brave API key — you'll be prompted to add one below"),
+            );
+            self.write_region(&format!("{line}\n"));
+            self.begin_thinking();
+            self.render_composer();
+            return;
+        }
+        let line = format!(
+            "  {} {}",
+            self.ui.brown("└─"),
+            self.ui.dim(&truncate(result, 140)),
+        );
+        self.write_region(&format!("{line}\n"));
+        self.begin_thinking();
+        self.render_composer();
+    }
+
+    fn on_compacted(&mut self, detail: &str) {
+        self.stop_spinner();
+        let line = format!(
+            "  {} {}",
+            self.ui.brown("⊙"),
+            self.ui.dim(&format!("compacted context — {detail}")),
+        );
+        self.write_region(&format!("{line}\n"));
+        self.begin_thinking();
+        self.render_composer();
     }
 
     // --- spinner -----------------------------------------------------------
