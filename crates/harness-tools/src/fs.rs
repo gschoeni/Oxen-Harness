@@ -15,6 +15,17 @@ use crate::args::{opt_bool, opt_str, opt_usize, require_str};
 use crate::sandbox::Workspace;
 use crate::{Tool, ToolError};
 
+/// Tool name for [`ReadFileTool`].
+pub const READ_FILE_TOOL: &str = "read_file";
+/// Tool name for [`WriteFileTool`].
+pub const WRITE_FILE_TOOL: &str = "write_file";
+/// Tool name for [`EditFileTool`].
+pub const EDIT_FILE_TOOL: &str = "edit_file";
+/// Tool name for [`FindFilesTool`].
+pub const FIND_FILES_TOOL: &str = "find_files";
+/// Tool name for [`SearchTool`].
+pub const SEARCH_FILES_TOOL: &str = "search_files";
+
 /// `read_file` reads at most this many lines when no `limit` is given.
 const DEFAULT_READ_LIMIT: usize = 2000;
 /// Lines longer than this are truncated in `read_file` output.
@@ -36,7 +47,7 @@ impl ReadFileTool {
 #[async_trait]
 impl Tool for ReadFileTool {
     fn name(&self) -> &str {
-        "read_file"
+        READ_FILE_TOOL
     }
     fn description(&self) -> &str {
         "Read a UTF-8 text file relative to the workspace root. Output is line-numbered \
@@ -116,7 +127,7 @@ impl WriteFileTool {
 #[async_trait]
 impl Tool for WriteFileTool {
     fn name(&self) -> &str {
-        "write_file"
+        WRITE_FILE_TOOL
     }
     fn description(&self) -> &str {
         "Create or overwrite a text file at a path relative to the workspace root."
@@ -162,7 +173,7 @@ impl EditFileTool {
 #[async_trait]
 impl Tool for EditFileTool {
     fn name(&self) -> &str {
-        "edit_file"
+        EDIT_FILE_TOOL
     }
     fn description(&self) -> &str {
         "Replace an exact occurrence of `old_string` with `new_string` in a file. \
@@ -313,7 +324,7 @@ impl FindFilesTool {
 #[async_trait]
 impl Tool for FindFilesTool {
     fn name(&self) -> &str {
-        "find_files"
+        FIND_FILES_TOOL
     }
     fn description(&self) -> &str {
         "Find files by glob pattern relative to the workspace root, e.g. `**/*.rs`, \
@@ -392,7 +403,7 @@ impl SearchTool {
 #[async_trait]
 impl Tool for SearchTool {
     fn name(&self) -> &str {
-        "search_files"
+        SEARCH_FILES_TOOL
     }
     fn description(&self) -> &str {
         "Search workspace file contents with a regular expression (ripgrep-style; respects \

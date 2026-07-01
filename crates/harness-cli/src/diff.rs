@@ -20,11 +20,11 @@ pub fn render_file_change(ui: &Ui, name: &str, args: &str) -> Option<Vec<String>
     let v: serde_json::Value = serde_json::from_str(args).ok()?;
     let get = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("");
     match name {
-        "write_file" => {
+        harness_tools::WRITE_FILE_TOOL => {
             let path = v.get("path")?.as_str()?;
             Some(render_write(ui, path, get("contents")))
         }
-        "edit_file" => {
+        harness_tools::EDIT_FILE_TOOL => {
             let path = v.get("path")?.as_str()?;
             Some(render_edit(ui, path, get("old_string"), get("new_string")))
         }

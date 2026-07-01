@@ -1205,7 +1205,9 @@ impl Live {
                 }
                 // Web search with no key: flag it for a prompt once the composer
                 // hands back to cooked mode, and show a friendlier line.
-                if name == "web_search" && result.contains(harness_tools::web::WEB_SEARCH_NO_KEY) {
+                if name == harness_tools::WEB_SEARCH_TOOL
+                    && result.contains(harness_tools::web::WEB_SEARCH_NO_KEY)
+                {
                     self.needs_brave_key = true;
                     let line = format!(
                         "  {} {}",

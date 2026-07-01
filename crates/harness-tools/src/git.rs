@@ -9,6 +9,9 @@ use crate::args::{opt_str, opt_u64, require_str};
 use crate::sandbox::Workspace;
 use crate::{Tool, ToolError};
 
+/// Tool name for [`GitTool`].
+pub const GIT_TOOL: &str = "git";
+
 /// Perform a git operation in the workspace.
 pub struct GitTool {
     workspace: Workspace,
@@ -44,7 +47,7 @@ impl GitTool {
 #[async_trait]
 impl Tool for GitTool {
     fn name(&self) -> &str {
-        "git"
+        GIT_TOOL
     }
     fn description(&self) -> &str {
         "Run a git operation in the workspace: `status`, `diff`, `log`, or `commit`. \

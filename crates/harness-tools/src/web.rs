@@ -17,6 +17,9 @@ use serde::Deserialize;
 use crate::args::{opt_usize, require_str};
 use crate::{Tool, ToolError};
 
+/// Tool name for [`WebSearchTool`].
+pub const WEB_SEARCH_TOOL: &str = "web_search";
+
 /// Primary environment variable holding the Brave Search API key.
 pub const BRAVE_API_KEY_ENV: &str = "BRAVE_API_KEY";
 /// Alternate environment variable name accepted for the key.
@@ -97,7 +100,7 @@ impl Default for WebSearchTool {
 #[async_trait]
 impl Tool for WebSearchTool {
     fn name(&self) -> &str {
-        "web_search"
+        WEB_SEARCH_TOOL
     }
     fn description(&self) -> &str {
         "Search the web with Brave Search and return ranked results (title, URL, snippet). \

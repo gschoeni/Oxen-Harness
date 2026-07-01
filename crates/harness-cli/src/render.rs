@@ -153,7 +153,9 @@ impl TurnRenderer {
                 }
                 // A web search with no key configured: flag it (so the caller can
                 // prompt for one) and show a friendlier line than the raw error.
-                if name == "web_search" && result.contains(harness_tools::web::WEB_SEARCH_NO_KEY) {
+                if name == harness_tools::WEB_SEARCH_TOOL
+                    && result.contains(harness_tools::web::WEB_SEARCH_NO_KEY)
+                {
                     self.needs_brave_key = true;
                     println!(
                         "  {} {}",

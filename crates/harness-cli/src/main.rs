@@ -271,7 +271,7 @@ async fn main() -> Result<()> {
         // Advertise web search only when it actually registered (Brave key set);
         // the canvas tool is always registered above.
         system_prompt: Some(harness_agent::system_prompt_with_env(
-            tools.get("web_search").is_some(),
+            tools.get(harness_tools::WEB_SEARCH_TOOL).is_some(),
             true,
             workspace.root(),
         )),

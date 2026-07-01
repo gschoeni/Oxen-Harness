@@ -14,6 +14,9 @@ use crate::args::{opt_u64, require_str};
 use crate::sandbox::Workspace;
 use crate::{Tool, ToolError};
 
+/// Tool name for [`ShellTool`].
+pub const RUN_SHELL_TOOL: &str = "run_shell";
+
 /// Default command timeout (2 minutes), matching common agent shells.
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// Hard cap on how much stdout/stderr (each) is returned to the model.
@@ -33,7 +36,7 @@ impl ShellTool {
 #[async_trait]
 impl Tool for ShellTool {
     fn name(&self) -> &str {
-        "run_shell"
+        RUN_SHELL_TOOL
     }
     fn description(&self) -> &str {
         "Run a shell command from the workspace root. Returns exit code, stdout, and stderr. \

@@ -177,7 +177,7 @@ impl Ui {
     /// when present — a natural "writing" feel — and otherwise falls back to the
     /// thinking phrases so the indicator is never empty.
     pub fn writing(&self) -> Vec<String> {
-        let verbs = self.theme.tool_verbs("write_file");
+        let verbs = self.theme.tool_verbs(harness_tools::WRITE_FILE_TOOL);
         if verbs.is_empty() || verbs == ["Working"] {
             self.thinking()
         } else {
