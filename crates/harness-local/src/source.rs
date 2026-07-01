@@ -429,6 +429,20 @@ mod tests {
     }
 
     #[test]
+    fn every_fit_quant_is_parseable_from_a_filename() {
+        // fit::QUANTS drives sizing; KNOWN_QUANTS drives parse_quant. If fit
+        // knows a quant that KNOWN_QUANTS doesn't, a downloaded file at that
+        // quant would parse as "unknown". Keep the two lists in lockstep.
+        for q in crate::fit::QUANTS {
+            assert!(
+                parse_quant(&format!("model-{}.gguf", q.name)).as_deref() == Some(q.name),
+                "fit::QUANTS has `{}`, not recoverable by parse_quant/KNOWN_QUANTS",
+                q.name
+            );
+        }
+    }
+
+    #[test]
     fn parses_params_including_moe() {
         assert_eq!(parse_params("bartowski/Qwen_Qwen3-8B-GGUF"), "8B");
         assert_eq!(parse_params("Qwen3-30B-A3B-GGUF"), "30B-A3B");

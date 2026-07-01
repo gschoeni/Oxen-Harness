@@ -196,6 +196,19 @@ mod tests {
     }
 
     #[test]
+    fn curated_quants_all_have_a_bits_per_weight_in_fit() {
+        // quant_refs() sizes each offered quant by looking it up in fit::QUANTS;
+        // a curated quant missing there would be silently dropped. Guard the
+        // invariant so renaming a quant fails loudly here instead.
+        for name in CURATED_QUANTS {
+            assert!(
+                crate::fit::QUANTS.iter().any(|q| &q.name == name),
+                "CURATED_QUANTS has `{name}`, absent from fit::QUANTS"
+            );
+        }
+    }
+
+    #[test]
     fn download_url_points_at_hugging_face() {
         let spec = find("qwen3-0.6b").unwrap();
         let url = download_url(spec);
