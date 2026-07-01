@@ -252,4 +252,25 @@ mod tests {
             "hub.oxen.ai"
         );
     }
+
+    #[test]
+    fn host_extraction_strips_path_query_and_missing_scheme() {
+        assert_eq!(host_from_base_url("https://h.ai:9/api/ai?x=1#f"), "h.ai:9");
+        assert_eq!(host_from_base_url("no-scheme.host/api"), "no-scheme.host");
+    }
+
+    #[test]
+    fn nondefault_port_implies_a_local_http_server_even_for_remote_hosts() {
+        // A hostname with an explicit non-443 port reads as a dev server → http,
+        // even when the host itself isn't loopback.
+        assert_eq!(
+            base_url_from_host("my-box.lan:8080"),
+            "http://my-box.lan:8080/api/ai"
+        );
+        // ...but the standard HTTPS port keeps https.
+        assert_eq!(
+            base_url_from_host("api.example.com:443"),
+            "https://api.example.com:443/api/ai"
+        );
+    }
 }

@@ -589,6 +589,19 @@ mod tests {
     }
 
     #[test]
+    fn image_budget_is_fixed_regardless_of_data_uri_size() {
+        // A multi-megabyte base64 image must not inflate the token estimate — it's
+        // capped at the fixed tile cost. Otherwise a large screenshot would count
+        // as millions of "chars" and falsely trip the context-window guard.
+        let small = MessageContent::Parts(vec![ContentPart::image("data:image/png;base64,AAAA")]);
+        let huge = MessageContent::Parts(vec![ContentPart::image(format!(
+            "data:image/png;base64,{}",
+            "A".repeat(5_000_000)
+        ))]);
+        assert_eq!(small.budget_len(), huge.budget_len());
+    }
+
+    #[test]
     fn content_text_extracts_text_parts_only() {
         let parts = MessageContent::Parts(vec![
             ContentPart::text("a"),
