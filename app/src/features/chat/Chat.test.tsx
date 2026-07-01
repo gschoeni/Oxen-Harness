@@ -89,6 +89,24 @@ describe("Chat", () => {
     expect(await screen.findByText(/a\.ts b\.ts/)).toBeInTheDocument();
   });
 
+  it("shows a stop button mid-turn and cancels the run when clicked", async () => {
+    let resolveTurn!: (v: string) => void;
+    ipc.runTurn.mockImplementationOnce(() => new Promise((r) => (resolveTurn = r)));
+
+    render(<Chat />);
+    await userEvent.type(screen.getByPlaceholderText(/ask the agent/i), "go");
+    await userEvent.keyboard("{Enter}");
+
+    // While running, the send button is replaced by a stop button.
+    const stopBtn = await screen.findByRole("button", { name: /stop generating/i });
+    await userEvent.click(stopBtn);
+    expect(ipc.cancelTurn).toHaveBeenCalledWith("s1");
+
+    // Resolving the (cancelled) turn settles the run status back to idle.
+    act(() => resolveTurn(""));
+    await waitFor(() => expect(useStore.getState().runStatus["s1"]).toBeUndefined());
+  });
+
   it("queues a message typed while the chat is mid-turn", async () => {
     useStore.setState({ runStatus: { s1: "running" } });
     render(<Chat />);

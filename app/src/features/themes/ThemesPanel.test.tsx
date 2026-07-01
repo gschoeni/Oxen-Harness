@@ -4,19 +4,18 @@ import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
-import { ThemesModal } from "./ThemesModal";
+import { ThemesPanel } from "./ThemesPanel";
 import { useStore } from "../../lib/store";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
 
 beforeEach(() => {
   resetAll();
-  useStore.setState({ themesOpen: true });
 });
 
-describe("ThemesModal", () => {
+describe("ThemesPanel", () => {
   it("lists themes with built-in/custom tags", async () => {
-    render(<ThemesModal />);
+    render(<ThemesPanel />);
     expect(await screen.findByText("Midnight")).toBeInTheDocument();
     expect(screen.getByText("My Custom")).toBeInTheDocument();
     expect(screen.getAllByText("built-in").length).toBeGreaterThan(0);
@@ -27,7 +26,7 @@ describe("ThemesModal", () => {
       ...ipc.sampleTheme,
       meta: { ...ipc.sampleTheme.meta, name: "Midnight" },
     });
-    render(<ThemesModal />);
+    render(<ThemesPanel />);
     const row = (await screen.findByText("Midnight")).closest(".theme-row")!;
     await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /^use$/i }));
     expect(ipc.useTheme).toHaveBeenCalledWith("Midnight");
@@ -36,7 +35,7 @@ describe("ThemesModal", () => {
 
   it("exports a theme to the clipboard", async () => {
     const writeText = vi.spyOn(navigator.clipboard, "writeText");
-    render(<ThemesModal />);
+    render(<ThemesPanel />);
     const row = (await screen.findByText("My Custom")).closest(".theme-row")!;
     await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /export/i }));
     expect(ipc.exportTheme).toHaveBeenCalledWith("My Custom");
@@ -44,7 +43,7 @@ describe("ThemesModal", () => {
   });
 
   it("removes a custom theme but offers no remove for built-ins", async () => {
-    render(<ThemesModal />);
+    render(<ThemesPanel />);
     const custom = (await screen.findByText("My Custom")).closest(".theme-row")!;
     expect(within(custom as HTMLElement).queryByRole("button", { name: /remove/i })).toBeInTheDocument();
 
@@ -56,7 +55,7 @@ describe("ThemesModal", () => {
   });
 
   it("vibe-codes a new theme from the brief", async () => {
-    render(<ThemesModal />);
+    render(<ThemesPanel />);
     await userEvent.click(screen.getByText(/vibe-code a new theme/i));
     await userEvent.click(screen.getByRole("button", { name: /generate with the model/i }));
     expect(ipc.newTheme).toHaveBeenCalledWith(

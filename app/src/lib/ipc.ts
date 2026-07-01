@@ -4,11 +4,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
+  CatalogModel,
+  CloudModel,
   ConnectionView,
   DownloadProgress,
-  ModelsView,
+  HardwareProfile,
+  HfHit,
+  InstalledView,
+  LocalStatus,
+  ModelRef,
+  RuntimeInstallEvent,
+  RuntimeStatus,
   QuestionAnswer,
   QuestionPayload,
   SessionInfo,
@@ -22,8 +30,10 @@ import type {
   ToolEvent,
   ToolDeltaEvent,
   UsageEvent,
+  CompactedEvent,
   ChatMessage,
   ToolDefinition,
+  ToolInfo,
 } from "./types";
 
 // ---- session / agent -------------------------------------------------------
@@ -36,6 +46,35 @@ export const totalTokensUsed = () => invoke<number>("total_tokens_used");
 export const sessionMessages = (id: string) => invoke<ChatMessage[]>("session_messages", { id });
 /** The tool definitions (JSON schemas) the current agent advertises to the model. */
 export const toolDefinitions = () => invoke<ToolDefinition[]>("tool_definitions");
+
+// ---- tools (manage which tools the agent may call) -------------------------
+
+/** Every built-in tool with its enabled/override state, for the Tools page. */
+export const listTools = () => invoke<ToolInfo[]>("list_tools");
+/** Enable or disable a built-in tool (applies to new/resumed chats). */
+export const setToolEnabled = (name: string, enabled: boolean) =>
+  invoke<void>("set_tool_enabled", { name, enabled });
+/** Override (or clear, with null) the description the model sees for a tool. */
+export const setToolDescription = (name: string, description: string | null) =>
+  invoke<void>("set_tool_description", { name, description });
+
+// ---- logs / fine-tuning export ---------------------------------------------
+
+/** Write the given sessions to `path` as Oxen chat-completions fine-tuning JSONL;
+ *  resolves with the number of conversations written. */
+export const exportFinetuning = (path: string, sessionIds: string[], includeTools: boolean) =>
+  invoke<number>("export_finetuning", { path, sessionIds, includeTools });
+
+/** Open a native "save as" dialog for the export, defaulting to a `.jsonl` name.
+ *  Returns the chosen path (or null if cancelled). */
+export async function pickExportPath(defaultName = "finetuning.jsonl"): Promise<string | null> {
+  const chosen = await save({
+    title: "Export fine-tuning data",
+    defaultPath: defaultName,
+    filters: [{ name: "JSON Lines", extensions: ["jsonl"] }],
+  });
+  return chosen ?? null;
+}
 /** Load an attachment (absolute path, or relative to a session's workspace) as a
  *  data: URI for display — used by the composer preview and chat history. */
 export const attachmentDataUri = (path: string, session?: string) =>
@@ -44,6 +83,14 @@ export const newSession = () => invoke<SessionInfo>("new_session");
 export const resumeSession = (id: string) => invoke<SessionView>("resume_session", { id });
 /** Permanently delete a chat session and its messages. */
 export const deleteSession = (id: string) => invoke<void>("delete_session", { id });
+
+/** Set a chat's training-data review status ("" | "kept" | "rejected"). */
+export const setReviewStatus = (id: string, status: string) =>
+  invoke<void>("set_review_status", { id, status });
+
+/** Bulk-set the review status for many chats at once; resolves with the count changed. */
+export const setReviewStatusMany = (ids: string[], status: string) =>
+  invoke<number>("set_review_status_many", { ids, status });
 
 // ---- projects (chats grouped by working directory) -------------------------
 
@@ -65,6 +112,10 @@ export async function pickFolder(): Promise<string | null> {
  *  `attachments` are absolute file paths of dropped images/PDFs to send along. */
 export const runTurn = (session: string, prompt: string, attachments: string[] = []) =>
   invoke<string>("run_turn", { session, prompt, attachments });
+
+/** Stop the in-flight turn in `session`, killing the model stream (local or
+ *  remote). The `runTurn` promise then resolves with whatever streamed so far. */
+export const cancelTurn = (session: string) => invoke<void>("cancel_turn", { session });
 
 /** Open a native file picker for images and PDFs, returning the chosen absolute
  *  paths (empty if the user cancels). These feed the same attachment flow as an
@@ -102,6 +153,10 @@ export const onToolDelta = (handler: (e: ToolDeltaEvent) => void) =>
 export const onUsage = (handler: (e: UsageEvent) => void) =>
   listen<UsageEvent>("agent://usage", (e) => handler(e.payload));
 
+/** Fires when the transcript was compacted mid-turn to fit the context window. */
+export const onCompacted = (handler: (e: CompactedEvent) => void) =>
+  listen<CompactedEvent>("agent://compacted", (e) => handler(e.payload));
+
 export const onQuestion = (handler: (q: QuestionPayload) => void) =>
   listen<QuestionPayload>("agent://question", (e) => handler(e.payload));
 
@@ -134,14 +189,57 @@ export const configureBraveKey = (key: string) =>
 
 // ---- local models ----------------------------------------------------------
 
-export const listModels = () => invoke<ModelsView>("list_models");
-export const installLlama = () => invoke<void>("install_llama");
-export const pullModel = (id: string) => invoke<void>("pull_model", { id });
+/** Installed local models, total disk used, and the runtime status. */
+export const installedLocalModels = () => invoke<InstalledView>("installed_local_models");
+/** The machine's compute profile, for hardware-aware recommendations. */
+export const detectHardware = () => invoke<HardwareProfile>("detect_hardware");
+/** Status of the self-managed llama.cpp runtime. */
+export const runtimeStatus = () => invoke<RuntimeStatus>("runtime_status");
+/** Download + set up the managed `llama-server` (streams `runtime://install`). */
+export const installRuntime = () => invoke<void>("install_runtime");
+/** The setup catalog: curated (fit + quant annotated) + featured Oxen models. */
+export const listModelCatalog = () => invoke<CatalogModel[]>("list_model_catalog");
+/** Resolve a pasted Hugging Face repo/GGUF link into an annotated model. */
+export const resolveHfModel = (input: string) =>
+  invoke<CatalogModel>("resolve_hf_model", { input });
+/** Search the Hugging Face hub for GGUF repos. */
+export const searchHfModels = (query: string) => invoke<HfHit[]>("search_hf_models", { query });
+/** Whether a Hugging Face token is saved (for gated repos). */
+export const hfTokenPresent = () => invoke<boolean>("hf_token_present");
+/** Save (or clear) the Hugging Face token. */
+export const setHfToken = (token: string) => invoke<void>("set_hf_token", { token });
+/** Download a specific model (a chosen quant), streaming `models://progress`. */
+export const downloadModel = (model: ModelRef) => invoke<void>("download_model", { model });
+/** Delete a downloaded local model by id. */
 export const removeModel = (id: string) => invoke<void>("remove_model", { id });
+/** Switch the current session to a downloaded local model (starts a fresh chat). */
 export const useLocalModel = (id: string) => invoke<SessionInfo>("use_local_model", { id });
+/** Homebrew fallback when the platform has no managed runtime (`llama://install`). */
+export const installLlama = () => invoke<void>("install_llama");
+
+// ---- cloud models ----------------------------------------------------------
+
+/** The cloud model catalog (built-ins + custom), with the selected one flagged. */
+export const listCloudModels = () => invoke<CloudModel[]>("list_cloud_models");
+/** Add (or rename) a custom cloud model; resolves with the updated catalog. */
+export const addCloudModel = (id: string, name: string) =>
+  invoke<CloudModel[]>("add_cloud_model", { id, name });
+/** Remove a custom cloud model (built-ins can't be removed); returns the catalog. */
+export const removeCloudModel = (id: string) =>
+  invoke<CloudModel[]>("remove_cloud_model", { id });
+/** Switch the current chat (and the default for new chats) to a cloud model,
+ *  continuing the same conversation. Resolves with the updated session info. */
+export const setModel = (model: string) => invoke<SessionInfo>("set_model", { model });
 
 export const onModelProgress = (handler: (p: DownloadProgress) => void) =>
   listen<DownloadProgress>("models://progress", (e) => handler(e.payload));
+
+export const onRuntimeInstall = (handler: (e: RuntimeInstallEvent) => void) =>
+  listen<RuntimeInstallEvent>("runtime://install", (e) => handler(e.payload));
+
+/** Phases of switching to a local model (runtime init → loading → ready). */
+export const onLocalStatus = (handler: (e: LocalStatus) => void) =>
+  listen<LocalStatus>("local://status", (e) => handler(e.payload));
 
 export const onLlamaInstall = (handler: (line: string) => void) =>
   listen<string>("llama://install", (e) => handler(e.payload));

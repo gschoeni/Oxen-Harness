@@ -1,3 +1,214 @@
+/* ===========================================================================
+   Full-screen settings surface — a left rail of subpages + a content pane.
+   =========================================================================== */
+/* A full-window takeover (not a floating modal): it fills the whole webview,
+   sliding up over the chat. The native traffic lights stay above the webview, so
+   the rail reserves space at the top for them and carries the drag region. */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--bg);
+  display: flex;
+  animation: settings-in var(--dur) var(--ease);
+}
+@keyframes settings-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+.settings-shell {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* --- Left rail --- */
+.settings-rail {
+  width: 264px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Top padding clears the macOS traffic-light buttons (overlay title bar),
+     matching the main sidebar. */
+  padding: 38px var(--space-3) var(--space-4);
+  background: var(--bg);
+  border-right: 1px solid var(--separator);
+  overflow-y: auto;
+}
+.settings-rail-title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  padding: var(--space-3) var(--space-3) var(--space-3);
+}
+.settings-rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.settings-rail-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.settings-rail-item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.settings-rail-item.active {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--separator-strong));
+}
+.settings-rail-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--text-tertiary);
+}
+.settings-rail-item.active .settings-rail-icon {
+  color: var(--accent);
+}
+.settings-rail-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.settings-rail-label {
+  font-weight: 600;
+  font-size: var(--text-md);
+}
+.settings-rail-blurb {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  line-height: 1.35;
+}
+
+/* --- Main pane --- */
+.settings-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-main-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  /* Generous top padding so the page title clears the title-bar zone and lines
+     up with the rail's "Settings" heading. */
+  padding: 38px var(--space-6) var(--space-4);
+  border-bottom: 1px solid var(--separator);
+  flex-shrink: 0;
+}
+.settings-main-title {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  margin: 0;
+}
+.settings-close {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.settings-close:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.settings-main-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-6);
+  /* Keep content readable on very wide windows rather than stretching forever. */
+}
+.settings-main-body > .settings-page {
+  max-width: 780px;
+}
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+/* The local-model wizard supplies its own padding via .ls-body; drop it when
+   embedded so it doesn't double up with the pane's padding. */
+.ls-embedded {
+  padding: 0;
+}
+.themes-panel-root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Light/dark toggle on the Appearance page. */
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-md);
+  font-weight: 500;
+  transition: background var(--dur-fast) var(--ease);
+}
+.mode-toggle:hover {
+  background: var(--surface-2);
+}
+.mode-toggle svg {
+  color: var(--accent);
+}
+
+@media (max-width: 720px) {
+  .settings-shell {
+    flex-direction: column;
+  }
+  .settings-rail {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--separator);
+    /* Pad past the traffic lights, which still sit top-left over the row. */
+    padding: var(--space-3) var(--space-3) var(--space-3) 80px;
+  }
+  .settings-rail-title {
+    display: none;
+  }
+  .settings-rail-nav {
+    flex-direction: row;
+  }
+  .settings-rail-blurb {
+    display: none;
+  }
+}
+
 .settings-body {
   display: flex;
   flex-direction: column;
@@ -174,4 +385,98 @@
   margin-left: auto;
   color: var(--text-tertiary);
   font-size: var(--text-sm);
+}
+
+/* --- Models management --- */
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+.model-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.model-item.selected {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--separator-strong));
+  background: var(--accent-soft);
+}
+.model-default {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.model-default:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+.model-item.selected .model-default {
+  color: var(--accent);
+}
+.model-item-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.model-item-name {
+  font-size: var(--text-md);
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-item-id {
+  font-family: var(--font-readout, monospace);
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-item-tag {
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.model-remove {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.model-remove:hover {
+  color: var(--danger);
+  background: var(--surface-2);
+}
+.model-add {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+.model-add .field-input {
+  flex: 1;
+  min-width: 0;
 }

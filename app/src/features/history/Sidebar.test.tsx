@@ -11,8 +11,8 @@ import { resetAll } from "../../test/utils";
 import type { Project, SessionSummary } from "../../lib/types";
 
 const sessions: SessionSummary[] = [
-  { id: "s1", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "First chat", message_count: 4 },
-  { id: "s2", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "Second chat", message_count: 2 },
+  { id: "s1", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "" },
+  { id: "s2", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "Second chat", message_count: 2, review_status: "" },
 ];
 const projects: Project[] = [{ path: "/w", name: "w", session_count: 2, active: true }];
 

@@ -8,6 +8,7 @@ import {
   GitBranch,
   Globe,
   KeyRound,
+  ListChecks,
   type LucideIcon,
   MessageCircleQuestion,
   PencilLine,
@@ -19,9 +20,12 @@ import { Button } from "../../components/ui";
 import { configureBraveKey } from "../../lib/ipc";
 import { basename, elapsed } from "../../lib/format";
 import { canvasDocFromArgs } from "../../lib/canvas";
+import { planItemsFromArgs, planProgress } from "../../lib/plan";
 import { useStore } from "../../lib/store";
 import type { Item } from "./thread";
+import { PlanChecklist } from "./Plan";
 import "./toolcall.css";
+import "./plan.css";
 
 type ToolItem = Extract<Item, { kind: "tool" }>;
 
@@ -40,6 +44,9 @@ export function ToolCall({ item, now }: { item: ToolItem; now: number }) {
   // A canvas call is a clickable card that (re)opens the document in the panel —
   // including past versions in a resumed chat, rebuilt from the call's args.
   if (item.name === "canvas") return <CanvasToolCall item={item} now={now} a={a} />;
+  // A plan update renders as a checklist snapshot (the live, pinned plan lives
+  // above the thread; this card is the in-thread record of each update).
+  if (item.name === "update_plan") return <PlanToolCard item={item} a={a} />;
   const { icon: Icon, verb, target } = present(item.name, a);
   const duration = toolDuration(item, now);
 
@@ -135,6 +142,32 @@ function CanvasToolCall({ item, now, a }: { item: ToolItem; now: number; a: Reco
           )}
         </span>
       </button>
+    </div>
+  );
+}
+
+/** A plan update in the thread: a non-collapsing card showing the checklist
+ *  snapshot for that call, with a "done/total" count in the header. */
+function PlanToolCard({ item, a }: { item: ToolItem; a: Record<string, unknown> }) {
+  const items = planItemsFromArgs(a);
+  if (!items) return null;
+  const { done, total } = planProgress(items);
+  return (
+    <div className={`toolcall plan-card ${item.running ? "running" : "done"}`}>
+      <div className="toolcall-head" style={{ cursor: "default" }}>
+        <span className="toolcall-icon">
+          <ListChecks size={15} />
+        </span>
+        <span className="toolcall-summary">
+          <span className="toolcall-verb">{item.running ? "Updating plan" : "Plan"}</span>
+        </span>
+        <span className="toolcall-meta">
+          <span className="plan-progress">
+            {done}/{total}
+          </span>
+        </span>
+      </div>
+      <PlanChecklist items={items} />
     </div>
   );
 }

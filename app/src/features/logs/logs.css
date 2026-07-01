@@ -1,0 +1,315 @@
+/* ---- header: title + description, then summary, then export action ------ */
+.log-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.log-header-text .hint {
+  margin: 0;
+  max-width: 60ch;
+}
+/* A touch more breathing room around the intro so the export CTA doesn't feel
+   cramped between the stats and the filters. */
+.log-intro {
+  gap: var(--space-4);
+}
+.log-export {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin: var(--space-2) 0 var(--space-3);
+}
+.log-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.log-toggle input {
+  accent-color: var(--accent);
+}
+
+/* ---- subtle dotted stat summary ----------------------------------------- */
+.log-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.log-summary-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.log-summary-item b {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.log-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-tertiary);
+}
+.log-dot.kept {
+  background: var(--green, #3fb950);
+  border-color: var(--green, #3fb950);
+}
+.log-dot.rejected {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ---- filter bar --------------------------------------------------------- */
+.log-filterbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.log-search,
+.log-select {
+  height: 34px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.log-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 180px;
+  padding: 0 var(--space-3);
+  color: var(--text-tertiary);
+}
+.log-search:focus-within,
+.log-select:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--separator-strong));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.log-search input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.log-select {
+  padding: 0 var(--space-3);
+  max-width: 200px;
+  cursor: pointer;
+}
+.log-clear-filters {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+.log-clear-filters:hover {
+  color: var(--text);
+}
+
+/* ---- toolbar: status segmented (left) + bulk actions (right) ------------ */
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.log-filters {
+  display: flex;
+  gap: 2px;
+  background: var(--surface-2);
+  padding: 3px;
+  border-radius: var(--radius-sm);
+}
+.log-filter {
+  padding: var(--space-1) var(--space-3);
+  border: none;
+  background: transparent;
+  border-radius: calc(var(--radius-sm) - 2px);
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+.log-filter:hover {
+  color: var(--text);
+}
+.log-filter.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+.log-bulk {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.log-bulk-count {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  margin-right: var(--space-2);
+}
+.log-bulk-btn {
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+.log-bulk-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.log-bulk-btn:disabled {
+  opacity: 0.4;
+}
+.log-bulk-btn.keep:hover:not(:disabled) {
+  color: var(--green, #3fb950);
+}
+.log-bulk-btn.reject:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+/* ---- trace list: one bordered card, hairline-divided rows --------------- */
+.log-trace-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.log-trace-list .muted {
+  padding: var(--space-4);
+}
+.log-trace {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--separator);
+  padding-right: var(--space-2);
+  transition: background var(--dur-fast) var(--ease);
+}
+.log-trace:last-child {
+  border-bottom: none;
+}
+.log-trace:hover {
+  background: var(--surface-2);
+}
+/* Kept / rejected get a quiet colored left edge instead of a full border. */
+.log-trace.status-kept {
+  box-shadow: inset 2px 0 0 var(--green, #3fb950);
+}
+.log-trace.status-rejected {
+  box-shadow: inset 2px 0 0 var(--danger);
+}
+.log-trace.status-rejected .log-trace-main {
+  opacity: 0.6;
+}
+.log-trace-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  text-align: left;
+  padding: var(--space-3);
+  color: var(--text);
+}
+.log-trace-icon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.log-trace-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.log-trace-title {
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-trace-meta {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-family: var(--font-readout, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-pill {
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.log-pill-kept {
+  background: color-mix(in srgb, var(--green, #3fb950) 16%, transparent);
+  color: var(--green, #3fb950);
+}
+.log-pill-rejected {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
+}
+.log-trace-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  /* Fade the per-row buttons in on hover for a calmer resting state. */
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.log-trace:hover .log-trace-actions,
+.log-trace.status-kept .log-trace-actions,
+.log-trace.status-rejected .log-trace-actions {
+  opacity: 1;
+}
+.log-decide {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+}
+.log-decide.keep:hover,
+.log-decide.keep.active {
+  color: var(--green, #3fb950);
+  background: color-mix(in srgb, var(--green, #3fb950) 14%, transparent);
+}
+.log-decide.reject:hover,
+.log-decide.reject.active {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}

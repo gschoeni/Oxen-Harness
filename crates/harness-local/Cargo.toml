@@ -11,11 +11,18 @@ description = "Local LLM management (llama.cpp + GGUF download/serve) for oxen-h
 [dependencies]
 harness-core = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
 futures-util = "0.3"
 dirs = "5"
+# .tar.gz extraction for the self-managed llama.cpp runtime (pure-Rust, so it
+# builds everywhere without a system `tar`). `zip` will join here for Windows.
+flate2 = "1"
+tar = "0.4"
+# Free/total disk space (statvfs) so the UI can warn before a big download.
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

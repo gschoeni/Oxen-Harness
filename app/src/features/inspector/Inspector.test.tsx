@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
-import { DevView } from "./DevView";
+import { Inspector } from "./Inspector";
 import { useStore } from "../../lib/store";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
@@ -24,7 +24,6 @@ const MESSAGES = [
 beforeEach(() => {
   resetAll();
   useStore.setState({
-    devViewOpen: true,
     session: { ...ipc.sampleSession, session_id: "s1", tokens_used: 1234, context_tokens: 900, context_window: 128000 },
   });
   ipc.sessionMessages.mockResolvedValue(MESSAGES as unknown[]);
@@ -34,9 +33,9 @@ beforeEach(() => {
   ] as unknown[]);
 });
 
-describe("DevView", () => {
+describe("Inspector", () => {
   it("fetches the session transcript and summarizes it", async () => {
-    render(<DevView />);
+    render(<Inspector sessionId="s1" />);
     await waitFor(() => expect(ipc.sessionMessages).toHaveBeenCalledWith("s1"));
     // Messages count, LLM calls (2 assistant), tool calls (1)
     expect(await screen.findByText("Messages")).toBeInTheDocument();
@@ -46,9 +45,20 @@ describe("DevView", () => {
     expect(screen.getAllByText("find_files").length).toBeGreaterThan(0);
   });
 
-  it("surfaces the tool definitions panel", async () => {
-    render(<DevView />);
+  it("defaults to the chat view rendering", async () => {
+    render(<Inspector sessionId="s1" />);
+    // The "Chat" tab is first and selected, showing the conversation as rendered.
+    expect(await screen.findByRole("tab", { name: /chat/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(await screen.findByText(/Found one file/)).toBeInTheDocument();
+  });
+
+  it("surfaces the tool definitions panel in the Readable view", async () => {
+    render(<Inspector sessionId="s1" />);
     await waitFor(() => expect(ipc.toolDefinitions).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole("tab", { name: /readable/i }));
     // The collapsible tool-definitions panel and its available count
     expect(await screen.findByText("Tool definitions")).toBeInTheDocument();
     expect(screen.getByText("2 available")).toBeInTheDocument();
@@ -58,15 +68,17 @@ describe("DevView", () => {
   });
 
   it("documents the tool-definitions token estimate", async () => {
-    render(<DevView />);
+    render(<Inspector sessionId="s1" />);
+    await userEvent.click(screen.getByRole("tab", { name: /readable/i }));
     await screen.findByText("Tool definitions");
     // Summary stat shows the count + token estimate, and the panel/rows show tok badges.
     expect(screen.getByText(/2 · ~\d/)).toBeInTheDocument();
     expect(screen.getAllByText(/~\d[\d,]* tok/).length).toBeGreaterThan(0);
   });
 
-  it("renders role-coded messages and shows tool-call args", async () => {
-    render(<DevView />);
+  it("renders role-coded messages and shows tool-call args in the Readable view", async () => {
+    render(<Inspector sessionId="s1" />);
+    await userEvent.click(screen.getByRole("tab", { name: /readable/i }));
     expect(await screen.findByText("User")).toBeInTheDocument();
     expect(screen.getAllByText("Assistant").length).toBe(2);
     expect(screen.getByText("Tool result")).toBeInTheDocument();
@@ -75,10 +87,9 @@ describe("DevView", () => {
   });
 
   it("toggles to raw JSON view", async () => {
-    render(<DevView />);
-    await screen.findByText("User");
+    render(<Inspector sessionId="s1" />);
     await userEvent.click(screen.getByRole("tab", { name: /raw json/i }));
     // The raw dump contains the verbatim tool_call_id
-    expect(screen.getByText(/"tool_call_id": "call_1"/)).toBeInTheDocument();
+    expect(await screen.findByText(/"tool_call_id": "call_1"/)).toBeInTheDocument();
   });
 });

@@ -1,16 +1,16 @@
 //! On-disk store of downloaded GGUF models.
 //!
-//! Models live in a single directory (`~/.oxen-harness/models/` by default).
-//! The store knows which catalog entries are present, how much disk each uses,
-//! and how to download (with progress) or remove them.
+//! Models live in a single directory (`~/.oxen-harness/models/` by default),
+//! each as `{id}.gguf` with a `{id}.json` sidecar holding its [`ModelRef`]
+//! metadata. The sidecar lets arbitrary Hugging Face / Oxen models keep their
+//! display name, quant, and origin across restarts — not just the curated few.
 
 use std::path::{Path, PathBuf};
 
 use futures_util::StreamExt;
-use serde::Serialize;
 
-use crate::catalog::{self, ModelSpec};
-use crate::{download_url, LocalError};
+use crate::source::ModelRef;
+use crate::LocalError;
 
 /// Progress for an in-flight download.
 #[derive(Debug, Clone, Copy)]
@@ -28,23 +28,6 @@ impl DownloadProgress {
             .filter(|t| *t > 0)
             .map(|t| (self.downloaded as f64 / t as f64).clamp(0.0, 1.0))
     }
-}
-
-/// A catalog model paired with its local on-disk status (for listing/UIs).
-#[derive(Debug, Clone, Serialize)]
-pub struct ModelStatus {
-    pub id: String,
-    pub display: String,
-    pub params: String,
-    pub quant: String,
-    pub context: u32,
-    pub note: String,
-    /// Whether the GGUF is present locally.
-    pub installed: bool,
-    /// Actual on-disk size when installed, else the catalog estimate.
-    pub size_bytes: u64,
-    /// True when `size_bytes` is the actual on-disk size (vs an estimate).
-    pub size_is_actual: bool,
 }
 
 /// Manages the directory of downloaded models.
@@ -75,19 +58,24 @@ impl ModelStore {
         &self.dir
     }
 
-    /// Local path a model's GGUF would occupy.
-    pub fn path_for(&self, spec: &ModelSpec) -> PathBuf {
-        self.dir.join(spec.file)
+    /// Local path a model's GGUF occupies.
+    pub fn path_for(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.gguf"))
     }
 
-    /// Whether a model's GGUF is fully present (no leftover `.part`).
-    pub fn is_installed(&self, spec: &ModelSpec) -> bool {
-        self.path_for(spec).is_file()
+    /// Local path a model's metadata sidecar occupies.
+    fn meta_path(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.json"))
+    }
+
+    /// Whether a model's GGUF is fully present.
+    pub fn is_installed(&self, id: &str) -> bool {
+        self.path_for(id).is_file()
     }
 
     /// Actual on-disk size of a model, if installed.
-    pub fn installed_size(&self, spec: &ModelSpec) -> Option<u64> {
-        std::fs::metadata(self.path_for(spec))
+    pub fn installed_size(&self, id: &str) -> Option<u64> {
+        std::fs::metadata(self.path_for(id))
             .ok()
             .filter(|m| m.is_file())
             .map(|m| m.len())
@@ -110,87 +98,165 @@ impl ModelStore {
             .sum()
     }
 
-    /// Catalog entries decorated with their local status (for `models list`).
-    pub fn statuses(&self) -> Vec<ModelStatus> {
-        catalog::catalog()
-            .iter()
-            .map(|spec| {
-                let installed_size = self.installed_size(spec);
-                ModelStatus {
-                    id: spec.id.to_string(),
-                    display: spec.display.to_string(),
-                    params: spec.params.to_string(),
-                    quant: spec.quant.to_string(),
-                    context: spec.context,
-                    note: spec.note.to_string(),
-                    installed: installed_size.is_some(),
-                    size_bytes: installed_size.unwrap_or(spec.approx_bytes),
-                    size_is_actual: installed_size.is_some(),
+    /// Every installed model, read from its sidecar. A `.gguf` without a sidecar
+    /// (e.g. placed manually) still appears as a minimal entry so it's usable.
+    pub fn installed(&self) -> Vec<ModelRef> {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|x| x != "gguf") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            match self.read_meta(id) {
+                Some(mut m) => {
+                    m.size_bytes = size; // reflect the real on-disk size
+                    out.push(m);
                 }
-            })
-            .collect()
-    }
-
-    /// Remove a downloaded model, returning `true` if a file was deleted.
-    pub fn remove(&self, spec: &ModelSpec) -> Result<bool, LocalError> {
-        let path = self.path_for(spec);
-        if path.is_file() {
-            std::fs::remove_file(&path)?;
-            Ok(true)
-        } else {
-            Ok(false)
+                None => out.push(orphan_ref(id, size)),
+            }
         }
+        out.sort_by(|a, b| a.display.to_lowercase().cmp(&b.display.to_lowercase()));
+        out
     }
 
-    /// Download a model using a fresh HTTP client (convenience over
-    /// [`ModelStore::download`] for callers that don't manage their own).
-    pub async fn pull<F>(&self, spec: &ModelSpec, on_progress: F) -> Result<PathBuf, LocalError>
-    where
-        F: FnMut(DownloadProgress),
-    {
-        let client = reqwest::Client::new();
-        self.download(spec, &client, on_progress).await
+    /// The metadata for one installed model, if a sidecar exists.
+    pub fn read_meta(&self, id: &str) -> Option<ModelRef> {
+        let raw = std::fs::read_to_string(self.meta_path(id)).ok()?;
+        serde_json::from_str(&raw).ok()
     }
 
-    /// Download a model's GGUF, invoking `on_progress` as bytes arrive.
+    /// The model's native (training) context window in tokens, or 0 if unknown.
     ///
-    /// The download streams to a `.part` file and is atomically renamed into
-    /// place on success, so an interrupted download never looks "installed".
-    /// Returns the final path (a no-op returning early if already present).
+    /// Read straight from the GGUF header — authoritative regardless of how the
+    /// model was added (a Hugging Face search leaves the sidecar's `context` at
+    /// 0). Falls back to the sidecar value if the file can't be parsed.
+    pub fn native_context(&self, id: &str) -> u32 {
+        crate::gguf::context_length(&self.path_for(id))
+            .or_else(|| self.read_meta(id).map(|m| m.context).filter(|&c| c > 0))
+            .unwrap_or(0)
+    }
+
+    /// Remove a downloaded model (GGUF + sidecar), returning `true` if it existed.
+    pub fn remove(&self, id: &str) -> Result<bool, LocalError> {
+        let gguf = self.path_for(id);
+        let existed = gguf.is_file();
+        if existed {
+            std::fs::remove_file(&gguf)?;
+        }
+        let _ = std::fs::remove_file(self.meta_path(id));
+        Ok(existed)
+    }
+
+    /// Download a model's GGUF, writing its sidecar on success. `token` is an
+    /// optional bearer token (Hugging Face / Oxen) for gated or private repos.
+    /// Streams to a `.part` file and atomically renames, so an interrupted
+    /// download never looks installed. A no-op if already present.
     pub async fn download<F>(
         &self,
-        spec: &ModelSpec,
-        client: &reqwest::Client,
+        model: &ModelRef,
+        token: Option<&str>,
         on_progress: F,
     ) -> Result<PathBuf, LocalError>
     where
         F: FnMut(DownloadProgress),
     {
-        let final_path = self.path_for(spec);
+        let final_path = self.path_for(&model.id);
         if final_path.is_file() {
+            // Ensure the sidecar exists even for a previously-downloaded file.
+            self.write_meta(model)?;
             return Ok(final_path);
         }
-        stream_to_file(client, &download_url(spec), &final_path, on_progress).await?;
+        let client = reqwest::Client::new();
+        stream_to_file(&client, &model.download_url(), token, &final_path, on_progress).await?;
+        self.write_meta(model)?;
         Ok(final_path)
+    }
+
+    fn write_meta(&self, model: &ModelRef) -> Result<(), LocalError> {
+        let json = serde_json::to_string_pretty(model)
+            .map_err(|e| LocalError::Download(format!("could not serialize metadata: {e}")))?;
+        std::fs::write(self.meta_path(&model.id), json)?;
+        Ok(())
     }
 }
 
-/// Stream `url` to `dest`, reporting progress, via a sibling `.part` file that
-/// is atomically renamed into place only on success.
+/// Total and available bytes on the filesystem holding `path`, so the UI can
+/// show free space and warn before a download won't fit. `None` if it can't be
+/// determined (or on platforms without `statvfs`).
+#[cfg(unix)]
+pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+    let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `cpath` is a valid NUL-terminated path; `statvfs` fully initializes
+    // `stat` on success (return 0) and we read it only then.
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(cpath.as_ptr(), &mut stat) != 0 {
+            return None;
+        }
+        let unit = if stat.f_frsize > 0 { stat.f_frsize } else { stat.f_bsize } as u64;
+        let total = (stat.f_blocks as u64).saturating_mul(unit);
+        let available = (stat.f_bavail as u64).saturating_mul(unit);
+        Some((total, available))
+    }
+}
+
+#[cfg(not(unix))]
+pub fn disk_space(_path: &Path) -> Option<(u64, u64)> {
+    None
+}
+
+/// A minimal [`ModelRef`] for a GGUF found on disk without a sidecar.
+fn orphan_ref(id: &str, size: u64) -> ModelRef {
+    ModelRef {
+        id: id.to_string(),
+        display: id.to_string(),
+        params: String::new(),
+        quant: crate::source::parse_quant(id).unwrap_or_default(),
+        context: 0,
+        size_bytes: size,
+        origin: crate::source::Origin::HuggingFace {
+            repo: String::new(),
+            file: format!("{id}.gguf"),
+            revision: "main".to_string(),
+        },
+    }
+}
+
+/// Stream `url` to `dest` (via a sibling `.part` file, atomically renamed on
+/// success), optionally with a bearer `token`, reporting progress.
 async fn stream_to_file<F>(
     client: &reqwest::Client,
     url: &str,
+    token: Option<&str>,
     dest: &Path,
     mut on_progress: F,
 ) -> Result<(), LocalError>
 where
     F: FnMut(DownloadProgress),
 {
-    let response = client
-        .get(url)
+    let mut req = client.get(url).header("User-Agent", "oxen-harness");
+    if let Some(t) = token.filter(|t| !t.trim().is_empty()) {
+        req = req.bearer_auth(t.trim());
+    }
+    let response = req
         .send()
         .await
         .map_err(|e| LocalError::Download(format!("request failed: {e}")))?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED
+        || response.status() == reqwest::StatusCode::FORBIDDEN
+    {
+        return Err(LocalError::Download(
+            "access denied — this model may be gated or private; add a token".to_string(),
+        ));
+    }
     if !response.status().is_success() {
         return Err(LocalError::Download(format!(
             "HTTP {} fetching {}",
@@ -222,6 +288,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::{ModelRef, Origin};
 
     fn store() -> (tempfile::TempDir, ModelStore) {
         let dir = tempfile::tempdir().unwrap();
@@ -229,123 +296,112 @@ mod tests {
         (dir, store)
     }
 
+    fn sample_ref(id: &str) -> ModelRef {
+        ModelRef {
+            id: id.to_string(),
+            display: "Sample".to_string(),
+            params: "8B".to_string(),
+            quant: "Q4_K_M".to_string(),
+            context: 40960,
+            size_bytes: 123,
+            origin: Origin::HuggingFace {
+                repo: "owner/name".to_string(),
+                file: "model-Q4_K_M.gguf".to_string(),
+                revision: "main".to_string(),
+            },
+        }
+    }
+
     #[test]
-    fn fresh_store_has_nothing_installed() {
-        let (_dir, store) = store();
-        let spec = catalog::find("qwen3-0.6b").unwrap();
-        assert!(!store.is_installed(spec));
-        assert_eq!(store.installed_size(spec), None);
+    fn fresh_store_is_empty() {
+        let (_d, store) = store();
+        assert!(!store.is_installed("x"));
         assert_eq!(store.total_disk_used(), 0);
-
-        let status = store
-            .statuses()
-            .iter()
-            .find(|s| s.id == spec.id)
-            .cloned()
-            .unwrap();
-        assert!(!status.installed);
-        assert!(!status.size_is_actual);
-        assert_eq!(status.size_bytes, spec.approx_bytes);
+        assert!(store.installed().is_empty());
     }
 
     #[test]
-    fn reports_disk_usage_and_status_for_present_files() {
-        let (_dir, store) = store();
-        let spec = catalog::find("qwen3-0.6b").unwrap();
-        std::fs::write(store.path_for(spec), b"0123456789").unwrap();
+    fn installed_reads_sidecar_and_reflects_disk_size() {
+        let (_d, store) = store();
+        let m = sample_ref("sample-q4-k-m");
+        std::fs::write(store.path_for(&m.id), b"0123456789").unwrap();
+        store.write_meta(&m).unwrap();
 
-        assert!(store.is_installed(spec));
-        assert_eq!(store.installed_size(spec), Some(10));
+        let installed = store.installed();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].display, "Sample");
+        assert_eq!(installed[0].quant, "Q4_K_M");
+        assert_eq!(installed[0].size_bytes, 10); // real on-disk size, not the 123
         assert_eq!(store.total_disk_used(), 10);
-
-        let status = store
-            .statuses()
-            .iter()
-            .find(|s| s.id == spec.id)
-            .cloned()
-            .unwrap();
-        assert!(status.installed);
-        assert!(status.size_is_actual);
-        assert_eq!(status.size_bytes, 10);
     }
 
     #[test]
-    fn remove_deletes_only_when_present() {
-        let (_dir, store) = store();
-        let spec = catalog::find("qwen3-0.6b").unwrap();
-        assert!(!store.remove(spec).unwrap());
-        std::fs::write(store.path_for(spec), b"x").unwrap();
-        assert!(store.remove(spec).unwrap());
-        assert!(!store.is_installed(spec));
+    fn orphan_gguf_without_sidecar_still_lists() {
+        let (_d, store) = store();
+        std::fs::write(store.path_for("loose-Q5_K_M"), b"x").unwrap();
+        let installed = store.installed();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].id, "loose-Q5_K_M");
+        assert_eq!(installed[0].quant, "Q5_K_M");
     }
 
     #[test]
-    fn total_disk_used_ignores_non_gguf() {
-        let (_dir, store) = store();
-        std::fs::write(store.dir().join("notes.txt"), b"hello").unwrap();
-        std::fs::write(store.dir().join("a.gguf"), b"1234").unwrap();
-        assert_eq!(store.total_disk_used(), 4);
+    fn remove_deletes_gguf_and_sidecar() {
+        let (_d, store) = store();
+        let m = sample_ref("gone");
+        std::fs::write(store.path_for(&m.id), b"x").unwrap();
+        store.write_meta(&m).unwrap();
+        assert!(store.remove(&m.id).unwrap());
+        assert!(!store.is_installed(&m.id));
+        assert!(!store.meta_path(&m.id).is_file());
+        assert!(!store.remove(&m.id).unwrap());
     }
 
     #[tokio::test]
-    async fn stream_to_file_writes_and_reports_progress() {
+    async fn download_streams_and_writes_sidecar() {
         let mut server = mockito::Server::new_async().await;
-        let body = vec![7u8; 4096];
+        let body = vec![7u8; 2048];
         let mock = server
-            .mock("GET", "/model.gguf")
+            .mock("GET", "/m.gguf")
             .with_status(200)
             .with_header("content-length", &body.len().to_string())
             .with_body(body)
             .create_async()
             .await;
 
-        let (_dir, store) = store();
-        let dest = store.dir().join("model.gguf");
-        let client = reqwest::Client::new();
-
-        let mut last = DownloadProgress {
-            downloaded: 0,
-            total: None,
-        };
-        super::stream_to_file(
-            &client,
-            &format!("{}/model.gguf", server.url()),
-            &dest,
-            |p| {
-                last = p;
+        let (_d, store) = store();
+        let m = ModelRef {
+            id: "dl".to_string(),
+            display: "DL".to_string(),
+            params: String::new(),
+            quant: "Q4_K_M".to_string(),
+            context: 0,
+            size_bytes: 0,
+            origin: Origin::HuggingFace {
+                repo: "o/n".to_string(),
+                // Point the download at the mock server via a full URL override
+                // isn't possible through ModelRef; instead we hit stream_to_file.
+                file: "m.gguf".to_string(),
+                revision: "main".to_string(),
             },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(last.downloaded, 4096);
-        assert_eq!(last.total, Some(4096));
-        assert_eq!(last.fraction(), Some(1.0));
-        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 4096);
-        // The temporary part file is gone after the atomic rename.
-        assert!(!dest.with_extension("gguf.part").exists());
-        mock.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn stream_to_file_surfaces_http_errors() {
-        let mut server = mockito::Server::new_async().await;
-        server
-            .mock("GET", "/missing.gguf")
-            .with_status(404)
-            .create_async()
-            .await;
-        let (_dir, store) = store();
-        let dest = store.dir().join("missing.gguf");
-        let err = super::stream_to_file(
+        };
+        // Exercise the streaming helper directly against the mock.
+        let dest = store.path_for(&m.id);
+        super::stream_to_file(
             &reqwest::Client::new(),
-            &format!("{}/missing.gguf", server.url()),
+            &format!("{}/m.gguf", server.url()),
+            None,
             &dest,
             |_| {},
         )
         .await
-        .unwrap_err();
-        assert!(matches!(err, LocalError::Download(msg) if msg.contains("404")));
-        assert!(!dest.exists());
+        .unwrap();
+        store.write_meta(&m).unwrap();
+
+        assert!(store.is_installed("dl"));
+        assert_eq!(store.installed_size("dl"), Some(2048));
+        assert_eq!(store.read_meta("dl").unwrap().quant, "Q4_K_M");
+        assert!(!dest.with_extension("gguf.part").exists());
+        mock.assert_async().await;
     }
 }

@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use harness_local::{
-    catalog, find, format_bytes, install_hint, llama_server_path, LocalServer, ModelSpec,
-    ModelStore,
+    catalog, detect_hardware, find, fit, format_bytes, install_hint, llama_server_path,
+    LocalServer, ModelSpec, ModelStore,
 };
 
 use crate::theme::{self, Ui};
@@ -52,16 +52,34 @@ fn resolve(id: &str) -> Result<&'static ModelSpec> {
     })
 }
 
+/// The default download reference (the catalog's published quant) for a curated
+/// model. The store is keyed by a model's ref id, so curated CLI commands map
+/// their spec to this ref to download/check/remove it.
+fn default_ref(spec: &ModelSpec) -> harness_local::ModelRef {
+    harness_local::quant_refs(spec)
+        .into_iter()
+        .find(|r| r.quant == spec.quant)
+        .unwrap_or_else(|| {
+            harness_local::quant_refs(spec)
+                .into_iter()
+                .next()
+                .expect("curated model has at least one quant")
+        })
+}
+
 fn list(store: &ModelStore, ui: &Ui) -> Result<()> {
-    let statuses = store.statuses();
-    let rows: Vec<theme::ModelRow> = statuses
+    let rows: Vec<theme::ModelRow> = catalog()
         .iter()
-        .map(|s| theme::ModelRow {
-            id: &s.id,
-            params: &s.params,
-            size: format_bytes(s.size_bytes),
-            installed: s.installed,
-            note: &s.note,
+        .map(|spec| {
+            let r = default_ref(spec);
+            let size = store.installed_size(&r.id).unwrap_or(spec.approx_bytes);
+            theme::ModelRow {
+                id: spec.id,
+                params: spec.params,
+                size: format_bytes(size),
+                installed: store.is_installed(&r.id),
+                note: spec.note,
+            }
         })
         .collect();
     print!(
@@ -77,8 +95,9 @@ fn list(store: &ModelStore, ui: &Ui) -> Result<()> {
 }
 
 fn remove(store: &ModelStore, spec: &ModelSpec, ui: &Ui) -> Result<()> {
-    let reclaimed = store.installed_size(spec);
-    if store.remove(spec)? {
+    let r = default_ref(spec);
+    let reclaimed = store.installed_size(&r.id);
+    if store.remove(&r.id)? {
         let freed = reclaimed.map(format_bytes).unwrap_or_default();
         println!(
             "  {} {}",
@@ -97,14 +116,15 @@ fn remove(store: &ModelStore, spec: &ModelSpec, ui: &Ui) -> Result<()> {
 
 /// Download a model, rendering a live progress bar.
 async fn pull(store: &ModelStore, spec: &ModelSpec, ui: &Ui) -> Result<()> {
-    if store.is_installed(spec) {
+    let model = default_ref(spec);
+    if store.is_installed(&model.id) {
         println!(
             "  {} {}",
             ui.green("Already in the wagon:"),
             ui.cream(&format!(
                 "{} ({})",
                 spec.id,
-                format_bytes(store.installed_size(spec).unwrap_or(spec.approx_bytes))
+                format_bytes(store.installed_size(&model.id).unwrap_or(spec.approx_bytes))
             )),
         );
         return Ok(());
@@ -126,7 +146,7 @@ async fn pull(store: &ModelStore, spec: &ModelSpec, ui: &Ui) -> Result<()> {
     let mut stdout = std::io::stdout();
 
     let result = store
-        .pull(spec, |p| {
+        .download(&model, None, |p| {
             // Live in-place bar on a TTY; skip per-chunk noise when piped.
             if !animate {
                 return;
@@ -159,7 +179,7 @@ async fn pull(store: &ModelStore, spec: &ModelSpec, ui: &Ui) -> Result<()> {
             "{} ready at {} ({})",
             spec.id,
             path.display(),
-            format_bytes(store.installed_size(spec).unwrap_or(0)),
+            format_bytes(store.installed_size(&model.id).unwrap_or(0)),
         )),
     );
     Ok(())
@@ -176,7 +196,8 @@ pub async fn start_for(id: &str, ui: &Ui) -> Result<(LocalServer, String)> {
     }
 
     let store = ModelStore::open().context("opening the local model store")?;
-    if !store.is_installed(spec) {
+    let model = default_ref(spec);
+    if !store.is_installed(&model.id) {
         pull(&store, spec, ui).await?;
     }
 
@@ -188,7 +209,13 @@ pub async fn start_for(id: &str, ui: &Ui) -> Result<(LocalServer, String)> {
             spec.id
         )),
     );
-    let server = LocalServer::start(&store.path_for(spec), id)
+    // Size the served context to this machine: weights + KV cache must fit the
+    // usable memory budget, capped by the model's native window.
+    let profile = detect_hardware();
+    let weight_bytes = store.installed_size(&model.id).unwrap_or(0);
+    let native = store.native_context(&model.id);
+    let context = fit::plan_context(profile.usable_budget, weight_bytes, native);
+    let server = LocalServer::start_with_context(&store.path_for(&model.id), id, context, |_| {})
         .await
         .with_context(|| format!("starting llama-server for {id}"))?;
     println!(

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendNotice,
   appendToken,
   finalizeAssistant,
   startTurn,
@@ -11,6 +12,22 @@ import {
 
 const assistantText = (items: Item[]) =>
   items.filter((i): i is Extract<Item, { kind: "assistant" }> => i.kind === "assistant");
+
+describe("thread: appendNotice", () => {
+  it("inserts the notice before a trailing empty streaming bubble", () => {
+    const items = startTurn([], "hello"); // [user, empty streaming assistant]
+    const next = appendNotice(items, "Compacted context — pruned old output");
+    expect(next.map((i) => i.kind)).toEqual(["user", "notice", "assistant"]);
+    // The streaming bubble is preserved as the last item so the reply continues below.
+    expect(next[next.length - 1]).toMatchObject({ kind: "assistant", streaming: true });
+  });
+
+  it("appends at the end when there is no in-flight bubble", () => {
+    const items = finalizeAssistant(startTurn([], "hi"), "done");
+    const next = appendNotice(items, "note");
+    expect(next[next.length - 1]).toMatchObject({ kind: "notice", text: "note" });
+  });
+});
 
 describe("thread: startTurn", () => {
   it("adds the user prompt and an empty in-flight assistant bubble", () => {

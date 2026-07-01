@@ -64,6 +64,7 @@ export function Sidebar() {
         created_at: 0,
         title: null,
         message_count: 0,
+        review_status: "",
       });
       rowsByPath.set(session.workspace, list);
     }

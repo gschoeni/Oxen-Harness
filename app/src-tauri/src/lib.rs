@@ -13,11 +13,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use harness_agent::{Agent, AgentConfig, AgentEvent};
-use harness_core::DEFAULT_MODEL;
 use harness_llm::{Attachment, ChatMessage, ChatRequest, OxenClient};
 use harness_local::{
-    can_auto_install, install_hint, install_llama_server, llama_server_path, LocalServer,
-    ModelStatus, ModelStore,
+    fit, install_hint, install_llama_server, llama_server_path, LocalServer, ModelRef, ModelStore,
 };
 use harness_store::{HistoryStore, SessionMeta, SessionSummary};
 use harness_tools::{
@@ -25,8 +23,9 @@ use harness_tools::{
     ToolError, ToolRegistry, Workspace,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tokio::sync::{oneshot, Mutex};
+use tokio_util::sync::CancellationToken;
 
 /// Outstanding `ask_user_question` prompts awaiting a UI answer, keyed by id.
 type Pending = Arc<StdMutex<HashMap<String, oneshot::Sender<Vec<QuestionAnswer>>>>>;
@@ -45,12 +44,19 @@ pub struct AppState {
     local_server: Mutex<Option<LocalServer>>,
     /// The local model id in use, so new sessions reuse it instead of the cloud.
     local_model: Mutex<Option<String>>,
+    /// The selected cloud model id, used for new sessions (and live swaps) when
+    /// no local model is active. Seeded from the persisted selection at startup.
+    cloud_model: Mutex<String>,
     /// The active project's directory — new chats are rooted here (the agent's
     /// workspace), so each project's chats run against its own codebase. Empty
     /// means "the launch directory" (resolved lazily by [`active_root`]).
     active_project: Mutex<PathBuf>,
     /// Questions the agent is currently waiting on the user to answer.
     pending: Pending,
+    /// Stop signals for in-flight turns, keyed by session. Held here (not on the
+    /// agent) so `cancel_turn` can fire one without taking the agent's lock,
+    /// which the running turn holds for its whole duration.
+    cancels: Mutex<HashMap<String, CancellationToken>>,
 }
 
 /// Bridges the agent's `ask_user_question` tool to the web UI: emits an
@@ -149,17 +155,57 @@ impl CanvasSink for TauriCanvasSink {
     }
 }
 
+/// The installed local models plus disk + runtime context (for the manage view).
 #[derive(Clone, Serialize)]
-struct ModelsView {
-    models: Vec<ModelStatus>,
+struct InstalledView {
+    models: Vec<ModelRef>,
+    /// Bytes used by downloaded models in the store directory.
     total_disk_bytes: u64,
     dir: String,
-    /// Whether `llama-server` is available to actually run a local model.
-    llama_installed: bool,
-    /// Whether the app can install `llama-server` for the user automatically.
-    can_auto_install: bool,
-    /// How to install `llama-server` when it's missing.
-    install_hint: String,
+    runtime: harness_local::RuntimeStatus,
+    /// Total bytes on the volume holding the model store (null if unknown).
+    disk_total: Option<u64>,
+    /// Free bytes on that volume — used to warn before a download won't fit.
+    disk_free: Option<u64>,
+}
+
+/// One quant of a catalog model, annotated with how well it fits this machine
+/// and the exact [`ModelRef`] to download it.
+#[derive(Clone, Serialize)]
+struct QuantOption {
+    quant: String,
+    size_bytes: u64,
+    fit: harness_local::Fit,
+    installed: bool,
+    /// The concrete download reference the UI passes back to `download_model`.
+    model: ModelRef,
+}
+
+/// A model offered in the setup wizard: a family with one or more quants, the
+/// quant we recommend for this machine, and its source.
+#[derive(Clone, Serialize)]
+struct CatalogModel {
+    id: String,
+    display: String,
+    params: String,
+    context: u32,
+    note: String,
+    /// `"curated"`, `"huggingface"`, or `"oxen"`.
+    source: String,
+    quants: Vec<QuantOption>,
+    /// The quant auto-picked for this machine (best quality that fits), if any.
+    recommended_quant: Option<String>,
+    /// The best fit achievable across this model's quants (for badges/sorting).
+    best_fit: harness_local::Fit,
+}
+
+/// A `local://status` payload: a phase of bringing a local model online, so the
+/// UI can show meaningful progress while switching to it.
+#[derive(Clone, Serialize)]
+struct LocalStatusPayload {
+    model: String,
+    /// `"starting"` (runtime/GPU init), `"loading"` (reading weights), `"ready"`.
+    phase: &'static str,
 }
 
 #[derive(Clone, Serialize)]
@@ -221,6 +267,14 @@ struct UsagePayload {
     context_window: usize,
 }
 
+/// `agent://compacted` payload — the transcript was trimmed to fit the window,
+/// with a short human-readable note for the thread.
+#[derive(Clone, Serialize)]
+struct CompactedPayload {
+    session: String,
+    detail: String,
+}
+
 /// A resumed session: its info plus the verbatim transcript for the UI to
 /// re-render (user/assistant bubbles and tool activity). When `running` is true
 /// the chat is mid-turn and couldn't be read; `messages` is empty and the UI
@@ -235,23 +289,60 @@ struct SessionView {
 /// The client, model label, and context window for a new agent: the selected
 /// local model + server if one is active, otherwise the configured cloud client.
 async fn client_for(state: &AppState) -> Result<(OxenClient, String, Option<usize>), String> {
-    let server = state.local_server.lock().await;
-    let model = state.local_model.lock().await;
-    match (server.as_ref(), model.as_ref()) {
-        (Some(s), Some(id)) => Ok((
-            OxenClient::new(s.base_url(), "local", id),
-            id.clone(),
-            Some(s.context_size() as usize),
-        )),
-        _ => Ok((build_client()?, DEFAULT_MODEL.to_string(), None)),
+    // If a local model is selected (including one restored from a previous run),
+    // make sure its server is running and use it.
+    let local_id = state.local_model.lock().await.clone();
+    if let Some(id) = local_id {
+        match ensure_local_server(state, &id).await {
+            Ok((base_url, ctx)) => {
+                return Ok((OxenClient::new(base_url, "local", &id), id, Some(ctx)));
+            }
+            // The runtime or weights aren't available right now — fall back to the
+            // cloud model for this session rather than failing to open a chat. The
+            // persisted choice is kept, so it retries on the next launch.
+            Err(_) => {
+                *state.local_model.lock().await = None;
+                *state.local_server.lock().await = None;
+            }
+        }
     }
+    let model = state.cloud_model.lock().await.clone();
+    Ok((build_client(&model)?, model, None))
+}
+
+/// Ensure a `llama-server` is running for local model `id`, returning its base
+/// URL and context size. Reuses the running server if there is one; otherwise
+/// validates the runtime + weights and starts it (sized to this machine). This
+/// lets a restored local selection start lazily on first use.
+async fn ensure_local_server(state: &AppState, id: &str) -> Result<(String, usize), String> {
+    let mut guard = state.local_server.lock().await;
+    if let Some(s) = guard.as_ref() {
+        return Ok((s.base_url().to_string(), s.context_size() as usize));
+    }
+    if llama_server_path().is_none() {
+        return Err("the local runtime isn't installed".to_string());
+    }
+    let store = ModelStore::open().map_err(|e| e.to_string())?;
+    if !store.is_installed(id) {
+        return Err(format!("{id} isn't downloaded"));
+    }
+    let profile = harness_local::detect_hardware();
+    let weight_bytes = store.installed_size(id).unwrap_or(0);
+    let native = store.native_context(id);
+    let context = fit::plan_context(profile.usable_budget, weight_bytes, native);
+    let server = LocalServer::start_with_context(&store.path_for(id), id, context, |_| {})
+        .await
+        .map_err(|e| e.to_string())?;
+    let result = (server.base_url().to_string(), server.context_size() as usize);
+    *guard = Some(server);
+    Ok(result)
 }
 
 /// Build an Oxen client honoring the user's saved connection settings, falling
 /// back to env / the `oxen` CLI login / the default endpoint. Delegates to the
 /// shared runtime so the CLI and desktop resolve the client identically.
-fn build_client() -> Result<OxenClient, String> {
-    harness_runtime::connection::build_client(DEFAULT_MODEL).map_err(|e| e.to_string())
+fn build_client(model: &str) -> Result<OxenClient, String> {
+    harness_runtime::connection::build_client(model).map_err(|e| e.to_string())
 }
 
 /// Shared agent dependencies — the tool registry (with the question bridge), the
@@ -271,8 +362,12 @@ fn agent_parts(
         app: app.clone(),
         pending,
     }))));
-    // Only advertise web search in the prompt when it actually registered, so
-    // the model never calls a tool the registry would reject as unknown.
+    // Apply the user's saved tool preferences: drop disabled tools and layer in
+    // any description overrides. Done before the web-search check so a disabled
+    // web_search isn't advertised in the prompt.
+    harness_runtime::tools::load().apply(&mut tools);
+    // Only advertise web search in the prompt when it actually registered (and
+    // wasn't disabled), so the model never calls a tool the registry rejects.
     let web_search = tools.get("web_search").is_some();
 
     let history_path = harness_config::paths::history_db().map_err(|e| e.to_string())?;
@@ -282,7 +377,11 @@ fn agent_parts(
         model: model_label.to_string(),
         // The host always registers the `canvas` tool (per session, below), so
         // advertise it in the prompt.
-        system_prompt: Some(harness_agent::system_prompt_with(web_search, true)),
+        system_prompt: Some(harness_agent::system_prompt_with_env(
+            web_search,
+            true,
+            workspace_root,
+        )),
         context_window,
         attachment_root: Some(workspace_root.to_path_buf()),
         ..AgentConfig::default()
@@ -466,17 +565,21 @@ async fn set_connection(
     harness_runtime::connection::save(&host, &api_key, &brave_api_key)
         .map_err(|e| e.to_string())?;
 
+    // A connection change drops any local model and starts fresh on the cloud
+    // endpoint using the selected cloud model.
+    *state.local_server.lock().await = None;
+    *state.local_model.lock().await = None;
+    let _ = harness_runtime::models::set_active_local("");
+    let model = state.cloud_model.lock().await.clone();
     let root = active_root(&state).await;
     let agent = new_agent(
         &app,
         state.pending.clone(),
-        build_client()?,
-        DEFAULT_MODEL,
+        build_client(&model)?,
+        &model,
         None,
         &root,
     )?;
-    *state.local_server.lock().await = None;
-    *state.local_model.lock().await = None;
     Ok(install_agent(&state, agent).await)
 }
 
@@ -625,11 +728,16 @@ async fn run_turn(
     // The context window is fixed for the turn; capture it once so the live usage
     // events emitted from inside the turn can report "% of context".
     let context_window = arc.lock().await.context_window();
+    // A fresh stop signal for this turn, registered so `cancel_turn` can fire it
+    // (a clone) without waiting on the agent lock the turn holds.
+    let cancel = CancellationToken::new();
+    state.cancels.lock().await.insert(session.clone(), cancel.clone());
     // Track the session's cumulative count before/after the turn so we can roll
     // just this turn's throughput into the all-time total.
     let turn_delta;
     let result = {
         let mut agent = arc.lock().await;
+        agent.set_cancel_token(cancel.clone());
         let before = agent.tokens_used();
         let r = agent
             .run_turn_with_attachments(prompt, attachments, move |event| match event {
@@ -699,11 +807,25 @@ async fn run_turn(
                         },
                     );
                 }
+                // The context filled and was compacted; surface it as a visible
+                // notice in the thread so the trimming isn't silent.
+                AgentEvent::Compacted { detail } => {
+                    let _ = app.emit(
+                        "agent://compacted",
+                        CompactedPayload {
+                            session: sid.clone(),
+                            detail: detail.clone(),
+                        },
+                    );
+                }
             })
             .await;
         turn_delta = agent.tokens_used().saturating_sub(before);
         r
     };
+    // The turn is over (finished, stopped, or errored): drop its stop signal so a
+    // later `cancel_turn` can't fire against a stale token.
+    state.cancels.lock().await.remove(&session);
     // Roll this turn's throughput into the all-time running total (a cheap
     // persisted counter); the hero refreshes that grand total after the turn.
     let _ = bump_total_tokens(turn_delta);
@@ -712,6 +834,19 @@ async fn run_turn(
     // any still-running turns) so memory tracks concurrency, not chat count.
     evict_idle(&state).await;
     result.map_err(|e| e.to_string())
+}
+
+/// Stop the in-flight turn for `session`, if any. Fires that turn's cancellation
+/// token, which breaks the streaming read and drops the HTTP connection — so a
+/// local `llama-server` stuck chewing through a long prompt is released too. The
+/// turn returns its partial reply (often empty) and settles normally; a no-op if
+/// the session isn't currently running.
+#[tauri::command]
+async fn cancel_turn(state: State<'_, AppState>, session: String) -> Result<(), String> {
+    if let Some(token) = state.cancels.lock().await.get(&session) {
+        token.cancel();
+    }
+    Ok(())
 }
 
 /// Report the current session info, initializing the agent if needed.
@@ -741,6 +876,24 @@ async fn list_sessions() -> Result<Vec<SessionSummary>, String> {
 #[tauri::command]
 async fn session_messages(id: String) -> Result<Vec<serde_json::Value>, String> {
     open_history_store()?.messages(&id).map_err(|e| e.to_string())
+}
+
+/// Set a chat's training-data review status: `""` (unreviewed), `"kept"`, or
+/// `"rejected"`. Persisted so the dataset builder's decisions survive restarts.
+#[tauri::command]
+async fn set_review_status(id: String, status: String) -> Result<(), String> {
+    open_history_store()?
+        .set_review_status(&id, &status)
+        .map_err(|e| e.to_string())
+}
+
+/// Bulk-set the review status for many chats at once (bulk keep/reject/clear
+/// from the dataset builder). Returns how many rows changed.
+#[tauri::command]
+async fn set_review_status_many(ids: Vec<String>, status: String) -> Result<usize, String> {
+    open_history_store()?
+        .set_review_status_many(&ids, &status)
+        .map_err(|e| e.to_string())
 }
 
 /// Permanently delete a chat session: remove it (and its messages) from history,
@@ -789,6 +942,64 @@ async fn tool_definitions(
     let arc = current_agent(&app, &state).await?;
     let agent = arc.lock().await;
     Ok(agent.tool_definitions())
+}
+
+// ===========================================================================
+// Tools — manage which built-in tools the agent may call and the descriptions
+// it sees for them. Preferences persist to `tools.json` and are applied when an
+// agent's registry is built (see `agent_parts`), so changes take effect for new
+// and resumed chats.
+// ===========================================================================
+
+/// Every built-in tool with its current enabled/override state, for the Tools
+/// settings page. Built from a fresh full registry (so disabled tools still
+/// appear, toggled off) overlaid with the saved preferences.
+#[tauri::command]
+async fn list_tools(state: State<'_, AppState>) -> Result<Vec<harness_runtime::tools::ToolInfo>, String> {
+    let root = active_root(&state).await;
+    let workspace = Workspace::new(&root).map_err(|e| e.to_string())?;
+    let brave_key = harness_runtime::connection::brave_key_override();
+    let registry = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
+    let prefs = harness_runtime::tools::load();
+    Ok(harness_runtime::tools::list(&registry, &prefs))
+}
+
+/// Enable or disable a built-in tool. Takes effect for new/resumed chats.
+#[tauri::command]
+async fn set_tool_enabled(name: String, enabled: bool) -> Result<(), String> {
+    let mut prefs = harness_runtime::tools::load();
+    if prefs.set_enabled(&name, enabled) {
+        harness_runtime::tools::save(&prefs).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Override (or clear, with `None`/blank) the description the model sees for a
+/// tool. Takes effect for new/resumed chats.
+#[tauri::command]
+async fn set_tool_description(name: String, description: Option<String>) -> Result<(), String> {
+    let mut prefs = harness_runtime::tools::load();
+    if prefs.set_description(&name, description.as_deref()) {
+        harness_runtime::tools::save(&prefs).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Export the given sessions as chat-completions fine-tuning JSONL (Oxen.ai
+/// format: one `{"messages":[…]}` conversation per line) to `path`. Returns the
+/// number of conversations written. `include_tools` keeps tool calls + results.
+#[tauri::command]
+async fn export_finetuning(
+    path: String,
+    session_ids: Vec<String>,
+    include_tools: bool,
+) -> Result<usize, String> {
+    let jsonl = open_history_store()?
+        .export_chat_completions(&session_ids, include_tools)
+        .map_err(|e| e.to_string())?;
+    let count = jsonl.lines().filter(|l| !l.is_empty()).count();
+    std::fs::write(&path, jsonl).map_err(|e| format!("could not write {path}: {e}"))?;
+    Ok(count)
 }
 
 /// The `app_meta` key holding the all-time running total of tokens used.
@@ -932,18 +1143,196 @@ async fn resume_session(
     Ok(view)
 }
 
-/// List local models with their on-disk status and total disk usage.
+/// The installed local models, total disk used, and the runtime status.
 #[tauri::command]
-async fn list_models() -> Result<ModelsView, String> {
+async fn installed_local_models() -> Result<InstalledView, String> {
     let store = ModelStore::open().map_err(|e| e.to_string())?;
-    Ok(ModelsView {
-        models: store.statuses(),
+    let (disk_total, disk_free) = match harness_local::disk_space(store.dir()) {
+        Some((total, free)) => (Some(total), Some(free)),
+        None => (None, None),
+    };
+    Ok(InstalledView {
+        models: store.installed(),
         total_disk_bytes: store.total_disk_used(),
         dir: store.dir().display().to_string(),
-        llama_installed: llama_server_path().is_some(),
-        can_auto_install: can_auto_install(),
-        install_hint: install_hint(),
+        runtime: harness_local::runtime::status(),
+        disk_total,
+        disk_free,
     })
+}
+
+/// Annotate a list of installable refs (largest-first) into a [`CatalogModel`]:
+/// fit + installed state per quant, plus the auto-picked recommended quant.
+fn annotate_catalog_model(
+    id: String,
+    display: String,
+    params: String,
+    context: u32,
+    note: String,
+    source: &str,
+    refs: Vec<ModelRef>,
+    profile: &harness_local::HardwareProfile,
+    store: &ModelStore,
+) -> CatalogModel {
+    let candidates: Vec<fit::QuantCandidate> = refs
+        .iter()
+        .map(|r| fit::QuantCandidate {
+            quant: r.quant.clone(),
+            weight_bytes: r.size_bytes,
+        })
+        .collect();
+    let recommended_quant = fit::pick_quant(&candidates, fit::PLANNED_CONTEXT, profile.usable_budget)
+        .map(|c| c.quant.clone());
+
+    let quants: Vec<QuantOption> = refs
+        .into_iter()
+        .map(|r| QuantOption {
+            quant: r.quant.clone(),
+            size_bytes: r.size_bytes,
+            fit: fit::fit_on(profile, r.size_bytes),
+            installed: store.is_installed(&r.id),
+            model: r,
+        })
+        .collect();
+    // Best fit across quants (smallest quant usually fits best).
+    let best_fit = quants
+        .iter()
+        .map(|q| q.fit)
+        .min_by_key(|f| match f {
+            harness_local::Fit::Good => 0,
+            harness_local::Fit::Tight => 1,
+            harness_local::Fit::TooBig => 2,
+        })
+        .unwrap_or(harness_local::Fit::TooBig);
+
+    CatalogModel {
+        id,
+        display,
+        params,
+        context,
+        note,
+        source: source.to_string(),
+        quants,
+        recommended_quant,
+        best_fit,
+    }
+}
+
+/// The model catalog for the setup wizard: the curated family (hardware-fit and
+/// quant annotated) plus any featured Oxen.ai-hosted models. Hugging Face models
+/// come in via `resolve_hf_model` / `search_hf_models` instead.
+#[tauri::command]
+async fn list_model_catalog() -> Result<Vec<CatalogModel>, String> {
+    let profile = harness_local::detect_hardware();
+    let store = ModelStore::open().map_err(|e| e.to_string())?;
+
+    let mut out: Vec<CatalogModel> = harness_local::catalog()
+        .iter()
+        .map(|spec| {
+            annotate_catalog_model(
+                spec.id.to_string(),
+                spec.display.to_string(),
+                spec.params.to_string(),
+                spec.context,
+                spec.note.to_string(),
+                "curated",
+                harness_local::quant_refs(spec),
+                &profile,
+                &store,
+            )
+        })
+        .collect();
+
+    // Featured Oxen.ai-hosted models (a stub today), grouped by repo.
+    for model in harness_local::source::oxen_featured() {
+        out.push(annotate_catalog_model(
+            model.id.clone(),
+            model.display.clone(),
+            model.params.clone(),
+            model.context,
+            String::new(),
+            "oxen",
+            vec![model],
+            &profile,
+            &store,
+        ));
+    }
+    Ok(out)
+}
+
+/// Resolve a pasted Hugging Face reference (repo or direct GGUF link) into a
+/// [`CatalogModel`] with its quants annotated for this machine.
+#[tauri::command]
+async fn resolve_hf_model(input: String) -> Result<CatalogModel, String> {
+    let (repo, file, revision) = harness_local::source::parse_hf_input(&input)
+        .ok_or_else(|| "enter a Hugging Face repo like `owner/name` or a GGUF link".to_string())?;
+    let token = hf_token();
+
+    let refs = match file {
+        // A direct link to one GGUF: resolve just that file.
+        Some(f) => {
+            let quant = harness_local::source::parse_quant(&f).unwrap_or_default();
+            vec![ModelRef {
+                id: harness_local::source::id_from_file(&f),
+                display: format!("{}{}", repo.rsplit('/').next().unwrap_or(&repo),
+                    if quant.is_empty() { String::new() } else { format!(" · {quant}") }),
+                params: harness_local::source::parse_params(&repo),
+                quant,
+                context: 0,
+                size_bytes: 0,
+                origin: harness_local::Origin::HuggingFace { repo: repo.clone(), file: f, revision },
+            }]
+        }
+        None => harness_local::source::hf_list_quants(&repo, &revision, token.as_deref())
+            .await
+            .map_err(|e| e.to_string())?,
+    };
+
+    let profile = harness_local::detect_hardware();
+    let store = ModelStore::open().map_err(|e| e.to_string())?;
+    let display = repo.clone();
+    let params = harness_local::source::parse_params(&repo);
+    Ok(annotate_catalog_model(
+        repo, display, params, 0, String::new(), "huggingface", refs, &profile, &store,
+    ))
+}
+
+/// Search the Hugging Face hub for GGUF repos.
+#[tauri::command]
+async fn search_hf_models(query: String) -> Result<Vec<harness_local::HfHit>, String> {
+    harness_local::source::hf_search(&query, hf_token().as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The Hugging Face token secret name (stored in `~/.oxen-harness/.env`).
+const HF_TOKEN_ENV: &str = "HF_TOKEN";
+
+/// The saved Hugging Face token, if any.
+fn hf_token() -> Option<String> {
+    harness_config::secrets::get(HF_TOKEN_ENV).filter(|t| !t.trim().is_empty())
+}
+
+/// Whether a Hugging Face token is currently saved.
+#[tauri::command]
+async fn hf_token_present() -> bool {
+    hf_token().is_some()
+}
+
+/// Save (or clear, with an empty string) the Hugging Face token for gated repos.
+#[tauri::command]
+async fn set_hf_token(token: String) -> Result<(), String> {
+    harness_config::secrets::set(HF_TOKEN_ENV, token.trim()).map_err(|e| e.to_string())
+}
+
+/// The bearer token to use for a model's origin (HF token / Oxen API key).
+fn token_for(model: &ModelRef) -> Option<String> {
+    match &model.origin {
+        harness_local::Origin::HuggingFace { .. } => hf_token(),
+        harness_local::Origin::Oxen { .. } => {
+            harness_config::secrets::get("OXEN_API_KEY").filter(|t| !t.trim().is_empty())
+        }
+    }
 }
 
 /// Install `llama-server` for the user, streaming progress via `llama://install`.
@@ -957,13 +1346,42 @@ async fn install_llama(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Download a model's weights, emitting `models://progress` as it streams.
+/// The machine's compute profile (RAM, accelerator), so the setup flow can
+/// recommend models that fit and auto-pick a quantization.
 #[tauri::command]
-async fn pull_model(app: AppHandle, id: String) -> Result<(), String> {
-    let spec = harness_local::find(&id).ok_or_else(|| format!("unknown model `{id}`"))?;
+async fn detect_hardware() -> harness_local::HardwareProfile {
+    harness_local::detect_hardware()
+}
+
+/// Status of the self-managed llama.cpp runtime (downloaded by us vs found on the
+/// system vs absent), for the local-model setup screen.
+#[tauri::command]
+async fn runtime_status() -> harness_local::RuntimeStatus {
+    harness_local::runtime::status()
+}
+
+/// Download + set up the self-managed `llama-server` for this platform, streaming
+/// progress (log lines + bytes) via `runtime://install`. No Homebrew required.
+#[tauri::command]
+async fn install_runtime(app: AppHandle) -> Result<(), String> {
+    harness_local::runtime::install(|event| {
+        let _ = app.emit("runtime://install", event);
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Download a model's weights (from any source), emitting `models://progress` as
+/// it streams. The `model` is a concrete [`ModelRef`] the UI chose (a specific
+/// quant); the token for its origin is resolved server-side.
+#[tauri::command]
+async fn download_model(app: AppHandle, model: ModelRef) -> Result<(), String> {
     let store = ModelStore::open().map_err(|e| e.to_string())?;
+    let token = token_for(&model);
+    let id = model.id.clone();
     store
-        .pull(spec, |p| {
+        .download(&model, token.as_deref(), |p| {
             let _ = app.emit(
                 "models://progress",
                 DownloadEvent {
@@ -979,35 +1397,56 @@ async fn pull_model(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Delete a downloaded model.
+/// Delete a downloaded model by its id.
 #[tauri::command]
 async fn remove_model(id: String) -> Result<(), String> {
-    let spec = harness_local::find(&id).ok_or_else(|| format!("unknown model `{id}`"))?;
     let store = ModelStore::open().map_err(|e| e.to_string())?;
-    store.remove(spec).map_err(|e| e.to_string())?;
+    store.remove(&id).map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// Switch the session to a downloaded local model: start `llama-server` and
-/// rebuild the agent against it. The model must already be downloaded.
+/// Switch the session to a downloaded local model: start `llama-server` (with a
+/// context window sized to this machine) and rebuild the agent against it. The
+/// model must already be downloaded.
 #[tauri::command]
 async fn use_local_model(
     app: AppHandle,
     state: State<'_, AppState>,
     id: String,
 ) -> Result<SessionInfo, String> {
-    let spec = harness_local::find(&id).ok_or_else(|| format!("unknown model `{id}`"))?;
     if llama_server_path().is_none() {
-        return Err(format!("llama-server isn't installed. {}", install_hint()));
+        return Err(format!("the local runtime isn't installed. {}", install_hint()));
     }
     let store = ModelStore::open().map_err(|e| e.to_string())?;
-    if !store.is_installed(spec) {
-        return Err(format!("{id} isn't downloaded yet — pull it first"));
+    if !store.is_installed(&id) {
+        return Err(format!("{id} isn't downloaded yet"));
     }
 
-    let server = LocalServer::start(&store.path_for(spec), &id)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Size the served context to the machine: weights + KV cache must fit budget.
+    let profile = harness_local::detect_hardware();
+    let weight_bytes = store.installed_size(&id).unwrap_or(0);
+    let native = store.native_context(&id);
+    let context = fit::plan_context(profile.usable_budget, weight_bytes, native);
+
+    // Stream load phases to the UI so the switch shows what it's doing (runtime
+    // init vs. loading the weights) instead of an opaque "Switching…".
+    let status_app = app.clone();
+    let status_model = id.clone();
+    let server = LocalServer::start_with_context(&store.path_for(&id), &id, context, move |phase| {
+        let _ = status_app.emit(
+            "local://status",
+            LocalStatusPayload {
+                model: status_model.clone(),
+                phase: match phase {
+                    harness_local::LoadPhase::Starting => "starting",
+                    harness_local::LoadPhase::LoadingModel => "loading",
+                    harness_local::LoadPhase::Ready => "ready",
+                },
+            },
+        );
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let context_window = Some(server.context_size() as usize);
     let root = active_root(&state).await;
     let agent = new_agent(
@@ -1019,11 +1458,73 @@ async fn use_local_model(
         &root,
     )?;
 
-    // Remember the local server + model so new sessions reuse it, then install
-    // the agent as the current chat.
+    // Remember the local server + model so new sessions reuse it, persist the
+    // choice so it survives a restart, then install the agent as the current chat.
     *state.local_server.lock().await = Some(server);
     *state.local_model.lock().await = Some(id.clone());
+    let _ = harness_runtime::models::set_active_local(&id);
     Ok(install_agent(&state, agent).await)
+}
+
+// ===========================================================================
+// Cloud models — a small catalog of built-in models plus any the user adds,
+// and the selected default. Switching swaps the live conversation in place
+// (continuing the chat), unlike a local model, which needs a fresh server.
+// ===========================================================================
+
+/// The cloud model catalog (built-ins + custom), with the selected one flagged.
+#[tauri::command]
+async fn list_cloud_models() -> Result<Vec<harness_runtime::models::CloudModel>, String> {
+    Ok(harness_runtime::models::catalog())
+}
+
+/// Add (or rename) a custom cloud model; returns the updated catalog.
+#[tauri::command]
+async fn add_cloud_model(
+    id: String,
+    name: String,
+) -> Result<Vec<harness_runtime::models::CloudModel>, String> {
+    harness_runtime::models::add(&id, &name).map_err(|e| e.to_string())
+}
+
+/// Remove a custom cloud model (built-ins can't be removed); returns the catalog.
+#[tauri::command]
+async fn remove_cloud_model(
+    id: String,
+) -> Result<Vec<harness_runtime::models::CloudModel>, String> {
+    harness_runtime::models::remove(&id).map_err(|e| e.to_string())
+}
+
+/// Switch the current chat to a cloud `model`, continuing the same conversation:
+/// the transcript stays, only the model (and, if coming from a local model, the
+/// client) is swapped. Also makes it the default for new chats and persists the
+/// choice so it survives a restart.
+#[tauri::command]
+async fn set_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model: String,
+) -> Result<SessionInfo, String> {
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return Err("model id cannot be empty".into());
+    }
+    harness_runtime::models::set_selected(&model).map_err(|e| e.to_string())?;
+    *state.cloud_model.lock().await = model.clone();
+    // We're going cloud — drop any active local model/server.
+    *state.local_server.lock().await = None;
+    *state.local_model.lock().await = None;
+
+    // Swap the live conversation onto the cloud client + model in place. (If the
+    // chat was on a local model, replacing the client moves it to the cloud
+    // endpoint; the small local context window is cleared so it re-derives.)
+    let arc = current_agent(&app, &state).await?;
+    let client = build_client(&model)?;
+    let mut agent = arc.lock().await;
+    agent.set_client(client);
+    agent.set_model(&model);
+    agent.set_context_window(None);
+    Ok(info_for(&agent))
 }
 
 // ===========================================================================
@@ -1125,7 +1626,7 @@ async fn complete_oneshot(state: &AppState, system: &str, user: &str) -> Result<
     )
     .streaming(true);
     let assembled = client
-        .stream_chat(&request, |_| {})
+        .stream_chat(&request, &CancellationToken::new(), |_| {})
         .await
         .map_err(|e| e.to_string())?;
     Ok(assembled.content)
@@ -1223,20 +1724,34 @@ pub fn run() {
         .active
         .map(PathBuf::from)
         .unwrap_or_else(launch_dir);
+    // Start on the model the user last chose: the selected cloud model, plus any
+    // persisted local model (its server is started lazily on first use). Both are
+    // restored so the dropdown choice survives a restart.
+    let initial_model = harness_runtime::models::selected();
+    let initial_local = harness_runtime::models::active_local();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             active_project: Mutex::new(initial_project),
+            cloud_model: Mutex::new(initial_model),
+            local_model: Mutex::new(initial_local),
             ..AppState::default()
         })
         .invoke_handler(tauri::generate_handler![
             run_turn,
+            cancel_turn,
             session_info,
             list_sessions,
             session_messages,
+            set_review_status,
+            set_review_status_many,
             delete_session,
             attachment_data_uri,
             tool_definitions,
+            list_tools,
+            set_tool_enabled,
+            set_tool_description,
+            export_finetuning,
             total_tokens_used,
             new_session,
             resume_session,
@@ -1246,11 +1761,23 @@ pub fn run() {
             get_connection,
             set_connection,
             configure_brave_key,
-            list_models,
+            installed_local_models,
             install_llama,
-            pull_model,
+            detect_hardware,
+            runtime_status,
+            install_runtime,
+            list_model_catalog,
+            resolve_hf_model,
+            search_hf_models,
+            hf_token_present,
+            set_hf_token,
+            download_model,
             remove_model,
             use_local_model,
+            list_cloud_models,
+            add_cloud_model,
+            remove_cloud_model,
+            set_model,
             answer_question,
             list_themes,
             active_theme,
@@ -1260,6 +1787,19 @@ pub fn run() {
             remove_theme,
             new_theme
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running oxen-harness desktop app");
+        .build(tauri::generate_context!())
+        .expect("error while building oxen-harness desktop app")
+        .run(|app, event| {
+            // The local `llama-server` runs as a separate child process. On a
+            // normal quit (Cmd+Q, window close, app menu) drop it so it doesn't
+            // linger after the app is gone — dropping the `LocalServer` kills the
+            // child (it spawned with `kill_on_drop`). A SIGKILL of the app itself
+            // can't be intercepted, so that case can still orphan the server.
+            if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
+                let state = app.state::<AppState>();
+                tauri::async_runtime::block_on(async {
+                    state.local_server.lock().await.take();
+                });
+            }
+        });
 }

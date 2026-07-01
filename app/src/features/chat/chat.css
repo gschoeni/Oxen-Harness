@@ -401,6 +401,16 @@
 .msg.assistant {
   align-self: stretch;
 }
+/* A centered, quiet system note in the thread (e.g. context was compacted). */
+.msg.notice {
+  align-self: center;
+  max-width: 90%;
+  text-align: center;
+  font-size: 0.82em;
+  color: var(--text-dim, var(--separator-strong));
+  font-style: italic;
+  padding: var(--space-1) 0;
+}
 .msg.assistant .role {
   display: flex;
   align-items: center;
@@ -770,10 +780,149 @@
   opacity: 0.4;
   cursor: default;
 }
-.send.queueing {
+/* Stop button: same footprint as .send, but reads as a halt — a filled square
+   on a muted surface with an accent ring, so it's clearly the live action while
+   a turn streams. */
+.stop {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
   background: var(--surface-2);
   color: var(--accent);
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--separator-strong));
+  border-radius: var(--radius-pill);
+  transition: filter var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.stop:hover {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+}
+.stop:active {
+  transform: scale(0.94);
+}
+
+/* --- Model picker (composer toolbar) --- */
+.composer-toolbar {
+  max-width: 740px;
+  margin: var(--space-2) auto 0;
+  display: flex;
+  align-items: center;
+}
+.model-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.model-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 320px;
+  padding: 3px var(--space-2);
+  background: transparent;
+  color: var(--text-tertiary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.model-picker-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--separator-strong);
+}
+.model-picker-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.model-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-picker-caret {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.model-menu {
+  position: absolute;
+  bottom: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 20;
+  min-width: 280px;
+  max-width: 380px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow-lg);
+}
+.model-menu-head {
+  padding: var(--space-1) var(--space-2);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+.model-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: 13px;
+  transition: background var(--dur-fast) var(--ease);
+}
+.model-menu-item:hover {
+  background: var(--surface-2);
+}
+.model-menu-check {
+  flex-shrink: 0;
+  opacity: 0;
+  color: var(--accent);
+}
+.model-menu-item.active .model-menu-check {
+  opacity: 1;
+}
+.model-menu-local-icon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.model-menu-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-menu-id {
+  flex-shrink: 0;
+  font-family: var(--font-readout, monospace);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.model-menu-sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--separator);
+}
+.model-menu-manage {
+  color: var(--text-secondary);
+}
+.model-menu-manage .model-menu-check {
+  opacity: 1;
+  color: var(--text-tertiary);
 }
 
 /* Reopen the chat's canvas after the panel was closed (top-right of messages). */
@@ -828,4 +977,55 @@
 }
 .token-meter-dot {
   opacity: 0.6;
+}
+.token-meter-tps {
+  color: var(--accent);
+}
+
+/* --- Switching to a local model: progress shown inline in the picker --- */
+.model-switch-spin {
+  color: var(--accent);
+  flex-shrink: 0;
+  animation: switch-spin 1s linear infinite;
+}
+@keyframes switch-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.model-switch-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.model-switch-hint {
+  font-style: italic;
+}
+.model-switch-bar {
+  position: relative;
+  width: 80px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.model-switch-bar span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  animation: switch-indeterminate 1.1s ease-in-out infinite;
+}
+@keyframes switch-indeterminate {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
 }

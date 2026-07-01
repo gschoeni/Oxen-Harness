@@ -14,6 +14,7 @@ harness-llm = { workspace = true }
 harness-tools = { workspace = true }
 harness-oxen = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

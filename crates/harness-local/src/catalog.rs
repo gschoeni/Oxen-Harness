@@ -122,6 +122,50 @@ pub fn find(id: &str) -> Option<&'static ModelSpec> {
     catalog().iter().find(|m| m.id == id)
 }
 
+/// Quants offered for a curated model, largest (best quality) first. These all
+/// exist in the bartowski Qwen3 GGUF repos this catalog draws from.
+const CURATED_QUANTS: &[&str] = &["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "Q3_K_M"];
+
+/// The installable [`ModelRef`]s for a curated model — one per quant, with
+/// filenames derived from the published `Q4_K_M` file and sizes scaled by
+/// bits-per-weight. Largest-first so quant auto-pick takes the best that fits.
+pub fn quant_refs(spec: &ModelSpec) -> Vec<crate::source::ModelRef> {
+    use crate::fit;
+    use crate::source::{slug, ModelRef, Origin};
+
+    let ref_bpw = fit::QUANTS
+        .iter()
+        .find(|q| q.name == spec.quant)
+        .map(|q| q.bits_per_weight)
+        .unwrap_or(4.9);
+
+    CURATED_QUANTS
+        .iter()
+        .filter_map(|&name| {
+            let bpw = fit::QUANTS.iter().find(|q| q.name == name)?.bits_per_weight;
+            let file = spec.file.replace(spec.quant, name);
+            let size_bytes = if name == spec.quant {
+                spec.approx_bytes
+            } else {
+                fit::scale_weight_bytes(spec.approx_bytes, ref_bpw, bpw)
+            };
+            Some(ModelRef {
+                id: slug(spec.repo, name),
+                display: format!("{} · {name}", spec.display),
+                params: spec.params.to_string(),
+                quant: name.to_string(),
+                context: spec.context,
+                size_bytes,
+                origin: Origin::HuggingFace {
+                    repo: spec.repo.to_string(),
+                    file,
+                    revision: "main".to_string(),
+                },
+            })
+        })
+        .collect()
+}
+
 /// The Hugging Face direct-download URL for a model's GGUF.
 pub fn download_url(spec: &ModelSpec) -> String {
     format!(

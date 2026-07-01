@@ -17,14 +17,23 @@
 //! disk space each model occupies.
 
 pub mod catalog;
+pub mod fit;
+pub mod gguf;
+pub mod hardware;
+pub mod runtime;
 pub mod server;
+pub mod source;
 pub mod store;
 
-pub use catalog::{catalog, download_url, find, ModelSpec};
+pub use catalog::{catalog, find, quant_refs, ModelSpec};
+pub use fit::{Fit, Quant, QuantCandidate};
+pub use hardware::{detect as detect_hardware, Accelerator, HardwareProfile};
+pub use runtime::{RuntimeInstallEvent, RuntimeSource, RuntimeStatus};
 pub use server::{
-    can_auto_install, install_hint, install_llama_server, llama_server_path, LocalServer,
+    can_auto_install, install_hint, install_llama_server, llama_server_path, LoadPhase, LocalServer,
 };
-pub use store::{DownloadProgress, ModelStatus, ModelStore};
+pub use source::{HfHit, ModelRef, Origin};
+pub use store::{disk_space, DownloadProgress, ModelStore};
 
 /// Errors from local model management.
 #[derive(Debug, thiserror::Error)]

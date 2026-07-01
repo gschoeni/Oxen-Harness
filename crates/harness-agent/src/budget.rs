@@ -27,8 +27,20 @@ const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
 /// theoretical maximum).
 pub fn context_window_for(model: &str) -> usize {
     let m = model.to_ascii_lowercase();
-    if m.contains("claude") {
-        200_000
+    if m.contains("claude") || m.contains("fable") || m.contains("mythos") {
+        // The 4.6+ Opus/Sonnet generation and Fable/Mythos ship a 1M window;
+        // Haiku and older Claude families stay at 200K.
+        let million = m.contains("fable")
+            || m.contains("mythos")
+            || m.contains("opus-4-6")
+            || m.contains("opus-4-7")
+            || m.contains("opus-4-8")
+            || m.contains("sonnet-4-6");
+        if million {
+            1_000_000
+        } else {
+            200_000
+        }
     } else if m.contains("gemini") {
         1_000_000
     } else if m.contains("gpt") || m.contains("o1") || m.contains("o3") || m.contains("o4") {
@@ -91,7 +103,13 @@ mod tests {
 
     #[test]
     fn context_windows_match_known_families() {
-        assert_eq!(context_window_for("claude-opus-4-8"), 200_000);
+        // 4.6+ Opus/Sonnet and Fable ship a 1M window...
+        assert_eq!(context_window_for("claude-opus-4-8"), 1_000_000);
+        assert_eq!(context_window_for("claude-sonnet-4-6"), 1_000_000);
+        assert_eq!(context_window_for("claude-fable-5"), 1_000_000);
+        // ...while Haiku and older Claude families stay at 200K.
+        assert_eq!(context_window_for("claude-haiku-4-5"), 200_000);
+        assert_eq!(context_window_for("claude-3-opus"), 200_000);
         assert_eq!(context_window_for("gpt-5-mini"), 128_000);
         assert_eq!(context_window_for("qwen3-8b"), 32_768);
         assert_eq!(context_window_for("llama-3-8b"), 8_192);

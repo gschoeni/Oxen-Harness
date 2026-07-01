@@ -23,8 +23,10 @@ use harness_llm::{
 };
 use harness_store::{HistoryError, HistoryStore, SessionMeta};
 use harness_tools::{ToolError, ToolRegistry};
+use tokio_util::sync::CancellationToken;
 
 pub mod budget;
+pub mod compact;
 
 /// Errors that can arise while running the agent loop.
 #[derive(Debug, thiserror::Error)]
@@ -73,6 +75,10 @@ pub enum AgentEvent {
         tokens_used: usize,
         context_tokens: usize,
     },
+    /// The transcript was compacted to fit the context window — older history
+    /// was pruned and/or summarized so the session can continue instead of
+    /// hitting a hard limit. Carries a short human-readable note for the UI.
+    Compacted { detail: String },
 }
 
 /// Configuration for an [`Agent`].
@@ -114,6 +120,35 @@ pub fn default_system_prompt(web_search: bool) -> String {
     system_prompt_with(web_search, false)
 }
 
+/// A note pinning the agent to a concrete working directory, so the model knows
+/// the absolute project root its file tools and shell operate in rather than
+/// guessing. Appended to the system prompt when the workspace is known.
+pub fn environment_section(workspace: &std::path::Path) -> String {
+    format!(
+        "\n\nEnvironment:\n\
+         - Working directory (the project root): {}\n\
+         - `find_files`, `search_files`, `read_file`, `write_file`, and `edit_file` \
+           resolve paths relative to this directory, and `run_shell` runs in it. \
+           Prefer relative paths; use the absolute root above only when you need it.",
+        workspace.display()
+    )
+}
+
+/// The system prompt with an [`environment_section`] appended, pinning the
+/// working directory. Use this at agent construction so every new session knows
+/// its project root.
+pub fn system_prompt_with_env(
+    web_search: bool,
+    canvas: bool,
+    workspace: &std::path::Path,
+) -> String {
+    format!(
+        "{}{}",
+        system_prompt_with(web_search, canvas),
+        environment_section(workspace)
+    )
+}
+
 /// The system prompt, advertising the optional `web_search` and `canvas` tools
 /// only when the host actually registered them.
 pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
@@ -150,7 +185,8 @@ pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
          project directory. Available tools: `find_files` (locate files by glob), \
          `search_files` (regex content search), `read_file` (line-numbered, supports \
          offset/limit), `write_file`, `edit_file` (exact-string patch), `run_shell`, \
-         `git`, `ask_user_question` (interview the user){web_tool}{canvas_tool}.\n\n\
+         `git`, `update_plan` (maintain a task checklist), \
+         `ask_user_question` (interview the user){web_tool}{canvas_tool}.\n\n\
          Guidelines:\n\
          - Prefer the dedicated tools over shell equivalents: use `find_files` not \
            `find`/`ls`, `search_files` not `grep`, `read_file` not `cat`, and \
@@ -164,6 +200,14 @@ pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
            you're acting on and the trade-off you're making rather than filling the gap \
            with plausible-looking code. For anything multi-step, state the plan and a \
            concrete success criterion first so a wrong approach is caught early.\n\
+         - Default to working WITHOUT `update_plan`. Reach for it only on large, \
+           multi-phase work (roughly 5+ substantial steps spanning clearly \
+           separate pieces) or when the user explicitly asks for a plan/todo list \
+           or hands you a numbered list of separate tasks. Don't use it for a \
+           single change, a few edits, or questions you can answer directly, and \
+           don't split one logical task into busywork steps just to have a list — \
+           when unsure, just do the work. When you do use it, keep exactly one item \
+           in_progress and mark items completed the moment they're done.\n\
          - When a product/design/implementation decision is genuinely ambiguous and \
            has multiple reasonable approaches with real trade-offs, call \
            `ask_user_question` to interview the user instead of guessing. Keep \
@@ -236,6 +280,17 @@ pub struct Agent {
     attachments: Option<AttachmentStore>,
     /// Cumulative estimated tokens sent + generated this run (see [`budget`]).
     tokens_used: usize,
+    /// Cooperative stop signal for the in-flight turn. Replaced per turn (see
+    /// [`Agent::set_cancel_token`]) so the host can cancel a streaming response
+    /// without holding the agent's lock; a fresh token each turn keeps a prior
+    /// turn's cancellation from poisoning the next.
+    cancel: CancellationToken,
+    /// Multiplier correcting the client-side token estimate toward the real
+    /// counts the endpoint reports (`actual_prompt_tokens / estimated`). Starts
+    /// at 1.0 and recalibrates after each call that returns usage, so the budget
+    /// check (and compaction trigger) track reality rather than the crude
+    /// 4-chars-per-token heuristic. Not persisted — re-learned each session.
+    token_ratio: f64,
 }
 
 impl Agent {
@@ -264,6 +319,8 @@ impl Agent {
             messages,
             attachments,
             tokens_used: 0,
+            cancel: CancellationToken::new(),
+            token_ratio: 1.0,
         })
     }
 
@@ -298,6 +355,8 @@ impl Agent {
             messages,
             attachments,
             tokens_used,
+            cancel: CancellationToken::new(),
+            token_ratio: 1.0,
         })
     }
 
@@ -349,6 +408,29 @@ impl Agent {
         self.config.model = model.into();
     }
 
+    /// Swap the underlying inference client (e.g. to move a live conversation
+    /// from a local `llama-server` to the cloud endpoint, or vice-versa) without
+    /// disturbing the transcript or session. Pair with [`set_model`] so the
+    /// request's model matches the new endpoint.
+    pub fn set_client(&mut self, client: OxenClient) {
+        self.client = client;
+    }
+
+    /// Override (or clear, with `None`) the context window used for budgeting —
+    /// e.g. after swapping a local model's small window for a cloud model's,
+    /// where `None` lets it derive from the model name again.
+    pub fn set_context_window(&mut self, window: Option<usize>) {
+        self.config.context_window = window;
+    }
+
+    /// Install the stop signal for the next turn. The host keeps a clone so it
+    /// can cancel a running turn (`token.cancel()`) without taking the agent's
+    /// lock — set a fresh token before each turn so a prior cancellation doesn't
+    /// carry over.
+    pub fn set_cancel_token(&mut self, token: CancellationToken) {
+        self.cancel = token;
+    }
+
     /// The effective context window (tokens): the configured override, else a
     /// best-effort size derived from the model name.
     pub fn context_window(&self) -> usize {
@@ -358,9 +440,23 @@ impl Agent {
     }
 
     /// Estimated tokens the current transcript (+ tool definitions) occupies —
-    /// i.e. how full the context window is right now.
+    /// i.e. how full the context window is right now, calibrated by the latest
+    /// real usage so the meter and budget reflect actual consumption.
     pub fn context_tokens(&self) -> usize {
-        budget::estimate_prompt_tokens(&self.messages, &self.tools.definitions())
+        self.calibrated(budget::estimate_prompt_tokens(
+            &self.messages,
+            &self.tools.definitions(),
+        ))
+    }
+
+    /// Scale a raw client-side token estimate by the learned calibration factor.
+    fn calibrated(&self, raw: usize) -> usize {
+        (raw as f64 * self.token_ratio).round() as usize
+    }
+
+    /// Whether the current transcript (+ tools) is within `budget`, calibrated.
+    fn fits_budget(&self, budget: usize, tool_defs: &[serde_json::Value]) -> bool {
+        self.calibrated(budget::estimate_prompt_tokens(&self.messages, tool_defs)) <= budget
     }
 
     /// Cumulative estimated tokens sent + generated this run.
@@ -384,7 +480,11 @@ impl Agent {
             ChatMessage::user(user.to_string()),
         ];
         let request = ChatRequest::new(&self.config.model, messages).streaming(true);
-        let assembled = self.client.stream_chat(&request, |_| {}).await?;
+        // A one-shot side task, not the cancellable turn loop: run it to completion.
+        let assembled = self
+            .client
+            .stream_chat(&request, &CancellationToken::new(), |_| {})
+            .await?;
         Ok(assembled.content)
     }
 
@@ -440,17 +540,35 @@ impl Agent {
         let mut nudge: Option<ChatMessage> = None;
         let mut nudged = false;
 
+        // The stop signal for this turn (a clone, so cancelling it from the host
+        // doesn't require the agent lock the turn is holding).
+        let cancel = self.cancel.clone();
+
         // No fixed iteration cap: the loop runs until the model returns a final
         // answer, bounded only by how much fits in the context window.
         loop {
-            // Stop before sending a request we know would overflow the window.
-            let prompt_tokens = budget::estimate_prompt_tokens(&self.messages, &tool_defs);
-            if prompt_tokens > budget {
-                return Err(AgentError::ContextWindowExceeded {
-                    used: prompt_tokens,
-                    window,
-                });
+            // Honor a stop requested between model calls (e.g. while tools ran).
+            if cancel.is_cancelled() {
+                return Ok(String::new());
             }
+
+            // Keep the next request within the window. The raw estimate is
+            // calibrated by the latest real usage so the check tracks reality
+            // (code under-counts at 4 chars/token). If we'd overflow, compact
+            // (prune stale tool output, then summarize old turns) rather than
+            // hard-stopping; only error if even a compacted transcript can't fit.
+            let mut raw_prompt_tokens = budget::estimate_prompt_tokens(&self.messages, &tool_defs);
+            if self.calibrated(raw_prompt_tokens) > budget {
+                let fit = self.compact_to_fit(budget, &tool_defs, &mut on_event).await?;
+                raw_prompt_tokens = budget::estimate_prompt_tokens(&self.messages, &tool_defs);
+                if !fit || self.calibrated(raw_prompt_tokens) > budget {
+                    return Err(AgentError::ContextWindowExceeded {
+                        used: self.calibrated(raw_prompt_tokens),
+                        window,
+                    });
+                }
+            }
+            let prompt_tokens = self.calibrated(raw_prompt_tokens);
 
             // Reflect this call's prompt cost the moment it's sent (the transcript
             // is `prompt_tokens` of context), so a live meter accounts for it now
@@ -471,7 +589,7 @@ impl Agent {
 
             let assembled = self
                 .client
-                .stream_chat(&request, |event| match event {
+                .stream_chat(&request, &cancel, |event| match event {
                     StreamEvent::Token(t) => on_event(&AgentEvent::Token(t.clone())),
                     StreamEvent::ToolCallStart { name } => {
                         on_event(&AgentEvent::ToolPending { name: name.clone() })
@@ -486,9 +604,39 @@ impl Agent {
                 })
                 .await?;
 
-            // Account for this round's prompt + generated tokens.
-            self.tokens_used += prompt_tokens
-                + budget::estimate_completion_tokens(&assembled.content, &assembled.tool_calls);
+            // A stop mid-stream returns whatever assembled so far. Persist only
+            // the partial prose (a half-formed tool call would be malformed and
+            // must not be replayed), keep it out of the token tally, and end the
+            // turn cleanly so the UI settles to a normal reply rather than error.
+            if cancel.is_cancelled() {
+                if !assembled.content.is_empty() {
+                    self.push(ChatMessage::assistant(assembled.content.clone()))?;
+                }
+                return Ok(assembled.content);
+            }
+
+            // Recalibrate the estimate against the real prompt size the endpoint
+            // billed, so the next budget check tracks reality.
+            if let Some(usage) = &assembled.usage {
+                if usage.prompt_tokens > 0 && raw_prompt_tokens > 0 {
+                    self.token_ratio = usage.prompt_tokens as f64 / raw_prompt_tokens as f64;
+                }
+            }
+
+            // Account for this round's prompt + generated tokens, preferring the
+            // endpoint's real counts and falling back to the calibrated estimate.
+            self.tokens_used += match &assembled.usage {
+                Some(u) if u.prompt_tokens + u.completion_tokens > 0 => {
+                    (u.prompt_tokens + u.completion_tokens) as usize
+                }
+                _ => {
+                    prompt_tokens
+                        + budget::estimate_completion_tokens(
+                            &assembled.content,
+                            &assembled.tool_calls,
+                        )
+                }
+            };
 
             self.push(ChatMessage::assistant_with_tools(
                 assembled.content.clone(),
@@ -522,6 +670,51 @@ impl Agent {
                 self.push(ChatMessage::tool_result(call.id.clone(), result))?;
             }
         }
+    }
+
+    /// Free context so the next request fits `budget`, in two stages (see
+    /// [`compact`]): prune stale tool output, then summarize the oldest turns.
+    /// Emits an [`AgentEvent::Compacted`] for each stage that does work and
+    /// returns whether the transcript now fits. Mutates only the in-memory
+    /// transcript — the history store keeps the full record.
+    async fn compact_to_fit<F>(
+        &mut self,
+        budget: usize,
+        tool_defs: &[serde_json::Value],
+        on_event: &mut F,
+    ) -> Result<bool, AgentError>
+    where
+        F: FnMut(&AgentEvent),
+    {
+        // Keep the latest few tool outputs and the last few turns verbatim.
+        const KEEP_RECENT_TOOLS: usize = 2;
+        const KEEP_RECENT_TURNS: usize = 3;
+
+        // Stage 1: prune stale tool output — cheap, no model call.
+        let freed = compact::prune_tool_results(&mut self.messages, KEEP_RECENT_TOOLS);
+        if freed > 0 {
+            on_event(&AgentEvent::Compacted {
+                detail: format!("pruned ~{freed} chars of older tool output"),
+            });
+        }
+        if self.fits_budget(budget, tool_defs) {
+            return Ok(true);
+        }
+
+        // Stage 2: summarize the oldest turns into a single message. The cut is
+        // on a user-turn boundary, so no tool result is orphaned from its call.
+        let Some(cut) = compact::summary_cut_index(&self.messages, KEEP_RECENT_TURNS) else {
+            return Ok(self.fits_budget(budget, tool_defs));
+        };
+        let start = usize::from(self.messages.first().is_some_and(|m| m.role == "system"));
+        let rendered = compact::render_for_summary(&self.messages[start..cut]);
+        let summary = self.complete(compact::SUMMARY_PROMPT, &rendered).await?;
+        let note = ChatMessage::user(format!("{}\n{}", compact::SUMMARY_MARKER, summary));
+        self.messages.splice(start..cut, std::iter::once(note));
+        on_event(&AgentEvent::Compacted {
+            detail: "summarized earlier conversation".to_string(),
+        });
+        Ok(self.fits_budget(budget, tool_defs))
     }
 
     async fn run_tool<F>(&self, call: &ToolCall, on_event: &mut F) -> String
@@ -621,6 +814,8 @@ mod tests {
         }
         // ...and via the public convenience wrapper the host uses by default.
         assert!(default_system_prompt(false).contains(needle));
+        // The always-available planning tool is advertised in every variant.
+        assert!(default_system_prompt(false).contains("update_plan"));
         assert!(AgentConfig::default()
             .system_prompt
             .unwrap()
@@ -758,5 +953,103 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AgentError::ContextWindowExceeded { .. }));
+    }
+
+    #[tokio::test]
+    async fn run_turn_stops_immediately_when_cancelled() {
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = store
+            .create_session(&SessionMeta {
+                workspace: "/tmp/proj".into(),
+                model: "claude-opus-4-8".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        // Point at an unroutable address: if cancellation didn't short-circuit
+        // before the network call, the turn would hang/err on connect instead of
+        // returning cleanly.
+        let client = OxenClient::new("http://127.0.0.1:1/api/ai", "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        // Pre-cancel the turn's stop signal; the loop bails before any request.
+        let token = CancellationToken::new();
+        token.cancel();
+        agent.set_cancel_token(token);
+
+        let out = agent.run_turn("do a lot of work", |_| {}).await.unwrap();
+        assert_eq!(out, "");
+        // Only the user message was persisted — no assistant reply for a turn that
+        // never reached the model.
+        assert_eq!(agent.messages().last().unwrap().role, "user");
+    }
+
+    #[tokio::test]
+    async fn run_turn_compacts_instead_of_erroring_when_over_budget() {
+        // A streaming endpoint that returns a short final answer.
+        let mut server = mockito::Server::new_async().await;
+        let sse = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"all done\"},\"finish_reason\":\"stop\"}]}\n\n\
+                   data: [DONE]\n\n";
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            .create_async()
+            .await;
+
+        // Seed a transcript with three big tool results — over a small window.
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = store
+            .create_session(&SessionMeta {
+                workspace: "/tmp/proj".into(),
+                model: "qwen3-8b".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let big = "x".repeat(8000); // ~2000 tokens each
+        for (i, _) in (0..3).enumerate() {
+            store.append_message(&session, &ChatMessage::user(format!("q{i}"))).unwrap();
+            store
+                .append_message(&session, &ChatMessage::tool_result(format!("t{i}"), big.clone()))
+                .unwrap();
+        }
+
+        let client = OxenClient::new(server.url(), "key", "qwen3-8b");
+        let config = AgentConfig {
+            model: "qwen3-8b".into(),
+            system_prompt: None,
+            // Fits two of the three big tool results, not all three.
+            context_window: Some(4500),
+            response_reserve: 0,
+            ..AgentConfig::default()
+        };
+        let mut agent =
+            Agent::resume_from_store(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        let mut compacted = false;
+        let out = agent
+            .run_turn("continue", |e| {
+                if matches!(e, AgentEvent::Compacted { .. }) {
+                    compacted = true;
+                }
+            })
+            .await
+            .expect("turn should compact and succeed, not error");
+
+        assert_eq!(out, "all done");
+        assert!(compacted, "a Compacted event should have fired");
+        // The oldest tool result was stubbed; the newest stays verbatim.
+        let tool_texts: Vec<String> = agent
+            .messages()
+            .iter()
+            .filter(|m| m.role == "tool")
+            .filter_map(|m| m.content_text())
+            .collect();
+        assert!(tool_texts.first().unwrap().contains("elided"));
+        assert!(tool_texts.last().unwrap().contains(&big));
     }
 }

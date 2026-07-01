@@ -18,12 +18,14 @@ pub mod ask;
 pub mod canvas;
 pub mod fs;
 pub mod git;
+pub mod plan;
 pub mod sandbox;
 pub mod shell;
 pub mod web;
 
 pub use ask::{AskUserTool, Choice, Question, QuestionAnswer, QuestionAsker, ASK_USER_TOOL};
 pub use canvas::{CanvasDoc, CanvasSink, CanvasTool, CANVAS_FORMATS, CANVAS_TOOL};
+pub use plan::{PlanItem, PlanStatus, PlanTool, PLAN_TOOL};
 pub use sandbox::Workspace;
 
 /// Errors a tool can return while running.
@@ -75,9 +77,16 @@ pub fn tool_definition(tool: &dyn Tool) -> serde_json::Value {
 }
 
 /// A set of tools, addressable by name, that the agent loop dispatches into.
+///
+/// Alongside the tools themselves, the registry holds optional per-tool
+/// description overrides. When present, an override replaces the tool's built-in
+/// description in the definitions advertised to the model (dispatch is
+/// unaffected — only the prose the model reads changes). The host layers these in
+/// from the user's saved tool preferences.
 #[derive(Default, Clone)]
 pub struct ToolRegistry {
     tools: BTreeMap<String, Arc<dyn Tool>>,
+    description_overrides: BTreeMap<String, String>,
 }
 
 impl ToolRegistry {
@@ -95,8 +104,42 @@ impl ToolRegistry {
         self.tools.insert(tool.name().to_string(), tool);
     }
 
+    /// Unregister a tool by name (used to apply the user's disabled-tools
+    /// preference). Returns the removed tool, if any.
+    pub fn remove(&mut self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.description_overrides.remove(name);
+        self.tools.remove(name)
+    }
+
+    /// Replace the description advertised to the model for `name`. No-op for
+    /// dispatch; only the model-facing definition changes.
+    pub fn set_description_override(
+        &mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) {
+        self.description_overrides
+            .insert(name.into(), description.into());
+    }
+
     pub fn get(&self, name: &str) -> Option<&Arc<dyn Tool>> {
         self.tools.get(name)
+    }
+
+    /// The (name, default description, schema) of every registered tool, sorted
+    /// by name — for a host enumerating tools in a settings UI. Reports each
+    /// tool's *built-in* description, ignoring any override.
+    pub fn specs(&self) -> Vec<(String, String, serde_json::Value)> {
+        self.tools
+            .values()
+            .map(|t| {
+                (
+                    t.name().to_string(),
+                    t.description().to_string(),
+                    t.parameters_schema(),
+                )
+            })
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -107,11 +150,22 @@ impl ToolRegistry {
         self.tools.len()
     }
 
-    /// The OpenAI-compatible `tools` array to send with a chat request.
+    /// The OpenAI-compatible `tools` array to send with a chat request, with any
+    /// per-tool description overrides layered in.
     pub fn definitions(&self) -> Vec<serde_json::Value> {
         self.tools
             .values()
-            .map(|t| tool_definition(t.as_ref()))
+            .map(|t| match self.description_overrides.get(t.name()) {
+                Some(desc) => serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name(),
+                        "description": desc,
+                        "parameters": t.parameters_schema(),
+                    }
+                }),
+                None => tool_definition(t.as_ref()),
+            })
             .collect()
     }
 
@@ -148,7 +202,9 @@ impl ToolRegistry {
             .with(Arc::new(fs::FindFilesTool::new(workspace.clone())))
             .with(Arc::new(fs::SearchTool::new(workspace.clone())))
             .with(Arc::new(shell::ShellTool::new(workspace.clone())))
-            .with(Arc::new(git::GitTool::new(workspace)));
+            .with(Arc::new(git::GitTool::new(workspace)))
+            // Planning/checklist tool — always available so any host gets it.
+            .with(Arc::new(plan::PlanTool::new()));
 
         // Always register web search so the model can use it; when no Brave key
         // is configured the call fails with a recognizable error that the UIs
@@ -214,5 +270,18 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::UnknownTool(_)));
+    }
+
+    #[test]
+    fn default_tool_definitions_stay_within_budget() {
+        // The tool-schema block is fixed overhead resent on every model call, so
+        // it directly shrinks the usable context window. Pin its size so a new
+        // tool or a verbose schema can't silently balloon the prefix. Current
+        // size is ~5.6K chars (~1.4K tokens); the ceiling leaves headroom for a
+        // tool or two without inviting unchecked growth.
+        let workspace = Workspace::new(".").unwrap();
+        let registry = ToolRegistry::default_for_workspace(workspace);
+        let chars: usize = registry.definitions().iter().map(|d| d.to_string().len()).sum();
+        assert!(chars < 8_000, "default tool definitions grew to {chars} chars (budget 8000)");
     }
 }

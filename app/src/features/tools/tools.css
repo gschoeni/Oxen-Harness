@@ -1,0 +1,181 @@
+.tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tool-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.tool-row.disabled {
+  opacity: 0.6;
+}
+
+.tool-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: var(--space-1) 0;
+  text-align: left;
+  color: var(--text);
+}
+.tool-chevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.tool-chevron.open {
+  transform: rotate(90deg);
+}
+.tool-row-icon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.tool-row-name {
+  font-family: var(--font-readout, monospace);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.tool-row-badge {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+}
+.tool-row-desc {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Toggle switch */
+.tool-switch {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.tool-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.tool-switch-track {
+  display: block;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--separator-strong);
+  transition: background var(--dur-fast) var(--ease);
+}
+.tool-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.tool-switch input:checked + .tool-switch-track {
+  background: var(--accent);
+}
+.tool-switch input:checked + .tool-switch-track::after {
+  transform: translateX(16px);
+}
+.tool-switch input:focus-visible + .tool-switch-track {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.tool-row-body {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--separator);
+}
+.tool-desc-edit {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  resize: vertical;
+}
+.tool-desc-edit:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--separator-strong));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.tool-row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.tool-schema {
+  margin-top: var(--space-1);
+}
+.tool-schema summary {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.tool-schema-code {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  max-height: 280px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+/* Custom & MCP — placeholder card */
+.tool-soon {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px dashed var(--separator-strong);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+}
+.tool-soon svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+}
+.tool-soon-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}

@@ -5,9 +5,14 @@
 
 import { vi } from "vitest";
 import type {
+  CatalogModel,
+  CloudModel,
   ConnectionView,
-  ModelsView,
+  HardwareProfile,
+  HfHit,
+  InstalledView,
   Project,
+  RuntimeStatus,
   SessionInfo,
   SessionView,
   Theme,
@@ -89,37 +94,44 @@ export const sampleSession: SessionInfo = {
   context_window: 128000,
 };
 
-export const sampleModels: ModelsView = {
+export const sampleHardware: HardwareProfile = {
+  ram_bytes: 16_000_000_000,
+  vram_bytes: null,
+  accelerator: "metal",
+  chip_label: "Apple M2",
+  usable_budget: 12_000_000_000,
+};
+
+export const sampleRuntime: RuntimeStatus = {
+  binary: "/Users/dev/.oxen-harness/runtime/llama.cpp/llama-b9835/llama-server",
+  source: "managed",
+  managed_version: "b9835",
+  can_manage: true,
+};
+
+export const sampleInstalled: InstalledView = {
   models: [
     {
-      id: "qwen2.5-coder-7b",
-      display: "Qwen2.5 Coder 7B",
-      params: "7B",
+      id: "qwen3-8b-q4-k-m",
+      display: "Qwen3 8B · Q4_K_M",
+      params: "8B",
       quant: "Q4_K_M",
-      context: 32768,
-      note: "fast",
-      installed: false,
-      size_bytes: 4_700_000_000,
-      size_is_actual: false,
-    },
-    {
-      id: "llama-3.2-3b",
-      display: "Llama 3.2 3B",
-      params: "3B",
-      quant: "Q4_K_M",
-      context: 8192,
-      note: "tiny",
-      installed: true,
-      size_bytes: 2_000_000_000,
-      size_is_actual: true,
+      context: 40960,
+      size_bytes: 5_000_000_000,
+      origin: { kind: "huggingface", repo: "bartowski/x", file: "x.gguf", revision: "main" },
     },
   ],
-  total_disk_bytes: 2_000_000_000,
+  total_disk_bytes: 5_000_000_000,
   dir: "/Users/dev/.oxen-harness/models",
-  llama_installed: true,
-  can_auto_install: true,
-  install_hint: "brew install llama.cpp",
+  runtime: sampleRuntime,
+  disk_total: 500_000_000_000,
+  disk_free: 220_000_000_000,
 };
+
+export const sampleCloudModels: CloudModel[] = [
+  { id: "claude-opus-4-8", name: "Claude Opus 4.8", builtin: true, selected: true },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", builtin: true, selected: false },
+];
 
 export const sampleThemes: ThemeSummary[] = [
   {
@@ -165,6 +177,11 @@ export const listSessions = vi.fn(async () => []);
 export const totalTokensUsed = vi.fn(async () => 0);
 export const sessionMessages = vi.fn(async () => [] as unknown[]);
 export const toolDefinitions = vi.fn(async () => [] as unknown[]);
+export const listTools = vi.fn(async () => [] as unknown[]);
+export const setToolEnabled = vi.fn(async () => {});
+export const setToolDescription = vi.fn(async () => {});
+export const exportFinetuning = vi.fn(async () => 0);
+export const pickExportPath = vi.fn(async () => null as string | null);
 export const attachmentDataUri = vi.fn(async () => "data:image/png;base64,AAAA");
 export const newSession = vi.fn(async () => ({ ...sampleSession, session_id: "new-session-id" }));
 export const resumeSession = vi.fn(async () => emptyView);
@@ -179,6 +196,7 @@ export const openProject = vi.fn(async (path: string) => ({
 export const setActiveProject = vi.fn(async () => {});
 export const pickFolder = vi.fn(async () => null as string | null);
 export const runTurn = vi.fn(async () => "Done.");
+export const cancelTurn = vi.fn(async () => {});
 export const onToken = listener("token");
 export const onTool = listener("tool");
 export const onQuestion = listener("question");
@@ -190,13 +208,31 @@ export const getConnection = vi.fn(async () => sampleConnection);
 export const setConnection = vi.fn(async () => ({ ...sampleSession, session_id: "reconnected" }));
 export const configureBraveKey = vi.fn(async () => {});
 
-export const listModels = vi.fn(async () => sampleModels);
+export const installedLocalModels = vi.fn(async () => sampleInstalled);
+export const detectHardware = vi.fn(async () => sampleHardware);
+export const runtimeStatus = vi.fn(async () => sampleRuntime);
+export const installRuntime = vi.fn(async () => {});
+export const listModelCatalog = vi.fn(async (): Promise<CatalogModel[]> => []);
+export const resolveHfModel = vi.fn((_input: string): Promise<CatalogModel> => {
+  throw new Error("not mocked");
+});
+export const searchHfModels = vi.fn(async (): Promise<HfHit[]> => []);
+export const hfTokenPresent = vi.fn(async () => false);
+export const setHfToken = vi.fn(async () => {});
+export const downloadModel = vi.fn(async () => {});
 export const installLlama = vi.fn(async () => {});
-export const pullModel = vi.fn(async () => {});
 export const removeModel = vi.fn(async () => {});
 export const useLocalModel = vi.fn(async () => ({ ...sampleSession, session_id: "local-session" }));
 export const onModelProgress = listener("modelProgress");
+export const onRuntimeInstall = listener("runtimeInstall");
+export const onLocalStatus = listener("localStatus");
 export const onLlamaInstall = listener("llamaInstall");
+
+// ---- cloud models ----------------------------------------------------------
+export const listCloudModels = vi.fn(async () => sampleCloudModels);
+export const addCloudModel = vi.fn(async () => sampleCloudModels);
+export const removeCloudModel = vi.fn(async () => sampleCloudModels);
+export const setModel = vi.fn(async () => ({ ...sampleSession, session_id: "model-switched" }));
 
 export const listThemes = vi.fn(async () => sampleThemes);
 export const activeTheme = vi.fn(async () => sampleTheme);
@@ -224,16 +260,28 @@ export function resetIpc() {
   setActiveProject.mockReset().mockResolvedValue(undefined);
   pickFolder.mockReset().mockResolvedValue(null);
   runTurn.mockReset().mockResolvedValue("Done.");
+  cancelTurn.mockReset().mockResolvedValue(undefined);
   pickAttachments.mockReset().mockResolvedValue([]);
   answerQuestion.mockReset().mockResolvedValue(undefined);
   getConnection.mockReset().mockResolvedValue(sampleConnection);
   setConnection.mockReset().mockResolvedValue({ ...sampleSession, session_id: "reconnected" });
   configureBraveKey.mockReset().mockResolvedValue(undefined);
-  listModels.mockReset().mockResolvedValue(sampleModels);
+  installedLocalModels.mockReset().mockResolvedValue(sampleInstalled);
+  detectHardware.mockReset().mockResolvedValue(sampleHardware);
+  runtimeStatus.mockReset().mockResolvedValue(sampleRuntime);
+  installRuntime.mockReset().mockResolvedValue(undefined);
+  listModelCatalog.mockReset().mockResolvedValue([]);
+  searchHfModels.mockReset().mockResolvedValue([]);
+  hfTokenPresent.mockReset().mockResolvedValue(false);
+  setHfToken.mockReset().mockResolvedValue(undefined);
+  downloadModel.mockReset().mockResolvedValue(undefined);
   installLlama.mockReset().mockResolvedValue(undefined);
-  pullModel.mockReset().mockResolvedValue(undefined);
   removeModel.mockReset().mockResolvedValue(undefined);
   useLocalModel.mockReset().mockResolvedValue({ ...sampleSession, session_id: "local-session" });
+  listCloudModels.mockReset().mockResolvedValue(sampleCloudModels);
+  addCloudModel.mockReset().mockResolvedValue(sampleCloudModels);
+  removeCloudModel.mockReset().mockResolvedValue(sampleCloudModels);
+  setModel.mockReset().mockResolvedValue({ ...sampleSession, session_id: "model-switched" });
   listThemes.mockReset().mockResolvedValue(sampleThemes);
   activeTheme.mockReset().mockResolvedValue(sampleTheme);
   useTheme.mockReset().mockResolvedValue(sampleTheme);
@@ -245,7 +293,14 @@ export function resetIpc() {
   sessionMessages.mockReset().mockResolvedValue([]);
   toolDefinitions.mockReset().mockResolvedValue([]);
   attachmentDataUri.mockReset().mockResolvedValue("data:image/png;base64,AAAA");
-  [onToken, onTool, onQuestion, onFileDrop, onModelProgress, onLlamaInstall].forEach((fn) =>
-    fn.mockClear(),
-  );
+  [
+    onToken,
+    onTool,
+    onQuestion,
+    onFileDrop,
+    onModelProgress,
+    onRuntimeInstall,
+    onLocalStatus,
+    onLlamaInstall,
+  ].forEach((fn) => fn.mockClear());
 }

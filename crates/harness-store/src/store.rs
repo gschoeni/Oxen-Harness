@@ -60,6 +60,10 @@ fn migrations() -> Migrations<'static> {
                  value  INTEGER NOT NULL
              );",
         ),
+        // M4 — a per-session training-data review status: '' = unreviewed,
+        // 'kept' = include in the fine-tuning dataset, 'rejected' = exclude.
+        // Defaults to '' so every existing chat starts unreviewed.
+        M::up("ALTER TABLE sessions ADD COLUMN review_status TEXT NOT NULL DEFAULT '';"),
     ])
 }
 
@@ -111,6 +115,8 @@ pub struct SessionSummary {
     /// The first user message's text, used as the conversation title.
     pub title: Option<String>,
     pub message_count: i64,
+    /// Training-data review status: `""` (unreviewed), `"kept"`, or `"rejected"`.
+    pub review_status: String,
 }
 
 /// A SQLite store of sessions and their verbatim message transcripts.
@@ -259,7 +265,8 @@ impl HistoryStore {
                        WHERE m.session_id = s.id AND m.role = 'user'
                          AND m.content IS NOT NULL
                        ORDER BY m.seq ASC LIMIT 1) AS title,
-                    (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count
+                    (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count,
+                    s.review_status
              FROM sessions s
              ORDER BY s.created_at DESC",
         )?;
@@ -271,6 +278,7 @@ impl HistoryStore {
                 created_at: row.get(3)?,
                 title: row.get(4)?,
                 message_count: row.get(5)?,
+                review_status: row.get(6)?,
             })
         })?;
         let mut out = Vec::new();
@@ -353,6 +361,41 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// Set a session's training-data review status (`""`, `"kept"`, or
+    /// `"rejected"`). Errors if the session doesn't exist.
+    pub fn set_review_status(&self, session_id: &str, status: &str) -> Result<(), HistoryError> {
+        let conn = self.lock();
+        let changed = conn.execute(
+            "UPDATE sessions SET review_status = ?2 WHERE id = ?1",
+            rusqlite::params![session_id, status],
+        )?;
+        if changed == 0 {
+            return Err(HistoryError::SessionNotFound(session_id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Set the review status for many sessions at once (bulk keep/reject from the
+    /// dataset builder), in a single transaction. Returns how many rows changed.
+    pub fn set_review_status_many(
+        &self,
+        session_ids: &[String],
+        status: &str,
+    ) -> Result<usize, HistoryError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let mut changed = 0usize;
+        {
+            let mut stmt =
+                tx.prepare("UPDATE sessions SET review_status = ?2 WHERE id = ?1")?;
+            for id in session_ids {
+                changed += stmt.execute(rusqlite::params![id, status])?;
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
     /// Export a session's transcript as JSONL (one verbatim message per line).
     pub fn export_jsonl(&self, session_id: &str) -> Result<String, HistoryError> {
         let messages = self.messages(session_id)?;
@@ -363,6 +406,90 @@ impl HistoryStore {
         }
         Ok(out)
     }
+
+    /// Export one or more sessions as chat-completions fine-tuning data, in the
+    /// shape Oxen.ai expects: one JSON object per line, each a single
+    /// conversation under a `messages` key —
+    /// `{"messages":[{"role":"system","content":"…"}, …]}`.
+    ///
+    /// Each session becomes one conversation. Messages are normalized for
+    /// training: multimodal content arrays are flattened to their text (image
+    /// parts dropped). When `include_tools` is false, tool-result messages are
+    /// omitted and assistant `tool_calls` are stripped, leaving a clean
+    /// text-only dialogue; when true, `tool_calls` and tool results are
+    /// preserved so the data can teach tool use. Sessions with no usable
+    /// messages are skipped, so the output never has blank conversations.
+    pub fn export_chat_completions(
+        &self,
+        session_ids: &[String],
+        include_tools: bool,
+    ) -> Result<String, HistoryError> {
+        let mut out = String::new();
+        for sid in session_ids {
+            let messages = self.messages(sid)?;
+            let conversation: Vec<serde_json::Value> = messages
+                .iter()
+                .filter_map(|m| sanitize_for_finetuning(m, include_tools))
+                .collect();
+            // Need at least one user + one assistant turn to be worth a row.
+            let has_user = conversation
+                .iter()
+                .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"));
+            let has_assistant = conversation
+                .iter()
+                .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("assistant"));
+            if !has_user || !has_assistant {
+                continue;
+            }
+            let line = serde_json::json!({ "messages": conversation });
+            out.push_str(&serde_json::to_string(&line)?);
+            out.push('\n');
+        }
+        Ok(out)
+    }
+}
+
+/// Normalize one persisted transcript message into a clean chat-completions
+/// message for fine-tuning, or `None` if it should be dropped.
+///
+/// - `content` is flattened to a plain string (text parts joined; images dropped).
+/// - When `include_tools` is false: `tool` messages are dropped and assistant
+///   `tool_calls` are stripped.
+/// - When `include_tools` is true: assistant `tool_calls` and a tool message's
+///   `tool_call_id` are carried through verbatim.
+fn sanitize_for_finetuning(
+    message: &serde_json::Value,
+    include_tools: bool,
+) -> Option<serde_json::Value> {
+    let role = message.get("role").and_then(|r| r.as_str())?;
+
+    if role == "tool" && !include_tools {
+        return None;
+    }
+
+    let content = derive_content_text(message.get("content")).unwrap_or_default();
+    let tool_calls = message.get("tool_calls").filter(|v| !v.is_null());
+
+    // A message with neither text nor (kept) tool calls carries nothing to train on.
+    let keeps_tool_calls = include_tools && tool_calls.is_some();
+    if content.is_empty() && !keeps_tool_calls && role != "tool" {
+        return None;
+    }
+
+    let mut obj = serde_json::Map::new();
+    obj.insert("role".into(), serde_json::Value::String(role.to_string()));
+    obj.insert("content".into(), serde_json::Value::String(content));
+    if keeps_tool_calls {
+        if let Some(tc) = tool_calls {
+            obj.insert("tool_calls".into(), tc.clone());
+        }
+    }
+    if include_tools {
+        if let Some(id) = message.get("tool_call_id").filter(|v| !v.is_null()) {
+            obj.insert("tool_call_id".into(), id.clone());
+        }
+    }
+    Some(serde_json::Value::Object(obj))
 }
 
 fn now() -> i64 {
@@ -458,6 +585,92 @@ mod tests {
 
         let msgs = store.messages(&session).unwrap();
         assert_eq!(msgs[0]["tool_calls"][0]["function"]["name"], "read_file");
+    }
+
+    #[test]
+    fn export_chat_completions_groups_one_conversation_per_line() {
+        let store = store();
+        let session = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&session, &Message::system("be helpful"))
+            .unwrap();
+        store.append_message(&session, &Message::user("hi")).unwrap();
+        store
+            .append_message(&session, &Message::assistant("hello"))
+            .unwrap();
+
+        let out = store
+            .export_chat_completions(&[session.clone()], false)
+            .unwrap();
+        // One conversation → one JSONL line.
+        assert_eq!(out.lines().count(), 1);
+        let row: serde_json::Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
+        let msgs = row["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[2]["content"], "hello");
+    }
+
+    #[test]
+    fn export_chat_completions_handles_tools_per_flag() {
+        let store = store();
+        let session = store.create_session(&meta()).unwrap();
+        store.append_message(&session, &Message::user("read it")).unwrap();
+        store
+            .append_message(
+                &session,
+                &serde_json::json!({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": { "name": "read_file", "arguments": "{}" }
+                    }]
+                }),
+            )
+            .unwrap();
+        store
+            .append_message(
+                &session,
+                &serde_json::json!({ "role": "tool", "tool_call_id": "call_1", "content": "file body" }),
+            )
+            .unwrap();
+        store
+            .append_message(&session, &Message::assistant("done"))
+            .unwrap();
+
+        // Without tools: the tool result is dropped and the empty tool-call-only
+        // assistant turn carries no content, so only user + final assistant remain.
+        let stripped = store
+            .export_chat_completions(&[session.clone()], false)
+            .unwrap();
+        let row: serde_json::Value = serde_json::from_str(stripped.lines().next().unwrap()).unwrap();
+        let msgs = row["messages"].as_array().unwrap();
+        assert!(msgs.iter().all(|m| m["role"] != "tool"));
+        assert!(msgs.iter().all(|m| m.get("tool_calls").is_none()));
+
+        // With tools: tool_calls and the tool result are preserved.
+        let full = store
+            .export_chat_completions(&[session.clone()], true)
+            .unwrap();
+        let row: serde_json::Value = serde_json::from_str(full.lines().next().unwrap()).unwrap();
+        let msgs = row["messages"].as_array().unwrap();
+        assert!(msgs.iter().any(|m| m["role"] == "tool" && m["tool_call_id"] == "call_1"));
+        assert!(msgs.iter().any(|m| m.get("tool_calls").is_some()));
+    }
+
+    #[test]
+    fn export_chat_completions_skips_conversations_without_a_turn_pair() {
+        let store = store();
+        // System prompt only — no user/assistant exchange, so it's skipped.
+        let bare = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&bare, &Message::system("be helpful"))
+            .unwrap();
+
+        let out = store.export_chat_completions(&[bare], false).unwrap();
+        assert_eq!(out.lines().count(), 0);
     }
 
     #[test]
@@ -583,7 +796,48 @@ mod tests {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(user_version, 3);
+        assert_eq!(user_version, 4);
+    }
+
+    #[test]
+    fn review_status_defaults_empty_and_updates() {
+        let store = store();
+        let session = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&session, &Message::user("hi"))
+            .unwrap();
+
+        // Unreviewed by default.
+        assert_eq!(store.list_sessions().unwrap()[0].review_status, "");
+
+        store.set_review_status(&session, "kept").unwrap();
+        assert_eq!(store.list_sessions().unwrap()[0].review_status, "kept");
+
+        store.set_review_status(&session, "rejected").unwrap();
+        assert_eq!(store.list_sessions().unwrap()[0].review_status, "rejected");
+
+        // Unknown session errors.
+        assert!(matches!(
+            store.set_review_status("nope", "kept").unwrap_err(),
+            HistoryError::SessionNotFound(_)
+        ));
+    }
+
+    #[test]
+    fn set_review_status_many_updates_all_and_reports_count() {
+        let store = store();
+        let a = store.create_session(&meta()).unwrap();
+        let b = store.create_session(&meta()).unwrap();
+        store.append_message(&a, &Message::user("a")).unwrap();
+        store.append_message(&b, &Message::user("b")).unwrap();
+
+        let changed = store
+            .set_review_status_many(&[a.clone(), b.clone(), "missing".into()], "kept")
+            .unwrap();
+        // Two real sessions updated; the missing id changes nothing.
+        assert_eq!(changed, 2);
+        let sessions = store.list_sessions().unwrap();
+        assert!(sessions.iter().all(|s| s.review_status == "kept"));
     }
 
     #[test]

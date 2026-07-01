@@ -37,6 +37,9 @@ export interface SessionInfo {
   context_window: number;
 }
 
+/** A chat's training-data review status: unreviewed (""), kept, or rejected. */
+export type ReviewStatus = "" | "kept" | "rejected";
+
 export interface SessionSummary {
   id: string;
   workspace: string;
@@ -44,6 +47,8 @@ export interface SessionSummary {
   created_at: number;
   title: string | null;
   message_count: number;
+  /** Whether this chat is kept/rejected for the fine-tuning dataset (else ""). */
+  review_status: ReviewStatus;
 }
 
 export interface SessionView {
@@ -84,27 +89,115 @@ export interface ConnectionView {
   env_key_available: boolean;
 }
 
+// ---- cloud models ----------------------------------------------------------
+
+/** A cloud model in the catalog. `id` is sent to the inference API; `name` is a
+ *  friendly label. `builtin` models can't be removed; `selected` is the current
+ *  default. */
+export interface CloudModel {
+  id: string;
+  name: string;
+  builtin: boolean;
+  selected: boolean;
+}
+
 // ---- local models ----------------------------------------------------------
 
-export interface ModelStatus {
+export type Accelerator = "metal" | "cuda" | "cpu";
+
+/** The machine's compute profile, for hardware-aware model recommendations. */
+export interface HardwareProfile {
+  ram_bytes: number;
+  vram_bytes: number | null;
+  accelerator: Accelerator;
+  chip_label: string;
+  /** Bytes we plan against (pool minus OS/app headroom). */
+  usable_budget: number;
+}
+
+export type RuntimeSource = "managed" | "system" | "none";
+
+/** Status of the self-managed llama.cpp runtime. */
+export interface RuntimeStatus {
+  binary: string | null;
+  source: RuntimeSource;
+  managed_version: string;
+  can_manage: boolean;
+}
+
+/** Streamed progress while installing the managed runtime (`runtime://install`). */
+export type RuntimeInstallEvent =
+  | { kind: "log"; line: string }
+  | { kind: "progress"; downloaded: number; total: number | null };
+
+/** How well a model is expected to run on this machine. */
+export type Fit = "good" | "tight" | "too_big";
+
+/** Where a model's weights are hosted. */
+export type Origin =
+  | { kind: "huggingface"; repo: string; file: string; revision: string }
+  | { kind: "oxen"; repo: string; file: string; revision: string };
+
+/** One downloadable GGUF at one quant. `id` is the on-disk name + served alias. */
+export interface ModelRef {
   id: string;
   display: string;
   params: string;
   quant: string;
   context: number;
-  note: string;
-  installed: boolean;
   size_bytes: number;
-  size_is_actual: boolean;
+  origin: Origin;
 }
 
-export interface ModelsView {
-  models: ModelStatus[];
+/** A quant of a catalog model, annotated with fit + the exact ref to download. */
+export interface QuantOption {
+  quant: string;
+  size_bytes: number;
+  fit: Fit;
+  installed: boolean;
+  model: ModelRef;
+}
+
+/** A model offered in the setup wizard (a family with one or more quants). */
+export interface CatalogModel {
+  id: string;
+  display: string;
+  params: string;
+  context: number;
+  note: string;
+  source: "curated" | "huggingface" | "oxen";
+  quants: QuantOption[];
+  recommended_quant: string | null;
+  best_fit: Fit;
+}
+
+/** A Hugging Face search hit. */
+export interface HfHit {
+  repo: string;
+  downloads: number;
+  likes: number;
+  params: string;
+}
+
+/** `local://status` payload — a phase of bringing a local model online, so the
+ *  UI can show progress while switching to it. */
+export interface LocalStatus {
+  model: string;
+  /** `"starting"` (runtime/GPU init), `"loading"` (reading weights), `"ready"`. */
+  phase: "starting" | "loading" | "ready";
+}
+
+/** Installed local models plus disk usage and runtime status. */
+export interface InstalledView {
+  models: ModelRef[];
+  /** Bytes used by downloaded models. */
   total_disk_bytes: number;
   dir: string;
-  llama_installed: boolean;
-  can_auto_install: boolean;
-  install_hint: string;
+  runtime: RuntimeStatus;
+  /** Total bytes on the volume holding the model store (null if unknown). */
+  disk_total: number | null;
+  /** Free bytes on that volume — used to warn before a download won't fit. */
+  disk_free: number | null;
 }
 
 export interface DownloadProgress {
@@ -239,10 +332,49 @@ export interface UsageEvent {
   context_window: number;
 }
 
+/** `agent://compacted` payload — the transcript was trimmed to fit the context
+ *  window, with a short note to show in the thread. */
+export interface CompactedEvent {
+  session: string;
+  detail: string;
+}
+
 export type Mode = "light" | "dark";
 
 /** A chat's run state for the sidebar indicator. Absent = idle / read. */
 export type RunStatus = "running" | "unread";
+
+// ---- settings (unified full-screen settings shell) -------------------------
+
+/** The subpages of the full-screen Settings surface, used as the sidebar nav
+ *  key and the deep-link target for `openSettings(page)`. */
+export type SettingsPage =
+  | "connection"
+  | "cloud-models"
+  | "local-models"
+  | "tools"
+  | "appearance"
+  | "logs";
+
+/** One built-in agent tool as shown on the Tools page: its identity, the
+ *  (possibly overridden) description advertised to the model, its JSON schema,
+ *  and whether the user has it enabled. Mirrors `harness_runtime::tools::ToolInfo`. */
+export interface ToolInfo {
+  /** Stable tool id the model calls (e.g. `read_file`). */
+  name: string;
+  /** Description currently advertised to the model (override if set, else default). */
+  description: string;
+  /** The tool's built-in default description, shown when an override is active. */
+  default_description: string;
+  /** JSON Schema for the tool's arguments. */
+  parameters: unknown;
+  /** Whether the tool is registered for new agents. */
+  enabled: boolean;
+  /** True for the always-on core tools the harness ships. */
+  builtin: boolean;
+  /** Free-form per-tool config (e.g. shell timeout), as a JSON object. */
+  config: Record<string, unknown>;
+}
 
 // ---- canvas (side-panel documents) -----------------------------------------
 
@@ -261,4 +393,18 @@ export interface CanvasDoc {
 /** `agent://canvas` payload — a CanvasDoc tagged with its chat session. */
 export interface CanvasEvent extends CanvasDoc {
   session: string;
+}
+
+// ---- plan (task checklist) -------------------------------------------------
+
+export type PlanStatus = "pending" | "in_progress" | "completed";
+
+/** One item in the agent's task plan, from an `update_plan` tool call. Mirrors
+ *  `harness_tools::plan::PlanItem`. */
+export interface PlanItem {
+  /** Imperative description, e.g. "Wire CLI rendering". */
+  content: string;
+  /** Present-continuous form shown while active, e.g. "Wiring CLI rendering". */
+  active_form: string;
+  status: PlanStatus;
 }

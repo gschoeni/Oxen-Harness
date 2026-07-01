@@ -22,6 +22,10 @@ export function ThreadItem({ item, now }: { item: Item; now: number }) {
     );
   }
 
+  if (item.kind === "notice") {
+    return <div className="msg notice">{item.text}</div>;
+  }
+
   if (item.kind === "assistant") {
     return (
       <div className={`msg assistant ${item.error ? "error" : ""}`}>

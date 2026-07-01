@@ -21,8 +21,7 @@ export function resetAll() {
     activeCanvas: {},
     canvasWriting: {},
     settingsOpen: false,
-    modelsOpen: false,
-    themesOpen: false,
+    settingsPage: "connection",
     question: null,
   });
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Button, Modal } from "../../components/ui";
+import { Button } from "../../components/ui";
 import {
   exportTheme,
   importTheme,
@@ -16,8 +16,10 @@ const MOODS = ["Cozy & warm", "Sleek & dark", "Loud & vibrant", "Minimal & calm"
 const COLORS = ["Sunset oranges", "Ocean blues", "Forest greens", "Neon magenta + cyan", "Monochrome"];
 const VOICES = ["Playful & punny", "Professional & terse", "Epic & dramatic", "Chill & friendly"];
 
-export function ThemesModal() {
-  const setThemesOpen = useStore((s) => s.setThemesOpen);
+/** The theme browser + generator, embedded in the Appearance settings subpage.
+ *  Lists built-in/custom themes, activates/exports/removes them, and vibe-codes
+ *  or imports new ones. */
+export function ThemesPanel() {
   const applyTheme = useStore((s) => s.applyTheme);
 
   const [themes, setThemes] = useState<ThemeSummary[]>([]);
@@ -98,7 +100,7 @@ export function ThemesModal() {
   }
 
   return (
-    <Modal title="Themes" wide onClose={() => setThemesOpen(false)}>
+    <div className="themes-panel-root">
       <div className="themes-list">
         {themes.map((t) => (
           <div className={`theme-row ${t.active ? "active" : ""}`} key={t.slug}>
@@ -184,6 +186,6 @@ export function ThemesModal() {
       </details>
 
       {status && <div className="theme-status muted">{status}</div>}
-    </Modal>
+    </div>
   );
 }

@@ -29,6 +29,7 @@ function imageRefs(content: MessageContent | null | undefined): string[] {
 export type Item =
   | { id: string; kind: "user"; text: string; images?: string[] }
   | { id: string; kind: "assistant"; text: string; streaming: boolean; error?: boolean }
+  | { id: string; kind: "notice"; text: string }
   | {
       id: string;
       kind: "tool";
@@ -155,4 +156,16 @@ export function finalizeAssistant(prev: Item[], final: string, error = false): I
   }
   if (final) next.push({ id: uid(), kind: "assistant", text: final, streaming: false, error });
   return next;
+}
+
+/** Add a centered notice line (e.g. a context-compaction note). Inserts it
+ *  before a trailing empty in-flight assistant bubble so the continued reply
+ *  still streams below it. */
+export function appendNotice(prev: Item[], text: string): Item[] {
+  const notice: Item = { id: uid(), kind: "notice", text };
+  const last = prev[prev.length - 1];
+  if (last && last.kind === "assistant" && last.streaming && last.text === "") {
+    return [...prev.slice(0, -1), notice, last];
+  }
+  return [...prev, notice];
 }

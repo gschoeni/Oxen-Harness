@@ -554,6 +554,19 @@ const MAX_INPUT_ROWS: usize = 8;
 /// queue, then windowed to the terminal width at paint time.
 const PREVIEW_CAP: usize = 256;
 
+/// The slash commands offered by Tab completion + the inline hint, with a short
+/// description. Kept in sync with [`crate::repl::parse_command`].
+const SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("/model", "show or switch the model"),
+    ("/theme", "change the theme"),
+    ("/queue", "manage the message queue"),
+    ("/loop", "run or list loops"),
+    ("/export", "export the transcript"),
+    ("/departing", "set the banner location"),
+    ("/help", "show help"),
+    ("/exit", "quit"),
+];
+
 /// Where keyboard focus sits: the bottom composer, or a 0-based queued item.
 ///
 /// The queue is stacked *above* the composer (item 0 on top, the last item just
@@ -715,6 +728,8 @@ enum KeyIntent {
     /// Insert a hard line break in the composer (Alt/Shift+Enter, Ctrl+J).
     ComposeNewline,
     ComposerSubmit,
+    /// Tab in the composer: menu-complete the slash command / argument.
+    Complete,
     /// Up in the composer: move a line up, else recall older history / focus the
     /// queue (resolved against composer + history + queue state in `handle_key`).
     ComposeUp,
@@ -751,6 +766,7 @@ fn classify_key(code: KeyCode, mods: KeyModifiers, mode: Mode, composer_empty: b
                 KeyIntent::ComposeNewline
             }
             KeyCode::Enter => KeyIntent::ComposerSubmit,
+            KeyCode::Tab => KeyIntent::Complete,
             KeyCode::Up => KeyIntent::ComposeUp,
             KeyCode::Down => KeyIntent::ComposeDown,
             KeyCode::Backspace => KeyIntent::Compose(BufOp::Backspace),
@@ -953,6 +969,16 @@ struct Live {
     /// Set when a `web_search` call failed for a missing Brave API key, so the
     /// caller can prompt for one once the composer hands back to cooked mode.
     needs_brave_key: bool,
+    /// Slash-command / argument completion candidates for the current composer
+    /// text (full-line replacements), shown as a hint above the box. Refreshed on
+    /// every compose edit; empty when there's nothing to suggest.
+    completion: Vec<String>,
+    /// The candidate currently selected by Tab cycling (highlights the hint and
+    /// drives menu-complete). `None` until the first Tab.
+    comp_index: Option<usize>,
+    /// Lazily-loaded model names (cloud catalog + installed local) for `/model`
+    /// argument completion, cached so we don't rescan on every keystroke.
+    model_names: Option<Vec<String>>,
 }
 
 impl Live {
@@ -972,6 +998,9 @@ impl Live {
             previews: Vec::new(),
             region_bottom: region_bottom(rows),
             needs_brave_key: false,
+            completion: Vec::new(),
+            comp_index: None,
+            model_names: None,
         }
     }
 
@@ -1200,6 +1229,18 @@ impl Live {
             }
             // Usage is surfaced in the banner/status, not inline during a turn.
             AgentEvent::Usage { .. } => {}
+            // The context filled and was compacted to keep the session going.
+            AgentEvent::Compacted { detail } => {
+                self.stop_spinner();
+                let line = format!(
+                    "  {} {}",
+                    self.ui.brown("⊙"),
+                    self.ui.dim(&format!("compacted context — {detail}")),
+                );
+                self.write_region(&format!("{line}\n"));
+                self.begin_thinking();
+                self.render_composer();
+            }
             // Streaming tool-argument fragments drive the desktop UI only.
             AgentEvent::ToolDelta { .. } => {}
         }
@@ -1519,10 +1560,20 @@ impl Live {
         };
 
         let bar = self.ui.brown("│");
-        let mut out = vec![format!(
+        let mut out: Vec<String> = Vec::new();
+        // A slash-command / argument suggestion hint sits just above the box while
+        // composing at idle (no spinner), so completions are discoverable.
+        if self.spinner.is_none()
+            && matches!(self.focus, Focus::Composer)
+            && self.edit.is_none()
+            && !self.completion.is_empty()
+        {
+            out.push(self.completion_hint(box_w));
+        }
+        out.push(format!(
             "  {}",
             self.ui.brown(&format!("╭{}╮", "─".repeat(box_w + 2)))
-        )];
+        ));
         for (vi, row) in vrows.iter().enumerate().take(hi).skip(lo) {
             let caret = (caret_on && vi == caret_vrow).then_some(caret_vcol);
             let (body, width) = render_text_line(row, caret, avail);
@@ -1539,6 +1590,116 @@ impl Live {
             self.ui.brown(&format!("╰{}╯", "─".repeat(box_w + 2)))
         ));
         out
+    }
+
+    /// One-line suggestion hint shown above the box: the candidate tokens (the
+    /// command, or model name for `/model` args), the Tab-selected one
+    /// highlighted, capped to the box width with an `…` overflow marker.
+    fn completion_hint(&self, box_w: usize) -> String {
+        let budget = box_w.saturating_sub(6); // room for the icon + a trailing "⇥"
+        let mut shown = String::new();
+        let mut width = 0usize;
+        let mut shown_any = false;
+        for (i, cand) in self.completion.iter().enumerate() {
+            let label = cand.rsplit(' ').next().unwrap_or(cand);
+            let label_w = label.chars().count();
+            // +1 for the separating space between chips.
+            let need = label_w + if shown_any { 1 } else { 0 };
+            if shown_any && width + need > budget {
+                shown.push_str(&self.ui.dim(" …"));
+                break;
+            }
+            if shown_any {
+                shown.push(' ');
+                width += 1;
+            }
+            if Some(i) == self.comp_index {
+                shown.push_str(&format!("\x1b[7m{label}\x1b[0m"));
+            } else {
+                shown.push_str(&self.ui.cream(label));
+            }
+            width += label_w;
+            shown_any = true;
+        }
+        format!("  {} {}", self.ui.brown("⇥"), shown)
+    }
+
+    // --- slash-command + argument completion -------------------------------
+
+    /// Candidate full-line replacements for the current composer text: slash
+    /// commands while typing the command word, or model names after `/model `.
+    /// Empty when the text isn't a completable `/command`.
+    fn compute_candidates(&mut self) -> Vec<String> {
+        let text = self.composer.text();
+        if !text.starts_with('/') {
+            return Vec::new();
+        }
+        let mut parts = text.splitn(2, char::is_whitespace);
+        let cmd = parts.next().unwrap_or("");
+        match parts.next() {
+            // Still typing the command word — match against the command list.
+            None => SLASH_COMMANDS
+                .iter()
+                .filter(|(c, _)| c.starts_with(cmd))
+                .map(|(c, _)| c.to_string())
+                .collect(),
+            // `/model <partial>` — complete model names (cloud + local).
+            Some(arg) if cmd == "/model" => {
+                let needle = arg.trim().to_lowercase();
+                self.model_candidates()
+                    .into_iter()
+                    .filter(|m| m.to_lowercase().starts_with(&needle))
+                    .map(|m| format!("/model {m}"))
+                    .collect()
+            }
+            Some(_) => Vec::new(),
+        }
+    }
+
+    /// Model names for `/model` completion: the cloud catalog plus installed
+    /// local models, loaded once and cached.
+    fn model_candidates(&mut self) -> Vec<String> {
+        if self.model_names.is_none() {
+            let mut names: Vec<String> = harness_runtime::models::catalog()
+                .into_iter()
+                .map(|m| m.id)
+                .collect();
+            if let Ok(store) = harness_local::ModelStore::open() {
+                names.extend(store.installed().into_iter().map(|m| m.id));
+            }
+            names.sort();
+            names.dedup();
+            self.model_names = Some(names);
+        }
+        self.model_names.clone().unwrap_or_default()
+    }
+
+    /// Recompute the completion hint after a compose-buffer change, and drop any
+    /// in-progress Tab cycle (the candidates may have changed).
+    fn refresh_completion(&mut self) {
+        self.completion = self.compute_candidates();
+        self.comp_index = None;
+    }
+
+    /// Handle Tab: menu-complete the composer to the next matching candidate,
+    /// cycling on repeated presses. Returns whether anything changed.
+    fn complete(&mut self) -> bool {
+        if self.completion.is_empty() {
+            self.completion = self.compute_candidates();
+        }
+        if self.completion.is_empty() {
+            return false;
+        }
+        let next = match self.comp_index {
+            // Still on the last pick (no edits since) → advance to cycle.
+            Some(i) if self.composer.text() == self.completion[i] => {
+                (i + 1) % self.completion.len()
+            }
+            _ => 0,
+        };
+        self.composer.set_text(&self.completion[next]);
+        self.comp_index = Some(next);
+        true
     }
 
     /// Translate a keystroke into a [`KeyAction`], mutating the composer / focus
@@ -1561,16 +1722,27 @@ impl Live {
                 apply_buf(&mut self.composer, op);
                 // Editing leaves history recall — keep the buffer as the draft.
                 self.history.reset();
+                self.refresh_completion();
                 KeyAction::Redraw
             }
             KeyIntent::ComposeNewline => {
                 self.composer.insert_newline();
                 self.history.reset();
+                self.refresh_completion();
                 KeyAction::Redraw
+            }
+            KeyIntent::Complete => {
+                if self.complete() {
+                    KeyAction::Redraw
+                } else {
+                    KeyAction::None
+                }
             }
             KeyIntent::ComposerSubmit => {
                 let text = self.composer.take();
                 self.history.push(&text);
+                self.completion.clear();
+                self.comp_index = None;
                 KeyAction::Submit(text)
             }
             KeyIntent::ComposeUp => {
@@ -1586,6 +1758,7 @@ impl Live {
                         self.composer.set_text(&prev);
                     }
                 }
+                self.refresh_completion();
                 KeyAction::Redraw
             }
             KeyIntent::ComposeDown => {
@@ -1596,10 +1769,14 @@ impl Live {
                 } else if let Some(next) = self.history.next() {
                     self.composer.set_text(&next);
                 }
+                self.refresh_completion();
                 KeyAction::Redraw
             }
             KeyIntent::FocusUp => {
                 self.focus = self.focus.up(queue_len);
+                // Leaving the composer for the queue drops the suggestion hint.
+                self.completion.clear();
+                self.comp_index = None;
                 KeyAction::Redraw
             }
             KeyIntent::FocusDown => {
@@ -1628,6 +1805,9 @@ impl Live {
         for ch in text.chars() {
             let ch = if ch == '\n' || ch == '\r' { ' ' } else { ch };
             target.insert_char(ch);
+        }
+        if self.edit.is_none() {
+            self.refresh_completion();
         }
     }
 
@@ -2434,6 +2614,53 @@ mod tests {
             cols,
             rows,
         )
+    }
+
+    #[test]
+    fn tab_is_a_compose_completion() {
+        assert_eq!(
+            classify_key(KeyCode::Tab, KeyModifiers::NONE, Mode::Compose, false),
+            KeyIntent::Complete
+        );
+    }
+
+    #[test]
+    fn typing_a_slash_offers_command_suggestions() {
+        let mut l = live(80, 24);
+        l.handle_key(key(KeyCode::Char('/')), 0);
+        // Every slash command is suggested right after `/`.
+        assert!(l.completion.iter().any(|c| c == "/model"));
+        assert!(l.completion.iter().any(|c| c == "/theme"));
+        // Narrowing filters the list.
+        l.handle_key(key(KeyCode::Char('m')), 0);
+        assert_eq!(l.completion, vec!["/model".to_string()]);
+    }
+
+    #[test]
+    fn tab_completes_and_cycles_command_matches() {
+        let mut l = live(80, 24);
+        for ch in "/e".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        // `/export` and `/exit` both match; Tab menu-completes, then cycles.
+        l.handle_key(key(KeyCode::Tab), 0);
+        let first = l.composer.text();
+        l.handle_key(key(KeyCode::Tab), 0);
+        let second = l.composer.text();
+        assert_ne!(first, second);
+        assert!(first.starts_with("/e") && second.starts_with("/e"));
+    }
+
+    #[test]
+    fn editing_after_complete_drops_the_cycle() {
+        let mut l = live(80, 24);
+        l.handle_key(key(KeyCode::Char('/')), 0);
+        l.handle_key(key(KeyCode::Char('h')), 0);
+        l.handle_key(key(KeyCode::Tab), 0);
+        assert_eq!(l.composer.text(), "/help");
+        // A normal edit clears the in-progress cycle selection.
+        l.handle_key(key(KeyCode::Char('x')), 0);
+        assert_eq!(l.comp_index, None);
     }
 
     fn key(code: KeyCode) -> KeyEvent {

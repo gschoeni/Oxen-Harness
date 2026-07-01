@@ -11,6 +11,7 @@ mod loop_cmd;
 mod markdown;
 mod oxen_cmd;
 mod picker;
+mod plan;
 mod queue;
 mod render;
 mod repl;
@@ -26,7 +27,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 use harness_agent::{Agent, AgentConfig};
-use harness_core::DEFAULT_MODEL;
 use harness_llm::OxenClient;
 use harness_store::{HistoryStore, SessionMeta};
 use harness_tools::{ToolRegistry, Workspace};
@@ -174,28 +174,15 @@ async fn main() -> Result<()> {
     // (smaller than the model's max); `None` lets the agent derive it by name.
     let mut context_window: Option<usize> = None;
 
-    // Resolve the model + client. `--local <id>` runs a model on this machine
-    // via llama.cpp; otherwise we connect to a remote Oxen.ai-style endpoint.
-    let (client, model) = if let Some(local_id) = args.local.clone() {
-        match local::start_for(&local_id, &ui).await {
-            Ok((server, alias)) => {
-                let client = OxenClient::new(server.base_url(), "local", &alias);
-                context_window = Some(server.context_size() as usize);
-                _local_server = Some(server);
-                (client, alias)
-            }
-            Err(e) => {
-                eprintln!("\n{}", ui.red(&ui.death()));
-                eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
-                std::process::exit(1);
-            }
-        }
-    } else {
+    // Build a cloud client + model, honoring the persisted dropdown selection
+    // when nothing is given on the CLI. Used directly, and as the fallback when a
+    // restored local model can't start.
+    let cloud_client = |ui: &Ui| -> (OxenClient, String) {
         let model = args
             .model
             .clone()
             .or_else(|| resume_meta.as_ref().map(|m| m.model.clone()))
-            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+            .unwrap_or_else(harness_runtime::models::selected);
 
         // Precedence for the base URL: --base-url > --host > env (OXEN_BASE_URL
         // / OXEN_HOST) > default Oxen.ai endpoint.
@@ -222,6 +209,45 @@ async fn main() -> Result<()> {
         (client, model)
     };
 
+    // Resolve the model + client. `--local <id>` runs a model on this machine via
+    // llama.cpp; absent any explicit choice we restore the last local model the
+    // user activated (in the desktop dropdown or a prior `--local` run). Anything
+    // else connects to a remote Oxen.ai-style endpoint.
+    let explicit_local = args.local.clone();
+    let local_id = explicit_local.clone().or_else(|| {
+        if args.model.is_none() && args.resume.is_none() {
+            harness_runtime::models::active_local()
+        } else {
+            None
+        }
+    });
+    let (client, model) = if let Some(local_id) = local_id {
+        match local::start_for(&local_id, &ui).await {
+            Ok((server, alias)) => {
+                let client = OxenClient::new(server.base_url(), "local", &alias);
+                context_window = Some(server.context_size() as usize);
+                _local_server = Some(server);
+                (client, alias)
+            }
+            // An explicit `--local` failure is fatal; a *restored* local model that
+            // can't start (e.g. runtime not installed here) falls back to cloud.
+            Err(e) if explicit_local.is_some() => {
+                eprintln!("\n{}", ui.red(&ui.death()));
+                eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!(
+                    "  {}",
+                    ui.dim(&format!("Local model {local_id} unavailable ({e}); using the cloud model."))
+                );
+                cloud_client(&ui)
+            }
+        }
+    } else {
+        cloud_client(&ui)
+    };
+
     // Migrate any legacy plaintext keys out of connection.json into .env (the
     // shared store, already loaded into the env above) so web search and auth
     // work without re-entering keys.
@@ -242,9 +268,10 @@ async fn main() -> Result<()> {
         context_window,
         // Advertise web search only when it actually registered (Brave key set);
         // the canvas tool is always registered above.
-        system_prompt: Some(harness_agent::system_prompt_with(
+        system_prompt: Some(harness_agent::system_prompt_with_env(
             tools.get("web_search").is_some(),
             true,
+            workspace.root(),
         )),
         attachment_root: Some(workspace.root().to_path_buf()),
         ..AgentConfig::default()
@@ -557,6 +584,9 @@ async fn handle_line(
         }
         Command::Model(Some(m)) => {
             agent.set_model(&m);
+            // Persist the choice (clearing any local selection) so it's the
+            // default next launch — here and in the desktop dropdown.
+            let _ = harness_runtime::models::set_selected(&m);
             println!("  {} {}", ui.brown("fresh oxen yoked:"), ui.accent(&m));
         }
         Command::Export(dest) => export(store, session, dest, ui)?,

@@ -1,13 +1,16 @@
 import { useRef, useState } from "react";
-import { ArrowUp, Paperclip } from "lucide-react";
+import { ArrowUp, Paperclip, Square } from "lucide-react";
+import { ModelPicker } from "./ModelPicker";
 
 export function Composer({
   busy,
   onSend,
+  onStop,
   onAttach,
 }: {
   busy: boolean;
   onSend: (text: string) => void;
+  onStop: () => void;
   onAttach: () => void;
 }) {
   const [value, setValue] = useState("");
@@ -66,14 +69,26 @@ export function Composer({
             }
           }}
         />
-        <button
-          type="submit"
-          className={`send ${busy ? "queueing" : ""}`}
-          aria-label={busy ? "Add to queue" : "Send"}
-          disabled={!value.trim()}
-        >
-          <ArrowUp size={18} />
-        </button>
+        {busy ? (
+          // Mid-turn the action button stops the run (killing the model stream);
+          // typing + Enter still queues a message (see the placeholder).
+          <button
+            type="button"
+            className="stop"
+            aria-label="Stop generating"
+            title="Stop generating"
+            onClick={onStop}
+          >
+            <Square size={14} fill="currentColor" />
+          </button>
+        ) : (
+          <button type="submit" className="send" aria-label="Send" disabled={!value.trim()}>
+            <ArrowUp size={18} />
+          </button>
+        )}
+      </div>
+      <div className="composer-toolbar">
+        <ModelPicker disabled={busy} />
       </div>
     </form>
   );

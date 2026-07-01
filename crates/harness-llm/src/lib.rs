@@ -19,7 +19,7 @@ pub use client::OxenClient;
 pub use stream::{AssembledMessage, StreamEvent};
 pub use types::{
     ChatMessage, ChatRequest, ChatResponse, ContentPart, FileData, FunctionCall, ImageUrl,
-    MessageContent, ToolCall, ToolChoice,
+    MessageContent, ToolCall, ToolChoice, Usage,
 };
 
 use harness_core::DEFAULT_BASE_URL;

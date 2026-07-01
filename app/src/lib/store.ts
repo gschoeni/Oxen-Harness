@@ -9,6 +9,7 @@ import { create } from "zustand";
 import { lighten, readableOn, withAlpha } from "./color";
 import {
   deleteSession,
+  listCloudModels,
   listProjects,
   listSessions,
   newSession,
@@ -16,11 +17,17 @@ import {
   pickFolder,
   resumeSession,
   runTurn,
+  cancelTurn,
   sessionInfo,
   setActiveProject,
+  setModel,
+  setReviewStatus as setReviewStatusIpc,
+  setReviewStatusMany as setReviewStatusManyIpc,
   totalTokensUsed,
+  useLocalModel,
 } from "./ipc";
 import {
+  appendNotice,
   appendToken,
   finalizeAssistant,
   startTurn,
@@ -33,16 +40,21 @@ import { partialCanvasDoc } from "./streamingArgs";
 import type {
   CanvasDoc,
   CanvasEvent,
+  CloudModel,
+  LocalStatus,
   Mode,
   Project,
   QuestionPayload,
+  ReviewStatus,
   RunStatus,
   SessionInfo,
   SessionSummary,
+  SettingsPage,
   Theme,
   ToolEvent,
   ToolDeltaEvent,
   UsageEvent,
+  CompactedEvent,
 } from "./types";
 
 const MODE_KEY = "oxen-ui-mode";
@@ -96,6 +108,8 @@ interface AppState {
   sessions: SessionSummary[];
   /** Known projects (working directories), refreshed alongside history. */
   projects: Project[];
+  /** The cloud model catalog (built-ins + custom), for the picker + settings. */
+  cloudModels: CloudModel[];
   /** Whether the projects screen overlay is open. */
   projectsOpen: boolean;
   /** Known session infos by id, so switching to a live chat keeps its header. */
@@ -106,6 +120,9 @@ interface AppState {
    *  the usage meter tick up live before the authoritative count lands at turn
    *  end. Reset to 0 when that turn's `agent://usage` arrives. */
   liveTokens: Record<string, number>;
+  /** Generation speed (tokens/sec) per session, measured over the current
+   *  streaming burst. Persists the last rate when idle. */
+  tokensPerSecond: Record<string, number>;
   /** Per-session run state driving the sidebar indicator (absent = idle/read). */
   runStatus: Record<string, RunStatus>;
   /** Prompts queued while a session is mid-turn, sent in order as it frees up. */
@@ -125,10 +142,12 @@ interface AppState {
    *  args, so the panel shows the document forming before it's committed. */
   streamingCanvas: Record<string, CanvasDoc | undefined>;
   settingsOpen: boolean;
-  modelsOpen: boolean;
-  themesOpen: boolean;
-  /** The developer view (raw LLM inputs/outputs inspector) overlay. */
-  devViewOpen: boolean;
+  /** Which subpage the full-screen Settings surface shows when open. */
+  settingsPage: SettingsPage;
+  /** The transcript inspector drawer. `review` is set when opened from the
+   *  dataset builder (carries the queue of chats to page through); null =
+   *  plain inspection (e.g. the chat's </> button). Absent = drawer closed. */
+  inspector: { sessionId: string; review: { queue: string[]; index: number } | null } | null;
   question: QuestionPayload | null;
 
   setMode: (m: Mode) => void;
@@ -148,8 +167,22 @@ interface AppState {
   /** Adopt a fresh session created by a model/connection switch as the current
    *  chat (it starts empty on a new endpoint). */
   adoptSession: (info: SessionInfo) => void;
+  /** Refresh the cloud model catalog from the backend. */
+  loadCloudModels: () => Promise<void>;
+  /** Swap the current chat to a cloud model in place, continuing the same
+   *  conversation (keeps the thread; only the model changes). */
+  changeModel: (model: string) => Promise<void>;
+  /** Switch to a downloaded local model — starts a fresh chat on it. */
+  switchToLocalModel: (id: string) => Promise<void>;
+  /** Live status while switching to a local model (its server is starting), so
+   *  the UI can show progress instead of an opaque "Switching…". Null when idle. */
+  localSwitch: { model: string; phase: LocalStatus["phase"]; startedAt: number } | null;
+  /** Update the local-switch phase from a `local://status` event. */
+  setLocalStatus: (s: LocalStatus) => void;
   /** Send (or queue) a prompt in the current chat. */
   send: (text: string, attachments?: string[]) => void;
+  /** Stop the current chat's in-flight turn, killing the model stream. */
+  stop: () => void;
   /** Replace the current chat's send queue (used by the queue editor). */
   setQueue: (items: string[]) => void;
   /** Route a streamed token / tool event into its session's thread. */
@@ -160,6 +193,8 @@ interface AppState {
   /** Update a session's live usage (per-session count + context fill) as it
    *  accrues within a turn. */
   ingestUsage: (e: UsageEvent) => void;
+  /** Add a notice to a session's thread when its context was compacted. */
+  ingestCompacted: (e: CompactedEvent) => void;
   /** Refresh the all-time total tokens used from the backend. */
   refreshTotalTokens: () => Promise<void>;
   /** Upsert a canvas document and open it in the side panel. */
@@ -172,16 +207,35 @@ interface AppState {
   /** Mark a session as (not) currently writing a canvas. */
   setCanvasWriting: (session: string, writing: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
-  setModelsOpen: (open: boolean) => void;
-  setThemesOpen: (open: boolean) => void;
-  setDevViewOpen: (open: boolean) => void;
+  /** Open the Settings surface, optionally jumping straight to a subpage. */
+  openSettings: (page?: SettingsPage) => void;
+  /** Switch the active Settings subpage (the surface stays open). */
+  setSettingsPage: (page: SettingsPage) => void;
+  /** Open the inspector drawer to read one chat's raw transcript. */
+  openInspector: (sessionId: string) => void;
+  /** Open the inspector in review mode over a queue of chats (dataset builder). */
+  openReview: (queue: string[], index: number) => void;
+  /** Move within the review queue by `delta` (clamped); no-op outside review. */
+  reviewStep: (delta: number) => void;
+  closeInspector: () => void;
+  /** Persist a chat's keep/reject status and reflect it in the session list. */
+  setReviewStatus: (id: string, status: ReviewStatus) => Promise<void>;
+  /** Bulk-apply a keep/reject status to many chats (dataset builder bulk actions). */
+  setReviewStatusMany: (ids: string[], status: ReviewStatus) => Promise<void>;
   setQuestion: (q: QuestionPayload | null) => void;
 }
 
 export const useStore = create<AppState>((set, get) => {
+  // Non-reactive per-session sample for the tokens/sec readout: the start of the
+  // current streaming burst and tokens seen in it. A burst resets after a gap
+  // (tool calls), so the rate reflects active decoding, not idle time.
+  const genSamples = new Map<string, { start: number; tokens: number; last: number }>();
+  const BURST_GAP_MS = 1200;
+
   // Drive one turn for `id`, then either send the next queued prompt or settle
   // the run status (read if the chat is in view, unread if it finished offscreen).
   function runTurnFor(id: string, text: string, paths: string[]) {
+    genSamples.delete(id); // a new turn starts a fresh speed measurement
     set((s) => ({
       threads: { ...s.threads, [id]: startTurn(s.threads[id] ?? [], text, paths) },
       runStatus: { ...s.runStatus, [id]: "running" },
@@ -231,10 +285,13 @@ export const useStore = create<AppState>((set, get) => {
     totalTokensUsed: 0,
     sessions: [],
     projects: [],
+    cloudModels: [],
+    localSwitch: null,
     projectsOpen: false,
     infos: {},
     threads: {},
     liveTokens: {},
+    tokensPerSecond: {},
     runStatus: {},
     queues: {},
     canvases: {},
@@ -243,9 +300,8 @@ export const useStore = create<AppState>((set, get) => {
     streamingTool: {},
     streamingCanvas: {},
     settingsOpen: false,
-    modelsOpen: false,
-    themesOpen: false,
-    devViewOpen: false,
+    settingsPage: "connection",
+    inspector: null,
     question: null,
 
     setMode: (mode) => {
@@ -312,6 +368,7 @@ export const useStore = create<AppState>((set, get) => {
     removeSession: async (id) => {
       await deleteSession(id);
       const wasCurrent = get().session?.session_id === id;
+      genSamples.delete(id);
       // Forget every per-session slice so nothing lingers for the deleted chat.
       set((s) => {
         const drop = <T,>(rec: Record<string, T>) => {
@@ -331,6 +388,7 @@ export const useStore = create<AppState>((set, get) => {
           streamingTool: drop(s.streamingTool),
           streamingCanvas: drop(s.streamingCanvas),
           liveTokens: drop(s.liveTokens),
+          tokensPerSecond: drop(s.tokensPerSecond),
         };
       });
       await get().refreshHistory();
@@ -363,6 +421,46 @@ export const useStore = create<AppState>((set, get) => {
         threads: { ...s.threads, [info.session_id]: [] },
       })),
 
+    loadCloudModels: async () => {
+      try {
+        set({ cloudModels: await listCloudModels() });
+      } catch {
+        /* leave the previous catalog in place on a transient error */
+      }
+    },
+
+    changeModel: async (model) => {
+      const info = await setModel(model);
+      // In-place swap: the backend kept the same session, so keep the thread and
+      // only update the model/info for the current chat.
+      set((s) => ({
+        session: info,
+        infos: { ...s.infos, [info.session_id]: info },
+        threads: { ...s.threads, [info.session_id]: s.threads[info.session_id] ?? [] },
+      }));
+      get().loadCloudModels(); // refresh the selected flag
+      get().refreshHistory(); // the history list shows each chat's model
+    },
+
+    switchToLocalModel: async (id) => {
+      set({ localSwitch: { model: id, phase: "starting", startedAt: Date.now() } });
+      try {
+        const info = await useLocalModel(id); // a local model starts a fresh session
+        get().adoptSession(info);
+        get().loadCloudModels();
+        get().refreshHistory();
+      } finally {
+        set({ localSwitch: null });
+      }
+    },
+
+    setLocalStatus: (s) =>
+      set((st) =>
+        st.localSwitch
+          ? { localSwitch: { ...st.localSwitch, model: s.model, phase: s.phase } }
+          : {},
+      ),
+
     send: (text, attachments = []) => {
       const id = get().session?.session_id;
       if (!id) return;
@@ -380,26 +478,46 @@ export const useStore = create<AppState>((set, get) => {
       runTurnFor(id, text, attachments);
     },
 
+    stop: () => {
+      const id = get().session?.session_id;
+      if (!id) return;
+      // Tell the backend to cancel; the in-flight runTurn promise then resolves
+      // with its partial reply and runTurnFor's normal completion path clears the
+      // "running" status. Fire-and-forget — a failed cancel just leaves it running.
+      void cancelTurn(id).catch(() => {});
+    },
+
     setQueue: (items) =>
       set((s) => {
         const id = s.session?.session_id;
         return id ? { queues: { ...s.queues, [id]: reconcileQueueTexts(s.queues[id], items) } } : {};
       }),
 
-    ingestToken: (session, token) =>
-      set((s) =>
-        s.threads[session] === undefined
-          ? {}
-          : {
-              threads: { ...s.threads, [session]: appendToken(s.threads[session], token) },
-              // Tick the usage meter up live as the reply streams, matching the
-              // backend's ~4-chars-per-token estimate; snapped exact at turn end.
-              liveTokens: {
-                ...s.liveTokens,
-                [session]: (s.liveTokens[session] ?? 0) + token.length / CHARS_PER_TOKEN,
-              },
-            },
-      ),
+    ingestToken: (session, token) => {
+      if (get().threads[session] === undefined) return;
+      const est = token.length / CHARS_PER_TOKEN;
+      // Measure decode speed over the current streaming burst: start a fresh
+      // sample after a gap (e.g. a tool call), so the rate isn't dragged down by
+      // idle time between model calls.
+      const now = Date.now();
+      let smp = genSamples.get(session);
+      if (!smp || now - smp.last > BURST_GAP_MS) smp = { start: now, tokens: 0, last: now };
+      smp.tokens += est;
+      smp.last = now;
+      genSamples.set(session, smp);
+      const secs = (now - smp.start) / 1000;
+      // Need a small window before the rate is meaningful; otherwise keep the last.
+      const tps = secs >= 0.3 ? smp.tokens / secs : null;
+      set((s) => ({
+        threads: { ...s.threads, [session]: appendToken(s.threads[session], token) },
+        // Tick the usage meter up live as the reply streams, matching the
+        // backend's ~4-chars-per-token estimate; snapped exact at turn end.
+        liveTokens: { ...s.liveTokens, [session]: (s.liveTokens[session] ?? 0) + est },
+        ...(tps !== null
+          ? { tokensPerSecond: { ...s.tokensPerSecond, [session]: tps } }
+          : {}),
+      }));
+    },
 
     ingestTool: (e) =>
       set((s) => {
@@ -452,6 +570,17 @@ export const useStore = create<AppState>((set, get) => {
         };
       }),
 
+    ingestCompacted: (e) =>
+      set((s) => {
+        if (s.threads[e.session] === undefined) return {};
+        return {
+          threads: {
+            ...s.threads,
+            [e.session]: appendNotice(s.threads[e.session], `Compacted context — ${e.detail}`),
+          },
+        };
+      }),
+
     refreshTotalTokens: async () => {
       try {
         set({ totalTokensUsed: await totalTokensUsed() });
@@ -501,9 +630,46 @@ export const useStore = create<AppState>((set, get) => {
       set((s) => ({ canvasWriting: { ...s.canvasWriting, [session]: writing } })),
 
     setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
-    setModelsOpen: (modelsOpen) => set({ modelsOpen }),
-    setThemesOpen: (themesOpen) => set({ themesOpen }),
-    setDevViewOpen: (devViewOpen) => set({ devViewOpen }),
+    openSettings: (page) =>
+      set(page ? { settingsOpen: true, settingsPage: page } : { settingsOpen: true }),
+    setSettingsPage: (settingsPage) => set({ settingsPage }),
+
+    openInspector: (sessionId) => set({ inspector: { sessionId, review: null } }),
+    openReview: (queue, index) => {
+      const i = Math.max(0, Math.min(index, queue.length - 1));
+      if (!queue[i]) return;
+      set({ inspector: { sessionId: queue[i], review: { queue, index: i } } });
+    },
+    reviewStep: (delta) =>
+      set((s) => {
+        const insp = s.inspector;
+        if (!insp?.review) return {};
+        const i = Math.max(0, Math.min(insp.review.index + delta, insp.review.queue.length - 1));
+        return { inspector: { sessionId: insp.review.queue[i], review: { ...insp.review, index: i } } };
+      }),
+    closeInspector: () => set({ inspector: null }),
+
+    setReviewStatus: async (id, status) => {
+      await setReviewStatusIpc(id, status);
+      // Reflect it in the loaded list immediately (no full history reload/flicker).
+      set((s) => ({
+        sessions: s.sessions.map((sess) =>
+          sess.id === id ? { ...sess, review_status: status } : sess,
+        ),
+      }));
+    },
+
+    setReviewStatusMany: async (ids, status) => {
+      if (ids.length === 0) return;
+      await setReviewStatusManyIpc(ids, status);
+      const idSet = new Set(ids);
+      set((s) => ({
+        sessions: s.sessions.map((sess) =>
+          idSet.has(sess.id) ? { ...sess, review_status: status } : sess,
+        ),
+      }));
+    },
+
     setQuestion: (question) => set({ question }),
   };
 });

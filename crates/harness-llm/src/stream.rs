@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::types::{ChatChunk, FunctionCall, ToolCall};
+use crate::types::{ChatChunk, FunctionCall, ToolCall, Usage};
 
 /// An event surfaced to a streaming consumer (e.g. the REPL) as it arrives.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +33,9 @@ pub struct AssembledMessage {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
     pub finish_reason: Option<String>,
+    /// Real token usage from the endpoint, if it sent a usage chunk. `None`
+    /// means the caller should fall back to a client-side estimate.
+    pub usage: Option<Usage>,
 }
 
 impl AssembledMessage {
@@ -77,6 +80,7 @@ pub struct StreamAssembler {
     content: String,
     finish_reason: Option<String>,
     tool_fragments: BTreeMap<u64, ToolFragment>,
+    usage: Option<Usage>,
     done: bool,
 }
 
@@ -122,6 +126,12 @@ impl StreamAssembler {
             Ok(c) => c,
             Err(_) => return Vec::new(),
         };
+
+        // The usage chunk usually arrives last and carries no choices; capture
+        // it whenever present so `finish` can report real token counts.
+        if let Some(usage) = chunk.usage {
+            self.usage = Some(usage);
+        }
 
         let mut events = Vec::new();
         for choice in chunk.choices {
@@ -206,6 +216,7 @@ impl StreamAssembler {
             content: self.content,
             tool_calls,
             finish_reason: self.finish_reason,
+            usage: self.usage,
         }
     }
 }
@@ -260,6 +271,28 @@ mod tests {
         let args = msg.tool_calls[0].function.parsed_arguments().unwrap();
         assert_eq!(args["path"], "a.rs");
         assert_eq!(msg.finish_reason.as_deref(), Some("tool_calls"));
+    }
+
+    #[test]
+    fn captures_usage_from_final_chunk() {
+        let mut asm = StreamAssembler::new();
+        asm.accept(r#"{"choices":[{"index":0,"delta":{"content":"hi"}}]}"#);
+        // The trailing usage chunk carries no choices.
+        asm.accept(
+            r#"{"choices":[],"usage":{"prompt_tokens":1234,"completion_tokens":56,"total_tokens":1290}}"#,
+        );
+        let msg = asm.finish();
+        assert_eq!(msg.content, "hi");
+        let usage = msg.usage.expect("usage captured");
+        assert_eq!(usage.prompt_tokens, 1234);
+        assert_eq!(usage.completion_tokens, 56);
+    }
+
+    #[test]
+    fn usage_absent_when_endpoint_sends_none() {
+        let mut asm = StreamAssembler::new();
+        asm.accept(r#"{"choices":[{"index":0,"delta":{"content":"hi"}}]}"#);
+        assert!(asm.finish().usage.is_none());
     }
 
     #[test]

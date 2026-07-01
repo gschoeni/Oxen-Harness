@@ -13,11 +13,13 @@ import { useStore } from "./store";
 import {
   onCanvas,
   onCanvasWriting,
+  onLocalStatus,
   onQuestion,
   onToken,
   onTool,
   onToolDelta,
   onUsage,
+  onCompacted,
 } from "./ipc";
 
 // Stored on `window` so the guard survives HMR module re-evaluation (a fresh
@@ -41,9 +43,11 @@ export function startAgentEventBridge(): void {
     onTool((e) => s().ingestTool(e)),
     onToolDelta((e) => s().ingestToolDelta(e)),
     onUsage((e) => s().ingestUsage(e)),
+    onCompacted((e) => s().ingestCompacted(e)),
     onCanvas((e) => s().ingestCanvas(e)),
     onCanvasWriting((session) => s().setCanvasWriting(session, true)),
     onQuestion((q) => s().setQuestion(q)),
+    onLocalStatus((e) => s().setLocalStatus(e)),
   ];
   Promise.all(pending).then((fns) => {
     unlisteners = fns;

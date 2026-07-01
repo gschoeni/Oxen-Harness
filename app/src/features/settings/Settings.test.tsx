@@ -15,37 +15,36 @@ beforeEach(() => {
     session: ipc.sampleSession,
     theme: ipc.sampleTheme,
     mode: "dark",
+    settingsOpen: true,
+    settingsPage: "connection",
   });
 });
 
 describe("Settings", () => {
-  it("shows the current session info", () => {
+  it("shows the current session info on the Connection page", () => {
     render(<Settings />);
     expect(screen.getByText("claude-opus-4-8")).toBeInTheDocument();
     expect(screen.getByText("/Users/dev/project")).toBeInTheDocument();
     expect(screen.getByText("current-")).toBeInTheDocument(); // session id, sliced to 8
-    expect(screen.getByText("Oregon Trail")).toBeInTheDocument();
   });
 
-  it("toggles light/dark mode", async () => {
+  it("navigates between subpages via the rail", async () => {
     render(<Settings />);
-    await userEvent.click(screen.getByRole("button", { name: /dark/i }));
+    // Jump to Cloud models — the catalog renders the built-in model ids.
+    await userEvent.click(screen.getByRole("button", { name: /cloud models/i }));
+    expect(await screen.findByText("Claude Sonnet 4.6")).toBeInTheDocument();
+  });
+
+  it("toggles light/dark mode on the Appearance page", async () => {
+    render(<Settings />);
+    await userEvent.click(screen.getByRole("button", { name: /appearance/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /dark mode/i }));
     expect(useStore.getState().mode).toBe("light");
   });
 
-  it("opens the local models and themes modals", async () => {
-    render(<Settings />);
-    await userEvent.click(screen.getByRole("button", { name: /local models/i }));
-    expect(useStore.getState().modelsOpen).toBe(true);
-
-    await userEvent.click(screen.getByRole("button", { name: /theme/i }));
-    expect(useStore.getState().themesOpen).toBe(true);
-  });
-
   it("closes via the header close button", async () => {
-    useStore.setState({ settingsOpen: true });
     render(<Settings />);
-    await userEvent.click(screen.getByRole("button", { name: /close/i }));
+    await userEvent.click(screen.getByRole("button", { name: /close settings/i }));
     expect(useStore.getState().settingsOpen).toBe(false);
   });
 });

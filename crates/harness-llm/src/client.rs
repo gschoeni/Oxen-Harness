@@ -1,6 +1,7 @@
 //! HTTP client for the Oxen.ai chat completions API.
 
 use futures_util::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 use crate::auth;
 use crate::stream::{AssembledMessage, SseDecoder, StreamAssembler, StreamEvent};
@@ -93,9 +94,17 @@ impl OxenClient {
     /// Send a streaming chat completion request, invoking `on_event` for each
     /// surfaced [`StreamEvent`] as it arrives, and returning the fully
     /// reassembled message.
+    ///
+    /// Cancellation is cooperative: when `cancel` fires, we stop reading and
+    /// return whatever has assembled so far (often empty — e.g. a local server
+    /// still chewing through a long prompt). Dropping the response on the way
+    /// out closes the HTTP connection, which signals the upstream/`llama-server`
+    /// to abort generation. A stop is therefore a normal early return, not an
+    /// error, so callers settle the turn cleanly rather than surfacing a failure.
     pub async fn stream_chat<F>(
         &self,
         request: &ChatRequest,
+        cancel: &CancellationToken,
         mut on_event: F,
     ) -> Result<AssembledMessage, LlmError>
     where
@@ -103,16 +112,24 @@ impl OxenClient {
     {
         let request = ChatRequest {
             stream: true,
+            // Ask for a final usage chunk so we can calibrate the token estimate
+            // against reality; ignored by endpoints that don't support it.
+            stream_options: Some(crate::types::StreamOptions { include_usage: true }),
             ..request.clone()
         };
 
-        let resp = self
-            .http
-            .post(self.endpoint())
-            .bearer_auth(&self.api_key)
-            .json(&request)
-            .send()
-            .await?;
+        // Race the request against cancellation even before the response headers
+        // land, so a stop is honored while we're still waiting to connect.
+        let resp = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(AssembledMessage::default()),
+            resp = self
+                .http
+                .post(self.endpoint())
+                .bearer_auth(&self.api_key)
+                .json(&request)
+                .send() => resp?,
+        };
 
         let status = resp.status();
         if !status.is_success() {
@@ -127,8 +144,18 @@ impl OxenClient {
         let mut assembler = StreamAssembler::new();
         let mut stream = resp.bytes_stream();
 
-        while let Some(bytes) = stream.next().await {
-            let bytes = bytes?;
+        loop {
+            // The long wait lives here — a local server processing a large prompt
+            // may not emit a byte for many seconds. `select!` lets a stop break
+            // out of that pending read immediately instead of hanging on it.
+            let bytes = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break,
+                next = stream.next() => match next {
+                    Some(bytes) => bytes?,
+                    None => break,
+                },
+            };
             let text = String::from_utf8_lossy(&bytes);
             for payload in decoder.push(&text) {
                 for event in assembler.accept(&payload) {
@@ -272,7 +299,7 @@ mod tests {
 
         let mut tokens = String::new();
         let assembled = client
-            .stream_chat(&req, |event| {
+            .stream_chat(&req, &CancellationToken::new(), |event| {
                 if let StreamEvent::Token(t) = event {
                     tokens.push_str(t);
                 }
@@ -283,5 +310,28 @@ mod tests {
         assert_eq!(tokens, "Hello ox");
         assert_eq!(assembled.content, "Hello ox");
         assert_eq!(assembled.finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[tokio::test]
+    async fn stream_chat_returns_empty_when_already_cancelled() {
+        // An already-cancelled token short-circuits before any request is sent,
+        // returning an empty message rather than erroring.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_body("data: [DONE]\n\n")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let client = OxenClient::new(server.url(), "sk-test", "claude-opus-4-8");
+        let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let assembled = client.stream_chat(&req, &cancel, |_| {}).await.unwrap();
+        assert_eq!(assembled.content, "");
+        mock.assert_async().await; // the request was never sent
     }
 }

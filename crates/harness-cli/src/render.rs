@@ -97,6 +97,17 @@ impl TurnRenderer {
                     return;
                 }
                 let target = crate::live::tool_target(arguments);
+                // For a plan update, print the full checklist block (the call's
+                // result is just a text echo, so suppress it on ToolEnd below).
+                if name == harness_tools::PLAN_TOOL {
+                    if let Some(block) = crate::plan::render_plan_block(&self.ui, arguments) {
+                        for line in block {
+                            println!("{line}");
+                        }
+                    }
+                    self.begin_thinking();
+                    return;
+                }
                 // For a canvas, preview the document inline (the result line then
                 // reports where it was saved / that it opened in the browser).
                 if name == harness_tools::CANVAS_TOOL {
@@ -134,6 +145,12 @@ impl TurnRenderer {
                     self.begin_thinking();
                     return;
                 }
+                // The plan block was already printed on ToolStart; its result is
+                // just a text echo, so don't print a redundant result line.
+                if name == harness_tools::PLAN_TOOL {
+                    self.begin_thinking();
+                    return;
+                }
                 // A web search with no key configured: flag it (so the caller can
                 // prompt for one) and show a friendlier line than the raw error.
                 if name == "web_search" && result.contains(harness_tools::web::WEB_SEARCH_NO_KEY) {
@@ -156,6 +173,17 @@ impl TurnRenderer {
             }
             // Usage is surfaced in the banner/status, not inline during a turn.
             AgentEvent::Usage { .. } => {}
+            // The context filled and was compacted to keep the session going;
+            // surface a quiet notice so the trimming isn't invisible.
+            AgentEvent::Compacted { detail } => {
+                self.stop_spinner();
+                println!(
+                    "  {} {}",
+                    self.ui.brown("⊙"),
+                    self.ui.dim(&format!("compacted context — {detail}")),
+                );
+                self.begin_thinking();
+            }
             // Streaming tool-argument fragments drive the desktop UI; the CLI
             // shows the assembled call when it starts, so ignore the deltas.
             AgentEvent::ToolDelta { .. } => {}

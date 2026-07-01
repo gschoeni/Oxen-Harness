@@ -34,16 +34,24 @@ fn exe_name() -> &'static str {
     }
 }
 
-/// Locate the `llama-server` binary: the `LLAMA_SERVER` override, then `PATH`,
-/// then common install locations (e.g. Homebrew) that aren't always on the PATH
-/// of an app launched from the GUI rather than a shell.
+/// Locate the `llama-server` binary, in precedence order: the `LLAMA_SERVER`
+/// override (power users with their own build), then the runtime we manage
+/// ourselves, then `PATH` / common install locations (e.g. Homebrew) — which
+/// aren't always on the PATH of an app launched from the GUI rather than a shell.
 pub fn llama_server_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os(LLAMA_SERVER_ENV) {
-        let path = PathBuf::from(p);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
+    env_override()
+        .or_else(crate::runtime::managed_binary_path)
+        .or_else(path_llama_server)
+}
+
+/// The explicit `LLAMA_SERVER` override, if it points at a real file.
+fn env_override() -> Option<PathBuf> {
+    let path = PathBuf::from(std::env::var_os(LLAMA_SERVER_ENV)?);
+    path.is_file().then_some(path)
+}
+
+/// `llama-server` discovered on `PATH` or in the common package-manager dirs.
+fn path_llama_server() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("PATH") {
         if let Some(found) = find_on_path(&path, exe_name()) {
             return Some(found);
@@ -189,6 +197,20 @@ where
     });
 }
 
+/// Coarse phases of bringing a local model online, for progress UI. The first
+/// phase ([`LoadPhase::Starting`]) is where a cold first run spends several
+/// seconds compiling GPU shaders; [`LoadPhase::LoadingModel`] then scales with
+/// the model's size as its weights are read into memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadPhase {
+    /// Process spawned; the runtime/GPU backend is initializing.
+    Starting,
+    /// The model weights are being read into memory.
+    LoadingModel,
+    /// Healthy and serving requests.
+    Ready,
+}
+
 /// A running `llama-server` instance bound to one model.
 pub struct LocalServer {
     child: Child,
@@ -198,37 +220,59 @@ pub struct LocalServer {
 }
 
 impl LocalServer {
-    /// Start `llama-server` for `model_path`, serving it under `alias`, and wait
-    /// until it reports healthy (the model is loaded).
+    /// Start `llama-server` for `model_path` with the default context window.
     pub async fn start(model_path: &Path, alias: &str) -> Result<Self, LocalError> {
+        Self::start_with_context(model_path, alias, DEFAULT_CONTEXT, |_| {}).await
+    }
+
+    /// Start `llama-server` for `model_path`, serving it under `alias` with a
+    /// `context`-token window (sized to the machine's memory by the caller), and
+    /// wait until it reports healthy (the model is loaded). `on_status` receives
+    /// [`LoadPhase`] updates so a UI can show what the startup is doing.
+    pub async fn start_with_context(
+        model_path: &Path,
+        alias: &str,
+        context: u32,
+        mut on_status: impl FnMut(LoadPhase),
+    ) -> Result<Self, LocalError> {
         let binary =
             llama_server_path().ok_or_else(|| LocalError::LlamaServerMissing(install_hint()))?;
         let port = find_free_port()?;
+        let context = context.max(512);
 
-        let child = Command::new(&binary)
+        on_status(LoadPhase::Starting);
+        let mut child = Command::new(&binary)
             .arg("-m")
             .arg(model_path)
             .args(["--host", "127.0.0.1"])
             .args(["--port", &port.to_string()])
             .args(["-a", alias])
-            .args(["-c", &DEFAULT_CONTEXT.to_string()])
+            .args(["-c", &context.to_string()])
             // Offload to GPU when the build supports it (ignored on CPU-only).
             .args(["-ngl", "99"])
             // Enable the model's chat template so tool calling works.
             .arg("--jinja")
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            // Capture stderr so we can tell when the runtime finishes initializing
+            // and the model itself starts loading (for accurate progress phases).
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| LocalError::Server(format!("spawning {}: {e}", binary.display())))?;
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        if let Some(err) = child.stderr.take() {
+            spawn_line_reader(err, tx);
+        }
 
         let mut server = Self {
             child,
             base_url: format!("http://127.0.0.1:{port}/v1"),
             port,
-            context: DEFAULT_CONTEXT,
+            context,
         };
-        server.await_healthy().await?;
+        server.await_healthy(rx, &mut on_status).await?;
+        on_status(LoadPhase::Ready);
         Ok(server)
     }
 
@@ -249,12 +293,25 @@ impl LocalServer {
         self.context
     }
 
-    async fn await_healthy(&mut self) -> Result<(), LocalError> {
+    async fn await_healthy(
+        &mut self,
+        mut lines: tokio::sync::mpsc::UnboundedReceiver<String>,
+        on_status: &mut impl FnMut(LoadPhase),
+    ) -> Result<(), LocalError> {
         let health = format!("http://127.0.0.1:{}/health", self.port);
         let client = reqwest::Client::new();
         let deadline = tokio::time::Instant::now() + HEALTH_TIMEOUT;
+        let mut announced_loading = false;
 
         loop {
+            // Drain stderr: the "loading model" line marks the end of runtime/GPU
+            // init (the slow cold-start phase) and the start of reading weights.
+            while let Ok(line) = lines.try_recv() {
+                if !announced_loading && line.to_ascii_lowercase().contains("loading model") {
+                    announced_loading = true;
+                    on_status(LoadPhase::LoadingModel);
+                }
+            }
             // If the process already exited, surface that immediately.
             if let Ok(Some(status)) = self.child.try_wait() {
                 return Err(LocalError::Server(format!(

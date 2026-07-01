@@ -6,6 +6,15 @@
   gap: var(--space-4);
 }
 
+/* ---- toolbar (view toggle + transcript actions) ------------------------- */
+
+.dev-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
 /* ---- summary header ------------------------------------------------------ */
 
 .dev-summary {
@@ -323,4 +332,154 @@
 .dev-error {
   color: var(--danger);
   font-size: var(--text-sm);
+}
+
+/* ===========================================================================
+   Inspector drawer — a right-side slide-in hosting the transcript, opened from
+   the chat's </> button or the training-data builder (with review controls).
+   =========================================================================== */
+.inspector-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  display: flex;
+  justify-content: flex-end;
+  animation: scrim-in var(--dur-fast) var(--ease);
+}
+.inspector-drawer {
+  width: min(720px, 94vw);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--separator-strong);
+  box-shadow: var(--shadow-2);
+  animation: drawer-in var(--dur) var(--ease);
+}
+@keyframes drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+.inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  /* Clears the traffic lights only on the left column; drawer is on the right,
+     so a normal header pad is fine. */
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+  flex-shrink: 0;
+}
+.inspector-title-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.inspector-title {
+  font-weight: 600;
+  font-size: var(--text-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspector-progress {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-family: var(--font-readout, monospace);
+}
+.inspector-close {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+}
+.inspector-close:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.inspector-review-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--separator);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.inspector-nav {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+.inspector-nav:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.inspector-nav:disabled {
+  opacity: 0.4;
+}
+.inspector-decide {
+  display: flex;
+  gap: var(--space-2);
+}
+.inspector-keep,
+.inspector-reject {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+}
+.inspector-keep:hover {
+  border-color: var(--green, #3fb950);
+  color: var(--green, #3fb950);
+}
+.inspector-keep.active {
+  background: color-mix(in srgb, var(--green, #3fb950) 18%, var(--surface));
+  border-color: var(--green, #3fb950);
+  color: var(--green, #3fb950);
+}
+.inspector-reject:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.inspector-reject.active {
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.inspector-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+/* ---- chat view (reuses the main thread rendering) ----------------------- */
+.dev-chatview .thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }

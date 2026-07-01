@@ -59,6 +59,18 @@ pub fn projects_file() -> Result<PathBuf, ConfigError> {
     under("projects.json")
 }
 
+/// `~/.oxen-harness/models.json` — the cloud model catalog (custom models the
+/// user added) and the currently selected default.
+pub fn models_file() -> Result<PathBuf, ConfigError> {
+    under("models.json")
+}
+
+/// `~/.oxen-harness/tools.json` — per-tool preferences (disabled tools and
+/// description overrides) applied when building an agent's tool registry.
+pub fn tools_file() -> Result<PathBuf, ConfigError> {
+    under("tools.json")
+}
+
 /// `~/.oxen-harness/config.toml` — the active theme selection.
 pub fn config_file() -> Result<PathBuf, ConfigError> {
     under("config.toml")

@@ -12,6 +12,8 @@ export function TokenMeter() {
   // Tokens streamed so far in the in-flight turn (reset to 0 at turn end), so the
   // meter climbs live instead of jumping only when the message finishes.
   const live = useStore((s) => Math.floor(s.session ? s.liveTokens[s.session.session_id] ?? 0 : 0));
+  // Generation speed for the active/last turn in this session (tokens/sec).
+  const tps = useStore((s) => (s.session ? s.tokensPerSecond[s.session.session_id] ?? 0 : 0));
 
   const tokensUsed = baseUsed + live;
   const contextTokens = baseContext + live;
@@ -24,6 +26,14 @@ export function TokenMeter() {
         <>
           <span className="token-meter-dot">·</span>
           <span className="token-meter-ctx">{pct < 1 ? "<1" : Math.round(pct)}% of context</span>
+        </>
+      )}
+      {tps > 0 && (
+        <>
+          <span className="token-meter-dot">·</span>
+          <span className="token-meter-tps" title="Generation speed">
+            {tps >= 10 ? Math.round(tps) : tps.toFixed(1)} tok/s
+          </span>
         </>
       )}
     </div>

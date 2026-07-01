@@ -39,17 +39,29 @@ impl MessageContent {
     }
 
     /// Approximate character weight for token budgeting. Text contributes its
-    /// length; each image/file part adds a flat nominal cost, since the model
-    /// charges attachments by image tiles — not by their (huge) data-URI length.
+    /// length; image/file parts add a flat nominal cost, since the model charges
+    /// attachments by image tiles, not by their (huge) data-URI length.
+    ///
+    /// The weights are deliberately conservative (high): a model charges a
+    /// full-resolution image at well over a thousand tokens, so the old flat
+    /// ~256-token estimate let a single screenshot silently blow the window.
+    /// We can't know the exact tile count without decoding, so we over-budget a
+    /// little rather than under-budget into an overflow. Values are in
+    /// character-equivalents (callers divide by ~4 chars/token).
     pub fn budget_len(&self) -> usize {
-        const ATTACHMENT_WEIGHT: usize = 1024;
+        // ~1,600 tokens — an image at full tile cost.
+        const IMAGE_CHARS: usize = 6_400;
+        // ~3,000 tokens — a document (e.g. a multi-page PDF) costs more than one
+        // image; conservative since real page counts vary widely.
+        const FILE_CHARS: usize = 12_000;
         match self {
             MessageContent::Text(s) => s.len(),
             MessageContent::Parts(parts) => parts
                 .iter()
                 .map(|p| match p {
                     ContentPart::Text { text } => text.len(),
-                    _ => ATTACHMENT_WEIGHT,
+                    ContentPart::ImageUrl { .. } => IMAGE_CHARS,
+                    ContentPart::File { .. } => FILE_CHARS,
                 })
                 .sum(),
         }
@@ -261,6 +273,15 @@ pub enum ToolChoice {
     Function(serde_json::Value),
 }
 
+/// Per-stream options. Setting `include_usage` asks an OpenAI-compatible
+/// endpoint to emit a final chunk carrying the real token [`Usage`], which we
+/// use to calibrate the client-side estimate. Endpoints that don't support it
+/// ignore the field, and we fall back to the estimate.
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamOptions {
+    pub include_usage: bool,
+}
+
 /// A chat completion request body.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatRequest {
@@ -275,6 +296,8 @@ pub struct ChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
 }
 
 impl ChatRequest {
@@ -288,6 +311,7 @@ impl ChatRequest {
             temperature: None,
             max_tokens: None,
             stream: false,
+            stream_options: None,
         }
     }
 
@@ -346,7 +370,7 @@ pub struct Choice {
     pub finish_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 pub struct Usage {
     #[serde(default)]
     pub prompt_tokens: u32,
@@ -361,6 +385,10 @@ pub struct Usage {
 pub struct ChatChunk {
     #[serde(default)]
     pub choices: Vec<ChunkChoice>,
+    /// Real token usage, present only on the final chunk when the request set
+    /// `stream_options.include_usage` (and the endpoint honors it).
+    #[serde(default)]
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -542,6 +570,22 @@ mod tests {
             let back: ChatMessage = serde_json::from_str(&json).unwrap();
             assert_eq!(msg, back);
         }
+    }
+
+    #[test]
+    fn attachment_budget_far_exceeds_text_and_distinguishes_kinds() {
+        // A short data URI for an image must budget for its real tile cost, not
+        // its (tiny) string length — otherwise a screenshot silently overflows.
+        let img = MessageContent::Parts(vec![ContentPart::image("data:image/png;base64,AAAA")]);
+        let pdf = MessageContent::Parts(vec![ContentPart::file(
+            "a.pdf",
+            "data:application/pdf;base64,AAAA",
+        )]);
+        // Both vastly exceed their literal length, and a file costs more than an image.
+        assert!(img.budget_len() > 1_000);
+        assert!(pdf.budget_len() > img.budget_len());
+        // Text is still budgeted by its actual length.
+        assert_eq!(MessageContent::Text("hello".into()).budget_len(), 5);
     }
 
     #[test]

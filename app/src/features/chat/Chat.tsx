@@ -4,6 +4,7 @@ import { onFileDrop, pickAttachments } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
 import { ThreadItem } from "./ThreadItem";
+import { Plan } from "./Plan";
 import { Composer } from "./Composer";
 import { Queue } from "./Queue";
 import { Hero } from "./Hero";
@@ -36,8 +37,9 @@ export function Chat() {
   const queue = queueEntries?.map((q) => q.text) ?? NO_QUEUE;
   const running = useStore((s) => !!s.session && s.runStatus[s.session.session_id] === "running");
   const send = useStore((s) => s.send);
+  const stop = useStore((s) => s.stop);
   const setQueue = useStore((s) => s.setQueue);
-  const setDevViewOpen = useStore((s) => s.setDevViewOpen);
+  const openInspector = useStore((s) => s.openInspector);
   // The most recent canvas in this chat, and whether the panel is currently
   // showing it — used to offer a one-click "reopen canvas" when it's closed.
   const sessionCanvases = useStore((s) => (s.session ? s.canvases[s.session.session_id] : undefined));
@@ -139,15 +141,16 @@ export function Chat() {
       <div className="chat-titlebar" data-tauri-drag-region>
         <button
           className="dev-view-btn"
-          onClick={() => setDevViewOpen(true)}
+          onClick={() => sessionId && openInspector(sessionId)}
           disabled={!sessionId}
-          title="Developer view — inspect the raw LLM inputs and outputs for this session"
-          aria-label="Open developer view"
+          title="Inspect this chat — the raw LLM inputs and outputs for this session"
+          aria-label="Inspect this chat's transcript"
         >
           <Code2 size={16} />
         </button>
       </div>
       <div className="messages-wrap">
+        <Plan />
         {showReopenCanvas && lastCanvas && (
           <button
             className="reopen-canvas"
@@ -210,7 +213,7 @@ export function Chat() {
       )}
       <QuestionPrompt />
       {items.length > 0 && <TokenMeter />}
-      <Composer busy={running} onSend={submit} onAttach={attach} />
+      <Composer busy={running} onSend={submit} onStop={stop} onAttach={attach} />
     </main>
   );
 }
