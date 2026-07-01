@@ -1,7 +1,7 @@
 /* Design tokens — the single source of visual truth. Components reference these;
    never hardcode color/space/radius. Neutrals are warm (Claude-style) and come
    in light + dark variants driven by [data-theme]. The accent family is driven
-   at runtime by the active harness *theme* (see applyThemePalette in store.ts),
+   at runtime by the active harness *theme* (see applyThemePalette in lib/theme.ts),
    so the app is both mode-aware and theme-extensible. */
 
 :root {
