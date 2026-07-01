@@ -11,6 +11,7 @@
 use std::path::Path;
 
 use base64::Engine;
+use harness_core::fmt::format_bytes;
 
 use crate::types::ContentPart;
 
@@ -209,19 +210,19 @@ impl Attachment {
                 ContentPart::text(format!(
                     "[Attached document `{}` ({}){note}]\n{body}",
                     self.filename,
-                    human_size(self.bytes.len() as u64),
+                    format_bytes(self.bytes.len() as u64),
                 ))
             }
             AttachmentKind::Video => ContentPart::text(format!(
                 "[Attached video `{}` ({}). The model can't watch video; \
                  describe what you need from it.]",
                 self.filename,
-                human_size(self.bytes.len() as u64),
+                format_bytes(self.bytes.len() as u64),
             )),
             AttachmentKind::Other => ContentPart::text(format!(
                 "[Attached file `{}` ({}), which isn't a supported image/PDF.]",
                 self.filename,
-                human_size(self.bytes.len() as u64),
+                format_bytes(self.bytes.len() as u64),
             )),
         }
     }
@@ -243,22 +244,6 @@ fn truncate_text(text: &str) -> (String, bool) {
         return (text.to_string(), false);
     }
     (text.chars().take(MAX_TEXT_CHARS).collect(), true)
-}
-
-/// A compact human-readable byte size like `1.2 MB`.
-fn human_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut v = bytes as f64;
-    let mut u = 0;
-    while v >= 1024.0 && u < UNITS.len() - 1 {
-        v /= 1024.0;
-        u += 1;
-    }
-    if u == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{v:.1} {}", UNITS[u])
-    }
 }
 
 #[cfg(test)]
@@ -374,11 +359,5 @@ mod tests {
             Attachment::from_bytes("empty.png", vec![]),
             Err(AttachmentError::Empty(_))
         ));
-    }
-
-    #[test]
-    fn human_size_is_compact() {
-        assert_eq!(human_size(512), "512 B");
-        assert_eq!(human_size(1536), "1.5 KB");
     }
 }
