@@ -13,6 +13,7 @@ oxen-harness/
   03-decisions.md            — Working decisions & rationale. (Tier 2B)
   04-backlog.md              — Ideas, links, future exploration. (Tier 2C)
   DOCUMENT-MAP.md            — This file. File index and loading strategy.
+  ARCHITECTURE.md            — Crate layering, the lifecycle of a turn, and how to extend.
   AGENTS.md                  — The Ralph Wiggum dev loop + project conventions.
   README.md                  — Public-facing repo README.
   LICENSE                    — Apache-2.0.

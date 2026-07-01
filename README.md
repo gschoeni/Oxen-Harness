@@ -15,7 +15,9 @@ An open source, hackable agentic coding harness — like Claude Code or Codex, b
 
 ## Architecture
 
-A single Cargo workspace of focused crates:
+For the layering, the lifecycle of a turn, and how to extend the harness, see
+[`ARCHITECTURE.md`](ARCHITECTURE.md). At a glance, it's a single Cargo workspace
+of focused crates:
 
 | Crate | Responsibility |
 |-------|----------------|
