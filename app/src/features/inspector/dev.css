@@ -152,7 +152,7 @@
   border-left-color: var(--green);
 }
 .dev-msg.dev-tool {
-  border-left-color: var(--orange, #d98a3d);
+  border-left-color: var(--orange);
 }
 
 .dev-msg-head {
@@ -454,13 +454,13 @@
   font-weight: 600;
 }
 .inspector-keep:hover {
-  border-color: var(--green, #3fb950);
-  color: var(--green, #3fb950);
+  border-color: var(--green);
+  color: var(--green);
 }
 .inspector-keep.active {
-  background: color-mix(in srgb, var(--green, #3fb950) 18%, var(--surface));
-  border-color: var(--green, #3fb950);
-  color: var(--green, #3fb950);
+  background: color-mix(in srgb, var(--green) 18%, var(--surface));
+  border-color: var(--green);
+  color: var(--green);
 }
 .inspector-reject:hover {
   border-color: var(--danger);

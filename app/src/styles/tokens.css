@@ -50,6 +50,10 @@
   --danger: #ff5d57;
   --green: #36b37e;
   --green-soft: rgba(54, 179, 126, 0.18);
+  /* Status hues (not theme-overridden): caution amber and a tool-activity
+     orange, kept here so components reference a token instead of a raw hex. */
+  --warning: #d29922;
+  --orange: #d98a3d;
   --focus: rgba(79, 140, 255, 0.5);
   --scrim: rgba(0, 0, 0, 0.5);
 

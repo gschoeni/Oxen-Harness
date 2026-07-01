@@ -333,12 +333,12 @@
   white-space: nowrap;
 }
 .fit-good {
-  background: color-mix(in srgb, #3fb950 22%, transparent);
-  color: #3fb950;
+  background: color-mix(in srgb, var(--green) 22%, transparent);
+  color: var(--green);
 }
 .fit-tight {
-  background: color-mix(in srgb, #d29922 24%, transparent);
-  color: #d29922;
+  background: color-mix(in srgb, var(--warning) 24%, transparent);
+  color: var(--warning);
 }
 .fit-too_big {
   background: color-mix(in srgb, var(--danger) 20%, transparent);
@@ -662,7 +662,7 @@
   height: 10px;
   border-radius: var(--radius-pill);
   overflow: hidden;
-  background: color-mix(in srgb, #3fb950 28%, var(--surface-2)); /* free portion */
+  background: color-mix(in srgb, var(--green) 28%, var(--surface-2)); /* free portion */
 }
 .ls-disk-models {
   height: 100%;

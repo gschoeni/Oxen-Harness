@@ -57,8 +57,8 @@
   border: 1.5px solid var(--text-tertiary);
 }
 .log-dot.kept {
-  background: var(--green, #3fb950);
-  border-color: var(--green, #3fb950);
+  background: var(--green);
+  border-color: var(--green);
 }
 .log-dot.rejected {
   background: var(--danger);
@@ -185,7 +185,7 @@
   opacity: 0.4;
 }
 .log-bulk-btn.keep:hover:not(:disabled) {
-  color: var(--green, #3fb950);
+  color: var(--green);
 }
 .log-bulk-btn.reject:hover:not(:disabled) {
   color: var(--danger);
@@ -218,7 +218,7 @@
 }
 /* Kept / rejected get a quiet colored left edge instead of a full border. */
 .log-trace.status-kept {
-  box-shadow: inset 2px 0 0 var(--green, #3fb950);
+  box-shadow: inset 2px 0 0 var(--green);
 }
 .log-trace.status-rejected {
   box-shadow: inset 2px 0 0 var(--danger);
@@ -273,8 +273,8 @@
   border-radius: 999px;
 }
 .log-pill-kept {
-  background: color-mix(in srgb, var(--green, #3fb950) 16%, transparent);
-  color: var(--green, #3fb950);
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  color: var(--green);
 }
 .log-pill-rejected {
   background: color-mix(in srgb, var(--danger) 15%, transparent);
@@ -305,8 +305,8 @@
 }
 .log-decide.keep:hover,
 .log-decide.keep.active {
-  color: var(--green, #3fb950);
-  background: color-mix(in srgb, var(--green, #3fb950) 14%, transparent);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
 }
 .log-decide.reject:hover,
 .log-decide.reject.active {
