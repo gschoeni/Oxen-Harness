@@ -15,6 +15,8 @@ use crate::args::{opt_bool, opt_str, opt_usize, require_str};
 use crate::sandbox::Workspace;
 use crate::{Tool, ToolError};
 
+mod edit_diagnostics;
+
 /// Tool name for [`ReadFileTool`].
 pub const READ_FILE_TOOL: &str = "read_file";
 /// Tool name for [`WriteFileTool`].
@@ -220,9 +222,9 @@ impl Tool for EditFileTool {
 
         let count = original.matches(old).count();
         if count == 0 {
-            return Err(ToolError::InvalidArguments(diagnose_no_match(
-                &original, old,
-            )));
+            return Err(ToolError::InvalidArguments(
+                edit_diagnostics::diagnose_no_match(&original, old),
+            ));
         }
         if count > 1 && !replace_all {
             return Err(ToolError::InvalidArguments(format!(
@@ -243,80 +245,6 @@ impl Tool for EditFileTool {
             path.display()
         ))
     }
-}
-
-/// Explain *why* an `edit_file` match failed, so the model can recover in one
-/// step instead of blindly retrying. Checks the three mistakes LLM agents make
-/// most often, in order of confidence, and falls back to a plain "not found".
-fn diagnose_no_match(original: &str, old: &str) -> String {
-    // 1. Did the model paste `read_file`'s `  123\t` line-number prefix into
-    //    `old_string`? Very common, and unambiguous when the de-prefixed text
-    //    then matches.
-    if let Some(stripped) = strip_line_number_prefix(old) {
-        if !stripped.is_empty() && original.contains(&stripped) {
-            return "`old_string` not found — but it matches once the line-number/tab \
-                    prefix is removed. `read_file` prepends `<number>\\t` to each line; \
-                    pass only the real file content that follows the tab."
-                .into();
-        }
-    }
-
-    // 2. Right text, wrong whitespace (tabs vs spaces, indentation width,
-    //    trailing spaces, or CRLF vs LF). Compare with all whitespace removed.
-    if strip_whitespace(old).len() >= 4
-        && strip_whitespace(original).contains(&strip_whitespace(old))
-    {
-        return "`old_string` not found — the same text exists but the whitespace differs \
-                (tabs vs spaces, indentation, trailing spaces, or line endings). Re-read \
-                the file and copy the exact indentation and spacing."
-            .into();
-    }
-
-    // 3. Nothing close. If a single line of `old_string` does occur, point at it
-    //    so the model knows its anchor drifted rather than being absent entirely.
-    if let Some(anchor) = old.lines().find(|l| {
-        let t = l.trim();
-        t.len() >= 4 && original.contains(t)
-    }) {
-        return format!(
-            "`old_string` not found. The line `{}` does appear in the file, but the \
-             surrounding text does not match — re-read the file and copy the exact \
-             current content around it.",
-            anchor.trim()
-        );
-    }
-
-    "`old_string` not found in file".into()
-}
-
-/// If every non-empty line of `s` carries `read_file`'s `<spaces><digits>\t`
-/// prefix, return `s` with those prefixes removed; otherwise `None`.
-fn strip_line_number_prefix(s: &str) -> Option<String> {
-    let mut saw_prefixed = false;
-    let mut out = String::with_capacity(s.len());
-    for (i, line) in s.split('\n').enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        match line.split_once('\t') {
-            Some((head, rest))
-                if !head.is_empty()
-                    && head.chars().all(|c| c.is_ascii_digit() || c == ' ')
-                    && head.chars().any(|c| c.is_ascii_digit()) =>
-            {
-                saw_prefixed = true;
-                out.push_str(rest);
-            }
-            _ => out.push_str(line),
-        }
-    }
-    saw_prefixed.then_some(out)
-}
-
-/// `s` with all Unicode whitespace removed — used to test for whitespace-only
-/// mismatches.
-fn strip_whitespace(s: &str) -> String {
-    s.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
 /// Find files by glob pattern (the agent's `Glob`), respecting `.gitignore`.
