@@ -90,6 +90,15 @@ fn number_lines(contents: &str, offset: usize, limit: usize) -> String {
     let total = lines.len();
     let start = offset.saturating_sub(1);
 
+    // An offset past the end would otherwise render as an empty string, which
+    // reads as "the file is empty" — tell the model what actually happened.
+    if start >= total {
+        return format!(
+            "(offset {offset} is past the end of the file, which has {total} line{})",
+            if total == 1 { "" } else { "s" }
+        );
+    }
+
     let mut out = String::new();
     for (i, line) in lines.iter().skip(start).take(limit).enumerate() {
         let n = start + i + 1;
@@ -605,6 +614,18 @@ mod tests {
         assert!(out.contains("     3\tl3"));
         assert!(!out.contains("l1"));
         assert!(out.contains("showing lines 2-3 of 4"));
+    }
+
+    #[tokio::test]
+    async fn read_past_end_of_file_explains_instead_of_returning_empty() {
+        let (_dir, ws) = workspace();
+        write(&ws, "a.txt", "l1\nl2\n").await;
+        let out = ReadFileTool::new(ws)
+            .invoke(serde_json::json!({"path": "a.txt", "offset": 50}))
+            .await
+            .unwrap();
+        assert!(out.contains("past the end"), "got: {out}");
+        assert!(out.contains("2 lines"), "got: {out}");
     }
 
     #[tokio::test]
