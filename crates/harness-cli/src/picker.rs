@@ -32,6 +32,17 @@ impl Choice {
     }
 }
 
+/// The question being asked, borrowed for the lifetime of one [`select`] call:
+/// the header shown as a `[chip]`, the prompt text, the selectable options, and
+/// whether more than one may be chosen. Bundled so the rendering and input
+/// helpers all take a single spec instead of the same four arguments.
+struct Question<'a> {
+    header: &'a str,
+    question: &'a str,
+    options: &'a [Choice],
+    multi: bool,
+}
+
 /// Present one question and collect the user's selection.
 ///
 /// Returns the chosen label(s) — or free text typed in the "my own answer" row
@@ -51,7 +62,13 @@ pub fn select(
     let mut out = io::stdout();
     queue!(out, cursor::Hide)?;
     out.flush()?;
-    prompt_one(ui, &mut out, header, question, options, multi)
+    let q = Question {
+        header,
+        question,
+        options,
+        multi,
+    };
+    prompt_one(ui, &mut out, &q)
 }
 
 /// Restores cooked mode + the cursor when the picker exits (any path).
@@ -64,22 +81,15 @@ impl Drop for RawModeGuard {
     }
 }
 
-fn prompt_one(
-    ui: &Ui,
-    out: &mut io::Stdout,
-    header: &str,
-    question: &str,
-    options: &[Choice],
-    multi: bool,
-) -> io::Result<Option<Vec<String>>> {
-    let custom_row = options.len(); // synthetic "type my own" row
-    let row_count = options.len() + 1;
+fn prompt_one(ui: &Ui, out: &mut io::Stdout, q: &Question) -> io::Result<Option<Vec<String>>> {
+    let custom_row = q.options.len(); // synthetic "type my own" row
+    let row_count = q.options.len() + 1;
     let mut cursor_row = 0usize;
-    let mut checked = vec![false; options.len()];
+    let mut checked = vec![false; q.options.len()];
     let mut prev_lines = 0usize;
 
     loop {
-        let lines = render(ui, header, question, options, multi, cursor_row, &checked);
+        let lines = render(ui, q, cursor_row, &checked);
         prev_lines = draw_block(out, &lines, prev_lines)?;
 
         let Some(key) = read_key()? else { continue };
@@ -94,43 +104,41 @@ fn prompt_one(
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
             KeyCode::Char(c @ '1'..='9') => {
                 let n = c as usize - '1' as usize;
-                if n < options.len() {
+                if n < q.options.len() {
                     cursor_row = n;
-                    if multi {
+                    if q.multi {
                         checked[n] = !checked[n];
                     } else {
-                        let selected = vec![options[n].label.clone()];
-                        finish(ui, out, header, question, &selected, prev_lines)?;
+                        let selected = vec![q.options[n].label.clone()];
+                        finish(ui, out, q, &selected, prev_lines)?;
                         return Ok(Some(selected));
                     }
                 }
             }
-            KeyCode::Char(' ') if multi && cursor_row < options.len() => {
+            KeyCode::Char(' ') if q.multi && cursor_row < q.options.len() => {
                 checked[cursor_row] = !checked[cursor_row];
             }
             KeyCode::Enter => {
                 let selected = if cursor_row == custom_row {
-                    match collect_custom(
-                        ui, out, header, question, options, multi, &checked, prev_lines,
-                    )? {
+                    match collect_custom(ui, out, q, &checked, prev_lines)? {
                         Some(sel) => sel,
                         None => {
                             prev_lines = 0;
                             continue;
                         }
                     }
-                } else if multi {
-                    let mut sel = checked_labels(options, &checked);
+                } else if q.multi {
+                    let mut sel = checked_labels(q.options, &checked);
                     if sel.is_empty() {
-                        sel.push(options[cursor_row].label.clone());
+                        sel.push(q.options[cursor_row].label.clone());
                     }
                     sel
                 } else {
-                    vec![options[cursor_row].label.clone()]
+                    vec![q.options[cursor_row].label.clone()]
                 };
 
                 if cursor_row != custom_row {
-                    finish(ui, out, header, question, &selected, prev_lines)?;
+                    finish(ui, out, q, &selected, prev_lines)?;
                 }
                 return Ok(Some(selected));
             }
@@ -148,19 +156,15 @@ fn checked_labels(options: &[Choice], checked: &[bool]) -> Vec<String> {
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_custom(
     ui: &Ui,
     out: &mut io::Stdout,
-    header: &str,
-    question: &str,
-    options: &[Choice],
-    multi: bool,
+    q: &Question,
     checked: &[bool],
     prev_lines: usize,
 ) -> io::Result<Option<Vec<String>>> {
     clear_block(out, prev_lines)?;
-    print_question_line(ui, out, header, question)?;
+    print_question_line(ui, out, q.header, q.question)?;
 
     terminal::disable_raw_mode()?;
     queue!(out, cursor::Show)?;
@@ -177,8 +181,8 @@ fn collect_custom(
     if read == 0 && typed.is_empty() {
         return Ok(None);
     }
-    let mut selected = if multi {
-        checked_labels(options, checked)
+    let mut selected = if q.multi {
+        checked_labels(q.options, checked)
     } else {
         Vec::new()
     };
@@ -195,27 +199,19 @@ fn collect_custom(
 /// Render the question as a framed "card" so it stands out from the surrounding
 /// conversation: an accent top rule labelled with the question's header, an
 /// accent bar down the left of every line, and a matching bottom rule.
-fn render(
-    ui: &Ui,
-    header: &str,
-    question: &str,
-    options: &[Choice],
-    multi: bool,
-    cursor_row: usize,
-    checked: &[bool],
-) -> Vec<String> {
+fn render(ui: &Ui, q: &Question, cursor_row: usize, checked: &[bool]) -> Vec<String> {
     let width = terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
-    let (top, bottom) = card_rules(ui, header, width);
+    let (top, bottom) = card_rules(ui, q.header, width);
     let bar = ui.accent("│");
     let mut lines = vec![top, format!("  {bar}")];
 
-    lines.push(format!("  {bar}  {}", ui.strong(question)));
+    lines.push(format!("  {bar}  {}", ui.strong(q.question)));
     lines.push(format!("  {bar}"));
 
-    for (i, opt) in options.iter().enumerate() {
+    for (i, opt) in q.options.iter().enumerate() {
         let active = i == cursor_row;
         let pointer = if active { ui.accent("❯") } else { " ".into() };
-        let marker = if multi {
+        let marker = if q.multi {
             if checked[i] {
                 ui.green("◉")
             } else {
@@ -238,7 +234,7 @@ fn render(
         lines.push(format!("  {bar}  {pointer} {marker} {label}  {desc}"));
     }
 
-    let active = cursor_row == options.len();
+    let active = cursor_row == q.options.len();
     let pointer = if active { ui.accent("❯") } else { " ".into() };
     lines.push(format!(
         "  {bar}  {pointer}   {}",
@@ -246,7 +242,7 @@ fn render(
     ));
 
     lines.push(format!("  {bar}"));
-    let hint = if multi {
+    let hint = if q.multi {
         "↑/↓ move · space toggle · enter submit · esc cancel"
     } else {
         "↑/↓ move · 1-9 jump · enter select · esc cancel"
@@ -280,13 +276,12 @@ fn card_rules(ui: &Ui, header: &str, width: usize) -> (String, String) {
 fn finish(
     ui: &Ui,
     out: &mut io::Stdout,
-    header: &str,
-    question: &str,
+    q: &Question,
     selected: &[String],
     prev_lines: usize,
 ) -> io::Result<()> {
     clear_block(out, prev_lines)?;
-    print_question_line(ui, out, header, question)?;
+    print_question_line(ui, out, q.header, q.question)?;
     print_chosen(ui, out, selected)
 }
 
@@ -373,18 +368,26 @@ mod tests {
         ]
     }
 
+    fn question<'a>(
+        header: &'a str,
+        prompt: &'a str,
+        options: &'a [Choice],
+        multi: bool,
+    ) -> Question<'a> {
+        Question {
+            header,
+            question: prompt,
+            options,
+            multi,
+        }
+    }
+
     #[test]
     fn render_shows_chip_options_and_pointer() {
         let ui = Ui::plain();
-        let lines = render(
-            &ui,
-            "Storage",
-            "Which backend?",
-            &options(),
-            false,
-            0,
-            &[false, false],
-        );
+        let opts = options();
+        let q = question("Storage", "Which backend?", &opts, false);
+        let lines = render(&ui, &q, 0, &[false, false]);
         let joined = lines.join("\n");
         assert!(joined.contains("[Storage]"));
         assert!(joined.contains("Which backend?"));
@@ -398,15 +401,9 @@ mod tests {
     #[test]
     fn render_frames_the_question_as_a_card() {
         let ui = Ui::plain();
-        let lines = render(
-            &ui,
-            "Storage",
-            "Which backend?",
-            &options(),
-            false,
-            0,
-            &[false, false],
-        );
+        let opts = options();
+        let q = question("Storage", "Which backend?", &opts, false);
+        let lines = render(&ui, &q, 0, &[false, false]);
         // Top + bottom rules and a left bar on the content make it a distinct card.
         assert!(lines.first().unwrap().contains("╭─"));
         assert!(lines.last().unwrap().contains('╰'));
@@ -418,15 +415,9 @@ mod tests {
     #[test]
     fn multi_select_renders_checkboxes_and_hint() {
         let ui = Ui::plain();
-        let lines = render(
-            &ui,
-            "Storage",
-            "Which?",
-            &options(),
-            true,
-            1,
-            &[true, false],
-        );
+        let opts = options();
+        let q = question("Storage", "Which?", &opts, true);
+        let lines = render(&ui, &q, 1, &[true, false]);
         let joined = lines.join("\n");
         assert!(joined.contains('◉'));
         assert!(joined.contains('◯'));
