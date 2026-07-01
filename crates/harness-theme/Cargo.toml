@@ -9,6 +9,7 @@ authors.workspace = true
 description = "Configurable, shareable color + voice themes for oxen-harness"
 
 [dependencies]
+harness-core = { workspace = true }
 harness-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

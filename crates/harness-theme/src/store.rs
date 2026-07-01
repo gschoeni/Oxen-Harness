@@ -17,26 +17,11 @@ use crate::{builtins, Theme, ThemeError};
 pub const DEFAULT_SLUG: &str = "oregon-trail";
 
 /// A normalized, filesystem-safe identifier derived from a theme's name.
+///
+/// Thin wrapper over [`harness_core::text::slug`] that pins the empty-name
+/// fallback to `"theme"`.
 pub fn slug(name: &str) -> String {
-    let mut out = String::new();
-    let mut last_dash = false;
-    for ch in name.trim().chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash && !out.is_empty() {
-            out.push('-');
-            last_dash = true;
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    if out.is_empty() {
-        "theme".to_string()
-    } else {
-        out
-    }
+    harness_core::text::slug(name, "theme")
 }
 
 #[derive(Default, Serialize, Deserialize)]

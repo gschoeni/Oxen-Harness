@@ -77,25 +77,13 @@ impl CanvasTool {
     }
 }
 
-/// Lowercase, filesystem/anchor-safe slug of a title (fallback document id).
+/// Lowercase, filesystem/anchor-safe slug of a title (fallback document id),
+/// capped at 64 characters.
 fn slug(title: &str) -> String {
-    let s: String = title
-        .trim()
+    harness_core::text::slug(title, "document")
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let s = s.trim_matches('-').to_string();
-    if s.is_empty() {
-        "document".to_string()
-    } else {
-        s.chars().take(64).collect()
-    }
+        .take(64)
+        .collect()
 }
 
 /// Parse + validate the tool arguments into a [`CanvasDoc`].
