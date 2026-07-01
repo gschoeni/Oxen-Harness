@@ -66,7 +66,7 @@ fn read_context_length<R: Read>(r: &mut R) -> io::Result<Option<u32>> {
         let vtype = read_u32(r)?;
         // The architecture prefix varies (llama/qwen2/…), so match on the suffix.
         if key.ends_with(".context_length") {
-            return Ok(read_u32_value(r, vtype)?);
+            return read_u32_value(r, vtype);
         }
         skip_value(r, vtype)?;
     }

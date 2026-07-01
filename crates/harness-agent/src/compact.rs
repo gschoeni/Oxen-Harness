@@ -162,8 +162,8 @@ mod tests {
     #[test]
     fn prune_ignores_non_tool_messages() {
         let mut msgs = vec![
-            ChatMessage::user(&"u".repeat(5000)),
-            ChatMessage::assistant(&"a".repeat(5000)),
+            ChatMessage::user("u".repeat(5000)),
+            ChatMessage::assistant("a".repeat(5000)),
         ];
         assert_eq!(prune_tool_results(&mut msgs, 0), 0);
     }

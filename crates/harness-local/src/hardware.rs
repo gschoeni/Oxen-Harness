@@ -127,7 +127,7 @@ mod tests {
         // Small pool → reserve floors at 3 GB.
         assert_eq!(budget_from_pool(8 * GIB), 5 * GIB);
         // Never underflows.
-        assert_eq!(budget_from_pool(1 * GIB), 0);
+        assert_eq!(budget_from_pool(GIB), 0);
     }
 
     #[test]

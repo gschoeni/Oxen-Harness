@@ -145,11 +145,11 @@ pub fn plan_context(budget: u64, weight_bytes: u64, native: u32) -> u32 {
 /// must be ordered best-first (largest). Returns the first that is at least
 /// `Tight`; if none fit, returns the smallest so we still suggest *something*
 /// (the UI flags it as too big).
-pub fn pick_quant<'a>(
-    candidates: &'a [QuantCandidate],
+pub fn pick_quant(
+    candidates: &[QuantCandidate],
     context: u32,
     budget: u64,
-) -> Option<&'a QuantCandidate> {
+) -> Option<&QuantCandidate> {
     candidates
         .iter()
         .find(|c| fit_for(c.weight_bytes, context, budget) != Fit::TooBig)

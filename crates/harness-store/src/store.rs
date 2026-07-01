@@ -600,7 +600,7 @@ mod tests {
             .unwrap();
 
         let out = store
-            .export_chat_completions(&[session.clone()], false)
+            .export_chat_completions(std::slice::from_ref(&session), false)
             .unwrap();
         // One conversation → one JSONL line.
         assert_eq!(out.lines().count(), 1);
@@ -645,7 +645,7 @@ mod tests {
         // Without tools: the tool result is dropped and the empty tool-call-only
         // assistant turn carries no content, so only user + final assistant remain.
         let stripped = store
-            .export_chat_completions(&[session.clone()], false)
+            .export_chat_completions(std::slice::from_ref(&session), false)
             .unwrap();
         let row: serde_json::Value =
             serde_json::from_str(stripped.lines().next().unwrap()).unwrap();
@@ -655,7 +655,7 @@ mod tests {
 
         // With tools: tool_calls and the tool result are preserved.
         let full = store
-            .export_chat_completions(&[session.clone()], true)
+            .export_chat_completions(std::slice::from_ref(&session), true)
             .unwrap();
         let row: serde_json::Value = serde_json::from_str(full.lines().next().unwrap()).unwrap();
         let msgs = row["messages"].as_array().unwrap();
