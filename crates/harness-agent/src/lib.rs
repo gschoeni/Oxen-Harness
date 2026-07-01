@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use harness_core::DEFAULT_MODEL;
-use harness_llm::stream::StreamEvent;
+use harness_llm::stream::{AssembledMessage, StreamEvent};
 use harness_llm::types::{ChatMessage, ContentPart};
 use harness_llm::{
     hydrate_content, Attachment, AttachmentStore, ChatRequest, LlmError, OxenClient, ToolCall,
@@ -402,24 +402,11 @@ impl Agent {
                 return Ok(String::new());
             }
 
-            // Keep the next request within the window. The raw estimate is
-            // calibrated by the latest real usage so the check tracks reality
-            // (code under-counts at 4 chars/token). If we'd overflow, compact
-            // (prune stale tool output, then summarize old turns) rather than
-            // hard-stopping; only error if even a compacted transcript can't fit.
-            let mut raw_prompt_tokens = budget::estimate_prompt_tokens(&self.messages, &tool_defs);
-            if self.calibrated(raw_prompt_tokens) > budget {
-                let fit = self
-                    .compact_to_fit(budget, &tool_defs, &mut on_event)
-                    .await?;
-                raw_prompt_tokens = budget::estimate_prompt_tokens(&self.messages, &tool_defs);
-                if !fit || self.calibrated(raw_prompt_tokens) > budget {
-                    return Err(AgentError::ContextWindowExceeded {
-                        used: self.calibrated(raw_prompt_tokens),
-                        window,
-                    });
-                }
-            }
+            // Make room for the next request, then send it and fold the round's
+            // token usage back into the running totals.
+            let raw_prompt_tokens = self
+                .fit_context(budget, window, &tool_defs, &mut on_event)
+                .await?;
             let prompt_tokens = self.calibrated(raw_prompt_tokens);
 
             // Reflect this call's prompt cost the moment it's sent (the transcript
@@ -431,29 +418,8 @@ impl Agent {
                 context_tokens: prompt_tokens,
             });
 
-            let mut outbound = self.outbound_messages();
-            if let Some(n) = &nudge {
-                outbound.push(n.clone());
-            }
-            let request = ChatRequest::new(&self.config.model, outbound)
-                .with_tools(tool_defs.clone())
-                .streaming(true);
-
             let assembled = self
-                .client
-                .stream_chat(&request, &cancel, |event| match event {
-                    StreamEvent::Token(t) => on_event(&AgentEvent::Token(t.clone())),
-                    StreamEvent::ToolCallStart { name } => {
-                        on_event(&AgentEvent::ToolPending { name: name.clone() })
-                    }
-                    StreamEvent::ToolCallDelta { name, arguments } => {
-                        on_event(&AgentEvent::ToolDelta {
-                            name: name.clone(),
-                            delta: arguments.clone(),
-                        })
-                    }
-                    StreamEvent::Done { .. } => {}
-                })
+                .stream_reply(&tool_defs, nudge.as_ref(), &cancel, &mut on_event)
                 .await?;
 
             // A stop mid-stream returns whatever assembled so far. Persist only
@@ -467,28 +433,7 @@ impl Agent {
                 return Ok(assembled.content);
             }
 
-            // Recalibrate the estimate against the real prompt size the endpoint
-            // billed, so the next budget check tracks reality.
-            if let Some(usage) = &assembled.usage {
-                if usage.prompt_tokens > 0 && raw_prompt_tokens > 0 {
-                    self.token_ratio = usage.prompt_tokens as f64 / raw_prompt_tokens as f64;
-                }
-            }
-
-            // Account for this round's prompt + generated tokens, preferring the
-            // endpoint's real counts and falling back to the calibrated estimate.
-            self.tokens_used += match &assembled.usage {
-                Some(u) if u.prompt_tokens + u.completion_tokens > 0 => {
-                    (u.prompt_tokens + u.completion_tokens) as usize
-                }
-                _ => {
-                    prompt_tokens
-                        + budget::estimate_completion_tokens(
-                            &assembled.content,
-                            &assembled.tool_calls,
-                        )
-                }
-            };
+            self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens);
 
             self.push(ChatMessage::assistant_with_tools(
                 assembled.content.clone(),
@@ -522,6 +467,104 @@ impl Agent {
                 self.push(ChatMessage::tool_result(call.id.clone(), result))?;
             }
         }
+    }
+
+    /// Keep the next request within the context window, returning the raw
+    /// (uncalibrated) prompt-token estimate for the transcript that will be sent.
+    ///
+    /// The estimate is calibrated by the latest real usage before the check, so
+    /// it tracks reality (the raw code under-counts at ~4 chars/token). On
+    /// overflow it compacts — pruning stale tool output, then summarizing old
+    /// turns — rather than hard-stopping, and only errors if even a compacted
+    /// transcript still can't fit.
+    async fn fit_context<F>(
+        &mut self,
+        budget: usize,
+        window: usize,
+        tool_defs: &[serde_json::Value],
+        on_event: &mut F,
+    ) -> Result<usize, AgentError>
+    where
+        F: FnMut(&AgentEvent),
+    {
+        let raw = budget::estimate_prompt_tokens(&self.messages, tool_defs);
+        if self.calibrated(raw) <= budget {
+            return Ok(raw);
+        }
+        let fit = self.compact_to_fit(budget, tool_defs, on_event).await?;
+        let raw = budget::estimate_prompt_tokens(&self.messages, tool_defs);
+        if !fit || self.calibrated(raw) > budget {
+            return Err(AgentError::ContextWindowExceeded {
+                used: self.calibrated(raw),
+                window,
+            });
+        }
+        Ok(raw)
+    }
+
+    /// Send the current transcript (plus the optional one-shot nudge) to the
+    /// model and stream the reply, translating provider stream events into
+    /// [`AgentEvent`]s as they arrive.
+    async fn stream_reply<F>(
+        &self,
+        tool_defs: &[serde_json::Value],
+        nudge: Option<&ChatMessage>,
+        cancel: &CancellationToken,
+        on_event: &mut F,
+    ) -> Result<AssembledMessage, AgentError>
+    where
+        F: FnMut(&AgentEvent),
+    {
+        let mut outbound = self.outbound_messages();
+        outbound.extend(nudge.cloned());
+        let request = ChatRequest::new(&self.config.model, outbound)
+            .with_tools(tool_defs.to_vec())
+            .streaming(true);
+
+        let assembled = self
+            .client
+            .stream_chat(&request, cancel, |event| match event {
+                StreamEvent::Token(t) => on_event(&AgentEvent::Token(t.clone())),
+                StreamEvent::ToolCallStart { name } => {
+                    on_event(&AgentEvent::ToolPending { name: name.clone() })
+                }
+                StreamEvent::ToolCallDelta { name, arguments } => {
+                    on_event(&AgentEvent::ToolDelta {
+                        name: name.clone(),
+                        delta: arguments.clone(),
+                    })
+                }
+                StreamEvent::Done { .. } => {}
+            })
+            .await?;
+        Ok(assembled)
+    }
+
+    /// Fold one model round's usage into the running totals: recalibrate the
+    /// client-side estimate against the endpoint's real prompt size (so the next
+    /// budget check tracks reality), then add this round's prompt + generated
+    /// tokens — preferring the endpoint's reported counts, falling back to the
+    /// calibrated estimate when it doesn't report any.
+    fn account_for_usage(
+        &mut self,
+        assembled: &AssembledMessage,
+        raw_prompt_tokens: usize,
+        prompt_tokens: usize,
+    ) {
+        if let Some(usage) = &assembled.usage {
+            if usage.prompt_tokens > 0 && raw_prompt_tokens > 0 {
+                self.token_ratio = usage.prompt_tokens as f64 / raw_prompt_tokens as f64;
+            }
+        }
+        self.tokens_used += match &assembled.usage {
+            Some(u) if u.prompt_tokens + u.completion_tokens > 0 => {
+                (u.prompt_tokens + u.completion_tokens) as usize
+            }
+            _ => {
+                prompt_tokens
+                    + budget::estimate_completion_tokens(&assembled.content, &assembled.tool_calls)
+            }
+        };
     }
 
     /// Free context so the next request fits `budget`, in two stages (see
