@@ -307,7 +307,7 @@ impl HistoryStore {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let content = derive_content_text(value.get("content"));
+        let content = crate::content::derive_content_text(value.get("content"));
         let raw_json = serde_json::to_string(&value)?;
 
         let conn = self.lock();
@@ -425,69 +425,16 @@ impl HistoryStore {
         let mut out = String::new();
         for sid in session_ids {
             let messages = self.messages(sid)?;
-            let conversation: Vec<serde_json::Value> = messages
-                .iter()
-                .filter_map(|m| sanitize_for_finetuning(m, include_tools))
-                .collect();
-            // Need at least one user + one assistant turn to be worth a row.
-            let has_user = conversation
-                .iter()
-                .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"));
-            let has_assistant = conversation
-                .iter()
-                .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("assistant"));
-            if !has_user || !has_assistant {
-                continue;
+            if let Some(conversation) =
+                crate::export::conversation_from_messages(&messages, include_tools)
+            {
+                let line = serde_json::json!({ "messages": conversation });
+                out.push_str(&serde_json::to_string(&line)?);
+                out.push('\n');
             }
-            let line = serde_json::json!({ "messages": conversation });
-            out.push_str(&serde_json::to_string(&line)?);
-            out.push('\n');
         }
         Ok(out)
     }
-}
-
-/// Normalize one persisted transcript message into a clean chat-completions
-/// message for fine-tuning, or `None` if it should be dropped.
-///
-/// - `content` is flattened to a plain string (text parts joined; images dropped).
-/// - When `include_tools` is false: `tool` messages are dropped and assistant
-///   `tool_calls` are stripped.
-/// - When `include_tools` is true: assistant `tool_calls` and a tool message's
-///   `tool_call_id` are carried through verbatim.
-fn sanitize_for_finetuning(
-    message: &serde_json::Value,
-    include_tools: bool,
-) -> Option<serde_json::Value> {
-    let role = message.get("role").and_then(|r| r.as_str())?;
-
-    if role == "tool" && !include_tools {
-        return None;
-    }
-
-    let content = derive_content_text(message.get("content")).unwrap_or_default();
-    let tool_calls = message.get("tool_calls").filter(|v| !v.is_null());
-
-    // A message with neither text nor (kept) tool calls carries nothing to train on.
-    let keeps_tool_calls = include_tools && tool_calls.is_some();
-    if content.is_empty() && !keeps_tool_calls && role != "tool" {
-        return None;
-    }
-
-    let mut obj = serde_json::Map::new();
-    obj.insert("role".into(), serde_json::Value::String(role.to_string()));
-    obj.insert("content".into(), serde_json::Value::String(content));
-    if keeps_tool_calls {
-        if let Some(tc) = tool_calls {
-            obj.insert("tool_calls".into(), tc.clone());
-        }
-    }
-    if include_tools {
-        if let Some(id) = message.get("tool_call_id").filter(|v| !v.is_null()) {
-            obj.insert("tool_call_id".into(), id.clone());
-        }
-    }
-    Some(serde_json::Value::Object(obj))
 }
 
 fn now() -> i64 {
@@ -495,30 +442,6 @@ fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
-}
-
-/// The plain-text rendering of a message's `content` for the queryable `content`
-/// column (and the session title derived from it).
-///
-/// A plain string is used as-is. A multimodal `Parts` array — what a user
-/// message with attachments serializes to — is flattened to its `text` parts
-/// joined by newlines, so a session that opened with an image still titles by
-/// the words the user typed instead of recording `NULL`. Image/file parts carry
-/// no displayable text and are skipped. Returns `None` when there's no text
-/// (e.g. an assistant turn that's only tool calls).
-fn derive_content_text(content: Option<&serde_json::Value>) -> Option<String> {
-    match content {
-        Some(serde_json::Value::String(s)) => Some(s.clone()),
-        Some(serde_json::Value::Array(parts)) => {
-            let text: Vec<&str> = parts
-                .iter()
-                .filter(|p| p.get("type").and_then(|t| t.as_str()) == Some("text"))
-                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
-                .collect();
-            (!text.is_empty()).then(|| text.join("\n"))
-        }
-        _ => None,
-    }
 }
 
 #[cfg(test)]

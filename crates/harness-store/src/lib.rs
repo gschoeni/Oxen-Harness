@@ -8,6 +8,8 @@
 //! [`HistoryStore::export_jsonl`] emits one JSON object per line — the on-disk
 //! format used to build fine-tuning datasets.
 
+mod content;
+mod export;
 pub mod store;
 
 pub use store::{HistoryError, HistoryStore, SessionMeta, SessionSummary};
