@@ -81,14 +81,6 @@ impl MessageQueue {
         self.items.clear();
     }
 
-    /// Drain every message at once, leaving the queue empty. (The REPL now
-    /// drains one message at a time so the user can keep stacking mid-turn, but
-    /// this batch form stays part of the queue's API.)
-    #[allow(dead_code)]
-    pub fn take_all(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.items)
-    }
-
     fn index(&self, pos: usize) -> Result<usize, String> {
         if pos == 0 || pos > self.items.len() {
             return Err(format!(
@@ -177,14 +169,5 @@ mod tests {
         );
         // Taking is one-shot: nothing left to fold in next time.
         assert!(q.take_authored().is_empty());
-    }
-
-    #[test]
-    fn take_all_drains_to_empty() {
-        let mut q = MessageQueue::default();
-        q.add("one");
-        q.add("two");
-        assert_eq!(q.take_all(), vec!["one".to_string(), "two".to_string()]);
-        assert!(q.is_empty());
     }
 }
