@@ -95,7 +95,11 @@ pub fn summary_cut_index(messages: &[ChatMessage], keep_recent_turns: usize) -> 
 pub fn render_for_summary(messages: &[ChatMessage]) -> String {
     let mut out = String::new();
     for m in messages {
-        let text = m.content.as_ref().map(MessageContent::as_text).unwrap_or_default();
+        let text = m
+            .content
+            .as_ref()
+            .map(MessageContent::as_text)
+            .unwrap_or_default();
         out.push_str(&m.role);
         out.push_str(": ");
         out.push_str(&text);
@@ -168,13 +172,13 @@ mod tests {
     fn cut_index_falls_on_a_user_boundary_and_keeps_recent_turns() {
         // system, [turn1: user/assistant], [turn2: user/tool/assistant], [turn3: user]
         let msgs = vec![
-            ChatMessage::system("sys"),    // 0
-            ChatMessage::user("t1"),       // 1  turn 1
-            ChatMessage::assistant("a1"),  // 2
-            ChatMessage::user("t2"),       // 3  turn 2
-            tool_msg("x", "out"),          // 4
-            ChatMessage::assistant("a2"),  // 5
-            ChatMessage::user("t3"),       // 6  turn 3
+            ChatMessage::system("sys"),   // 0
+            ChatMessage::user("t1"),      // 1  turn 1
+            ChatMessage::assistant("a1"), // 2
+            ChatMessage::user("t2"),      // 3  turn 2
+            tool_msg("x", "out"),         // 4
+            ChatMessage::assistant("a2"), // 5
+            ChatMessage::user("t3"),      // 6  turn 3
         ];
         // Keep the last 1 turn → summarize up to the start of turn 3 (index 6).
         assert_eq!(summary_cut_index(&msgs, 1), Some(6));

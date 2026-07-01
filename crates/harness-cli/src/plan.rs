@@ -30,7 +30,10 @@ pub fn render_plan_block(ui: &Ui, arguments: &str) -> Option<Vec<String>> {
     )];
 
     for it in items {
-        let status = it.get("status").and_then(|s| s.as_str()).unwrap_or("pending");
+        let status = it
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("pending");
         let content = it.get("content").and_then(|s| s.as_str()).unwrap_or("");
         let active = it
             .get("active_form")

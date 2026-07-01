@@ -239,7 +239,9 @@ async fn main() -> Result<()> {
             Err(e) => {
                 eprintln!(
                     "  {}",
-                    ui.dim(&format!("Local model {local_id} unavailable ({e}); using the cloud model."))
+                    ui.dim(&format!(
+                        "Local model {local_id} unavailable ({e}); using the cloud model."
+                    ))
                 );
                 cloud_client(&ui)
             }

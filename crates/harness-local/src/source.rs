@@ -142,7 +142,13 @@ pub fn slug(repo: &str, quant: &str) -> String {
         format!("{base}-{quant}")
     };
     raw.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
@@ -267,7 +273,11 @@ pub async fn hf_list_quants(
                 id: id_from_file(&e.path),
                 display: format!(
                     "{base}{}",
-                    if quant.is_empty() { String::new() } else { format!(" · {quant}") }
+                    if quant.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {quant}")
+                    }
                 ),
                 params: params.clone(),
                 quant,
@@ -285,7 +295,8 @@ pub async fn hf_list_quants(
     // same quant (e.g. a standard and an `-MTP-` variant) which would otherwise
     // show as confusing duplicates. Keep the canonical one — the shortest
     // filename, i.e. the plain build without an extra variant tag.
-    let mut by_quant: std::collections::HashMap<String, ModelRef> = std::collections::HashMap::new();
+    let mut by_quant: std::collections::HashMap<String, ModelRef> =
+        std::collections::HashMap::new();
     for r in mapped {
         match by_quant.get(&r.quant) {
             Some(kept) if hf_file_len(kept) <= hf_file_len(&r) => {}
@@ -297,7 +308,9 @@ pub async fn hf_list_quants(
     let mut refs: Vec<ModelRef> = by_quant.into_values().collect();
     refs.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
     if refs.is_empty() {
-        return Err(LocalError::Download(format!("no GGUF files found in {repo}")));
+        return Err(LocalError::Download(format!(
+            "no GGUF files found in {repo}"
+        )));
     }
     Ok(refs)
 }
@@ -406,7 +419,10 @@ mod tests {
 
     #[test]
     fn parses_quant_longest_match() {
-        assert_eq!(parse_quant("Qwen3-8B-Q4_K_M.gguf").as_deref(), Some("Q4_K_M"));
+        assert_eq!(
+            parse_quant("Qwen3-8B-Q4_K_M.gguf").as_deref(),
+            Some("Q4_K_M")
+        );
         assert_eq!(parse_quant("model-Q8_0.gguf").as_deref(), Some("Q8_0"));
         assert_eq!(parse_quant("model-IQ4_XS.gguf").as_deref(), Some("IQ4_XS"));
         assert_eq!(parse_quant("model.gguf"), None);
@@ -423,7 +439,10 @@ mod tests {
 
     #[test]
     fn slug_is_filename_safe() {
-        assert_eq!(slug("bartowski/Qwen_Qwen3-8B-GGUF", "Q4_K_M"), "qwen_qwen3-8b-gguf-q4_k_m".replace('_', "-"));
+        assert_eq!(
+            slug("bartowski/Qwen_Qwen3-8B-GGUF", "Q4_K_M"),
+            "qwen_qwen3-8b-gguf-q4_k_m".replace('_', "-")
+        );
     }
 
     #[test]
@@ -434,7 +453,11 @@ mod tests {
         );
         assert_eq!(
             parse_hf_input("https://huggingface.co/owner/name/resolve/main/file-Q4_K_M.gguf"),
-            Some(("owner/name".into(), Some("file-Q4_K_M.gguf".into()), "main".into()))
+            Some((
+                "owner/name".into(),
+                Some("file-Q4_K_M.gguf".into()),
+                "main".into()
+            ))
         );
         assert_eq!(
             parse_hf_input("https://huggingface.co/owner/name"),
@@ -466,11 +489,22 @@ mod tests {
     #[test]
     fn download_urls() {
         let hf = ModelRef {
-            id: "x".into(), display: "x".into(), params: "".into(), quant: "Q4_K_M".into(),
-            context: 0, size_bytes: 0,
-            origin: Origin::HuggingFace { repo: "o/n".into(), file: "f.gguf".into(), revision: "main".into() },
+            id: "x".into(),
+            display: "x".into(),
+            params: "".into(),
+            quant: "Q4_K_M".into(),
+            context: 0,
+            size_bytes: 0,
+            origin: Origin::HuggingFace {
+                repo: "o/n".into(),
+                file: "f.gguf".into(),
+                revision: "main".into(),
+            },
         };
-        assert_eq!(hf.download_url(), "https://huggingface.co/o/n/resolve/main/f.gguf?download=true");
+        assert_eq!(
+            hf.download_url(),
+            "https://huggingface.co/o/n/resolve/main/f.gguf?download=true"
+        );
         assert!(!hf.needs_auth());
     }
 }

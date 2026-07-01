@@ -241,7 +241,8 @@ pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
 /// The one-shot corrective appended when the model announces an action but
 /// doesn't call a tool (see [`looks_like_unfulfilled_intent`]). Sent only on the
 /// retry request and never persisted.
-const INTENT_NUDGE: &str = "You described what you'll do but didn't actually call a tool to do it. \
+const INTENT_NUDGE: &str =
+    "You described what you'll do but didn't actually call a tool to do it. \
      If you intended to take an action — open a `canvas`, write or edit a file, run a command — \
      make that tool call now. If you were genuinely finished, reply with your final answer.";
 
@@ -559,7 +560,9 @@ impl Agent {
             // hard-stopping; only error if even a compacted transcript can't fit.
             let mut raw_prompt_tokens = budget::estimate_prompt_tokens(&self.messages, &tool_defs);
             if self.calibrated(raw_prompt_tokens) > budget {
-                let fit = self.compact_to_fit(budget, &tool_defs, &mut on_event).await?;
+                let fit = self
+                    .compact_to_fit(budget, &tool_defs, &mut on_event)
+                    .await?;
                 raw_prompt_tokens = budget::estimate_prompt_tokens(&self.messages, &tool_defs);
                 if !fit || self.calibrated(raw_prompt_tokens) > budget {
                     return Err(AgentError::ContextWindowExceeded {
@@ -594,12 +597,12 @@ impl Agent {
                     StreamEvent::ToolCallStart { name } => {
                         on_event(&AgentEvent::ToolPending { name: name.clone() })
                     }
-                    StreamEvent::ToolCallDelta { name, arguments } => on_event(
-                        &AgentEvent::ToolDelta {
+                    StreamEvent::ToolCallDelta { name, arguments } => {
+                        on_event(&AgentEvent::ToolDelta {
                             name: name.clone(),
                             delta: arguments.clone(),
-                        },
-                    ),
+                        })
+                    }
                     StreamEvent::Done { .. } => {}
                 })
                 .await?;
@@ -1012,9 +1015,14 @@ mod tests {
             .unwrap();
         let big = "x".repeat(8000); // ~2000 tokens each
         for (i, _) in (0..3).enumerate() {
-            store.append_message(&session, &ChatMessage::user(format!("q{i}"))).unwrap();
             store
-                .append_message(&session, &ChatMessage::tool_result(format!("t{i}"), big.clone()))
+                .append_message(&session, &ChatMessage::user(format!("q{i}")))
+                .unwrap();
+            store
+                .append_message(
+                    &session,
+                    &ChatMessage::tool_result(format!("t{i}"), big.clone()),
+                )
                 .unwrap();
         }
 

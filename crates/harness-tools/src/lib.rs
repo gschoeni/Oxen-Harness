@@ -281,7 +281,14 @@ mod tests {
         // tool or two without inviting unchecked growth.
         let workspace = Workspace::new(".").unwrap();
         let registry = ToolRegistry::default_for_workspace(workspace);
-        let chars: usize = registry.definitions().iter().map(|d| d.to_string().len()).sum();
-        assert!(chars < 8_000, "default tool definitions grew to {chars} chars (budget 8000)");
+        let chars: usize = registry
+            .definitions()
+            .iter()
+            .map(|d| d.to_string().len())
+            .sum();
+        assert!(
+            chars < 8_000,
+            "default tool definitions grew to {chars} chars (budget 8000)"
+        );
     }
 }

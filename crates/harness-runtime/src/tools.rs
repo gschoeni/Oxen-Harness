@@ -165,7 +165,10 @@ mod tests {
     fn description_override_set_and_clear() {
         let mut prefs = ToolPrefs::default();
         assert!(prefs.set_description("shell", Some("Run a command")));
-        assert_eq!(prefs.descriptions.get("shell").map(String::as_str), Some("Run a command"));
+        assert_eq!(
+            prefs.descriptions.get("shell").map(String::as_str),
+            Some("Run a command")
+        );
         // Blank clears it.
         assert!(prefs.set_description("shell", Some("  ")));
         assert!(!prefs.descriptions.contains_key("shell"));

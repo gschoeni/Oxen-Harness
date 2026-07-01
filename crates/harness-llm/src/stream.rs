@@ -245,7 +245,10 @@ mod tests {
             asm.accept(&chunk("Hello ")),
             vec![StreamEvent::Token("Hello ".into())]
         );
-        assert_eq!(asm.accept(&chunk("ox")), vec![StreamEvent::Token("ox".into())]);
+        assert_eq!(
+            asm.accept(&chunk("ox")),
+            vec![StreamEvent::Token("ox".into())]
+        );
         let done = asm.accept("[DONE]");
         assert!(matches!(done.as_slice(), [StreamEvent::Done { .. }]));
         let msg = asm.finish();
@@ -305,8 +308,13 @@ mod tests {
         assert_eq!(
             first,
             vec![
-                StreamEvent::ToolCallStart { name: "write_file".into() },
-                StreamEvent::ToolCallDelta { name: "write_file".into(), arguments: "{\"pa".into() },
+                StreamEvent::ToolCallStart {
+                    name: "write_file".into()
+                },
+                StreamEvent::ToolCallDelta {
+                    name: "write_file".into(),
+                    arguments: "{\"pa".into()
+                },
             ]
         );
         // Subsequent chunks carry only argument fragments, tagged with the name.

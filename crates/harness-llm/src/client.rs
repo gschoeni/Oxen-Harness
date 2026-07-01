@@ -114,7 +114,9 @@ impl OxenClient {
             stream: true,
             // Ask for a final usage chunk so we can calibrate the token estimate
             // against reality; ignored by endpoints that don't support it.
-            stream_options: Some(crate::types::StreamOptions { include_usage: true }),
+            stream_options: Some(crate::types::StreamOptions {
+                include_usage: true,
+            }),
             ..request.clone()
         };
 

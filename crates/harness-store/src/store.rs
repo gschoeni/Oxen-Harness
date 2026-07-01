@@ -214,10 +214,9 @@ impl HistoryStore {
              ON CONFLICT(key) DO UPDATE SET value = value + excluded.value",
             rusqlite::params![key, delta],
         )?;
-        let value =
-            conn.query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |row| {
-                row.get::<_, i64>(0)
-            })?;
+        let value = conn.query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |row| {
+            row.get::<_, i64>(0)
+        })?;
         Ok(value)
     }
 
@@ -386,8 +385,7 @@ impl HistoryStore {
         let tx = conn.transaction()?;
         let mut changed = 0usize;
         {
-            let mut stmt =
-                tx.prepare("UPDATE sessions SET review_status = ?2 WHERE id = ?1")?;
+            let mut stmt = tx.prepare("UPDATE sessions SET review_status = ?2 WHERE id = ?1")?;
             for id in session_ids {
                 changed += stmt.execute(rusqlite::params![id, status])?;
             }
@@ -594,7 +592,9 @@ mod tests {
         store
             .append_message(&session, &Message::system("be helpful"))
             .unwrap();
-        store.append_message(&session, &Message::user("hi")).unwrap();
+        store
+            .append_message(&session, &Message::user("hi"))
+            .unwrap();
         store
             .append_message(&session, &Message::assistant("hello"))
             .unwrap();
@@ -615,7 +615,9 @@ mod tests {
     fn export_chat_completions_handles_tools_per_flag() {
         let store = store();
         let session = store.create_session(&meta()).unwrap();
-        store.append_message(&session, &Message::user("read it")).unwrap();
+        store
+            .append_message(&session, &Message::user("read it"))
+            .unwrap();
         store
             .append_message(
                 &session,
@@ -645,7 +647,8 @@ mod tests {
         let stripped = store
             .export_chat_completions(&[session.clone()], false)
             .unwrap();
-        let row: serde_json::Value = serde_json::from_str(stripped.lines().next().unwrap()).unwrap();
+        let row: serde_json::Value =
+            serde_json::from_str(stripped.lines().next().unwrap()).unwrap();
         let msgs = row["messages"].as_array().unwrap();
         assert!(msgs.iter().all(|m| m["role"] != "tool"));
         assert!(msgs.iter().all(|m| m.get("tool_calls").is_none()));
@@ -656,7 +659,9 @@ mod tests {
             .unwrap();
         let row: serde_json::Value = serde_json::from_str(full.lines().next().unwrap()).unwrap();
         let msgs = row["messages"].as_array().unwrap();
-        assert!(msgs.iter().any(|m| m["role"] == "tool" && m["tool_call_id"] == "call_1"));
+        assert!(msgs
+            .iter()
+            .any(|m| m["role"] == "tool" && m["tool_call_id"] == "call_1"));
         assert!(msgs.iter().any(|m| m.get("tool_calls").is_some()));
     }
 

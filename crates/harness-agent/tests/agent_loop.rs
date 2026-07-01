@@ -191,7 +191,10 @@ async fn unfulfilled_intent_reply_nudges_once_then_continues() {
     // user turn between them.
     let stored = store.messages(&session).unwrap();
     let roles: Vec<&str> = stored.iter().map(|m| m["role"].as_str().unwrap()).collect();
-    assert_eq!(roles, vec!["user", "assistant", "assistant", "tool", "assistant"]);
+    assert_eq!(
+        roles,
+        vec!["user", "assistant", "assistant", "tool", "assistant"]
+    );
 }
 
 #[tokio::test]

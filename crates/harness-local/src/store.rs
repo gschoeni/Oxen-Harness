@@ -174,7 +174,14 @@ impl ModelStore {
             return Ok(final_path);
         }
         let client = reqwest::Client::new();
-        stream_to_file(&client, &model.download_url(), token, &final_path, on_progress).await?;
+        stream_to_file(
+            &client,
+            &model.download_url(),
+            token,
+            &final_path,
+            on_progress,
+        )
+        .await?;
         self.write_meta(model)?;
         Ok(final_path)
     }
@@ -201,7 +208,11 @@ pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
         if libc::statvfs(cpath.as_ptr(), &mut stat) != 0 {
             return None;
         }
-        let unit = if stat.f_frsize > 0 { stat.f_frsize } else { stat.f_bsize } as u64;
+        let unit = if stat.f_frsize > 0 {
+            stat.f_frsize
+        } else {
+            stat.f_bsize
+        } as u64;
         let total = (stat.f_blocks as u64).saturating_mul(unit);
         let available = (stat.f_bavail as u64).saturating_mul(unit);
         Some((total, available))

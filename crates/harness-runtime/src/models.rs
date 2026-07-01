@@ -141,7 +141,11 @@ pub fn add(id: &str, name: &str) -> Result<Vec<CloudModel>, RuntimeError> {
     if builtins().iter().any(|b| b.id == id) {
         return Ok(catalog());
     }
-    let name = if name.trim().is_empty() { id } else { name.trim() };
+    let name = if name.trim().is_empty() {
+        id
+    } else {
+        name.trim()
+    };
     let mut cfg = load();
     if let Some(existing) = cfg.custom.iter_mut().find(|e| e.id == id) {
         existing.name = name.to_string();
@@ -195,7 +199,9 @@ mod tests {
     use super::*;
 
     fn with_temp_home<T>(f: impl FnOnce() -> T) -> T {
-        let _lock = crate::TEST_ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = crate::TEST_ENV_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var(paths::BASE_DIR_ENV, tmp.path());
         let out = f();

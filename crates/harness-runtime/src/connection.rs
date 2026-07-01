@@ -159,7 +159,9 @@ mod tests {
     // connection.json + .env + the secret env vars are process-global; serialize
     // against every other env-touching test in the crate.
     fn with_temp_home<T>(f: impl FnOnce() -> T) -> T {
-        let _lock = crate::TEST_ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = crate::TEST_ENV_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var(paths::BASE_DIR_ENV, tmp.path());
         std::env::remove_var(auth::API_KEY_ENV);

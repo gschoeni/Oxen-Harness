@@ -141,7 +141,10 @@ fn skip_bytes<R: Read>(r: &mut R, n: u64) -> io::Result<()> {
     }
     let copied = io::copy(&mut r.take(n), &mut io::sink())?;
     if copied != n {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "short GGUF read"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "short GGUF read",
+        ));
     }
     Ok(())
 }
@@ -210,7 +213,11 @@ mod tests {
         let bytes = gguf(&[
             ("general.architecture", T_STRING, string_val("qwen2")),
             ("qwen2.block_count", T_UINT32, 48u32.to_le_bytes().to_vec()),
-            ("qwen2.context_length", T_UINT32, 1_048_576u32.to_le_bytes().to_vec()),
+            (
+                "qwen2.context_length",
+                T_UINT32,
+                1_048_576u32.to_le_bytes().to_vec(),
+            ),
         ]);
         let got = read_context_length(&mut Cursor::new(bytes)).unwrap();
         assert_eq!(got, Some(1_048_576));
@@ -225,7 +232,11 @@ mod tests {
         arr.extend_from_slice(&string_val("bb"));
         let bytes = gguf(&[
             ("tokenizer.ggml.tokens", T_ARRAY, arr),
-            ("llama.context_length", T_UINT64, 32_768u64.to_le_bytes().to_vec()),
+            (
+                "llama.context_length",
+                T_UINT64,
+                32_768u64.to_le_bytes().to_vec(),
+            ),
         ]);
         let got = read_context_length(&mut Cursor::new(bytes)).unwrap();
         assert_eq!(got, Some(32_768));

@@ -178,11 +178,7 @@ where
 }
 
 /// Stream `url` to `dest`, emitting [`RuntimeInstallEvent::Progress`].
-async fn download_to_file<F>(
-    url: &str,
-    dest: &Path,
-    on_event: &mut F,
-) -> Result<(), LocalError>
+async fn download_to_file<F>(url: &str, dest: &Path, on_event: &mut F) -> Result<(), LocalError>
 where
     F: FnMut(RuntimeInstallEvent),
 {

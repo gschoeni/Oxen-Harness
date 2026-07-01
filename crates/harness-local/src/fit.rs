@@ -22,12 +22,30 @@ pub struct Quant {
 /// The quant ladder we consider, highest quality (largest) first. `Q4_K_M` is
 /// the consumer sweet spot and the baseline the curated catalog ships at.
 pub const QUANTS: &[Quant] = &[
-    Quant { name: "Q8_0", bits_per_weight: 8.5 },
-    Quant { name: "Q6_K", bits_per_weight: 6.6 },
-    Quant { name: "Q5_K_M", bits_per_weight: 5.7 },
-    Quant { name: "Q4_K_M", bits_per_weight: 4.9 },
-    Quant { name: "Q3_K_M", bits_per_weight: 3.9 },
-    Quant { name: "IQ3_XS", bits_per_weight: 3.3 },
+    Quant {
+        name: "Q8_0",
+        bits_per_weight: 8.5,
+    },
+    Quant {
+        name: "Q6_K",
+        bits_per_weight: 6.6,
+    },
+    Quant {
+        name: "Q5_K_M",
+        bits_per_weight: 5.7,
+    },
+    Quant {
+        name: "Q4_K_M",
+        bits_per_weight: 4.9,
+    },
+    Quant {
+        name: "Q3_K_M",
+        bits_per_weight: 3.9,
+    },
+    Quant {
+        name: "IQ3_XS",
+        bits_per_weight: 3.3,
+    },
 ];
 
 /// The default context window we plan to serve a local model with. The KV cache
@@ -110,7 +128,11 @@ pub fn plan_context(budget: u64, weight_bytes: u64, native: u32) -> u32 {
     const LADDER: &[u32] = &[
         1_048_576, 524_288, 262_144, 131_072, 65_536, 32_768, 16_384, 8_192, 4_096, 2_048,
     ];
-    let cap = if native == 0 { UNKNOWN_NATIVE_CAP } else { native };
+    let cap = if native == 0 {
+        UNKNOWN_NATIVE_CAP
+    } else {
+        native
+    };
     for &c in LADDER {
         if c <= cap && footprint(weight_bytes, c) <= budget {
             return c;
@@ -156,10 +178,22 @@ mod tests {
     fn pick_quant_takes_best_that_fits() {
         // Best-first ladder of the same model at decreasing quants.
         let candidates = vec![
-            QuantCandidate { quant: "Q8_0".into(), weight_bytes: 20 * GIB },
-            QuantCandidate { quant: "Q5_K_M".into(), weight_bytes: 12 * GIB },
-            QuantCandidate { quant: "Q4_K_M".into(), weight_bytes: 9 * GIB },
-            QuantCandidate { quant: "Q3_K_M".into(), weight_bytes: 6 * GIB },
+            QuantCandidate {
+                quant: "Q8_0".into(),
+                weight_bytes: 20 * GIB,
+            },
+            QuantCandidate {
+                quant: "Q5_K_M".into(),
+                weight_bytes: 12 * GIB,
+            },
+            QuantCandidate {
+                quant: "Q4_K_M".into(),
+                weight_bytes: 9 * GIB,
+            },
+            QuantCandidate {
+                quant: "Q3_K_M".into(),
+                weight_bytes: 6 * GIB,
+            },
         ];
         // 16 GB budget → Q8 too big; Q5_K_M (~15 GB footprint) fits tight and is
         // the highest-quality that fits, so it wins over the smaller Q4_K_M.
@@ -170,8 +204,14 @@ mod tests {
     #[test]
     fn pick_quant_falls_back_to_smallest_when_nothing_fits() {
         let candidates = vec![
-            QuantCandidate { quant: "Q8_0".into(), weight_bytes: 40 * GIB },
-            QuantCandidate { quant: "Q3_K_M".into(), weight_bytes: 24 * GIB },
+            QuantCandidate {
+                quant: "Q8_0".into(),
+                weight_bytes: 40 * GIB,
+            },
+            QuantCandidate {
+                quant: "Q3_K_M".into(),
+                weight_bytes: 24 * GIB,
+            },
         ];
         let pick = pick_quant(&candidates, PLANNED_CONTEXT, 8 * GIB).unwrap();
         assert_eq!(pick.quant, "Q3_K_M");
@@ -211,7 +251,10 @@ mod tests {
         // A 1M-native model on a small machine is limited by KV memory, not the
         // native window: an 8 GB budget can't hold a large window.
         let ctx = plan_context(8 * GIB, 4 * GIB, 1_048_576);
-        assert!(ctx <= 32_768, "tight memory should keep the window small, got {ctx}");
+        assert!(
+            ctx <= 32_768,
+            "tight memory should keep the window small, got {ctx}"
+        );
     }
 
     #[test]
