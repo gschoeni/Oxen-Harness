@@ -612,6 +612,42 @@ mod tests {
     }
 
     #[test]
+    fn export_flattens_multimodal_user_message_and_drops_image_data() {
+        let store = store();
+        let session = store.create_session(&meta()).unwrap();
+        // A user message with an attached image serializes content as a Parts
+        // array; the training export must keep the typed text and drop the image.
+        store
+            .append_message(
+                &session,
+                &serde_json::json!({
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is in this image?"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,SECRETPIXELS"}}
+                    ]
+                }),
+            )
+            .unwrap();
+        store
+            .append_message(&session, &Message::assistant("a cat"))
+            .unwrap();
+
+        let out = store
+            .export_chat_completions(std::slice::from_ref(&session), true)
+            .unwrap();
+        let row: serde_json::Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
+        let msgs = row["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["role"], "user");
+        assert_eq!(msgs[0]["content"], "what is in this image?");
+        // The base64 image bytes must never reach the fine-tuning dataset.
+        assert!(
+            !out.contains("SECRETPIXELS") && !out.contains("image_url"),
+            "image data leaked into the training export: {out}"
+        );
+    }
+
+    #[test]
     fn export_chat_completions_handles_tools_per_flag() {
         let store = store();
         let session = store.create_session(&meta()).unwrap();

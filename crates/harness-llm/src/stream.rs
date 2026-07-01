@@ -277,6 +277,40 @@ mod tests {
     }
 
     #[test]
+    fn merges_multiple_parallel_tool_calls_by_distinct_index() {
+        // The model can request several tools in one response; each streams under
+        // its own `index`, interleaved. They must reassemble into separate calls,
+        // in index order, without their arguments bleeding together.
+        let mut asm = StreamAssembler::new();
+        asm.accept(
+            r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"read_file","arguments":"{\"path\":"}}]}}]}"#,
+        );
+        asm.accept(
+            r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_b","function":{"name":"search_files","arguments":"{\"pattern\":"}}]}}]}"#,
+        );
+        asm.accept(
+            r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"a.rs\"}"}}]}}]}"#,
+        );
+        asm.accept(
+            r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"fn\"}"}}]}}]}"#,
+        );
+        let msg = asm.finish();
+        assert_eq!(msg.tool_calls.len(), 2);
+        assert_eq!(msg.tool_calls[0].id, "call_a");
+        assert_eq!(msg.tool_calls[0].function.name, "read_file");
+        assert_eq!(
+            msg.tool_calls[0].function.parsed_arguments().unwrap()["path"],
+            "a.rs"
+        );
+        assert_eq!(msg.tool_calls[1].id, "call_b");
+        assert_eq!(msg.tool_calls[1].function.name, "search_files");
+        assert_eq!(
+            msg.tool_calls[1].function.parsed_arguments().unwrap()["pattern"],
+            "fn"
+        );
+    }
+
+    #[test]
     fn captures_usage_from_final_chunk() {
         let mut asm = StreamAssembler::new();
         asm.accept(r#"{"choices":[{"index":0,"delta":{"content":"hi"}}]}"#);
