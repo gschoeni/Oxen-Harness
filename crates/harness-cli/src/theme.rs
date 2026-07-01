@@ -13,9 +13,11 @@ use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use harness_theme::{Color, Theme};
+
+use crate::almanac::{pick, seed, today, weather, xorshift};
 
 /// An RGB color for 24-bit ANSI.
 type Rgb = (u8, u8, u8);
@@ -219,88 +221,6 @@ pub fn divider(ui: &Ui) -> String {
         .unwrap_or(80)
         .clamp(8, 200);
     ui.dim(&"─".repeat(width))
-}
-
-// ===========================================================================
-// Pseudo-random selection (no `rand` dependency — a tiny time-seeded xorshift).
-// ===========================================================================
-
-/// Today's date formatted like the journal's flavor ("March 21, 1848"), but for
-/// the present day. Derived from `SystemTime` (UTC) with a civil-date conversion
-/// so we avoid pulling in a date/time dependency.
-fn today() -> String {
-    const MONTHS: [&str; 12] = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-    ];
-    let days = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() / 86_400)
-        .unwrap_or(0) as i64;
-    let (year, month, day) = civil_from_days(days);
-    format!("{} {}, {}", MONTHS[(month - 1) as usize], day, year)
-}
-
-/// Convert a count of days since the Unix epoch (1970-01-01) into a
-/// (year, month, day) civil date. Algorithm from Howard Hinnant's `chrono`
-/// date library (`civil_from_days`), valid across the Gregorian calendar.
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
-/// A random weather reading for the trail journal — Oregon Trail flavor, picked
-/// fresh each run from the same time-seeded PRNG used for the death screen.
-fn weather() -> &'static str {
-    const CONDITIONS: [&str; 10] = [
-        "warm", "hot", "cool", "cold", "freezing", "rainy", "snowy", "foggy", "windy", "clear",
-    ];
-    let mut s = seed();
-    CONDITIONS[(xorshift(&mut s) as usize) % CONDITIONS.len()]
-}
-
-fn seed() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x9E3779B97F4A7C15)
-        | 1
-}
-
-fn xorshift(state: &mut u64) -> u64 {
-    let mut x = *state;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    *state = x;
-    x
-}
-
-fn pick(pool: &[String]) -> &str {
-    if pool.is_empty() {
-        return "";
-    }
-    let mut s = seed();
-    let idx = (xorshift(&mut s) as usize) % pool.len();
-    &pool[idx]
 }
 
 /// A tombstone "game over" screen shown when the user ends the session — a
@@ -835,28 +755,12 @@ mod tests {
     }
 
     #[test]
-    fn civil_from_days_matches_known_dates() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1)); // Unix epoch
-        assert_eq!(civil_from_days(18_993), (2022, 1, 1));
-        assert_eq!(civil_from_days(59), (1970, 3, 1)); // non-leap year
-        assert_eq!(civil_from_days(-719_162), (1, 1, 1));
-    }
-
-    #[test]
     fn banner_shows_a_live_date_not_the_static_flavor() {
         let ui = colored();
         let out = banner(&ui, "u", "m", "w", "s", 0);
         // The static flavor year (1848) must be replaced by today's real date.
         assert!(out.contains(&today()));
         assert!(!out.contains("March 21, 1848"));
-    }
-
-    #[test]
-    fn weather_is_one_of_the_known_conditions() {
-        const CONDITIONS: [&str; 10] = [
-            "warm", "hot", "cool", "cold", "freezing", "rainy", "snowy", "foggy", "windy", "clear",
-        ];
-        assert!(CONDITIONS.contains(&weather()));
     }
 
     #[test]

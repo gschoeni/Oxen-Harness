@@ -1,5 +1,6 @@
 //! `oxen-harness` — an interactive, streaming agentic coding REPL.
 
+mod almanac;
 mod ask;
 mod attach;
 mod brave;
