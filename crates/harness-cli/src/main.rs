@@ -333,16 +333,14 @@ async fn main() -> Result<()> {
     // history, queue) for both idle and in-turn input. Pipes, dumb terminals, and
     // an explicit `OXEN_HARNESS_CLASSIC_INPUT` fall back to the classic readline.
     let use_box = live_enabled(&ui) && std::env::var_os("OXEN_HARNESS_CLASSIC_INPUT").is_none();
+    let ctx = ReplContext {
+        store: &store,
+        session: &session,
+        workspace_root: workspace.root(),
+        base_url: &base_url,
+    };
     if use_box {
-        return run_box_repl(
-            &mut agent,
-            &mut ui,
-            &store,
-            &session,
-            workspace.root(),
-            &base_url,
-        )
-        .await;
+        return run_box_repl(&mut agent, &mut ui, &ctx).await;
     }
 
     // A persistent prompt history: Up-arrow recalls prompts from earlier
@@ -389,18 +387,9 @@ async fn main() -> Result<()> {
         match read {
             Ok(line) => {
                 let mut new_history = editor.add_history_entry(line.as_str()).unwrap_or(false);
-                let exit = handle_line(
-                    &line,
-                    &mut agent,
-                    &store,
-                    &session,
-                    &mut ui,
-                    &mut queue,
-                    workspace.root(),
-                    &base_url,
-                    &mut carryover,
-                )
-                .await?;
+                let exit =
+                    handle_line(&line, &mut agent, &mut ui, &mut queue, &mut carryover, &ctx)
+                        .await?;
                 // Fold any prompts queued during the turn — typed into the live
                 // composer or added via `/queue add` — into the history too, so
                 // queued prompts are recallable next session, not just ones typed
@@ -432,18 +421,21 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Immutable, session-scoped context for a REPL run: the values set once at
+/// startup and threaded through the line handler unchanged. Bundling them keeps
+/// [`handle_line`] to the state that actually varies (the agent, UI, and queue).
+struct ReplContext<'a> {
+    store: &'a Arc<HistoryStore>,
+    session: &'a str,
+    workspace_root: &'a Path,
+    base_url: &'a str,
+}
+
 /// The interactive REPL for a live terminal: a bordered, bottom-pinned box
 /// composer (multi-line, history, queue) for both idle input and in-turn
 /// queueing. Reads one submission at idle via [`live::read_idle`], then dispatches
 /// it (a `/command` or a prompt) through [`handle_line`] in cooked mode.
-async fn run_box_repl(
-    agent: &mut Agent,
-    ui: &mut Ui,
-    store: &Arc<HistoryStore>,
-    session: &str,
-    workspace_root: &Path,
-    base_url: &str,
-) -> Result<()> {
+async fn run_box_repl(agent: &mut Agent, ui: &mut Ui, ctx: &ReplContext<'_>) -> Result<()> {
     let history_path = prompt_history_path();
     let mut history = load_prompt_history(history_path.as_deref());
     let mut queue = MessageQueue::default();
@@ -461,23 +453,12 @@ async fn run_box_repl(
         let idle = live::read_idle(ui, &mut queue, &mut history, &seed).await?;
         match idle {
             live::Idle::Exit => {
-                print!("{}", theme::death_screen(ui, session));
+                print!("{}", theme::death_screen(ui, ctx.session));
                 break;
             }
             live::Idle::Submit(line) => {
                 let mut carryover = String::new();
-                let exit = handle_line(
-                    &line,
-                    agent,
-                    store,
-                    session,
-                    ui,
-                    &mut queue,
-                    workspace_root,
-                    base_url,
-                    &mut carryover,
-                )
-                .await?;
+                let exit = handle_line(&line, agent, ui, &mut queue, &mut carryover, ctx).await?;
                 seed = carryover;
                 // Fold any prompts queued during the turn into the recallable
                 // history too, then persist (survives an abrupt exit).
@@ -522,22 +503,18 @@ fn save_prompt_history(path: Option<&Path>, entries: &[String]) {
 }
 
 /// Handle one line of input. Returns `Ok(true)` when the REPL should exit.
-#[allow(clippy::too_many_arguments)]
 async fn handle_line(
     line: &str,
     agent: &mut Agent,
-    store: &Arc<HistoryStore>,
-    session: &str,
     ui: &mut Ui,
     queue: &mut MessageQueue,
-    workspace_root: &Path,
-    base_url: &str,
     carryover: &mut String,
+    ctx: &ReplContext<'_>,
 ) -> Result<bool> {
     match parse_command(line) {
         Command::Empty => {}
         Command::Exit => {
-            print!("{}", theme::death_screen(ui, session));
+            print!("{}", theme::death_screen(ui, ctx.session));
             return Ok(true);
         }
         Command::Help => print!("{}", theme::help(ui)),
@@ -545,14 +522,14 @@ async fn handle_line(
         Command::Queue(rest) => {
             // `/queue run` may stream turns that the user can Ctrl-C to quit.
             if queue_cmd::handle_repl(rest, queue, agent, ui, carryover).await? {
-                print!("{}", theme::death_screen(ui, session));
+                print!("{}", theme::death_screen(ui, ctx.session));
                 return Ok(true);
             }
         }
         Command::Loop(rest) => {
             // A running loop streams turns the user can Ctrl-C to quit.
-            if loop_cmd::handle_repl(rest, agent, ui, workspace_root).await? {
-                print!("{}", theme::death_screen(ui, session));
+            if loop_cmd::handle_repl(rest, agent, ui, ctx.workspace_root).await? {
+                print!("{}", theme::death_screen(ui, ctx.session));
                 return Ok(true);
             }
         }
@@ -569,10 +546,10 @@ async fn handle_line(
                 "{}",
                 theme::banner(
                     ui,
-                    base_url,
+                    ctx.base_url,
                     agent.model(),
-                    &workspace_root.display().to_string(),
-                    session,
+                    &ctx.workspace_root.display().to_string(),
+                    ctx.session,
                     agent.tokens_used(),
                 )
             );
@@ -593,11 +570,11 @@ async fn handle_line(
             let _ = harness_runtime::models::set_selected(&m);
             println!("  {} {}", ui.brown("fresh oxen yoked:"), ui.accent(&m));
         }
-        Command::Export(dest) => export(store, session, dest, ui)?,
+        Command::Export(dest) => export(ctx.store, ctx.session, dest, ui)?,
         Command::Prompt(prompt) => {
             // Ctrl-C mid-stream ends the expedition just like quitting does.
             if run_turn_and_drain(agent, &prompt, ui, queue, carryover).await? {
-                print!("{}", theme::death_screen(ui, session));
+                print!("{}", theme::death_screen(ui, ctx.session));
                 return Ok(true);
             }
         }
