@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { SkillsPage } from "./SkillsPage";
+import { useStore } from "../../lib/store";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
 import type { SkillInfo } from "../../lib/types";
@@ -38,6 +39,14 @@ async function openSkill(name: string) {
 }
 
 describe("SkillsPage", () => {
+  it("explains the tools vs skills split and cross-links to Tools", async () => {
+    render(<SkillsPage />);
+    await screen.findByText("release-notes");
+    expect(screen.getByText(/knows how to do/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Tools" }));
+    expect(useStore.getState().settingsPage).toBe("tools");
+  });
+
   it("lists skills with their scope and enabled state", async () => {
     render(<SkillsPage />);
     expect(await screen.findByText("release-notes")).toBeInTheDocument();

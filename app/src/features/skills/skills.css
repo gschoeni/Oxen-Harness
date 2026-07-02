@@ -1,6 +1,38 @@
 /* Skills settings page — extends the tools.css row/editor styles with
    skill-specific touches. */
 
+/* The tools ↔ skills mental model, shown first so new users get the split. */
+.skills-explainer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.skills-explainer-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+}
+.skills-explainer-term {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.skills-explainer-def {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+@media (max-width: 900px) {
+  .skills-explainer {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Where a skill lives: global (every project) or project (this repo). */
 .skill-scope {
   flex-shrink: 0;

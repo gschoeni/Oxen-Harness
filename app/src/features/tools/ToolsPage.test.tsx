@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { ToolsPage } from "./ToolsPage";
+import { useStore } from "../../lib/store";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
 import type { ToolInfo } from "../../lib/types";
@@ -39,6 +40,13 @@ beforeEach(() => {
 });
 
 describe("ToolsPage", () => {
+  it("cross-links to the Skills page where workflows live", async () => {
+    render(<ToolsPage />);
+    await screen.findByText("read_file");
+    await userEvent.click(screen.getByRole("button", { name: "Skills" }));
+    expect(useStore.getState().settingsPage).toBe("skills");
+  });
+
   it("splits tools into custom and built-in sections", async () => {
     render(<ToolsPage />);
     expect(await screen.findByText("lookup_customer")).toBeInTheDocument();

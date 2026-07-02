@@ -4,6 +4,22 @@
   gap: var(--space-2);
 }
 
+/* An inline link-shaped button inside hint text (e.g. Tools ↔ Skills
+   cross-references) — navigates between settings pages. */
+.hint-link {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--link, var(--accent));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.hint-link:hover {
+  color: var(--accent);
+}
+
 .tool-row {
   display: grid;
   grid-template-columns: 1fr auto;

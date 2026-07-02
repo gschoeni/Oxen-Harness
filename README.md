@@ -409,6 +409,34 @@ Every crate's `src/lib.rs` opens with a `//!` comment stating what it owns, and
 layering. Tests live in a `#[cfg(test)] mod tests` right beside the code they
 cover, so they double as usage examples.
 
+### Extending the agent: tools vs skills
+
+Two concepts cover everything the agent can be taught, and the split is worth
+internalizing before you add either:
+
+- **Tools are what the agent can *do*** — read a file, run a command, search
+  the web, call your API. Every tool's name, description, and schema are sent
+  to the model on **every request**, and the model calls one whenever it needs
+  that ability.
+- **Skills are what the agent *knows how to do*** — a workflow, a house style,
+  a procedure, written as markdown instructions. Skills ride on a single
+  built-in `skill` **tool**: the model is shown only each skill's name and
+  one-line description, and when a request matches it calls
+  `skill("<name>")` to pull the full instructions into the conversation.
+  That's the whole interaction — a skill never runs code itself; once loaded,
+  its instructions guide which *tools* the agent uses.
+
+| You want the agent to… | Add a… | How | Cost per request |
+|---|---|---|---|
+| Follow your release-notes format, review checklist, deploy runbook | **Skill** (markdown, no code) | Settings → Skills, or drop a `SKILL.md` folder | One line (name + description) |
+| Call your internal API or webhook | **Custom tool** (no code) | Settings → Tools → New tool (HTTP POST) | Its name + description + schema |
+| Do something new on the machine (parse a format, drive a CLI…) | **Built-in tool** (Rust) | The recipe below | Its name + description + schema |
+
+Rule of thumb: if it could be a wiki page for a new teammate, it's a skill; if
+it needs to *execute*, it's a tool. Both are managed in the desktop app's
+Settings (each page links to the other), both apply to new and resumed chats,
+and the CLI honors the same configuration.
+
 ### Adding a tool
 
 Tools are what the agent can *do* — read files, run commands, search the web.

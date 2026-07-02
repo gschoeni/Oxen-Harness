@@ -14,6 +14,7 @@ import { ArrowLeft, ChevronRight, GraduationCap, Pencil, Plus, Trash2 } from "lu
 import { Button } from "../../components/ui";
 import { Markdown } from "../../components/ui/Markdown";
 import { deleteSkill, listSkills, saveSkill, setSkillEnabled } from "../../lib/ipc";
+import { useStore } from "../../lib/store";
 import type { SkillInfo, SkillScope } from "../../lib/types";
 import { ToolSwitch } from "../tools/ToolSwitch";
 import "../tools/tools.css";
@@ -110,11 +111,11 @@ export function SkillsPage() {
         <div className="settings-label">
           Skills{skills && skills.length > 0 && ` · ${skills.length}`}
         </div>
+        <SkillsExplainer />
         <p className="hint">
           A skill teaches the agent a reusable workflow — release notes in your house style, a
-          review checklist, a deploy procedure. The model sees each skill's name and
-          description, and loads the full instructions only when a request matches. Skills
-          apply to <strong>new and resumed chats</strong>; project skills live in{" "}
+          review checklist, a deploy procedure. Skills apply to{" "}
+          <strong>new and resumed chats</strong>; project skills live in{" "}
           <code>.oxen-harness/skills/</code> so they can ship with the repo.
         </p>
         {error && <span className="save-status err">{error}</span>}
@@ -139,6 +140,38 @@ export function SkillsPage() {
           </button>
         </div>
       </section>
+    </div>
+  );
+}
+
+/** The tools ↔ skills mental model, up front for first-time visitors: tools are
+ *  abilities, skills are know-how riding on one `skill` tool. */
+function SkillsExplainer() {
+  const setPage = useStore((s) => s.setSettingsPage);
+  return (
+    <div className="skills-explainer">
+      <div className="skills-explainer-col">
+        <span className="skills-explainer-term">
+          <button className="hint-link" onClick={() => setPage("tools")}>
+            Tools
+          </button>{" "}
+          are what the agent can <em>do</em>
+        </span>
+        <span className="skills-explainer-def">
+          Read files, run commands, search the web, call your APIs. Every tool is offered to
+          the model on every request.
+        </span>
+      </div>
+      <div className="skills-explainer-col">
+        <span className="skills-explainer-term">
+          Skills are what it <em>knows how to do</em>
+        </span>
+        <span className="skills-explainer-def">
+          Instructions loaded on demand through one built-in <code>skill</code> tool: the model
+          sees each skill's name + description, and pulls in the full instructions only when a
+          request matches. Write the description like a trigger — "does X, use when Y".
+        </span>
+      </div>
     </div>
   );
 }

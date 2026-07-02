@@ -15,12 +15,14 @@ import {
   setToolDescription,
   setToolEnabled,
 } from "../../lib/ipc";
+import { useStore } from "../../lib/store";
 import type { CustomToolSpec, ToolInfo } from "../../lib/types";
 import { ToolEditor } from "./ToolEditor";
 import { ToolSwitch } from "./ToolSwitch";
 import "./tools.css";
 
 export function ToolsPage() {
+  const setPage = useStore((s) => s.setSettingsPage);
   const [tools, setTools] = useState<ToolInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Whether the "new tool" editor card is open.
@@ -138,6 +140,15 @@ export function ToolsPage() {
             ))
           )}
         </div>
+
+        <p className="hint">
+          Tools are what the agent can <em>do</em>. For what it should <em>know how to do</em> —
+          reusable workflows loaded on demand through a single <code>skill</code> tool — see{" "}
+          <button className="hint-link" onClick={() => setPage("skills")}>
+            Skills
+          </button>
+          .
+        </p>
       </section>
     </div>
   );
