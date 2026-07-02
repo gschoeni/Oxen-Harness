@@ -12,6 +12,7 @@ An open source, hackable agentic coding harness — like Claude Code or Codex, b
 ## Why
 
 - **Hackable & open source (Apache-2.0).** A small, readable Rust workspace you can fork and extend.
+- **Extend it at three levels, no forking required.** Teach the agent reusable workflows with [skills](#adding-a-skill) (a markdown file — no code), connect your own HTTP endpoints as [custom tools](#adding-a-tool) from the desktop app's Settings, or add a built-in tool in Rust with a [start-to-finish recipe](#adding-a-tool).
 - **Bring your own model.** Anything with a chat completions endpoint and tool calling — default is `claude-opus-4-8` via Oxen.ai, or run Qwen3 **locally** with llama.cpp (`--local`).
 - **Your data, exportable.** Full conversation + tool-call history in SQLite, with a JSONL exporter for fine-tuning.
 - **Two front ends.** A `claude`-style interactive CLI first, then a cross-platform [Tauri v2](https://v2.tauri.app/) desktop app.
@@ -26,7 +27,7 @@ of focused crates:
 |-------|----------------|
 | `harness-core` | Shared domain types (messages, roles) and defaults |
 | `harness-llm` | Oxen.ai chat completions client: tool calling + SSE streaming, lightweight auth |
-| `harness-tools` | Built-in tools: read/write/edit files, glob find, regex search, sandboxed shell, git status/diff/log/commit, Brave web search, interactive multiple-choice questions |
+| `harness-tools` | The `TypedTool` trait + built-in tools: read/write/edit files, glob find, regex search, sandboxed shell, git, Brave web search, interactive questions, canvas documents, plans, skills, and user-defined HTTP tools |
 | `harness-store` | SQLite history (verbatim) + JSONL export for fine-tuning |
 | `harness-local` | Local models: curated Qwen3 GGUF catalog, downloads + disk tracking, `llama-server` launcher |
 | `harness-theme` | Configurable, shareable themes (palette + voice): built-ins, TOML/JSON load/save, partial overrides, the active-theme store |
