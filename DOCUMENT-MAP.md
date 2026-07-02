@@ -37,11 +37,6 @@ oxen-harness/
                                dist/ = chat UI. See app/README.md.
   plans/                     — Actionable execution docs. Pull in per-topic.
     archive/                 — Deprecated plans, kept for historical reference.
-  reference/                 — Look-up material. Pull in when in the weeds.
-  output/                    — Finished or near-finished deliverables.
-  ongoing/                   — Operational runbooks. Living docs for recurring processes.
-  journal/                   — Historical archives & templates.
-  scratch/                   — Working artifacts. Graduate to plans/ or reference/ when complete.
 ```
 
 ## Loading Guide
