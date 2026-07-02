@@ -52,6 +52,14 @@ cargo nextest run          # or: cargo test --workspace
 
 A change is "green" only when all three pass.
 
+The desktop app is a separate Cargo project (the root workspace excludes it), so
+changes under `app/` get their own loop:
+
+```bash
+cd app/src-tauri && cargo clippy -- -D warnings   # the Tauri bridge
+cd app && npx tsc --noEmit && npx vitest run       # the React frontend
+```
+
 ## Project conventions
 
 - **Provider:** Oxen.ai only. Base URL `https://hub.oxen.ai/api/ai`, default model

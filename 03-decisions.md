@@ -244,6 +244,34 @@ command delivers the user's selection from the question card. The CLI renderer
 special-cases the tool name to suppress the usual tool line + spinner while the picker
 owns the screen.
 
+**Tool schemas derive from typed args structs (`TypedTool` + `schemars`)** (2026-07-01)
+Every tool used to carry a hand-written `json!` schema *and* hand-rolled argument
+extraction — two disconnected encodings of the same interface that could silently
+drift. Tools now implement `TypedTool` (`NAME`, `type Args: Deserialize + JsonSchema`,
+`run(Args)`); the schema the model reads is generated from the same struct serde
+parses, with doc comments becoming the model-facing field descriptions. A blanket
+`impl Tool for T: TypedTool` would collide with runtime-schema tools (user-defined
+custom tools) under coherence rules, so the registry wraps via a private adapter
+(`with_typed`/`register_typed`) instead. `schema_for` strips generator noise and
+compacts documented enums to keep the per-request token overhead pinned by the
+existing budget test; a registry-completeness test makes forgot-to-register loud.
+The old `args.rs` helpers were deleted. Rejected: staying hand-written (drift risk),
+proc-macro codegen (a second thing to learn).
+
+**Skills: SKILL.md + progressive disclosure via one `skill` tool** (2026-07-01)
+Reusable know-how (house styles, checklists, procedures) is data, not code — so a
+skill is a directory holding a `SKILL.md` (YAML frontmatter `name`/`description` +
+markdown body), deliberately the same shape as Claude Code skills so existing ones
+port over. The interaction copies Claude Code's progressive disclosure: a single
+built-in `skill` tool advertises only each skill's name + one-line description
+(a few tokens per skill); the full instructions enter context only when the model
+invokes the skill. Discovery is global (`~/.oxen-harness/skills/`) + per-project
+(`.oxen-harness/skills/`, committed to the repo — project shadows global by name);
+enable/disable prefs live in `skills.json`; the desktop Settings → Skills page and
+the CLI `/skills` command surface them. Rejected: injecting all skills into the
+system prompt (pays for every skill on every call), a per-skill tool (tool-list
+bloat), and a bespoke format (Claude Code compatibility is free adoption).
+
 ## Attachments (drag-and-drop)
 
 **Dropped files become content parts; text documents are inlined** (2026-06-23)
