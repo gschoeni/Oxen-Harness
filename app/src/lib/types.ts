@@ -356,8 +356,8 @@ export type SettingsPage =
   | "appearance"
   | "logs";
 
-/** One built-in agent tool as shown on the Tools page: its identity, the
- *  (possibly overridden) description advertised to the model, its JSON schema,
+/** One agent tool (built-in or custom) as shown on the Tools page: its identity,
+ *  the (possibly overridden) description advertised to the model, its JSON schema,
  *  and whether the user has it enabled. Mirrors `harness_runtime::tools::ToolInfo`. */
 export interface ToolInfo {
   /** Stable tool id the model calls (e.g. `read_file`). */
@@ -374,6 +374,19 @@ export interface ToolInfo {
   builtin: boolean;
   /** Free-form per-tool config (e.g. shell timeout), as a JSON object. */
   config: Record<string, unknown>;
+}
+
+/** A user-defined tool backed by a simple external action. Mirrors
+ *  `harness_tools::CustomToolSpec`. */
+export interface CustomToolSpec {
+  /** Tool id the model calls — lowercase letters, digits, underscores. */
+  name: string;
+  /** Tells the model what the tool does and when to reach for it. */
+  description: string;
+  /** JSON Schema object describing the tool's arguments. */
+  parameters: unknown;
+  /** What invoking the tool does. Only HTTP POST today. */
+  action: { kind: "http_post"; url: string };
 }
 
 // ---- canvas (side-panel documents) -----------------------------------------

@@ -358,10 +358,10 @@ fn agent_parts(
     let workspace = Workspace::new(workspace_root).map_err(|e| e.to_string())?;
     let brave_key = harness_runtime::connection::brave_key_override();
     let mut tools = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
-    tools.register(Arc::new(AskUserTool::new(Arc::new(TauriAsker {
+    tools.register_typed(AskUserTool::new(Arc::new(TauriAsker {
         app: app.clone(),
         pending,
-    }))));
+    })));
     // Apply the user's saved tool preferences: drop disabled tools and layer in
     // any description overrides. Done before the web-search check so a disabled
     // web_search isn't advertised in the prompt.
@@ -392,10 +392,10 @@ fn agent_parts(
 /// Register the session-scoped `canvas` tool on a registry. Done once the
 /// session id is known so canvas events can be tagged with it.
 fn register_canvas(tools: &mut ToolRegistry, app: &AppHandle, session: &str) {
-    tools.register(Arc::new(CanvasTool::new(Arc::new(TauriCanvasSink {
+    tools.register_typed(CanvasTool::new(Arc::new(TauriCanvasSink {
         app: app.clone(),
         session: session.to_string(),
-    }))));
+    })));
 }
 
 /// Build an agent for a brand-new session (creates the session row).
@@ -1024,6 +1024,25 @@ async fn list_tools(state: State<'_, AppState>) -> Result<Vec<harness_runtime::t
     let registry = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
     let prefs = harness_runtime::tools::load();
     Ok(harness_runtime::tools::list(&registry, &prefs))
+}
+
+/// Add or update a custom HTTP POST tool. Takes effect for new/resumed chats.
+#[tauri::command]
+async fn add_custom_tool(
+    state: State<'_, AppState>,
+    spec: harness_tools::CustomToolSpec,
+) -> Result<(), String> {
+    let root = active_root(&state).await;
+    let workspace = Workspace::new(&root).map_err(|e| e.to_string())?;
+    let brave_key = harness_runtime::connection::brave_key_override();
+    let registry = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
+    harness_runtime::tools::add_custom(spec, &registry).map_err(|e| e.to_string())
+}
+
+/// Remove a custom tool. Built-ins cannot be removed, only disabled.
+#[tauri::command]
+async fn remove_custom_tool(name: String) -> Result<(), String> {
+    harness_runtime::tools::remove_custom(&name).map_err(|e| e.to_string())
 }
 
 /// Enable or disable a built-in tool. Takes effect for new/resumed chats.
@@ -1811,6 +1830,8 @@ pub fn run() {
             attachment_data_uri,
             tool_definitions,
             list_tools,
+            add_custom_tool,
+            remove_custom_tool,
             set_tool_enabled,
             set_tool_description,
             export_finetuning,

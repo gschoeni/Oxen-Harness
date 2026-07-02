@@ -34,6 +34,7 @@ import type {
   ChatMessage,
   ToolDefinition,
   ToolInfo,
+  CustomToolSpec,
 } from "./types";
 
 // ---- session / agent -------------------------------------------------------
@@ -49,8 +50,12 @@ export const toolDefinitions = () => invoke<ToolDefinition[]>("tool_definitions"
 
 // ---- tools (manage which tools the agent may call) -------------------------
 
-/** Every built-in tool with its enabled/override state, for the Tools page. */
+/** Every tool (built-in + custom) with its enabled/override state, for the Tools page. */
 export const listTools = () => invoke<ToolInfo[]>("list_tools");
+/** Add a new custom HTTP tool, or update the one with the same name. */
+export const addCustomTool = (spec: CustomToolSpec) => invoke<void>("add_custom_tool", { spec });
+/** Remove a custom tool (built-ins can only be disabled). */
+export const removeCustomTool = (name: string) => invoke<void>("remove_custom_tool", { name });
 /** Enable or disable a built-in tool (applies to new/resumed chats). */
 export const setToolEnabled = (name: string, enabled: boolean) =>
   invoke<void>("set_tool_enabled", { name, enabled });

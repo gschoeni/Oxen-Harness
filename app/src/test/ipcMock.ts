@@ -180,6 +180,8 @@ export const toolDefinitions = vi.fn(async () => [] as unknown[]);
 export const listTools = vi.fn(async () => [] as unknown[]);
 export const setToolEnabled = vi.fn(async () => {});
 export const setToolDescription = vi.fn(async () => {});
+export const addCustomTool = vi.fn(async () => {});
+export const removeCustomTool = vi.fn(async () => {});
 export const exportFinetuning = vi.fn(async () => 0);
 export const pickExportPath = vi.fn(async () => null as string | null);
 export const attachmentDataUri = vi.fn(async () => "data:image/png;base64,AAAA");
@@ -296,6 +298,11 @@ export function resetIpc() {
   totalTokensUsed.mockReset().mockResolvedValue(0);
   sessionMessages.mockReset().mockResolvedValue([]);
   toolDefinitions.mockReset().mockResolvedValue([]);
+  listTools.mockReset().mockResolvedValue([]);
+  setToolEnabled.mockReset().mockResolvedValue(undefined);
+  setToolDescription.mockReset().mockResolvedValue(undefined);
+  addCustomTool.mockReset().mockResolvedValue(undefined);
+  removeCustomTool.mockReset().mockResolvedValue(undefined);
   attachmentDataUri.mockReset().mockResolvedValue("data:image/png;base64,AAAA");
   [
     onToken,
