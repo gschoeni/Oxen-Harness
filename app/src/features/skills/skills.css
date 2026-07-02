@@ -23,4 +23,95 @@
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: 1.6;
+  resize: vertical;
+}
+
+/* Chevron hinting that a list row opens the reading view. */
+.skill-row-go {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+/* --- Show / edit subpages (they take over the settings content pane) --- */
+.skill-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.skill-back {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  margin-left: calc(-1 * var(--space-2));
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+  color: var(--text-tertiary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.skill-back:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.skill-detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.skill-detail-icon {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--accent);
+}
+.skill-detail-titles {
+  flex: 1;
+  min-width: 0;
+}
+.skill-detail-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-family: var(--font-readout, monospace);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+.skill-detail-desc {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.skill-detail-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* The rendered SKILL.md body — a framed reading surface. */
+.skill-md {
+  background: var(--surface);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+  padding: var(--space-4) var(--space-5);
+  overflow-x: auto;
+}
+.skill-md-preview {
+  /* Match the write-mode textarea so toggling doesn't jump the layout. */
+  min-height: 21rem;
+  background: var(--bg);
+}
+
+.skill-detail-foot {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
