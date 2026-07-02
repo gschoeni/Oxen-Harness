@@ -10,7 +10,7 @@ import { ChevronRight, GraduationCap, Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/ui";
 import { deleteSkill, listSkills, saveSkill, setSkillEnabled } from "../../lib/ipc";
 import type { SkillInfo, SkillScope } from "../../lib/types";
-import { ToolSwitch } from "../tools/ToolsPage";
+import { ToolSwitch } from "../tools/ToolSwitch";
 import "../tools/tools.css";
 import "./skills.css";
 
