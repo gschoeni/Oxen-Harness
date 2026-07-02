@@ -366,6 +366,11 @@ fn agent_parts(
     // any description overrides. Done before the web-search check so a disabled
     // web_search isn't advertised in the prompt.
     harness_runtime::tools::load().apply(&mut tools);
+    // Skills load on demand through the `skill` tool; it's only registered when
+    // the user has enabled skills, so an empty set costs no prompt tokens.
+    if let Some(skill_tool) = harness_runtime::skills::enabled_tool(workspace_root) {
+        tools.register_typed(skill_tool);
+    }
     // Only advertise web search in the prompt when it actually registered (and
     // wasn't disabled), so the model never calls a tool the registry rejects.
     let web_search = tools.get("web_search").is_some();
@@ -1043,6 +1048,52 @@ async fn add_custom_tool(
 #[tauri::command]
 async fn remove_custom_tool(name: String) -> Result<(), String> {
     harness_runtime::tools::remove_custom(&name).map_err(|e| e.to_string())
+}
+
+/// Every skill visible from the active project (global + project scope, with
+/// project shadowing), for the Skills settings page.
+#[tauri::command]
+async fn list_skills(
+    state: State<'_, AppState>,
+) -> Result<Vec<harness_runtime::skills::SkillInfo>, String> {
+    let root = active_root(&state).await;
+    let prefs = harness_runtime::skills::load();
+    Ok(harness_runtime::skills::list(&root, &prefs))
+}
+
+/// Create or update a skill's SKILL.md. Takes effect for new/resumed chats.
+#[tauri::command]
+async fn save_skill(
+    state: State<'_, AppState>,
+    scope: harness_tools::SkillScope,
+    name: String,
+    description: String,
+    instructions: String,
+) -> Result<(), String> {
+    let root = active_root(&state).await;
+    harness_runtime::skills::save_skill(&root, scope, &name, &description, &instructions)
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a skill's directory (SKILL.md plus any supporting files).
+#[tauri::command]
+async fn delete_skill(
+    state: State<'_, AppState>,
+    scope: harness_tools::SkillScope,
+    name: String,
+) -> Result<(), String> {
+    let root = active_root(&state).await;
+    harness_runtime::skills::delete_skill(&root, scope, &name).map_err(|e| e.to_string())
+}
+
+/// Enable or disable a skill. Takes effect for new/resumed chats.
+#[tauri::command]
+async fn set_skill_enabled(name: String, enabled: bool) -> Result<(), String> {
+    let mut prefs = harness_runtime::skills::load();
+    if prefs.set_enabled(&name, enabled) {
+        harness_runtime::skills::save(&prefs).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Enable or disable a built-in tool. Takes effect for new/resumed chats.
@@ -1834,6 +1885,10 @@ pub fn run() {
             remove_custom_tool,
             set_tool_enabled,
             set_tool_description,
+            list_skills,
+            save_skill,
+            delete_skill,
+            set_skill_enabled,
             export_finetuning,
             total_tokens_used,
             new_session,

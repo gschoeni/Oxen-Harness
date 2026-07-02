@@ -27,6 +27,7 @@ pub mod git;
 pub mod plan;
 pub mod sandbox;
 pub mod shell;
+pub mod skill;
 pub mod web;
 
 pub use ask::{AskUserTool, Choice, Question, QuestionAnswer, QuestionAsker, ASK_USER_TOOL};
@@ -36,6 +37,7 @@ pub use git::GIT_TOOL;
 pub use plan::{PlanItem, PlanStatus, PlanTool, PLAN_TOOL};
 pub use sandbox::Workspace;
 pub use shell::RUN_SHELL_TOOL;
+pub use skill::{Skill, SkillScope, SkillTool, SKILL_TOOL};
 pub use web::WEB_SEARCH_TOOL;
 
 /// Errors a tool can return while running.

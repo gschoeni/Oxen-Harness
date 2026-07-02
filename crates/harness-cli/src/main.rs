@@ -358,7 +358,8 @@ async fn resolve_endpoint(args: &Args, resume_meta: Option<&SessionMeta>, ui: &U
 
 /// The CLI's tool set: the workspace file/shell/git/web tools, plus the
 /// interactive question picker and the canvas document viewer wired to their CLI
-/// front ends.
+/// front ends, with the user's saved tool preferences and skills applied — the
+/// same setup the desktop app builds, so sessions behave identically.
 fn build_tool_registry(workspace: &Workspace, ui: &Ui) -> ToolRegistry {
     let mut tools = ToolRegistry::default_for_workspace(workspace.clone());
     // Let the agent interview the user via the interactive terminal picker.
@@ -370,6 +371,15 @@ fn build_tool_registry(workspace: &Workspace, ui: &Ui) -> ToolRegistry {
     tools.register_typed(harness_tools::CanvasTool::new(Arc::new(
         canvas::CliCanvasSink,
     )));
+    // Honor the user's saved tool preferences (Settings → Tools in the desktop
+    // app): custom HTTP tools register, disabled tools drop, and description
+    // overrides layer into the definitions the model sees.
+    harness_runtime::tools::load().apply(&mut tools);
+    // Skills load on demand through the `skill` tool; it's only registered when
+    // the user has enabled skills, so an empty set costs no prompt tokens.
+    if let Some(skill_tool) = harness_runtime::skills::enabled_tool(workspace.root()) {
+        tools.register_typed(skill_tool);
+    }
     tools
 }
 

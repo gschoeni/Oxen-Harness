@@ -10,11 +10,17 @@
 //!   path both front ends use to build a client.
 //! - [`config_repo`] — opt-in Oxen versioning of `~/.oxen-harness`, snapshotted
 //!   after config changes.
+//! - [`models`] — the cloud-model catalog (built-ins + user additions).
+//! - [`tools`] — per-tool preferences (enable/disable, description overrides)
+//!   and user-defined custom HTTP tools.
+//! - [`skills`] — skill discovery (global + per-project `SKILL.md` dirs),
+//!   preferences, and authoring.
 
 mod config;
 pub mod config_repo;
 pub mod connection;
 pub mod models;
+pub mod skills;
 pub mod tools;
 
 /// A process-wide lock serializing tests that mutate global env vars / the shared
@@ -59,4 +65,6 @@ pub enum RuntimeError {
     Client(String),
     #[error("{0}")]
     Invalid(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }

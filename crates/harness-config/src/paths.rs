@@ -96,6 +96,22 @@ pub fn themes_dir() -> Result<PathBuf, ConfigError> {
     Ok(dir)
 }
 
+/// `~/.oxen-harness/skills.json` — skill preferences (disabled skills).
+pub fn skills_file() -> Result<PathBuf, ConfigError> {
+    under("skills.json")
+}
+
+/// `~/.oxen-harness/skills/` — global skills (one directory per skill, each
+/// holding a `SKILL.md`), available in every project.
+pub fn skills_dir() -> Result<PathBuf, ConfigError> {
+    let dir = under("skills")?;
+    std::fs::create_dir_all(&dir).map_err(|source| ConfigError::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    Ok(dir)
+}
+
 /// `~/.oxen-harness/loops/` — shareable loop specs + run journals.
 pub fn loops_dir() -> Result<PathBuf, ConfigError> {
     let dir = under("loops")?;
