@@ -384,9 +384,9 @@ fn build_tool_registry(workspace: &Workspace, ui: &Ui) -> ToolRegistry {
 }
 
 /// The agent configuration for a CLI session: model + window, a system prompt
-/// that advertises web search only when the Brave key enabled it (the canvas
-/// tool is always registered), and an attachment root so images/PDFs are stored
-/// on disk rather than inlined.
+/// gated on which tools actually survived the user's preferences (so the model
+/// is never told about web search or the canvas when they're disabled), and an
+/// attachment root so images/PDFs are stored on disk rather than inlined.
 fn agent_config(
     model: &str,
     context_window: Option<usize>,
@@ -398,7 +398,7 @@ fn agent_config(
         context_window,
         system_prompt: Some(harness_agent::system_prompt_with_env(
             tools.get(harness_tools::WEB_SEARCH_TOOL).is_some(),
-            true,
+            tools.get(harness_tools::CANVAS_TOOL).is_some(),
             workspace.root(),
         )),
         attachment_root: Some(workspace.root().to_path_buf()),

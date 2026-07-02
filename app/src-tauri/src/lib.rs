@@ -333,7 +333,10 @@ async fn ensure_local_server(state: &AppState, id: &str) -> Result<(String, usiz
     let server = LocalServer::start_with_context(&store.path_for(id), id, context, |_| {})
         .await
         .map_err(|e| e.to_string())?;
-    let result = (server.base_url().to_string(), server.context_size() as usize);
+    let result = (
+        server.base_url().to_string(),
+        server.context_size() as usize,
+    );
     *guard = Some(server);
     Ok(result)
 }
@@ -345,16 +348,15 @@ fn build_client(model: &str) -> Result<OxenClient, String> {
     harness_runtime::connection::build_client(model).map_err(|e| e.to_string())
 }
 
-/// Shared agent dependencies — the tool registry (with the question bridge), the
-/// history store, and the run config. Fresh and resumed agents build these the
-/// same way; only how they bind a session differs.
+/// Shared agent dependencies — the tool registry (defaults + the question
+/// bridge, *before* user preferences) and the history store. Fresh and resumed
+/// agents build these the same way; only how they bind a session differs.
+/// [`finish_tools`] completes the registry once the session id is known.
 fn agent_parts(
     app: &AppHandle,
     pending: Pending,
-    model_label: &str,
-    context_window: Option<usize>,
     workspace_root: &Path,
-) -> Result<(ToolRegistry, Arc<HistoryStore>, AgentConfig), String> {
+) -> Result<(ToolRegistry, Arc<HistoryStore>), String> {
     let workspace = Workspace::new(workspace_root).map_err(|e| e.to_string())?;
     let brave_key = harness_runtime::connection::brave_key_override();
     let mut tools = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
@@ -362,45 +364,52 @@ fn agent_parts(
         app: app.clone(),
         pending,
     })));
-    // Apply the user's saved tool preferences: drop disabled tools and layer in
-    // any description overrides. Done before the web-search check so a disabled
-    // web_search isn't advertised in the prompt.
-    harness_runtime::tools::load().apply(&mut tools);
-    // Skills load on demand through the `skill` tool; it's only registered when
-    // the user has enabled skills, so an empty set costs no prompt tokens.
-    if let Some(skill_tool) = harness_runtime::skills::enabled_tool(workspace_root) {
-        tools.register_typed(skill_tool);
-    }
-    // Only advertise web search in the prompt when it actually registered (and
-    // wasn't disabled), so the model never calls a tool the registry rejects.
-    let web_search = tools.get("web_search").is_some();
 
     let history_path = harness_config::paths::history_db().map_err(|e| e.to_string())?;
     let store = Arc::new(HistoryStore::open(history_path).map_err(|e| e.to_string())?);
+    Ok((tools, store))
+}
 
-    let config = AgentConfig {
+/// Complete a session's tool registry and derive its run config. Registers the
+/// session-scoped `canvas` tool, applies the user's saved tool preferences to
+/// the *complete* tool set (so disabling any tool — including ask/canvas —
+/// sticks), adds the `skill` tool when enabled skills exist, and gates the
+/// system prompt on what actually survived so the model is never told about a
+/// tool the registry would reject.
+fn finish_tools(
+    tools: &mut ToolRegistry,
+    app: &AppHandle,
+    session: &str,
+    model_label: &str,
+    context_window: Option<usize>,
+    workspace_root: &Path,
+) -> AgentConfig {
+    tools.register_typed(CanvasTool::new(Arc::new(TauriCanvasSink {
+        app: app.clone(),
+        session: session.to_string(),
+    })));
+    harness_runtime::tools::load().apply(tools);
+    // Skills load on demand through the `skill` tool; it's only registered when
+    // the user has enabled skills, so an empty set costs no prompt tokens.
+    // Registered after prefs: skills have their own enable/disable in
+    // skills.json, managed on the Skills settings page.
+    if let Some(skill_tool) = harness_runtime::skills::enabled_tool(workspace_root) {
+        tools.register_typed(skill_tool);
+    }
+
+    let web_search = tools.get(harness_tools::WEB_SEARCH_TOOL).is_some();
+    let canvas = tools.get(harness_tools::CANVAS_TOOL).is_some();
+    AgentConfig {
         model: model_label.to_string(),
-        // The host always registers the `canvas` tool (per session, below), so
-        // advertise it in the prompt.
         system_prompt: Some(harness_agent::system_prompt_with_env(
             web_search,
-            true,
+            canvas,
             workspace_root,
         )),
         context_window,
         attachment_root: Some(workspace_root.to_path_buf()),
         ..AgentConfig::default()
-    };
-    Ok((tools, store, config))
-}
-
-/// Register the session-scoped `canvas` tool on a registry. Done once the
-/// session id is known so canvas events can be tagged with it.
-fn register_canvas(tools: &mut ToolRegistry, app: &AppHandle, session: &str) {
-    tools.register_typed(CanvasTool::new(Arc::new(TauriCanvasSink {
-        app: app.clone(),
-        session: session.to_string(),
-    })));
+    }
 }
 
 /// Build an agent for a brand-new session (creates the session row).
@@ -412,8 +421,7 @@ fn new_agent(
     context_window: Option<usize>,
     workspace_root: &Path,
 ) -> Result<Agent, String> {
-    let (mut tools, store, config) =
-        agent_parts(app, pending, model_label, context_window, workspace_root)?;
+    let (mut tools, store) = agent_parts(app, pending, workspace_root)?;
     let session = store
         .create_session(&SessionMeta {
             workspace: workspace_root.display().to_string(),
@@ -424,7 +432,14 @@ fn new_agent(
             ..Default::default()
         })
         .map_err(|e| e.to_string())?;
-    register_canvas(&mut tools, app, &session);
+    let config = finish_tools(
+        &mut tools,
+        app,
+        &session,
+        model_label,
+        context_window,
+        workspace_root,
+    );
     Agent::new(client, tools, store, session, config).map_err(|e| e.to_string())
 }
 
@@ -440,9 +455,15 @@ fn resume_agent(
     session_id: String,
     workspace_root: &Path,
 ) -> Result<Agent, String> {
-    let (mut tools, store, config) =
-        agent_parts(app, pending, model_label, context_window, workspace_root)?;
-    register_canvas(&mut tools, app, &session_id);
+    let (mut tools, store) = agent_parts(app, pending, workspace_root)?;
+    let config = finish_tools(
+        &mut tools,
+        app,
+        &session_id,
+        model_label,
+        context_window,
+        workspace_root,
+    );
     Agent::resume_from_store(client, tools, store, session_id, config).map_err(|e| e.to_string())
 }
 
@@ -613,7 +634,11 @@ async fn set_connection(
 
 /// Build a fresh agent for a new session rooted at `root`, reusing the active
 /// local model if any.
-async fn build_fresh_agent(app: &AppHandle, state: &AppState, root: &Path) -> Result<Agent, String> {
+async fn build_fresh_agent(
+    app: &AppHandle,
+    state: &AppState,
+    root: &Path,
+) -> Result<Agent, String> {
     let (client, label, ctx) = client_for(state).await?;
     new_agent(app, state.pending.clone(), client, &label, ctx, root)
 }
@@ -627,7 +652,15 @@ async fn build_resumed_agent(
     root: &Path,
 ) -> Result<Agent, String> {
     let (client, label, ctx) = client_for(state).await?;
-    resume_agent(app, state.pending.clone(), client, &label, ctx, session_id, root)
+    resume_agent(
+        app,
+        state.pending.clone(),
+        client,
+        &label,
+        ctx,
+        session_id,
+        root,
+    )
 }
 
 /// The agent handle for a session id, if one is live in memory.
@@ -758,7 +791,16 @@ async fn run_turn(
         .iter()
         .filter_map(|p| Attachment::from_path(p).ok())
         .collect();
-    execute_turn(app, &state, session, TurnKind::Fresh { prompt, attachments }).await
+    execute_turn(
+        app,
+        &state,
+        session,
+        TurnKind::Fresh {
+            prompt,
+            attachments,
+        },
+    )
+    .await
 }
 
 /// Retry the current chat's failed turn after its API key was set, continuing the
@@ -794,7 +836,11 @@ async fn execute_turn(
     // A fresh stop signal for this turn, registered so `cancel_turn` can fire it
     // (a clone) without waiting on the agent lock the turn holds.
     let cancel = CancellationToken::new();
-    state.cancels.lock().await.insert(session.clone(), cancel.clone());
+    state
+        .cancels
+        .lock()
+        .await
+        .insert(session.clone(), cancel.clone());
     // Track the session's cumulative count before/after the turn so we can roll
     // just this turn's throughput into the all-time total.
     let turn_delta;
@@ -803,87 +849,97 @@ async fn execute_turn(
         agent.set_cancel_token(cancel.clone());
         let before = agent.tokens_used();
         let on_event = move |event: &AgentEvent| match event {
-                AgentEvent::Token(t) => {
-                    let _ = app.emit(
-                        "agent://token",
-                        TokenPayload {
-                            session: sid.clone(),
-                            token: t.clone(),
-                        },
-                    );
-                }
-                // The model started writing a canvas; open the panel in a
-                // "writing" state while its content streams in as tool args.
-                AgentEvent::ToolPending { name } if name == harness_tools::CANVAS_TOOL => {
-                    let _ = app.emit("agent://canvas-writing", SessionPayload { session: sid.clone() });
-                }
-                AgentEvent::ToolPending { .. } => {}
-                // Stream the tool call's arguments as they arrive so the UI can
-                // show the file/canvas content being written in real time.
-                AgentEvent::ToolDelta { name, delta } => {
-                    let _ = app.emit(
-                        "agent://tool-delta",
-                        ToolDeltaPayload {
-                            session: sid.clone(),
-                            name: name.clone(),
-                            delta: delta.clone(),
-                        },
-                    );
-                }
-                AgentEvent::ToolStart { name, arguments } => {
-                    let _ = app.emit(
-                        "agent://tool",
-                        ToolEventPayload {
-                            session: sid.clone(),
-                            phase: "start",
-                            name: name.clone(),
-                            detail: arguments.clone(),
-                        },
-                    );
-                }
-                AgentEvent::ToolEnd { name, result } => {
-                    let _ = app.emit(
-                        "agent://tool",
-                        ToolEventPayload {
-                            session: sid.clone(),
-                            phase: "end",
-                            name: name.clone(),
-                            detail: result.clone(),
-                        },
-                    );
-                }
-                // Live token usage, surfaced around each model call within the
-                // turn so the meter tracks real consumption as it accrues rather
-                // than jumping only at the end.
-                AgentEvent::Usage {
-                    tokens_used,
-                    context_tokens,
-                } => {
-                    let _ = app.emit(
-                        "agent://usage",
-                        UsagePayload {
-                            session: sid.clone(),
-                            tokens_used: *tokens_used,
-                            context_tokens: *context_tokens,
-                            context_window,
-                        },
-                    );
-                }
-                // The context filled and was compacted; surface it as a visible
-                // notice in the thread so the trimming isn't silent.
-                AgentEvent::Compacted { detail } => {
-                    let _ = app.emit(
-                        "agent://compacted",
-                        CompactedPayload {
-                            session: sid.clone(),
-                            detail: detail.clone(),
-                        },
-                    );
-                }
+            AgentEvent::Token(t) => {
+                let _ = app.emit(
+                    "agent://token",
+                    TokenPayload {
+                        session: sid.clone(),
+                        token: t.clone(),
+                    },
+                );
+            }
+            // The model started writing a canvas; open the panel in a
+            // "writing" state while its content streams in as tool args.
+            AgentEvent::ToolPending { name } if name == harness_tools::CANVAS_TOOL => {
+                let _ = app.emit(
+                    "agent://canvas-writing",
+                    SessionPayload {
+                        session: sid.clone(),
+                    },
+                );
+            }
+            AgentEvent::ToolPending { .. } => {}
+            // Stream the tool call's arguments as they arrive so the UI can
+            // show the file/canvas content being written in real time.
+            AgentEvent::ToolDelta { name, delta } => {
+                let _ = app.emit(
+                    "agent://tool-delta",
+                    ToolDeltaPayload {
+                        session: sid.clone(),
+                        name: name.clone(),
+                        delta: delta.clone(),
+                    },
+                );
+            }
+            AgentEvent::ToolStart { name, arguments } => {
+                let _ = app.emit(
+                    "agent://tool",
+                    ToolEventPayload {
+                        session: sid.clone(),
+                        phase: "start",
+                        name: name.clone(),
+                        detail: arguments.clone(),
+                    },
+                );
+            }
+            AgentEvent::ToolEnd { name, result } => {
+                let _ = app.emit(
+                    "agent://tool",
+                    ToolEventPayload {
+                        session: sid.clone(),
+                        phase: "end",
+                        name: name.clone(),
+                        detail: result.clone(),
+                    },
+                );
+            }
+            // Live token usage, surfaced around each model call within the
+            // turn so the meter tracks real consumption as it accrues rather
+            // than jumping only at the end.
+            AgentEvent::Usage {
+                tokens_used,
+                context_tokens,
+            } => {
+                let _ = app.emit(
+                    "agent://usage",
+                    UsagePayload {
+                        session: sid.clone(),
+                        tokens_used: *tokens_used,
+                        context_tokens: *context_tokens,
+                        context_window,
+                    },
+                );
+            }
+            // The context filled and was compacted; surface it as a visible
+            // notice in the thread so the trimming isn't silent.
+            AgentEvent::Compacted { detail } => {
+                let _ = app.emit(
+                    "agent://compacted",
+                    CompactedPayload {
+                        session: sid.clone(),
+                        detail: detail.clone(),
+                    },
+                );
+            }
         };
         let r = match kind {
-            TurnKind::Fresh { prompt, attachments } => {
-                agent.run_turn_with_attachments(prompt, attachments, on_event).await
+            TurnKind::Fresh {
+                prompt,
+                attachments,
+            } => {
+                agent
+                    .run_turn_with_attachments(prompt, attachments, on_event)
+                    .await
             }
             TurnKind::Retry => agent.continue_turn(on_event).await,
         };
@@ -933,7 +989,9 @@ fn open_history_store() -> Result<HistoryStore, String> {
 /// List past chat sessions (those with at least one user message), newest first.
 #[tauri::command]
 async fn list_sessions() -> Result<Vec<SessionSummary>, String> {
-    open_history_store()?.list_sessions().map_err(|e| e.to_string())
+    open_history_store()?
+        .list_sessions()
+        .map_err(|e| e.to_string())
 }
 
 /// Read a session's raw, persisted transcript (every message, verbatim — system
@@ -942,7 +1000,9 @@ async fn list_sessions() -> Result<Vec<SessionSummary>, String> {
 /// agent, so it works even while a turn is mid-flight.
 #[tauri::command]
 async fn session_messages(id: String) -> Result<Vec<serde_json::Value>, String> {
-    open_history_store()?.messages(&id).map_err(|e| e.to_string())
+    open_history_store()?
+        .messages(&id)
+        .map_err(|e| e.to_string())
 }
 
 /// Set a chat's training-data review status: `""` (unreviewed), `"kept"`, or
@@ -1018,15 +1078,56 @@ async fn tool_definitions(
 // and resumed chats.
 // ===========================================================================
 
-/// Every built-in tool with its current enabled/override state, for the Tools
+/// An inert question bridge for the settings registry — never invoked; only the
+/// tool's name/description/schema are read.
+struct NullAsker;
+
+#[async_trait::async_trait]
+impl harness_tools::QuestionAsker for NullAsker {
+    async fn ask(
+        &self,
+        _: &[harness_tools::Question],
+    ) -> Result<Option<Vec<harness_tools::QuestionAnswer>>, harness_tools::ToolError> {
+        Ok(None)
+    }
+}
+
+/// An inert canvas bridge for the settings registry — never invoked.
+struct NullCanvasSink;
+
+#[async_trait::async_trait]
+impl harness_tools::CanvasSink for NullCanvasSink {
+    async fn show(
+        &self,
+        _: &harness_tools::CanvasDoc,
+    ) -> Result<Option<String>, harness_tools::ToolError> {
+        Ok(None)
+    }
+}
+
+/// The complete tool set for settings purposes: the workspace defaults plus the
+/// host-bridged ask/canvas tools (wired to inert bridges — the Tools page only
+/// reads names, descriptions, and schemas). Matches what [`finish_tools`]
+/// registers on a real agent, so every manageable tool appears in Settings and
+/// custom-tool names can't shadow any of them.
+async fn settings_registry(state: &AppState) -> Result<ToolRegistry, String> {
+    let root = active_root(state).await;
+    let workspace = Workspace::new(&root).map_err(|e| e.to_string())?;
+    let brave_key = harness_runtime::connection::brave_key_override();
+    let mut registry = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
+    registry.register_typed(AskUserTool::new(Arc::new(NullAsker)));
+    registry.register_typed(CanvasTool::new(Arc::new(NullCanvasSink)));
+    Ok(registry)
+}
+
+/// Every manageable tool with its current enabled/override state, for the Tools
 /// settings page. Built from a fresh full registry (so disabled tools still
 /// appear, toggled off) overlaid with the saved preferences.
 #[tauri::command]
-async fn list_tools(state: State<'_, AppState>) -> Result<Vec<harness_runtime::tools::ToolInfo>, String> {
-    let root = active_root(&state).await;
-    let workspace = Workspace::new(&root).map_err(|e| e.to_string())?;
-    let brave_key = harness_runtime::connection::brave_key_override();
-    let registry = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
+async fn list_tools(
+    state: State<'_, AppState>,
+) -> Result<Vec<harness_runtime::tools::ToolInfo>, String> {
+    let registry = settings_registry(&state).await?;
     let prefs = harness_runtime::tools::load();
     Ok(harness_runtime::tools::list(&registry, &prefs))
 }
@@ -1037,10 +1138,7 @@ async fn add_custom_tool(
     state: State<'_, AppState>,
     spec: harness_tools::CustomToolSpec,
 ) -> Result<(), String> {
-    let root = active_root(&state).await;
-    let workspace = Workspace::new(&root).map_err(|e| e.to_string())?;
-    let brave_key = harness_runtime::connection::brave_key_override();
-    let registry = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
+    let registry = settings_registry(&state).await?;
     harness_runtime::tools::add_custom(spec, &registry).map_err(|e| e.to_string())
 }
 
@@ -1151,7 +1249,10 @@ async fn total_tokens_used() -> Result<usize, String> {
 /// transcript scan runs at most once (the first time); afterwards each turn just
 /// increments the counter, so reads and updates stay O(1).
 fn ensure_total_tokens(store: &HistoryStore) -> Result<i64, String> {
-    if let Some(v) = store.meta_get_i64(TOTAL_TOKENS_KEY).map_err(|e| e.to_string())? {
+    if let Some(v) = store
+        .meta_get_i64(TOTAL_TOKENS_KEY)
+        .map_err(|e| e.to_string())?
+    {
         return Ok(v);
     }
     let seeded = estimate_all_tokens(store) as i64;
@@ -1293,15 +1394,21 @@ async fn installed_local_models() -> Result<InstalledView, String> {
     })
 }
 
-/// Annotate a list of installable refs (largest-first) into a [`CatalogModel`]:
-/// fit + installed state per quant, plus the auto-picked recommended quant.
-fn annotate_catalog_model(
+/// The descriptive half of a [`CatalogModel`] — who the model is, before its
+/// quants are annotated for this machine.
+struct CatalogIdentity {
     id: String,
     display: String,
     params: String,
     context: u32,
     note: String,
-    source: &str,
+    source: &'static str,
+}
+
+/// Annotate a list of installable refs (largest-first) into a [`CatalogModel`]:
+/// fit + installed state per quant, plus the auto-picked recommended quant.
+fn annotate_catalog_model(
+    identity: CatalogIdentity,
     refs: Vec<ModelRef>,
     profile: &harness_local::HardwareProfile,
     store: &ModelStore,
@@ -1313,8 +1420,9 @@ fn annotate_catalog_model(
             weight_bytes: r.size_bytes,
         })
         .collect();
-    let recommended_quant = fit::pick_quant(&candidates, fit::PLANNED_CONTEXT, profile.usable_budget)
-        .map(|c| c.quant.clone());
+    let recommended_quant =
+        fit::pick_quant(&candidates, fit::PLANNED_CONTEXT, profile.usable_budget)
+            .map(|c| c.quant.clone());
 
     let quants: Vec<QuantOption> = refs
         .into_iter()
@@ -1338,12 +1446,12 @@ fn annotate_catalog_model(
         .unwrap_or(harness_local::Fit::TooBig);
 
     CatalogModel {
-        id,
-        display,
-        params,
-        context,
-        note,
-        source: source.to_string(),
+        id: identity.id,
+        display: identity.display,
+        params: identity.params,
+        context: identity.context,
+        note: identity.note,
+        source: identity.source.to_string(),
         quants,
         recommended_quant,
         best_fit,
@@ -1362,12 +1470,14 @@ async fn list_model_catalog() -> Result<Vec<CatalogModel>, String> {
         .iter()
         .map(|spec| {
             annotate_catalog_model(
-                spec.id.to_string(),
-                spec.display.to_string(),
-                spec.params.to_string(),
-                spec.context,
-                spec.note.to_string(),
-                "curated",
+                CatalogIdentity {
+                    id: spec.id.to_string(),
+                    display: spec.display.to_string(),
+                    params: spec.params.to_string(),
+                    context: spec.context,
+                    note: spec.note.to_string(),
+                    source: "curated",
+                },
                 harness_local::quant_refs(spec),
                 &profile,
                 &store,
@@ -1378,12 +1488,14 @@ async fn list_model_catalog() -> Result<Vec<CatalogModel>, String> {
     // Featured Oxen.ai-hosted models (a stub today), grouped by repo.
     for model in harness_local::source::oxen_featured() {
         out.push(annotate_catalog_model(
-            model.id.clone(),
-            model.display.clone(),
-            model.params.clone(),
-            model.context,
-            String::new(),
-            "oxen",
+            CatalogIdentity {
+                id: model.id.clone(),
+                display: model.display.clone(),
+                params: model.params.clone(),
+                context: model.context,
+                note: String::new(),
+                source: "oxen",
+            },
             vec![model],
             &profile,
             &store,
@@ -1406,13 +1518,24 @@ async fn resolve_hf_model(input: String) -> Result<CatalogModel, String> {
             let quant = harness_local::source::parse_quant(&f).unwrap_or_default();
             vec![ModelRef {
                 id: harness_local::source::id_from_file(&f),
-                display: format!("{}{}", repo.rsplit('/').next().unwrap_or(&repo),
-                    if quant.is_empty() { String::new() } else { format!(" · {quant}") }),
+                display: format!(
+                    "{}{}",
+                    repo.rsplit('/').next().unwrap_or(&repo),
+                    if quant.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {quant}")
+                    }
+                ),
                 params: harness_local::source::parse_params(&repo),
                 quant,
                 context: 0,
                 size_bytes: 0,
-                origin: harness_local::Origin::HuggingFace { repo: repo.clone(), file: f, revision },
+                origin: harness_local::Origin::HuggingFace {
+                    repo: repo.clone(),
+                    file: f,
+                    revision,
+                },
             }]
         }
         None => harness_local::source::hf_list_quants(&repo, &revision, token.as_deref())
@@ -1425,7 +1548,17 @@ async fn resolve_hf_model(input: String) -> Result<CatalogModel, String> {
     let display = repo.clone();
     let params = harness_local::source::parse_params(&repo);
     Ok(annotate_catalog_model(
-        repo, display, params, 0, String::new(), "huggingface", refs, &profile, &store,
+        CatalogIdentity {
+            id: repo,
+            display,
+            params,
+            context: 0,
+            note: String::new(),
+            source: "huggingface",
+        },
+        refs,
+        &profile,
+        &store,
     ))
 }
 
@@ -1547,7 +1680,10 @@ async fn use_local_model(
     id: String,
 ) -> Result<SessionInfo, String> {
     if llama_server_path().is_none() {
-        return Err(format!("the local runtime isn't installed. {}", install_hint()));
+        return Err(format!(
+            "the local runtime isn't installed. {}",
+            install_hint()
+        ));
     }
     let store = ModelStore::open().map_err(|e| e.to_string())?;
     if !store.is_installed(&id) {
@@ -1564,21 +1700,22 @@ async fn use_local_model(
     // init vs. loading the weights) instead of an opaque "Switching…".
     let status_app = app.clone();
     let status_model = id.clone();
-    let server = LocalServer::start_with_context(&store.path_for(&id), &id, context, move |phase| {
-        let _ = status_app.emit(
-            "local://status",
-            LocalStatusPayload {
-                model: status_model.clone(),
-                phase: match phase {
-                    harness_local::LoadPhase::Starting => "starting",
-                    harness_local::LoadPhase::LoadingModel => "loading",
-                    harness_local::LoadPhase::Ready => "ready",
+    let server =
+        LocalServer::start_with_context(&store.path_for(&id), &id, context, move |phase| {
+            let _ = status_app.emit(
+                "local://status",
+                LocalStatusPayload {
+                    model: status_model.clone(),
+                    phase: match phase {
+                        harness_local::LoadPhase::Starting => "starting",
+                        harness_local::LoadPhase::LoadingModel => "loading",
+                        harness_local::LoadPhase::Ready => "ready",
+                    },
                 },
-            },
-        );
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+            );
+        })
+        .await
+        .map_err(|e| e.to_string())?;
     let context_window = Some(server.context_size() as usize);
     let root = active_root(&state).await;
     let agent = new_agent(
@@ -1814,8 +1951,12 @@ async fn new_theme(
     state: State<'_, AppState>,
     brief: String,
 ) -> Result<harness_theme::Theme, String> {
-    let raw =
-        complete_oneshot(&state, &harness_theme::Theme::generation_system_prompt(), &brief).await?;
+    let raw = complete_oneshot(
+        &state,
+        &harness_theme::Theme::generation_system_prompt(),
+        &brief,
+    )
+    .await?;
     let theme = harness_theme::Theme::from_model_output(&raw).map_err(|e| e.to_string())?;
     let store = theme_store()?;
     store.save(&theme).map_err(|e| e.to_string())?;
