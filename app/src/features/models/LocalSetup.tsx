@@ -273,9 +273,42 @@ export function LocalSetup() {
             )}
           </section>
 
-          {/* 2 — Choose a model */}
+          {/* 2 — Installed models */}
+          {installed && installed.models.length > 0 && (
+            <section className="ls-section">
+              <div className="ls-step">
+                Installed
+                <span className="ls-disk">{formatBytes(installed.total_disk_bytes)} on disk</span>
+              </div>
+              <div className="ls-installed">
+                {installed.models.map((m) => (
+                  <div className="ls-installed-row" key={m.id}>
+                    <Cpu size={14} />
+                    <span className="ls-installed-name">{m.display}</span>
+                    <span className="ls-installed-size">{formatBytes(m.size_bytes)}</span>
+                    <button
+                      className="ls-btn ls-btn-primary ls-btn-sm"
+                      onClick={() => doUse(m.id)}
+                      disabled={!runtimeReady || usingId === m.id}
+                    >
+                      {usingId === m.id ? "Starting…" : "Use"}
+                    </button>
+                    <button
+                      className="ls-icon-btn"
+                      onClick={() => doRemove(m.id)}
+                      aria-label={`Remove ${m.display}`}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* 3 — Install a model */}
           <section className="ls-section">
-            <div className="ls-step">Choose a model</div>
+            <div className="ls-step">Install a model</div>
             <div className="ls-tabs">
               {(["recommended", "huggingface", "oxen"] as Tab[]).map((t) => (
                 <button
@@ -394,7 +427,7 @@ export function LocalSetup() {
             )}
           </section>
 
-          {/* 3 — Selected model: quants + download/use */}
+          {/* 4 — Selected model: quants + download/use */}
           {selected && (
             <section className="ls-section ls-selected">
               <div className="ls-step">
@@ -459,39 +492,6 @@ export function LocalSetup() {
                     </div>
                   );
                 })}
-              </div>
-            </section>
-          )}
-
-          {/* 4 — Installed models */}
-          {installed && installed.models.length > 0 && (
-            <section className="ls-section">
-              <div className="ls-step">
-                Installed
-                <span className="ls-disk">{formatBytes(installed.total_disk_bytes)} on disk</span>
-              </div>
-              <div className="ls-installed">
-                {installed.models.map((m) => (
-                  <div className="ls-installed-row" key={m.id}>
-                    <Cpu size={14} />
-                    <span className="ls-installed-name">{m.display}</span>
-                    <span className="ls-installed-size">{formatBytes(m.size_bytes)}</span>
-                    <button
-                      className="ls-btn ls-btn-primary ls-btn-sm"
-                      onClick={() => doUse(m.id)}
-                      disabled={!runtimeReady || usingId === m.id}
-                    >
-                      {usingId === m.id ? "Starting…" : "Use"}
-                    </button>
-                    <button
-                      className="ls-icon-btn"
-                      onClick={() => doRemove(m.id)}
-                      aria-label={`Remove ${m.display}`}
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-                ))}
               </div>
             </section>
           )}
