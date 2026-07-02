@@ -35,6 +35,8 @@ import type {
   ToolDefinition,
   ToolInfo,
   CustomToolSpec,
+  SkillInfo,
+  SkillScope,
 } from "./types";
 
 // ---- session / agent -------------------------------------------------------
@@ -56,6 +58,20 @@ export const listTools = () => invoke<ToolInfo[]>("list_tools");
 export const addCustomTool = (spec: CustomToolSpec) => invoke<void>("add_custom_tool", { spec });
 /** Remove a custom tool (built-ins can only be disabled). */
 export const removeCustomTool = (name: string) => invoke<void>("remove_custom_tool", { name });
+
+// ---- skills (reusable SKILL.md instructions the model loads on demand) ------
+
+/** Every skill visible from the active project, for the Skills page. */
+export const listSkills = () => invoke<SkillInfo[]>("list_skills");
+/** Create a skill, or update the one with the same name + scope. */
+export const saveSkill = (scope: SkillScope, name: string, description: string, instructions: string) =>
+  invoke<void>("save_skill", { scope, name, description, instructions });
+/** Delete a skill's directory (SKILL.md plus supporting files). */
+export const deleteSkill = (scope: SkillScope, name: string) =>
+  invoke<void>("delete_skill", { scope, name });
+/** Enable or disable a skill (applies to new/resumed chats). */
+export const setSkillEnabled = (name: string, enabled: boolean) =>
+  invoke<void>("set_skill_enabled", { name, enabled });
 /** Enable or disable a built-in tool (applies to new/resumed chats). */
 export const setToolEnabled = (name: string, enabled: boolean) =>
   invoke<void>("set_tool_enabled", { name, enabled });

@@ -171,7 +171,7 @@ function ToolRow({
         {!open && <span className="tool-row-desc">{tool.description}</span>}
       </button>
 
-      <ToolSwitch tool={tool} onToggle={onToggle} />
+      <ToolSwitch name={tool.name} enabled={tool.enabled} onToggle={onToggle} />
 
       {open && (
         <div className="tool-row-body">
@@ -240,7 +240,7 @@ function CustomToolRow({
         {!open && <span className="tool-row-desc">{tool.description}</span>}
       </button>
 
-      <ToolSwitch tool={tool} onToggle={onToggle} />
+      <ToolSwitch name={tool.name} enabled={tool.enabled} onToggle={onToggle} />
 
       {open && (
         <div className="tool-row-body">
@@ -265,24 +265,27 @@ function CustomToolRow({
   );
 }
 
-function ToolSwitch({
-  tool,
+/** The shared enable/disable switch used by tool and skill rows. */
+export function ToolSwitch({
+  name,
+  enabled,
   onToggle,
 }: {
-  tool: ToolInfo;
+  name: string;
+  enabled: boolean;
   onToggle: (name: string, enabled: boolean) => void;
 }) {
   return (
     <label
       className="tool-switch"
-      title={tool.enabled ? "Enabled — click to turn off" : "Disabled — click to turn on"}
+      title={enabled ? "Enabled — click to turn off" : "Disabled — click to turn on"}
       onClick={(e) => e.stopPropagation()}
     >
       <input
         type="checkbox"
-        checked={tool.enabled}
-        onChange={(e) => onToggle(tool.name, e.target.checked)}
-        aria-label={`${tool.enabled ? "Disable" : "Enable"} ${tool.name}`}
+        checked={enabled}
+        onChange={(e) => onToggle(name, e.target.checked)}
+        aria-label={`${enabled ? "Disable" : "Enable"} ${name}`}
       />
       <span className="tool-switch-track" />
     </label>

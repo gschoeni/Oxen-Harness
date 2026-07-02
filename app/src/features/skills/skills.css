@@ -1,0 +1,26 @@
+/* Skills settings page — extends the tools.css row/editor styles with
+   skill-specific touches. */
+
+/* Where a skill lives: global (every project) or project (this repo). */
+.skill-scope {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: var(--radius-pill);
+  padding: 1px var(--space-2);
+  color: var(--text-tertiary);
+  background: var(--surface-2);
+}
+.skill-scope.project {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Instructions are the main event — give the markdown room and a mono face. */
+.skill-instructions {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}

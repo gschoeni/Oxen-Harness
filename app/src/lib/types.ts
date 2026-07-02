@@ -353,6 +353,7 @@ export type SettingsPage =
   | "cloud-models"
   | "local-models"
   | "tools"
+  | "skills"
   | "appearance"
   | "logs";
 
@@ -374,6 +375,26 @@ export interface ToolInfo {
   builtin: boolean;
   /** Free-form per-tool config (e.g. shell timeout), as a JSON object. */
   config: Record<string, unknown>;
+}
+
+/** Where a skill lives. Mirrors `harness_tools::SkillScope`. */
+export type SkillScope = "global" | "project";
+
+/** One skill as shown on the Skills settings page: a SKILL.md the model can
+ *  load on demand. Mirrors `harness_runtime::skills::SkillInfo`. */
+export interface SkillInfo {
+  /** Stable identifier the model passes to the `skill` tool (the directory name). */
+  name: string;
+  /** One-line "when to use this" trigger, advertised to the model. */
+  description: string;
+  /** The full SKILL.md body — the instructions loaded on invocation. */
+  instructions: string;
+  /** global = every project; project = travels with this repository. */
+  scope: SkillScope;
+  /** The skill's directory on disk, for supporting files. */
+  dir: string;
+  /** Whether the skill is offered to the model. */
+  enabled: boolean;
 }
 
 /** A user-defined tool backed by a simple external action. Mirrors

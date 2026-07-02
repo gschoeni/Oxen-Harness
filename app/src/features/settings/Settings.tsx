@@ -4,6 +4,7 @@ import {
   Cpu,
   Eye,
   EyeOff,
+  GraduationCap,
   Link2,
   Moon,
   Palette,
@@ -28,6 +29,7 @@ import type { SettingsPage } from "../../lib/types";
 import { LocalSetup } from "../models/LocalSetup";
 import { ThemesPanel } from "../themes/ThemesPanel";
 import { ToolsPage } from "../tools/ToolsPage";
+import { SkillsPage } from "../skills/SkillsPage";
 import { LogsPage } from "../logs/LogsPage";
 import "./settings.css";
 
@@ -38,6 +40,7 @@ const NAV: { page: SettingsPage; icon: ReactNode; label: string; blurb: string }
   { page: "cloud-models", icon: <Cloud size={17} />, label: "Cloud models", blurb: "Hosted model catalog" },
   { page: "local-models", icon: <Cpu size={17} />, label: "Local models", blurb: "Download & run on-device" },
   { page: "tools", icon: <Wrench size={17} />, label: "Tools", blurb: "What the agent can do" },
+  { page: "skills", icon: <GraduationCap size={17} />, label: "Skills", blurb: "Reusable workflows it can learn" },
   { page: "appearance", icon: <Palette size={17} />, label: "Appearance", blurb: "Theme & light/dark" },
   { page: "logs", icon: <ScrollText size={17} />, label: "Training data", blurb: "Curate chats & export for fine-tuning" },
 ];
@@ -47,6 +50,7 @@ const TITLE: Record<SettingsPage, string> = {
   "cloud-models": "Cloud models",
   "local-models": "Local models",
   tools: "Tools",
+  skills: "Skills",
   appearance: "Appearance",
   logs: "Training data",
 };
@@ -101,6 +105,7 @@ export function Settings() {
             {page === "cloud-models" && <CloudModelsSettings />}
             {page === "local-models" && <LocalSetup />}
             {page === "tools" && <ToolsPage />}
+            {page === "skills" && <SkillsPage />}
             {page === "appearance" && <AppearanceSettings />}
             {page === "logs" && <LogsPage />}
           </div>
