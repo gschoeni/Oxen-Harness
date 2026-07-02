@@ -1,28 +1,95 @@
+/* ===========================================================================
+   Full-window Projects page — the top-level project picker. Entering a project
+   scopes the sidebar to its chats; this page is the way to switch or add one.
+   =========================================================================== */
+.projects-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--bg);
+  overflow-y: auto;
+  animation: projects-in var(--dur) var(--ease);
+}
+@keyframes projects-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+/* Drag strip over the macOS traffic-light row (overlay title bar). */
+.projects-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  z-index: 1;
+}
+
+.projects-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 64px var(--space-6) var(--space-8);
+}
+
+.projects-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+.projects-header > div {
+  flex: 1;
+  min-width: 0;
+}
+.projects-title {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  margin: 0 0 var(--space-2);
+}
 .projects-intro {
   color: var(--text-secondary);
   font-size: var(--text-sm);
-  margin: 0 0 var(--space-4);
+  margin: 0;
   line-height: 1.5;
 }
+.projects-close {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.projects-close:hover {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  color: var(--text);
+}
 
-.projects-list {
+.projects-grid {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
+  gap: var(--space-3);
 }
 
 .project-card {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-4);
   width: 100%;
   text-align: left;
   background: var(--surface);
   border: var(--frame-border-w) solid var(--separator-strong);
   border-radius: var(--frame-radius);
   box-shadow: var(--frame-shadow);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4) var(--space-5);
   color: var(--text);
   cursor: pointer;
   transition: transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
@@ -51,13 +118,13 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 .project-card-name {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-md);
+  font-size: var(--text-lg);
   font-weight: 600;
 }
 .project-card-badge {
@@ -78,8 +145,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.project-card-count {
+.project-card-meta {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+/* Reuses the sidebar's .run-dot breathing animation for "chats running here". */
+.project-card-running {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+.project-card-count {
   font-size: var(--text-xs);
   color: var(--text-tertiary);
 }

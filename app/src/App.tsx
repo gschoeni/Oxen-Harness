@@ -3,7 +3,7 @@ import { Sidebar } from "./features/history/Sidebar";
 import { Chat } from "./features/chat/Chat";
 import { Canvas } from "./features/canvas/Canvas";
 import { Settings } from "./features/settings/Settings";
-import { ProjectsModal } from "./features/projects/ProjectsModal";
+import { ProjectsPage } from "./features/projects/ProjectsPage";
 import { InspectorDrawer } from "./features/inspector/Inspector";
 import { activeTheme } from "./lib/ipc";
 import { useStore } from "./lib/store";
@@ -80,7 +80,7 @@ export default function App() {
       <Chat />
       {canvasOpen && <Canvas onResizeStart={beginResize} />}
       {settingsOpen && <Settings />}
-      {projectsOpen && <ProjectsModal />}
+      {projectsOpen && <ProjectsPage />}
       <InspectorDrawer />
     </div>
   );

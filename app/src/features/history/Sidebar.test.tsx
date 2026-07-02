@@ -13,12 +13,16 @@ import type { Project, SessionSummary } from "../../lib/types";
 const sessions: SessionSummary[] = [
   { id: "s1", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "" },
   { id: "s2", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "Second chat", message_count: 2, review_status: "" },
+  { id: "other", workspace: "/elsewhere", model: "m", created_at: 1_700_000_000, title: "Other project chat", message_count: 1, review_status: "" },
 ];
-const projects: Project[] = [{ path: "/w", name: "w", session_count: 2, active: true }];
+const projects: Project[] = [
+  { path: "/w", name: "w", session_count: 2, active: true },
+  { path: "/elsewhere", name: "elsewhere", session_count: 1, active: false },
+];
 
 beforeEach(() => {
   resetAll();
-  // The active chat lives in project "/w", so that folder is expanded by default.
+  // The active chat lives in project "/w", so the sidebar is scoped to it.
   useStore.setState({
     session: { ...ipc.sampleSession, session_id: "s1", workspace: "/w" },
     sessions,
@@ -27,22 +31,23 @@ beforeEach(() => {
 });
 
 describe("Sidebar", () => {
-  it("lists chats under the active project folder and marks the active chat", () => {
+  it("shows the active project's name and only its chats, marking the active one", () => {
     render(<Sidebar />);
-    expect(screen.getByText("w", { selector: ".project-name" })).toBeInTheDocument();
+    expect(screen.getByText("w", { selector: ".current-project-name" })).toBeInTheDocument();
     expect(screen.getByText("First chat")).toBeInTheDocument();
     expect(screen.getByText("Second chat")).toBeInTheDocument();
+    expect(screen.queryByText("Other project chat")).toBeNull();
     expect(screen.getByText("First chat").closest(".history-item")).toHaveClass("active");
   });
 
-  it("pins a brand-new (untitled) active chat into its project", () => {
+  it("pins a brand-new (untitled) active chat to the top of the list", () => {
     useStore.setState({ session: { ...ipc.sampleSession, session_id: "fresh", workspace: "/w" } });
     render(<Sidebar />);
     const newChat = screen.getByText("New chat", { selector: ".history-title" });
     expect(newChat.closest(".history-item")).toHaveClass("active");
   });
 
-  it("starts a new session when the top New chat is clicked", async () => {
+  it("starts a new session when New chat is clicked", async () => {
     render(<Sidebar />);
     await userEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(ipc.newSession).toHaveBeenCalledOnce();
@@ -54,23 +59,22 @@ describe("Sidebar", () => {
     expect(ipc.resumeSession).toHaveBeenCalledWith("s2");
   });
 
-  it("collapses a project folder to hide its chats", async () => {
+  it("opens the projects page from the Projects link", async () => {
     render(<Sidebar />);
-    expect(screen.getByText("First chat")).toBeInTheDocument();
-    await userEvent.click(screen.getByText("w", { selector: ".project-name" }));
-    expect(screen.queryByText("First chat")).toBeNull();
-  });
-
-  it("opens the projects screen from the header", async () => {
-    render(<Sidebar />);
-    await userEvent.click(screen.getByRole("button", { name: /manage projects/i }));
+    await userEvent.click(screen.getByRole("button", { name: /all projects/i }));
     expect(useStore.getState().projectsOpen).toBe(true);
   });
 
-  it("starts a new chat in a project from its folder", async () => {
+  it("signals activity in other projects on the Projects link", () => {
+    useStore.setState({ runStatus: { other: "running" } });
     render(<Sidebar />);
-    await userEvent.click(screen.getByRole("button", { name: /new chat in w/i }));
-    expect(ipc.setActiveProject).toHaveBeenCalledWith("/w");
+    expect(document.querySelector(".projects-link-dot")).not.toBeNull();
+  });
+
+  it("shows no activity dot when only the current project is busy", () => {
+    useStore.setState({ runStatus: { s2: "running" } });
+    render(<Sidebar />);
+    expect(document.querySelector(".projects-link-dot")).toBeNull();
   });
 
   it("opens Settings from the footer button", async () => {
@@ -86,6 +90,19 @@ describe("Sidebar", () => {
     const second = screen.getByText("Second chat").closest(".history-item")!;
     expect(first.querySelector(".chat-status.running")).not.toBeNull();
     expect(second.querySelector(".chat-status.unread")).not.toBeNull();
+  });
+
+  it("shows the model and date for each chat", () => {
+    useStore.setState({
+      sessions: [
+        { id: "s1", workspace: "/w", model: "anthropic/claude-sonnet-4-5-20250929", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "" },
+      ],
+    });
+    render(<Sidebar />);
+    const row = screen.getByText("First chat").closest(".history-item")!;
+    // Provider prefix and date suffix are trimmed for a compact label.
+    expect(row.querySelector(".history-model")).toHaveTextContent("claude-sonnet-4-5");
+    expect(row.querySelector(".history-date")).not.toBeNull();
   });
 
   it("deletes a chat only after confirming in the modal", async () => {
