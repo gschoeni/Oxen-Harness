@@ -1,7 +1,7 @@
 # Project Status & Roadmap
 
 **Purpose:** Where we are, what's next, what's done. Pull this in for any working session.
-**Updated:** 2026-06-22
+**Updated:** 2026-07-01
 
 ---
 
@@ -48,7 +48,9 @@
 
 - [x] `Workspace` sandbox: path resolution rejecting escapes outside the root
 - [x] `Tool` trait, `ToolRegistry` (dispatch by name), OpenAI tool definitions
-- [x] Shared `args` helpers for typed JSON argument extraction across all tools
+- [x] `TypedTool` (2026-07-01): args are a typed struct, the schema derives from
+      it via `schemars` (doc comments = model-facing descriptions) — replaced
+      the hand-written schemas + `args` extraction helpers across all tools
 - [x] fs tools: `read_file`, `write_file`, `edit_file` (unique-match), `search_files`
 - [x] `run_shell`: command execution pinned to workspace root
 - [x] `git`: status / diff / log / commit
@@ -239,6 +241,27 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
 - [ ] Loop support in the Tauri desktop app (follow-up pass)
 
 ---
+
+## Recent — extensibility push (2026-07-01)
+
+Tools, skills, and the surfaces to manage them, in one sweep:
+
+- **TypedTool refactor** (`harness-tools`): schemas derive from typed args
+  structs — advertised interface and parsed arguments can't drift; registry
+  completeness + schema-budget tests; README "Adding a tool" recipe.
+- **Custom HTTP tools**: name + description + JSON-schema params + endpoint;
+  arguments POST as JSON, response body = tool result. Settings → Tools editor
+  with a simple parameter builder (JSON mode for complex schemas).
+- **Skills** (Claude Code shape): `SKILL.md` dirs, global
+  (`~/.oxen-harness/skills/`) + per-project (`.oxen-harness/skills/`, committed
+  — see the repo's own `add-a-tool` skill). Progressive disclosure via a single
+  `skill` tool; Settings → Skills page to create/edit/toggle; README
+  "Adding a skill".
+- **Host parity**: the CLI now applies tool prefs + skills like the desktop;
+  both hosts gate the system prompt on the tools that actually survived
+  preferences (canvas was hardcoded before).
+- **Desktop navigation**: projects became a full-window picker page; the
+  sidebar scopes to one project's chats.
 
 ## What's left / next
 
