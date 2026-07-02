@@ -19,13 +19,13 @@ const releaseNotes: SkillInfo = {
   enabled: true,
 };
 
-/** A minimal ToolInfo for the autocomplete vocabulary. */
-const tool = (name: string) => ({
+/** A minimal ToolInfo for the autocomplete vocabulary and palette. */
+const tool = (name: string, description = "", enabled = true) => ({
   name,
-  description: "",
-  default_description: "",
+  description,
+  default_description: description,
   parameters: {},
-  enabled: true,
+  enabled,
   builtin: true,
   config: {},
 });
@@ -47,7 +47,11 @@ beforeEach(() => {
     projects: [{ path: "/repo", name: "OxenHarness", session_count: 1, active: true }],
   });
   ipc.listSkills.mockResolvedValue([releaseNotes, reviewChecklist]);
-  ipc.listTools.mockResolvedValue([tool("read_file"), tool("run_shell")]);
+  ipc.listTools.mockResolvedValue([
+    tool("read_file", "Read a UTF-8 text file."),
+    tool("run_shell", "Run a shell command from the workspace root."),
+    tool("web_search", "Search the web with Brave.", false),
+  ]);
 });
 
 /** Open a skill's reading view from the list. */
@@ -185,6 +189,23 @@ describe("SkillsPage", () => {
 
     // The reference summary now lists it as a known tool.
     expect(screen.getByLabelText("Referenced tools")).toHaveTextContent("run_shell");
+  });
+
+  it("browses the tool palette and inserts a reference from it", async () => {
+    render(<SkillsPage />);
+    await openSkill("release-notes");
+    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+
+    await userEvent.click(screen.getByRole("button", { name: /available tools/i }));
+    // The palette lists every tool with its description; disabled ones are marked.
+    expect(screen.getByText("Run a shell command from the workspace root.")).toBeInTheDocument();
+    expect(screen.getByText("web_search").closest(".tool-palette-row")).toHaveClass("disabled");
+
+    await userEvent.click(screen.getByRole("button", { name: /run_shell/ }));
+    const editor = screen.getByLabelText<HTMLTextAreaElement>("Instructions markdown");
+    expect(editor.value).toContain("`run_shell`");
+    // Inserting closes the palette.
+    expect(screen.queryByText(/everything the agent can call/i)).toBeNull();
   });
 
   it("warns about backticked names that don't match any tool", async () => {

@@ -14,7 +14,7 @@ import { ArrowLeft, ChevronDown, ChevronRight, GraduationCap, Pencil, Plus, Tras
 import { Button } from "../../components/ui";
 import { deleteSkill, listSkills, listTools, saveSkill, setSkillEnabled } from "../../lib/ipc";
 import { useActiveProject, useStore } from "../../lib/store";
-import type { SkillInfo, SkillScope } from "../../lib/types";
+import type { SkillInfo, SkillScope, ToolInfo } from "../../lib/types";
 import { InstructionsEditor, SkillMarkdown } from "./InstructionsEditor";
 import { ToolSwitch } from "../tools/ToolSwitch";
 import "../tools/tools.css";
@@ -30,11 +30,12 @@ type View =
 
 export function SkillsPage() {
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
-  // The tool vocabulary, for autocomplete + reference highlighting. Skills
-  // direct the agent to tools by naming them in backticks.
-  const [toolNames, setToolNames] = useState<string[]>([]);
+  // The tool vocabulary, for autocomplete, the palette, and reference
+  // highlighting. Skills direct the agent to tools by naming them in backticks.
+  const [tools, setTools] = useState<ToolInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>({ kind: "list" });
+  const toolNames = tools.map((t) => t.name);
 
   const load = () =>
     listSkills()
@@ -44,8 +45,8 @@ export function SkillsPage() {
   useEffect(() => {
     load();
     listTools()
-      .then((ts) => setToolNames(ts.map((t) => t.name).sort()))
-      .catch(() => {}); // autocomplete is progressive enhancement — no error UI
+      .then(setTools)
+      .catch(() => {}); // tool hints are progressive enhancement — no error UI
   }, []);
 
   // Optimistically flip the toggle, then persist; reload on failure to resync.
@@ -100,7 +101,7 @@ export function SkillsPage() {
       return (
         <SkillEditor
           initial={skill}
-          toolNames={toolNames}
+          tools={tools}
           onSave={(draft) => save(draft, skill)}
           onCancel={() => setView({ kind: "show", name: skill.name, scope: skill.scope })}
           onDelete={() => remove(skill)}
@@ -112,7 +113,7 @@ export function SkillsPage() {
   if (view.kind === "new") {
     return (
       <SkillEditor
-        toolNames={toolNames}
+        tools={tools}
         onSave={(draft) => save(draft)}
         onCancel={() => setView({ kind: "list" })}
       />
@@ -335,17 +336,18 @@ interface SkillDraft {
  *  re-homes the SKILL.md; a delete action appears). */
 function SkillEditor({
   initial,
-  toolNames,
+  tools,
   onSave,
   onCancel,
   onDelete,
 }: {
   initial?: SkillInfo;
-  toolNames: string[];
+  tools: ToolInfo[];
   onSave: (draft: SkillDraft) => Promise<void>;
   onCancel: () => void;
   onDelete?: () => Promise<void>;
 }) {
+  const toolNames = tools.map((t) => t.name);
   const project = useActiveProject();
   const [name, setName] = useState(initial?.name ?? "");
   const [scope, setScope] = useState<SkillScope>(initial?.scope ?? "global");
@@ -471,7 +473,7 @@ function SkillEditor({
             <InstructionsEditor
               value={instructions}
               onChange={setInstructions}
-              toolNames={toolNames}
+              tools={tools}
               placeholder={
                 "Markdown the agent follows once the skill loads, e.g.\n\n" +
                 "1. Run `git log --oneline` since the last tag.\n" +

@@ -8,7 +8,9 @@
 
 import { useRef, useState, type KeyboardEvent } from "react";
 import { AlertTriangle, Wrench } from "lucide-react";
+import { Modal } from "../../components/ui";
 import { Markdown } from "../../components/ui/Markdown";
+import type { ToolInfo } from "../../lib/types";
 
 /** Markdown with tool-aware `code` spans: content exactly matching a known
  *  tool name renders as a highlighted tool reference. */
@@ -73,23 +75,26 @@ function openToken(text: string, caret: number): { start: number; query: string 
   return null;
 }
 
-/** The instructions textarea with tool-name autocomplete: typing a backtick
+/** The instructions textarea with tool-name autocomplete (typing a backtick
  *  offers the registered tools; Enter/Tab/click inserts the completed
- *  `` `name` `` reference. */
+ *  `` `name` `` reference) and a browsable tool palette — a modal listing every
+ *  tool with its description, inserting a reference at the caret on click. */
 export function InstructionsEditor({
   value,
   onChange,
-  toolNames,
+  tools,
   placeholder,
 }: {
   value: string;
   onChange: (value: string) => void;
-  toolNames: string[];
+  tools: ToolInfo[];
   placeholder?: string;
 }) {
+  const toolNames = tools.map((t) => t.name);
   const ref = useRef<HTMLTextAreaElement>(null);
   const [token, setToken] = useState<{ start: number; query: string } | null>(null);
   const [active, setActive] = useState(0);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const matches = token
     ? toolNames.filter((n) => n.startsWith(token.query) && n !== token.query).slice(0, 6)
@@ -115,6 +120,21 @@ export function InstructionsEditor({
     requestAnimationFrame(() => {
       el.focus();
       el.setSelectionRange(caretPos, caretPos);
+    });
+  }
+
+  /** Insert a `` `name` `` reference at the caret (the textarea keeps its last
+   *  caret position while the palette modal has focus). */
+  function insertReference(name: string) {
+    const el = ref.current;
+    const caret = el?.selectionStart ?? value.length;
+    const next = `${value.slice(0, caret)}\`${name}\`${value.slice(caret)}`;
+    const caretPos = caret + name.length + 2;
+    onChange(next);
+    setPaletteOpen(false);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(caretPos, caretPos);
     });
   }
 
@@ -179,26 +199,65 @@ export function InstructionsEditor({
         </ul>
       )}
 
-      {(refs.known.length > 0 || refs.unknown.length > 0) && (
-        <div className="skill-refs" aria-label="Referenced tools">
-          <span className="skill-refs-label">References</span>
-          {refs.known.map((name) => (
-            <span key={name} className="skill-ref-chip">
-              <Wrench size={11} />
-              {name}
-            </span>
-          ))}
-          {refs.unknown.map((name) => (
-            <span
-              key={name}
-              className="skill-ref-chip unknown"
-              title={`\`${name}\` doesn't match any tool — a typo, or a tool that isn't registered.`}
-            >
-              <AlertTriangle size={11} />
-              {name}
-            </span>
-          ))}
-        </div>
+      <div className="skill-editor-foot">
+        <button
+          type="button"
+          className="skill-tools-button"
+          onClick={() => setPaletteOpen(true)}
+          title="Browse the tools this agent can use"
+        >
+          <Wrench size={13} />
+          Available tools
+        </button>
+
+        {(refs.known.length > 0 || refs.unknown.length > 0) && (
+          <div className="skill-refs" aria-label="Referenced tools">
+            <span className="skill-refs-label">References</span>
+            {refs.known.map((name) => (
+              <span key={name} className="skill-ref-chip">
+                <Wrench size={11} />
+                {name}
+              </span>
+            ))}
+            {refs.unknown.map((name) => (
+              <span
+                key={name}
+                className="skill-ref-chip unknown"
+                title={`\`${name}\` doesn't match any tool — a typo, or a tool that isn't registered.`}
+              >
+                <AlertTriangle size={11} />
+                {name}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {paletteOpen && (
+        <Modal title="Available tools" onClose={() => setPaletteOpen(false)}>
+          <p className="tool-palette-intro">
+            Everything the agent can call. Click one to insert a reference at the cursor —
+            the skill's instructions can then direct the agent to it by name.
+          </p>
+          <div className="tool-palette">
+            {tools.map((t) => (
+              <button
+                key={t.name}
+                type="button"
+                className={`tool-palette-row ${t.enabled ? "" : "disabled"}`}
+                onClick={() => insertReference(t.name)}
+                title={t.enabled ? undefined : "Currently disabled in Settings → Tools"}
+              >
+                <span className="tool-palette-name">
+                  <Wrench size={12} />
+                  {t.name}
+                  {!t.enabled && <span className="tool-palette-off">off</span>}
+                </span>
+                <span className="tool-palette-desc">{t.description}</span>
+              </button>
+            ))}
+          </div>
+        </Modal>
       )}
     </div>
   );
