@@ -30,6 +30,11 @@ const reviewChecklist: SkillInfo = {
 
 beforeEach(() => {
   resetAll();
+  // An active project so scope labels can name it.
+  useStore.setState({
+    session: { ...ipc.sampleSession, workspace: "/repo" },
+    projects: [{ path: "/repo", name: "OxenHarness", session_count: 1, active: true }],
+  });
   ipc.listSkills.mockResolvedValue([releaseNotes, reviewChecklist]);
 });
 
@@ -47,13 +52,19 @@ describe("SkillsPage", () => {
     expect(useStore.getState().settingsPage).toBe("tools");
   });
 
-  it("lists skills with their scope and enabled state", async () => {
+  it("groups skills by context — this project (named) first, then global", async () => {
     render(<SkillsPage />);
     expect(await screen.findByText("release-notes")).toBeInTheDocument();
     expect(screen.getByText("review-checklist")).toBeInTheDocument();
-    expect(screen.getByText("global")).toBeInTheDocument();
-    expect(screen.getByText("project")).toBeInTheDocument();
+    expect(screen.getByText("This project · OxenHarness")).toBeInTheDocument();
+    expect(screen.getByText("Global · every project")).toBeInTheDocument();
     expect(screen.getByText("review-checklist").closest(".tool-row")).toHaveClass("disabled");
+
+    // The project group renders above the global one.
+    const labels = [...document.querySelectorAll(".skills-group-label")].map(
+      (el) => el.textContent,
+    );
+    expect(labels[0]).toContain("This project");
   });
 
   it("opens a skill's reading view with rendered markdown, and navigates back", async () => {
@@ -142,6 +153,18 @@ describe("SkillsPage", () => {
     render(<SkillsPage />);
     await userEvent.click(await screen.findByRole("button", { name: /new skill/i }));
     expect(screen.getByRole("button", { name: "Add skill" })).toBeDisabled();
+  });
+
+  it("names the active project in the scope choice", async () => {
+    render(<SkillsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /new skill/i }));
+    expect(
+      screen.getByRole("option", { name: "This project only — OxenHarness" }),
+    ).toBeInTheDocument();
+
+    // Choosing it makes the hint say exactly where the skill will land.
+    await userEvent.selectOptions(screen.getByLabelText("Skill scope"), "project");
+    expect(screen.getByText(/saved into OxenHarness's repo/i)).toBeInTheDocument();
   });
 
   it("edits a skill in place without deleting it", async () => {

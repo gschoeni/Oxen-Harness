@@ -726,6 +726,19 @@ export const useStore = create<AppState>((set, get) => {
   };
 });
 
+/** The project the app is currently working in — the current chat's workspace,
+ *  falling back to the backend's active project. Everything project-scoped
+ *  (project skills, new chats) resolves against this. Returns `null` before a
+ *  session exists. */
+export function useActiveProject(): { path: string; name: string } | null {
+  const session = useStore((s) => s.session);
+  const projects = useStore((s) => s.projects);
+  const path = session?.workspace ?? projects.find((p) => p.active)?.path ?? null;
+  if (!path) return null;
+  const name = projects.find((p) => p.path === path)?.name ?? path.split("/").pop() ?? path;
+  return { path, name };
+}
+
 function initialMode(): Mode {
   const saved = localStorage.getItem(MODE_KEY) as Mode | null;
   const mode =

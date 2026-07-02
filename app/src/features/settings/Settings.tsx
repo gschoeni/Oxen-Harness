@@ -4,6 +4,7 @@ import {
   Cpu,
   Eye,
   EyeOff,
+  FolderOpen,
   GraduationCap,
   Link2,
   Moon,
@@ -24,7 +25,7 @@ import {
   removeCloudModel,
   setConnection,
 } from "../../lib/ipc";
-import { useStore } from "../../lib/store";
+import { useActiveProject, useStore } from "../../lib/store";
 import type { SettingsPage } from "../../lib/types";
 import { LocalSetup } from "../models/LocalSetup";
 import { ThemesPanel } from "../themes/ThemesPanel";
@@ -62,6 +63,7 @@ export function Settings() {
   const page = useStore((s) => s.settingsPage);
   const setPage = useStore((s) => s.setSettingsPage);
   const close = useStore((s) => s.setSettingsOpen);
+  const project = useActiveProject();
 
   // Esc closes the whole surface.
   useEffect(() => {
@@ -75,6 +77,17 @@ export function Settings() {
       <div className="settings-shell" role="dialog" aria-modal="true" aria-label="Settings">
         <aside className="settings-rail" data-tauri-drag-region>
           <div className="settings-rail-title">Settings</div>
+          {/* The context anything project-scoped (e.g. project skills) applies
+              to. Global settings live in ~/.oxen-harness regardless. */}
+          <div
+            className="settings-rail-project"
+            title={project ? project.path : "Open a project to use project-scoped settings"}
+          >
+            <FolderOpen size={13} />
+            <span className="settings-rail-project-name">
+              {project ? project.name : "No project open"}
+            </span>
+          </div>
           <nav className="settings-rail-nav">
             {NAV.map((item) => (
               <button

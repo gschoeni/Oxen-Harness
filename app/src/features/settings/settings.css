@@ -44,7 +44,27 @@
   font-family: var(--font-display);
   font-size: var(--text-lg);
   font-weight: 700;
-  padding: var(--space-3) var(--space-3) var(--space-3);
+  padding: var(--space-3) var(--space-3) 0;
+}
+/* The active project — the context that project-scoped settings apply to. */
+.settings-rail-project {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3) var(--space-3);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  min-width: 0;
+}
+.settings-rail-project > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.settings-rail-project-name {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .settings-rail-nav {
   display: flex;

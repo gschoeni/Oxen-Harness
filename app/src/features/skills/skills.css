@@ -64,6 +64,23 @@
   color: var(--text-tertiary);
 }
 
+/* The list groups skills by where they live: this project, then global. */
+.skills-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.skills-group + .skills-group {
+  margin-top: var(--space-4);
+}
+.skills-group-label {
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+  color: var(--text-tertiary);
+}
+
 /* --- Show / edit subpages (they take over the settings content pane) --- */
 .skill-detail {
   display: flex;

@@ -21,6 +21,13 @@ beforeEach(() => {
 });
 
 describe("Settings", () => {
+  it("shows the active project context in the rail", () => {
+    render(<Settings />);
+    const chip = document.querySelector(".settings-rail-project-name");
+    // No named project in the store, so the chip falls back to the workspace basename.
+    expect(chip?.textContent).toBe("project");
+  });
+
   it("shows the current session info on the Connection page", () => {
     render(<Settings />);
     expect(screen.getByText("claude-opus-4-8")).toBeInTheDocument();

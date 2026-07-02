@@ -14,7 +14,7 @@ import { ArrowLeft, ChevronDown, ChevronRight, GraduationCap, Pencil, Plus, Tras
 import { Button } from "../../components/ui";
 import { Markdown } from "../../components/ui/Markdown";
 import { deleteSkill, listSkills, saveSkill, setSkillEnabled } from "../../lib/ipc";
-import { useStore } from "../../lib/store";
+import { useActiveProject, useStore } from "../../lib/store";
 import type { SkillInfo, SkillScope } from "../../lib/types";
 import { ToolSwitch } from "../tools/ToolSwitch";
 import "../tools/tools.css";
@@ -120,20 +120,17 @@ export function SkillsPage() {
         </p>
         {error && <span className="save-status err">{error}</span>}
 
-        <div className="tool-list">
-          {skills === null ? (
-            <p className="muted">Loading skills…</p>
-          ) : (
-            skills.map((s) => (
-              <SkillRow
-                key={`${s.scope}:${s.name}`}
-                skill={s}
-                onOpen={() => setView({ kind: "show", name: s.name, scope: s.scope })}
-                onToggle={toggle}
-              />
-            ))
-          )}
+        {skills === null ? (
+          <p className="muted">Loading skills…</p>
+        ) : (
+          <SkillGroups
+            skills={skills}
+            onOpen={(s) => setView({ kind: "show", name: s.name, scope: s.scope })}
+            onToggle={toggle}
+          />
+        )}
 
+        <div className="tool-list">
           <button className="tool-add" onClick={() => setView({ kind: "new" })} disabled={skills === null}>
             <Plus size={16} />
             New skill
@@ -141,6 +138,56 @@ export function SkillsPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+/** The skill list, grouped by where each skill lives so the context is
+ *  unmissable: this project's skills first (named), then the global set. */
+function SkillGroups({
+  skills,
+  onOpen,
+  onToggle,
+}: {
+  skills: SkillInfo[];
+  onOpen: (skill: SkillInfo) => void;
+  onToggle: (name: string, enabled: boolean) => void;
+}) {
+  const project = useActiveProject();
+  const groups = [
+    {
+      key: "project",
+      label: project ? `This project · ${project.name}` : "This project",
+      title: project?.path,
+      skills: skills.filter((s) => s.scope === "project"),
+    },
+    {
+      key: "global",
+      label: "Global · every project",
+      title: undefined as string | undefined,
+      skills: skills.filter((s) => s.scope === "global"),
+    },
+  ].filter((g) => g.skills.length > 0);
+
+  return (
+    <>
+      {groups.map((g) => (
+        <div className="skills-group" key={g.key}>
+          <div className="skills-group-label" title={g.title}>
+            {g.label}
+          </div>
+          <div className="tool-list">
+            {g.skills.map((s) => (
+              <SkillRow
+                key={`${s.scope}:${s.name}`}
+                skill={s}
+                onOpen={() => onOpen(s)}
+                onToggle={onToggle}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -193,7 +240,6 @@ function SkillRow({
       <button className="tool-row-head" onClick={onOpen} aria-label={`Open skill ${skill.name}`}>
         <GraduationCap size={14} className="tool-row-icon" />
         <span className="tool-row-name">{skill.name}</span>
-        <span className={`skill-scope ${skill.scope}`}>{skill.scope}</span>
         <span className="tool-row-desc">{skill.description}</span>
         <ChevronRight size={14} className="skill-row-go" />
       </button>
@@ -217,6 +263,9 @@ function SkillShow({
   onEdit: () => void;
   onToggle: (name: string, enabled: boolean) => void;
 }) {
+  const project = useActiveProject();
+  const scopeLabel =
+    skill.scope === "project" && project ? `project · ${project.name}` : skill.scope;
   return (
     <div className="settings-page skill-detail">
       <button className="skill-back" onClick={onBack}>
@@ -229,7 +278,9 @@ function SkillShow({
         <div className="skill-detail-titles">
           <h3 className="skill-detail-name">
             {skill.name}
-            <span className={`skill-scope ${skill.scope}`}>{skill.scope}</span>
+            <span className={`skill-scope ${skill.scope}`} title={skill.dir}>
+              {scopeLabel}
+            </span>
           </h3>
           <p className="skill-detail-desc">{skill.description}</p>
         </div>
@@ -277,6 +328,7 @@ function SkillEditor({
   onCancel: () => void;
   onDelete?: () => Promise<void>;
 }) {
+  const project = useActiveProject();
   const [name, setName] = useState(initial?.name ?? "");
   const [scope, setScope] = useState<SkillScope>(initial?.scope ?? "global");
   const [description, setDescription] = useState(initial?.description ?? "");
@@ -349,12 +401,16 @@ function SkillEditor({
                 aria-label="Skill scope"
               >
                 <option value="global">Every project (global)</option>
-                <option value="project">This project only</option>
+                <option value="project">
+                  {project ? `This project only — ${project.name}` : "This project only"}
+                </option>
               </select>
               <ChevronDown size={14} />
             </span>
-            <span className="tool-field-hint">
-              Project skills live in the repo, so your team gets them too.
+            <span className="tool-field-hint" title={project?.path}>
+              {scope === "project" && project
+                ? `Saved into ${project.name}'s repo (.oxen-harness/skills/), so your team gets it too.`
+                : "Project skills live in the repo, so your team gets them too."}
             </span>
           </label>
         </div>
