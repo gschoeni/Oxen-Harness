@@ -12,32 +12,39 @@ toolchain.
 
 ## How it works
 
-- `src-tauri/` — the Rust backend. `src/lib.rs` exposes the Tauri commands:
-  - `run_turn(prompt)` — drives `harness_agent::Agent`, emitting `agent://token`
-    and `agent://tool` events as the turn streams, returning the final text.
-  - `session_info()` — model, workspace, and session id for the header.
-  - `list_models` / `pull_model` / `remove_model` / `use_local_model` — the local
-    model catalog (Qwen3 via llama.cpp): list with disk usage, download (emitting
-    `models://progress`), remove, and switch the session to a local model.
-  - `install_llama` — installs `llama-server` for the user via Homebrew when it's
-    missing, streaming output to the UI over `llama://install`. `list_models`
-    reports `can_auto_install` so the panel can offer a one-click **Install
-    llama.cpp** button (with a live log) instead of just a manual hint.
-  - `answer_question(id, answers)` — delivers the user's choice for a clarifying
-    question. When the agent calls `ask_user_question`, the backend emits an
-    `agent://question` event and parks until the UI answers.
-  - `list_themes` / `active_theme` / `use_theme` / `import_theme` / `export_theme`
-    / `remove_theme` / `new_theme` — the theme system (shared with the CLI via
-    `harness-theme`): list/switch themes, import/export shareable theme files, and
-    vibe-code a brand-new theme with the model.
+- `src-tauri/` — the Rust backend. `src/lib.rs` exposes the Tauri commands,
+  grouped by concern (each group has a banner comment in the file):
+  - **Turns** — `run_turn(prompt)` drives `harness_agent::Agent`, emitting
+    `agent://token` / `agent://tool` / `agent://usage` events as the turn
+    streams; chats run concurrently per session, so several can be mid-turn.
+  - **Sessions & projects** — history CRUD (`list_sessions`, `resume_session`,
+    `delete_session`, …) plus projects (`list_projects`, `open_project`,
+    `set_active_project`): a project is a working directory chats are rooted in.
+  - **Tools & skills** — `list_tools` / `set_tool_enabled` /
+    `set_tool_description` / `add_custom_tool` / `remove_custom_tool` and
+    `list_skills` / `save_skill` / `delete_skill` / `set_skill_enabled`, backing
+    the Tools and Skills settings pages (see the root README's "Adding a tool" /
+    "Adding a skill").
+  - **Models** — the cloud-model catalog and the local-model setup (llama.cpp
+    downloads with `models://progress`, one-click `install_llama`, hardware-fit
+    annotation).
+  - **Bridged tools** — when the agent calls `ask_user_question` the backend
+    emits `agent://question` and parks until the UI answers
+    (`answer_question`); `canvas` documents stream over `agent://canvas` into
+    the side panel.
+  - **Themes, connection, training data** — theme CRUD shared with the CLI via
+    `harness-theme`; endpoint/API-key settings; per-chat review status + JSONL
+    fine-tuning export.
 - `src/` — the frontend: **React 19 + TypeScript**, bundled by **Vite** (which
-  gives hot-module reload in `tauri dev`). The chat history lives in the left
-  sidebar (**＋ New chat**, past conversations, **⚙ Settings** in the footer); the
-  Settings page holds the session info plus the **Local models**, **Theme**, and
-  light/dark controls. When the agent needs a decision, a **question modal** pops up
-  with multiple-choice options (radio / checkbox) plus a free-text row. You can also
-  **queue messages**: keep typing while the agent works and each message stacks above
-  the composer; the next is sent automatically when the current turn finishes.
+  gives hot-module reload in `tauri dev`). The sidebar is scoped to one project
+  (a **Projects** page switches between them) with **＋ New chat**, that
+  project's history, and **⚙ Settings** in the footer. Settings is a
+  full-window surface with pages for **Connection**, **Cloud/Local models**,
+  **Tools**, **Skills**, **Appearance**, and **Training data**. When the agent
+  needs a decision, a **question modal** pops up with multiple-choice options
+  plus a free-text row. You can also **queue messages**: keep typing while the
+  agent works and each message stacks above the composer; the next is sent
+  automatically when the current turn finishes.
 
 ### Frontend layout (how to extend)
 
@@ -46,20 +53,22 @@ shared layer:
 
 ```
 src/
-  main.tsx, App.tsx        # entry + shell (sidebar | chat + overlays)
+  main.tsx, App.tsx        # entry + shell (sidebar | chat + canvas + overlays)
   lib/
     ipc.ts                 # typed wrappers over every Tauri command/event —
                            #   components import from here, never call invoke()
     types.ts               # wire types mirroring the Rust structs (serde shape)
-    store.ts               # zustand store: mode, theme, session, history, modals
+    store.ts               # zustand store: mode, theme, sessions, threads, modals
     color.ts, format.ts    # pure helpers (accent derivation, byte/time formatting)
   components/ui/           # design-system primitives (Button, Modal, Markdown…)
   styles/                  # tokens.css (the only source of color/space) + global
   features/
-    history/Sidebar.tsx    # chat-history list + new chat + settings entry
+    history/Sidebar.tsx    # the active project's chats + new chat + settings
+    projects/              # the full-window project picker
     chat/                  # Chat orchestration; thread.ts = pure stream reducers;
                            #   ThreadItem, Composer, Queue are presentational
-    settings/  models/  themes/  questions/   # one folder per overlay
+    canvas/                # the side-panel document viewer
+    settings/  tools/  skills/  models/  themes/  logs/  inspector/  questions/
   test/                    # Vitest setup + a controllable mock of lib/ipc
 ```
 
