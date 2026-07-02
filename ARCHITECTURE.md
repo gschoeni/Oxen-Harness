@@ -80,7 +80,7 @@ The crate seams are designed so common extensions touch one place:
 
 | To add… | Do this |
 |---|---|
-| **A tool** | Implement the [`Tool`](crates/harness-tools/src/lib.rs) trait, expose a `*_TOOL` name constant next to it, and register it in the `ToolRegistry`. Dispatch is by name — nothing else needs to change. |
+| **A tool** | Implement the [`TypedTool`](crates/harness-tools/src/lib.rs) trait (typed args struct; doc comments become the model-facing schema), expose a `*_TOOL` name constant, register it with `with_typed` in the `ToolRegistry`, and add its name to the registry completeness test. Full recipe: ["Adding a tool"](README.md#adding-a-tool) in the README. |
 | **A built-in theme** | Add a factory in [`harness-theme/src/builtins.rs`](crates/harness-theme/src/builtins.rs) (overlay a small patch on `Theme::default()`) and list it in `all()`. Theme *data* all lives in that module. |
 | **A config file** | Define a serde struct and lean on `harness-runtime`'s `config::{load_or_default, write_and_snapshot}`; you get atomic writes + Oxen snapshotting for free. |
 | **A cloud model** | Add an entry to `harness_runtime::models::builtins()`. |
