@@ -546,7 +546,10 @@ Three ways to add one:
   skill — it's picked up on the next chat.
 - **Commit one to a repo** at `.oxen-harness/skills/<name>/SKILL.md` — everyone
   who opens that project gets it (a project skill shadows a global one with the
-  same name).
+  same name). This repo ships one:
+  [`add-a-tool`](.oxen-harness/skills/add-a-tool/SKILL.md) teaches the agent to
+  extend itself following the recipe above — open oxen-harness *in*
+  oxen-harness and ask for a new capability.
 
 **How skills and tools interact** (the Claude Code pattern, *progressive
 disclosure*): the model is shown only each skill's name and one-line description

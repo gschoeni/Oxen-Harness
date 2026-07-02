@@ -10,8 +10,10 @@
 /exports
 *.jsonl
 # Per-project harness state (chat attachments etc.) written when the harness
-# runs against this repo. Versioned via Oxen, not git.
-.oxen-harness/
+# runs against this repo. Versioned via Oxen, not git — EXCEPT project skills,
+# which are deliberately committed so everyone who opens the repo gets them.
+.oxen-harness/*
+!.oxen-harness/skills
 
 # Secrets / local config
 .env
