@@ -589,6 +589,14 @@ description is therefore the trigger — write it like "does X, use when Y". A
 skill's folder can hold supporting files (templates, scripts, examples) next to
 the `SKILL.md`; the instructions can point the agent at them.
 
+**Referencing tools from a skill**: name the tool in backticks, exactly as it
+appears on the Tools page — "run \`git\` with operation=status", "read it with
+\`read_file\`". There's no special syntax beyond that; the model connects the
+name to the registered tool when the skill loads. The desktop editor makes the
+convention hard to get wrong: typing a backtick autocompletes the registered
+tool names, known references render as highlighted chips in the preview, and a
+backticked snake_case name that matches no tool gets a typo warning.
+
 Skills work in both the CLI and the desktop app, and changes apply to new and
 resumed chats. The machinery lives in
 [`crates/harness-tools/src/skill.rs`](crates/harness-tools/src/skill.rs)

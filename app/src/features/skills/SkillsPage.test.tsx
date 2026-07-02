@@ -13,11 +13,22 @@ import type { SkillInfo } from "../../lib/types";
 const releaseNotes: SkillInfo = {
   name: "release-notes",
   description: "Writes release notes in our house style.",
-  instructions: "# Steps\n\n1. Read the **git log**.\n2. Group the changes.",
+  instructions: "# Steps\n\n1. Read the **git log** with `read_file`.\n2. Group the changes.",
   scope: "global",
   dir: "/home/ox/.oxen-harness/skills/release-notes",
   enabled: true,
 };
+
+/** A minimal ToolInfo for the autocomplete vocabulary. */
+const tool = (name: string) => ({
+  name,
+  description: "",
+  default_description: "",
+  parameters: {},
+  enabled: true,
+  builtin: true,
+  config: {},
+});
 
 const reviewChecklist: SkillInfo = {
   name: "review-checklist",
@@ -36,6 +47,7 @@ beforeEach(() => {
     projects: [{ path: "/repo", name: "OxenHarness", session_count: 1, active: true }],
   });
   ipc.listSkills.mockResolvedValue([releaseNotes, reviewChecklist]);
+  ipc.listTools.mockResolvedValue([tool("read_file"), tool("run_shell")]);
 });
 
 /** Open a skill's reading view from the list. */
@@ -147,6 +159,44 @@ describe("SkillsPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Write" }));
     expect(screen.getByLabelText("Instructions markdown")).toBeInTheDocument();
+  });
+
+  it("highlights known tool references in the reading view and preview", async () => {
+    render(<SkillsPage />);
+    await openSkill("release-notes");
+
+    // `read_file` matches a registered tool, so it renders as a reference chip.
+    const ref = document.querySelector("code.tool-ref");
+    expect(ref?.textContent).toBe("read_file");
+  });
+
+  it("autocompletes tool names after a backtick in the editor", async () => {
+    render(<SkillsPage />);
+    await openSkill("release-notes");
+    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+
+    const editor = screen.getByLabelText<HTMLTextAreaElement>("Instructions markdown");
+    await userEvent.type(editor, "\nThen run `run");
+
+    // The suggestion list offers the matching tool; accepting completes the
+    // reference with its closing backtick.
+    await userEvent.click(screen.getByRole("option", { name: "run_shell" }));
+    expect(editor.value).toContain("Then run `run_shell`");
+
+    // The reference summary now lists it as a known tool.
+    expect(screen.getByLabelText("Referenced tools")).toHaveTextContent("run_shell");
+  });
+
+  it("warns about backticked names that don't match any tool", async () => {
+    render(<SkillsPage />);
+    await openSkill("release-notes");
+    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+
+    const editor = screen.getByLabelText<HTMLTextAreaElement>("Instructions markdown");
+    await userEvent.type(editor, "\nUse `run_shel` here.");
+
+    const warning = document.querySelector(".skill-ref-chip.unknown");
+    expect(warning?.textContent).toContain("run_shel");
   });
 
   it("won't save until name, description, and instructions are filled", async () => {

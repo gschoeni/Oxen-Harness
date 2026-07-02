@@ -12,10 +12,10 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, ChevronDown, ChevronRight, GraduationCap, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/ui";
-import { Markdown } from "../../components/ui/Markdown";
-import { deleteSkill, listSkills, saveSkill, setSkillEnabled } from "../../lib/ipc";
+import { deleteSkill, listSkills, listTools, saveSkill, setSkillEnabled } from "../../lib/ipc";
 import { useActiveProject, useStore } from "../../lib/store";
 import type { SkillInfo, SkillScope } from "../../lib/types";
+import { InstructionsEditor, SkillMarkdown } from "./InstructionsEditor";
 import { ToolSwitch } from "../tools/ToolSwitch";
 import "../tools/tools.css";
 import "./skills.css";
@@ -30,6 +30,9 @@ type View =
 
 export function SkillsPage() {
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
+  // The tool vocabulary, for autocomplete + reference highlighting. Skills
+  // direct the agent to tools by naming them in backticks.
+  const [toolNames, setToolNames] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>({ kind: "list" });
 
@@ -40,6 +43,9 @@ export function SkillsPage() {
 
   useEffect(() => {
     load();
+    listTools()
+      .then((ts) => setToolNames(ts.map((t) => t.name).sort()))
+      .catch(() => {}); // autocomplete is progressive enhancement — no error UI
   }, []);
 
   // Optimistically flip the toggle, then persist; reload on failure to resync.
@@ -84,6 +90,7 @@ export function SkillsPage() {
       return (
         <SkillShow
           skill={skill}
+          toolNames={toolNames}
           onBack={() => setView({ kind: "list" })}
           onEdit={() => setView({ kind: "edit", name: skill.name, scope: skill.scope })}
           onToggle={toggle}
@@ -93,6 +100,7 @@ export function SkillsPage() {
       return (
         <SkillEditor
           initial={skill}
+          toolNames={toolNames}
           onSave={(draft) => save(draft, skill)}
           onCancel={() => setView({ kind: "show", name: skill.name, scope: skill.scope })}
           onDelete={() => remove(skill)}
@@ -102,7 +110,13 @@ export function SkillsPage() {
   }
 
   if (view.kind === "new") {
-    return <SkillEditor onSave={(draft) => save(draft)} onCancel={() => setView({ kind: "list" })} />;
+    return (
+      <SkillEditor
+        toolNames={toolNames}
+        onSave={(draft) => save(draft)}
+        onCancel={() => setView({ kind: "list" })}
+      />
+    );
   }
 
   return (
@@ -254,11 +268,13 @@ function SkillRow({
  *  rendered as markdown. */
 function SkillShow({
   skill,
+  toolNames,
   onBack,
   onEdit,
   onToggle,
 }: {
   skill: SkillInfo;
+  toolNames: string[];
   onBack: () => void;
   onEdit: () => void;
   onToggle: (name: string, enabled: boolean) => void;
@@ -293,7 +309,7 @@ function SkillShow({
       </header>
 
       <article className="skill-md" aria-label="Skill instructions">
-        <Markdown text={skill.instructions} />
+        <SkillMarkdown text={skill.instructions} toolNames={toolNames} />
       </article>
 
       <footer className="skill-detail-foot">
@@ -319,11 +335,13 @@ interface SkillDraft {
  *  re-homes the SKILL.md; a delete action appears). */
 function SkillEditor({
   initial,
+  toolNames,
   onSave,
   onCancel,
   onDelete,
 }: {
   initial?: SkillInfo;
+  toolNames: string[];
   onSave: (draft: SkillDraft) => Promise<void>;
   onCancel: () => void;
   onDelete?: () => Promise<void>;
@@ -444,27 +462,28 @@ function SkillEditor({
           {previewing ? (
             <div className="skill-md skill-md-preview" aria-label="Instructions preview">
               {instructions.trim() ? (
-                <Markdown text={instructions} />
+                <SkillMarkdown text={instructions} toolNames={toolNames} />
               ) : (
                 <p className="muted">Nothing to preview yet.</p>
               )}
             </div>
           ) : (
-            <textarea
-              className="tool-desc-edit skill-instructions"
-              rows={16}
+            <InstructionsEditor
               value={instructions}
-              onChange={(e) => setInstructions(e.target.value)}
+              onChange={setInstructions}
+              toolNames={toolNames}
               placeholder={
                 "Markdown the agent follows once the skill loads, e.g.\n\n" +
                 "1. Run `git log --oneline` since the last tag.\n" +
                 "2. Group changes into Added / Fixed / Changed.\n" +
                 "3. Write one crisp line per change — no commit hashes."
               }
-              spellCheck={false}
-              aria-label="Instructions markdown"
             />
           )}
+          <span className="tool-field-hint">
+            Point the agent at specific tools by naming them in backticks — type{" "}
+            <code>`</code> to autocomplete. Known tools highlight in the preview.
+          </span>
         </div>
 
         {initial && (

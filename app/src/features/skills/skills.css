@@ -164,3 +164,90 @@
   font-size: var(--text-xs);
   line-height: 1.5;
 }
+
+/* --- Tool references inside instructions --- */
+
+/* A backticked name matching a real tool: rendered as a chip so references
+   stand out from ordinary code spans. */
+.skill-md .prose code.tool-ref {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+}
+
+/* The editor area wraps the textarea so the autocomplete list can anchor. */
+.skill-editor-area {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.skill-autocomplete {
+  position: absolute;
+  left: var(--space-3);
+  bottom: var(--space-2);
+  z-index: 5;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  background: var(--surface);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--frame-shadow-hover, 0 8px 24px rgba(0, 0, 0, 0.35));
+}
+.skill-autocomplete button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.skill-autocomplete button svg {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.skill-autocomplete button.active,
+.skill-autocomplete button:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* The live "which tools does this skill use" summary under the editor. */
+.skill-refs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.skill-refs-label {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.skill-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--space-2);
+}
+.skill-ref-chip.unknown {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
