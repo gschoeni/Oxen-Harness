@@ -366,7 +366,7 @@ impl Agent {
         &mut self,
         user_input: impl Into<String>,
         attachments: Vec<Attachment>,
-        mut on_event: F,
+        on_event: F,
     ) -> Result<String, AgentError>
     where
         F: FnMut(&AgentEvent),
@@ -376,7 +376,30 @@ impl Agent {
             &attachments,
             self.attachments.as_ref(),
         )?)?;
+        self.drive_turn(on_event).await
+    }
 
+    /// Retry a turn whose user message is already recorded but whose model call
+    /// failed before producing a reply (e.g. a 401 before an API key was set).
+    ///
+    /// Unlike [`Agent::run_turn_with_attachments`], this appends **no** user
+    /// message — it drives the same loop against the existing transcript, so the
+    /// user's prompt isn't duplicated in the history (or a fine-tuning export).
+    /// Call it only when the trailing message is the user turn to re-attempt.
+    pub async fn continue_turn<F>(&mut self, on_event: F) -> Result<String, AgentError>
+    where
+        F: FnMut(&AgentEvent),
+    {
+        self.drive_turn(on_event).await
+    }
+
+    /// Drive the model/tool loop against the current transcript to a final reply.
+    /// Shared by a fresh turn and a retry — the only difference is whether a user
+    /// message was pushed first.
+    async fn drive_turn<F>(&mut self, mut on_event: F) -> Result<String, AgentError>
+    where
+        F: FnMut(&AgentEvent),
+    {
         // Tool definitions are fixed for the turn; compute once.
         let tool_defs = self.tools.definitions();
         let window = self.context_window();
@@ -856,6 +879,63 @@ mod tests {
         // Only the user message was persisted — no assistant reply for a turn that
         // never reached the model.
         assert_eq!(agent.messages().last().unwrap().role, "user");
+    }
+
+    #[tokio::test]
+    async fn continue_turn_retries_without_duplicating_the_user_message() {
+        // A failed turn leaves its user message in the transcript; retrying via
+        // continue_turn (after e.g. authenticating past a 401) must not re-add it.
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = store
+            .create_session(&SessionMeta {
+                workspace: "/tmp/proj".into(),
+                model: "claude-opus-4-8".into(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // First attempt: an unroutable endpoint makes the model call fail after
+        // the user message is pushed — exactly the shape of a 401 mid-turn.
+        let dead = OxenClient::new("http://127.0.0.1:1/api/ai", "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            context_window: Some(128_000),
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(dead, ToolRegistry::new(), store, session, config).unwrap();
+
+        agent
+            .run_turn("Write me a README", |_| {})
+            .await
+            .expect_err("the first attempt should fail to reach the model");
+        assert_eq!(
+            agent.messages().iter().filter(|m| m.role == "user").count(),
+            1,
+            "the failed turn should have recorded exactly one user message"
+        );
+
+        // Now the key is set: swap in a working client and continue the turn.
+        let mut server = mockito::Server::new_async().await;
+        let sse = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n\
+                   data: [DONE]\n\n";
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            .create_async()
+            .await;
+        agent.set_client(OxenClient::new(server.url(), "key", "claude-opus-4-8"));
+
+        let out = agent.continue_turn(|_| {}).await.unwrap();
+        assert_eq!(out, "done");
+        // Still exactly one user message (not duplicated), now followed by the reply.
+        assert_eq!(
+            agent.messages().iter().filter(|m| m.role == "user").count(),
+            1,
+            "the retry must not append a second copy of the user prompt"
+        );
+        assert_eq!(agent.messages().last().unwrap().role, "assistant");
     }
 
     #[tokio::test]

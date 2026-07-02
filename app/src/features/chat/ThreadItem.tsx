@@ -1,5 +1,6 @@
 import { Markdown } from "../../components/ui/Markdown";
 import { ToolCall } from "./ToolCall";
+import { ApiKeyPrompt } from "./ApiKeyPrompt";
 import { AttachmentImage } from "./AttachmentImage";
 import type { Item } from "./thread";
 
@@ -24,6 +25,10 @@ export function ThreadItem({ item, now }: { item: Item; now: number }) {
 
   if (item.kind === "notice") {
     return <div className="msg notice">{item.text}</div>;
+  }
+
+  if (item.kind === "apikey") {
+    return <ApiKeyPrompt item={item} />;
   }
 
   if (item.kind === "assistant") {

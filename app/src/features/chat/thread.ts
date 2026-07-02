@@ -30,6 +30,10 @@ export type Item =
   | { id: string; kind: "user"; text: string; images?: string[] }
   | { id: string; kind: "assistant"; text: string; streaming: boolean; error?: boolean }
   | { id: string; kind: "notice"; text: string }
+  // An inline API-key entry card, shown in place of a reply when a turn failed
+  // authentication (a 401). It carries the failed prompt so the turn can be
+  // retried once a key is saved.
+  | { id: string; kind: "apikey"; text: string; attachments: string[] }
   | {
       id: string;
       kind: "tool";
@@ -155,6 +159,32 @@ export function finalizeAssistant(prev: Item[], final: string, error = false): I
     }
   }
   if (final) next.push({ id: uid(), kind: "assistant", text: final, streaming: false, error });
+  return next;
+}
+
+/** Replace the in-flight assistant bubble with an inline API-key prompt after a
+ *  turn failed authentication. Drops the empty streaming bubble (or settles a
+ *  non-empty one), then appends a card carrying the failed turn so it can be
+ *  retried in place once a key is entered. */
+export function appendApiKeyPrompt(prev: Item[], text: string, attachments: string[]): Item[] {
+  const next = [...prev];
+  for (let i = next.length - 1; i >= 0; i--) {
+    const it = next[i];
+    if (it.kind === "assistant" && it.streaming) {
+      if (it.text === "") next.splice(i, 1);
+      else next[i] = { ...it, streaming: false };
+      break;
+    }
+  }
+  next.push({ id: uid(), kind: "apikey", text, attachments });
+  return next;
+}
+
+/** Retire the inline API-key prompt (once the key is saved) and open a fresh
+ *  streaming assistant bubble to receive the retried turn's reply. */
+export function resolveApiKeyPrompt(prev: Item[], id: string): Item[] {
+  const next = prev.filter((it) => it.id !== id);
+  next.push({ id: uid(), kind: "assistant", text: "", streaming: true });
   return next;
 }
 

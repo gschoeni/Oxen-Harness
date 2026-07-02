@@ -196,7 +196,9 @@ export const openProject = vi.fn(async (path: string) => ({
 export const setActiveProject = vi.fn(async () => {});
 export const pickFolder = vi.fn(async () => null as string | null);
 export const runTurn = vi.fn(async () => "Done.");
+export const retryTurn = vi.fn(async () => "Done.");
 export const cancelTurn = vi.fn(async () => {});
+export const configureOxenKey = vi.fn(async () => {});
 export const onToken = listener("token");
 export const onTool = listener("tool");
 export const onQuestion = listener("question");
@@ -260,7 +262,9 @@ export function resetIpc() {
   setActiveProject.mockReset().mockResolvedValue(undefined);
   pickFolder.mockReset().mockResolvedValue(null);
   runTurn.mockReset().mockResolvedValue("Done.");
+  retryTurn.mockReset().mockResolvedValue("Done.");
   cancelTurn.mockReset().mockResolvedValue(undefined);
+  configureOxenKey.mockReset().mockResolvedValue(undefined);
   pickAttachments.mockReset().mockResolvedValue([]);
   answerQuestion.mockReset().mockResolvedValue(undefined);
   getConnection.mockReset().mockResolvedValue(sampleConnection);

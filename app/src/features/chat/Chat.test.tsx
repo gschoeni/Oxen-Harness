@@ -138,6 +138,33 @@ describe("Chat", () => {
     expect(screen.queryByText(/a\.pdf/)).toBeNull();
   });
 
+  it("offers an inline API-key form on a 401, then saves the key and retries the turn", async () => {
+    // The first attempt fails auth; the retry (after the key is saved) succeeds.
+    ipc.runTurn.mockRejectedValueOnce("Oxen API error (401): You must be authenticated");
+    ipc.retryTurn.mockResolvedValueOnce("Here is your README.");
+
+    render(<Chat />);
+    await userEvent.type(screen.getByPlaceholderText(/ask the agent/i), "Write me a README");
+    await userEvent.keyboard("{Enter}");
+
+    // Instead of a dead-end error, the auth prompt appears with the user's turn intact.
+    expect(await screen.findByText(/Connect your Oxen account/i)).toBeInTheDocument();
+    expect(screen.getByText("Write me a README")).toBeInTheDocument();
+    // The card names the host the key will authenticate against.
+    expect(await screen.findByText("hub.oxen.ai")).toBeInTheDocument();
+    // The turn settled to idle so the composer isn't stuck "busy".
+    await waitFor(() => expect(useStore.getState().runStatus["s1"]).toBeUndefined());
+
+    await userEvent.type(screen.getByPlaceholderText(/Oxen API key/i), "sk-live-key");
+    await userEvent.click(screen.getByRole("button", { name: /save & retry/i }));
+
+    expect(ipc.configureOxenKey).toHaveBeenCalledWith("s1", "sk-live-key");
+    expect(ipc.retryTurn).toHaveBeenCalledWith("s1");
+    // The retried reply streams into the same chat; the key card is gone.
+    expect(await screen.findByText("Here is your README.")).toBeInTheDocument();
+    expect(screen.queryByText(/Connect your Oxen account/i)).toBeNull();
+  });
+
   it("renders a resumed transcript from the store", () => {
     useStore.setState({
       session: { ...ipc.sampleSession, session_id: "x" },

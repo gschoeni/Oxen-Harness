@@ -99,6 +99,14 @@ pub fn set_brave_key(key: &str) -> Result<(), RuntimeError> {
     Ok(())
 }
 
+/// Persist just the Oxen API key to `.env` (and the current process), leaving the
+/// host override untouched. Used to authenticate a running chat inline after a
+/// 401, without rewriting `connection.json` or starting a fresh session.
+pub fn set_oxen_key(key: &str) -> Result<(), RuntimeError> {
+    secrets::set(auth::API_KEY_ENV, key.trim())?;
+    Ok(())
+}
+
 /// The effective base URL: the saved host override, else env / CLI / default.
 pub fn effective_base_url(cfg: &ConnectionConfig) -> String {
     match cfg.host.trim() {
@@ -183,6 +191,23 @@ mod tests {
             );
             assert!(!json.contains("secret-brave"));
             assert!(json.contains("localhost:3001"));
+        });
+    }
+
+    #[test]
+    fn set_oxen_key_writes_only_the_key_leaving_host_untouched() {
+        with_temp_home(|| {
+            // A saved host override that the inline key entry must not disturb.
+            save("myhost:9000", "", "").unwrap();
+
+            set_oxen_key("sk-inline").unwrap();
+
+            let base_url = effective_base_url(&load());
+            assert_eq!(effective_api_key(&base_url), "sk-inline");
+            // The host override is preserved (no fresh connection was started).
+            let json = std::fs::read_to_string(paths::connection_file().unwrap()).unwrap();
+            assert!(json.contains("myhost:9000"));
+            assert!(!json.contains("sk-inline"), "key leaked into json: {json}");
         });
     }
 

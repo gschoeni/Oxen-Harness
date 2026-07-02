@@ -17,7 +17,9 @@ import {
   pickFolder,
   resumeSession,
   runTurn,
+  retryTurn,
   cancelTurn,
+  configureOxenKey,
   sessionInfo,
   setActiveProject,
   setModel,
@@ -27,9 +29,11 @@ import {
   useLocalModel,
 } from "./ipc";
 import {
+  appendApiKeyPrompt,
   appendNotice,
   appendToken,
   finalizeAssistant,
+  resolveApiKeyPrompt,
   startTurn,
   toolEnd,
   toolStart,
@@ -84,6 +88,13 @@ function capCanvases(list: CanvasDoc[]): CanvasDoc[] {
 export interface QueuedPrompt {
   text: string;
   attachments: string[];
+}
+
+/** Whether a turn's error is an Oxen authentication failure (no/invalid API key),
+ *  so the chat can offer an inline key-entry form instead of a dead-end error.
+ *  Matches the backend's `Oxen API error (401): …` shape and the auth wording. */
+function isAuthError(message: string): boolean {
+  return /\(401\)/.test(message) || /\b(must be authenticated|unauthorized)\b/i.test(message);
 }
 
 function reconcileQueueTexts(previous: QueuedPrompt[] = [], texts: string[]): QueuedPrompt[] {
@@ -183,6 +194,10 @@ interface AppState {
   send: (text: string, attachments?: string[]) => void;
   /** Stop the current chat's in-flight turn, killing the model stream. */
   stop: () => void;
+  /** Save the Oxen API key entered in a chat's inline auth prompt, then retry the
+   *  turn that hit the 401 — keeping the same conversation. Rejects if saving the
+   *  key fails, so the form can surface the error. */
+  submitApiKey: (session: string, itemId: string, key: string) => Promise<void>;
   /** Replace the current chat's send queue (used by the queue editor). */
   setQueue: (items: string[]) => void;
   /** Route a streamed token / tool event into its session's thread. */
@@ -232,26 +247,40 @@ export const useStore = create<AppState>((set, get) => {
   const genSamples = new Map<string, { start: number; tokens: number; last: number }>();
   const BURST_GAP_MS = 1200;
 
-  // Drive one turn for `id`, then either send the next queued prompt or settle
-  // the run status (read if the chat is in view, unread if it finished offscreen).
-  function runTurnFor(id: string, text: string, paths: string[]) {
-    genSamples.delete(id); // a new turn starts a fresh speed measurement
+  // Drive one turn for `id` (a fresh send, or a retry that continues the existing
+  // transcript), then either send the next queued prompt or settle the run status
+  // (read if the chat is in view, unread if it finished offscreen). The turn's UI
+  // (user bubble + streaming assistant bubble) must already be in the thread.
+  function driveTurn(id: string, text: string, paths: string[], retry: boolean) {
+    genSamples.delete(id); // each turn starts a fresh speed measurement
     set((s) => ({
-      threads: { ...s.threads, [id]: startTurn(s.threads[id] ?? [], text, paths) },
       runStatus: { ...s.runStatus, [id]: "running" },
       // Clear any stale live estimate so this turn's meter starts from the
       // authoritative base (the usage event normally resets it, but be safe).
       liveTokens: { ...s.liveTokens, [id]: 0 },
     }));
-    runTurn(id, text, paths)
+    // A retry continues the failed turn's transcript in place; a fresh turn sends
+    // the prompt (and any attachments) for the first time.
+    let awaitingKey = false;
+    const turn = retry ? retryTurn(id) : runTurn(id, text, paths);
+    turn
       .then((final) =>
         set((s) => ({ threads: { ...s.threads, [id]: finalizeAssistant(s.threads[id] ?? [], final) } })),
       )
-      .catch((e) =>
+      .catch((e) => {
+        // An auth (401) failure isn't a dead end: swap the reply for an inline
+        // key-entry card carrying this turn, so the user can authenticate and
+        // retry without losing the conversation. Any other error shows normally.
+        awaitingKey = isAuthError(String(e));
         set((s) => ({
-          threads: { ...s.threads, [id]: finalizeAssistant(s.threads[id] ?? [], `⚠ ${e}`, true) },
-        })),
-      )
+          threads: {
+            ...s.threads,
+            [id]: awaitingKey
+              ? appendApiKeyPrompt(s.threads[id] ?? [], text, paths)
+              : finalizeAssistant(s.threads[id] ?? [], `⚠ ${e}`, true),
+          },
+        }));
+      })
       .finally(() => {
         // A canvas "writing" signal that never produced a doc (or errored) must
         // not leave the panel stuck in the writing state. Also drop any leftover
@@ -263,7 +292,9 @@ export const useStore = create<AppState>((set, get) => {
         }));
         get().refreshHistory(); // the first turn gives a new session its title
         get().refreshTotalTokens(); // the turn bumped the all-time total
-        const next = (get().queues[id] ?? [])[0];
+        // While waiting on an API key, hold the queue: draining it would just hit
+        // the same 401. Submitting the key retries this turn, then the queue flows.
+        const next = awaitingKey ? undefined : (get().queues[id] ?? [])[0];
         if (next !== undefined) {
           set((s) => ({ queues: { ...s.queues, [id]: (s.queues[id] ?? []).slice(1) } }));
           setTimeout(() => runTurnFor(id, next.text, next.attachments), 0); // let state settle first
@@ -276,6 +307,13 @@ export const useStore = create<AppState>((set, get) => {
           });
         }
       });
+  }
+
+  // Start a fresh turn: append its UI (user bubble + empty streaming reply), then
+  // drive it.
+  function runTurnFor(id: string, text: string, paths: string[]) {
+    set((s) => ({ threads: { ...s.threads, [id]: startTurn(s.threads[id] ?? [], text, paths) } }));
+    driveTurn(id, text, paths, false);
   }
 
   return {
@@ -485,6 +523,20 @@ export const useStore = create<AppState>((set, get) => {
       // with its partial reply and runTurnFor's normal completion path clears the
       // "running" status. Fire-and-forget — a failed cancel just leaves it running.
       void cancelTurn(id).catch(() => {});
+    },
+
+    submitApiKey: async (session, itemId, key) => {
+      const item = (get().threads[session] ?? []).find((it) => it.id === itemId);
+      if (!item || item.kind !== "apikey") return;
+      // Save + authenticate the running agent first; if this throws, the card
+      // stays put so the form can show the error and let the user try again.
+      await configureOxenKey(session, key);
+      // Retire the card, open a fresh reply bubble, and retry the failed turn
+      // (which continues the existing transcript — no duplicate user message).
+      set((s) => ({
+        threads: { ...s.threads, [session]: resolveApiKeyPrompt(s.threads[session] ?? [], itemId) },
+      }));
+      driveTurn(session, item.text, item.attachments, true);
     },
 
     setQueue: (items) =>

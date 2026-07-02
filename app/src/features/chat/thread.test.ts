@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendApiKeyPrompt,
   appendNotice,
   appendToken,
   finalizeAssistant,
+  resolveApiKeyPrompt,
   startTurn,
   toolEnd,
   toolStart,
@@ -91,6 +93,34 @@ describe("thread: finalizeAssistant", () => {
   it("marks errors so they can be styled", () => {
     const items = finalizeAssistant(startTurn([], "q"), "⚠ boom", true);
     expect(assistantText(items)[0]).toMatchObject({ error: true });
+  });
+});
+
+describe("thread: API-key prompt", () => {
+  it("swaps the empty reply bubble for a key card carrying the failed turn", () => {
+    const items = startTurn([], "Write me a README", ["/abs/a.png"]); // [user, empty assistant]
+    const next = appendApiKeyPrompt(items, "Write me a README", ["/abs/a.png"]);
+    expect(next.map((i) => i.kind)).toEqual(["user", "apikey"]); // empty bubble dropped
+    expect(next[1]).toMatchObject({
+      kind: "apikey",
+      text: "Write me a README",
+      attachments: ["/abs/a.png"],
+    });
+  });
+
+  it("keeps any streamed preamble text when it swaps in the key card", () => {
+    const items = appendToken(startTurn([], "go"), "One moment"); // non-empty streaming bubble
+    const next = appendApiKeyPrompt(items, "go", []);
+    expect(next.map((i) => i.kind)).toEqual(["user", "assistant", "apikey"]);
+    expect(next[1]).toMatchObject({ kind: "assistant", text: "One moment", streaming: false });
+  });
+
+  it("retires the key card and opens a fresh reply bubble on resolve", () => {
+    const items = appendApiKeyPrompt(startTurn([], "hi"), "hi", []);
+    const card = items.find((i) => i.kind === "apikey")!;
+    const next = resolveApiKeyPrompt(items, card.id);
+    expect(next.some((i) => i.kind === "apikey")).toBe(false);
+    expect(next[next.length - 1]).toMatchObject({ kind: "assistant", text: "", streaming: true });
   });
 });
 

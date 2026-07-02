@@ -117,6 +117,12 @@ export const runTurn = (session: string, prompt: string, attachments: string[] =
  *  remote). The `runTurn` promise then resolves with whatever streamed so far. */
 export const cancelTurn = (session: string) => invoke<void>("cancel_turn", { session });
 
+/** Retry a turn that failed before replying (e.g. a 401 before an API key was
+ *  set), continuing the same conversation. The failed attempt's user message is
+ *  already recorded, so this re-drives it without duplicating it. Resolves with
+ *  the assistant's final text, exactly like `runTurn`. */
+export const retryTurn = (session: string) => invoke<string>("retry_turn", { session });
+
 /** Open a native file picker for images and PDFs, returning the chosen absolute
  *  paths (empty if the user cancels). These feed the same attachment flow as an
  *  OS file drop. */
@@ -186,6 +192,12 @@ export const setConnection = (host: string, apiKey: string, braveApiKey: string)
  *  rebuilding it — so a failed web search can be retried in the same chat. */
 export const configureBraveKey = (key: string) =>
   invoke<void>("configure_brave_key", { key });
+
+/** Save the Oxen API key and authenticate `session`'s agent in place (no new
+ *  session), so a turn that failed with a 401 can be retried inline in the same
+ *  chat. Pair with `retryTurn` to re-drive the failed turn. */
+export const configureOxenKey = (session: string, key: string) =>
+  invoke<void>("configure_oxen_key", { session, key });
 
 // ---- local models ----------------------------------------------------------
 

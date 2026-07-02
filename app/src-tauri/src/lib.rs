@@ -549,6 +549,29 @@ fn configure_brave_key(key: String) -> Result<(), String> {
     harness_runtime::connection::set_brave_key(&key).map_err(|e| e.to_string())
 }
 
+/// Save the Oxen API key and authenticate a chat's running agent in place.
+///
+/// Unlike [`set_connection`], this does **not** start a new session — it persists
+/// the key (to `.env`) and swaps a freshly-built client (same model, now carrying
+/// the key) into the session's agent, keeping the transcript intact. Lets the
+/// user paste a key inline after a 401 and retry the turn in the same chat.
+#[tauri::command]
+async fn configure_oxen_key(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session: String,
+    key: String,
+) -> Result<(), String> {
+    harness_runtime::connection::set_oxen_key(&key).map_err(|e| e.to_string())?;
+    let arc = agent_or_build(&app, &state, &session).await?;
+    let mut agent = arc.lock().await;
+    // Rebuild the client for the agent's own model so the key applies without
+    // disturbing the model choice or the conversation.
+    let client = build_client(agent.model())?;
+    agent.set_client(client);
+    Ok(())
+}
+
 /// Save the Oxen API key + host and rebuild the agent against the new endpoint.
 ///
 /// Rebuilding validates that a key resolves (a blank key must be backed by env /
@@ -701,6 +724,17 @@ async fn current_agent(app: &AppHandle, state: &AppState) -> Result<Arc<Mutex<Ag
     Ok(arc)
 }
 
+/// Whether a turn starts fresh (pushing a new user message) or retries the
+/// existing transcript's trailing user turn (e.g. after authenticating past a
+/// 401). Both drive the identical streaming/accounting scaffold in [`execute_turn`].
+enum TurnKind {
+    Fresh {
+        prompt: String,
+        attachments: Vec<Attachment>,
+    },
+    Retry,
+}
+
 /// Run one user turn for a specific chat, streaming session-tagged events to the
 /// UI; returns the final text. Holds only that session's lock, so turns in other
 /// chats keep running concurrently.
@@ -719,10 +753,34 @@ async fn run_turn(
         .iter()
         .filter_map(|p| Attachment::from_path(p).ok())
         .collect();
+    execute_turn(app, &state, session, TurnKind::Fresh { prompt, attachments }).await
+}
 
+/// Retry the current chat's failed turn after its API key was set, continuing the
+/// same conversation. The user message from the failed attempt is already in the
+/// transcript, so this drives it again without re-appending it (avoiding a
+/// duplicate user turn in the history / fine-tuning export).
+#[tauri::command]
+async fn retry_turn(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session: String,
+) -> Result<String, String> {
+    execute_turn(app, &state, session, TurnKind::Retry).await
+}
+
+/// The shared body of a turn: rehydrate the agent, register a cancel token, run
+/// the turn (fresh or retried) while forwarding streamed events to the UI, then
+/// account for tokens and release idle background agents.
+async fn execute_turn(
+    app: AppHandle,
+    state: &State<'_, AppState>,
+    session: String,
+    kind: TurnKind,
+) -> Result<String, String> {
     // Get the live agent or rehydrate it from the database. The agents map is a
     // cache, not the source of truth, so an evicted chat simply rebuilds here.
-    let arc = agent_or_build(&app, &state, &session).await?;
+    let arc = agent_or_build(&app, state, &session).await?;
 
     let sid = session.clone();
     // The context window is fixed for the turn; capture it once so the live usage
@@ -739,8 +797,7 @@ async fn run_turn(
         let mut agent = arc.lock().await;
         agent.set_cancel_token(cancel.clone());
         let before = agent.tokens_used();
-        let r = agent
-            .run_turn_with_attachments(prompt, attachments, move |event| match event {
+        let on_event = move |event: &AgentEvent| match event {
                 AgentEvent::Token(t) => {
                     let _ = app.emit(
                         "agent://token",
@@ -818,8 +875,13 @@ async fn run_turn(
                         },
                     );
                 }
-            })
-            .await;
+        };
+        let r = match kind {
+            TurnKind::Fresh { prompt, attachments } => {
+                agent.run_turn_with_attachments(prompt, attachments, on_event).await
+            }
+            TurnKind::Retry => agent.continue_turn(on_event).await,
+        };
         turn_delta = agent.tokens_used().saturating_sub(before);
         r
     };
@@ -832,7 +894,7 @@ async fn run_turn(
     // The turn is persisted message-by-message, so once it's done the agent is
     // just a cache. Release idle background agents (keeping the current chat and
     // any still-running turns) so memory tracks concurrency, not chat count.
-    evict_idle(&state).await;
+    evict_idle(state).await;
     result.map_err(|e| e.to_string())
 }
 
@@ -1761,6 +1823,8 @@ pub fn run() {
             get_connection,
             set_connection,
             configure_brave_key,
+            configure_oxen_key,
+            retry_turn,
             installed_local_models,
             install_llama,
             detect_hardware,

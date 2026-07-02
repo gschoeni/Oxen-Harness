@@ -1,0 +1,142 @@
+/* Inline API-key recovery card, shown in the thread where a reply would be when
+   a turn fails authentication. Accent-tinted so it reads as an actionable prompt
+   rather than an error. */
+.apikey-card {
+  align-self: flex-start;
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  border: var(--frame-border-w) solid color-mix(in srgb, var(--accent) 40%, var(--separator-strong));
+  border-radius: var(--frame-radius);
+  padding: var(--space-4);
+  animation: apikey-in var(--dur) var(--ease);
+}
+@keyframes apikey-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.apikey-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.apikey-icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-pill);
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.apikey-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.apikey-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.apikey-sub {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  line-height: 1.45;
+}
+/* The endpoint being authenticated, called out inline in the subtitle. */
+.apikey-host {
+  font-family: var(--font-readout);
+  font-size: 0.95em;
+  color: var(--text);
+  background: var(--surface-2);
+  border-radius: var(--radius-xs);
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
+.apikey-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.apikey-input-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  background: var(--bg);
+  border: 1px solid var(--separator);
+  border-radius: var(--frame-radius);
+}
+.apikey-input-wrap:focus-within {
+  border-color: var(--accent);
+}
+.apikey-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  outline: none;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.apikey-input::placeholder {
+  color: var(--text-tertiary);
+}
+.apikey-input:disabled {
+  opacity: 0.6;
+}
+.apikey-reveal {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.apikey-reveal:hover {
+  color: var(--text);
+}
+
+.apikey-error {
+  font-size: var(--text-sm);
+  color: var(--danger);
+  line-height: 1.4;
+}
+
+.apikey-foot {
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+.apikey-foot code {
+  font-family: var(--font-readout);
+  font-size: 0.95em;
+}
+.apikey-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.apikey-link:hover {
+  color: var(--accent-hover);
+}
