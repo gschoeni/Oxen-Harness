@@ -10,7 +10,7 @@
 // write/preview markdown editor. Show and edit take over the whole subpage.
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, ChevronRight, GraduationCap, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, GraduationCap, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/ui";
 import { Markdown } from "../../components/ui/Markdown";
 import { deleteSkill, listSkills, saveSkill, setSkillEnabled } from "../../lib/ipc";
@@ -341,15 +341,18 @@ function SkillEditor({
           </label>
           <label className="tool-field">
             <span className="field-name">Available in</span>
-            <select
-              className="tool-input"
-              value={scope}
-              onChange={(e) => setScope(e.target.value as SkillScope)}
-              aria-label="Skill scope"
-            >
-              <option value="global">Every project (global)</option>
-              <option value="project">This project only</option>
-            </select>
+            <span className="tool-select">
+              <select
+                className="tool-input"
+                value={scope}
+                onChange={(e) => setScope(e.target.value as SkillScope)}
+                aria-label="Skill scope"
+              >
+                <option value="global">Every project (global)</option>
+                <option value="project">This project only</option>
+              </select>
+              <ChevronDown size={14} />
+            </span>
             <span className="tool-field-hint">
               Project skills live in the repo, so your team gets them too.
             </span>

@@ -254,6 +254,30 @@
   border-color: color-mix(in srgb, var(--accent) 55%, var(--separator-strong));
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+
+/* Selects: strip the native chrome so they share the text inputs' exact
+   height, background, and radius; the wrapper draws a token-colored chevron
+   (a bare <select> can't host a pseudo-element). */
+.tool-select {
+  display: block;
+  position: relative;
+  min-width: 0;
+}
+.tool-select > select.tool-input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  padding-right: calc(var(--space-3) + 20px);
+  cursor: pointer;
+}
+.tool-select > svg {
+  position: absolute;
+  right: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--text-tertiary);
+}
 .tool-input.mono,
 .tool-desc-edit.mono {
   font-family: var(--font-mono);
