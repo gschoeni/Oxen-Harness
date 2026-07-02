@@ -16,13 +16,13 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::{Tool, ToolError};
+use crate::{ToolError, TypedTool};
 
 /// The tool name the model calls (and front ends special-case for rendering).
 pub const PLAN_TOOL: &str = "update_plan";
 
 /// Lifecycle of a single plan item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanStatus {
     /// Not started yet.
@@ -34,61 +34,40 @@ pub enum PlanStatus {
 }
 
 /// One entry in the plan.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PlanItem {
-    /// Imperative description of the step, e.g. "Wire CLI rendering".
+    /// Imperative description of the step, e.g. "Run tests".
     pub content: String,
-    /// Present-continuous form shown while active, e.g. "Wiring CLI rendering".
+    /// Present-continuous form shown while active, e.g. "Running tests".
     pub active_form: String,
     /// Current lifecycle state.
     pub status: PlanStatus,
 }
 
-/// Parse + validate the tool arguments into the full plan.
-///
-/// Enforces the same invariants the model is told to maintain: a non-empty list,
-/// non-empty text on every item, and at most one `in_progress` item.
-fn parse_plan(args: &serde_json::Value) -> Result<Vec<PlanItem>, String> {
-    let raw = args
-        .get("plan")
-        .and_then(|v| v.as_array())
-        .ok_or("missing `plan` array")?;
-    if raw.is_empty() {
+/// Arguments to `update_plan`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct PlanArgs {
+    /// The full, updated checklist. Send every item every time; this replaces
+    /// the previous plan.
+    pub plan: Vec<PlanItem>,
+}
+
+/// Validate an already-parsed plan, enforcing the invariants the model is told
+/// to maintain: a non-empty list, non-empty text on every item, and at most one
+/// `in_progress` item. Returns the items with surrounding whitespace trimmed.
+fn validate_plan(mut items: Vec<PlanItem>) -> Result<Vec<PlanItem>, String> {
+    if items.is_empty() {
         return Err("`plan` must contain at least one item".into());
     }
-
-    let mut items = Vec::with_capacity(raw.len());
-    for (i, entry) in raw.iter().enumerate() {
-        let content = entry
-            .get("content")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| format!("plan[{i}] is missing a non-empty `content`"))?
-            .to_string();
-        let active_form = entry
-            .get("active_form")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| format!("plan[{i}] is missing a non-empty `active_form`"))?
-            .to_string();
-        let status = match entry.get("status").and_then(|v| v.as_str()) {
-            Some("pending") => PlanStatus::Pending,
-            Some("in_progress") => PlanStatus::InProgress,
-            Some("completed") => PlanStatus::Completed,
-            Some(other) => {
-                return Err(format!(
-                    "plan[{i}] has unknown `status` {other:?}; use one of: pending, in_progress, completed"
-                ))
-            }
-            None => return Err(format!("plan[{i}] is missing `status`")),
-        };
-        items.push(PlanItem {
-            content,
-            active_form,
-            status,
-        });
+    for (i, it) in items.iter_mut().enumerate() {
+        it.content = it.content.trim().to_string();
+        it.active_form = it.active_form.trim().to_string();
+        if it.content.is_empty() {
+            return Err(format!("plan[{i}] is missing a non-empty `content`"));
+        }
+        if it.active_form.is_empty() {
+            return Err(format!("plan[{i}] is missing a non-empty `active_form`"));
+        }
     }
 
     let in_progress = items
@@ -139,10 +118,9 @@ impl PlanTool {
 }
 
 #[async_trait]
-impl Tool for PlanTool {
-    fn name(&self) -> &str {
-        PLAN_TOOL
-    }
+impl TypedTool for PlanTool {
+    const NAME: &'static str = PLAN_TOOL;
+    type Args = PlanArgs;
 
     fn description(&self) -> &str {
         "Track a LARGE, multi-phase piece of work as a shared checklist so the \
@@ -172,40 +150,8 @@ impl Tool for PlanTool {
          relevant."
     }
 
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "plan": {
-                    "type": "array",
-                    "description": "The full, updated checklist. Send every item every time; this replaces the previous plan.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "content": {
-                                "type": "string",
-                                "description": "Imperative description of the step (e.g. 'Run tests')."
-                            },
-                            "active_form": {
-                                "type": "string",
-                                "description": "Present-continuous form shown while active (e.g. 'Running tests')."
-                            },
-                            "status": {
-                                "type": "string",
-                                "enum": ["pending", "in_progress", "completed"],
-                                "description": "pending = not started; in_progress = working on it now (at most one); completed = done."
-                            }
-                        },
-                        "required": ["content", "active_form", "status"]
-                    }
-                }
-            },
-            "required": ["plan"]
-        })
-    }
-
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let items = parse_plan(&args).map_err(ToolError::InvalidArguments)?;
+    async fn run(&self, args: PlanArgs) -> Result<String, ToolError> {
+        let items = validate_plan(args.plan).map_err(ToolError::InvalidArguments)?;
         Ok(render(&items))
     }
 }
@@ -213,6 +159,13 @@ impl Tool for PlanTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parse raw JSON the way dispatch does (serde), then validate — the same
+    /// path a model tool call takes.
+    fn parse_plan(args: &serde_json::Value) -> Result<Vec<PlanItem>, String> {
+        let parsed: PlanArgs = serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
+        validate_plan(parsed.plan)
+    }
 
     fn item(content: &str, status: &str) -> serde_json::Value {
         serde_json::json!({
@@ -281,12 +234,15 @@ mod tests {
 
     #[test]
     fn name_and_schema_shape() {
-        let tool = PlanTool::new();
-        assert_eq!(tool.name(), PLAN_TOOL);
-        let schema = tool.parameters_schema();
-        assert_eq!(
-            schema["properties"]["plan"]["items"]["properties"]["status"]["enum"][1],
-            "in_progress"
-        );
+        assert_eq!(PlanTool::NAME, PLAN_TOOL);
+        let schema = crate::schema_for::<PlanArgs>();
+        let status = &schema["properties"]["plan"]["items"]["properties"]["status"];
+        // Variant doc comments fold into a compact enum + description.
+        assert_eq!(status["enum"][1], "in_progress");
+        assert!(status["description"]
+            .as_str()
+            .unwrap()
+            .contains("in_progress ="));
+        assert_eq!(schema["required"][0], "plan");
     }
 }

@@ -16,34 +16,42 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::{Tool, ToolError};
+use crate::{ToolError, TypedTool};
 
 /// The tool name the model calls (and front ends special-case for rendering).
 pub const ASK_USER_TOOL: &str = "ask_user_question";
 
 /// One selectable choice within a question.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Choice {
-    /// Concise display text the user selects (1–5 words).
+    /// Concise choice text the user selects (1–5 words).
     pub label: String,
-    /// What this option means / its trade-offs.
+    /// What this option means or implies / its trade-offs.
     #[serde(default)]
     pub description: String,
 }
 
 /// A single multiple-choice question posed to the user.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Question {
-    /// The full question text (should end with a question mark).
+    /// The full question text; end with a question mark.
     pub question: String,
-    /// A very short label/chip for the question (≈ ≤12 chars).
+    /// Very short label/chip for the question (max ~12 chars), e.g. 'Storage', 'Auth'.
     #[serde(default)]
     pub header: String,
-    /// The 2–4 mutually exclusive choices (a free-text option is added by the host).
+    /// 2–4 distinct, mutually exclusive choices. Do not add an 'Other' option —
+    /// the host always lets the user type their own answer.
     pub options: Vec<Choice>,
-    /// Whether the user may pick more than one option.
+    /// Allow selecting multiple options.
     #[serde(default, rename = "multiSelect")]
     pub multi_select: bool,
+}
+
+/// Arguments to `ask_user_question`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct AskArgs {
+    /// 1–4 questions to ask the user.
+    pub questions: Vec<Question>,
 }
 
 /// The user's answer to one [`Question`].
@@ -78,19 +86,13 @@ impl AskUserTool {
     }
 }
 
-/// Parse + validate the `questions` argument, returning a model-friendly error
-/// string on malformed input.
-fn parse_questions(args: &serde_json::Value) -> Result<Vec<Question>, String> {
-    let raw = args
-        .get("questions")
-        .ok_or("missing `questions` array")?
-        .clone();
-    let questions: Vec<Question> =
-        serde_json::from_value(raw).map_err(|e| format!("invalid `questions`: {e}"))?;
+/// Validate already-parsed questions, returning a model-friendly error string
+/// on malformed input.
+fn validate_questions(questions: &[Question]) -> Result<(), String> {
     if questions.is_empty() || questions.len() > 4 {
         return Err("provide between 1 and 4 questions".to_string());
     }
-    for q in &questions {
+    for q in questions {
         if q.question.trim().is_empty() {
             return Err("each question needs non-empty `question` text".to_string());
         }
@@ -102,7 +104,7 @@ fn parse_questions(args: &serde_json::Value) -> Result<Vec<Question>, String> {
             ));
         }
     }
-    Ok(questions)
+    Ok(())
 }
 
 /// Format collected answers as a compact, unambiguous block for the model.
@@ -125,10 +127,9 @@ fn format_answers(answers: &[QuestionAnswer]) -> String {
 }
 
 #[async_trait]
-impl Tool for AskUserTool {
-    fn name(&self) -> &str {
-        ASK_USER_TOOL
-    }
+impl TypedTool for AskUserTool {
+    const NAME: &'static str = ASK_USER_TOOL;
+    type Args = AskArgs;
 
     fn description(&self) -> &str {
         "Ask the user one or more multiple-choice questions to resolve an \
@@ -140,62 +141,9 @@ impl Tool for AskUserTool {
          early rather than building the wrong thing."
     }
 
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "questions": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 4,
-                    "description": "1–4 questions to ask the user.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "question": {
-                                "type": "string",
-                                "description": "The full question text; end with a question mark."
-                            },
-                            "header": {
-                                "type": "string",
-                                "description": "Very short label/chip for the question (max ~12 chars), e.g. 'Storage', 'Auth'."
-                            },
-                            "options": {
-                                "type": "array",
-                                "minItems": 2,
-                                "maxItems": 4,
-                                "description": "2–4 distinct, mutually exclusive choices. Do not add an 'Other' option.",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "label": {
-                                            "type": "string",
-                                            "description": "Concise choice text (1–5 words)."
-                                        },
-                                        "description": {
-                                            "type": "string",
-                                            "description": "What this option means or implies."
-                                        }
-                                    },
-                                    "required": ["label"]
-                                }
-                            },
-                            "multiSelect": {
-                                "type": "boolean",
-                                "default": false,
-                                "description": "Allow selecting multiple options."
-                            }
-                        },
-                        "required": ["question", "header", "options"]
-                    }
-                }
-            },
-            "required": ["questions"]
-        })
-    }
-
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let questions = parse_questions(&args).map_err(ToolError::InvalidArguments)?;
+    async fn run(&self, args: AskArgs) -> Result<String, ToolError> {
+        let questions = args.questions;
+        validate_questions(&questions).map_err(ToolError::InvalidArguments)?;
         match self.asker.ask(&questions).await? {
             Some(answers) => Ok(format_answers(&answers)),
             None => Ok("No interactive user is available to answer right now. \
@@ -239,6 +187,14 @@ mod tests {
         async fn ask(&self, _: &[Question]) -> Result<Option<Vec<QuestionAnswer>>, ToolError> {
             Ok(None)
         }
+    }
+
+    /// Parse raw JSON the way dispatch does (serde), then validate — the same
+    /// path a model tool call takes.
+    fn parse_questions(args: &serde_json::Value) -> Result<Vec<Question>, String> {
+        let parsed: AskArgs = serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
+        validate_questions(&parsed.questions)?;
+        Ok(parsed.questions)
     }
 
     fn sample_args() -> serde_json::Value {
@@ -293,9 +249,15 @@ mod tests {
 
     #[test]
     fn schema_advertises_questions_array() {
-        let tool = AskUserTool::new(Arc::new(NonInteractiveAsker));
-        let schema = tool.parameters_schema();
-        assert_eq!(schema["properties"]["questions"]["maxItems"], 4);
-        assert_eq!(tool.name(), ASK_USER_TOOL);
+        assert_eq!(AskUserTool::NAME, ASK_USER_TOOL);
+        let schema = crate::schema_for::<AskArgs>();
+        assert_eq!(schema["required"][0], "questions");
+        // Nested types inline (no $ref) so every provider can read them.
+        let items = &schema["properties"]["questions"]["items"];
+        assert_eq!(
+            items["properties"]["options"]["items"]["required"][0],
+            "label"
+        );
+        assert!(items["properties"]["multiSelect"].is_object());
     }
 }

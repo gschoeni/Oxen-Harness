@@ -9,10 +9,10 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde::Deserialize;
 
-use crate::args::{opt_u64, require_str};
 use crate::sandbox::Workspace;
-use crate::{Tool, ToolError};
+use crate::{ToolError, TypedTool};
 
 /// Tool name for [`ShellTool`].
 pub const RUN_SHELL_TOOL: &str = "run_shell";
@@ -33,30 +33,30 @@ impl ShellTool {
     }
 }
 
+/// Arguments to `run_shell`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ShellArgs {
+    /// Command line to execute via the shell.
+    pub command: String,
+    /// Timeout in milliseconds (default 120000).
+    pub timeout_ms: Option<u64>,
+}
+
 #[async_trait]
-impl Tool for ShellTool {
-    fn name(&self) -> &str {
-        RUN_SHELL_TOOL
-    }
+impl TypedTool for ShellTool {
+    const NAME: &'static str = RUN_SHELL_TOOL;
+    type Args = ShellArgs;
+
     fn description(&self) -> &str {
         "Run a shell command from the workspace root. Returns exit code, stdout, and stderr. \
          Times out after 2 minutes by default (override with `timeout_ms`). Prefer the \
          dedicated tools for file work: use `find_files`/`search_files`/`read_file` instead \
          of `find`/`grep`/`cat`, and `write_file`/`edit_file` instead of redirects/`sed`."
     }
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "command": { "type": "string", "description": "Command line to execute via the shell." },
-                "timeout_ms": { "type": "integer", "description": "Timeout in milliseconds (default 120000)." }
-            },
-            "required": ["command"]
-        })
-    }
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let command = require_str(&args, "command")?;
-        let timeout_ms = opt_u64(&args, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS);
+
+    async fn run(&self, args: ShellArgs) -> Result<String, ToolError> {
+        let command = &args.command;
+        let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
 
         let mut cmd = shell_command(command);
         cmd.current_dir(self.workspace.root());

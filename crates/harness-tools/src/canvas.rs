@@ -17,13 +17,38 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::{Tool, ToolError};
+use crate::{ToolError, TypedTool};
 
 /// The tool name the model calls (and front ends special-case for rendering).
 pub const CANVAS_TOOL: &str = "canvas";
 
 /// The document formats a canvas can render.
 pub const CANVAS_FORMATS: &[&str] = &["markdown", "html", "code", "svg"];
+
+/// A canvas document format, as the model supplies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasFormat {
+    /// Rich text: a report, article, or document.
+    Markdown,
+    /// A rendered web page or interactive experience.
+    Html,
+    /// A source file (set `language`).
+    Code,
+    /// A vector image.
+    Svg,
+}
+
+impl CanvasFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Markdown => "markdown",
+            Self::Html => "html",
+            Self::Code => "code",
+            Self::Svg => "svg",
+        }
+    }
+}
 
 /// A document to display in the canvas. Addressed by [`CanvasDoc::id`] so a
 /// later call with the same id updates the same panel.
@@ -86,42 +111,48 @@ fn slug(title: &str) -> String {
         .collect()
 }
 
-/// Parse + validate the tool arguments into a [`CanvasDoc`].
-fn parse_doc(args: &serde_json::Value) -> Result<CanvasDoc, String> {
-    let content = args
-        .get("content")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.trim().is_empty())
-        .ok_or("missing non-empty `content`")?
-        .to_string();
+/// Arguments to `canvas`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct CanvasArgs {
+    /// Stable id for the document. Reuse the same id to UPDATE a document you
+    /// previously showed; omit it for a new document (one is derived from the
+    /// title).
+    pub id: Option<String>,
+    /// Short human title for the document.
+    pub title: Option<String>,
+    /// markdown = rich text/report; html = a rendered web page or interactive
+    /// experience; code = a source file (set `language`); svg = a vector image.
+    pub format: CanvasFormat,
+    /// For format=code, the source language (e.g. 'python', 'rust', 'typescript').
+    pub language: Option<String>,
+    /// The full document body. When updating, send the complete new content,
+    /// not a diff.
+    pub content: String,
+}
+
+/// Validate + normalize the tool arguments into a [`CanvasDoc`].
+fn build_doc(args: CanvasArgs) -> Result<CanvasDoc, String> {
+    if args.content.trim().is_empty() {
+        return Err("missing non-empty `content`".into());
+    }
     let title = args
-        .get("title")
-        .and_then(|v| v.as_str())
+        .title
+        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("Document")
         .to_string();
-    let format = args
-        .get("format")
-        .and_then(|v| v.as_str())
-        .unwrap_or("markdown")
-        .to_string();
-    if !CANVAS_FORMATS.contains(&format.as_str()) {
-        return Err(format!(
-            "unknown `format` {format:?}; use one of: {}",
-            CANVAS_FORMATS.join(", ")
-        ));
-    }
     let language = args
-        .get("language")
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     // A model-supplied id lets it target updates; otherwise derive one from the
     // title so "update the report" naturally re-targets the same document.
     let id = args
-        .get("id")
-        .and_then(|v| v.as_str())
+        .id
+        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(slug)
@@ -130,17 +161,16 @@ fn parse_doc(args: &serde_json::Value) -> Result<CanvasDoc, String> {
     Ok(CanvasDoc {
         id,
         title,
-        format,
+        format: args.format.as_str().to_string(),
         language,
-        content,
+        content: args.content,
     })
 }
 
 #[async_trait]
-impl Tool for CanvasTool {
-    fn name(&self) -> &str {
-        CANVAS_TOOL
-    }
+impl TypedTool for CanvasTool {
+    const NAME: &'static str = CANVAS_TOOL;
+    type Args = CanvasArgs;
 
     fn description(&self) -> &str {
         "Display a standalone document in a side-panel canvas next to the chat, \
@@ -155,38 +185,8 @@ impl Tool for CanvasTool {
          `canvas` again with the SAME `id` and the full updated content."
     }
 
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "Stable id for the document. Reuse the same id to UPDATE a document you previously showed; omit it for a new document (one is derived from the title)."
-                },
-                "title": {
-                    "type": "string",
-                    "description": "Short human title for the document."
-                },
-                "format": {
-                    "type": "string",
-                    "enum": ["markdown", "html", "code", "svg"],
-                    "description": "markdown = rich text/report; html = a rendered web page or interactive experience; code = a source file (set `language`); svg = a vector image."
-                },
-                "language": {
-                    "type": "string",
-                    "description": "For format=code, the source language (e.g. 'python', 'rust', 'typescript')."
-                },
-                "content": {
-                    "type": "string",
-                    "description": "The full document body. When updating, send the complete new content, not a diff."
-                }
-            },
-            "required": ["content", "format"]
-        })
-    }
-
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let doc = parse_doc(&args).map_err(ToolError::InvalidArguments)?;
+    async fn run(&self, args: CanvasArgs) -> Result<String, ToolError> {
+        let doc = build_doc(args).map_err(ToolError::InvalidArguments)?;
         let note = self.sink.show(&doc).await?;
         let mut msg = format!(
             "Showed canvas \"{}\" ({}) [id={}]. The user can see it; revise it by \
@@ -233,6 +233,13 @@ fn code_extension(language: Option<&str>) -> &str {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// Parse raw JSON the way dispatch does (serde), then normalize — the same
+    /// path a model tool call takes.
+    fn parse_doc(args: &serde_json::Value) -> Result<CanvasDoc, String> {
+        let parsed: CanvasArgs = serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
+        build_doc(parsed)
+    }
 
     /// A sink that records the last document it was shown.
     struct CapturingSink(Mutex<Option<CanvasDoc>>);
@@ -302,9 +309,15 @@ mod tests {
 
     #[test]
     fn schema_advertises_format_enum() {
-        let tool = CanvasTool::new(Arc::new(CapturingSink(Mutex::new(None))));
-        let schema = tool.parameters_schema();
-        assert_eq!(tool.name(), CANVAS_TOOL);
-        assert!(schema["properties"]["format"]["enum"].is_array());
+        assert_eq!(CanvasTool::NAME, CANVAS_TOOL);
+        let schema = crate::schema_for::<CanvasArgs>();
+        // Every format the hosts can render must be advertised in the enum.
+        let formats: Vec<&str> = schema["properties"]["format"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(formats, CANVAS_FORMATS);
     }
 }

@@ -362,14 +362,14 @@ async fn resolve_endpoint(args: &Args, resume_meta: Option<&SessionMeta>, ui: &U
 fn build_tool_registry(workspace: &Workspace, ui: &Ui) -> ToolRegistry {
     let mut tools = ToolRegistry::default_for_workspace(workspace.clone());
     // Let the agent interview the user via the interactive terminal picker.
-    tools.register(Arc::new(harness_tools::AskUserTool::new(Arc::new(
+    tools.register_typed(harness_tools::AskUserTool::new(Arc::new(
         ask::CliAsker::new(ui.clone()),
-    ))));
+    )));
     // Show documents in the canvas: write them to disk, open web docs in the
     // browser, and preview text docs inline.
-    tools.register(Arc::new(harness_tools::CanvasTool::new(Arc::new(
+    tools.register_typed(harness_tools::CanvasTool::new(Arc::new(
         canvas::CliCanvasSink,
-    ))));
+    )));
     tools
 }
 

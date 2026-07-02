@@ -10,10 +10,10 @@ use std::path::Path;
 use async_trait::async_trait;
 use globset::GlobBuilder;
 use regex::RegexBuilder;
+use serde::Deserialize;
 
-use crate::args::{opt_bool, opt_str, opt_usize, require_str};
 use crate::sandbox::Workspace;
-use crate::{Tool, ToolError};
+use crate::{ToolError, TypedTool};
 
 mod edit_diagnostics;
 
@@ -46,11 +46,22 @@ impl ReadFileTool {
     }
 }
 
+/// Arguments to `read_file`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ReadFileArgs {
+    /// Path relative to the workspace root.
+    pub path: String,
+    /// 1-based line to start reading from.
+    pub offset: Option<usize>,
+    /// Maximum number of lines to read.
+    pub limit: Option<usize>,
+}
+
 #[async_trait]
-impl Tool for ReadFileTool {
-    fn name(&self) -> &str {
-        READ_FILE_TOOL
-    }
+impl TypedTool for ReadFileTool {
+    const NAME: &'static str = READ_FILE_TOOL;
+    type Args = ReadFileArgs;
+
     fn description(&self) -> &str {
         "Read a UTF-8 text file relative to the workspace root. Output is line-numbered \
          in `cat -n` format (right-aligned number, a tab, then the line content); reads up \
@@ -58,26 +69,16 @@ impl Tool for ReadFileTool {
          `limit` for large files. NOTE: when editing, never include the line-number/tab \
          prefix in `edit_file` arguments — match only the content after the tab."
     }
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Path relative to the workspace root." },
-                "offset": { "type": "integer", "description": "1-based line to start reading from." },
-                "limit": { "type": "integer", "description": "Maximum number of lines to read." }
-            },
-            "required": ["path"]
-        })
-    }
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let path = self.workspace.resolve(require_str(&args, "path")?)?;
+
+    async fn run(&self, args: ReadFileArgs) -> Result<String, ToolError> {
+        let path = self.workspace.resolve(&args.path)?;
         let contents = tokio::fs::read_to_string(&path)
             .await
             .map_err(|e| ToolError::Execution(format!("read {}: {e}", path.display())))?;
         Ok(number_lines(
             &contents,
-            opt_usize(&args, "offset", 1).max(1),
-            opt_usize(&args, "limit", DEFAULT_READ_LIMIT),
+            args.offset.unwrap_or(1).max(1),
+            args.limit.unwrap_or(DEFAULT_READ_LIMIT),
         ))
     }
 }
@@ -135,36 +136,35 @@ impl WriteFileTool {
     }
 }
 
+/// Arguments to `write_file`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct WriteFileArgs {
+    /// Path relative to the workspace root; parent directories are created.
+    pub path: String,
+    /// The full file contents to write.
+    pub contents: String,
+}
+
 #[async_trait]
-impl Tool for WriteFileTool {
-    fn name(&self) -> &str {
-        WRITE_FILE_TOOL
-    }
+impl TypedTool for WriteFileTool {
+    const NAME: &'static str = WRITE_FILE_TOOL;
+    type Args = WriteFileArgs;
+
     fn description(&self) -> &str {
         "Create or overwrite a text file at a path relative to the workspace root."
     }
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string" },
-                "contents": { "type": "string" }
-            },
-            "required": ["path", "contents"]
-        })
-    }
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let path = self.workspace.resolve(require_str(&args, "path")?)?;
-        let contents = require_str(&args, "contents")?;
+
+    async fn run(&self, args: WriteFileArgs) -> Result<String, ToolError> {
+        let path = self.workspace.resolve(&args.path)?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        tokio::fs::write(&path, contents)
+        tokio::fs::write(&path, &args.contents)
             .await
             .map_err(|e| ToolError::Execution(format!("write {}: {e}", path.display())))?;
         Ok(format!(
             "wrote {} bytes to {}",
-            contents.len(),
+            args.contents.len(),
             path.display()
         ))
     }
@@ -181,34 +181,35 @@ impl EditFileTool {
     }
 }
 
+/// Arguments to `edit_file`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct EditFileArgs {
+    /// Path relative to the workspace root.
+    pub path: String,
+    /// Exact text to find (the real file content — no line-number prefix).
+    pub old_string: String,
+    /// The replacement text.
+    pub new_string: String,
+    /// Replace every occurrence instead of requiring a unique match.
+    #[serde(default)]
+    pub replace_all: bool,
+}
+
 #[async_trait]
-impl Tool for EditFileTool {
-    fn name(&self) -> &str {
-        EDIT_FILE_TOOL
-    }
+impl TypedTool for EditFileTool {
+    const NAME: &'static str = EDIT_FILE_TOOL;
+    type Args = EditFileArgs;
+
     fn description(&self) -> &str {
         "Replace an exact occurrence of `old_string` with `new_string` in a file. \
          `old_string` must match exactly once unless `replace_all` is true. Match only \
          the real file content — do NOT include the line-number/tab prefix that \
          `read_file` adds to its output."
     }
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string" },
-                "old_string": { "type": "string" },
-                "new_string": { "type": "string" },
-                "replace_all": { "type": "boolean", "default": false }
-            },
-            "required": ["path", "old_string", "new_string"]
-        })
-    }
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let path = self.workspace.resolve(require_str(&args, "path")?)?;
-        let old = require_str(&args, "old_string")?;
-        let new = require_str(&args, "new_string")?;
-        let replace_all = opt_bool(&args, "replace_all");
+
+    async fn run(&self, args: EditFileArgs) -> Result<String, ToolError> {
+        let path = self.workspace.resolve(&args.path)?;
+        let (old, new, replace_all) = (&args.old_string, &args.new_string, args.replace_all);
 
         if old == new {
             return Err(ToolError::InvalidArguments(
@@ -258,29 +259,29 @@ impl FindFilesTool {
     }
 }
 
+/// Arguments to `find_files`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct FindFilesArgs {
+    /// Glob pattern, e.g. `**/*.rs`.
+    pub pattern: String,
+    /// Cap on the number of paths returned (default 200).
+    pub max_results: Option<usize>,
+}
+
 #[async_trait]
-impl Tool for FindFilesTool {
-    fn name(&self) -> &str {
-        FIND_FILES_TOOL
-    }
+impl TypedTool for FindFilesTool {
+    const NAME: &'static str = FIND_FILES_TOOL;
+    type Args = FindFilesArgs;
+
     fn description(&self) -> &str {
         "Find files by glob pattern relative to the workspace root, e.g. `**/*.rs`, \
          `src/**/*.ts`, `*.toml`. `*` does not cross directory boundaries; use `**` to \
          recurse. Respects .gitignore. Returns paths, most-recently-modified first."
     }
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "pattern": { "type": "string", "description": "Glob pattern, e.g. `**/*.rs`." },
-                "max_results": { "type": "integer", "default": DEFAULT_MAX_RESULTS }
-            },
-            "required": ["pattern"]
-        })
-    }
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let pattern = require_str(&args, "pattern")?.to_string();
-        let max_results = opt_usize(&args, "max_results", DEFAULT_MAX_RESULTS);
+
+    async fn run(&self, args: FindFilesArgs) -> Result<String, ToolError> {
+        let pattern = args.pattern;
+        let max_results = args.max_results.unwrap_or(DEFAULT_MAX_RESULTS);
         let root = self.workspace.root().to_path_buf();
 
         let results =
@@ -337,44 +338,46 @@ impl SearchTool {
     }
 }
 
+/// Arguments to `search_files`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SearchArgs {
+    /// Regular expression to search for.
+    pub pattern: String,
+    /// Subdirectory or file to restrict the search to.
+    pub path: Option<String>,
+    /// Filename filter, e.g. `*.rs` or `**/*.ts`.
+    pub glob: Option<String>,
+    /// How to report matches (default `content`).
+    #[serde(default)]
+    pub output_mode: OutputMode,
+    /// Case-insensitive matching.
+    #[serde(default)]
+    pub case_insensitive: bool,
+    /// Cap on the number of result lines (default 200).
+    pub max_results: Option<usize>,
+}
+
 #[async_trait]
-impl Tool for SearchTool {
-    fn name(&self) -> &str {
-        SEARCH_FILES_TOOL
-    }
+impl TypedTool for SearchTool {
+    const NAME: &'static str = SEARCH_FILES_TOOL;
+    type Args = SearchArgs;
+
     fn description(&self) -> &str {
         "Search workspace file contents with a regular expression (ripgrep-style; respects \
          .gitignore). `output_mode` is `content` (default — `path:line:text`), \
          `files_with_matches` (just paths), or `count` (per-file match counts). Optionally \
          restrict with `path` (a subdir or file) and `glob` (a filename filter like `*.rs`)."
     }
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "pattern": { "type": "string", "description": "Regular expression to search for." },
-                "path": { "type": "string", "description": "Subdirectory or file to restrict the search to." },
-                "glob": { "type": "string", "description": "Filename filter, e.g. `*.rs` or `**/*.ts`." },
-                "output_mode": {
-                    "type": "string",
-                    "enum": ["content", "files_with_matches", "count"],
-                    "default": "content"
-                },
-                "case_insensitive": { "type": "boolean", "default": false },
-                "max_results": { "type": "integer", "default": DEFAULT_MAX_RESULTS }
-            },
-            "required": ["pattern"]
-        })
-    }
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let pattern = require_str(&args, "pattern")?.to_string();
-        let glob = opt_str(&args, "glob").map(str::to_string);
-        let mode = OutputMode::parse(opt_str(&args, "output_mode").unwrap_or("content"));
-        let case_insensitive = opt_bool(&args, "case_insensitive");
-        let max_results = opt_usize(&args, "max_results", DEFAULT_MAX_RESULTS);
+
+    async fn run(&self, args: SearchArgs) -> Result<String, ToolError> {
+        let pattern = args.pattern;
+        let glob = args.glob;
+        let mode = args.output_mode;
+        let case_insensitive = args.case_insensitive;
+        let max_results = args.max_results.unwrap_or(DEFAULT_MAX_RESULTS);
         let root = self.workspace.root().to_path_buf();
         // `path` is resolved through the sandbox so it cannot escape the workspace.
-        let search_root = match opt_str(&args, "path") {
+        let search_root = match &args.path {
             Some(p) => self.workspace.resolve(p)?,
             None => root.clone(),
         };
@@ -402,24 +405,16 @@ impl Tool for SearchTool {
 }
 
 /// How `search_files` reports matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputMode {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputMode {
     /// `path:line:text` for every matching line (default).
+    #[default]
     Content,
     /// Just the paths of files containing a match.
     FilesWithMatches,
     /// `path:count` of matching lines per file.
     Count,
-}
-
-impl OutputMode {
-    fn parse(s: &str) -> Self {
-        match s {
-            "files_with_matches" => Self::FilesWithMatches,
-            "count" => Self::Count,
-            _ => Self::Content,
-        }
-    }
 }
 
 struct GrepOpts<'a> {

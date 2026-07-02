@@ -12,6 +12,7 @@ description = "Built-in agent tools (fs, shell, git) for oxen-harness"
 harness-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }

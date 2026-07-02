@@ -14,8 +14,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::args::{opt_usize, require_str};
-use crate::{Tool, ToolError};
+use crate::{ToolError, TypedTool};
 
 /// Tool name for [`WebSearchTool`].
 pub const WEB_SEARCH_TOOL: &str = "web_search";
@@ -97,34 +96,30 @@ impl Default for WebSearchTool {
     }
 }
 
+/// Arguments to `web_search`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct WebSearchArgs {
+    /// The search query.
+    pub query: String,
+    /// Number of results to return (1-20, default 5).
+    pub count: Option<usize>,
+}
+
 #[async_trait]
-impl Tool for WebSearchTool {
-    fn name(&self) -> &str {
-        WEB_SEARCH_TOOL
-    }
+impl TypedTool for WebSearchTool {
+    const NAME: &'static str = WEB_SEARCH_TOOL;
+    type Args = WebSearchArgs;
+
     fn description(&self) -> &str {
         "Search the web with Brave Search and return ranked results (title, URL, snippet). \
          Use it for current events, documentation, unfamiliar libraries/APIs, or to research \
          an error message — anything that may have changed since training or isn't in the \
          workspace."
     }
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "query": { "type": "string", "description": "The search query." },
-                "count": {
-                    "type": "integer",
-                    "description": "Number of results to return (1-20, default 5).",
-                    "default": DEFAULT_RESULTS
-                }
-            },
-            "required": ["query"]
-        })
-    }
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let query = require_str(&args, "query")?;
-        let count = opt_usize(&args, "count", DEFAULT_RESULTS).clamp(1, MAX_RESULTS);
+
+    async fn run(&self, args: WebSearchArgs) -> Result<String, ToolError> {
+        let query = &args.query;
+        let count = args.count.unwrap_or(DEFAULT_RESULTS).clamp(1, MAX_RESULTS);
         let api_key = self.resolve_key().ok_or_else(|| {
             ToolError::Execution(format!(
                 "{WEB_SEARCH_NO_KEY} Add one in Settings, or set {BRAVE_API_KEY_ENV} \

@@ -4,10 +4,10 @@
 //! than linking libgit2). Only an allow-list of operations is exposed.
 
 use async_trait::async_trait;
+use serde::Deserialize;
 
-use crate::args::{opt_str, opt_u64, require_str};
 use crate::sandbox::Workspace;
-use crate::{Tool, ToolError};
+use crate::{ToolError, TypedTool};
 
 /// Tool name for [`GitTool`].
 pub const GIT_TOOL: &str = "git";
@@ -44,60 +44,64 @@ impl GitTool {
     }
 }
 
+/// The allow-listed git operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GitOperation {
+    /// Working-tree status (`git status --short`).
+    Status,
+    /// Unstaged changes (`git diff`).
+    Diff,
+    /// Recent commits (`git log --oneline`).
+    Log,
+    /// Stage everything and commit (requires `message`).
+    Commit,
+}
+
+/// Arguments to `git`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct GitArgs {
+    /// The operation to perform.
+    pub operation: GitOperation,
+    /// Commit message (required when operation is `commit`).
+    pub message: Option<String>,
+    /// For `log`: number of commits to show (default 20).
+    pub max_count: Option<u64>,
+}
+
 #[async_trait]
-impl Tool for GitTool {
-    fn name(&self) -> &str {
-        GIT_TOOL
-    }
+impl TypedTool for GitTool {
+    const NAME: &'static str = GIT_TOOL;
+    type Args = GitArgs;
+
     fn description(&self) -> &str {
         "Run a git operation in the workspace: `status`, `diff`, `log`, or `commit`. \
          `commit` stages all changes (git add -A) and commits with `message`."
     }
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "operation": {
-                    "type": "string",
-                    "enum": ["status", "diff", "log", "commit"]
-                },
-                "message": {
-                    "type": "string",
-                    "description": "Commit message (required when operation is `commit`)."
-                },
-                "max_count": {
-                    "type": "integer",
-                    "description": "For `log`: number of commits to show.",
-                    "default": 20
-                }
-            },
-            "required": ["operation"]
-        })
-    }
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        let operation = require_str(&args, "operation")?;
 
-        match operation {
-            "status" => self.run_git(&["status".into(), "--short".into()]).await,
-            "diff" => self.run_git(&["diff".into()]).await,
-            "log" => {
-                let n = opt_u64(&args, "max_count").unwrap_or(20);
+    async fn run(&self, args: GitArgs) -> Result<String, ToolError> {
+        match args.operation {
+            GitOperation::Status => self.run_git(&["status".into(), "--short".into()]).await,
+            GitOperation::Diff => self.run_git(&["diff".into()]).await,
+            GitOperation::Log => {
+                let n = args.max_count.unwrap_or(20);
                 self.run_git(&["log".into(), "--oneline".into(), "-n".into(), n.to_string()])
                     .await
             }
-            "commit" => {
-                let message = opt_str(&args, "message").ok_or_else(|| {
-                    ToolError::InvalidArguments("`commit` requires `message`".into())
-                })?;
+            GitOperation::Commit => {
+                let message = args
+                    .message
+                    .as_deref()
+                    .filter(|m| !m.trim().is_empty())
+                    .ok_or_else(|| {
+                        ToolError::InvalidArguments("`commit` requires `message`".into())
+                    })?;
                 let add = self.run_git(&["add".into(), "-A".into()]).await?;
                 let commit = self
                     .run_git(&["commit".into(), "-m".into(), message.to_string()])
                     .await?;
                 Ok(format!("{add}{commit}"))
             }
-            other => Err(ToolError::InvalidArguments(format!(
-                "unsupported git operation `{other}`"
-            ))),
         }
     }
 }
