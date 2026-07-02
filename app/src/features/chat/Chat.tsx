@@ -213,7 +213,13 @@ export function Chat() {
       )}
       <QuestionPrompt />
       {items.length > 0 && <TokenMeter />}
-      <Composer busy={running} onSend={submit} onStop={stop} onAttach={attach} />
+      <Composer
+        busy={running}
+        focusKey={items.length === 0 ? sessionId : undefined}
+        onSend={submit}
+        onStop={stop}
+        onAttach={attach}
+      />
     </main>
   );
 }

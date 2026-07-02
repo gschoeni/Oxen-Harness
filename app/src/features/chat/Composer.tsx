@@ -1,20 +1,29 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Paperclip, Square } from "lucide-react";
 import { ModelPicker } from "./ModelPicker";
 
 export function Composer({
   busy,
+  focusKey,
   onSend,
   onStop,
   onAttach,
 }: {
   busy: boolean;
+  // Changes whenever a fresh/empty chat becomes active (e.g. "New chat"), so we
+  // re-focus the textarea for immediate typing.
+  focusKey?: string;
   onSend: (text: string) => void;
   onStop: () => void;
   onAttach: () => void;
 }) {
   const [value, setValue] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  // Focus the composer when an empty chat is opened (new chat / initial mount).
+  useEffect(() => {
+    ref.current?.focus();
+  }, [focusKey]);
 
   function submit() {
     const text = value.trim();
