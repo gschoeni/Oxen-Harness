@@ -81,6 +81,7 @@ The crate seams are designed so common extensions touch one place:
 | To add… | Do this |
 |---|---|
 | **A tool** | Implement the [`TypedTool`](crates/harness-tools/src/lib.rs) trait (typed args struct; doc comments become the model-facing schema), expose a `*_TOOL` name constant, register it with `with_typed` in the `ToolRegistry`, and add its name to the registry completeness test. Full recipe: ["Adding a tool"](README.md#adding-a-tool) in the README. |
+| **A skill** | No code: drop a `SKILL.md` folder into `~/.oxen-harness/skills/` (global) or `<repo>/.oxen-harness/skills/` (project), or use Settings → Skills in the desktop app. Parsing + the `skill` tool live in [`harness-tools/src/skill.rs`](crates/harness-tools/src/skill.rs); discovery/prefs in [`harness-runtime/src/skills.rs`](crates/harness-runtime/src/skills.rs). See ["Adding a skill"](README.md#adding-a-skill). |
 | **A built-in theme** | Add a factory in [`harness-theme/src/builtins.rs`](crates/harness-theme/src/builtins.rs) (overlay a small patch on `Theme::default()`) and list it in `all()`. Theme *data* all lives in that module. |
 | **A config file** | Define a serde struct and lean on `harness-runtime`'s `config::{load_or_default, write_and_snapshot}`; you get atomic writes + Oxen snapshotting for free. |
 | **A cloud model** | Add an entry to `harness_runtime::models::builtins()`. |

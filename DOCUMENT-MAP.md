@@ -23,13 +23,13 @@ oxen-harness/
     harness-core/            — Shared message/role types and defaults (leaf crate).
     harness-config/          — Single source for ~/.oxen-harness paths; atomic + schema-versioned config IO; .env secrets (dotenvy).
     harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth; attachment store (content-addressed on-disk files) + hydration.
-    harness-tools/           — fs read/write/edit, glob find, regex search, sandboxed shell, git, Brave web search, ask_user_question (clarifying questions).
+    harness-tools/           — TypedTool trait (schemas derived from typed args), fs read/write/edit, glob find, regex search, sandboxed shell, git, Brave web search, ask_user_question, canvas, update_plan, skills (SKILL.md loaded on demand), custom HTTP tools.
     harness-store/           — SQLite history (verbatim) + JSONL export; rusqlite_migration schema versioning; rich session metadata.
     harness-oxen/            — Version config/data + export/share traces via the `oxen` CLI (testable Runner shell-out; no liboxen).
     harness-local/           — Local models: Qwen3 GGUF catalog, downloads + disk tracking, llama-server launcher.
     harness-theme/           — Configurable themes (palette + voice): built-ins, TOML/JSON load/save with partial overrides, active-theme store.
     harness-agent/           — The agent (Ralph) loop (llm + tools + store).
-    harness-runtime/         — Front-end-agnostic services: connection settings + secrets (.env) resolution shared by CLI/desktop; opt-in Oxen versioning of ~/.oxen-harness.
+    harness-runtime/         — Front-end-agnostic services shared by CLI/desktop: connection settings + secrets (.env), cloud-model catalog, tool prefs + custom tools, skill discovery/prefs/authoring, opt-in Oxen versioning of ~/.oxen-harness.
     harness-loop/            — Goal-driven, self-verifying loops (discover→verify→iterate): LoopSpec/Verify, runner, journal, shareable store + built-ins.
     harness-cli/             — The `oxen-harness` interactive REPL binary (incl. picker, live sticky-bottom composer, /theme + theme subcommand, /loop + loop subcommand, `trace export` to share a conversation via Oxen, `oxen` subcommand to version config).
   app/                       — Tauri v2 desktop app (separate project, excluded

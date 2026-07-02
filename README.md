@@ -516,6 +516,54 @@ tools that need UI — like `ask_user_question` and `canvas` — define only the
 data and a host trait in this crate, with each front end (CLI, desktop)
 implementing and registering its own version.
 
+### Adding a skill
+
+Tools are what the agent can *do*; **skills are what it knows how to do well**.
+A skill is a reusable set of instructions — release notes in your house style, a
+code-review checklist, a deploy procedure — that the agent loads on demand. No
+code involved: a skill is a folder holding a `SKILL.md` (the same shape as
+Claude Code skills):
+
+```markdown
+---
+name: release-notes
+description: Writes release notes from the git log in our house style.
+---
+
+# Writing release notes
+
+1. Run `git log --oneline` since the last tag.
+2. Group changes into Added / Fixed / Changed.
+3. One crisp line per change — no commit hashes, no filler.
+```
+
+Three ways to add one:
+
+- **Desktop app**: **Settings → Skills → New skill.** Fill in the name, the
+  one-line description, and the instructions; choose whether it's available in
+  every project or just this one. Edit, toggle, and delete from the same page.
+- **Drop a folder in** `~/.oxen-harness/skills/<name>/SKILL.md` for a global
+  skill — it's picked up on the next chat.
+- **Commit one to a repo** at `.oxen-harness/skills/<name>/SKILL.md` — everyone
+  who opens that project gets it (a project skill shadows a global one with the
+  same name).
+
+**How skills and tools interact** (the Claude Code pattern, *progressive
+disclosure*): the model is shown only each skill's name and one-line description
+— a few tokens per skill, carried by a single built-in `skill` tool. When a
+request matches a description, the model calls `skill("release-notes")` and the
+full instructions enter the conversation right when they're needed. The
+description is therefore the trigger — write it like "does X, use when Y". A
+skill's folder can hold supporting files (templates, scripts, examples) next to
+the `SKILL.md`; the instructions can point the agent at them.
+
+Skills work in both the CLI and the desktop app, and changes apply to new and
+resumed chats. The machinery lives in
+[`crates/harness-tools/src/skill.rs`](crates/harness-tools/src/skill.rs)
+(parsing + the `skill` tool) and
+[`crates/harness-runtime/src/skills.rs`](crates/harness-runtime/src/skills.rs)
+(discovery, preferences, authoring).
+
 ### The dev loop
 
 This project is built with **The Ralph Wiggum loop** — a tight,
