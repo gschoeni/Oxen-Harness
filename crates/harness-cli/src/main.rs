@@ -626,6 +626,7 @@ async fn handle_line(
                 ui.cream(&place),
             );
         }
+        Command::Skills => print_skills(ui, ctx.workspace_root),
         Command::Model(None) => {
             println!("  {} {}", ui.brown("oxen yoked:"), ui.cream(agent.model()))
         }
@@ -646,6 +647,48 @@ async fn handle_line(
         }
     }
     Ok(false)
+}
+
+/// Print the skills discovered for this workspace (global + project, with the
+/// user's enable/disable preferences), and where to add more. Skills apply when
+/// a session starts, so a mid-session edit shows here but reaches the agent on
+/// the next run.
+fn print_skills(ui: &Ui, workspace_root: &Path) {
+    let skills = harness_runtime::skills::list(workspace_root, &harness_runtime::skills::load());
+    if skills.is_empty() {
+        println!(
+            "  {}",
+            ui.dim("no skills yet — teach the agent a workflow:")
+        );
+        println!(
+            "  {}",
+            ui.dim("drop a SKILL.md folder in ~/.oxen-harness/skills/ (or .oxen-harness/skills/")
+        );
+        println!(
+            "  {}",
+            ui.dim("in this repo). See \"Adding a skill\" in the README.")
+        );
+        return;
+    }
+    println!("  {}", ui.brown("know-how on hand:"));
+    for s in &skills {
+        let scope = match s.scope {
+            harness_tools::SkillScope::Global => "global",
+            harness_tools::SkillScope::Project => "project",
+        };
+        let status = if s.enabled { "" } else { "  (off)" };
+        println!(
+            "    {} {}{}",
+            ui.accent(&format!("{:<20}", s.name)),
+            ui.dim(&format!("[{scope}]")),
+            ui.red(status),
+        );
+        println!("      {}", ui.cream(&s.description));
+    }
+    println!(
+        "  {}",
+        ui.dim("the model loads a skill's instructions on demand; new skills apply to new runs")
+    );
 }
 
 /// Whether the sticky-bottom live composer should drive this turn: only for an

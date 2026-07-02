@@ -29,6 +29,8 @@ pub enum Command {
     /// Set (or, with `None`, show) the "Departing" location shown in the main
     /// menu banner. Kept raw so multi-word place names keep their spaces.
     Departing(Option<String>),
+    /// List the skills discovered for this workspace (global + project).
+    Skills,
     /// A prompt to send to the agent.
     Prompt(String),
 }
@@ -62,6 +64,7 @@ pub fn parse_command(line: &str) -> Command {
         "/queue" => Command::Queue(rest),
         "/loop" | "/loops" => Command::Loop(rest),
         "/departing" => Command::Departing(rest),
+        "/skills" | "/skill" => Command::Skills,
         // Unknown slash command: treat the whole line as a prompt so users can
         // still send text that happens to start with a slash.
         _ => Command::Prompt(trimmed.to_string()),
@@ -160,6 +163,12 @@ mod tests {
             parse_command("/departing Independence, Missouri"),
             Command::Departing(Some("Independence, Missouri".into()))
         );
+    }
+
+    #[test]
+    fn skills_aliases() {
+        assert_eq!(parse_command("/skills"), Command::Skills);
+        assert_eq!(parse_command("/skill"), Command::Skills);
     }
 
     #[test]

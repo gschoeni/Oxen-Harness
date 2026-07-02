@@ -264,6 +264,11 @@ pub(crate) fn oregon_trail() -> Theme {
                 },
                 HelpItem {
                     key: s("9."),
+                    title: s("Check your know-how"),
+                    hint: s("— /skills  (the workflows the agent has learned)"),
+                },
+                HelpItem {
+                    key: s("10."),
                     title: s("Make camp / End"),
                     hint: s("— /exit  (or Ctrl-D)"),
                 },
