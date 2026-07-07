@@ -461,7 +461,7 @@ const PREVIEW_CAP: usize = 256;
 /// The slash commands offered by Tab completion + the inline hint, with a short
 /// description. Kept in sync with [`crate::repl::parse_command`].
 const SLASH_COMMANDS: &[(&str, &str)] = &[
-    ("/model", "show, switch, or add a model"),
+    ("/model", "pick, switch, or add a model"),
     ("/theme", "change the theme"),
     ("/queue", "manage the message queue"),
     ("/loop", "run or list loops"),
@@ -1484,6 +1484,30 @@ impl Live {
         self.model_items.clone().unwrap_or_default()
     }
 
+    /// On Enter, fold the visible completion into the submission so Enter both
+    /// completes and runs in one stroke: the highlighted row of an argument
+    /// picker (its hint says "enter run"), or the single remaining candidate of
+    /// a command word (`/mo` ↵ runs `/model`). An ambiguous prefix (`/e` could
+    /// be `/export` or `/exit`) is left as typed, and so is a bare `/model ` —
+    /// an empty argument means "show me the choices", which the command itself
+    /// answers with the interactive picker, not whichever row sorts first.
+    fn accept_completion_on_submit(&mut self) {
+        let text = self.composer.text();
+        let has_arg = text
+            .split_once(char::is_whitespace)
+            .is_some_and(|(_, arg)| !arg.trim().is_empty());
+        let replacement = match self.comp_index {
+            Some(i) if has_arg => self.completion.get(i),
+            Some(_) => None,
+            None if self.completion.len() == 1 => self.completion.first(),
+            None => None,
+        };
+        if let Some(r) = replacement {
+            let text = r.replacement.clone();
+            self.composer.set_text(&text);
+        }
+    }
+
     /// Recompute the completion hint after a compose-buffer change, and drop any
     /// in-progress Tab cycle (the candidates may have changed).
     fn refresh_completion(&mut self) {
@@ -1569,6 +1593,7 @@ impl Live {
                 }
             }
             KeyIntent::ComposerSubmit => {
+                self.accept_completion_on_submit();
                 let text = self.composer.take();
                 self.history.push(&text);
                 self.completion.clear();
@@ -1826,6 +1851,56 @@ mod tests {
             .completion
             .iter()
             .all(|c| !c.detail.contains("new model id")));
+    }
+
+    fn submit(l: &mut Live) -> String {
+        match l.handle_key(key(KeyCode::Enter), 0) {
+            KeyAction::Submit(text) => text,
+            _ => panic!("Enter in the composer should submit"),
+        }
+    }
+
+    #[test]
+    fn enter_completes_an_unambiguous_command_word() {
+        let mut l = live(80, 24);
+        for ch in "/mo".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        // `/model` is the only match, so Enter completes and runs it.
+        assert_eq!(submit(&mut l), "/model");
+    }
+
+    #[test]
+    fn enter_leaves_an_ambiguous_command_word_as_typed() {
+        let mut l = live(80, 24);
+        for ch in "/e".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        // `/export` and `/exit` both match — don't guess.
+        assert_eq!(submit(&mut l), "/e");
+    }
+
+    #[test]
+    fn enter_runs_the_highlighted_model_row() {
+        let mut l = live(80, 24);
+        for ch in "/model sonnet".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        // The picker hint says "enter run": Enter submits the highlighted
+        // row's full id, not the typed fragment.
+        let text = submit(&mut l);
+        assert!(text.starts_with("/model claude-sonnet"), "got `{text}`");
+    }
+
+    #[test]
+    fn enter_on_a_bare_model_command_submits_as_typed_for_the_picker() {
+        let mut l = live(80, 24);
+        for ch in "/model ".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        // An empty argument isn't a choice — `/model` goes through unchanged
+        // so the command opens the interactive picker.
+        assert_eq!(submit(&mut l).trim(), "/model");
     }
 
     // --- Live wiring (no TTY: handle_key + buffer state, never paint) ------

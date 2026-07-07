@@ -13,9 +13,9 @@ pub enum Command {
     Exit,
     /// Print help.
     Help,
-    /// Show the current model, or switch to another (an id not yet in the
-    /// catalog is saved as a custom entry, so any model the endpoint serves
-    /// can be typed in directly).
+    /// Switch models: `/model` opens the interactive picker, `/model <id>`
+    /// switches directly (an id not yet in the catalog is saved as a custom
+    /// entry, so any model the endpoint serves can be typed in directly).
     Model(Option<String>),
     /// Export the current session transcript as JSONL (optional path).
     Export(Option<String>),
