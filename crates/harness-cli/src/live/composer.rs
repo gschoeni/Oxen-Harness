@@ -126,6 +126,67 @@ impl Composer {
         }
     }
 
+    /// Move the caret to the start of the previous word (readline `M-b`):
+    /// skip separators leftward, then the word itself.
+    pub(super) fn move_word_left(&mut self) {
+        while self.cursor > 0 && !is_word_char(self.buf[self.cursor - 1]) {
+            self.cursor -= 1;
+        }
+        while self.cursor > 0 && is_word_char(self.buf[self.cursor - 1]) {
+            self.cursor -= 1;
+        }
+    }
+
+    /// Move the caret past the end of the next word (readline `M-f`):
+    /// skip separators rightward, then the word itself.
+    pub(super) fn move_word_right(&mut self) {
+        let n = self.buf.len();
+        while self.cursor < n && !is_word_char(self.buf[self.cursor]) {
+            self.cursor += 1;
+        }
+        while self.cursor < n && is_word_char(self.buf[self.cursor]) {
+            self.cursor += 1;
+        }
+    }
+
+    /// Delete from the start of the previous word to the caret
+    /// (Alt+Backspace / Ctrl+W).
+    pub(super) fn delete_word_back(&mut self) {
+        let end = self.cursor;
+        self.move_word_left();
+        self.buf.drain(self.cursor..end);
+    }
+
+    /// Delete from the caret through the end of the next word (Alt+D).
+    pub(super) fn delete_word_forward(&mut self) {
+        let start = self.cursor;
+        self.move_word_right();
+        self.buf.drain(start..self.cursor);
+        self.cursor = start;
+    }
+
+    /// Delete from the caret to the end of the line (readline `C-k`); at the
+    /// end of a line, join it with the next (delete the newline).
+    pub(super) fn kill_to_end(&mut self) {
+        let (line, _) = self.line_col();
+        let end = self.line_starts()[line] + self.line_len(line);
+        if self.cursor == end {
+            if end < self.buf.len() {
+                self.buf.remove(end);
+            }
+        } else {
+            self.buf.drain(self.cursor..end);
+        }
+    }
+
+    /// Delete from the start of the line to the caret (readline `C-u`).
+    pub(super) fn kill_to_start(&mut self) {
+        let (line, _) = self.line_col();
+        let start = self.line_starts()[line];
+        self.buf.drain(start..self.cursor);
+        self.cursor = start;
+    }
+
     /// Move to the start of the current line.
     pub(super) fn move_home(&mut self) {
         let (line, _) = self.line_col();
@@ -177,6 +238,13 @@ impl Composer {
         self.cursor = 0;
         line
     }
+}
+
+/// What counts as a word for word-wise movement and deletion: alphanumerics
+/// (readline's default). Punctuation like `-`, `/`, and `.` separates, so
+/// hopping through paths and model ids stops at each segment.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric()
 }
 
 /// Recallable input history: past submissions plus a scratch slot for the
@@ -402,6 +470,73 @@ mod tests {
         assert_eq!(c.chars().iter().collect::<String>(), "caf");
         c.insert_char('é');
         assert_eq!(c.take(), "café");
+    }
+
+    #[test]
+    fn word_left_and_right_hop_between_words() {
+        let mut c = typed("fix the-bug now");
+        c.move_word_left();
+        assert_eq!(c.cursor(), 12); // before "now"
+        c.move_word_left();
+        assert_eq!(c.cursor(), 8); // before "bug"
+        c.move_word_left();
+        assert_eq!(c.cursor(), 4); // before "the"
+        c.move_word_left();
+        assert_eq!(c.cursor(), 0);
+        c.move_word_left(); // clamp at start
+        assert_eq!(c.cursor(), 0);
+        c.move_word_right();
+        assert_eq!(c.cursor(), 3); // after "fix"
+        c.move_word_right();
+        assert_eq!(c.cursor(), 7); // after "the"
+        c.move_word_right();
+        c.move_word_right();
+        assert_eq!(c.cursor(), 15); // after "now"
+        c.move_word_right(); // clamp at end
+        assert_eq!(c.cursor(), 15);
+    }
+
+    #[test]
+    fn delete_word_back_and_forward() {
+        let mut c = typed("run the tests");
+        c.delete_word_back();
+        assert_eq!(c.text(), "run the ");
+        c.delete_word_back();
+        assert_eq!(c.text(), "run ");
+
+        let mut c = typed("run the tests");
+        c.move_home();
+        c.delete_word_forward();
+        assert_eq!(c.text(), " the tests");
+        assert_eq!(c.cursor(), 0);
+        c.delete_word_forward();
+        assert_eq!(c.text(), " tests");
+    }
+
+    #[test]
+    fn kill_to_end_and_start_are_line_relative() {
+        let mut c = typed("hello world");
+        for _ in 0..5 {
+            c.move_left(); // caret after "hello "
+        }
+        c.kill_to_end();
+        assert_eq!(c.text(), "hello ");
+        c.kill_to_start();
+        assert_eq!(c.text(), "");
+
+        // On a multi-line buffer the kill stops at the line boundary; a second
+        // C-k at line end joins the lines (deletes the newline).
+        let mut c = typed("one\ntwo");
+        c.move_up();
+        c.move_end();
+        c.kill_to_end();
+        assert_eq!(c.text(), "onetwo");
+
+        let mut c = typed("one\ntwo");
+        c.move_up();
+        c.move_home();
+        c.kill_to_end();
+        assert_eq!(c.text(), "\ntwo");
     }
 
     #[test]

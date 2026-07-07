@@ -739,6 +739,7 @@ dependencies = [
 name = "harness-loop"
 version = "0.1.0"
 dependencies = [
+ "globset",
  "harness-agent",
  "harness-config",
  "harness-core",

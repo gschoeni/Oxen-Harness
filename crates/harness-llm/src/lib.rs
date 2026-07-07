@@ -39,6 +39,22 @@ pub enum LlmError {
     Stream(String),
 }
 
+impl LlmError {
+    /// Whether this failure is plausibly transient — a provider hiccup or a
+    /// network blip — and therefore worth retrying with backoff. Transport
+    /// errors (connect failures, timeouts, a dropped stream) and the statuses
+    /// services return for temporary trouble (408 timeout, 429 rate limit,
+    /// 5xx upstream errors, 529 overloaded) qualify. Auth (401), credits
+    /// (402), and malformed requests don't: retrying can't fix them.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            LlmError::Http(e) => !e.is_builder(),
+            LlmError::Api { status, .. } => matches!(*status, 408 | 429 | 500..=599),
+            _ => false,
+        }
+    }
+}
+
 /// Resolve the chat completions endpoint for a given API base URL.
 pub fn chat_completions_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim_end_matches('/'))
@@ -59,6 +75,25 @@ mod tests {
             chat_completions_url("https://hub.oxen.ai/api/ai/"),
             "https://hub.oxen.ai/api/ai/chat/completions"
         );
+    }
+
+    #[test]
+    fn transient_errors_are_the_retryable_ones() {
+        let api = |status| LlmError::Api {
+            status,
+            message: "boom".into(),
+        };
+        // Provider-side trouble and throttling are worth retrying…
+        assert!(api(502).is_transient());
+        assert!(api(500).is_transient());
+        assert!(api(529).is_transient());
+        assert!(api(429).is_transient());
+        assert!(api(408).is_transient());
+        // …but auth, credits, and bad requests are not.
+        assert!(!api(401).is_transient());
+        assert!(!api(402).is_transient());
+        assert!(!api(400).is_transient());
+        assert!(!LlmError::Auth("no key".into()).is_transient());
     }
 
     #[test]

@@ -11,8 +11,11 @@
 //! The three things that make it a real loop (rather than an agent agreeing
 //! with itself on repeat):
 //!
-//! - **A gate** ([`Verify`]) that can *fail* the work — a real command (exit 0)
-//!   or a strict, separate-checker rubric. This is the heart of the loop.
+//! - **Gates** ([`Gate`] wrapping a [`Verify`]) that can *fail* the work — a
+//!   real command (exit 0) or a strict, separate-checker rubric. This is the
+//!   heart of the loop. Each gate has a [`RunWhen`] condition, so expensive
+//!   checks (the test suite) only run on passes that actually changed matching
+//!   files — a commit-only pass skips them.
 //! - **State** ([`LoopJournal`]) recording what's been tried and what failed,
 //!   fed into each pass and persisted for resuming.
 //! - **Stop conditions** ([`StopReason`]) — success *and* a hard limit
@@ -23,16 +26,17 @@
 //! "make the checks green" loop this project runs on itself).
 
 pub mod builtins;
+mod changes;
 mod journal;
 mod runner;
 mod spec;
 mod store;
 
-pub use journal::{Attempt, LoopJournal, VerifyOutcome};
+pub use journal::{Attempt, GateOutcome, GateReport, LoopJournal, VerifyOutcome};
 pub use runner::{LoopEvent, LoopRunner, StopReason};
 pub use spec::{
-    slug, LoopSpec, Verify, DEFAULT_MAX_ITERATIONS, DEFAULT_THRESHOLD, DEFAULT_VERIFY_TIMEOUT_MS,
-    LOOP_SCHEMA_VERSION,
+    slug, Gate, LoopSpec, RunWhen, Verify, DEFAULT_MAX_ITERATIONS, DEFAULT_THRESHOLD,
+    DEFAULT_VERIFY_TIMEOUT_MS, LOOP_SCHEMA_VERSION,
 };
 pub use store::{LoopStore, LoopSummary};
 

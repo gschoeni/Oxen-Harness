@@ -166,7 +166,12 @@ pub fn compress_tool_result(
     // debug. (Huge error dumps still get the line treatment below, which
     // preserves every error-bearing line.)
     if text.len() <= cfg.protect_error_chars {
-        let head = &text[..text.len().min(400)];
+        // Clamp to a char boundary: byte 400 may land inside a multi-byte char.
+        let mut end = text.len().min(400);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let head = &text[..end];
         if contains_error_keyword(head) {
             return None;
         }
@@ -253,6 +258,17 @@ mod tests {
             compress_tool_result(&error_text, &cfg(), None).is_none(),
             "medium error output stays verbatim"
         );
+    }
+
+    #[test]
+    fn error_sniff_handles_multibyte_char_at_byte_400() {
+        // Regression: a multi-byte char straddling byte 400 panicked the
+        // head slice in the error-protection check.
+        let mut text = "x".repeat(398);
+        text.push('—'); // 3 bytes: occupies 398..401
+        text.push_str(&"more output here\n".repeat(50));
+        assert!(text.len() <= cfg().protect_error_chars);
+        let _ = compress_tool_result(&text, &cfg(), None); // must not panic
     }
 
     #[test]

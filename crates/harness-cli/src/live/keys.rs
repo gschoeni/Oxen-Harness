@@ -54,8 +54,20 @@ pub(super) enum BufOp {
     Delete,
     Left,
     Right,
+    /// Jump to the start of the previous word (Alt/Ctrl+Left, Alt+B).
+    WordLeft,
+    /// Jump past the end of the next word (Alt/Ctrl+Right, Alt+F).
+    WordRight,
     Home,
     End,
+    /// Delete the previous word (Alt/Ctrl+Backspace, Ctrl+W).
+    DeleteWordBack,
+    /// Delete the next word (Alt+D, Alt/Ctrl+Delete).
+    DeleteWordForward,
+    /// Delete to the end of the line (Ctrl+K).
+    KillToEnd,
+    /// Delete to the start of the line (Ctrl+U).
+    KillToStart,
 }
 
 /// The semantic intent of a keystroke, decided purely from the key + current
@@ -87,7 +99,8 @@ pub(super) enum KeyIntent {
 }
 
 /// Map a keystroke to its [`KeyIntent`] for the given mode. Ctrl-C always
-/// interrupts; Ctrl-D exits only on an empty composer.
+/// interrupts; Ctrl-D exits only on an empty composer (elsewhere it's the
+/// readline forward-delete).
 pub(super) fn classify_key(
     code: KeyCode,
     mods: KeyModifiers,
@@ -96,54 +109,104 @@ pub(super) fn classify_key(
 ) -> KeyIntent {
     let ctrl = mods.contains(KeyModifiers::CONTROL);
     let alt = mods.contains(KeyModifiers::ALT);
-    if ctrl {
-        return match code {
-            KeyCode::Char('c') => KeyIntent::Interrupt,
-            KeyCode::Char('d') if mode == Mode::Compose && composer_empty => KeyIntent::Exit,
-            // Ctrl-J is a portable "insert newline" that survives terminals which
-            // don't distinguish Shift/Alt+Enter.
-            KeyCode::Char('j') if mode == Mode::Compose => KeyIntent::ComposeNewline,
-            _ => KeyIntent::Ignore,
-        };
+    if ctrl && code == KeyCode::Char('c') {
+        return KeyIntent::Interrupt;
+    }
+    if ctrl && code == KeyCode::Char('d') && mode == Mode::Compose && composer_empty {
+        return KeyIntent::Exit;
     }
     match mode {
-        Mode::Compose => match code {
-            // Alt/Shift+Enter add a line; plain Enter sends (or queues).
-            KeyCode::Enter if alt || mods.contains(KeyModifiers::SHIFT) => {
-                KeyIntent::ComposeNewline
+        Mode::Compose => {
+            // Compose-specific chords first; everything else is a buffer edit.
+            match code {
+                // Ctrl-J is a portable "insert newline" that survives terminals
+                // which don't distinguish Shift/Alt+Enter.
+                KeyCode::Char('j') if ctrl => return KeyIntent::ComposeNewline,
+                // Alt/Shift+Enter add a line; plain Enter sends (or queues).
+                KeyCode::Enter if alt || mods.contains(KeyModifiers::SHIFT) => {
+                    return KeyIntent::ComposeNewline
+                }
+                KeyCode::Enter if !ctrl => return KeyIntent::ComposerSubmit,
+                KeyCode::Tab if !ctrl && !alt => return KeyIntent::Complete,
+                KeyCode::Up if !ctrl && !alt => return KeyIntent::ComposeUp,
+                KeyCode::Down if !ctrl && !alt => return KeyIntent::ComposeDown,
+                _ => {}
             }
-            KeyCode::Enter => KeyIntent::ComposerSubmit,
-            KeyCode::Tab => KeyIntent::Complete,
-            KeyCode::Up => KeyIntent::ComposeUp,
-            KeyCode::Down => KeyIntent::ComposeDown,
-            KeyCode::Backspace => KeyIntent::Compose(BufOp::Backspace),
-            KeyCode::Delete => KeyIntent::Compose(BufOp::Delete),
-            KeyCode::Left => KeyIntent::Compose(BufOp::Left),
-            KeyCode::Right => KeyIntent::Compose(BufOp::Right),
-            KeyCode::Home => KeyIntent::Compose(BufOp::Home),
-            KeyCode::End => KeyIntent::Compose(BufOp::End),
-            KeyCode::Char(c) if !alt => KeyIntent::Compose(BufOp::Insert(c)),
-            _ => KeyIntent::Ignore,
-        },
-        Mode::Browse => match code {
-            KeyCode::Up => KeyIntent::FocusUp,
-            KeyCode::Down => KeyIntent::FocusDown,
-            KeyCode::Enter | KeyCode::Char('e') => KeyIntent::BeginEdit,
-            KeyCode::Char('d') | KeyCode::Delete | KeyCode::Backspace => KeyIntent::DeleteItem,
-            _ => KeyIntent::Ignore,
-        },
-        Mode::Edit => match code {
-            KeyCode::Enter => KeyIntent::EditCommit,
-            KeyCode::Esc => KeyIntent::EditCancel,
-            KeyCode::Backspace => KeyIntent::Edit(BufOp::Backspace),
-            KeyCode::Delete => KeyIntent::Edit(BufOp::Delete),
-            KeyCode::Left => KeyIntent::Edit(BufOp::Left),
-            KeyCode::Right => KeyIntent::Edit(BufOp::Right),
-            KeyCode::Home => KeyIntent::Edit(BufOp::Home),
-            KeyCode::End => KeyIntent::Edit(BufOp::End),
-            KeyCode::Char(c) if !alt => KeyIntent::Edit(BufOp::Insert(c)),
-            _ => KeyIntent::Ignore,
-        },
+            edit_op(code, mods)
+                .map(KeyIntent::Compose)
+                .unwrap_or(KeyIntent::Ignore)
+        }
+        Mode::Browse => {
+            if ctrl || alt {
+                return KeyIntent::Ignore;
+            }
+            match code {
+                KeyCode::Up => KeyIntent::FocusUp,
+                KeyCode::Down => KeyIntent::FocusDown,
+                KeyCode::Enter | KeyCode::Char('e') => KeyIntent::BeginEdit,
+                KeyCode::Char('d') | KeyCode::Delete | KeyCode::Backspace => KeyIntent::DeleteItem,
+                _ => KeyIntent::Ignore,
+            }
+        }
+        Mode::Edit => {
+            match code {
+                KeyCode::Enter if !ctrl && !alt => return KeyIntent::EditCommit,
+                KeyCode::Esc => return KeyIntent::EditCancel,
+                _ => {}
+            }
+            edit_op(code, mods)
+                .map(KeyIntent::Edit)
+                .unwrap_or(KeyIntent::Ignore)
+        }
+    }
+}
+
+/// The line-editing key map shared by the composer and the inline item editor:
+/// plain caret movement plus the usual readline/terminal chords — Ctrl+A/E
+/// (line start/end), Ctrl/Alt+arrows and Alt+B/F (word hops), Ctrl+W and
+/// Alt+Backspace (delete word back), Alt+D (delete word forward), Ctrl+K/U
+/// (kill to line end/start), Ctrl+B/F (char moves), Ctrl+D (forward delete).
+fn edit_op(code: KeyCode, mods: KeyModifiers) -> Option<BufOp> {
+    let ctrl = mods.contains(KeyModifiers::CONTROL);
+    let alt = mods.contains(KeyModifiers::ALT);
+    if ctrl {
+        return match code {
+            KeyCode::Char('a') => Some(BufOp::Home),
+            KeyCode::Char('e') => Some(BufOp::End),
+            KeyCode::Char('b') => Some(BufOp::Left),
+            KeyCode::Char('f') => Some(BufOp::Right),
+            KeyCode::Char('d') => Some(BufOp::Delete),
+            KeyCode::Char('h') => Some(BufOp::Backspace),
+            KeyCode::Char('w') | KeyCode::Backspace => Some(BufOp::DeleteWordBack),
+            KeyCode::Char('k') => Some(BufOp::KillToEnd),
+            KeyCode::Char('u') => Some(BufOp::KillToStart),
+            KeyCode::Left => Some(BufOp::WordLeft),
+            KeyCode::Right => Some(BufOp::WordRight),
+            KeyCode::Delete => Some(BufOp::DeleteWordForward),
+            _ => None,
+        };
+    }
+    if alt {
+        // Terminals send Option/Alt combos either as modified keys or as
+        // ESC-prefixed chars (e.g. macOS Terminal's option+arrow presets emit
+        // ESC B / ESC F); crossterm reports both with the ALT modifier.
+        return match code {
+            KeyCode::Left | KeyCode::Char('b') | KeyCode::Char('B') => Some(BufOp::WordLeft),
+            KeyCode::Right | KeyCode::Char('f') | KeyCode::Char('F') => Some(BufOp::WordRight),
+            KeyCode::Backspace => Some(BufOp::DeleteWordBack),
+            KeyCode::Delete | KeyCode::Char('d') => Some(BufOp::DeleteWordForward),
+            _ => None,
+        };
+    }
+    match code {
+        KeyCode::Backspace => Some(BufOp::Backspace),
+        KeyCode::Delete => Some(BufOp::Delete),
+        KeyCode::Left => Some(BufOp::Left),
+        KeyCode::Right => Some(BufOp::Right),
+        KeyCode::Home => Some(BufOp::Home),
+        KeyCode::End => Some(BufOp::End),
+        KeyCode::Char(c) => Some(BufOp::Insert(c)),
+        _ => None,
     }
 }
 
@@ -156,8 +219,14 @@ pub(super) fn apply_buf(c: &mut Composer, op: BufOp) {
         BufOp::Delete => c.delete(),
         BufOp::Left => c.move_left(),
         BufOp::Right => c.move_right(),
+        BufOp::WordLeft => c.move_word_left(),
+        BufOp::WordRight => c.move_word_right(),
         BufOp::Home => c.move_home(),
         BufOp::End => c.move_end(),
+        BufOp::DeleteWordBack => c.delete_word_back(),
+        BufOp::DeleteWordForward => c.delete_word_forward(),
+        BufOp::KillToEnd => c.kill_to_end(),
+        BufOp::KillToStart => c.kill_to_start(),
     }
 }
 
@@ -267,13 +336,93 @@ mod tests {
             classify_key(KeyCode::Char('d'), c, Mode::Compose, true),
             KeyIntent::Exit
         );
+        // On a non-empty composer Ctrl-D is readline's forward delete.
         assert_eq!(
             classify_key(KeyCode::Char('d'), c, Mode::Compose, false),
-            KeyIntent::Ignore
+            KeyIntent::Compose(BufOp::Delete)
         );
         assert_eq!(
             classify_key(KeyCode::Char('d'), c, Mode::Browse, true),
             KeyIntent::Ignore
         );
+    }
+
+    #[test]
+    fn word_chords_map_in_compose_and_edit() {
+        let a = KeyModifiers::ALT;
+        let c = KeyModifiers::CONTROL;
+        for mode in [Mode::Compose, Mode::Edit] {
+            let intent = |op| match mode {
+                Mode::Compose => KeyIntent::Compose(op),
+                _ => KeyIntent::Edit(op),
+            };
+            // Option/Alt+arrows and the ESC-b / ESC-f forms hop words.
+            for (code, mods) in [
+                (KeyCode::Left, a),
+                (KeyCode::Char('b'), a),
+                (KeyCode::Left, c),
+            ] {
+                assert_eq!(
+                    classify_key(code, mods, mode, false),
+                    intent(BufOp::WordLeft)
+                );
+            }
+            for (code, mods) in [
+                (KeyCode::Right, a),
+                (KeyCode::Char('f'), a),
+                (KeyCode::Right, c),
+            ] {
+                assert_eq!(
+                    classify_key(code, mods, mode, false),
+                    intent(BufOp::WordRight)
+                );
+            }
+            for (code, mods) in [
+                (KeyCode::Backspace, a),
+                (KeyCode::Backspace, c),
+                (KeyCode::Char('w'), c),
+            ] {
+                assert_eq!(
+                    classify_key(code, mods, mode, false),
+                    intent(BufOp::DeleteWordBack)
+                );
+            }
+            assert_eq!(
+                classify_key(KeyCode::Char('d'), a, mode, false),
+                intent(BufOp::DeleteWordForward)
+            );
+        }
+    }
+
+    #[test]
+    fn readline_ctrl_chords_map_to_line_edits() {
+        let c = KeyModifiers::CONTROL;
+        for (ch, op) in [
+            ('a', BufOp::Home),
+            ('e', BufOp::End),
+            ('b', BufOp::Left),
+            ('f', BufOp::Right),
+            ('k', BufOp::KillToEnd),
+            ('u', BufOp::KillToStart),
+        ] {
+            assert_eq!(
+                classify_key(KeyCode::Char(ch), c, Mode::Compose, false),
+                KeyIntent::Compose(op)
+            );
+            assert_eq!(
+                classify_key(KeyCode::Char(ch), c, Mode::Edit, false),
+                KeyIntent::Edit(op)
+            );
+        }
+    }
+
+    #[test]
+    fn alt_and_ctrl_chords_are_ignored_while_browsing() {
+        for mods in [KeyModifiers::ALT, KeyModifiers::CONTROL] {
+            assert_eq!(
+                classify_key(KeyCode::Backspace, mods, Mode::Browse, false),
+                KeyIntent::Ignore
+            );
+        }
     }
 }

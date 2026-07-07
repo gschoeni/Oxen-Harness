@@ -310,6 +310,18 @@ struct CompactedPayload {
     detail: String,
 }
 
+/// `agent://retry` payload — a model call hit a transient provider/network
+/// error and is being retried with backoff. Surfaced as a thread notice so the
+/// pause reads as a hiccup (with the error for debugging), not a hang.
+#[derive(Clone, Serialize)]
+struct RetryPayload {
+    session: String,
+    attempt: u32,
+    max_attempts: u32,
+    delay_ms: u64,
+    error: String,
+}
+
 /// `agent://compression` payload — stale tool output was compressed before a
 /// model call (`mode: "on"`), or its would-be savings were measured without
 /// changing the request (`mode: "audit"`). Emitted per model call within a
@@ -997,6 +1009,25 @@ async fn execute_turn(
                     CompactedPayload {
                         session: sid.clone(),
                         detail: detail.clone(),
+                    },
+                );
+            }
+            // A transient provider/network failure being retried with backoff;
+            // surface it so the turn reads as alive (and debuggable), not hung.
+            AgentEvent::Retrying {
+                attempt,
+                max_attempts,
+                delay_ms,
+                error,
+            } => {
+                let _ = app.emit(
+                    "agent://retry",
+                    RetryPayload {
+                        session: sid.clone(),
+                        attempt: *attempt,
+                        max_attempts: *max_attempts,
+                        delay_ms: *delay_ms,
+                        error: error.clone(),
                     },
                 );
             }

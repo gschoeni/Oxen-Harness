@@ -346,6 +346,19 @@ export interface CompactedEvent {
   detail: string;
 }
 
+/** `agent://retry` payload — a model call hit a transient provider/network
+ *  error and is being retried with backoff; shown as a thread notice so the
+ *  pause reads as a hiccup (with the error for debugging), not a hang. */
+export interface RetryEvent {
+  session: string;
+  /** Which attempt just failed (1-based). */
+  attempt: number;
+  max_attempts: number;
+  /** How long the agent waits before the next attempt. */
+  delay_ms: number;
+  error: string;
+}
+
 /** The context-compression setting: off (send requests as recorded), audit
  *  (measure would-be savings without changing anything), or on (compress stale
  *  tool output before each request; originals stay retrievable). */

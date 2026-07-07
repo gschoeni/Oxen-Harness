@@ -33,6 +33,7 @@ import type {
   CompactedEvent,
   CompressionEvent,
   CompressionMode,
+  RetryEvent,
   ChatMessage,
   ToolDefinition,
   ToolInfo,
@@ -201,6 +202,11 @@ export const onCompacted = (handler: (e: CompactedEvent) => void) =>
  *  request — per model call, carrying the session's running savings. */
 export const onCompression = (handler: (e: CompressionEvent) => void) =>
   listen<CompressionEvent>("agent://compression", (e) => handler(e.payload));
+
+/** Fires when a model call hit a transient provider/network error and is being
+ *  retried with backoff — so the thread can show the hiccup instead of hanging. */
+export const onRetry = (handler: (e: RetryEvent) => void) =>
+  listen<RetryEvent>("agent://retry", (e) => handler(e.payload));
 
 export const onQuestion = (handler: (q: QuestionPayload) => void) =>
   listen<QuestionPayload>("agent://question", (e) => handler(e.payload));

@@ -209,6 +209,27 @@ impl TurnRenderer {
                 );
                 self.begin_thinking();
             }
+            // A transient provider/network failure being retried with backoff;
+            // show it so the pause reads as a hiccup, not a hang.
+            AgentEvent::Retrying {
+                attempt,
+                max_attempts,
+                delay_ms,
+                error,
+            } => {
+                self.stop_spinner();
+                println!(
+                    "  {} {}",
+                    self.ui.red("⚠"),
+                    self.ui.dim(&crate::retry_notice(
+                        *attempt,
+                        *max_attempts,
+                        *delay_ms,
+                        error
+                    )),
+                );
+                self.begin_thinking();
+            }
             // Streaming tool-argument fragments drive the desktop UI; the CLI
             // shows the assembled call when it starts, so ignore the deltas.
             AgentEvent::ToolDelta { .. } => {}

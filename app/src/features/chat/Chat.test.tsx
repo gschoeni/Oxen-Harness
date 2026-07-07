@@ -227,6 +227,34 @@ describe("Chat", () => {
     expect(screen.queryByText(/Out of Oxen credits/i)).toBeNull();
   });
 
+  it("offers a retry card when the provider stays down, then continues after e.g. a model switch", async () => {
+    // The backend already retried with backoff; this is the surfaced failure.
+    ipc.runTurn.mockRejectedValueOnce(
+      "the model endpoint failed 4 times in a row (gpt-5-5 at https://hub.oxen.ai/api/ai) — " +
+        "last error: Oxen API error (502): The model provider returned an error.",
+    );
+    ipc.retryTurn.mockResolvedValueOnce("Back on the trail.");
+
+    render(<Chat />);
+    await userEvent.type(screen.getByPlaceholderText(/ask the agent/i), "Write me a README");
+    await userEvent.keyboard("{Enter}");
+
+    // Instead of a dead-end error bubble, the continue card appears carrying
+    // the full diagnostic (attempts, model, endpoint, provider error).
+    expect(await screen.findByText(/Continue this chat/i)).toBeInTheDocument();
+    expect(screen.getByText(/failed 4 times in a row/)).toBeInTheDocument();
+    expect(screen.getByText(/502/)).toBeInTheDocument();
+    // The turn settled to idle so the composer isn't stuck "busy".
+    await waitFor(() => expect(useStore.getState().runStatus["s1"]).toBeUndefined());
+
+    // One click re-drives the same turn (works after switching models too,
+    // since the swap keeps the session).
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+    expect(ipc.retryTurn).toHaveBeenCalledWith("s1");
+    expect(await screen.findByText("Back on the trail.")).toBeInTheDocument();
+    expect(screen.queryByText(/Continue this chat/i)).toBeNull();
+  });
+
   it("drops the retry card when a fresh prompt supersedes it", async () => {
     ipc.runTurn.mockRejectedValueOnce("Oxen API error (402): You have run out of credits.");
     render(<Chat />);

@@ -126,10 +126,11 @@ impl LoopStore {
             let sl = slug(&spec.name);
             let installed = self.spec_path(&sl).exists();
             seen.push(sl.clone());
+            let verify = spec.gate_summary();
             out.push(LoopSummary {
                 name: spec.name,
                 description: spec.description,
-                verify: spec.verify.label(),
+                verify,
                 builtin: true,
                 installed,
                 slug: sl,
@@ -151,10 +152,11 @@ impl LoopStore {
                 if let Ok(spec) =
                     LoopSpec::from_toml_str(&std::fs::read_to_string(&path).unwrap_or_default())
                 {
+                    let verify = spec.gate_summary();
                     out.push(LoopSummary {
                         name: spec.name,
                         description: spec.description,
-                        verify: spec.verify.label(),
+                        verify,
                         builtin: false,
                         installed: true,
                         slug: sl.to_string(),
@@ -183,7 +185,7 @@ mod tests {
         let (_d, store) = store();
         let spec = store.resolve("default").unwrap();
         assert_eq!(spec.name, "default");
-        assert!(spec.verify.is_command());
+        assert!(spec.resolved_gates().iter().all(|g| g.verify.is_command()));
     }
 
     #[test]
@@ -231,6 +233,7 @@ mod tests {
             verify: VerifyOutcome::Failed {
                 detail: "nope".into(),
             },
+            gates: Vec::new(),
         });
         j.finish(StopReason::MaxIterations);
         store.save_journal(&j).unwrap();

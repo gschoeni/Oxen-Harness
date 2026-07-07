@@ -13,7 +13,9 @@ pub enum Command {
     Exit,
     /// Print help.
     Help,
-    /// Show the current model, or switch to a new one.
+    /// Show the current model, or switch to another (an id not yet in the
+    /// catalog is saved as a custom entry, so any model the endpoint serves
+    /// can be typed in directly).
     Model(Option<String>),
     /// Export the current session transcript as JSONL (optional path).
     Export(Option<String>),
@@ -37,6 +39,10 @@ pub enum Command {
     /// Show or switch context compression: `/compression` opens a picker;
     /// `/compression off|audit|on` switches directly.
     Compression(Option<String>),
+    /// Re-drive the last turn against the existing transcript — for a turn
+    /// that died (provider error, no internet), possibly after `/model`
+    /// switched to a working endpoint. No user message is re-appended.
+    Retry,
     /// A prompt to send to the agent.
     Prompt(String),
 }
@@ -73,6 +79,7 @@ pub fn parse_command(line: &str) -> Command {
         "/skills" | "/skill" => Command::Skills,
         "/auth" | "/login" => Command::Auth(rest),
         "/compression" | "/compress" => Command::Compression(rest),
+        "/retry" | "/continue" => Command::Retry,
         // Unknown slash command: treat the whole line as a prompt so users can
         // still send text that happens to start with a slash.
         _ => Command::Prompt(trimmed.to_string()),
@@ -187,6 +194,12 @@ mod tests {
             parse_command("/auth sk-abc123"),
             Command::Auth(Some("sk-abc123".into()))
         );
+    }
+
+    #[test]
+    fn retry_aliases() {
+        assert_eq!(parse_command("/retry"), Command::Retry);
+        assert_eq!(parse_command("/continue"), Command::Retry);
     }
 
     #[test]

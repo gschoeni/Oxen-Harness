@@ -216,6 +216,7 @@ export const configureOxenKey = vi.fn(async () => {});
 export const onToken = listener("token");
 export const onTool = listener("tool");
 export const onCompression = listener("compression");
+export const onRetry = listener("retry");
 export const onQuestion = listener("question");
 export const onFileDrop = listener("fileDrop");
 export const pickAttachments = vi.fn(async () => [] as string[]);
@@ -330,6 +331,7 @@ export function resetIpc() {
     onToken,
     onTool,
     onCompression,
+    onRetry,
     onQuestion,
     onFileDrop,
     onModelProgress,

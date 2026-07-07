@@ -53,6 +53,16 @@ pub enum AgentError {
          or switch to a model with a larger context window"
     )]
     ContextWindowExceeded { used: usize, window: usize },
+    #[error(
+        "the model endpoint failed {attempts} times in a row \
+         ({model} at {endpoint}) — last error: {source}"
+    )]
+    RetriesExhausted {
+        attempts: u32,
+        model: String,
+        endpoint: String,
+        source: LlmError,
+    },
 }
 
 /// Events surfaced to the caller (e.g. the REPL) as a turn progresses.
@@ -94,6 +104,43 @@ pub enum AgentEvent {
         total_saved_tokens: usize,
         results_compressed: usize,
     },
+    /// A model call hit a transient provider/network error and will be retried
+    /// after `delay_ms`. Surfaced so a UI can show that the turn is still alive
+    /// (and why it paused) instead of appearing hung — and, if the stream died
+    /// mid-reply, why some text may repeat.
+    Retrying {
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        error: String,
+    },
+}
+
+/// Backoff schedule for retrying model calls that fail transiently (provider
+/// 5xx, rate limits, network blips — see [`LlmError::is_transient`]).
+/// `max_attempts` counts the first try; the wait doubles from `base_delay`
+/// after each failure (1s → 2s → 4s by default).
+#[derive(Debug, Clone)]
+pub struct RetryPolicy {
+    pub max_attempts: u32,
+    pub base_delay: std::time::Duration,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 4,
+            base_delay: std::time::Duration::from_secs(1),
+        }
+    }
+}
+
+impl RetryPolicy {
+    /// How long to wait after the `attempt`-th try failed (1-based), doubling
+    /// each time: base, 2×base, 4×base, …
+    fn delay_after(&self, attempt: u32) -> std::time::Duration {
+        self.base_delay * 2u32.saturating_pow(attempt.saturating_sub(1))
+    }
 }
 
 /// Configuration for an [`Agent`].
@@ -116,6 +163,8 @@ pub struct AgentConfig {
     /// without changing anything, `On` compresses stale tool output and
     /// registers the `retrieve_original` tool so nothing is unrecoverable.
     pub compression: CompressionMode,
+    /// How transient model-call failures are retried before the turn errors.
+    pub retry: RetryPolicy,
 }
 
 impl Default for AgentConfig {
@@ -129,6 +178,7 @@ impl Default for AgentConfig {
             response_reserve: 4096,
             attachment_root: None,
             compression: CompressionMode::Off,
+            retry: RetryPolicy::default(),
         }
     }
 }
@@ -638,6 +688,13 @@ impl Agent {
     /// Send the prepared outbound transcript (plus the optional one-shot
     /// nudge) to the model and stream the reply, translating provider stream
     /// events into [`AgentEvent`]s as they arrive.
+    ///
+    /// Transient failures (provider 5xx, rate limits, network blips) are
+    /// retried with exponential backoff per [`AgentConfig::retry`], emitting
+    /// [`AgentEvent::Retrying`] before each wait so the UI can show the hiccup.
+    /// A stream that dies mid-reply retries too — nothing was persisted yet, so
+    /// re-sending the same request is safe (the UI may show some text twice).
+    /// Non-transient errors (auth, credits, bad request) fail immediately.
     async fn stream_reply<F>(
         &self,
         mut outbound: Vec<ChatMessage>,
@@ -654,23 +711,59 @@ impl Agent {
             .with_tools(tool_defs.to_vec())
             .streaming(true);
 
-        let assembled = self
-            .client
-            .stream_chat(&request, cancel, |event| match event {
-                StreamEvent::Token(t) => on_event(&AgentEvent::Token(t.clone())),
-                StreamEvent::ToolCallStart { name } => {
-                    on_event(&AgentEvent::ToolPending { name: name.clone() })
+        let retry = self.config.retry.clone();
+        let mut attempt: u32 = 1;
+        loop {
+            let result = self
+                .client
+                .stream_chat(&request, cancel, |event| match event {
+                    StreamEvent::Token(t) => on_event(&AgentEvent::Token(t.clone())),
+                    StreamEvent::ToolCallStart { name } => {
+                        on_event(&AgentEvent::ToolPending { name: name.clone() })
+                    }
+                    StreamEvent::ToolCallDelta { name, arguments } => {
+                        on_event(&AgentEvent::ToolDelta {
+                            name: name.clone(),
+                            delta: arguments.clone(),
+                        })
+                    }
+                    StreamEvent::Done { .. } => {}
+                })
+                .await;
+
+            match result {
+                Ok(assembled) => return Ok(assembled),
+                Err(e) if e.is_transient() && attempt < retry.max_attempts => {
+                    let delay = retry.delay_after(attempt);
+                    on_event(&AgentEvent::Retrying {
+                        attempt,
+                        max_attempts: retry.max_attempts,
+                        delay_ms: delay.as_millis() as u64,
+                        error: e.to_string(),
+                    });
+                    // A stop during the backoff wait ends the turn like any
+                    // other cancellation: quietly, with nothing assembled.
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => return Ok(AssembledMessage::default()),
+                        _ = tokio::time::sleep(delay) => {}
+                    }
+                    attempt += 1;
                 }
-                StreamEvent::ToolCallDelta { name, arguments } => {
-                    on_event(&AgentEvent::ToolDelta {
-                        name: name.clone(),
-                        delta: arguments.clone(),
+                // Retries were burned and it's still down: report the full
+                // picture (attempts, model, endpoint, last error) so the
+                // failure is debuggable rather than a bare status code.
+                Err(e) if attempt > 1 => {
+                    return Err(AgentError::RetriesExhausted {
+                        attempts: attempt,
+                        model: self.config.model.clone(),
+                        endpoint: self.client.base_url().to_string(),
+                        source: e,
                     })
                 }
-                StreamEvent::Done { .. } => {}
-            })
-            .await?;
-        Ok(assembled)
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 
     /// Fold one model round's usage into the running totals: recalibrate the
@@ -1270,6 +1363,148 @@ mod tests {
         let out = agent.run_turn("research this topic", |_| {}).await.unwrap();
         assert_eq!(out, "All done.");
         nudge.assert_async().await;
+    }
+
+    /// A retry policy with near-zero waits so backoff tests run instantly.
+    fn fast_retry(max_attempts: u32) -> RetryPolicy {
+        RetryPolicy {
+            max_attempts,
+            base_delay: std::time::Duration::from_millis(1),
+        }
+    }
+
+    fn retry_test_agent(url: String, retry: RetryPolicy) -> Agent {
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = store
+            .create_session(&SessionMeta {
+                workspace: "/tmp/proj".into(),
+                model: "claude-opus-4-8".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let client = OxenClient::new(url, "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            retry,
+            ..AgentConfig::default()
+        };
+        Agent::new(client, ToolRegistry::new(), store, session, config).unwrap()
+    }
+
+    #[tokio::test]
+    async fn transient_provider_errors_are_retried_until_the_call_lands() {
+        let mut server = mockito::Server::new_async().await;
+        // Mockito serves the first matching mock that hasn't met its expected
+        // hits: the 502 mock absorbs the first two calls, then the SSE mock
+        // answers the third — a provider that hiccups twice and recovers.
+        let bad = server
+            .mock("POST", "/chat/completions")
+            .with_status(502)
+            .with_body(r#"{"error":{"title":"The model provider returned an error."}}"#)
+            .expect(2)
+            .create_async()
+            .await;
+        let good = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("recovered"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(4));
+        let mut retries = Vec::new();
+        let out = agent
+            .run_turn("hello", |e| {
+                if let AgentEvent::Retrying {
+                    attempt,
+                    max_attempts,
+                    error,
+                    ..
+                } = e
+                {
+                    retries.push((*attempt, *max_attempts, error.clone()));
+                }
+            })
+            .await
+            .expect("the turn should survive two 502s and finish");
+
+        assert_eq!(out, "recovered");
+        // One Retrying event per failed attempt, numbered and carrying the error.
+        assert_eq!(retries.len(), 2);
+        assert_eq!((retries[0].0, retries[0].1), (1, 4));
+        assert_eq!((retries[1].0, retries[1].1), (2, 4));
+        assert!(retries[0].2.contains("502"), "event should carry the error");
+        bad.assert_async().await;
+        good.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn retries_exhausted_reports_attempts_model_and_endpoint() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(502)
+            .with_body(r#"{"error":{"title":"The model provider returned an error."}}"#)
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(2));
+        let err = agent.run_turn("hello", |_| {}).await.unwrap_err();
+
+        match &err {
+            AgentError::RetriesExhausted {
+                attempts,
+                model,
+                endpoint,
+                source,
+            } => {
+                assert_eq!(*attempts, 2);
+                assert_eq!(model, "claude-opus-4-8");
+                assert_eq!(endpoint, &server.url());
+                assert!(matches!(source, LlmError::Api { status: 502, .. }));
+            }
+            other => panic!("expected RetriesExhausted, got {other:?}"),
+        }
+        // The display alone should carry everything needed to debug it.
+        let msg = err.to_string();
+        assert!(msg.contains("2 times"), "attempts missing from: {msg}");
+        assert!(msg.contains("claude-opus-4-8"), "model missing from: {msg}");
+        assert!(msg.contains("502"), "status missing from: {msg}");
+    }
+
+    #[tokio::test]
+    async fn non_transient_errors_fail_fast_without_retry() {
+        let mut server = mockito::Server::new_async().await;
+        // expect(1): a retried 401 would trip this mock's assertion below.
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(401)
+            .with_body(r#"{"error":{"message":"Invalid API key"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(4));
+        let mut retried = false;
+        let err = agent
+            .run_turn("hello", |e| {
+                if matches!(e, AgentEvent::Retrying { .. }) {
+                    retried = true;
+                }
+            })
+            .await
+            .unwrap_err();
+
+        assert!(!retried, "a 401 must not be retried");
+        // Still the plain Llm error, so hosts' auth handling (the inline
+        // key-entry card, the /auth hint) keeps matching on it.
+        assert!(matches!(
+            err,
+            AgentError::Llm(LlmError::Api { status: 401, .. })
+        ));
+        mock.assert_async().await;
     }
 
     /// A big, repetitive JSON tool result the crusher provably shrinks.

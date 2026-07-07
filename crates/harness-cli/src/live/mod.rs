@@ -63,7 +63,8 @@ use terminal::{
 };
 use text::{composer_prompt, render_buffer, render_text_line, wrap_line};
 
-/// Run `first_prompt`, then drain any queued prompts in order, all under a single
+/// Run `first` (a prompt, or a `/retry` continuation of the transcript's
+/// dangling turn), then drain any queued prompts in order, all under a single
 /// owned live terminal so the composer stays pinned across the whole sequence.
 ///
 /// Returns `(end_session, draft)`: `end_session` is true when the user asked to
@@ -72,7 +73,7 @@ use text::{composer_prompt, render_buffer, render_text_line, wrap_line};
 /// message isn't lost when the turn ends).
 pub(crate) async fn run_prompt(
     agent: &mut Agent,
-    first_prompt: &str,
+    first: crate::TurnRequest,
     ui: &Ui,
     queue: &mut MessageQueue,
 ) -> Result<(bool, String)> {
@@ -94,21 +95,16 @@ pub(crate) async fn run_prompt(
         s.compression_line = crate::compression_status_line(agent, ui);
     }
 
-    let mut next = Some(first_prompt.to_string());
+    let mut next = Some(first);
     let mut exit = false;
-    while let Some(prompt) = next.take() {
-        match run_one_turn(agent, &prompt, &state, &mut rx, queue, &paused).await {
+    while let Some(request) = next.take() {
+        match run_one_turn(agent, &request, &state, &mut rx, queue, &paused).await {
             TurnOutcome::Done(result) => {
                 {
                     let mut s = state.borrow_mut();
                     if let Err(e) = &result {
-                        s.print_line(&format!("  {}", ui.red(&ui.death())));
-                        s.print_line(&format!(
-                            "  {}",
-                            ui.dim(&format!("The trail guide says: {e}"))
-                        ));
-                        if let Some(hint) = crate::auth_cmd::auth_hint(ui, &e.to_string()) {
-                            s.print_line(&hint);
+                        for line in crate::turn_failure_lines(agent, ui, e) {
+                            s.print_line(&line);
                         }
                     }
                     // Refresh the pinned meters (they sit above the divider,
@@ -129,7 +125,7 @@ pub(crate) async fn run_prompt(
                         ui.cream(&truncate(&msg, 80)),
                     ));
                     s.render();
-                    next = Some(msg);
+                    next = Some(crate::TurnRequest::Prompt(msg));
                 }
             }
             TurnOutcome::Interrupted | TurnOutcome::Exit => {
@@ -315,38 +311,51 @@ enum TurnOutcome {
 /// the bottom line.
 async fn run_one_turn(
     agent: &mut Agent,
-    prompt: &str,
+    request: &crate::TurnRequest,
     state: &Rc<RefCell<Live>>,
     rx: &mut UnboundedReceiver<Event>,
     queue: &mut MessageQueue,
     paused: &Arc<AtomicBool>,
 ) -> TurnOutcome {
     // Pull any dropped files out of the line and announce them in the scroll
-    // region before the turn starts.
-    let (text, attachments, warnings) = crate::attach::extract_attachments(prompt);
-    {
-        let mut st = state.borrow_mut();
-        let ui = st.ui.clone();
-        for w in &warnings {
-            st.print_line(&format!("  {} {}", ui.red("⚠"), ui.dim(w)));
+    // region before the turn starts. A `/retry` continuation carries no new
+    // message, so there is nothing to extract or announce.
+    let (text, attachments) = match request {
+        crate::TurnRequest::Prompt(prompt) => {
+            let (text, attachments, warnings) = crate::attach::extract_attachments(prompt);
+            let mut st = state.borrow_mut();
+            let ui = st.ui.clone();
+            for w in &warnings {
+                st.print_line(&format!("  {} {}", ui.red("⚠"), ui.dim(w)));
+            }
+            if !attachments.is_empty() {
+                let names: Vec<&str> = attachments.iter().map(|a| a.filename.as_str()).collect();
+                st.print_line(&format!(
+                    "  {} {}",
+                    ui.green("📎 attached:"),
+                    ui.cream(&names.join(", "))
+                ));
+            }
+            (text, attachments)
         }
-        if !attachments.is_empty() {
-            let names: Vec<&str> = attachments.iter().map(|a| a.filename.as_str()).collect();
-            st.print_line(&format!(
-                "  {} {}",
-                ui.green("📎 attached:"),
-                ui.cream(&names.join(", "))
-            ));
-        }
-    }
+        crate::TurnRequest::Continue => (String::new(), Vec::new()),
+    };
 
     state.borrow_mut().begin_turn(queue.items());
 
     let cb = state.clone();
     let cb_paused = paused.clone();
-    let turn = agent.run_turn_with_attachments(text, attachments, move |event| {
+    let on_event = move |event: &AgentEvent| {
         cb.borrow_mut().on_event(event, &cb_paused);
-    });
+    };
+    let turn: std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<String, AgentError>> + '_>,
+    > = match request {
+        crate::TurnRequest::Prompt(_) => {
+            Box::pin(agent.run_turn_with_attachments(text, attachments, on_event))
+        }
+        crate::TurnRequest::Continue => Box::pin(agent.continue_turn(on_event)),
+    };
     tokio::pin!(turn);
 
     let mut ticker = tokio::time::interval(Duration::from_millis(110));
@@ -452,7 +461,7 @@ const PREVIEW_CAP: usize = 256;
 /// The slash commands offered by Tab completion + the inline hint, with a short
 /// description. Kept in sync with [`crate::repl::parse_command`].
 const SLASH_COMMANDS: &[(&str, &str)] = &[
-    ("/model", "show or switch the model"),
+    ("/model", "show, switch, or add a model"),
     ("/theme", "change the theme"),
     ("/queue", "manage the message queue"),
     ("/loop", "run or list loops"),
@@ -507,15 +516,72 @@ struct Live {
     /// instead of scrolling a new line into the conversation.
     compression_line: Option<String>,
     /// Slash-command / argument completion candidates for the current composer
-    /// text (full-line replacements), shown as a hint above the box. Refreshed on
-    /// every compose edit; empty when there's nothing to suggest.
-    completion: Vec<String>,
-    /// The candidate currently selected by Tab cycling (highlights the hint and
+    /// text (full-line replacements), shown as a picker above the box. Refreshed
+    /// on every compose edit; empty when there's nothing to suggest.
+    completion: Vec<CompletionItem>,
+    /// The candidate currently selected by Tab cycling (highlights the picker and
     /// drives menu-complete). `None` until the first Tab.
     comp_index: Option<usize>,
-    /// Lazily-loaded model names (cloud catalog + installed local) for `/model`
-    /// argument completion, cached so we don't rescan on every keystroke.
-    model_names: Option<Vec<String>>,
+    /// Whether the composer text was set by the last Tab (menu-complete), so the
+    /// next Tab advances the cycle. Cleared by edits and arrow selection — a Tab
+    /// after arrowing applies the highlighted row even when its replacement
+    /// happens to equal the current text (e.g. the `/model ` "add" row).
+    comp_applied: bool,
+    /// Lazily-loaded model candidates (cloud catalog + installed local) for
+    /// `/model` argument completion, cached so we don't rescan on every keystroke.
+    model_items: Option<Vec<CompletionItem>>,
+}
+
+/// One slash-command or argument completion row. `replacement` is the whole line
+/// inserted by Tab; `label` is the compact selectable text; `detail` explains why
+/// a user might pick it (model display name, provider, current marker, etc.).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CompletionItem {
+    replacement: String,
+    label: String,
+    detail: String,
+}
+
+impl CompletionItem {
+    fn new(
+        replacement: impl Into<String>,
+        label: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            replacement: replacement.into(),
+            label: label.into(),
+            detail: detail.into(),
+        }
+    }
+}
+
+struct FittedText {
+    text: String,
+    width: usize,
+}
+
+impl FittedText {
+    fn max_width(mut self, min: usize) -> Self {
+        self.width = self.width.max(min);
+        self
+    }
+}
+
+fn fit_text(s: &str, max: usize) -> FittedText {
+    let count = s.chars().count();
+    if count <= max {
+        FittedText {
+            text: s.to_string(),
+            width: count,
+        }
+    } else {
+        let kept: String = s.chars().take(max.saturating_sub(1)).collect();
+        FittedText {
+            text: format!("{kept}…"),
+            width: max,
+        }
+    }
 }
 
 impl Live {
@@ -539,7 +605,8 @@ impl Live {
             compression_line: None,
             completion: Vec::new(),
             comp_index: None,
-            model_names: None,
+            comp_applied: false,
+            model_items: None,
         }
     }
 
@@ -679,9 +746,31 @@ impl Live {
                 total_saved_tokens,
                 ..
             } => self.on_compression(mode, *saved_tokens, *total_saved_tokens),
+            // A transient provider/network failure being retried with backoff;
+            // show it so the pause reads as a hiccup, not a hang.
+            AgentEvent::Retrying {
+                attempt,
+                max_attempts,
+                delay_ms,
+                error,
+            } => self.on_retrying(*attempt, *max_attempts, *delay_ms, error),
             // Streaming tool-argument fragments drive the desktop UI only.
             AgentEvent::ToolDelta { .. } => {}
         }
+    }
+
+    fn on_retrying(&mut self, attempt: u32, max_attempts: u32, delay_ms: u64, error: &str) {
+        self.stop_spinner();
+        self.end_markdown();
+        let line = format!(
+            "  {} {}",
+            self.ui.red("⚠"),
+            self.ui
+                .dim(&crate::retry_notice(attempt, max_attempts, delay_ms, error)),
+        );
+        self.write_region(&format!("{line}\n"));
+        self.begin_thinking();
+        self.render_composer();
     }
 
     fn on_token(&mut self, t: &str) {
@@ -816,10 +905,12 @@ impl Live {
             "saved"
         };
         self.compression_line = Some(format!(
-            "  {} {}",
+            "  {} {} {} {}",
             self.ui.brown("⊙"),
+            self.ui.dim("compression:"),
+            self.ui.accent(mode),
             self.ui.dim(&format!(
-                "compression {verb} ~{saved_tokens} tokens this call ({total_saved_tokens} total)"
+                "· {verb} ~{saved_tokens} tokens this call ({total_saved_tokens} total) · /compression to switch"
             )),
         ));
         self.render();
@@ -1164,7 +1255,7 @@ impl Live {
             && self.edit.is_none()
             && !self.completion.is_empty()
         {
-            out.push(self.completion_hint(box_w));
+            out.extend(self.completion_hint(box_w));
         }
         for (vi, row) in vrows.iter().enumerate().take(hi).skip(lo) {
             let caret = (caret_on && vi == caret_vrow).then_some(caret_vcol);
@@ -1179,36 +1270,84 @@ impl Live {
         out
     }
 
-    /// One-line suggestion hint shown above the box: the candidate tokens (the
-    /// command, or model name for `/model` args), the Tab-selected one
-    /// highlighted, capped to the box width with an `…` overflow marker.
-    fn completion_hint(&self, box_w: usize) -> String {
-        let budget = box_w.saturating_sub(6); // room for the icon + a trailing "⇥"
-        let mut shown = String::new();
-        let mut width = 0usize;
-        let mut shown_any = false;
-        for (i, cand) in self.completion.iter().enumerate() {
-            let label = cand.rsplit(' ').next().unwrap_or(cand);
-            let label_w = label.chars().count();
-            // +1 for the separating space between chips.
-            let need = label_w + if shown_any { 1 } else { 0 };
-            if shown_any && width + need > budget {
-                shown.push_str(&self.ui.dim(" …"));
-                break;
-            }
-            if shown_any {
-                shown.push(' ');
-                width += 1;
-            }
-            if Some(i) == self.comp_index {
-                shown.push_str(&format!("\x1b[7m{label}\x1b[0m"));
-            } else {
-                shown.push_str(&self.ui.cream(label));
-            }
-            width += label_w;
-            shown_any = true;
+    /// Completion picker shown above the box. Model names are long and similar,
+    /// so render a small vertical list with provider/details instead of squeezing
+    /// unlabeled chips into one hard-to-scan line.
+    fn completion_hint(&self, box_w: usize) -> Vec<String> {
+        let visible = self.visible_completion_rows();
+        let total = self.completion.len();
+        let current = self.comp_index.unwrap_or(0).min(total.saturating_sub(1));
+        let mut lines = Vec::new();
+        let title = if self.is_model_completion() {
+            format!("model picker {}/{}", current + 1, total)
+        } else {
+            "completions".to_string()
+        };
+        let hint = if self.is_model_completion() {
+            "tab/↑↓ choose · enter run"
+        } else {
+            "tab cycles"
+        };
+        lines.push(format!(
+            "  {} {}  {}",
+            self.ui.brown("⇥"),
+            self.ui.accent(&title),
+            self.ui.dim(hint)
+        ));
+        if visible.start > 0 {
+            lines.push(format!(
+                "  {} {}",
+                self.ui.brown("│"),
+                self.ui.dim(&format!("… {} more above", visible.start))
+            ));
         }
-        format!("  {} {}", self.ui.brown("⇥"), shown)
+        for i in visible.start..visible.end {
+            let item = &self.completion[i];
+            let selected = i == current;
+            let pointer = if selected {
+                self.ui.accent("❯")
+            } else {
+                " ".into()
+            };
+            let label = fit_text(&item.label, box_w / 2).max_width(8);
+            let detail_budget = box_w.saturating_sub(label.width + 8).max(8);
+            let detail = fit_text(&item.detail, detail_budget);
+            if selected {
+                let plain = format!("❯ {} — {}", item.label, item.detail);
+                let plain = fit_text(&plain, box_w.saturating_sub(2)).text;
+                lines.push(format!("  \x1b[7m{plain:<width$}\x1b[0m", width = box_w));
+            } else {
+                lines.push(format!(
+                    "  {} {} {}",
+                    pointer,
+                    self.ui.cream(&label.text),
+                    self.ui.dim(&detail.text)
+                ));
+            }
+        }
+        if visible.end < total {
+            lines.push(format!(
+                "  {} {}",
+                self.ui.brown("│"),
+                self.ui
+                    .dim(&format!("… {} more below", total - visible.end))
+            ));
+        }
+        lines
+    }
+
+    fn is_model_completion(&self) -> bool {
+        self.composer.text().starts_with("/model")
+    }
+
+    fn visible_completion_rows(&self) -> std::ops::Range<usize> {
+        let total = self.completion.len();
+        let max = (if self.is_model_completion() { 8 } else { 4 }).min(total);
+        let selected = self.comp_index.unwrap_or(0).min(total.saturating_sub(1));
+        let start = selected
+            .saturating_sub(max / 2)
+            .min(total.saturating_sub(max));
+        start..start + max
     }
 
     // --- slash-command + argument completion -------------------------------
@@ -1216,7 +1355,7 @@ impl Live {
     /// Candidate full-line replacements for the current composer text: slash
     /// commands while typing the command word, or model names after `/model `.
     /// Empty when the text isn't a completable `/command`.
-    fn compute_candidates(&mut self) -> Vec<String> {
+    fn compute_candidates(&mut self) -> Vec<CompletionItem> {
         let text = self.composer.text();
         if !text.starts_with('/') {
             return Vec::new();
@@ -1228,57 +1367,148 @@ impl Live {
             None => SLASH_COMMANDS
                 .iter()
                 .filter(|(c, _)| c.starts_with(cmd))
-                .map(|(c, _)| c.to_string())
+                .map(|(c, desc)| CompletionItem::new(*c, *c, *desc))
                 .collect(),
-            // `/model <partial>` — complete model names (cloud + local).
+            // `/model <partial>` — complete model names (cloud + local). Match on
+            // both the API id and the friendly display name so typing "sonnet" or
+            // "qwen" narrows to what a human remembers.
             Some(arg) if cmd == "/model" => {
-                let needle = arg.trim().to_lowercase();
-                self.model_candidates()
+                let typed = arg.trim();
+                let needle = typed.to_lowercase();
+                let mut items: Vec<CompletionItem> = self
+                    .model_candidates()
                     .into_iter()
-                    .filter(|m| m.to_lowercase().starts_with(&needle))
-                    .map(|m| format!("/model {m}"))
-                    .collect()
+                    .filter(|m| {
+                        needle.is_empty()
+                            || m.label.to_lowercase().contains(&needle)
+                            || m.detail.to_lowercase().contains(&needle)
+                    })
+                    .map(|mut m| {
+                        m.replacement = format!("/model {}", m.replacement);
+                        m
+                    })
+                    .collect();
+                // A typed id that matches nothing is still runnable — the
+                // endpoint may serve models we don't know about. Offer it as
+                // the picker's only row so entering a brand-new model id is a
+                // first-class path: Enter switches to it and saves it to the
+                // catalog (see `Command::Model` in main.rs).
+                if items.is_empty() && !typed.is_empty() && !typed.contains(char::is_whitespace) {
+                    items.push(CompletionItem::new(
+                        format!("/model {typed}"),
+                        typed,
+                        "new model id — switch to it and save to the catalog",
+                    ));
+                } else {
+                    // Standing affordance at the bottom of the list: picking it
+                    // clears the argument so a fresh id can be typed in.
+                    items.push(CompletionItem::new(
+                        "/model ",
+                        "+ add a new model",
+                        "type an id — it's switched to and saved to the catalog",
+                    ));
+                }
+                items
             }
             // `/compression <partial>` — complete the three modes.
             Some(arg) if cmd == "/compression" || cmd == "/compress" => {
                 let needle = arg.trim().to_lowercase();
-                ["off", "audit", "on"]
-                    .iter()
-                    .filter(|m| m.starts_with(&needle))
-                    .map(|m| format!("{cmd} {m}"))
-                    .collect()
+                [
+                    ("off", "send every tool result untouched"),
+                    ("audit", "measure savings, change nothing"),
+                    ("on", "compress stale tool output"),
+                ]
+                .iter()
+                .filter(|(m, _)| m.starts_with(&needle))
+                .map(|(m, desc)| CompletionItem::new(format!("{cmd} {m}"), *m, *desc))
+                .collect()
             }
             Some(_) => Vec::new(),
         }
     }
 
-    /// Model names for `/model` completion: the cloud catalog plus installed
-    /// local models, loaded once and cached.
-    fn model_candidates(&mut self) -> Vec<String> {
-        if self.model_names.is_none() {
-            let mut names: Vec<String> = harness_runtime::models::catalog()
+    /// Model rows for `/model` completion: cloud catalog plus installed local
+    /// models, loaded once and cached with display names and current markers.
+    fn model_candidates(&mut self) -> Vec<CompletionItem> {
+        if self.model_items.is_none() {
+            let selected = harness_runtime::models::selected();
+            let active_local = harness_runtime::models::active_local();
+            let mut items: Vec<CompletionItem> = harness_runtime::models::catalog()
                 .into_iter()
-                .map(|m| m.id)
+                .map(|m| {
+                    let marker = if active_local.is_none() && m.id == selected {
+                        " ← current"
+                    } else {
+                        ""
+                    };
+                    let source = if m.builtin {
+                        "cloud built-in"
+                    } else {
+                        "cloud custom"
+                    };
+                    CompletionItem::new(
+                        m.id.clone(),
+                        m.id,
+                        format!("{} · {source}{marker}", m.name),
+                    )
+                })
                 .collect();
             if let Ok(store) = harness_local::ModelStore::open() {
-                names.extend(store.installed().into_iter().map(|m| m.id));
+                items.extend(store.installed().into_iter().map(|m| {
+                    let marker = if active_local.as_deref() == Some(m.id.as_str()) {
+                        " ← current"
+                    } else {
+                        ""
+                    };
+                    let meta = [m.params.as_str(), m.quant.as_str()]
+                        .into_iter()
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" · ");
+                    let meta = if meta.is_empty() {
+                        "local".to_string()
+                    } else {
+                        format!("local · {meta}")
+                    };
+                    CompletionItem::new(
+                        m.id.clone(),
+                        m.id,
+                        format!("{} · {meta}{marker}", m.display),
+                    )
+                }));
             }
-            names.sort();
-            names.dedup();
-            self.model_names = Some(names);
+            items.sort_by_key(|item| item.label.to_lowercase());
+            items.dedup_by(|a, b| a.label == b.label);
+            self.model_items = Some(items);
         }
-        self.model_names.clone().unwrap_or_default()
+        self.model_items.clone().unwrap_or_default()
     }
 
     /// Recompute the completion hint after a compose-buffer change, and drop any
     /// in-progress Tab cycle (the candidates may have changed).
     fn refresh_completion(&mut self) {
         self.completion = self.compute_candidates();
-        self.comp_index = None;
+        self.comp_index = (!self.completion.is_empty() && self.is_model_completion()).then_some(0);
+        self.comp_applied = false;
     }
 
-    /// Handle Tab: menu-complete the composer to the next matching candidate,
-    /// cycling on repeated presses. Returns whether anything changed.
+    /// Move the highlighted completion row without changing the typed prefix.
+    /// Only active for argument pickers; a plain Up/Down with no visible picker
+    /// keeps its normal history/queue behavior.
+    fn move_completion(&mut self, delta: isize) -> bool {
+        if self.completion.is_empty() || !self.is_model_completion() {
+            return false;
+        }
+        let len = self.completion.len() as isize;
+        let current = self.comp_index.unwrap_or(0) as isize;
+        let next = (current + delta).rem_euclid(len) as usize;
+        self.comp_index = Some(next);
+        self.comp_applied = false;
+        true
+    }
+
+    /// Handle Tab: menu-complete the composer to the highlighted matching
+    /// candidate, cycling on repeated presses. Returns whether anything changed.
     fn complete(&mut self) -> bool {
         if self.completion.is_empty() {
             self.completion = self.compute_candidates();
@@ -1287,14 +1517,18 @@ impl Live {
             return false;
         }
         let next = match self.comp_index {
-            // Still on the last pick (no edits since) → advance to cycle.
-            Some(i) if self.composer.text() == self.completion[i] => {
+            // Still on the last Tab's pick (no edits or arrowing since) →
+            // advance to cycle.
+            Some(i)
+                if self.comp_applied && self.composer.text() == self.completion[i].replacement =>
+            {
                 (i + 1) % self.completion.len()
             }
-            _ => 0,
+            _ => self.comp_index.unwrap_or(0).min(self.completion.len() - 1),
         };
-        self.composer.set_text(&self.completion[next]);
+        self.composer.set_text(&self.completion[next].replacement);
         self.comp_index = Some(next);
+        self.comp_applied = true;
         true
     }
 
@@ -1342,6 +1576,9 @@ impl Live {
                 KeyAction::Submit(text)
             }
             KeyIntent::ComposeUp => {
+                if self.move_completion(-1) {
+                    return KeyAction::Redraw;
+                }
                 // Move up a line if there is one; on the first line, either focus
                 // the queue (empty box) or recall the previous history entry.
                 if self.composer.move_up() {
@@ -1358,6 +1595,9 @@ impl Live {
                 KeyAction::Redraw
             }
             KeyIntent::ComposeDown => {
+                if self.move_completion(1) {
+                    return KeyAction::Redraw;
+                }
                 // Move down a line if there is one; on the last line, recall the
                 // next history entry (eventually restoring the stashed draft).
                 if self.composer.move_down() {
@@ -1486,11 +1726,17 @@ mod tests {
         let mut l = live(80, 24);
         l.handle_key(key(KeyCode::Char('/')), 0);
         // Every slash command is suggested right after `/`.
-        assert!(l.completion.iter().any(|c| c == "/model"));
-        assert!(l.completion.iter().any(|c| c == "/theme"));
+        assert!(l.completion.iter().any(|c| c.label == "/model"));
+        assert!(l.completion.iter().any(|c| c.label == "/theme"));
         // Narrowing filters the list.
         l.handle_key(key(KeyCode::Char('m')), 0);
-        assert_eq!(l.completion, vec!["/model".to_string()]);
+        assert_eq!(
+            l.completion
+                .iter()
+                .map(|c| c.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/model"]
+        );
     }
 
     #[test]
@@ -1518,6 +1764,68 @@ mod tests {
         // A normal edit clears the in-progress cycle selection.
         l.handle_key(key(KeyCode::Char('x')), 0);
         assert_eq!(l.comp_index, None);
+    }
+
+    #[test]
+    fn model_completion_filters_by_display_and_arrow_selects() {
+        let mut l = live(80, 24);
+        for ch in "/model sonnet".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        assert!(l.completion.iter().any(|c| c.label == "claude-sonnet-4-6"));
+        assert_eq!(l.comp_index, Some(0));
+        // Down walks the rows and wraps past the trailing "add" row back to
+        // the first match.
+        for _ in 0..l.completion.len() {
+            l.handle_key(key(KeyCode::Down), 0);
+        }
+        assert_eq!(l.comp_index, Some(0));
+        l.handle_key(key(KeyCode::Tab), 0);
+        assert!(l.composer.text().starts_with("/model "));
+        assert!(l.composer.text().contains("claude-sonnet"));
+    }
+
+    #[test]
+    fn model_completion_ends_with_an_add_row_that_clears_the_argument() {
+        let mut l = live(80, 24);
+        for ch in "/model ".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        let last = l.completion.last().unwrap();
+        assert_eq!(last.label, "+ add a new model");
+        assert_eq!(last.replacement, "/model ");
+        // Arrow up from the top wraps to the add row; Tab picks it, leaving
+        // `/model ` ready for a fresh id to be typed.
+        l.handle_key(key(KeyCode::Up), 0);
+        assert_eq!(l.comp_index, Some(l.completion.len() - 1));
+        l.handle_key(key(KeyCode::Tab), 0);
+        assert_eq!(l.composer.text(), "/model ");
+    }
+
+    #[test]
+    fn model_completion_offers_an_unknown_id_as_a_new_model() {
+        let mut l = live(80, 24);
+        for ch in "/model some-brand-new-model".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        // Nothing in the catalog matches, so the typed id itself is offered.
+        assert_eq!(l.completion.len(), 1);
+        assert_eq!(l.completion[0].label, "some-brand-new-model");
+        assert!(l.completion[0].detail.contains("new model id"));
+        l.handle_key(key(KeyCode::Tab), 0);
+        assert_eq!(l.composer.text(), "/model some-brand-new-model");
+    }
+
+    #[test]
+    fn model_completion_does_not_offer_a_new_row_while_matches_exist() {
+        let mut l = live(80, 24);
+        for ch in "/model sonnet".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        assert!(l
+            .completion
+            .iter()
+            .all(|c| !c.detail.contains("new model id")));
     }
 
     // --- Live wiring (no TTY: handle_key + buffer state, never paint) ------
@@ -1604,11 +1912,14 @@ mod tests {
             l.handle_key(ctrl(KeyCode::Char('d')), 0),
             KeyAction::Exit
         ));
+        // On a non-empty composer Ctrl-D forward-deletes instead of exiting.
         l.handle_key(key(KeyCode::Char('x')), 0);
+        l.handle_key(ctrl(KeyCode::Char('a')), 0); // caret to line start
         assert!(matches!(
             l.handle_key(ctrl(KeyCode::Char('d')), 0),
-            KeyAction::None
+            KeyAction::Redraw
         ));
+        assert!(l.composer.is_empty());
     }
 
     // --- queue table painting ----------------------------------------------

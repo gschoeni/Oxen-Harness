@@ -1,11 +1,18 @@
 //! The loop engine: drive an agent through DISCOVER → QUESTION → PLAN →
-//! EXECUTE → VERIFY → ITERATE until the verify gate passes or a stop condition
+//! EXECUTE → VERIFY → ITERATE until the verify gates pass or a stop condition
 //! trips.
 //!
 //! Each pass hands the agent the goal, the success criteria, and a digest of
 //! what's already been tried (so it doesn't repeat failures), runs one agent
 //! turn (during which it can use tools and ask the user questions), then runs
-//! the verify gate. The gate — not the agent's own say-so — decides success.
+//! the verify gates. The gates — not the agent's own say-so — decide success.
+//!
+//! Gates are conditional: a gate whose `run_when` doesn't match what the pass
+//! actually changed on disk is skipped (a commit-only pass shouldn't pay for
+//! the test suite). Two safety rules keep skipping honest: unknown changes
+//! (not a git repo) run everything, and a gate the previous pass left failed
+//! or blocked always re-runs, so a no-op pass can never launder a red gate
+//! into success.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -14,7 +21,8 @@ use std::time::Duration;
 use harness_agent::{Agent, AgentEvent};
 use serde::{Deserialize, Serialize};
 
-use crate::journal::{Attempt, LoopJournal, VerifyOutcome};
+use crate::changes::WorkspaceSnapshot;
+use crate::journal::{Attempt, GateOutcome, GateReport, LoopJournal, VerifyOutcome};
 use crate::spec::{LoopSpec, Verify};
 use crate::LoopError;
 
@@ -62,12 +70,14 @@ pub enum LoopEvent {
     IterationStarted { iteration: u32 },
     /// A streaming/tool event forwarded from the underlying agent turn.
     Agent(AgentEvent),
-    /// The verify gate is about to run.
-    VerifyStarted { command_gate: bool },
+    /// A gate is about to run.
+    VerifyStarted { gate: String, command_gate: bool },
+    /// A conditional gate was skipped — the pass didn't change matching files.
+    VerifySkipped { gate: String },
     /// The gate passed.
-    VerifyPassed,
+    VerifyPassed { gate: String },
     /// The gate failed, with the (truncated) detail fed back into the next pass.
-    VerifyFailed { detail: String },
+    VerifyFailed { gate: String, detail: String },
     /// The loop stopped.
     Stopped { reason: StopReason },
 }
@@ -148,6 +158,7 @@ impl LoopRunner {
 
             on_event(&LoopEvent::IterationStarted { iteration });
 
+            let snapshot = WorkspaceSnapshot::capture(&self.workspace_root);
             let prompt = self.compose_prompt(&journal);
             let turn = agent
                 .run_turn(prompt, |e| on_event(&LoopEvent::Agent(e.clone())))
@@ -161,22 +172,25 @@ impl LoopRunner {
                 }
             };
 
-            on_event(&LoopEvent::VerifyStarted {
-                command_gate: self.spec.verify.is_command(),
-            });
-            let outcome = self.verify(agent, &final_text).await?;
-            match &outcome {
-                VerifyOutcome::Passed => on_event(&LoopEvent::VerifyPassed),
-                VerifyOutcome::Failed { detail } => on_event(&LoopEvent::VerifyFailed {
-                    detail: detail.clone(),
-                }),
-            }
+            // What did the pass actually change? `None` = unknown (run everything).
+            let changed = snapshot.and_then(|s| s.changed_paths(&self.workspace_root));
+            let pending = journal.pending_gates();
+            let (outcome, gates) = self
+                .run_gates(
+                    agent,
+                    &final_text,
+                    changed.as_deref(),
+                    &pending,
+                    &mut on_event,
+                )
+                .await?;
 
             let passed = outcome.passed();
             journal.record(Attempt {
                 iteration,
                 summary: summarize(&final_text),
                 verify: outcome,
+                gates,
             });
             self.persist(&journal);
 
@@ -206,13 +220,15 @@ impl LoopRunner {
         if journal.attempts.is_empty() {
             format!(
                 "{PROTOCOL}\n\nGOAL:\n{}\n\nSUCCESS CRITERIA (strict — no soft passes):\n{}\n\n\
-                 VERIFY GATE: after your turn I will check the work with {}. \
+                 VERIFY GATES: after your turn I will check the work with: {}. \
+                 Conditional gates only run when the pass changed matching files, \
+                 so don't make gratuitous edits just to exercise them. \
                  Do not declare success yourself. Begin the loop now: discover, \
                  (ask if genuinely needed), plan, then execute. End your turn with a \
                  short summary of exactly what you changed this pass.",
                 self.spec.goal,
                 criteria,
-                self.spec.verify.label(),
+                self.spec.gate_summary(),
             )
         } else {
             let last = journal
@@ -252,8 +268,88 @@ impl LoopRunner {
         }
     }
 
-    async fn verify(&self, agent: &Agent, work: &str) -> Result<VerifyOutcome, LoopError> {
-        match &self.spec.verify {
+    /// Run the pass's gate sequence in order, honoring each gate's `run_when`
+    /// against what the pass changed. A gate the previous pass left pending
+    /// (failed or blocked) always runs; a failure blocks the gates after it.
+    /// The pass succeeds when every gate either passed or was legitimately
+    /// skipped.
+    async fn run_gates<F>(
+        &self,
+        agent: &Agent,
+        work: &str,
+        changed: Option<&[String]>,
+        pending: &[String],
+        on_event: &mut F,
+    ) -> Result<(VerifyOutcome, Vec<GateReport>), LoopError>
+    where
+        F: FnMut(&LoopEvent),
+    {
+        let mut reports = Vec::new();
+        let mut failure: Option<String> = None;
+
+        for gate in self.spec.resolved_gates() {
+            if failure.is_some() {
+                reports.push(GateReport {
+                    name: gate.name,
+                    outcome: GateOutcome::Blocked,
+                });
+                continue;
+            }
+            let owes_a_run = pending.iter().any(|p| p == &gate.name);
+            if !owes_a_run && !gate.run_when.should_run(changed) {
+                on_event(&LoopEvent::VerifySkipped {
+                    gate: gate.name.clone(),
+                });
+                reports.push(GateReport {
+                    name: gate.name,
+                    outcome: GateOutcome::Skipped,
+                });
+                continue;
+            }
+
+            on_event(&LoopEvent::VerifyStarted {
+                gate: gate.name.clone(),
+                command_gate: gate.verify.is_command(),
+            });
+            match self.check(agent, &gate.verify, work).await? {
+                VerifyOutcome::Passed => {
+                    on_event(&LoopEvent::VerifyPassed {
+                        gate: gate.name.clone(),
+                    });
+                    reports.push(GateReport {
+                        name: gate.name,
+                        outcome: GateOutcome::Passed,
+                    });
+                }
+                VerifyOutcome::Failed { detail } => {
+                    on_event(&LoopEvent::VerifyFailed {
+                        gate: gate.name.clone(),
+                        detail: detail.clone(),
+                    });
+                    failure = Some(format!("gate `{}` failed — {detail}", gate.name));
+                    reports.push(GateReport {
+                        name: gate.name,
+                        outcome: GateOutcome::Failed { detail },
+                    });
+                }
+            }
+        }
+
+        let outcome = match failure {
+            Some(detail) => VerifyOutcome::Failed { detail },
+            None => VerifyOutcome::Passed,
+        };
+        Ok((outcome, reports))
+    }
+
+    /// Run one gate's check.
+    async fn check(
+        &self,
+        agent: &Agent,
+        verify: &Verify,
+        work: &str,
+    ) -> Result<VerifyOutcome, LoopError> {
+        match verify {
             Verify::Command {
                 command,
                 timeout_ms,

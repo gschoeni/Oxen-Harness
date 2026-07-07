@@ -9,7 +9,9 @@ use std::rc::Rc;
 
 use anyhow::{Context, Result};
 use harness_agent::Agent;
-use harness_loop::{LoopEvent, LoopJournal, LoopRunner, LoopSpec, LoopStore, Verify};
+use harness_loop::{
+    Gate, LoopEvent, LoopJournal, LoopRunner, LoopSpec, LoopStore, RunWhen, Verify,
+};
 use rustyline::DefaultEditor;
 
 use crate::picker::{self, Choice};
@@ -217,7 +219,7 @@ pub async fn run(
     let journal_path = store.journal_path_for(&spec.name);
 
     print_header(ui, &spec);
-    if !spec.verify.is_command() {
+    if spec.has_rubric_gate() {
         println!(
             "  {}",
             ui.dim("tip: a rubric is graded by the model — add a command gate (e.g. `cargo test`) for an objective check."),
@@ -261,27 +263,37 @@ fn render_event(ev: &LoopEvent, renderer: &Rc<RefCell<TurnRenderer>>, ui: &Ui) {
             renderer.borrow_mut().begin_thinking();
         }
         LoopEvent::Agent(e) => renderer.borrow_mut().on_event(e),
-        LoopEvent::VerifyStarted { command_gate } => {
+        LoopEvent::VerifyStarted { gate, command_gate } => {
             renderer.borrow_mut().finish();
             let what = if *command_gate {
-                "Checking the gate (running the verify command)…"
+                format!("Checking gate `{gate}` (running the verify command)…")
             } else {
-                "Checking the gate (scoring against the criteria)…"
+                format!("Checking gate `{gate}` (scoring against the criteria)…")
             };
-            println!("  {} {}", ui.brown("⚖"), ui.dim(what));
+            println!("  {} {}", ui.brown("⚖"), ui.dim(&what));
         }
-        LoopEvent::VerifyPassed => {
+        LoopEvent::VerifySkipped { gate } => {
+            renderer.borrow_mut().finish();
+            println!(
+                "  {} {}",
+                ui.brown("↷"),
+                ui.dim(&format!(
+                    "gate `{gate}` skipped — no matching changes this pass"
+                )),
+            );
+        }
+        LoopEvent::VerifyPassed { gate } => {
             println!(
                 "  {} {}",
                 ui.green("✓"),
-                ui.green("verify passed — goal met")
+                ui.green(&format!("gate `{gate}` passed"))
             );
         }
-        LoopEvent::VerifyFailed { detail } => {
+        LoopEvent::VerifyFailed { gate, detail } => {
             println!(
                 "  {} {}",
                 ui.brown("✗"),
-                ui.dim(&format!("verify failed — {}", truncate(detail, 160))),
+                ui.dim(&format!("gate `{gate}` failed — {}", truncate(detail, 160))),
             );
         }
         LoopEvent::Stopped { .. } => {}
@@ -292,7 +304,9 @@ fn print_header(ui: &Ui, spec: &LoopSpec) {
     println!();
     println!("  {} {}", ui.title("▶ Loop:"), ui.cream(&spec.name));
     println!("    {} {}", ui.brown("goal:"), ui.cream(&spec.goal));
-    println!("    {} {}", ui.brown("gate:"), ui.dim(&spec.verify.label()));
+    for gate in spec.resolved_gates() {
+        println!("    {} {}", ui.brown("gate:"), ui.dim(&gate.label()));
+    }
     println!(
         "    {} {}",
         ui.brown("stop:"),
@@ -360,7 +374,9 @@ fn show(ui: &Ui, store: &LoopStore, name: &str) -> Result<()> {
         println!("  {}", ui.dim(&spec.description));
     }
     println!("  {} {}", ui.brown("goal:"), ui.cream(&spec.goal));
-    println!("  {} {}", ui.brown("gate:"), ui.dim(&spec.verify.label()));
+    for gate in spec.resolved_gates() {
+        println!("  {} {}", ui.brown("gate:"), ui.dim(&gate.label()));
+    }
     if !spec.success_criteria.is_empty() {
         println!("  {}", ui.brown("criteria:"));
         for c in &spec.success_criteria {
@@ -438,6 +454,49 @@ fn new_interactive(ui: &Ui, store: &LoopStore) -> Result<()> {
         Verify::default()
     };
 
+    let when = picker::select(
+        ui,
+        "When to run the gate",
+        "Skip expensive checks on passes that didn't change matching files?",
+        &[
+            Choice::new("Every pass", "always run, whether or not files changed"),
+            Choice::new(
+                "Only when files change",
+                "skip the gate when the pass didn't modify matching files",
+            ),
+        ],
+        false,
+    )?;
+    let on_change = when
+        .as_ref()
+        .and_then(|w| w.first())
+        .map(|w| w.starts_with("Only"))
+        .unwrap_or(false);
+    let run_when = if on_change {
+        let globs_line = prompt_line(
+            &mut editor,
+            ui,
+            "File globs, comma-separated (optional — empty = any change, e.g. **/*.rs)",
+        )?;
+        let paths: Vec<String> = globs_line
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        RunWhen::OnChange { paths }
+    } else {
+        RunWhen::Always
+    };
+    let gate = Gate {
+        name: if verify.is_command() {
+            "verify".to_string()
+        } else {
+            "rubric".to_string()
+        },
+        run_when,
+        verify,
+    };
+
     let criteria_line = prompt_line(
         &mut editor,
         ui,
@@ -455,7 +514,8 @@ fn new_interactive(ui: &Ui, store: &LoopStore) -> Result<()> {
         description: String::new(),
         goal,
         success_criteria,
-        verify,
+        verify: None,
+        gates: vec![gate],
         max_iterations: harness_loop::DEFAULT_MAX_ITERATIONS,
         token_budget: None,
     };

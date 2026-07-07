@@ -240,7 +240,7 @@ pub(crate) fn oregon_trail() -> Theme {
                 HelpItem {
                     key: s("4."),
                     title: s("Trade your oxen"),
-                    hint: s("— /model [name]"),
+                    hint: s("— /model [name]  (any new id is saved to the catalog)"),
                 },
                 HelpItem {
                     key: s("5."),
@@ -279,6 +279,11 @@ pub(crate) fn oregon_trail() -> Theme {
                 },
                 HelpItem {
                     key: s("12."),
+                    title: s("Press on after a mishap"),
+                    hint: s("— /retry  (continue a turn that died mid-trail)"),
+                },
+                HelpItem {
+                    key: s("13."),
                     title: s("Make camp / End"),
                     hint: s("— /exit  (or Ctrl-D)"),
                 },

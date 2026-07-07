@@ -103,7 +103,14 @@ async fn run_queue(
         ui.brown("▶ rolling the wagon:"),
         ui.cream(&truncate(&first, 80)),
     );
-    crate::run_turn_and_drain(agent, &first, ui, queue, carryover).await
+    crate::run_turn_and_drain(
+        agent,
+        crate::TurnRequest::Prompt(first),
+        ui,
+        queue,
+        carryover,
+    )
+    .await
 }
 
 fn print_queue(queue: &MessageQueue, ui: &Ui) {

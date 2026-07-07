@@ -66,6 +66,7 @@ import type {
   CompactedEvent,
   CompressionEvent,
   CompressionMode,
+  RetryEvent,
 } from "./types";
 
 const MODE_KEY = "oxen-ui-mode";
@@ -246,6 +247,8 @@ interface AppState {
   ingestUsage: (e: UsageEvent) => void;
   /** Add a notice to a session's thread when its context was compacted. */
   ingestCompacted: (e: CompactedEvent) => void;
+  /** Add a notice when a model call hit a transient error and is retrying. */
+  ingestRetry: (e: RetryEvent) => void;
   /** Update a session's compression savings counters. Fires per model call —
    *  deliberately no thread notice (that would be far too chatty). */
   ingestCompression: (e: CompressionEvent) => void;
@@ -307,13 +310,15 @@ export const useStore = create<AppState>((set, get) => {
         set((s) => ({ threads: { ...s.threads, [id]: finalizeAssistant(s.threads[id] ?? [], final) } })),
       )
       .catch((e) => {
-        // Recoverable failures aren't dead ends: a 401 swaps the reply for an
-        // inline key-entry card, a 402 for an "add credits, then retry" card —
-        // both carry this turn so it continues in place once the user acts.
-        // Any other error shows normally.
+        // No failure is a dead end: a 401 swaps the reply for an inline
+        // key-entry card, and everything else (out of credits, a provider
+        // that stayed down through the agent's retries, no internet) gets a
+        // retry card carrying the error — so once the user acts (adds
+        // credits, switches models, gets back online) one click continues
+        // the turn in place.
         const message = String(e);
         const auth = isAuthError(message);
-        recovering = auth || isCreditsError(message);
+        recovering = true;
         set((s) => {
           const thread = s.threads[id] ?? [];
           return {
@@ -321,9 +326,7 @@ export const useStore = create<AppState>((set, get) => {
               ...s.threads,
               [id]: auth
                 ? appendApiKeyPrompt(thread, text, paths)
-                : recovering
-                  ? appendRetryPrompt(thread, text, paths, message)
-                  : finalizeAssistant(thread, `⚠ ${e}`, true),
+                : appendRetryPrompt(thread, text, paths, message),
             },
           };
         });
@@ -738,6 +741,21 @@ export const useStore = create<AppState>((set, get) => {
           threads: {
             ...s.threads,
             [e.session]: appendNotice(s.threads[e.session], `Compacted context — ${e.detail}`),
+          },
+        };
+      }),
+
+    ingestRetry: (e) =>
+      set((s) => {
+        if (s.threads[e.session] === undefined) return {};
+        const wait = Math.max(1, Math.ceil(e.delay_ms / 1000));
+        return {
+          threads: {
+            ...s.threads,
+            [e.session]: appendNotice(
+              s.threads[e.session],
+              `Model call failed (${e.error}) — retrying in ${wait}s (attempt ${e.attempt + 1} of ${e.max_attempts})`,
+            ),
           },
         };
       }),

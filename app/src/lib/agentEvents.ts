@@ -21,6 +21,7 @@ import {
   onUsage,
   onCompacted,
   onCompression,
+  onRetry,
 } from "./ipc";
 
 // Stored on `window` so the guard survives HMR module re-evaluation (a fresh
@@ -46,6 +47,7 @@ export function startAgentEventBridge(): void {
     onUsage((e) => s().ingestUsage(e)),
     onCompacted((e) => s().ingestCompacted(e)),
     onCompression((e) => s().ingestCompression(e)),
+    onRetry((e) => s().ingestRetry(e)),
     onCanvas((e) => s().ingestCanvas(e)),
     onCanvasWriting((session) => s().setCanvasWriting(session, true)),
     onQuestion((q) => s().setQuestion(q)),

@@ -2,14 +2,16 @@
 //! for when to give up.
 //!
 //! A [`LoopSpec`] is the durable, shareable description of a job. It is
-//! deliberately small — the heart of it is the [`Verify`] gate, because a loop
-//! without a real check is just an agent agreeing with itself on repeat.
+//! deliberately small — the heart of it is the list of [`Gate`]s, because a
+//! loop without a real check is just an agent agreeing with itself on repeat.
+//! Each gate carries a [`RunWhen`] condition, so expensive checks (the test
+//! suite) only run on passes that actually touched matching files.
 
 use serde::{Deserialize, Serialize};
 
 /// Current loop file schema version. Bump on incompatible changes; files
 /// written before versioning read back as this default.
-pub const LOOP_SCHEMA_VERSION: u32 = 1;
+pub const LOOP_SCHEMA_VERSION: u32 = 2;
 fn default_loop_schema_version() -> u32 {
     LOOP_SCHEMA_VERSION
 }
@@ -31,8 +33,8 @@ fn default_timeout_ms() -> u64 {
     DEFAULT_VERIFY_TIMEOUT_MS
 }
 
-/// How a loop decides whether a pass succeeded — the gate that turns repetition
-/// into progress.
+/// How a gate decides whether a pass succeeded — the check that turns
+/// repetition into progress.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Verify {
@@ -76,6 +78,134 @@ impl Verify {
     }
 }
 
+/// When a gate should run within a pass. In TOML: `run_when = "always"`,
+/// `run_when = "on_change"` (any file the pass touched), or
+/// `run_when = { on_change = ["**/*.rs"] }` (only matching files count).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RunWhenRepr", into = "RunWhenRepr")]
+pub enum RunWhen {
+    /// Run on every pass, whether or not anything changed.
+    #[default]
+    Always,
+    /// Run only on passes that changed workspace files. An empty glob list
+    /// means any change counts; otherwise at least one changed path must match.
+    /// When change detection is unavailable (not a git repo, git error), the
+    /// gate runs anyway — unknown fails safe toward checking.
+    OnChange { paths: Vec<String> },
+}
+
+impl RunWhen {
+    /// Decide whether the gate applies, given the paths this pass changed.
+    /// `None` means change detection was unavailable — run the gate.
+    pub fn should_run(&self, changed: Option<&[String]>) -> bool {
+        match self {
+            RunWhen::Always => true,
+            RunWhen::OnChange { paths } => {
+                let Some(changed) = changed else {
+                    return true;
+                };
+                if changed.is_empty() {
+                    return false;
+                }
+                if paths.is_empty() {
+                    return true;
+                }
+                let mut builder = globset::GlobSetBuilder::new();
+                let mut usable = false;
+                for pattern in paths {
+                    if let Ok(glob) = globset::Glob::new(pattern) {
+                        builder.add(glob);
+                        usable = true;
+                    }
+                }
+                // Unusable globs fail safe: run rather than silently skip.
+                if !usable {
+                    return true;
+                }
+                match builder.build() {
+                    Ok(set) => changed.iter().any(|p| set.is_match(p)),
+                    Err(_) => true,
+                }
+            }
+        }
+    }
+
+    /// A short human label for the condition ("every pass", "when **/*.rs change").
+    pub fn label(&self) -> String {
+        match self {
+            RunWhen::Always => "every pass".to_string(),
+            RunWhen::OnChange { paths } if paths.is_empty() => "when files change".to_string(),
+            RunWhen::OnChange { paths } => format!("when {} change", paths.join(", ")),
+        }
+    }
+}
+
+/// Serde surface for [`RunWhen`]: a bare word or a `{ on_change = [...] }` table.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum RunWhenRepr {
+    Word(String),
+    Globs { on_change: Vec<String> },
+}
+
+impl From<RunWhen> for RunWhenRepr {
+    fn from(value: RunWhen) -> Self {
+        match value {
+            RunWhen::Always => RunWhenRepr::Word("always".to_string()),
+            RunWhen::OnChange { paths } if paths.is_empty() => {
+                RunWhenRepr::Word("on_change".to_string())
+            }
+            RunWhen::OnChange { paths } => RunWhenRepr::Globs { on_change: paths },
+        }
+    }
+}
+
+impl TryFrom<RunWhenRepr> for RunWhen {
+    type Error = String;
+
+    fn try_from(value: RunWhenRepr) -> Result<Self, Self::Error> {
+        match value {
+            RunWhenRepr::Word(w) => match w.as_str() {
+                "always" => Ok(RunWhen::Always),
+                "on_change" => Ok(RunWhen::OnChange { paths: Vec::new() }),
+                other => Err(format!(
+                    "unknown run_when `{other}` (expected \"always\", \"on_change\", \
+                     or {{ on_change = [globs] }})"
+                )),
+            },
+            RunWhenRepr::Globs { on_change } => Ok(RunWhen::OnChange { paths: on_change }),
+        }
+    }
+}
+
+/// One named check in a loop's verify sequence, with a condition for when it
+/// applies. Gates run in order; the first failure stops the sequence.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gate {
+    /// Short identifier ("fmt", "tests") used in events, journals, and prompts.
+    pub name: String,
+    /// When this gate applies within a pass. Defaults to every pass.
+    #[serde(default)]
+    pub run_when: RunWhen,
+    /// The actual check.
+    pub verify: Verify,
+}
+
+impl Gate {
+    /// One-line human label: name, check, and condition (if conditional).
+    pub fn label(&self) -> String {
+        match self.run_when {
+            RunWhen::Always => format!("{} — {}", self.name, self.verify.label()),
+            _ => format!(
+                "{} — {} ({})",
+                self.name,
+                self.verify.label(),
+                self.run_when.label()
+            ),
+        }
+    }
+}
+
 /// A reusable, shareable loop definition.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopSpec {
@@ -92,9 +222,14 @@ pub struct LoopSpec {
     /// Concrete, strict criteria the work is checked against (no soft passes).
     #[serde(default)]
     pub success_criteria: Vec<String>,
-    /// The gate. Defaults to a rubric when omitted.
-    #[serde(default)]
-    pub verify: Verify,
+    /// Legacy single gate from schema v1 files. Prefer `gates`; when present it
+    /// resolves to one always-run gate named "verify".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<Verify>,
+    /// The gates run (in order) after each pass. Empty + no legacy `verify`
+    /// falls back to a single always-run rubric gate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<Gate>,
     /// Hard stop: give up and report after this many iterations.
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
@@ -112,10 +247,44 @@ impl LoopSpec {
             description: String::new(),
             goal: goal.into(),
             success_criteria: Vec::new(),
-            verify: Verify::default(),
+            verify: None,
+            gates: Vec::new(),
             max_iterations: DEFAULT_MAX_ITERATIONS,
             token_budget: None,
         }
+    }
+
+    /// The effective gate sequence: `gates` when set, a legacy `verify` as a
+    /// single always-run gate, or the default rubric gate as a last resort.
+    pub fn resolved_gates(&self) -> Vec<Gate> {
+        if !self.gates.is_empty() {
+            return self.gates.clone();
+        }
+        let verify = self.verify.clone().unwrap_or_default();
+        let name = if verify.is_command() {
+            "verify"
+        } else {
+            "rubric"
+        };
+        vec![Gate {
+            name: name.to_string(),
+            run_when: RunWhen::Always,
+            verify,
+        }]
+    }
+
+    /// A one-line summary of the gate sequence for headers and listings.
+    pub fn gate_summary(&self) -> String {
+        self.resolved_gates()
+            .iter()
+            .map(Gate::label)
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    /// True if any effective gate is a model-scored rubric (vs. all commands).
+    pub fn has_rubric_gate(&self) -> bool {
+        self.resolved_gates().iter().any(|g| !g.verify.is_command())
     }
 
     pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
@@ -149,30 +318,109 @@ mod tests {
         )
         .unwrap();
         assert_eq!(spec.max_iterations, DEFAULT_MAX_ITERATIONS);
-        assert!(matches!(spec.verify, Verify::Rubric { threshold: 8 }));
+        let gates = spec.resolved_gates();
+        assert_eq!(gates.len(), 1);
+        assert!(matches!(gates[0].verify, Verify::Rubric { threshold: 8 }));
+        assert_eq!(gates[0].run_when, RunWhen::Always);
         assert!(spec.success_criteria.is_empty());
         assert!(spec.token_budget.is_none());
     }
 
     #[test]
-    fn command_verify_round_trips_through_toml() {
+    fn legacy_single_verify_resolves_to_one_always_gate() {
+        let spec: LoopSpec = toml::from_str(
+            r#"
+            name = "Legacy"
+            goal = "old format still works"
+
+            [verify]
+            type = "command"
+            command = "cargo test"
+        "#,
+        )
+        .unwrap();
+        let gates = spec.resolved_gates();
+        assert_eq!(gates.len(), 1);
+        assert_eq!(gates[0].name, "verify");
+        assert_eq!(gates[0].run_when, RunWhen::Always);
+        assert!(gates[0].verify.is_command());
+    }
+
+    #[test]
+    fn gates_round_trip_through_toml() {
         let spec = LoopSpec {
             schema_version: LOOP_SCHEMA_VERSION,
             name: "Green tests".into(),
             description: "all tests pass".into(),
             goal: "make the test suite green".into(),
             success_criteria: vec!["cargo test passes".into()],
-            verify: Verify::Command {
-                command: "cargo test".into(),
-                timeout_ms: 600_000,
-            },
+            verify: None,
+            gates: vec![
+                Gate {
+                    name: "fmt".into(),
+                    run_when: RunWhen::OnChange { paths: Vec::new() },
+                    verify: Verify::Command {
+                        command: "cargo fmt --check".into(),
+                        timeout_ms: 120_000,
+                    },
+                },
+                Gate {
+                    name: "tests".into(),
+                    run_when: RunWhen::OnChange {
+                        paths: vec!["**/*.rs".into()],
+                    },
+                    verify: Verify::Command {
+                        command: "cargo test".into(),
+                        timeout_ms: 600_000,
+                    },
+                },
+            ],
             max_iterations: 10,
             token_budget: Some(500_000),
         };
         let toml = spec.to_toml().unwrap();
         let back = LoopSpec::from_toml_str(&toml).unwrap();
         assert_eq!(spec, back);
-        assert!(back.verify.is_command());
+    }
+
+    #[test]
+    fn run_when_parses_word_and_glob_forms() {
+        #[derive(Deserialize)]
+        struct Holder {
+            run_when: RunWhen,
+        }
+        let w: Holder = toml::from_str(r#"run_when = "always""#).unwrap();
+        assert_eq!(w.run_when, RunWhen::Always);
+        let w: Holder = toml::from_str(r#"run_when = "on_change""#).unwrap();
+        assert_eq!(w.run_when, RunWhen::OnChange { paths: Vec::new() });
+        let w: Holder = toml::from_str(r#"run_when = { on_change = ["**/*.rs"] }"#).unwrap();
+        assert_eq!(
+            w.run_when,
+            RunWhen::OnChange {
+                paths: vec!["**/*.rs".into()]
+            }
+        );
+        assert!(toml::from_str::<Holder>(r#"run_when = "sometimes""#).is_err());
+    }
+
+    #[test]
+    fn should_run_honors_changes_and_globs() {
+        let always = RunWhen::Always;
+        assert!(always.should_run(Some(&[])));
+
+        let any = RunWhen::OnChange { paths: Vec::new() };
+        assert!(!any.should_run(Some(&[])));
+        assert!(any.should_run(Some(&["README.md".into()])));
+        // Unknown changes fail safe toward running.
+        assert!(any.should_run(None));
+
+        let rust = RunWhen::OnChange {
+            paths: vec!["**/*.rs".into(), "**/Cargo.toml".into()],
+        };
+        assert!(!rust.should_run(Some(&["README.md".into()])));
+        assert!(rust.should_run(Some(&["src/main.rs".into()])));
+        assert!(rust.should_run(Some(&["Cargo.toml".into()])));
+        assert!(rust.should_run(None));
     }
 
     #[test]

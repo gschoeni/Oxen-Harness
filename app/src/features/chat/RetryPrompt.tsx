@@ -42,7 +42,7 @@ export function RetryPrompt({ item }: { item: RetryItem }) {
             {item.message}
             {credits
               ? " Add credits to your account, then pick up right where you left off."
-              : " Retry the last turn to pick up right where you left off."}
+              : " Nothing is lost — retry as-is, or switch models or check your connection first, then pick up right where you left off."}
           </div>
         </div>
       </div>

@@ -68,6 +68,12 @@ struct Args {
     #[arg(long, value_name = "SESSION_ID")]
     resume: Option<String>,
 
+    /// Continue your most recent session — transcript, workspace, and model
+    /// restored. Handy after a provider outage or lost internet: relaunch with
+    /// -c and /retry the turn that died.
+    #[arg(long = "continue", short = 'c', conflicts_with = "resume")]
+    continue_last: bool,
+
     /// Run a local model with llama.cpp instead of a remote endpoint, by
     /// catalog id (e.g. qwen3-8b). Downloads it if needed, then serves it
     /// locally for the session. See `oxen-harness models list`.
@@ -144,6 +150,20 @@ async fn main() -> Result<()> {
     }
 
     let store = Arc::new(open_store()?);
+
+    // `--continue` is `--resume` pointed at the newest session on record.
+    if args.continue_last {
+        match store.list_sessions()?.first() {
+            Some(latest) => args.resume = Some(latest.id.clone()),
+            None => {
+                eprintln!(
+                    "\n{}",
+                    ui.red("No previous expedition to continue — set out fresh.")
+                );
+                std::process::exit(1);
+            }
+        }
+    }
 
     // When resuming, the saved session supplies default workspace + model.
     let resume_meta = match &args.resume {
@@ -229,6 +249,15 @@ async fn main() -> Result<()> {
             ui.green("↺ Picking up the trail:"),
             ui.cream(&format!("{n} journal entries restored")),
         );
+        // A transcript that stops mid-turn (the reply never landed — provider
+        // error, no internet, a crash) can be continued in place.
+        if ends_mid_turn(agent.messages()) {
+            println!(
+                "  {} {}",
+                ui.red("⚠"),
+                ui.dim("this expedition stopped mid-turn — /retry picks up where it left off"),
+            );
+        }
         println!();
     }
 
@@ -645,21 +674,122 @@ async fn handle_line(
         }
         Command::Model(Some(m)) => {
             agent.set_model(&m);
+            // An id we've never seen (not in the cloud catalog, not an
+            // installed local model) is saved as a custom catalog entry so it
+            // shows up in the picker from now on — here and in the desktop.
+            let known_cloud = harness_runtime::models::catalog().iter().any(|c| c.id == m);
+            let known_local = harness_local::ModelStore::open()
+                .map(|s| s.installed().iter().any(|l| l.id == m))
+                .unwrap_or(false);
+            if !known_cloud && !known_local {
+                match harness_runtime::models::add(&m, "") {
+                    Ok(_) => println!(
+                        "  {} {}",
+                        ui.dim("new model saved to the catalog:"),
+                        ui.cream(&m)
+                    ),
+                    Err(e) => println!("  {} {e}", ui.dim("couldn't save to the catalog:")),
+                }
+            }
             // Persist the choice (clearing any local selection) so it's the
             // default next launch — here and in the desktop dropdown.
             let _ = harness_runtime::models::set_selected(&m);
             println!("  {} {}", ui.brown("fresh oxen yoked:"), ui.accent(&m));
         }
         Command::Export(dest) => export(ctx.store, ctx.session, dest, ui)?,
+        Command::Retry => {
+            // Only a transcript that stops mid-turn has anything to re-drive;
+            // retrying a settled conversation would confuse the model (and
+            // the user).
+            if !ends_mid_turn(agent.messages()) {
+                println!(
+                    "  {} {}",
+                    ui.dim("nothing to retry —"),
+                    ui.dim("the last turn finished (send a new message instead)"),
+                );
+                return Ok(false);
+            }
+            if run_turn_and_drain(agent, TurnRequest::Continue, ui, queue, carryover).await? {
+                print!("{}", theme::death_screen(ui, ctx.session));
+                return Ok(true);
+            }
+        }
         Command::Prompt(prompt) => {
             // Ctrl-C mid-stream ends the expedition just like quitting does.
-            if run_turn_and_drain(agent, &prompt, ui, queue, carryover).await? {
+            if run_turn_and_drain(agent, TurnRequest::Prompt(prompt), ui, queue, carryover).await? {
                 print!("{}", theme::death_screen(ui, ctx.session));
                 return Ok(true);
             }
         }
     }
     Ok(false)
+}
+
+/// What to drive through the agent for one turn: a fresh prompt (the normal
+/// case), or a continuation of the transcript's dangling last turn — `/retry`
+/// after a failure, with no user message re-appended.
+#[derive(Debug, Clone)]
+pub(crate) enum TurnRequest {
+    Prompt(String),
+    Continue,
+}
+
+/// Whether the transcript stops mid-turn — it ends on a user message (the
+/// reply never arrived: a provider error, no internet, a crash) or on a tool
+/// result the model never got to react to. Such a session can be continued in
+/// place with `/retry` (`Agent::continue_turn`).
+pub(crate) fn ends_mid_turn(messages: &[harness_llm::ChatMessage]) -> bool {
+    messages
+        .last()
+        .is_some_and(|m| m.role == "user" || m.role == "tool")
+}
+
+/// The one-line notice for a transient model-call failure being retried with
+/// backoff — shared by the classic renderer and the live composer.
+pub(crate) fn retry_notice(attempt: u32, max_attempts: u32, delay_ms: u64, error: &str) -> String {
+    let secs = (delay_ms as f64 / 1000.0).ceil() as u64;
+    format!(
+        "{error} — retrying in {secs}s (attempt {} of {max_attempts})",
+        attempt + 1
+    )
+}
+
+/// The failure report for a turn that died even after retries: what happened,
+/// then how to pick the conversation back up — now (`/retry`, `/model`) or
+/// later (`--continue` / `--resume`). Auth failures get the `/auth` hint
+/// instead of the generic recovery lines. Shared by the classic prompt and the
+/// live composer so both terminals explain the same way out.
+pub(crate) fn turn_failure_lines(
+    agent: &Agent,
+    ui: &Ui,
+    err: &harness_agent::AgentError,
+) -> Vec<String> {
+    let mut lines = vec![
+        format!("  {}", ui.red(&ui.death())),
+        format!("  {}", ui.dim(&format!("The trail guide says: {err}"))),
+    ];
+    if let Some(hint) = auth_cmd::auth_hint(ui, &err.to_string()) {
+        lines.push(hint);
+        return lines;
+    }
+    lines.push(format!(
+        "  {}",
+        ui.dim("Nothing is lost — every step is saved in the trail journal.")
+    ));
+    lines.push(format!(
+        "  {} {}",
+        ui.dim("·"),
+        ui.dim("/retry to try the turn again · /model <name> to switch oxen first"),
+    ));
+    lines.push(format!(
+        "  {} {}",
+        ui.dim("·"),
+        ui.dim(&format!(
+            "later: oxen-harness --continue (or --resume {}), then /retry",
+            agent.session_id()
+        )),
+    ));
+    lines
 }
 
 /// Print the skills discovered for this workspace (global + project, with the
@@ -712,13 +842,14 @@ fn live_enabled(ui: &Ui) -> bool {
     std::io::stdout().is_terminal() && ui.animates()
 }
 
-/// Run `prompt`, then auto-drain any stacked messages in order. On a live TTY
-/// this hands off to the sticky composer (which lets the user keep stacking
-/// while turns run); otherwise it runs the classic prompt and drains after.
+/// Run one turn (a prompt or a `/retry` continuation), then auto-drain any
+/// stacked messages in order. On a live TTY this hands off to the sticky
+/// composer (which lets the user keep stacking while turns run); otherwise it
+/// runs the classic prompt and drains after.
 /// Returns `Ok(true)` when the session should end.
 async fn run_turn_and_drain(
     agent: &mut Agent,
-    prompt: &str,
+    request: TurnRequest,
     ui: &Ui,
     queue: &mut MessageQueue,
     carryover: &mut String,
@@ -726,11 +857,11 @@ async fn run_turn_and_drain(
     if live_enabled(ui) {
         // The live composer hands back any half-typed next message so the idle
         // prompt can keep it instead of wiping it when the turn ends.
-        let (exit, draft) = live::run_prompt(agent, prompt, ui, queue).await?;
+        let (exit, draft) = live::run_prompt(agent, request, ui, queue).await?;
         *carryover = draft;
         return Ok(exit);
     }
-    if run_prompt(agent, prompt, ui).await? {
+    if run_prompt(agent, &request, ui).await? {
         return Ok(true);
     }
     while !queue.is_empty() {
@@ -740,7 +871,7 @@ async fn run_turn_and_drain(
             ui.brown("▶ rolling the wagon:"),
             ui.cream(&truncate(&next, 80)),
         );
-        if run_prompt(agent, &next, ui).await? {
+        if run_prompt(agent, &TurnRequest::Prompt(next), ui).await? {
             return Ok(true);
         }
     }
@@ -749,31 +880,46 @@ async fn run_turn_and_drain(
 
 /// Run one turn, racing it against Ctrl-C. Returns `Ok(true)` if the user
 /// interrupted the stream (the caller should then end the session).
-async fn run_prompt(agent: &mut Agent, prompt: &str, ui: &Ui) -> Result<bool> {
-    let (text, attachments, warnings) = attach::extract_attachments(prompt);
-    for w in &warnings {
-        println!("  {} {}", ui.red("⚠"), ui.dim(w));
-    }
-    if !attachments.is_empty() {
-        let names: Vec<&str> = attachments.iter().map(|a| a.filename.as_str()).collect();
-        println!(
-            "  {} {}",
-            ui.green("📎 attached:"),
-            ui.cream(&names.join(", "))
-        );
-    }
+async fn run_prompt(agent: &mut Agent, request: &TurnRequest, ui: &Ui) -> Result<bool> {
+    let (text, attachments) = match request {
+        TurnRequest::Prompt(prompt) => {
+            let (text, attachments, warnings) = attach::extract_attachments(prompt);
+            for w in &warnings {
+                println!("  {} {}", ui.red("⚠"), ui.dim(w));
+            }
+            if !attachments.is_empty() {
+                let names: Vec<&str> = attachments.iter().map(|a| a.filename.as_str()).collect();
+                println!(
+                    "  {} {}",
+                    ui.green("📎 attached:"),
+                    ui.cream(&names.join(", "))
+                );
+            }
+            (text, attachments)
+        }
+        // A retry re-drives the transcript as-is; there is no new message.
+        TurnRequest::Continue => (String::new(), Vec::new()),
+    };
 
     let renderer = Rc::new(RefCell::new(TurnRenderer::new(ui.clone())));
     renderer.borrow_mut().begin_thinking();
 
     let cb = renderer.clone();
+    let mut on_event = move |event: &harness_agent::AgentEvent| cb.borrow_mut().on_event(event);
+    let is_continue = matches!(request, TurnRequest::Continue);
     let result = tokio::select! {
         // Cancel the in-flight turn on Ctrl-C and signal an exit.
         _ = tokio::signal::ctrl_c() => {
             renderer.borrow_mut().finish();
             return Ok(true);
         }
-        result = agent.run_turn_with_attachments(text, attachments, move |event| cb.borrow_mut().on_event(event)) => result,
+        result = async {
+            if is_continue {
+                agent.continue_turn(&mut on_event).await
+            } else {
+                agent.run_turn_with_attachments(text, attachments, &mut on_event).await
+            }
+        } => result,
     };
     renderer.borrow_mut().finish();
     let needs_brave_key = renderer.borrow().needs_brave_key();
@@ -788,10 +934,9 @@ async fn run_prompt(agent: &mut Agent, prompt: &str, ui: &Ui) -> Result<bool> {
             Ok(false)
         }
         Err(e) => {
-            println!("\n{}", ui.red(&ui.death()));
-            println!("  {}", ui.dim(&format!("The trail guide says: {e}")));
-            if let Some(hint) = auth_cmd::auth_hint(ui, &e.to_string()) {
-                println!("{hint}");
+            println!();
+            for line in turn_failure_lines(agent, ui, &e) {
+                println!("{line}");
             }
             Ok(false)
         }
@@ -905,9 +1050,11 @@ fn switch_compression(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> Resul
 }
 
 /// The compression-savings trailer, pinned directly above the context meter:
-/// mode plus what compression saved (`on`) or would have saved (`audit`) so
-/// far this session. `None` with compression off, so the row disappears
-/// entirely rather than showing a dead `off` line.
+/// the current mode leads (accented), then what compression saved (`on`) or
+/// would have saved (`audit`) so far this session, then the `/compression`
+/// hint so switching is discoverable from the meter itself. `None` with
+/// compression off, so the row disappears entirely rather than showing a dead
+/// `off` line.
 pub(crate) fn compression_status_line(agent: &Agent, ui: &Ui) -> Option<String> {
     let mode = agent.compression_mode();
     if mode == harness_compress::CompressionMode::Off {
@@ -919,11 +1066,12 @@ pub(crate) fn compression_status_line(agent: &Agent, ui: &Ui) -> Option<String> 
         "saved"
     };
     Some(format!(
-        "  {} {}",
+        "  {} {} {} {}",
         ui.brown("⊙"),
+        ui.dim("compression:"),
+        ui.accent(mode.as_str()),
         ui.dim(&format!(
-            "compression ({}) {verb} ~{} tokens this session",
-            mode.as_str(),
+            "· {verb} ~{} tokens this session · /compression to switch",
             human_tokens(agent.tokens_saved()),
         )),
     ))
@@ -977,12 +1125,40 @@ fn prompt_history_path() -> Option<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::human_tokens;
+    use super::{ends_mid_turn, human_tokens, retry_notice};
+    use harness_llm::ChatMessage;
 
     #[test]
     fn human_tokens_scales_units() {
         assert_eq!(human_tokens(980), "980");
         assert_eq!(human_tokens(12_300), "12.3k");
         assert_eq!(human_tokens(1_200_000), "1.2M");
+    }
+
+    #[test]
+    fn ends_mid_turn_flags_dangling_user_and_tool_messages() {
+        // Ends on a user message: the reply never arrived → retryable.
+        let dangling_user = vec![ChatMessage::system("s"), ChatMessage::user("hi")];
+        assert!(ends_mid_turn(&dangling_user));
+
+        // Ends on a tool result the model never reacted to → retryable.
+        let dangling_tool = vec![
+            ChatMessage::user("hi"),
+            ChatMessage::tool_result("t1", "output".to_string()),
+        ];
+        assert!(ends_mid_turn(&dangling_tool));
+
+        // A settled conversation (assistant spoke last) has nothing to retry.
+        let settled = vec![ChatMessage::user("hi"), ChatMessage::assistant("hello")];
+        assert!(!ends_mid_turn(&settled));
+        assert!(!ends_mid_turn(&[]));
+    }
+
+    #[test]
+    fn retry_notice_reports_the_upcoming_attempt_and_wait() {
+        let notice = retry_notice(1, 4, 2000, "Oxen API error (502): provider error");
+        assert!(notice.contains("Oxen API error (502)"));
+        assert!(notice.contains("retrying in 2s"));
+        assert!(notice.contains("attempt 2 of 4"));
     }
 }
