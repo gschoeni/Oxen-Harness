@@ -3,8 +3,22 @@
 // ways: an 8-bit trail screen, a broadsheet masthead, or a clean app splash.
 
 import { useStore } from "../../lib/store";
+import { DEFAULT_HERO_GAME, HeroGame } from "./heroGames";
 import { getScene } from "./scenes";
 import { StatusPanel } from "./StatusPanel";
+
+const DEFAULT_GAME_PALETTE = {
+  title: "#f0be8c",
+  primary: "#60b060",
+  secondary: "#aa6e3c",
+  text: "#ece2ce",
+  muted: "#968d7d",
+  danger: "#c94c4c",
+  link: "#f0be8c",
+  background: "#0f1115",
+  surface: "#17191f",
+  border: "#2a2d35",
+};
 
 interface HeroProps {
   examples: string[];
@@ -26,6 +40,8 @@ function Chips({ examples, busy, onPick }: HeroProps) {
 
 export function Hero(props: HeroProps) {
   const theme = useStore((s) => s.theme);
+  const heroGame = useStore((s) => s.heroGame);
+  const setHeroGame = useStore((s) => s.setHeroGame);
   // The hero's "Total tokens used" shows the all-time grand total across every
   // session, so a fresh chat opens with your running tally rather than 0.
   const tokensUsed = useStore((s) => s.totalTokensUsed);
@@ -35,7 +51,8 @@ export function Hero(props: HeroProps) {
   const wordmark = v?.wordmark || "OXEN TRAIL";
   const preTagline = v?.pre_tagline ?? "～ The ～";
   const subtitle = v?.subtitle || "an open source agentic coding harness · powered by Oxen.ai";
-  const hint = v?.bottom_hint || "Press RETURN to size up the situation";
+  const bottomHint = v?.bottom_hint || "Press RETURN to size up the situation";
+  const hint = bottomHint === "Send a message to begin on your trail" ? "" : bottomHint;
   const icon = v?.prompt_icon || "🐂";
   // Themes carry a static "Total tokens used" flavor row; swap in the live count
   // for the current session so the dashboard reflects real consumption.
@@ -62,7 +79,7 @@ export function Hero(props: HeroProps) {
             <StatusPanel rows={statusRows} />
           </div>
         )}
-        <p className="hero-hint">{hint}</p>
+        {hint && <p className="hero-hint">{hint}</p>}
         <Chips {...props} />
       </div>
     );
@@ -76,24 +93,44 @@ export function Hero(props: HeroProps) {
         <p className="hero-sub">{subtitle}</p>
         {statusRows.length > 0 && <StatusPanel rows={statusRows} />}
         <Chips {...props} />
-        <p className="hero-hint hero-hint-min">{hint}</p>
+        {hint && <p className="hero-hint hero-hint-min">{hint}</p>}
       </div>
     );
   }
 
-  // "pixel" — a framed retro "screen" (the trail wagon, the synth grid, …).
-  const Scene = getScene(theme?.style?.scene);
-  const palette = theme?.palette;
+  // "pixel" — a framed retro "screen". Themes can still opt into the older
+  // static scene renderer with `scene = "trail" | "grid"`; otherwise the empty
+  // state is an interactive game, registered in heroGames.tsx.
+  const palette = theme?.palette || DEFAULT_GAME_PALETTE;
+  // The player's explicit choice wins; otherwise fall back to the theme's default
+  // game (a theme can opt out of games entirely with `game = "none"`).
+  const themeGame = typeof theme?.style?.game === "string" ? theme.style.game : undefined;
+  const gameName = heroGame ?? themeGame;
+  const useStaticScene = gameName === "none";
+  const Scene = useStaticScene ? getScene(theme?.style?.scene) : null;
   return (
     <div className="hero">
       {preTagline && <p className="hero-pretag">{preTagline}</p>}
       <h1 className="hero-wordmark">{wordmark}</h1>
-      <div className="hero-screen">
-        {Scene && palette && <Scene p={palette} />}
-        <div className="hero-prompt">
-          {hint}
-          <span className="pixel-caret" aria-hidden="true" />
-        </div>
+      <div className="hero-screen hero-game-screen">
+        {useStaticScene && Scene ? (
+          <>
+            <Scene p={palette} />
+            {hint && (
+              <div className="hero-prompt">
+                {hint}
+                <span className="pixel-caret" aria-hidden="true" />
+              </div>
+            )}
+          </>
+        ) : (
+          <HeroGame
+            gameName={gameName ?? DEFAULT_HERO_GAME}
+            palette={palette}
+            hint={hint}
+            onSelectGame={setHeroGame}
+          />
+        )}
       </div>
       <StatusPanel rows={statusRows} />
       <p className="hero-sub">{subtitle}</p>

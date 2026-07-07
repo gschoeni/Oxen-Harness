@@ -93,12 +93,12 @@ export function Sidebar() {
       {activePath ? (
         <>
           <div className="current-project" title={activePath}>
-            <FolderOpen size={17} />
+            <FolderOpen size={18} />
             <span className="current-project-name">{projectName}</span>
           </div>
 
           <button className="new-chat" onClick={() => startNewSession()}>
-            <Plus size={17} />
+            <Plus size={18} />
             New chat
           </button>
 
@@ -133,7 +133,7 @@ export function Sidebar() {
 
       <div className="sidebar-foot">
         <button className="foot-btn" onClick={() => setSettingsOpen(true)}>
-          <SettingsIcon size={17} />
+          <SettingsIcon size={18} />
           Settings
         </button>
       </div>
@@ -210,7 +210,7 @@ function ChatRow({
           onDelete();
         }}
       >
-        <Trash2 size={14} />
+        <Trash2 size={15} />
       </button>
     </div>
   );

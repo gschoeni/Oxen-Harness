@@ -31,6 +31,12 @@ pub enum Command {
     Departing(Option<String>),
     /// List the skills discovered for this workspace (global + project).
     Skills,
+    /// Set the Oxen API key: `/auth` opens a masked entry box; `/auth <key>`
+    /// sets it directly.
+    Auth(Option<String>),
+    /// Show or switch context compression: `/compression` opens a picker;
+    /// `/compression off|audit|on` switches directly.
+    Compression(Option<String>),
     /// A prompt to send to the agent.
     Prompt(String),
 }
@@ -65,6 +71,8 @@ pub fn parse_command(line: &str) -> Command {
         "/loop" | "/loops" => Command::Loop(rest),
         "/departing" => Command::Departing(rest),
         "/skills" | "/skill" => Command::Skills,
+        "/auth" | "/login" => Command::Auth(rest),
+        "/compression" | "/compress" => Command::Compression(rest),
         // Unknown slash command: treat the whole line as a prompt so users can
         // still send text that happens to start with a slash.
         _ => Command::Prompt(trimmed.to_string()),
@@ -169,6 +177,25 @@ mod tests {
     fn skills_aliases() {
         assert_eq!(parse_command("/skills"), Command::Skills);
         assert_eq!(parse_command("/skill"), Command::Skills);
+    }
+
+    #[test]
+    fn auth_with_and_without_inline_key() {
+        assert_eq!(parse_command("/auth"), Command::Auth(None));
+        assert_eq!(parse_command("/login"), Command::Auth(None));
+        assert_eq!(
+            parse_command("/auth sk-abc123"),
+            Command::Auth(Some("sk-abc123".into()))
+        );
+    }
+
+    #[test]
+    fn compression_with_and_without_mode() {
+        assert_eq!(parse_command("/compression"), Command::Compression(None));
+        assert_eq!(
+            parse_command("/compress audit"),
+            Command::Compression(Some("audit".into()))
+        );
     }
 
     #[test]

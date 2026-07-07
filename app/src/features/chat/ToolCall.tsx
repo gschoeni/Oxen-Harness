@@ -84,7 +84,7 @@ export function ToolCall({ item, now }: { item: ToolItem; now: number }) {
           ) : (
             <span className={`toolcall-dot ${failed ? "err" : ""}`} aria-hidden />
           )}
-          {hasBody && <ChevronRight className={`toolcall-chevron ${open ? "open" : ""}`} size={15} />}
+          {hasBody && <ChevronRight className={`chevron ${open ? "open" : ""}`} size={15} />}
         </span>
       </button>
 
@@ -149,12 +149,17 @@ function CanvasToolCall({ item, now, a }: { item: ToolItem; now: number; a: Reco
 /** A plan update in the thread: a non-collapsing card showing the checklist
  *  snapshot for that call, with a "done/total" count in the header. */
 function PlanToolCard({ item, a }: { item: ToolItem; a: Record<string, unknown> }) {
+  // Rows only animate while this chat's run is live — a card in a finished
+  // (or errored/cancelled) chat is a historical snapshot and must not spin.
+  const running = useStore((s) =>
+    s.session ? s.runStatus[s.session.session_id] === "running" : false,
+  );
   const items = planItemsFromArgs(a);
   if (!items) return null;
   const { done, total } = planProgress(items);
   return (
     <div className={`toolcall plan-card ${item.running ? "running" : "done"}`}>
-      <div className="toolcall-head" style={{ cursor: "default" }}>
+      <div className="toolcall-head static">
         <span className="toolcall-icon">
           <ListChecks size={15} />
         </span>
@@ -167,7 +172,7 @@ function PlanToolCard({ item, a }: { item: ToolItem; a: Record<string, unknown> 
           </span>
         </span>
       </div>
-      <PlanChecklist items={items} />
+      <PlanChecklist items={items} live={running} />
     </div>
   );
 }
@@ -198,7 +203,7 @@ function WebSearchKeyPrompt() {
   if (saved) {
     return (
       <div className="ws-key saved">
-        <Check size={16} />
+        <Check size={15} />
         <span>Key saved — ask me to search again and it’ll work.</span>
       </div>
     );
@@ -207,7 +212,7 @@ function WebSearchKeyPrompt() {
   return (
     <div className="ws-key">
       <div className="ws-key-head">
-        <KeyRound size={16} />
+        <KeyRound size={15} />
         <span>Web search needs a Brave Search API key</span>
       </div>
       <p className="ws-key-sub">

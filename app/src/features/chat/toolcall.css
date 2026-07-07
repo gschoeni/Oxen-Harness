@@ -30,7 +30,8 @@
 .toolcall-head:not(:disabled):hover {
   background: var(--surface-2);
 }
-.toolcall-head:disabled {
+.toolcall-head:disabled,
+.toolcall-head.static {
   cursor: default;
 }
 
@@ -41,7 +42,7 @@
   height: 26px;
   flex-shrink: 0;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+  background: var(--accent-tint-strong);
   color: var(--accent);
 }
 
@@ -83,7 +84,7 @@
   width: 7px;
   height: 7px;
   border-radius: var(--radius-pill);
-  background: var(--green, var(--accent));
+  background: var(--green);
 }
 .toolcall-dot.err {
   background: var(--danger);
@@ -94,19 +95,9 @@
   border-radius: var(--radius-pill);
   border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-top-color: var(--accent);
-  animation: toolcall-spin 0.7s linear infinite;
+  animation: spin var(--dur-spin) linear infinite;
 }
-@keyframes toolcall-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-.toolcall-chevron {
-  transition: transform var(--dur-fast) var(--ease);
-}
-.toolcall-chevron.open {
-  transform: rotate(90deg);
-}
+/* Disclosure chevron: the shared .chevron (ui.css). */
 
 /* --- body --- */
 .toolcall-body {
@@ -151,12 +142,12 @@
   user-select: none;
 }
 .diff-line.del {
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  background: var(--danger-soft);
   color: color-mix(in srgb, var(--danger) 80%, var(--text));
 }
 .diff-line.add {
-  background: color-mix(in srgb, var(--green, var(--accent)) 16%, transparent);
-  color: color-mix(in srgb, var(--green, var(--accent)) 80%, var(--text));
+  background: var(--green-soft);
+  color: color-mix(in srgb, var(--green) 80%, var(--text));
 }
 
 /* Terminal */
@@ -206,7 +197,7 @@
 }
 .toolcall-result-url {
   font-size: var(--text-xs);
-  color: var(--green, var(--text-tertiary));
+  color: var(--green);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -244,7 +235,7 @@
 .ws-key-sub code {
   font-family: var(--font-mono);
   font-size: 0.92em;
-  background: var(--surface-2);
+  background: var(--code-bg);
   padding: 1px 5px;
   border-radius: var(--radius-sm);
 }
@@ -271,7 +262,7 @@
 .ws-key-row .field-input:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 55%, var(--separator-strong));
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--focus-ring);
 }
 .ws-key-error {
   font-size: var(--text-xs);
@@ -283,7 +274,7 @@
   align-items: center;
   gap: var(--space-2);
   font-size: var(--text-sm);
-  color: var(--green, var(--accent));
+  color: var(--green);
 }
 .ws-key.saved svg {
   flex-shrink: 0;

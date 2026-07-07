@@ -74,7 +74,7 @@
 }
 .log-search,
 .log-select {
-  height: 34px;
+  height: var(--control-h-lg);
   border: 1px solid var(--separator);
   border-radius: var(--radius-sm);
   background: var(--bg);
@@ -96,7 +96,7 @@
 .log-select:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 50%, var(--separator-strong));
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--focus-ring);
 }
 .log-search input {
   flex: 1;
@@ -134,30 +134,7 @@
   gap: var(--space-3);
   flex-wrap: wrap;
 }
-.log-filters {
-  display: flex;
-  gap: 2px;
-  background: var(--surface-2);
-  padding: 3px;
-  border-radius: var(--radius-sm);
-}
-.log-filter {
-  padding: var(--space-1) var(--space-3);
-  border: none;
-  background: transparent;
-  border-radius: calc(var(--radius-sm) - 2px);
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
-  font-weight: 500;
-}
-.log-filter:hover {
-  color: var(--text);
-}
-.log-filter.active {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-}
+/* The status filter is the shared .segmented control (ui.css). */
 .log-bulk {
   display: flex;
   align-items: center;
@@ -258,26 +235,26 @@
 .log-trace-meta {
   font-size: var(--text-xs);
   color: var(--text-tertiary);
-  font-family: var(--font-readout, monospace);
+  font-family: var(--font-readout);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .log-pill {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--text-3xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-weight: 700;
   padding: 2px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
 }
 .log-pill-kept {
-  background: color-mix(in srgb, var(--green) 16%, transparent);
+  background: var(--green-soft);
   color: var(--green);
 }
 .log-pill-rejected {
-  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 .log-trace-actions {
@@ -306,10 +283,10 @@
 .log-decide.keep:hover,
 .log-decide.keep.active {
   color: var(--green);
-  background: color-mix(in srgb, var(--green) 14%, transparent);
+  background: var(--green-soft);
 }
 .log-decide.reject:hover,
 .log-decide.reject.active {
   color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  background: var(--danger-soft);
 }

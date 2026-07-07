@@ -31,6 +31,8 @@ import type {
   ToolDeltaEvent,
   UsageEvent,
   CompactedEvent,
+  CompressionEvent,
+  CompressionMode,
   ChatMessage,
   ToolDefinition,
   ToolInfo,
@@ -78,6 +80,17 @@ export const setToolEnabled = (name: string, enabled: boolean) =>
 /** Override (or clear, with null) the description the model sees for a tool. */
 export const setToolDescription = (name: string, description: string | null) =>
   invoke<void>("set_tool_description", { name, description });
+
+// ---- context compression (shrink stale tool output on the wire) -------------
+
+/** The persisted context-compression mode ("off" | "audit" | "on"). */
+export const getCompressionMode = () => invoke<CompressionMode>("get_compression_mode");
+/** Set the context-compression mode: persisted for new chats and applied to
+ *  the live conversation in place. Returns the refreshed session info. */
+export const setCompressionMode = (mode: CompressionMode) =>
+  invoke<SessionInfo>("set_compression_mode", { mode });
+/** All-time tokens compression saved (or, in audit mode, would have saved). */
+export const totalTokensSaved = () => invoke<number>("total_tokens_saved");
 
 // ---- logs / fine-tuning export ---------------------------------------------
 
@@ -183,6 +196,11 @@ export const onUsage = (handler: (e: UsageEvent) => void) =>
 /** Fires when the transcript was compacted mid-turn to fit the context window. */
 export const onCompacted = (handler: (e: CompactedEvent) => void) =>
   listen<CompactedEvent>("agent://compacted", (e) => handler(e.payload));
+
+/** Fires when compression shrank (or, in audit mode, measured) a model call's
+ *  request — per model call, carrying the session's running savings. */
+export const onCompression = (handler: (e: CompressionEvent) => void) =>
+  listen<CompressionEvent>("agent://compression", (e) => handler(e.payload));
 
 export const onQuestion = (handler: (q: QuestionPayload) => void) =>
   listen<QuestionPayload>("agent://question", (e) => handler(e.payload));

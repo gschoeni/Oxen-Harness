@@ -204,8 +204,40 @@ struct CatalogModel {
 #[derive(Clone, Serialize)]
 struct LocalStatusPayload {
     model: String,
-    /// `"starting"` (runtime/GPU init), `"loading"` (reading weights), `"ready"`.
+    /// `"starting"` (runtime/GPU init), `"loading"` (reading weights),
+    /// `"ready"`, or `"error"` (the load ended without a server).
     phase: &'static str,
+}
+
+/// Report a local-model load phase to the UI (`local://status`).
+fn emit_local_status(app: &AppHandle, model: &str, phase: &'static str) {
+    let _ = app.emit(
+        "local://status",
+        LocalStatusPayload {
+            model: model.to_string(),
+            phase,
+        },
+    );
+}
+
+/// The `start_with_context` progress callback that streams load phases to the
+/// UI — shared by the explicit model switch (`use_local_model`) and the lazy
+/// restore of a persisted local selection on first use after launch
+/// (`ensure_local_server`), so both render the same loading state.
+fn local_status_emitter(app: &AppHandle, model: &str) -> impl FnMut(harness_local::LoadPhase) {
+    let app = app.clone();
+    let model = model.to_string();
+    move |phase| {
+        emit_local_status(
+            &app,
+            &model,
+            match phase {
+                harness_local::LoadPhase::Starting => "starting",
+                harness_local::LoadPhase::LoadingModel => "loading",
+                harness_local::LoadPhase::Ready => "ready",
+            },
+        )
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -254,6 +286,9 @@ struct SessionInfo {
     context_tokens: usize,
     /// The model's effective context window, for a "% of context" readout.
     context_window: usize,
+    /// The context-compression mode this session's agent was built with
+    /// ("off"/"audit"/"on") — drives the TokenMeter's armed indicator.
+    compression_mode: String,
 }
 
 /// An `agent://usage` payload: the session's cumulative token count plus current
@@ -275,6 +310,19 @@ struct CompactedPayload {
     detail: String,
 }
 
+/// `agent://compression` payload — stale tool output was compressed before a
+/// model call (`mode: "on"`), or its would-be savings were measured without
+/// changing the request (`mode: "audit"`). Emitted per model call within a
+/// turn, so the UI updates counters rather than appending thread notices.
+#[derive(Clone, Serialize)]
+struct CompressionPayload {
+    session: String,
+    mode: String,
+    saved_tokens: usize,
+    total_saved_tokens: usize,
+    results_compressed: usize,
+}
+
 /// A resumed session: its info plus the verbatim transcript for the UI to
 /// re-render (user/assistant bubbles and tool activity). When `running` is true
 /// the chat is mid-turn and couldn't be read; `messages` is empty and the UI
@@ -288,19 +336,24 @@ struct SessionView {
 
 /// The client, model label, and context window for a new agent: the selected
 /// local model + server if one is active, otherwise the configured cloud client.
-async fn client_for(state: &AppState) -> Result<(OxenClient, String, Option<usize>), String> {
+async fn client_for(
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<(OxenClient, String, Option<usize>), String> {
     // If a local model is selected (including one restored from a previous run),
     // make sure its server is running and use it.
     let local_id = state.local_model.lock().await.clone();
     if let Some(id) = local_id {
-        match ensure_local_server(state, &id).await {
+        match ensure_local_server(app, state, &id).await {
             Ok((base_url, ctx)) => {
                 return Ok((OxenClient::new(base_url, "local", &id), id, Some(ctx)));
             }
             // The runtime or weights aren't available right now — fall back to the
             // cloud model for this session rather than failing to open a chat. The
-            // persisted choice is kept, so it retries on the next launch.
+            // persisted choice is kept, so it retries on the next launch. Tell the
+            // UI the load ended (it may have shown loading phases already).
             Err(_) => {
+                emit_local_status(app, &id, "error");
                 *state.local_model.lock().await = None;
                 *state.local_server.lock().await = None;
             }
@@ -313,8 +366,14 @@ async fn client_for(state: &AppState) -> Result<(OxenClient, String, Option<usiz
 /// Ensure a `llama-server` is running for local model `id`, returning its base
 /// URL and context size. Reuses the running server if there is one; otherwise
 /// validates the runtime + weights and starts it (sized to this machine). This
-/// lets a restored local selection start lazily on first use.
-async fn ensure_local_server(state: &AppState, id: &str) -> Result<(String, usize), String> {
+/// lets a restored local selection start lazily on first use — streaming the
+/// same `local://status` load phases an explicit switch shows, so the composer
+/// isn't silent while the model comes online after a restart.
+async fn ensure_local_server(
+    app: &AppHandle,
+    state: &AppState,
+    id: &str,
+) -> Result<(String, usize), String> {
     let mut guard = state.local_server.lock().await;
     if let Some(s) = guard.as_ref() {
         return Ok((s.base_url().to_string(), s.context_size() as usize));
@@ -330,9 +389,14 @@ async fn ensure_local_server(state: &AppState, id: &str) -> Result<(String, usiz
     let weight_bytes = store.installed_size(id).unwrap_or(0);
     let native = store.native_context(id);
     let context = fit::plan_context(profile.usable_budget, weight_bytes, native);
-    let server = LocalServer::start_with_context(&store.path_for(id), id, context, |_| {})
-        .await
-        .map_err(|e| e.to_string())?;
+    let server = LocalServer::start_with_context(
+        &store.path_for(id),
+        id,
+        context,
+        local_status_emitter(app, id),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let result = (
         server.base_url().to_string(),
         server.context_size() as usize,
@@ -408,6 +472,7 @@ fn finish_tools(
         )),
         context_window,
         attachment_root: Some(workspace_root.to_path_buf()),
+        compression: harness_runtime::compression::mode(),
         ..AgentConfig::default()
     }
 }
@@ -639,7 +704,7 @@ async fn build_fresh_agent(
     state: &AppState,
     root: &Path,
 ) -> Result<Agent, String> {
-    let (client, label, ctx) = client_for(state).await?;
+    let (client, label, ctx) = client_for(app, state).await?;
     new_agent(app, state.pending.clone(), client, &label, ctx, root)
 }
 
@@ -651,7 +716,7 @@ async fn build_resumed_agent(
     session_id: String,
     root: &Path,
 ) -> Result<Agent, String> {
-    let (client, label, ctx) = client_for(state).await?;
+    let (client, label, ctx) = client_for(app, state).await?;
     resume_agent(
         app,
         state.pending.clone(),
@@ -711,6 +776,7 @@ fn info_for(agent: &Agent) -> SessionInfo {
         tokens_used: agent.tokens_used(),
         context_tokens: agent.context_tokens(),
         context_window: agent.context_window(),
+        compression_mode: agent.compression_mode().as_str().to_string(),
     }
 }
 
@@ -841,13 +907,16 @@ async fn execute_turn(
         .lock()
         .await
         .insert(session.clone(), cancel.clone());
-    // Track the session's cumulative count before/after the turn so we can roll
-    // just this turn's throughput into the all-time total.
+    // Track the session's cumulative counts before/after the turn so we can roll
+    // just this turn's throughput (and compression savings) into the all-time
+    // totals.
     let turn_delta;
+    let saved_delta;
     let result = {
         let mut agent = arc.lock().await;
         agent.set_cancel_token(cancel.clone());
         let before = agent.tokens_used();
+        let saved_before = agent.tokens_saved();
         let on_event = move |event: &AgentEvent| match event {
             AgentEvent::Token(t) => {
                 let _ = app.emit(
@@ -931,6 +1000,25 @@ async fn execute_turn(
                     },
                 );
             }
+            // Compression shrank (or, in audit mode, measured) this model
+            // call's request; surface the savings so the UI can track them.
+            AgentEvent::Compression {
+                mode,
+                saved_tokens,
+                total_saved_tokens,
+                results_compressed,
+            } => {
+                let _ = app.emit(
+                    "agent://compression",
+                    CompressionPayload {
+                        session: sid.clone(),
+                        mode: mode.clone(),
+                        saved_tokens: *saved_tokens,
+                        total_saved_tokens: *total_saved_tokens,
+                        results_compressed: *results_compressed,
+                    },
+                );
+            }
         };
         let r = match kind {
             TurnKind::Fresh {
@@ -944,6 +1032,7 @@ async fn execute_turn(
             TurnKind::Retry => agent.continue_turn(on_event).await,
         };
         turn_delta = agent.tokens_used().saturating_sub(before);
+        saved_delta = agent.tokens_saved().saturating_sub(saved_before);
         r
     };
     // The turn is over (finished, stopped, or errored): drop its stop signal so a
@@ -952,6 +1041,8 @@ async fn execute_turn(
     // Roll this turn's throughput into the all-time running total (a cheap
     // persisted counter); the hero refreshes that grand total after the turn.
     let _ = bump_total_tokens(turn_delta);
+    // Same for what compression saved (or would have saved, in audit mode).
+    let _ = bump_total_tokens_saved(saved_delta);
     // The turn is persisted message-by-message, so once it's done the agent is
     // just a cache. Release idle background agents (keeping the current chat and
     // any still-running turns) so memory tracks concurrency, not chat count.
@@ -1215,6 +1306,30 @@ async fn set_tool_description(name: String, description: Option<String>) -> Resu
     Ok(())
 }
 
+/// The persisted context-compression mode: `"off"`, `"audit"`, or `"on"`.
+#[tauri::command]
+async fn get_compression_mode() -> String {
+    harness_runtime::compression::mode().as_str().to_string()
+}
+
+/// Set the context-compression mode: persist it for new chats AND apply it to
+/// the live conversation in place (mirroring `set_model`), so a meter toggle
+/// takes effect on the very next model call. Returns the refreshed session
+/// info carrying the now-current mode.
+#[tauri::command]
+async fn set_compression_mode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mode: String,
+) -> Result<SessionInfo, String> {
+    let mode = harness_compress::CompressionMode::from_str_or_off(&mode);
+    harness_runtime::compression::set_mode(mode).map_err(|e| e.to_string())?;
+    let arc = current_agent(&app, &state).await?;
+    let mut agent = arc.lock().await;
+    agent.set_compression_mode(mode);
+    Ok(info_for(&agent))
+}
+
 /// Export the given sessions as chat-completions fine-tuning JSONL (Oxen.ai
 /// format: one `{"messages":[…]}` conversation per line) to `path`. Returns the
 /// number of conversations written. `include_tools` keeps tool calls + results.
@@ -1296,6 +1411,38 @@ fn bump_total_tokens(delta: usize) -> usize {
         .unwrap_or(0)
 }
 
+/// The `app_meta` key holding the all-time tokens saved by context compression.
+const TOTAL_TOKENS_SAVED_KEY: &str = "total_tokens_saved";
+
+/// The all-time tokens compression saved (mode `on`) or would have saved
+/// (mode `audit`) across every session — the Compression settings page's stat.
+/// No backfill: savings only exist from the moment the feature ships, so the
+/// counter simply starts at 0.
+#[tauri::command]
+async fn total_tokens_saved() -> Result<usize, String> {
+    let store = open_history_store()?;
+    Ok(store
+        .meta_get_i64(TOTAL_TOKENS_SAVED_KEY)
+        .map_err(|e| e.to_string())?
+        .unwrap_or(0)
+        .max(0) as usize)
+}
+
+/// Add a turn's compression savings to the all-time counter and return the new
+/// grand total. Best-effort: never fails a turn.
+fn bump_total_tokens_saved(delta: usize) -> usize {
+    if delta == 0 {
+        return 0; // the common case (compression off) — skip the DB round-trip
+    }
+    let Ok(store) = open_history_store() else {
+        return 0;
+    };
+    store
+        .meta_add_i64(TOTAL_TOKENS_SAVED_KEY, delta as i64)
+        .map(|v| v.max(0) as usize)
+        .unwrap_or(0)
+}
+
 /// Start a fresh chat session as its own agent. Any in-flight chats keep running
 /// in the background — this never disturbs them. Returns the new session's info.
 #[tauri::command]
@@ -1368,6 +1515,9 @@ async fn resume_session(
                 tokens_used: 0,
                 context_tokens: 0,
                 context_window: 0,
+                // Mid-turn placeholder: the live agent is locked, so report the
+                // saved preference (what any rebuilt agent would get).
+                compression_mode: harness_runtime::compression::mode().as_str().to_string(),
             },
             messages: vec![],
             running: true,
@@ -1698,24 +1848,14 @@ async fn use_local_model(
 
     // Stream load phases to the UI so the switch shows what it's doing (runtime
     // init vs. loading the weights) instead of an opaque "Switching…".
-    let status_app = app.clone();
-    let status_model = id.clone();
-    let server =
-        LocalServer::start_with_context(&store.path_for(&id), &id, context, move |phase| {
-            let _ = status_app.emit(
-                "local://status",
-                LocalStatusPayload {
-                    model: status_model.clone(),
-                    phase: match phase {
-                        harness_local::LoadPhase::Starting => "starting",
-                        harness_local::LoadPhase::LoadingModel => "loading",
-                        harness_local::LoadPhase::Ready => "ready",
-                    },
-                },
-            );
-        })
-        .await
-        .map_err(|e| e.to_string())?;
+    let server = LocalServer::start_with_context(
+        &store.path_for(&id),
+        &id,
+        context,
+        local_status_emitter(&app, &id),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let context_window = Some(server.context_size() as usize);
     let root = active_root(&state).await;
     let agent = new_agent(
@@ -1884,8 +2024,13 @@ fn theme_store() -> Result<harness_theme::Store, String> {
 /// A one-shot, agent-free model completion using the active model + endpoint.
 /// Used for side tasks (theme generation) so they never block — or wait on — a
 /// chat's agent, which may be mid-turn.
-async fn complete_oneshot(state: &AppState, system: &str, user: &str) -> Result<String, String> {
-    let (client, model, _) = client_for(state).await?;
+async fn complete_oneshot(
+    app: &AppHandle,
+    state: &AppState,
+    system: &str,
+    user: &str,
+) -> Result<String, String> {
+    let (client, model, _) = client_for(app, state).await?;
     let request = ChatRequest::new(
         &model,
         vec![
@@ -1948,10 +2093,12 @@ async fn remove_theme(name: String) -> Result<(), String> {
 /// and activate it. Reuses the session's model + endpoint.
 #[tauri::command]
 async fn new_theme(
+    app: AppHandle,
     state: State<'_, AppState>,
     brief: String,
 ) -> Result<harness_theme::Theme, String> {
     let raw = complete_oneshot(
+        &app,
         &state,
         &harness_theme::Theme::generation_system_prompt(),
         &brief,
@@ -2026,6 +2173,9 @@ pub fn run() {
             remove_custom_tool,
             set_tool_enabled,
             set_tool_description,
+            get_compression_mode,
+            set_compression_mode,
+            total_tokens_saved,
             list_skills,
             save_skill,
             delete_skill,

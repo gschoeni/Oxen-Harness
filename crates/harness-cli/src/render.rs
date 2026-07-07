@@ -186,6 +186,29 @@ impl TurnRenderer {
                 );
                 self.begin_thinking();
             }
+            // Stale tool output was compressed (or measured, in audit mode)
+            // before the model call; a quiet note keeps the savings visible.
+            AgentEvent::Compression {
+                mode,
+                saved_tokens,
+                total_saved_tokens,
+                ..
+            } => {
+                self.stop_spinner();
+                let verb = if mode == "audit" {
+                    "would save"
+                } else {
+                    "saved"
+                };
+                println!(
+                    "  {} {}",
+                    self.ui.brown("⊙"),
+                    self.ui.dim(&format!(
+                        "compression {verb} ~{saved_tokens} tokens this call ({total_saved_tokens} total)"
+                    )),
+                );
+                self.begin_thinking();
+            }
             // Streaming tool-argument fragments drive the desktop UI; the CLI
             // shows the assembled call when it starts, so ignore the deltas.
             AgentEvent::ToolDelta { .. } => {}

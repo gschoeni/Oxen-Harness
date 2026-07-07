@@ -42,12 +42,12 @@
 .prose code {
   font-family: var(--font-mono);
   font-size: 0.9em;
-  background: var(--surface-2);
+  background: var(--code-bg);
   padding: 1px 5px;
   border-radius: var(--radius-xs);
 }
 .prose pre {
-  background: var(--surface-2);
+  background: var(--code-bg);
   border: 1px solid var(--separator);
   border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-4);

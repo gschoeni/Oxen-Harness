@@ -191,7 +191,7 @@ export function InstructionsEditor({
                   accept(name);
                 }}
               >
-                <Wrench size={12} />
+                <Wrench size={13} />
                 {name}
               </button>
             </li>
@@ -215,7 +215,7 @@ export function InstructionsEditor({
             <span className="skill-refs-label">References</span>
             {refs.known.map((name) => (
               <span key={name} className="skill-ref-chip">
-                <Wrench size={11} />
+                <Wrench size={13} />
                 {name}
               </span>
             ))}
@@ -225,7 +225,7 @@ export function InstructionsEditor({
                 className="skill-ref-chip unknown"
                 title={`\`${name}\` doesn't match any tool — a typo, or a tool that isn't registered.`}
               >
-                <AlertTriangle size={11} />
+                <AlertTriangle size={13} />
                 {name}
               </span>
             ))}
@@ -249,7 +249,7 @@ export function InstructionsEditor({
                 title={t.enabled ? undefined : "Currently disabled in Settings → Tools"}
               >
                 <span className="tool-palette-name">
-                  <Wrench size={12} />
+                  <Wrench size={13} />
                   {t.name}
                   {!t.enabled && <span className="tool-palette-off">off</span>}
                 </span>

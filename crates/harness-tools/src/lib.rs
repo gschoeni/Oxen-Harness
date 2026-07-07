@@ -25,6 +25,7 @@ pub mod canvas;
 pub mod fs;
 pub mod git;
 pub mod plan;
+pub mod retrieve;
 pub mod sandbox;
 pub mod shell;
 pub mod skill;
@@ -34,7 +35,8 @@ pub use ask::{AskUserTool, Choice, Question, QuestionAnswer, QuestionAsker, ASK_
 pub use canvas::{CanvasDoc, CanvasSink, CanvasTool, CANVAS_FORMATS, CANVAS_TOOL};
 pub use fs::{EDIT_FILE_TOOL, FIND_FILES_TOOL, READ_FILE_TOOL, SEARCH_FILES_TOOL, WRITE_FILE_TOOL};
 pub use git::GIT_TOOL;
-pub use plan::{PlanItem, PlanStatus, PlanTool, PLAN_TOOL};
+pub use plan::{parse_plan_arguments, plan_is_open, PlanItem, PlanStatus, PlanTool, PLAN_TOOL};
+pub use retrieve::{RetrieveOriginalTool, RETRIEVE_ORIGINAL_TOOL};
 pub use sandbox::Workspace;
 pub use shell::RUN_SHELL_TOOL;
 pub use skill::{Skill, SkillScope, SkillTool, SKILL_TOOL};

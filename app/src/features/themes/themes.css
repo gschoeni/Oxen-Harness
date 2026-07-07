@@ -20,7 +20,7 @@
 }
 .theme-marker {
   grid-row: 1 / span 2;
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--text-tertiary);
 }
 .theme-row.active .theme-marker {
@@ -99,7 +99,8 @@
 .theme-selects select:focus,
 .theme-panel-body textarea:focus {
   outline: none;
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--separator-strong));
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
 }
 .theme-panel-body textarea {
   resize: vertical;

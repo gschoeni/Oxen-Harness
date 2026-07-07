@@ -253,8 +253,9 @@ fn render(ui: &Ui, q: &Question, cursor_row: usize, checked: &[bool]) -> Vec<Str
 }
 
 /// The accent-colored top (labelled with the header) and bottom rules that frame
-/// the question card, sized to the terminal width.
-fn card_rules(ui: &Ui, header: &str, width: usize) -> (String, String) {
+/// the question card, sized to the terminal width. Shared with other card-style
+/// prompts (e.g. the `/auth` masked key entry).
+pub(crate) fn card_rules(ui: &Ui, header: &str, width: usize) -> (String, String) {
     let label = if header.trim().is_empty() {
         "Question".to_string()
     } else {
@@ -312,7 +313,7 @@ fn print_chosen(ui: &Ui, out: &mut io::Stdout, selected: &[String]) -> io::Resul
     out.flush()
 }
 
-fn draw_block(out: &mut io::Stdout, lines: &[String], prev: usize) -> io::Result<usize> {
+pub(crate) fn draw_block(out: &mut io::Stdout, lines: &[String], prev: usize) -> io::Result<usize> {
     if prev > 0 {
         queue!(
             out,
@@ -327,7 +328,7 @@ fn draw_block(out: &mut io::Stdout, lines: &[String], prev: usize) -> io::Result
     Ok(lines.len())
 }
 
-fn clear_block(out: &mut io::Stdout, prev: usize) -> io::Result<()> {
+pub(crate) fn clear_block(out: &mut io::Stdout, prev: usize) -> io::Result<()> {
     if prev > 0 {
         queue!(
             out,

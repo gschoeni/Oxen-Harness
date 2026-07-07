@@ -1,5 +1,6 @@
-import { useEffect, useReducer, useRef, useState } from "react";
-import { Check, ChevronDown, Cloud, Cpu, Download, Loader, Plus } from "lucide-react";
+import { useEffect, useReducer, useState } from "react";
+import { ChevronDown, Cloud, Cpu, Download, Loader, Plus } from "lucide-react";
+import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../components/ui/Menu";
 import { installedLocalModels } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import type { ModelRef } from "../../lib/types";
@@ -18,10 +19,9 @@ export function ModelPicker({ disabled }: { disabled: boolean }) {
   // Live phase while a local model's server is starting (null when idle).
   const localSwitch = useStore((s) => s.localSwitch);
 
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, ref } = useMenuState();
   const [busy, setBusy] = useState(false);
   const [localModels, setLocalModels] = useState<ModelRef[]>([]);
-  const ref = useRef<HTMLDivElement>(null);
 
   // Tick once a second so the local-switch elapsed counter advances in place.
   const [, tick] = useReducer((n: number) => n + 1, 0);
@@ -64,23 +64,6 @@ export function ModelPicker({ disabled }: { disabled: boolean }) {
       .catch(() => setLocalModels([]));
   }, [open, loadCloudModels]);
 
-  // Close on an outside click or Escape.
-  useEffect(() => {
-    if (!open) return;
-    function onDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
   async function pickCloud(id: string) {
     setOpen(false);
     if (id === model) return;
@@ -104,10 +87,10 @@ export function ModelPicker({ disabled }: { disabled: boolean }) {
   }
 
   return (
-    <div className="model-picker" ref={ref}>
+    <div className="picker" ref={ref}>
       <button
         type="button"
-        className="model-picker-btn"
+        className="picker-btn"
         onClick={() => setOpen((o) => !o)}
         disabled={disabled || switching}
         title={
@@ -121,12 +104,12 @@ export function ModelPicker({ disabled }: { disabled: boolean }) {
         aria-expanded={open}
       >
         {switching ? (
-          <Loader size={13} className="model-switch-spin" />
+          <Loader size={13} className="picker-spin" />
         ) : (
           <Cloud size={13} />
         )}
-        <span className="model-picker-label">{statusLabel}</span>
-        {!switching && <ChevronDown size={13} className="model-picker-caret" />}
+        <span className="picker-label">{statusLabel}</span>
+        {!switching && <ChevronDown size={13} className="picker-caret" />}
       </button>
 
       {localSwitch && (
@@ -141,67 +124,53 @@ export function ModelPicker({ disabled }: { disabled: boolean }) {
       )}
 
       {open && (
-        <div className="model-menu" role="listbox">
-          <div className="model-menu-head">Cloud models</div>
+        <Menu className="picker-menu">
+          <MenuHead>Cloud models</MenuHead>
           {cloudModels.map((m) => (
-            <button
+            <MenuItem
               key={m.id}
-              type="button"
-              className={`model-menu-item ${m.id === model ? "active" : ""}`}
-              onClick={() => pickCloud(m.id)}
-              role="option"
-              aria-selected={m.id === model}
-            >
-              <Check size={14} className="model-menu-check" />
-              <span className="model-menu-name">{m.name}</span>
-              <span className="model-menu-id">{m.id}</span>
-            </button>
+              active={m.id === model}
+              name={m.name}
+              hint={m.id}
+              onSelect={() => pickCloud(m.id)}
+            />
           ))}
 
           {localModels.length > 0 && (
             <>
-              <div className="model-menu-head">Local models</div>
+              <MenuHead>Local models</MenuHead>
               {localModels.map((m) => (
-                <button
+                <MenuItem
                   key={m.id}
-                  type="button"
-                  className={`model-menu-item ${m.id === model ? "active" : ""}`}
-                  onClick={() => pickLocal(m.id)}
-                  role="option"
-                  aria-selected={m.id === model}
-                >
-                  <Check size={14} className="model-menu-check" />
-                  <Cpu size={13} className="model-menu-local-icon" />
-                  <span className="model-menu-name">{m.display}</span>
-                </button>
+                  active={m.id === model}
+                  icon={<Cpu size={13} className="menu-icon" />}
+                  name={m.display}
+                  onSelect={() => pickLocal(m.id)}
+                />
               ))}
             </>
           )}
 
-          <div className="model-menu-sep" />
-          <button
-            type="button"
-            className="model-menu-item model-menu-manage"
-            onClick={() => {
+          <MenuSep />
+          <MenuItem
+            manage
+            checkSlot={<Download size={15} className="menu-check" />}
+            name="Set up a local model…"
+            onSelect={() => {
               setOpen(false);
               openSettings("local-models");
             }}
-          >
-            <Download size={14} className="model-menu-check" />
-            <span className="model-menu-name">Set up a local model…</span>
-          </button>
-          <button
-            type="button"
-            className="model-menu-item model-menu-manage"
-            onClick={() => {
+          />
+          <MenuItem
+            manage
+            checkSlot={<Plus size={15} className="menu-check" />}
+            name="Add a cloud model…"
+            onSelect={() => {
               setOpen(false);
               openSettings("cloud-models");
             }}
-          >
-            <Plus size={14} className="model-menu-check" />
-            <span className="model-menu-name">Add a cloud model…</span>
-          </button>
-        </div>
+          />
+        </Menu>
       )}
     </div>
   );

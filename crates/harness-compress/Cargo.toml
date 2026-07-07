@@ -1,0 +1,17 @@
+[package]
+name = "harness-compress"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Reversible context compression for tool output (JSON crushing, log collapsing, compress-cache-retrieve)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+
+[lints]
+workspace = true

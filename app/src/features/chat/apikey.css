@@ -1,6 +1,7 @@
-/* Inline API-key recovery card, shown in the thread where a reply would be when
-   a turn fails authentication. Accent-tinted so it reads as an actionable prompt
-   rather than an error. */
+/* Inline recovery cards, shown in the thread where a reply would be when a turn
+   fails recoverably: the API-key card (401) and the retry/continue card (402 or
+   a chat resumed mid-turn) share this visual language. Accent-tinted so they
+   read as actionable prompts rather than errors. */
 .apikey-card {
   align-self: flex-start;
   width: 100%;
@@ -8,7 +9,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  background: var(--accent-tint);
   border: var(--frame-border-w) solid color-mix(in srgb, var(--accent) 40%, var(--separator-strong));
   border-radius: var(--frame-radius);
   padding: var(--space-4);
@@ -79,6 +80,7 @@
 }
 .apikey-input-wrap:focus-within {
   border-color: var(--accent);
+  box-shadow: var(--focus-ring);
 }
 .apikey-input {
   flex: 1;
@@ -138,5 +140,23 @@
   text-decoration: underline;
 }
 .apikey-link:hover {
+  color: var(--accent-hover);
+}
+
+/* ---- retry/continue card --------------------------------------------------- */
+
+.retry-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+/* "Add credits" opens the hub's billing page in the browser; styled as the
+   secondary path next to the primary retry button. */
+.retry-add-credits {
+  font-size: var(--text-sm);
+  color: var(--accent);
+  text-decoration: underline;
+}
+.retry-add-credits:hover {
   color: var(--accent-hover);
 }

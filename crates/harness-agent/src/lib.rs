@@ -15,9 +15,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use harness_compress::{CcrStore, CompressConfig, CompressionMode};
 use harness_core::DEFAULT_MODEL;
 use harness_llm::stream::{AssembledMessage, StreamEvent};
-use harness_llm::types::{ChatMessage, ContentPart};
+use harness_llm::types::{ChatMessage, ContentPart, MessageContent};
 use harness_llm::{
     hydrate_content, Attachment, AttachmentStore, ChatRequest, LlmError, OxenClient, ToolCall,
 };
@@ -84,6 +85,15 @@ pub enum AgentEvent {
     /// was pruned and/or summarized so the session can continue instead of
     /// hitting a hard limit. Carries a short human-readable note for the UI.
     Compacted { detail: String },
+    /// Stale tool output was compressed before this model call (`mode: "on"`),
+    /// or measured without changing the request (`mode: "audit"`). Token
+    /// figures use the same calibrated estimate as the usage meter.
+    Compression {
+        mode: String,
+        saved_tokens: usize,
+        total_saved_tokens: usize,
+        results_compressed: usize,
+    },
 }
 
 /// Configuration for an [`Agent`].
@@ -101,6 +111,11 @@ pub struct AgentConfig {
     /// transcript records a relative path, not inline base64). `None` keeps the
     /// legacy behavior of inlining attachments as data URIs.
     pub attachment_root: Option<PathBuf>,
+    /// Context compression for outbound requests (see [`harness_compress`]):
+    /// `Off` sends the transcript as-is, `Audit` measures would-be savings
+    /// without changing anything, `On` compresses stale tool output and
+    /// registers the `retrieve_original` tool so nothing is unrecoverable.
+    pub compression: CompressionMode,
 }
 
 impl Default for AgentConfig {
@@ -113,6 +128,7 @@ impl Default for AgentConfig {
             context_window: None,
             response_reserve: 4096,
             attachment_root: None,
+            compression: CompressionMode::Off,
         }
     }
 }
@@ -141,6 +157,14 @@ pub struct Agent {
     /// check (and compaction trigger) track reality rather than the crude
     /// 4-chars-per-token heuristic. Not persisted — re-learned each session.
     token_ratio: f64,
+    /// Where compressed-away tool output lives while compression is `On`
+    /// (shared with the `retrieve_original` tool). `None` in `Off`/`Audit`.
+    ccr: Option<Arc<CcrStore>>,
+    /// Compressor tunables (defaults; not yet user-configurable).
+    compress_cfg: CompressConfig,
+    /// Cumulative estimated tokens saved (`On`) or would-be saved (`Audit`)
+    /// by compression this run.
+    tokens_saved: usize,
 }
 
 impl Agent {
@@ -148,7 +172,7 @@ impl Agent {
     /// and persists it to the session.
     pub fn new(
         client: OxenClient,
-        tools: ToolRegistry,
+        mut tools: ToolRegistry,
         store: Arc<HistoryStore>,
         session_id: String,
         config: AgentConfig,
@@ -160,6 +184,7 @@ impl Agent {
             messages.push(system);
         }
         let attachments = config.attachment_root.clone().map(AttachmentStore::new);
+        let ccr = setup_compression(&config, &mut tools);
         Ok(Self {
             client,
             tools,
@@ -171,6 +196,9 @@ impl Agent {
             tokens_used: 0,
             cancel: CancellationToken::new(),
             token_ratio: 1.0,
+            ccr,
+            compress_cfg: CompressConfig::default(),
+            tokens_saved: 0,
         })
     }
 
@@ -182,7 +210,7 @@ impl Agent {
     /// store and is appended to from where it left off.
     pub fn resume_from_store(
         client: OxenClient,
-        tools: ToolRegistry,
+        mut tools: ToolRegistry,
         store: Arc<HistoryStore>,
         session_id: String,
         config: AgentConfig,
@@ -193,6 +221,7 @@ impl Agent {
             messages.push(serde_json::from_value::<ChatMessage>(value)?);
         }
         let attachments = config.attachment_root.clone().map(AttachmentStore::new);
+        let ccr = setup_compression(&config, &mut tools);
         // Seed the cumulative count from the loaded transcript so a resumed
         // session's dashboard reflects prior usage instead of starting at 0.
         let tokens_used = budget::estimate_prompt_tokens(&messages, &tools.definitions());
@@ -207,6 +236,9 @@ impl Agent {
             tokens_used,
             cancel: CancellationToken::new(),
             token_ratio: 1.0,
+            ccr,
+            compress_cfg: CompressConfig::default(),
+            tokens_saved: 0,
         })
     }
 
@@ -228,6 +260,7 @@ impl Agent {
         self.session_id = session_id;
         self.messages = messages;
         self.tokens_used = 0;
+        self.tokens_saved = 0;
         Ok(())
     }
 
@@ -312,6 +345,41 @@ impl Agent {
     /// Cumulative estimated tokens sent + generated this run.
     pub fn tokens_used(&self) -> usize {
         self.tokens_used
+    }
+
+    /// Cumulative estimated tokens compression saved (`on`) or would have
+    /// saved (`audit`) this run. Always 0 with compression off.
+    pub fn tokens_saved(&self) -> usize {
+        self.tokens_saved
+    }
+
+    /// The compression mode this agent was built with (a UI showing "armed"
+    /// state needs the agent's actual mode, not the current global preference —
+    /// they differ for agents built before the preference changed).
+    pub fn compression_mode(&self) -> CompressionMode {
+        self.config.compression
+    }
+
+    /// Switch compression for subsequent model calls on this live conversation
+    /// (e.g. from a meter toggle), registering or removing the
+    /// `retrieve_original` tool to match. Turning `On` off is always safe: the
+    /// transcript keeps every original, compression only ever shapes what's
+    /// sent. Markers from a previous `On` period stop being resolvable (their
+    /// store is dropped), which the retrieve tool reports gracefully.
+    pub fn set_compression_mode(&mut self, mode: CompressionMode) {
+        if mode == self.config.compression {
+            return;
+        }
+        self.config.compression = mode;
+        match mode {
+            CompressionMode::On => {
+                self.ccr = setup_compression(&self.config, &mut self.tools);
+            }
+            CompressionMode::Audit | CompressionMode::Off => {
+                self.tools.remove(harness_tools::RETRIEVE_ORIGINAL_TOOL);
+                self.ccr = None;
+            }
+        }
     }
 
     /// The tool definitions (JSON schemas) advertised to the model on every
@@ -413,6 +481,15 @@ impl Agent {
         let mut nudge: Option<ChatMessage> = None;
         let mut nudged = false;
 
+        // A second one-shot corrective, for the "one subtask failed, so the whole
+        // checklist silently stalls" failure: if the model updates its plan this
+        // turn and then ends the turn with items still unfinished (typically after
+        // a tool error), nudge it once to keep working or reconcile the plan.
+        // Tracks only plans updated *this* turn — an older incomplete plan must not
+        // hijack an unrelated follow-up question. Never persisted.
+        let mut plan_nudged = false;
+        let mut plan_open_this_turn = false;
+
         // The stop signal for this turn (a clone, so cancelling it from the host
         // doesn't require the agent lock the turn is holding).
         let cancel = self.cancel.clone();
@@ -441,8 +518,24 @@ impl Agent {
                 context_tokens: prompt_tokens,
             });
 
+            // Compress stale tool output in the outbound copy (or, in audit
+            // mode, just measure what compression would save). The in-memory
+            // transcript and the store keep the originals either way.
+            let (outbound, report) = self.prepare_outbound();
+            if report.saved_chars > 0 {
+                let saved_tokens =
+                    self.calibrated(budget::estimate_tokens_for_chars(report.saved_chars));
+                self.tokens_saved += saved_tokens;
+                on_event(&AgentEvent::Compression {
+                    mode: self.config.compression.as_str().to_string(),
+                    saved_tokens,
+                    total_saved_tokens: self.tokens_saved,
+                    results_compressed: report.results_compressed,
+                });
+            }
+
             let assembled = self
-                .stream_reply(&tool_defs, nudge.as_ref(), &cancel, &mut on_event)
+                .stream_reply(outbound, &tool_defs, nudge.as_ref(), &cancel, &mut on_event)
                 .await?;
 
             // A stop mid-stream returns whatever assembled so far. Persist only
@@ -479,6 +572,14 @@ impl Agent {
                     nudge = Some(ChatMessage::user(prompt::INTENT_NUDGE.to_string()));
                     continue;
                 }
+                // Ending the turn while this turn's own plan has unfinished items
+                // is almost always a stall (a failed step made the model give up);
+                // give it one chance to continue or tidy the checklist.
+                if !plan_nudged && plan_open_this_turn {
+                    plan_nudged = true;
+                    nudge = Some(ChatMessage::user(prompt::PLAN_STALL_NUDGE.to_string()));
+                    continue;
+                }
                 return Ok(assembled.content);
             }
 
@@ -487,6 +588,15 @@ impl Agent {
 
             for call in &assembled.tool_calls {
                 let result = self.run_tool(call, &mut on_event).await;
+                // Track the latest plan state from successful `update_plan` calls
+                // (invalid arguments were rejected, so they changed nothing).
+                if call.function.name == harness_tools::PLAN_TOOL {
+                    if let Some(items) =
+                        harness_tools::parse_plan_arguments(&call.function.arguments)
+                    {
+                        plan_open_this_turn = harness_tools::plan_is_open(&items);
+                    }
+                }
                 self.push(ChatMessage::tool_result(call.id.clone(), result))?;
             }
         }
@@ -525,11 +635,12 @@ impl Agent {
         Ok(raw)
     }
 
-    /// Send the current transcript (plus the optional one-shot nudge) to the
-    /// model and stream the reply, translating provider stream events into
-    /// [`AgentEvent`]s as they arrive.
+    /// Send the prepared outbound transcript (plus the optional one-shot
+    /// nudge) to the model and stream the reply, translating provider stream
+    /// events into [`AgentEvent`]s as they arrive.
     async fn stream_reply<F>(
         &self,
+        mut outbound: Vec<ChatMessage>,
         tool_defs: &[serde_json::Value],
         nudge: Option<&ChatMessage>,
         cancel: &CancellationToken,
@@ -538,7 +649,6 @@ impl Agent {
     where
         F: FnMut(&AgentEvent),
     {
-        let mut outbound = self.outbound_messages();
         outbound.extend(nudge.cloned());
         let request = ChatRequest::new(&self.config.model, outbound)
             .with_tools(tool_defs.to_vec())
@@ -679,6 +789,90 @@ impl Agent {
             }
         }
         messages
+    }
+
+    /// Build the transcript to send, applying context compression per the
+    /// configured mode (see [`harness_compress`]).
+    ///
+    /// Only stale `tool` messages are candidates — never the most recent few
+    /// (the model is still working with them), never `retrieve_original`
+    /// results (re-compressing them would loop), and the compressor itself
+    /// protects errors, small output, and anything already compressed. In
+    /// `Audit` mode the report is computed but the original messages are
+    /// returned; in `Off` this is exactly [`Self::outbound_messages`].
+    fn prepare_outbound(&self) -> (Vec<ChatMessage>, CompressionReport) {
+        let mut messages = self.outbound_messages();
+        let mut report = CompressionReport::default();
+        if self.config.compression == CompressionMode::Off {
+            return (messages, report);
+        }
+
+        // Results of `retrieve_original` calls are exempt: they exist because
+        // the model asked for the full data back.
+        let retrieve_ids: std::collections::HashSet<String> = messages
+            .iter()
+            .flat_map(|m| m.tool_calls.iter().flatten())
+            .filter(|c| c.function.name == harness_tools::RETRIEVE_ORIGINAL_TOOL)
+            .map(|c| c.id.clone())
+            .collect();
+
+        let tool_indices: Vec<usize> = messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.role == "tool")
+            .map(|(i, _)| i)
+            .collect();
+        let protect_from = tool_indices
+            .len()
+            .saturating_sub(self.compress_cfg.keep_recent_tools);
+
+        let apply = self.config.compression == CompressionMode::On;
+        // Audit passes no store: the identical pipeline runs, nothing is kept.
+        let store = if apply { self.ccr.as_deref() } else { None };
+
+        for &i in &tool_indices[..protect_from] {
+            if messages[i]
+                .tool_call_id
+                .as_ref()
+                .is_some_and(|id| retrieve_ids.contains(id))
+            {
+                continue;
+            }
+            let Some(MessageContent::Text(text)) = &messages[i].content else {
+                continue;
+            };
+            if let Some(compressed) =
+                harness_compress::compress_tool_result(text, &self.compress_cfg, store)
+            {
+                report.saved_chars += compressed.chars_before - compressed.chars_after;
+                report.results_compressed += 1;
+                if apply {
+                    messages[i].content = Some(MessageContent::Text(compressed.text));
+                }
+            }
+        }
+        (messages, report)
+    }
+}
+
+/// What one [`Agent::prepare_outbound`] pass did (or, in audit, would do).
+#[derive(Debug, Default)]
+struct CompressionReport {
+    saved_chars: usize,
+    results_compressed: usize,
+}
+
+/// Set up compression for a new agent: `On` gets a CCR store and the
+/// `retrieve_original` tool registered; `Audit`/`Off` need neither (audit
+/// sends unmodified requests, so there are no markers to resolve).
+fn setup_compression(config: &AgentConfig, tools: &mut ToolRegistry) -> Option<Arc<CcrStore>> {
+    match config.compression {
+        CompressionMode::On => {
+            let store = Arc::new(CcrStore::default());
+            tools.register_typed(harness_tools::RetrieveOriginalTool::new(store.clone()));
+            Some(store)
+        }
+        CompressionMode::Audit | CompressionMode::Off => None,
     }
 }
 
@@ -936,6 +1130,339 @@ mod tests {
             "the retry must not append a second copy of the user prompt"
         );
         assert_eq!(agent.messages().last().unwrap().role, "assistant");
+    }
+
+    /// SSE for a reply that calls `update_plan` with a single item in `status`,
+    /// alongside a bit of prose.
+    fn sse_plan_update(status: &str) -> String {
+        let plan_args = serde_json::json!({
+            "plan": [{ "content": "Research", "active_form": "Researching", "status": status }]
+        })
+        .to_string();
+        let chunk = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": "Working on it.",
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_1",
+                        "function": { "name": "update_plan", "arguments": plan_args }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
+
+    /// SSE for a plain prose reply (no tool calls) that ends the turn.
+    fn sse_prose(text: &str) -> String {
+        let chunk = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": { "content": text },
+                "finish_reason": "stop"
+            }]
+        });
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
+
+    fn plan_test_agent(url: String, store: Arc<HistoryStore>) -> Agent {
+        let session = store
+            .create_session(&SessionMeta {
+                workspace: "/tmp/proj".into(),
+                model: "claude-opus-4-8".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let client = OxenClient::new(url, "key", "claude-opus-4-8");
+        let mut tools = ToolRegistry::new();
+        tools.register_typed(harness_tools::PlanTool::new());
+        let config = AgentConfig {
+            system_prompt: None,
+            ..AgentConfig::default()
+        };
+        Agent::new(client, tools, store, session, config).unwrap()
+    }
+
+    #[tokio::test]
+    async fn plan_stall_nudge_fires_when_a_turn_abandons_an_open_plan() {
+        let mut server = mockito::Server::new_async().await;
+        // Mockito serves the most recently defined matching mock, so these read
+        // bottom-up: the base reply lays out an open plan; a request carrying
+        // the recorded plan result gets the stall (prose, plan unfinished); a
+        // request carrying the nudge gets the recovery.
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_plan_update("in_progress"))
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("0/1 done".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose(
+                "The search failed, so that is where things stand.",
+            ))
+            .create_async()
+            .await;
+        let recovery = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("unfinished items".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("Recovered: reconciled the plan."))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let mut agent = plan_test_agent(server.url(), store);
+
+        let out = agent.run_turn("research this topic", |_| {}).await.unwrap();
+        assert_eq!(out, "Recovered: reconciled the plan.");
+        recovery.assert_async().await;
+
+        // The nudge is a request-only corrective — never persisted to the
+        // transcript, and the user's single message stays the only user turn.
+        assert!(agent.messages().iter().all(|m| !m
+            .content_text()
+            .unwrap_or_default()
+            .contains("unfinished items")));
+        assert_eq!(
+            agent.messages().iter().filter(|m| m.role == "user").count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn no_plan_stall_nudge_when_the_plan_is_complete() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_plan_update("completed"))
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("1/1 done".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("All done."))
+            .create_async()
+            .await;
+        let nudge = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("unfinished items".into()))
+            .expect(0)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let mut agent = plan_test_agent(server.url(), store);
+
+        let out = agent.run_turn("research this topic", |_| {}).await.unwrap();
+        assert_eq!(out, "All done.");
+        nudge.assert_async().await;
+    }
+
+    /// A big, repetitive JSON tool result the crusher provably shrinks.
+    fn repetitive_json_rows(n: usize) -> String {
+        let rows: Vec<serde_json::Value> = (0..n)
+            .map(|i| serde_json::json!({"id": i, "level": "info", "message": "heartbeat ok"}))
+            .collect();
+        serde_json::Value::Array(rows).to_string()
+    }
+
+    /// Seed a session with three big JSON tool results (the oldest is fair
+    /// game for compression; the last two are protected as "recent").
+    fn seed_big_tool_results(store: &HistoryStore) -> String {
+        let session = store
+            .create_session(&SessionMeta {
+                workspace: "/tmp/proj".into(),
+                model: "claude-opus-4-8".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        for i in 0..3 {
+            store
+                .append_message(&session, &ChatMessage::user(format!("q{i}")))
+                .unwrap();
+            store
+                .append_message(
+                    &session,
+                    &ChatMessage::tool_result(format!("t{i}"), repetitive_json_rows(200)),
+                )
+                .unwrap();
+        }
+        session
+    }
+
+    fn sse_done() -> &'static str {
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"all done\"},\"finish_reason\":\"stop\"}]}\n\n\
+         data: [DONE]\n\n"
+    }
+
+    #[tokio::test]
+    async fn compression_on_shrinks_the_request_but_never_the_transcript() {
+        let mut server = mockito::Server::new_async().await;
+        // The mock only matches a request whose body carries a CCR sentinel —
+        // an uncompressed request gets no response and the turn errors.
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("_ccr_dropped".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_done())
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = seed_big_tool_results(&store);
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            compression: CompressionMode::On,
+            ..AgentConfig::default()
+        };
+        let mut agent =
+            Agent::resume_from_store(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        // The retrieve tool rides along whenever compression is on.
+        let defs = agent.tool_definitions();
+        assert!(
+            defs.iter()
+                .any(|d| d["function"]["name"] == "retrieve_original"),
+            "retrieve_original should be registered with compression on"
+        );
+
+        let mut compression_events = Vec::new();
+        let out = agent
+            .run_turn("continue", |e| {
+                if let AgentEvent::Compression { .. } = e {
+                    compression_events.push(e.clone());
+                }
+            })
+            .await
+            .expect("turn should succeed with a compressed request");
+        assert_eq!(out, "all done");
+
+        let AgentEvent::Compression {
+            mode,
+            saved_tokens,
+            results_compressed,
+            ..
+        } = &compression_events[0]
+        else {
+            panic!("expected a compression event");
+        };
+        assert_eq!(mode, "on");
+        assert!(*saved_tokens > 0);
+        // Only the stale tool result is compressed; the recent two are protected.
+        assert_eq!(*results_compressed, 1);
+        assert_eq!(agent.tokens_saved(), *saved_tokens);
+
+        // The transcript (memory + store) still holds every original byte.
+        let originals = agent
+            .messages()
+            .iter()
+            .filter(|m| m.role == "tool")
+            .filter(|m| m.content_text().is_some_and(|t| t.contains("heartbeat ok")))
+            .count();
+        assert_eq!(originals, 3, "in-memory transcript must stay uncompressed");
+    }
+
+    #[test]
+    fn live_mode_switch_registers_and_removes_the_retrieve_tool() {
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = store
+            .create_session(&SessionMeta {
+                workspace: "/tmp/proj".into(),
+                model: "claude-opus-4-8".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let client = OxenClient::new("http://localhost/api/ai", "key", "claude-opus-4-8");
+        let mut agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store,
+            session,
+            AgentConfig::default(),
+        )
+        .unwrap();
+        let has_retrieve = |agent: &Agent| {
+            agent
+                .tool_definitions()
+                .iter()
+                .any(|d| d["function"]["name"] == "retrieve_original")
+        };
+
+        assert_eq!(agent.compression_mode(), CompressionMode::Off);
+        assert!(!has_retrieve(&agent));
+
+        agent.set_compression_mode(CompressionMode::On);
+        assert_eq!(agent.compression_mode(), CompressionMode::On);
+        assert!(has_retrieve(&agent), "On registers the retrieve tool");
+
+        agent.set_compression_mode(CompressionMode::Audit);
+        assert_eq!(agent.compression_mode(), CompressionMode::Audit);
+        assert!(!has_retrieve(&agent), "leaving On removes it");
+    }
+
+    #[tokio::test]
+    async fn audit_mode_measures_savings_but_sends_the_original_request() {
+        let mut server = mockito::Server::new_async().await;
+        // Match only an *uncompressed* request: the oldest tool result's rows
+        // all present (row 150 only survives if nothing was sampled away) and
+        // no CCR sentinel anywhere.
+        server
+            .mock("POST", "/chat/completions")
+            .match_request(|req| {
+                let body = String::from_utf8_lossy(req.body().unwrap()).to_string();
+                body.contains("\\\"id\\\":150") && !body.contains("_ccr_dropped")
+            })
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_done())
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = seed_big_tool_results(&store);
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            compression: CompressionMode::Audit,
+            ..AgentConfig::default()
+        };
+        let mut agent =
+            Agent::resume_from_store(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        // No markers are sent in audit mode, so no retrieve tool either.
+        assert!(agent.tool_definitions().is_empty());
+
+        let mut audit_saved = 0usize;
+        let out = agent
+            .run_turn("continue", |e| {
+                if let AgentEvent::Compression {
+                    mode, saved_tokens, ..
+                } = e
+                {
+                    assert_eq!(mode, "audit");
+                    audit_saved += saved_tokens;
+                }
+            })
+            .await
+            .expect("audit turn must send the untouched request");
+        assert_eq!(out, "all done");
+        assert!(audit_saved > 0, "audit should report would-be savings");
     }
 
     #[tokio::test]

@@ -10,6 +10,7 @@ description = "The agentic (Ralph) loop wiring the LLM, tools, and history store
 
 [dependencies]
 harness-core = { workspace = true }
+harness-compress = { workspace = true }
 harness-llm = { workspace = true }
 harness-tools = { workspace = true }
 harness-store = { workspace = true }

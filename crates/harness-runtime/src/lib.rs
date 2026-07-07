@@ -15,7 +15,10 @@
 //!   and user-defined custom HTTP tools.
 //! - [`skills`] — skill discovery (global + per-project `SKILL.md` dirs),
 //!   preferences, and authoring.
+//! - [`compression`] — the context-compression mode (off/audit/on) applied
+//!   when building an agent.
 
+pub mod compression;
 mod config;
 pub mod config_repo;
 pub mod connection;

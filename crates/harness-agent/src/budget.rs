@@ -80,6 +80,12 @@ pub fn estimate_prompt_tokens(messages: &[ChatMessage], tools: &[serde_json::Val
     chars / CHARS_PER_TOKEN + messages.len() * PER_MESSAGE_OVERHEAD
 }
 
+/// Tokens for a raw character count, on the same heuristic as the estimators
+/// above (used to express compression savings in the meter's units).
+pub fn estimate_tokens_for_chars(chars: usize) -> usize {
+    chars / CHARS_PER_TOKEN
+}
+
 /// Estimate the tokens generated in an assembled reply (text + tool calls).
 pub fn estimate_completion_tokens(content: &str, tool_calls: &[ToolCall]) -> usize {
     let mut chars = content.len();

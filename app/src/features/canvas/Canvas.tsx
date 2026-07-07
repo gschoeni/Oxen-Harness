@@ -68,7 +68,7 @@ export function Canvas({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =>
           {writing && <span className="canvas-writing">writing…</span>}
         </div>
         <button className="icon-btn" aria-label="Close canvas" onClick={() => setActiveCanvas(null)}>
-          <X size={16} />
+          <X size={15} />
         </button>
       </header>
       <div className="canvas-body">
@@ -125,7 +125,7 @@ function CanvasStreamingView({ doc }: { doc: CanvasDoc }) {
   }
   if (doc.format === "code") {
     return (
-      <pre className="canvas-code">
+      <pre className="canvas-code hljs-theme">
         <HighlightedCode code={doc.content} language={doc.language} />
       </pre>
     );
@@ -161,7 +161,7 @@ function CodeView({ content, language }: { content: string; language?: string | 
   }, [content, language]);
 
   return (
-    <pre className="canvas-code">
+    <pre className="canvas-code hljs-theme">
       {html != null ? (
         <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
       ) : (

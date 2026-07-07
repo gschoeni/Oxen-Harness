@@ -20,6 +20,7 @@ import {
   onToolDelta,
   onUsage,
   onCompacted,
+  onCompression,
 } from "./ipc";
 
 // Stored on `window` so the guard survives HMR module re-evaluation (a fresh
@@ -44,6 +45,7 @@ export function startAgentEventBridge(): void {
     onToolDelta((e) => s().ingestToolDelta(e)),
     onUsage((e) => s().ingestUsage(e)),
     onCompacted((e) => s().ingestCompacted(e)),
+    onCompression((e) => s().ingestCompression(e)),
     onCanvas((e) => s().ingestCanvas(e)),
     onCanvasWriting((session) => s().setCanvasWriting(session, true)),
     onQuestion((q) => s().setQuestion(q)),

@@ -5,7 +5,7 @@
 .projects-overlay {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: var(--z-overlay);
   background: var(--bg);
   overflow-y: auto;
   animation: projects-in var(--dur) var(--ease);
@@ -22,14 +22,14 @@
   top: 0;
   left: 0;
   right: 0;
-  height: 38px;
-  z-index: 1;
+  height: var(--titlebar-h);
+  z-index: var(--z-titlebar);
 }
 
 .projects-page {
   max-width: 720px;
   margin: 0 auto;
-  padding: 64px var(--space-6) var(--space-8);
+  padding: var(--space-8) var(--space-6) var(--space-8);
 }
 
 .projects-header {
@@ -110,7 +110,7 @@
 }
 .project-card.active {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--separator-strong));
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  background: var(--accent-tint);
 }
 
 .project-card-main {

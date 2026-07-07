@@ -35,6 +35,9 @@ export interface SessionInfo {
   context_tokens: number;
   /** The model's effective context window, for a "% of context" readout. */
   context_window: number;
+  /** The context-compression mode this session's agent was built with —
+   *  drives the TokenMeter's armed indicator. */
+  compression_mode: CompressionMode;
 }
 
 /** A chat's training-data review status: unreviewed (""), kept, or rejected. */
@@ -180,11 +183,13 @@ export interface HfHit {
 }
 
 /** `local://status` payload — a phase of bringing a local model online, so the
- *  UI can show progress while switching to it. */
+ *  UI can show progress while switching to it (or while a restored selection
+ *  starts lazily after an app relaunch). */
 export interface LocalStatus {
   model: string;
-  /** `"starting"` (runtime/GPU init), `"loading"` (reading weights), `"ready"`. */
-  phase: "starting" | "loading" | "ready";
+  /** `"starting"` (runtime/GPU init), `"loading"` (reading weights), `"ready"`,
+   *  or `"error"` (the load ended without a server). */
+  phase: "starting" | "loading" | "ready" | "error";
 }
 
 /** Installed local models plus disk usage and runtime status. */
@@ -254,7 +259,9 @@ export interface ThemeStyle {
   border_width: string; // CSS length
   shadow: string; // "pixel" | "soft" | "glow" | "none"
   hero: string; // "pixel" | "newspaper" | "minimal"
-  scene: string; // "trail" | "grid" | "none" — the pixel hero's artwork
+  scene: string; // "trail" | "grid" | "none" — the pixel hero's fallback artwork
+  game?: string; // "tumbleweed" | "oregon" | "none" — the pixel hero's default game
+  // (the player can switch cabinets at runtime; "none" opts into a static scene)
 }
 
 export interface Theme {
@@ -339,6 +346,25 @@ export interface CompactedEvent {
   detail: string;
 }
 
+/** The context-compression setting: off (send requests as recorded), audit
+ *  (measure would-be savings without changing anything), or on (compress stale
+ *  tool output before each request; originals stay retrievable). */
+export type CompressionMode = "off" | "audit" | "on";
+
+/** `agent://compression` payload — compression shrank ("on") or measured
+ *  ("audit") a model call's request. Fires per model call within a turn, so the
+ *  UI updates counters rather than appending thread notices. */
+export interface CompressionEvent {
+  session: string;
+  mode: CompressionMode;
+  /** Estimated tokens this model call saved (or would have saved). */
+  saved_tokens: number;
+  /** Cumulative estimated tokens saved across the session's run. */
+  total_saved_tokens: number;
+  /** How many tool results were compressed for this call. */
+  results_compressed: number;
+}
+
 export type Mode = "light" | "dark";
 
 /** A chat's run state for the sidebar indicator. Absent = idle / read. */
@@ -354,6 +380,7 @@ export type SettingsPage =
   | "local-models"
   | "tools"
   | "skills"
+  | "compression"
   | "appearance"
   | "logs";
 

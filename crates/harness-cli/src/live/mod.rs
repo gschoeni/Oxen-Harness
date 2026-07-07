@@ -1,7 +1,8 @@
 //! The live, bottom-pinned input box for the interactive REPL.
 //!
-//! On an interactive terminal this replaces `rustyline`: the input is a rounded
-//! bordered box pinned to the bottom, with the themed prompt, **multi-line**
+//! On an interactive terminal this replaces `rustyline`: the input is a
+//! frameless prompt area pinned to the bottom (no border characters, so
+//! terminal selections copy clean), with the themed prompt, **multi-line**
 //! editing (Alt/Shift+Enter or Ctrl-J adds a line), **history** recall (Up/Down at
 //! a line edge), and the stacked [`MessageQueue`] above it. The same box is used
 //! whether idle ([`read_idle`]) or mid-turn ([`run_prompt`]) — while the agent
@@ -86,24 +87,35 @@ pub(crate) async fn run_prompt(
     let (mut rx, input) = spawn_input(&stop, &paused);
 
     let state = Rc::new(RefCell::new(Live::new(ui.clone(), cols, rows)));
+    // Show the meters in their pinned slots from the start of the turn.
+    {
+        let mut s = state.borrow_mut();
+        s.status_line = Some(crate::context_usage_line(agent, ui));
+        s.compression_line = crate::compression_status_line(agent, ui);
+    }
 
     let mut next = Some(first_prompt.to_string());
     let mut exit = false;
     while let Some(prompt) = next.take() {
         match run_one_turn(agent, &prompt, &state, &mut rx, queue, &paused).await {
             TurnOutcome::Done(result) => {
-                match result {
-                    Ok(_) => state
-                        .borrow_mut()
-                        .print_line(&crate::context_usage_line(agent, ui)),
-                    Err(e) => {
-                        let mut s = state.borrow_mut();
+                {
+                    let mut s = state.borrow_mut();
+                    if let Err(e) = &result {
                         s.print_line(&format!("  {}", ui.red(&ui.death())));
                         s.print_line(&format!(
                             "  {}",
                             ui.dim(&format!("The trail guide says: {e}"))
                         ));
+                        if let Some(hint) = crate::auth_cmd::auth_hint(ui, &e.to_string()) {
+                            s.print_line(&hint);
+                        }
                     }
+                    // Refresh the pinned meters (they sit above the divider,
+                    // not in the scrollback) with the turn's totals.
+                    s.status_line = Some(crate::context_usage_line(agent, ui));
+                    s.compression_line = crate::compression_status_line(agent, ui);
+                    s.render();
                 }
                 // Auto-drain: send the next stacked message (more may still be
                 // typed while it runs — they just keep stacking onto the queue).
@@ -158,10 +170,12 @@ pub(crate) enum Idle {
     Exit,
 }
 
-/// Read one submission at the idle prompt using the bordered box composer, then
+/// Read one submission at the idle prompt using the pinned composer, then
 /// tear the terminal down so the caller can run a turn or a command in cooked
-/// mode. `seed` pre-fills the box (e.g. a draft carried over from a turn);
-/// `history` is loaded for Up/Down recall and updated with the submission.
+/// mode. `seed` pre-fills the input (e.g. a draft carried over from a turn);
+/// `history` is loaded for Up/Down recall and updated with the submission;
+/// `status` is the context-usage line pinned just above the divider, and
+/// `compression` the savings line pinned just above that.
 ///
 /// Returns [`Idle::Submit`] with the trimmed text, or [`Idle::Exit`] to quit.
 pub(crate) async fn read_idle(
@@ -169,6 +183,8 @@ pub(crate) async fn read_idle(
     queue: &mut MessageQueue,
     history: &mut Vec<String>,
     seed: &str,
+    status: Option<String>,
+    compression: Option<String>,
 ) -> Result<Idle> {
     let term = LiveTerminal::new()?;
     let (rows, cols) = (term.rows, term.cols);
@@ -183,6 +199,8 @@ pub(crate) async fn read_idle(
         if !seed.is_empty() {
             s.composer = Composer::seeded(seed);
         }
+        s.status_line = status;
+        s.compression_line = compression;
         s.sync_queue(queue.items());
         s.render();
     }
@@ -440,6 +458,8 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/loop", "run or list loops"),
     ("/export", "export the transcript"),
     ("/departing", "set the banner location"),
+    ("/auth", "set your Oxen API key"),
+    ("/compression", "switch context compression (off/audit/on)"),
     ("/help", "show help"),
     ("/exit", "quit"),
 ];
@@ -478,6 +498,14 @@ struct Live {
     /// Set when a `web_search` call failed for a missing Brave API key, so the
     /// caller can prompt for one once the composer hands back to cooked mode.
     needs_brave_key: bool,
+    /// The context-usage trailer (`🧭 context …`), pinned just above the divider
+    /// rather than printed into the scrollback — so it always sits right above
+    /// the input area with the blank spacer separating it from the last message.
+    status_line: Option<String>,
+    /// The compression-savings line (`⊙ compression …`), pinned directly above
+    /// [`Live::status_line`]. Updated in place on every `Compression` event
+    /// instead of scrolling a new line into the conversation.
+    compression_line: Option<String>,
     /// Slash-command / argument completion candidates for the current composer
     /// text (full-line replacements), shown as a hint above the box. Refreshed on
     /// every compose edit; empty when there's nothing to suggest.
@@ -507,6 +535,8 @@ impl Live {
             previews: Vec::new(),
             region_bottom: region_bottom(rows),
             needs_brave_key: false,
+            status_line: None,
+            compression_line: None,
             completion: Vec::new(),
             comp_index: None,
             model_names: None,
@@ -643,6 +673,12 @@ impl Live {
             // Usage is surfaced in the banner/status, not inline during a turn.
             AgentEvent::Usage { .. } => {}
             AgentEvent::Compacted { detail } => self.on_compacted(detail),
+            AgentEvent::Compression {
+                mode,
+                saved_tokens,
+                total_saved_tokens,
+                ..
+            } => self.on_compression(mode, *saved_tokens, *total_saved_tokens),
             // Streaming tool-argument fragments drive the desktop UI only.
             AgentEvent::ToolDelta { .. } => {}
         }
@@ -770,6 +806,25 @@ impl Live {
         self.render_composer();
     }
 
+    fn on_compression(&mut self, mode: &str, saved_tokens: usize, total_saved_tokens: usize) {
+        // Update the pinned line (above the context meter) in place — the
+        // savings are chrome, not conversation, so they never scroll a line
+        // into the transcript between tool output and the spinner.
+        let verb = if mode == "audit" {
+            "would save"
+        } else {
+            "saved"
+        };
+        self.compression_line = Some(format!(
+            "  {} {}",
+            self.ui.brown("⊙"),
+            self.ui.dim(&format!(
+                "compression {verb} ~{saved_tokens} tokens this call ({total_saved_tokens} total)"
+            )),
+        ));
+        self.render();
+    }
+
     // --- spinner -----------------------------------------------------------
 
     fn tick_spinner(&mut self) {
@@ -844,14 +899,22 @@ impl Live {
         let frame = if len == 0 { 0 } else { QUEUE_FRAME_ROWS };
         let plan = queue_rows(len, self.focus, self.rows, MAX_QUEUE_ROWS, frame);
         let chrome = if plan.is_empty() { 0 } else { QUEUE_FRAME_ROWS };
-        // The input is a bordered box whose height grows with the lines typed.
+        // The input area's height grows with the lines typed.
         let box_lines = self.composer_box_lines();
         let box_h = box_lines.len() as u16;
-        // Between the agent's output and the pinned input area: a blank spacer
-        // then a faint divider rule, matching the idle prompt (output · blank ·
-        // rule · input), so the prompt always has breathing room and a clear edge.
-        let reserved =
-            (plan.len() + chrome) as u16 + SPACER_ROWS as u16 + DIVIDER_ROWS as u16 + box_h;
+        // Between the agent's output and the pinned input area: a blank spacer,
+        // the compression savings (when active), the context-usage status, then
+        // a faint divider rule (output · blank · compression · status · rule ·
+        // input), so the prompt always has breathing room and a clear edge, and
+        // the meters sit right above the input instead of trailing the last
+        // message.
+        let status_rows: u16 = self.compression_line.is_some() as u16
+            + self.status_line.is_some() as u16;
+        let reserved = (plan.len() + chrome) as u16
+            + SPACER_ROWS as u16
+            + status_rows
+            + DIVIDER_ROWS as u16
+            + box_h;
         let new_bottom = self.rows.saturating_sub(reserved).max(1);
 
         let mut buf = String::new();
@@ -876,15 +939,25 @@ impl Live {
         for s in 0..SPACER_ROWS as u16 {
             buf.push_str(&format!("\x1b[{};1H\x1b[2K", new_bottom + 1 + s));
         }
+        // The compression savings and context-usage meters sit under the
+        // spacer, just above the divider (compression on top of context).
+        let mut next_row = new_bottom + 1 + SPACER_ROWS as u16;
+        for line in [&self.compression_line, &self.status_line]
+            .into_iter()
+            .flatten()
+        {
+            buf.push_str(&format!("\x1b[{next_row};1H\x1b[2K{line}"));
+            next_row += 1;
+        }
         // Then a faint full-width divider rule, just above the input area.
-        let divider_row = new_bottom + 1 + SPACER_ROWS as u16;
+        let divider_row = next_row;
         buf.push_str(&format!(
             "\x1b[{divider_row};1H\x1b[2K{}",
             self.ui.dim(&"─".repeat(self.cols as usize))
         ));
         if !plan.is_empty() {
             let box_w = self.queue_box_w();
-            let mut r = new_bottom + 1 + SPACER_ROWS as u16 + DIVIDER_ROWS as u16;
+            let mut r = divider_row + DIVIDER_ROWS as u16;
             buf.push_str(&format!("\x1b[{r};1H\x1b[2K{}", self.queue_header(box_w)));
             for row in &plan {
                 r += 1;
@@ -1026,19 +1099,21 @@ impl Live {
         truncate(preview, width.saturating_sub(1))
     }
 
-    /// Render the input as a rounded bordered box. Long lines **word-wrap** onto
-    /// the next visual row (rather than scrolling sideways); the themed prompt
-    /// sits on the first row and wrapped/continuation rows align under it. The
-    /// box grows with the rows typed (capped at [`MAX_INPUT_ROWS`], windowing
-    /// around the caret beyond that). The caret (reverse-video cell) shows only
-    /// when the composer holds focus — not while browsing/editing the queue.
+    /// Render the input rows — deliberately **frameless** (no bordered box), so
+    /// a terminal selection over the bottom of the screen never picks up border
+    /// characters. Long lines **word-wrap** onto the next visual row (rather
+    /// than scrolling sideways); the themed prompt sits on the first row and
+    /// wrapped/continuation rows align under it. The area grows with the rows
+    /// typed (capped at [`MAX_INPUT_ROWS`], windowing around the caret beyond
+    /// that). The caret (reverse-video cell) shows only when the composer holds
+    /// focus — not while browsing/editing the queue.
     fn composer_box_lines(&self) -> Vec<String> {
         let depth = self.previews.len();
         let (plain_prompt, styled_prompt) = composer_prompt(&self.ui, depth);
         let prompt_w = plain_prompt.chars().count();
         let box_w = self.queue_box_w();
         // Wrap width leaves a column for the caret so it never spills past the
-        // right border; every row is indented under the prompt for alignment.
+        // right edge; every row is indented under the prompt for alignment.
         let avail = box_w.saturating_sub(prompt_w + 1).max(4);
         let caret_on = matches!(self.focus, Focus::Composer) && self.edit.is_none();
 
@@ -1081,10 +1156,9 @@ impl Live {
             (lo, lo + MAX_INPUT_ROWS)
         };
 
-        let bar = self.ui.brown("│");
         let mut out: Vec<String> = Vec::new();
-        // A slash-command / argument suggestion hint sits just above the box while
-        // composing at idle (no spinner), so completions are discoverable.
+        // A slash-command / argument suggestion hint sits just above the input
+        // while composing at idle (no spinner), so completions are discoverable.
         if self.spinner.is_none()
             && matches!(self.focus, Focus::Composer)
             && self.edit.is_none()
@@ -1092,25 +1166,16 @@ impl Live {
         {
             out.push(self.completion_hint(box_w));
         }
-        out.push(format!(
-            "  {}",
-            self.ui.brown(&format!("╭{}╮", "─".repeat(box_w + 2)))
-        ));
         for (vi, row) in vrows.iter().enumerate().take(hi).skip(lo) {
             let caret = (caret_on && vi == caret_vrow).then_some(caret_vcol);
-            let (body, width) = render_text_line(row, caret, avail);
+            let (body, _) = render_text_line(row, caret, avail);
             let prefix = if vi == 0 {
                 styled_prompt.clone()
             } else {
                 " ".repeat(prompt_w)
             };
-            let pad = box_w.saturating_sub(prompt_w + width);
-            out.push(format!("  {bar} {prefix}{body}{} {bar}", " ".repeat(pad)));
+            out.push(format!("  {prefix}{body}"));
         }
-        out.push(format!(
-            "  {}",
-            self.ui.brown(&format!("╰{}╯", "─".repeat(box_w + 2)))
-        ));
         out
     }
 
@@ -1172,6 +1237,15 @@ impl Live {
                     .into_iter()
                     .filter(|m| m.to_lowercase().starts_with(&needle))
                     .map(|m| format!("/model {m}"))
+                    .collect()
+            }
+            // `/compression <partial>` — complete the three modes.
+            Some(arg) if cmd == "/compression" || cmd == "/compress" => {
+                let needle = arg.trim().to_lowercase();
+                ["off", "audit", "on"]
+                    .iter()
+                    .filter(|m| m.starts_with(&needle))
+                    .map(|m| format!("{cmd} {m}"))
                     .collect()
             }
             Some(_) => Vec::new(),

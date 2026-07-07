@@ -257,7 +257,7 @@ export function ToolEditor({
                       </option>
                     ))}
                   </select>
-                  <ChevronDown size={14} />
+                  <ChevronDown size={15} />
                 </span>
                 <input
                   className="tool-input"
@@ -289,7 +289,7 @@ export function ToolEditor({
               className="tool-param-add"
               onClick={() => setRows((rs) => [...rs, { ...EMPTY_ROW }])}
             >
-              <Plus size={14} /> Add parameter
+              <Plus size={15} /> Add parameter
             </button>
           </div>
         )}
@@ -318,7 +318,7 @@ export function ToolEditor({
               onClick={() => setConfirmDelete(true)}
               title="Remove this tool"
             >
-              <Trash2 size={14} /> Delete tool
+              <Trash2 size={15} /> Delete tool
             </Button>
           ))}
       </div>

@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   appendApiKeyPrompt,
   appendNotice,
+  appendRetryPrompt,
   appendToken,
+  dropRetryPrompts,
+  endsMidTurn,
   finalizeAssistant,
-  resolveApiKeyPrompt,
+  lastUserText,
+  resolveRecoveryPrompt,
   startTurn,
   toolEnd,
   toolStart,
@@ -118,9 +122,78 @@ describe("thread: API-key prompt", () => {
   it("retires the key card and opens a fresh reply bubble on resolve", () => {
     const items = appendApiKeyPrompt(startTurn([], "hi"), "hi", []);
     const card = items.find((i) => i.kind === "apikey")!;
-    const next = resolveApiKeyPrompt(items, card.id);
+    const next = resolveRecoveryPrompt(items, card.id);
     expect(next.some((i) => i.kind === "apikey")).toBe(false);
     expect(next[next.length - 1]).toMatchObject({ kind: "assistant", text: "", streaming: true });
+  });
+});
+
+describe("thread: retry prompt", () => {
+  it("swaps the empty reply bubble for a retry card carrying the failed turn", () => {
+    const items = startTurn([], "build it"); // [user, empty assistant]
+    const next = appendRetryPrompt(items, "build it", [], "Oxen API error (402): out of credits");
+    expect(next.map((i) => i.kind)).toEqual(["user", "retry"]); // empty bubble dropped
+    expect(next[1]).toMatchObject({
+      kind: "retry",
+      text: "build it",
+      message: "Oxen API error (402): out of credits",
+    });
+  });
+
+  it("appends a card to a settled thread (a resumed broken transcript)", () => {
+    const items = transcriptToItems([{ role: "user", content: "hello" }]);
+    const next = appendRetryPrompt(items, "hello", [], "stopped mid-turn");
+    expect(next.map((i) => i.kind)).toEqual(["user", "retry"]);
+  });
+
+  it("retires the retry card and opens a fresh reply bubble on resolve", () => {
+    const items = appendRetryPrompt(startTurn([], "hi"), "hi", [], "boom");
+    const card = items.find((i) => i.kind === "retry")!;
+    const next = resolveRecoveryPrompt(items, card.id);
+    expect(next.some((i) => i.kind === "retry")).toBe(false);
+    expect(next[next.length - 1]).toMatchObject({ kind: "assistant", text: "", streaming: true });
+  });
+
+  it("drops pending retry cards when a fresh prompt supersedes them", () => {
+    const items = appendRetryPrompt(startTurn([], "hi"), "hi", [], "boom");
+    expect(dropRetryPrompts(items).some((i) => i.kind === "retry")).toBe(false);
+    // No cards → the same array back (no pointless re-render).
+    const settled = finalizeAssistant(startTurn([], "q"), "done");
+    expect(dropRetryPrompts(settled)).toBe(settled);
+  });
+});
+
+describe("thread: broken-transcript detection", () => {
+  it("flags a transcript ending on a user message or dangling tool result", () => {
+    expect(endsMidTurn([{ role: "user", content: "hi" }])).toBe(true);
+    expect(
+      endsMidTurn([
+        { role: "user", content: "go" },
+        { role: "assistant", content: "", tool_calls: [] },
+        { role: "tool", content: "output", tool_call_id: "1" },
+      ]),
+    ).toBe(true);
+  });
+
+  it("does not flag an empty or completed transcript", () => {
+    expect(endsMidTurn([])).toBe(false);
+    expect(
+      endsMidTurn([
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "hello!" },
+      ]),
+    ).toBe(false);
+  });
+
+  it("finds the last user message's text", () => {
+    expect(
+      lastUserText([
+        { role: "user", content: "first" },
+        { role: "assistant", content: "ok" },
+        { role: "user", content: "second" },
+      ]),
+    ).toBe("second");
+    expect(lastUserText([])).toBe("");
   });
 });
 

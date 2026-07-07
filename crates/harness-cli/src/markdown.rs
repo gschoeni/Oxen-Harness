@@ -85,7 +85,7 @@ impl<W: Write> MarkdownStream<W> {
         }
         self.flush_table();
         if self.in_code {
-            let _ = writeln!(self.out, "  {}", self.ui.brown("└──────────"));
+            let _ = writeln!(self.out, "{}", code_close_rule(&self.ui));
             self.in_code = false;
         }
         let _ = self.out.flush();
@@ -99,20 +99,21 @@ impl<W: Write> MarkdownStream<W> {
             self.flush_pending_text();
             self.flush_table();
             if self.in_code {
-                let _ = writeln!(self.out, "  {}", self.ui.brown("└──────────"));
+                let _ = writeln!(self.out, "{}", code_close_rule(&self.ui));
                 self.in_code = false;
             } else {
                 let lang = after_fence.trim();
                 let label = if lang.is_empty() { "code" } else { lang };
-                let _ = writeln!(self.out, "  {} {}", self.ui.brown("┌─"), self.ui.dim(label));
+                let _ = writeln!(self.out, "{}", code_open_rule(&self.ui, label));
                 self.in_code = true;
             }
             return;
         }
 
         if self.in_code {
-            // Code is shown verbatim (no inline parsing) behind a gutter.
-            let _ = writeln!(self.out, "  {} {}", self.ui.brown("│"), self.ui.code(line));
+            // Code is shown verbatim (no inline parsing) and flush-left, with no
+            // gutter or indent, so a terminal selection pastes back cleanly.
+            let _ = writeln!(self.out, "{}", self.ui.code(line));
             return;
         }
 
@@ -166,6 +167,24 @@ impl<W: Write> MarkdownStream<W> {
     }
 }
 
+/// The rule above a code block, carrying the language label: `── rust ───────`.
+/// Code lines themselves render flush-left with no gutter (see `render_line`),
+/// so the frame lives entirely above/below the code and a selection of the code
+/// pastes back clean.
+fn code_open_rule(ui: &Ui, label: &str) -> String {
+    format!(
+        "{} {} {}",
+        ui.brown("──"),
+        ui.dim(label),
+        ui.brown("──────────")
+    )
+}
+
+/// The rule closing a code block — same weight as the opening rule, no corners.
+fn code_close_rule(ui: &Ui) -> String {
+    ui.brown("──────────────")
+}
+
 /// Render a single, complete non-code line of Markdown.
 fn render_block_line(ui: &Ui, line: &str) -> String {
     let indent: String = line.chars().take_while(|c| *c == ' ').collect();
@@ -187,14 +206,15 @@ fn render_block_line(ui: &Ui, line: &str) -> String {
         return format!("{indent}{}", ui.title(&render_inline(ui, text)));
     }
 
-    // Blockquote.
+    // Blockquote. A dim `>` rather than a box-drawing bar, so a copied quote is
+    // still valid Markdown instead of picking up `│` characters.
     if let Some(rest) = trimmed
         .strip_prefix("> ")
         .or_else(|| trimmed.strip_prefix(">"))
     {
         return format!(
             "{indent}{} {}",
-            ui.brown("│"),
+            ui.brown(">"),
             ui.dim(&render_inline(ui, rest))
         );
     }
@@ -566,8 +586,9 @@ mod tests {
     }
 
     #[test]
-    fn blockquote_gets_gutter() {
-        assert_eq!(render_block_line(&ui(), "> quoted"), "│ quoted");
+    fn blockquote_gets_copyable_marker() {
+        // `>` (not a box-drawing bar) so a copied quote is still valid Markdown.
+        assert_eq!(render_block_line(&ui(), "> quoted"), "> quoted");
     }
 
     #[test]
@@ -577,12 +598,15 @@ mod tests {
     }
 
     #[test]
-    fn fenced_code_block_streams_with_gutter() {
+    fn fenced_code_block_is_flush_left_with_no_side_bars() {
         let out = render("```rust\nfn main() {}\n```\n");
-        assert!(out.contains("code") || out.contains("rust"));
-        assert!(out.contains("│ fn main() {}"));
-        // Code content must NOT be inline-parsed.
-        assert!(out.contains("fn main() {}"));
+        // The language label lives in the rule above the code.
+        assert!(out.contains("rust"));
+        // Code lines carry no gutter, bar, or indent — a terminal selection of
+        // the block pastes back exactly as written (and is not inline-parsed).
+        assert!(out.lines().any(|l| l == "fn main() {}"), "got:\n{out}");
+        assert!(!out.contains('│'), "no side bars expected:\n{out}");
+        assert!(!out.contains('┌') && !out.contains('└'));
     }
 
     #[test]

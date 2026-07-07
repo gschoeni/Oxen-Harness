@@ -7,6 +7,7 @@ import { vi } from "vitest";
 import type {
   CatalogModel,
   CloudModel,
+  CompressionMode,
   ConnectionView,
   HardwareProfile,
   HfHit,
@@ -92,6 +93,7 @@ export const sampleSession: SessionInfo = {
   tokens_used: 0,
   context_tokens: 0,
   context_window: 128000,
+  compression_mode: "off",
 };
 
 export const sampleHardware: HardwareProfile = {
@@ -180,6 +182,12 @@ export const toolDefinitions = vi.fn(async () => [] as unknown[]);
 export const listTools = vi.fn(async () => [] as unknown[]);
 export const setToolEnabled = vi.fn(async () => {});
 export const setToolDescription = vi.fn(async () => {});
+export const getCompressionMode = vi.fn(async (): Promise<CompressionMode> => "off");
+export const setCompressionMode = vi.fn(async (mode: CompressionMode) => ({
+  ...sampleSession,
+  compression_mode: mode,
+}));
+export const totalTokensSaved = vi.fn(async () => 0);
 export const addCustomTool = vi.fn(async () => {});
 export const removeCustomTool = vi.fn(async () => {});
 export const listSkills = vi.fn(async () => [] as unknown[]);
@@ -207,6 +215,7 @@ export const cancelTurn = vi.fn(async () => {});
 export const configureOxenKey = vi.fn(async () => {});
 export const onToken = listener("token");
 export const onTool = listener("tool");
+export const onCompression = listener("compression");
 export const onQuestion = listener("question");
 export const onFileDrop = listener("fileDrop");
 export const pickAttachments = vi.fn(async () => [] as string[]);
@@ -305,6 +314,11 @@ export function resetIpc() {
   listTools.mockReset().mockResolvedValue([]);
   setToolEnabled.mockReset().mockResolvedValue(undefined);
   setToolDescription.mockReset().mockResolvedValue(undefined);
+  getCompressionMode.mockReset().mockResolvedValue("off");
+  setCompressionMode
+    .mockReset()
+    .mockImplementation(async (mode: CompressionMode) => ({ ...sampleSession, compression_mode: mode }));
+  totalTokensSaved.mockReset().mockResolvedValue(0);
   addCustomTool.mockReset().mockResolvedValue(undefined);
   removeCustomTool.mockReset().mockResolvedValue(undefined);
   listSkills.mockReset().mockResolvedValue([]);
@@ -315,6 +329,7 @@ export function resetIpc() {
   [
     onToken,
     onTool,
+    onCompression,
     onQuestion,
     onFileDrop,
     onModelProgress,

@@ -104,7 +104,7 @@ function ToolCallBlock({ call }: { call: ToolCall }) {
   return (
     <div className="dev-toolcall">
       <div className="dev-tool-head">
-        <Wrench size={12} />
+        <Wrench size={13} />
         <span className="dev-tool-name">{call.function.name}</span>
         <span className="dev-tool-id">{call.id}</span>
         <CopyButton text={prettyJson(call.function.arguments)} label="args" />
@@ -122,8 +122,8 @@ function ToolDefRow({ tool }: { tool: ToolDefinition }) {
   return (
     <div className="dev-toolcall">
       <button className="dev-tool-head dev-tooldef-head" onClick={() => setOpen((v) => !v)}>
-        <ChevronRight size={12} className={`dev-chevron ${open ? "open" : ""}`} />
-        <Wrench size={12} />
+        <ChevronRight size={13} className={`chevron ${open ? "open" : ""}`} />
+        <Wrench size={13} />
         <span className="dev-tool-name">{name}</span>
         {description && <span className="dev-tooldef-desc">{description}</span>}
         <span className="dev-msg-tokens">~{estJsonTokens(tool).toLocaleString()} tok</span>
@@ -141,7 +141,7 @@ function ToolsPanel({ tools }: { tools: ToolDefinition[] }) {
   return (
     <div className="dev-msg dev-tools-panel">
       <button className="dev-msg-head" onClick={() => setOpen((v) => !v)}>
-        <ChevronRight size={14} className={`dev-chevron ${open ? "open" : ""}`} />
+        <ChevronRight size={15} className={`chevron ${open ? "open" : ""}`} />
         <span className="dev-role">Tool definitions</span>
         <span className="dev-tag">{tools.length} available</span>
         {!open && (
@@ -175,7 +175,7 @@ function MessageCard({ message, index }: { message: ChatMessage; index: number }
   return (
     <div className={`dev-msg dev-${role}`}>
       <button className="dev-msg-head" onClick={() => setOpen((v) => !v)}>
-        <ChevronRight size={14} className={`dev-chevron ${open ? "open" : ""}`} />
+        <ChevronRight size={15} className={`chevron ${open ? "open" : ""}`} />
         <span className="dev-role">{ROLE_LABEL[role] ?? role}</span>
         <span className="dev-idx">#{index}</span>
         {message.name && <span className="dev-tag">{message.name}</span>}
@@ -300,7 +300,7 @@ export function Inspector({ sessionId }: { sessionId: string }) {
     <div className="dev">
           {/* Toolbar — view toggle + transcript actions */}
           <div className="dev-toolbar">
-            <div className="dev-segmented" role="tablist">
+            <div className="segmented" role="tablist">
               <button
                 role="tab"
                 aria-selected={mode === "chat"}
@@ -475,7 +475,7 @@ export function InspectorDrawer() {
               disabled={review.index === 0}
               aria-label="Previous chat"
             >
-              <ChevronLeft size={16} />
+              <ChevronLeft size={15} />
             </button>
             <div className="inspector-decide">
               <button
@@ -497,7 +497,7 @@ export function InspectorDrawer() {
               disabled={review.index === review.queue.length - 1}
               aria-label="Next chat"
             >
-              <ChevronRight size={16} />
+              <ChevronRight size={15} />
             </button>
           </div>
         )}

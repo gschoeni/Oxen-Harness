@@ -19,6 +19,7 @@ describe("ModelPicker", () => {
         tokens_used: 0,
         context_tokens: 0,
         context_window: 200000,
+      compression_mode: "off",
       },
       cloudModels: [{ id: "claude-opus-4-8", name: "Claude Opus 4.8", builtin: true, selected: true }],
     });

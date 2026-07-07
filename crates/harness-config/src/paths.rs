@@ -71,6 +71,12 @@ pub fn tools_file() -> Result<PathBuf, ConfigError> {
     under("tools.json")
 }
 
+/// `~/.oxen-harness/compression.json` — the context-compression mode
+/// (off/audit/on) applied when building an agent.
+pub fn compression_file() -> Result<PathBuf, ConfigError> {
+    under("compression.json")
+}
+
 /// `~/.oxen-harness/config.toml` — the active theme selection.
 pub fn config_file() -> Result<PathBuf, ConfigError> {
     under("config.toml")

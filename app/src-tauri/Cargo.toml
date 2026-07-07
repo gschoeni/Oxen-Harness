@@ -25,6 +25,7 @@ async-trait = "0.1"
 
 # Reuse the core harness crates from the parent repo.
 harness-core = { path = "../../crates/harness-core" }
+harness-compress = { path = "../../crates/harness-compress" }
 harness-config = { path = "../../crates/harness-config" }
 harness-runtime = { path = "../../crates/harness-runtime" }
 harness-llm = { path = "../../crates/harness-llm" }

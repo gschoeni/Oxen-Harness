@@ -43,17 +43,12 @@
   border-radius: 50%;
   border: 2px solid var(--accent-soft);
   border-top-color: var(--accent);
-  animation: streaming-write-spin 0.7s linear infinite;
-}
-@keyframes streaming-write-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: spin var(--dur-spin) linear infinite;
 }
 .streaming-write-code {
   margin: 0;
   border-top: 1px solid var(--separator);
-  background: var(--surface-2);
+  background: var(--code-bg);
   padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
   font-size: var(--text-xs);

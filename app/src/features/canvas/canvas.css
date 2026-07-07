@@ -18,7 +18,7 @@
   width: 9px;
   transform: translateX(-50%);
   cursor: col-resize;
-  z-index: 6;
+  z-index: var(--z-sticky);
   touch-action: none;
 }
 .canvas-resizer::after {
@@ -44,7 +44,7 @@
   gap: var(--space-2);
   /* Clear the macOS traffic lights / overlay titlebar like the other panes. */
   padding: 10px var(--space-3) 10px var(--space-4);
-  padding-top: 38px;
+  padding-top: var(--titlebar-h);
   border-bottom: 1px solid var(--separator);
   flex-shrink: 0;
 }
@@ -126,7 +126,7 @@
   border-radius: var(--radius-pill);
   border: 2px solid var(--separator-strong);
   border-top-color: var(--accent);
-  animation: spin 0.7s linear infinite;
+  animation: spin var(--dur-spin) linear infinite;
 }
 
 .canvas-body {
@@ -162,57 +162,8 @@
   white-space: pre-wrap;
 }
 
-/* highlight.js theme mapped onto our design tokens, so code coloring follows the
-   active theme + light/dark mode. Scoped to the canvas so it never leaks into
-   the chat's markdown code blocks. */
-.canvas-code code.hljs {
-  color: var(--text);
-  background: transparent;
-}
-.canvas-code .hljs-comment,
-.canvas-code .hljs-quote {
-  color: var(--text-tertiary);
-  font-style: italic;
-}
-.canvas-code .hljs-keyword,
-.canvas-code .hljs-selector-tag,
-.canvas-code .hljs-literal,
-.canvas-code .hljs-built_in,
-.canvas-code .hljs-name,
-.canvas-code .hljs-tag {
-  color: var(--accent);
-}
-.canvas-code .hljs-string,
-.canvas-code .hljs-attr,
-.canvas-code .hljs-template-tag,
-.canvas-code .hljs-addition {
-  color: var(--green);
-}
-.canvas-code .hljs-number,
-.canvas-code .hljs-meta,
-.canvas-code .hljs-link {
-  color: var(--link);
-}
-.canvas-code .hljs-title,
-.canvas-code .hljs-section,
-.canvas-code .hljs-type,
-.canvas-code .hljs-attribute {
-  color: var(--text-secondary);
-}
-.canvas-code .hljs-variable,
-.canvas-code .hljs-symbol,
-.canvas-code .hljs-bullet {
-  color: var(--text-secondary);
-}
-.canvas-code .hljs-deletion {
-  color: var(--danger);
-}
-.canvas-code .hljs-emphasis {
-  font-style: italic;
-}
-.canvas-code .hljs-strong {
-  font-weight: 600;
-}
+/* Syntax coloring comes from the shared `.hljs-theme` scope (ui/hljs.css);
+   Canvas.tsx adds that class alongside `canvas-code` on highlighted views. */
 
 /* HTML / SVG / full web experiences render here, sandboxed. */
 .canvas-frame {

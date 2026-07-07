@@ -10,6 +10,7 @@
     Inter, Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
 
+  --text-3xs: 10px;
   --text-2xs: 11px;
   --text-xs: 12px;
   --text-sm: 13px;
@@ -39,6 +40,28 @@
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
   --dur-fast: 150ms;
   --dur: 220ms;
+  /* Continuous motion (spinners, progress shimmer) — slower than transitions. */
+  --dur-spin: 700ms;
+
+  /* Control sizes — one height family for inputs, selects, and icon buttons,
+     so mixed rows line up without per-widget nudging. */
+  --control-h-sm: 26px;
+  --control-h: 32px;
+  --control-h-lg: 34px;
+
+  /* macOS overlay-titlebar clearance (the traffic-light strip). The value is a
+     platform constraint; the token exists so it's named, not magic. */
+  --titlebar-h: 38px;
+
+  /* Stacking — one scale, ordered by how "in front" a layer semantically is.
+     Full-window takeovers < centered modals < the inspector drawer (which can
+     open above Settings). In-page chrome stays in the base bands. */
+  --z-titlebar: 1;
+  --z-sticky: 5;
+  --z-dropdown: 100;
+  --z-overlay: 1000;
+  --z-modal: 1100;
+  --z-drawer: 1200;
 
   /* Accent family — overridden at runtime from the active theme's palette.
      Defaults to a neutral blue so the app is presentable before a theme loads. */
@@ -56,6 +79,18 @@
   --orange: #d98a3d;
   --focus: rgba(79, 140, 255, 0.5);
   --scrim: rgba(0, 0, 0, 0.5);
+
+  /* Derived washes — computed from the runtime palette so themes stay in
+     charge. Soft = translucent tint (hover washes, halos); tint = opaque
+     accent-on-surface (selected cards, callouts). */
+  --danger-soft: color-mix(in srgb, var(--danger) 15%, transparent);
+  --warning-soft: color-mix(in srgb, var(--warning) 15%, transparent);
+  --accent-tint: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  --accent-tint-strong: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  /* The one input focus ring (pair with `border-color: var(--accent)`). */
+  --focus-ring: 0 0 0 3px var(--accent-soft);
+  /* The one code background — inline chips and blocks alike. */
+  --code-bg: var(--surface-2);
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
   --shadow-2: 0 8px 40px rgba(0, 0, 0, 0.16);

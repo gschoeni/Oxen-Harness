@@ -54,4 +54,23 @@ describe("Settings", () => {
     await userEvent.click(screen.getByRole("button", { name: /close settings/i }));
     expect(useStore.getState().settingsOpen).toBe(false);
   });
+
+  it("offers the three compression modes and persists a change", async () => {
+    ipc.getCompressionMode.mockResolvedValueOnce("audit");
+    ipc.totalTokensSaved.mockResolvedValueOnce(12345);
+    render(<Settings />);
+    await userEvent.click(screen.getByRole("button", { name: /compression/i }));
+
+    const select = await screen.findByRole("combobox", { name: /compression mode/i });
+    // The persisted mode loads into the select, and all three modes are offered.
+    await vi.waitFor(() => expect(select).toHaveValue("audit"));
+    expect(
+      screen.getAllByRole("option").map((o) => (o as HTMLOptionElement).value),
+    ).toEqual(["off", "audit", "on"]);
+    // The all-time savings stat is shown.
+    expect(screen.getByText("12,345")).toBeInTheDocument();
+
+    await userEvent.selectOptions(select, "on");
+    expect(ipc.setCompressionMode).toHaveBeenCalledWith("on");
+  });
 });

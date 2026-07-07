@@ -1,0 +1,91 @@
+/* The floating arcade cabinet — a small game window docked to the lower-right,
+   opened from the titlebar so you can play while a turn streams. It reuses the
+   CRT `.hero-screen` bezel for the game itself, wrapped in its own chrome. */
+.game-dock {
+  position: fixed;
+  right: 24px;
+  bottom: 128px;
+  width: 340px;
+  max-width: calc(100vw - 48px);
+  z-index: var(--z-titlebar);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow-lg);
+  overflow: hidden;
+  animation: game-dock-in 140ms var(--ease);
+}
+@keyframes game-dock-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .game-dock {
+    animation: none;
+  }
+}
+
+.game-dock-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--separator);
+}
+.game-dock-grip {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.game-dock-title {
+  flex: 1;
+  font-family: var(--font-readout);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.game-dock-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.game-dock-close:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--separator);
+}
+
+/* Inside the dock the CRT screen is already framed by the window chrome, so drop
+   its own border/radius/shadow — but keep the true-black background. */
+.game-dock-screen {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.game-dock-foot {
+  margin: 0;
+  padding: 5px 8px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text-tertiary);
+  background: var(--surface-2);
+  border-top: 1px solid var(--separator);
+  text-align: center;
+}

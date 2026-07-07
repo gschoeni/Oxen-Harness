@@ -34,6 +34,12 @@ export type Item =
   // authentication (a 401). It carries the failed prompt so the turn can be
   // retried once a key is saved.
   | { id: string; kind: "apikey"; text: string; attachments: string[] }
+  // An inline "continue this chat" card, shown where the reply would be when a
+  // turn died recoverably (e.g. a 402 out-of-credits error) or when a resumed
+  // transcript ends mid-turn. `message` explains why; `text`/`attachments`
+  // carry the failed prompt so a retry can fall back to the API-key card if it
+  // then hits a 401.
+  | { id: string; kind: "retry"; text: string; attachments: string[]; message: string }
   | {
       id: string;
       kind: "tool";
@@ -180,12 +186,61 @@ export function appendApiKeyPrompt(prev: Item[], text: string, attachments: stri
   return next;
 }
 
-/** Retire the inline API-key prompt (once the key is saved) and open a fresh
- *  streaming assistant bubble to receive the retried turn's reply. */
-export function resolveApiKeyPrompt(prev: Item[], id: string): Item[] {
+/** Retire an inline recovery card (API-key prompt or retry card) once its
+ *  action fired, and open a fresh streaming assistant bubble to receive the
+ *  retried turn's reply. */
+export function resolveRecoveryPrompt(prev: Item[], id: string): Item[] {
   const next = prev.filter((it) => it.id !== id);
   next.push({ id: uid(), kind: "assistant", text: "", streaming: true });
   return next;
+}
+
+/** Replace the in-flight assistant bubble with an inline retry card after a
+ *  turn died recoverably (e.g. out of credits). Same shape as
+ *  [`appendApiKeyPrompt`]: settle/drop the streaming bubble, then append a card
+ *  carrying the failed turn so it can be continued in place. */
+export function appendRetryPrompt(
+  prev: Item[],
+  text: string,
+  attachments: string[],
+  message: string,
+): Item[] {
+  const next = [...prev];
+  for (let i = next.length - 1; i >= 0; i--) {
+    const it = next[i];
+    if (it.kind === "assistant" && it.streaming) {
+      if (it.text === "") next.splice(i, 1);
+      else next[i] = { ...it, streaming: false };
+      break;
+    }
+  }
+  next.push({ id: uid(), kind: "retry", text, attachments, message });
+  return next;
+}
+
+/** Drop any pending retry cards — a fresh prompt supersedes them (the dangling
+ *  user turn is still in the transcript, so the model answers both), and a
+ *  stale card left behind would re-drive an already-settled transcript. */
+export function dropRetryPrompts(prev: Item[]): Item[] {
+  return prev.some((it) => it.kind === "retry") ? prev.filter((it) => it.kind !== "retry") : prev;
+}
+
+/** Whether a stored transcript stops mid-turn — it ends on a user message (the
+ *  reply never arrived: an API error, out of credits, or the app closed) or on
+ *  a tool result the model never got to react to. Such a chat can be continued
+ *  in place by re-driving the transcript. */
+export function endsMidTurn(messages: ChatMessage[]): boolean {
+  const last = messages[messages.length - 1];
+  return last !== undefined && (last.role === "user" || last.role === "tool");
+}
+
+/** The text of the transcript's last user message (for a retry card's carried
+ *  prompt). Empty if there is none. */
+export function lastUserText(messages: ChatMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") return contentText(messages[i].content);
+  }
+  return "";
 }
 
 /** Add a centered notice line (e.g. a context-compaction note). Inserts it

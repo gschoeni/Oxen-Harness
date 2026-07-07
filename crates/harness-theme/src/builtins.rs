@@ -269,6 +269,16 @@ pub(crate) fn oregon_trail() -> Theme {
                 },
                 HelpItem {
                     key: s("10."),
+                    title: s("Show your papers"),
+                    hint: s("— /auth  (set your Oxen API key)"),
+                },
+                HelpItem {
+                    key: s("11."),
+                    title: s("Lighten the load"),
+                    hint: s("— /compression [off|audit|on]  (context compression)"),
+                },
+                HelpItem {
+                    key: s("12."),
                     title: s("Make camp / End"),
                     hint: s("— /exit  (or Ctrl-D)"),
                 },

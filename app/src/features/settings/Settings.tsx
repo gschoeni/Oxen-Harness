@@ -11,6 +11,7 @@ import {
   Palette,
   Plus,
   ScrollText,
+  Shrink,
   Star,
   Sun,
   Trash2,
@@ -31,19 +32,21 @@ import { LocalSetup } from "../models/LocalSetup";
 import { ThemesPanel } from "../themes/ThemesPanel";
 import { ToolsPage } from "../tools/ToolsPage";
 import { SkillsPage } from "../skills/SkillsPage";
+import { CompressionPage } from "./CompressionPage";
 import { LogsPage } from "../logs/LogsPage";
 import "./settings.css";
 
 /** The settings sidebar entries, in display order. Each maps a page key to its
  *  icon, label, and a one-line description shown under the label in the rail. */
 const NAV: { page: SettingsPage; icon: ReactNode; label: string; blurb: string }[] = [
-  { page: "connection", icon: <Link2 size={17} />, label: "Connection", blurb: "Oxen endpoint & API keys" },
-  { page: "cloud-models", icon: <Cloud size={17} />, label: "Cloud models", blurb: "Hosted model catalog" },
-  { page: "local-models", icon: <Cpu size={17} />, label: "Local models", blurb: "Download & run on-device" },
-  { page: "tools", icon: <Wrench size={17} />, label: "Tools", blurb: "What the agent can do" },
-  { page: "skills", icon: <GraduationCap size={17} />, label: "Skills", blurb: "Reusable workflows it can learn" },
-  { page: "appearance", icon: <Palette size={17} />, label: "Appearance", blurb: "Theme & light/dark" },
-  { page: "logs", icon: <ScrollText size={17} />, label: "Training data", blurb: "Curate chats & export for fine-tuning" },
+  { page: "connection", icon: <Link2 size={18} />, label: "Connection", blurb: "Oxen endpoint & API keys" },
+  { page: "cloud-models", icon: <Cloud size={18} />, label: "Cloud models", blurb: "Hosted model catalog" },
+  { page: "local-models", icon: <Cpu size={18} />, label: "Local models", blurb: "Download & run on-device" },
+  { page: "tools", icon: <Wrench size={18} />, label: "Tools", blurb: "What the agent can do" },
+  { page: "skills", icon: <GraduationCap size={18} />, label: "Skills", blurb: "Reusable workflows it can learn" },
+  { page: "compression", icon: <Shrink size={18} />, label: "Compression", blurb: "Shrink stale context on the wire" },
+  { page: "appearance", icon: <Palette size={18} />, label: "Appearance", blurb: "Theme & light/dark" },
+  { page: "logs", icon: <ScrollText size={18} />, label: "Training data", blurb: "Curate chats & export for fine-tuning" },
 ];
 
 const TITLE: Record<SettingsPage, string> = {
@@ -52,6 +55,7 @@ const TITLE: Record<SettingsPage, string> = {
   "local-models": "Local models",
   tools: "Tools",
   skills: "Skills",
+  compression: "Compression",
   appearance: "Appearance",
   logs: "Training data",
 };
@@ -119,6 +123,7 @@ export function Settings() {
             {page === "local-models" && <LocalSetup />}
             {page === "tools" && <ToolsPage />}
             {page === "skills" && <SkillsPage />}
+            {page === "compression" && <CompressionPage />}
             {page === "appearance" && <AppearanceSettings />}
             {page === "logs" && <LogsPage />}
           </div>
@@ -211,7 +216,7 @@ function ConnectionSettings() {
                 title={revealKey ? "Hide" : "Show"}
                 onClick={() => setRevealKey((r) => !r)}
               >
-                {revealKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                {revealKey ? <EyeOff size={15} /> : <Eye size={15} />}
               </button>
             </div>
           </label>
@@ -235,7 +240,7 @@ function ConnectionSettings() {
                 title={revealBrave ? "Hide" : "Show"}
                 onClick={() => setRevealBrave((r) => !r)}
               >
-                {revealBrave ? <EyeOff size={16} /> : <Eye size={16} />}
+                {revealBrave ? <EyeOff size={15} /> : <Eye size={15} />}
               </button>
             </div>
           </label>
@@ -246,7 +251,7 @@ function ConnectionSettings() {
           </Button>
           {status && (
             <span className={`save-status ${status.ok ? "ok" : "err"}`}>
-              {status.ok && <Check size={14} />}
+              {status.ok && <Check size={15} />}
               {status.msg}
             </span>
           )}

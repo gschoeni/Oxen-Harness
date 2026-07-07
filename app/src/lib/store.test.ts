@@ -68,7 +68,7 @@ describe("store: sessions", () => {
     });
     // Backend reports a mid-turn chat with running=true / empty transcript.
     ipc.resumeSession.mockResolvedValueOnce({
-      info: { model: "", workspace: "", session_id: "bg", tokens_used: 0, context_tokens: 0, context_window: 0 },
+      info: { model: "", workspace: "", session_id: "bg", tokens_used: 0, context_tokens: 0, context_window: 0, compression_mode: "off" },
       messages: [],
       running: true,
     });
@@ -143,5 +143,80 @@ describe("store: sessions", () => {
     useStore.setState({ session: { ...ipc.sampleSession, session_id: "same" } });
     await useStore.getState().resume("same");
     expect(ipc.resumeSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("store: compression", () => {
+  it("ingestCompression tracks the session's running savings and latest mode", () => {
+    useStore.getState().ingestCompression({
+      session: "s1",
+      mode: "audit",
+      saved_tokens: 500,
+      total_saved_tokens: 500,
+      results_compressed: 2,
+    });
+    expect(useStore.getState().compression["s1"]).toEqual({ mode: "audit", tokensSaved: 500 });
+
+    // A later event supersedes the counters (the payload carries the running total).
+    useStore.getState().ingestCompression({
+      session: "s1",
+      mode: "on",
+      saved_tokens: 700,
+      total_saved_tokens: 1200,
+      results_compressed: 3,
+    });
+    expect(useStore.getState().compression["s1"]).toEqual({ mode: "on", tokensSaved: 1200 });
+  });
+
+  it("ingestCompression keeps sessions independent and never touches the thread", () => {
+    useStore.setState({ threads: { s1: [] } });
+    useStore.getState().ingestCompression({
+      session: "s1",
+      mode: "on",
+      saved_tokens: 10,
+      total_saved_tokens: 10,
+      results_compressed: 1,
+    });
+    useStore.getState().ingestCompression({
+      session: "s2",
+      mode: "audit",
+      saved_tokens: 20,
+      total_saved_tokens: 20,
+      results_compressed: 1,
+    });
+    expect(useStore.getState().compression["s1"]).toEqual({ mode: "on", tokensSaved: 10 });
+    expect(useStore.getState().compression["s2"]).toEqual({ mode: "audit", tokensSaved: 20 });
+    // No per-event thread notice — it fires every model call.
+    expect(useStore.getState().threads["s1"]).toEqual([]);
+  });
+});
+
+describe("store: local model load status", () => {
+  it("creates the switch state for a load it didn't initiate (startup restore)", () => {
+    // No switchToLocalModel ran — the event alone must surface the loading UI.
+    useStore.getState().setLocalStatus({ model: "qwen3-1.7b", phase: "starting" });
+    expect(useStore.getState().localSwitch).toMatchObject({
+      model: "qwen3-1.7b",
+      phase: "starting",
+    });
+
+    // Later phases update in place, keeping the original start time.
+    const started = useStore.getState().localSwitch!.startedAt;
+    useStore.getState().setLocalStatus({ model: "qwen3-1.7b", phase: "loading" });
+    expect(useStore.getState().localSwitch).toMatchObject({
+      phase: "loading",
+      startedAt: started,
+    });
+  });
+
+  it("clears the switch state when the load ends (ready or error)", () => {
+    useStore.getState().setLocalStatus({ model: "qwen3-1.7b", phase: "loading" });
+    useStore.getState().setLocalStatus({ model: "qwen3-1.7b", phase: "ready" });
+    expect(useStore.getState().localSwitch).toBeNull();
+
+    // A load that dies mid-way (backend emits "error") must not stick either.
+    useStore.getState().setLocalStatus({ model: "qwen3-1.7b", phase: "starting" });
+    useStore.getState().setLocalStatus({ model: "qwen3-1.7b", phase: "error" });
+    expect(useStore.getState().localSwitch).toBeNull();
   });
 });

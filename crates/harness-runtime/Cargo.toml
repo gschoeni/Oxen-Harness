@@ -10,6 +10,7 @@ description = "Front-end-agnostic runtime services for oxen-harness: connection 
 
 [dependencies]
 harness-config = { workspace = true }
+harness-compress = { workspace = true }
 harness-llm = { workspace = true }
 harness-tools = { workspace = true }
 harness-oxen = { workspace = true }

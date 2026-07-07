@@ -2,7 +2,7 @@
   margin-bottom: var(--space-4);
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+  background: var(--danger-soft);
   border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--separator));
   color: var(--danger);
   font-size: var(--text-sm);
@@ -12,7 +12,7 @@
   margin-bottom: var(--space-4);
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  background: var(--danger-soft);
   border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--separator));
   font-size: var(--text-sm);
   line-height: 1.55;
@@ -23,7 +23,7 @@
   padding: var(--space-3);
   max-height: 180px;
   overflow-y: auto;
-  background: color-mix(in srgb, var(--text) 6%, transparent);
+  background: var(--code-bg);
   border: 1px solid var(--separator);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
@@ -85,7 +85,7 @@
   height: 100%;
   width: 0;
   background: var(--accent);
-  transition: width 0.15s linear;
+  transition: width var(--dur-fast) var(--ease);
 }
 
 .models-foot {
@@ -113,7 +113,7 @@
 .local-setup-overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--z-overlay);
   background: color-mix(in srgb, var(--bg) 70%, transparent);
   backdrop-filter: blur(4px);
   display: flex;
@@ -175,7 +175,7 @@
 .ls-error {
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+  background: var(--danger-soft);
   color: var(--danger);
   font-size: var(--text-sm);
 }
@@ -188,7 +188,7 @@
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
-  font-size: var(--text-xs, 11px);
+  font-size: var(--text-2xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
@@ -314,8 +314,8 @@
   gap: var(--space-2);
 }
 .ls-card-quant {
-  font-family: var(--font-readout, monospace);
-  font-size: var(--text-xs, 11px);
+  font-family: var(--font-readout);
+  font-size: var(--text-2xs);
   color: var(--text-tertiary);
 }
 .ls-empty {
@@ -326,22 +326,22 @@
 
 /* Fit badges */
 .fit-badge {
-  font-size: var(--text-xs, 10px);
+  font-size: var(--text-3xs);
   font-weight: 600;
   padding: 2px 7px;
   border-radius: var(--radius-pill);
   white-space: nowrap;
 }
 .fit-good {
-  background: color-mix(in srgb, var(--green) 22%, transparent);
+  background: var(--green-soft);
   color: var(--green);
 }
 .fit-tight {
-  background: color-mix(in srgb, var(--warning) 24%, transparent);
+  background: var(--warning-soft);
   color: var(--warning);
 }
 .fit-too_big {
-  background: color-mix(in srgb, var(--danger) 20%, transparent);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
@@ -350,6 +350,13 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+/* While the search is focused or its dropdown is open, reserve scroll runway
+   below the bar. The tab has almost no content under the search, so without
+   this the pane cannot scroll the bar to the top (scroll range is content
+   height minus pane height) and the dropdown gets cramped against the bottom. */
+.ls-hf.expanded {
+  padding-bottom: calc(100vh - 160px);
 }
 .ls-hf-row {
   display: flex;
@@ -420,7 +427,7 @@
   display: flex;
   gap: var(--space-3);
   color: var(--text-tertiary);
-  font-size: var(--text-xs, 11px);
+  font-size: var(--text-2xs);
   flex-shrink: 0;
 }
 
@@ -453,12 +460,12 @@
   gap: var(--space-2);
 }
 .ls-quant-name {
-  font-family: var(--font-readout, monospace);
+  font-family: var(--font-readout);
   font-weight: 600;
   font-size: var(--text-sm);
 }
 .ls-rec {
-  font-size: var(--text-xs, 10px);
+  font-size: var(--text-3xs);
   font-weight: 600;
   color: var(--accent);
 }
@@ -481,7 +488,7 @@
   flex: 1;
 }
 .ls-dl-pct {
-  font-size: var(--text-xs, 11px);
+  font-size: var(--text-2xs);
   color: var(--text-tertiary);
   min-width: 34px;
   text-align: right;
@@ -514,7 +521,7 @@
   white-space: nowrap;
 }
 .ls-installed-size {
-  font-size: var(--text-xs, 11px);
+  font-size: var(--text-2xs);
   color: var(--text-tertiary);
 }
 
@@ -533,7 +540,7 @@
   white-space: nowrap;
 }
 .ls-btn:hover:not(:disabled) {
-  background: var(--surface-3, var(--surface-2));
+  background: var(--surface-3);
   border-color: var(--accent);
 }
 .ls-btn:disabled {
@@ -548,8 +555,8 @@
   filter: brightness(1.08);
 }
 .ls-btn-sm {
-  padding: 4px var(--space-2);
-  font-size: var(--text-xs, 12px);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
 }
 .ls-icon-btn {
   display: grid;
@@ -577,32 +584,29 @@
   display: block;
   height: 100%;
   background: var(--accent);
-  transition: width 0.2s var(--ease);
+  transition: width var(--dur) var(--ease);
 }
 .ls-log {
   max-height: 160px;
   overflow-y: auto;
   padding: var(--space-2) var(--space-3);
-  background: var(--bg);
+  background: var(--code-bg);
   border: 1px solid var(--separator);
   border-radius: var(--radius-sm);
-  font-family: var(--font-readout, monospace);
-  font-size: var(--text-xs, 11px);
+  font-family: var(--font-readout);
+  font-size: var(--text-2xs);
   color: var(--text-secondary);
   white-space: pre-wrap;
 }
 .spin {
-  animation: ls-spin 1s linear infinite;
-}
-@keyframes ls-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: spin var(--dur-spin) linear infinite;
 }
 
 /* HF autocomplete combobox */
 .ls-combo {
   position: relative;
+  /* Focus scrolls the search bar to the top of the pane; keep a little air. */
+  scroll-margin-top: var(--space-4);
 }
 .ls-combo-spin {
   margin-left: auto;
@@ -613,7 +617,7 @@
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  z-index: 10;
+  z-index: var(--z-dropdown);
   max-height: 320px;
   overflow-y: auto;
   padding: var(--space-1);
@@ -677,7 +681,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: var(--text-xs, 11px);
+  font-size: var(--text-2xs);
   color: var(--text-tertiary);
 }
 .ls-disk-legend .dot {

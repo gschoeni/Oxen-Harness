@@ -622,6 +622,7 @@ name = "harness-agent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "harness-compress",
  "harness-core",
  "harness-llm",
  "harness-store",
@@ -646,6 +647,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "harness-agent",
+ "harness-compress",
  "harness-config",
  "harness-core",
  "harness-llm",
@@ -661,6 +663,15 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "harness-compress"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -752,6 +763,7 @@ dependencies = [
 name = "harness-runtime"
 version = "0.1.0"
 dependencies = [
+ "harness-compress",
  "harness-config",
  "harness-llm",
  "harness-oxen",
@@ -796,6 +808,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "globset",
+ "harness-compress",
  "harness-core",
  "ignore",
  "mockito",

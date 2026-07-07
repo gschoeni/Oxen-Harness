@@ -12,12 +12,13 @@
 /* Transparent strip across the top that drags the window (overlay title bar).
    The dev-view button sits at the right; the rest stays a drag handle. */
 .chat-titlebar {
-  height: 38px;
+  height: var(--titlebar-h);
   flex-shrink: 0;
-  z-index: 2;
+  z-index: var(--z-titlebar);
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: var(--space-1);
   padding: 0 var(--space-3);
 }
 /* Developer-view toggle, pinned to the upper-right of the chat window. */
@@ -119,8 +120,8 @@
   display: flex;
   flex-direction: column;
   padding: var(--space-6) var(--space-5) var(--space-7);
-  /* Let presses fall through for text selection; only the chips are clickable. */
-  pointer-events: none;
+  /* The empty hero now contains an interactive game; individual controls manage
+     their own pointer affordances. */
 }
 .hero {
   display: flex;
@@ -165,10 +166,103 @@
   box-shadow: var(--frame-shadow-lg);
   overflow: hidden;
 }
-.trail-scene {
+.trail-scene,
+.hero-game-canvas {
   display: block;
   width: 100%;
   height: auto;
+}
+.hero-game-screen {
+  position: relative;
+}
+.hero-game {
+  pointer-events: auto;
+}
+/* The playfield proper; overlays (help line, start combo) pin to this so they
+   never cover the hero-prompt bar below it. */
+.hero-game-stage {
+  position: relative;
+}
+.hero-game-help {
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  bottom: var(--space-2);
+  font-family: var(--font-readout);
+  font-size: 12px;
+  line-height: 1;
+  color: #f4f1e8;
+  text-shadow: 1px 1px 0 #000;
+  opacity: 0.82;
+}
+/* The "insert coin" line, sitting in the prompt bar below the screen: the
+   ↑ ↑ ↓ ↓ start combo as chunky key blocks that fill in as you enter them. */
+.hero-game-start {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-family: var(--font-readout);
+  font-size: 14px;
+  line-height: 1;
+  color: #f4f1e8;
+}
+.hero-game-combo {
+  display: inline-flex;
+  gap: 4px;
+}
+.hero-game-combo kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font: inherit;
+  font-size: 13px;
+  color: #f4f1e8;
+  text-shadow: none;
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid #f4f1e8;
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
+}
+.hero-game-combo kbd.combo-hit {
+  background: #f4f1e8;
+  color: #000;
+}
+.hero-game-start-label {
+  opacity: 0.85;
+}
+/* Cabinet-select tabs on the attract screen — pick which game to play. */
+.hero-game-tabs {
+  position: absolute;
+  top: var(--space-2);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  z-index: 2;
+}
+.hero-game-tab {
+  font-family: var(--font-readout);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 9px;
+  color: #f4f1e8;
+  background: rgba(0, 0, 0, 0.55);
+  border: 2px solid rgba(244, 241, 232, 0.45);
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.hero-game-tab:hover:not(.active) {
+  border-color: #f4f1e8;
+}
+.hero-game-tab.active {
+  background: #f4f1e8;
+  color: #000;
+  border-color: #f4f1e8;
 }
 /* The white-on-black "Press RETURN to size up the situation" bar. */
 .hero-prompt {
@@ -180,6 +274,17 @@
   background: #000;
   border-top: var(--frame-border-w) solid rgba(255, 255, 255, 0.14);
   padding: var(--space-2) var(--space-3) calc(var(--space-2) + 1px);
+}
+/* The game's variant stacks the hint over the ↑↑↓↓ start combo, both centered. */
+.hero-prompt-start {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+.hero-prompt-hint {
+  display: inline-flex;
+  align-items: baseline;
 }
 
 .hero-sub {
@@ -273,7 +378,7 @@
   place-items: center;
   font-size: 46px;
   border-radius: calc(var(--frame-radius) + 8px);
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  background: var(--accent-tint-strong);
   border: var(--frame-border-w) solid color-mix(in srgb, var(--accent) 22%, var(--separator));
   box-shadow: var(--frame-shadow-lg);
 }
@@ -392,7 +497,7 @@
   align-self: flex-end;
   max-width: 82%;
   white-space: pre-wrap;
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  background: var(--accent-tint-strong);
   border: var(--frame-border-w) solid color-mix(in srgb, var(--accent) 40%, var(--separator-strong));
   border-radius: var(--frame-radius);
   box-shadow: var(--frame-shadow);
@@ -584,7 +689,7 @@
   display: grid;
   place-items: center;
   border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+  background: var(--accent-tint-strong);
   color: var(--text-secondary);
   font-size: var(--text-xs);
   font-weight: 600;
@@ -719,7 +824,7 @@
 }
 .composer-inner:focus-within {
   border-color: var(--accent);
-  box-shadow: var(--frame-shadow), 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--frame-shadow), var(--focus-ring);
 }
 .composer textarea {
   flex: 1;
@@ -797,26 +902,29 @@
     transform var(--dur-fast) var(--ease);
 }
 .stop:hover {
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+  background: var(--accent-tint-strong);
 }
 .stop:active {
   transform: scale(0.94);
 }
 
-/* --- Model picker (composer toolbar) --- */
+/* --- Composer pickers (model, compression) --- */
+/* Trigger buttons share the quiet pill treatment; the popover chrome is the
+   shared .menu primitive (ui.css) — only its anchoring lives here. */
 .composer-toolbar {
   max-width: 740px;
   margin: var(--space-2) auto 0;
   display: flex;
   align-items: center;
+  gap: var(--space-1);
 }
-.model-picker {
+.picker {
   position: relative;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
 }
-.model-picker-btn {
+.picker-btn {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -826,103 +934,39 @@
   color: var(--text-tertiary);
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
-  font-size: 12px;
+  font-size: var(--text-xs);
   transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease);
 }
-.model-picker-btn:hover:not(:disabled) {
+.picker-btn:hover:not(:disabled) {
   color: var(--text);
   background: var(--surface-2);
   border-color: var(--separator-strong);
 }
-.model-picker-btn:disabled {
+.picker-btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.model-picker-label {
+.picker-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.model-picker-caret {
+.picker-caret {
   flex-shrink: 0;
   opacity: 0.7;
 }
+.picker-spin {
+  color: var(--accent);
+  flex-shrink: 0;
+  animation: spin var(--dur-spin) linear infinite;
+}
 
-.model-menu {
-  position: absolute;
+.picker-menu {
   bottom: calc(100% + var(--space-1));
   left: 0;
-  z-index: 20;
   min-width: 280px;
   max-width: 380px;
-  max-height: 360px;
-  overflow-y: auto;
-  padding: var(--space-1);
-  background: var(--surface);
-  border: var(--frame-border-w) solid var(--separator-strong);
-  border-radius: var(--frame-radius);
-  box-shadow: var(--frame-shadow-lg);
-}
-.model-menu-head {
-  padding: var(--space-1) var(--space-2);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-tertiary);
-}
-.model-menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-2);
-  background: transparent;
-  color: var(--text);
-  border: none;
-  border-radius: var(--radius-sm);
-  text-align: left;
-  font-size: 13px;
-  transition: background var(--dur-fast) var(--ease);
-}
-.model-menu-item:hover {
-  background: var(--surface-2);
-}
-.model-menu-check {
-  flex-shrink: 0;
-  opacity: 0;
-  color: var(--accent);
-}
-.model-menu-item.active .model-menu-check {
-  opacity: 1;
-}
-.model-menu-local-icon {
-  flex-shrink: 0;
-  color: var(--text-tertiary);
-}
-.model-menu-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.model-menu-id {
-  flex-shrink: 0;
-  font-family: var(--font-readout, monospace);
-  font-size: 10px;
-  color: var(--text-tertiary);
-}
-.model-menu-sep {
-  height: 1px;
-  margin: var(--space-1) 0;
-  background: var(--separator);
-}
-.model-menu-manage {
-  color: var(--text-secondary);
-}
-.model-menu-manage .model-menu-check {
-  opacity: 1;
-  color: var(--text-tertiary);
 }
 
 /* Reopen the chat's canvas after the panel was closed (top-right of messages). */
@@ -930,7 +974,7 @@
   position: absolute;
   top: var(--space-3);
   right: var(--space-4);
-  z-index: 3;
+  z-index: var(--z-titlebar);
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -981,23 +1025,17 @@
 .token-meter-tps {
   color: var(--accent);
 }
+/* Compression savings — informational, quieter than the counts around it. */
+.token-meter-saved {
+  opacity: 0.7;
+}
 
 /* --- Switching to a local model: progress shown inline in the picker --- */
-.model-switch-spin {
-  color: var(--accent);
-  flex-shrink: 0;
-  animation: switch-spin 1s linear infinite;
-}
-@keyframes switch-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 .model-switch-inline {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
 .model-switch-hint {

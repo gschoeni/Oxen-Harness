@@ -11,7 +11,7 @@
   border: none;
   padding: 0;
   font: inherit;
-  color: var(--link, var(--accent));
+  color: var(--link);
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
@@ -46,20 +46,13 @@
   text-align: left;
   color: var(--text);
 }
-.tool-chevron {
-  flex-shrink: 0;
-  color: var(--text-tertiary);
-  transition: transform var(--dur-fast) var(--ease);
-}
-.tool-chevron.open {
-  transform: rotate(90deg);
-}
+/* Disclosure chevron: the shared .chevron (ui.css). */
 .tool-row-icon {
   flex-shrink: 0;
   color: var(--text-tertiary);
 }
 .tool-row-name {
-  font-family: var(--font-readout, monospace);
+  font-family: var(--font-readout);
   font-weight: 600;
   flex-shrink: 0;
 }
@@ -98,7 +91,7 @@
   display: block;
   width: 38px;
   height: 22px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--separator-strong);
   transition: background var(--dur-fast) var(--ease);
 }
@@ -111,7 +104,7 @@
   height: 16px;
   border-radius: 50%;
   background: var(--surface);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-1);
   transition: transform var(--dur-fast) var(--ease);
 }
 .tool-switch input:checked + .tool-switch-track {
@@ -121,7 +114,7 @@
   transform: translateX(16px);
 }
 .tool-switch input:focus-visible + .tool-switch-track {
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--focus-ring);
 }
 
 .tool-row-body {
@@ -147,7 +140,7 @@
 .tool-desc-edit:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 55%, var(--separator-strong));
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--focus-ring);
 }
 .tool-row-actions {
   display: flex;
@@ -167,7 +160,7 @@
   padding: var(--space-3);
   max-height: 280px;
   overflow: auto;
-  background: color-mix(in srgb, var(--text) 6%, transparent);
+  background: var(--code-bg);
   border: 1px solid var(--separator);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
@@ -252,7 +245,7 @@
 .tool-input:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 55%, var(--separator-strong));
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--focus-ring);
 }
 
 /* Selects: strip the native chrome so they share the text inputs' exact
@@ -343,7 +336,7 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 .tool-param-remove:hover {
-  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 .tool-param-add {

@@ -147,7 +147,7 @@ export function SkillsPage() {
 
         <div className="tool-list">
           <button className="tool-add" onClick={() => setView({ kind: "new" })} disabled={skills === null}>
-            <Plus size={16} />
+            <Plus size={15} />
             New skill
           </button>
         </div>
@@ -253,10 +253,10 @@ function SkillRow({
   return (
     <div className={`tool-row ${skill.enabled ? "" : "disabled"}`}>
       <button className="tool-row-head" onClick={onOpen} aria-label={`Open skill ${skill.name}`}>
-        <GraduationCap size={14} className="tool-row-icon" />
+        <GraduationCap size={15} className="tool-row-icon" />
         <span className="tool-row-name">{skill.name}</span>
         <span className="tool-row-desc">{skill.description}</span>
-        <ChevronRight size={14} className="skill-row-go" />
+        <ChevronRight size={15} className="skill-row-go" />
       </button>
       <ToolSwitch name={skill.name} enabled={skill.enabled} onToggle={onToggle} />
     </div>
@@ -304,7 +304,7 @@ function SkillShow({
         <div className="skill-detail-actions">
           <ToolSwitch name={skill.name} enabled={skill.enabled} onToggle={onToggle} />
           <Button variant="primary" size="sm" onClick={onEdit}>
-            <Pencil size={14} /> Edit
+            <Pencil size={15} /> Edit
           </Button>
         </div>
       </header>
@@ -425,7 +425,7 @@ function SkillEditor({
                   {project ? `This project only — ${project.name}` : "This project only"}
                 </option>
               </select>
-              <ChevronDown size={14} />
+              <ChevronDown size={15} />
             </span>
             <span className="tool-field-hint" title={project?.path}>
               {scope === "project" && project
@@ -516,7 +516,7 @@ function SkillEditor({
                 onClick={() => setConfirmDelete(true)}
                 title="Remove this skill and its files"
               >
-                <Trash2 size={14} /> Delete skill
+                <Trash2 size={15} /> Delete skill
               </Button>
             ))}
         </div>

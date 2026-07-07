@@ -68,8 +68,8 @@
 .icon-btn {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: var(--control-h);
+  height: var(--control-h);
   background: transparent;
   color: var(--text-secondary);
   border: none;
@@ -84,14 +84,24 @@
   background: var(--accent-soft);
   color: var(--accent);
 }
+.icon-btn.sm {
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+}
+.icon-btn.danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
 
+/* The one spinner. Size via the --size custom property (default 16px); every
+   rotating loader shares this single keyframe. */
 .spinner {
-  width: 16px;
-  height: 16px;
+  width: var(--size, 16px);
+  height: var(--size, 16px);
   border-radius: var(--radius-pill);
   border: 2px solid var(--separator-strong);
   border-top-color: var(--accent);
-  animation: spin 0.7s linear infinite;
+  animation: spin var(--dur-spin) linear infinite;
 }
 @keyframes spin {
   to {
@@ -109,8 +119,8 @@
   padding: var(--space-7);
 }
 .empty-icon {
-  width: 64px;
-  height: 64px;
+  width: var(--space-8);
+  height: var(--space-8);
   display: grid;
   place-items: center;
   border: var(--frame-border-w) solid color-mix(in srgb, var(--accent) 35%, var(--separator-strong));
@@ -133,7 +143,7 @@
 .modal-scrim {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--z-modal);
   background: var(--scrim);
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
@@ -198,4 +208,196 @@
 
 .muted {
   color: var(--text-tertiary);
+}
+
+/* Uppercase section label — the caps-and-tracking treatment used for section
+   headings, field names, and stat keys everywhere. */
+.label-caps {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+
+/* --- Form controls --- */
+/* The canonical text input (mirrored by feature-local classes like
+   .field-input/.tool-input, which should keep these exact rules). */
+.input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  font: inherit;
+  font-size: var(--text-md);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.input::placeholder {
+  color: var(--text-tertiary);
+}
+.input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--separator-strong));
+  box-shadow: var(--focus-ring);
+}
+
+/* --- Dropdown menu --- */
+/* The popover surface + rows shared by every picker (model, compression,
+   combo boxes, autocomplete). Position (top/bottom anchoring, width) is the
+   caller's concern. */
+.menu {
+  position: absolute;
+  z-index: var(--z-dropdown);
+  max-height: 360px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow-lg);
+}
+.menu-head {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: var(--text-sm);
+  transition: background var(--dur-fast) var(--ease);
+}
+.menu-item:hover {
+  background: var(--surface-2);
+}
+.menu-check {
+  flex-shrink: 0;
+  opacity: 0;
+  color: var(--accent);
+}
+.menu-item.active .menu-check {
+  opacity: 1;
+}
+.menu-icon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.menu-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-hint {
+  flex-shrink: 0;
+  font-family: var(--font-readout, monospace);
+  font-size: var(--text-3xs);
+  color: var(--text-tertiary);
+}
+.menu-sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--separator);
+}
+.menu-item.manage {
+  color: var(--text-secondary);
+}
+.menu-item.manage .menu-check {
+  opacity: 1;
+  color: var(--text-tertiary);
+}
+
+/* Rotating disclosure chevron shared by every collapsible row. */
+.chevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.chevron.open {
+  transform: rotate(90deg);
+}
+
+/* --- Segmented control --- */
+.segmented {
+  display: inline-flex;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: transparent;
+  color: var(--text-tertiary);
+  border: none;
+  border-radius: var(--radius-xs);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.segmented button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+/* --- Chips (small status/label pills) --- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+.chip.accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.chip.success {
+  background: var(--green-soft);
+  color: var(--green);
+}
+.chip.warn {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.chip.danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* --- Progress bar --- */
+.progress {
+  width: 100%;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur-fast) var(--ease);
 }

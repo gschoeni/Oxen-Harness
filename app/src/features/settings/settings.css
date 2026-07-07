@@ -7,7 +7,7 @@
 .settings-overlay {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: var(--z-overlay);
   background: var(--bg);
   display: flex;
   animation: settings-in var(--dur) var(--ease);
@@ -35,7 +35,7 @@
   gap: var(--space-2);
   /* Top padding clears the macOS traffic-light buttons (overlay title bar),
      matching the main sidebar. */
-  padding: 38px var(--space-3) var(--space-4);
+  padding: var(--titlebar-h) var(--space-3) var(--space-4);
   background: var(--bg);
   border-right: 1px solid var(--separator);
   overflow-y: auto;
@@ -133,7 +133,7 @@
   gap: var(--space-3);
   /* Generous top padding so the page title clears the title-bar zone and lines
      up with the rail's "Settings" heading. */
-  padding: 38px var(--space-6) var(--space-4);
+  padding: var(--titlebar-h) var(--space-6) var(--space-4);
   border-bottom: 1px solid var(--separator);
   flex-shrink: 0;
 }
@@ -319,7 +319,7 @@
 .field-input:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 55%, var(--separator-strong));
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--focus-ring);
 }
 .field-with-action {
   position: relative;
@@ -360,7 +360,7 @@
   line-height: 1.4;
 }
 .save-status.ok {
-  color: var(--green, var(--accent));
+  color: var(--green);
 }
 .save-status.err {
   color: var(--danger);
@@ -368,7 +368,7 @@
 .hint code {
   font-family: var(--font-mono);
   font-size: 0.92em;
-  background: var(--surface-2);
+  background: var(--code-bg);
   padding: 1px 5px;
   border-radius: var(--radius-sm);
 }
@@ -461,7 +461,7 @@
   white-space: nowrap;
 }
 .model-item-id {
-  font-family: var(--font-readout, monospace);
+  font-family: var(--font-readout);
   font-size: var(--text-sm);
   color: var(--text-tertiary);
   overflow: hidden;

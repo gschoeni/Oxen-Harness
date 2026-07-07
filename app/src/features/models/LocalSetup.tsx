@@ -95,6 +95,17 @@ export function LocalSetup() {
     onKeyDown: onHfKeyDown,
     saveToken,
   } = useHfSearch({ onResolved: setSelected, onError: setError });
+  const [hfFocused, setHfFocused] = useState(false);
+  const hfMenuVisible = hfOpen && (hfResults.length > 0 || looksLikeRepo(hfInput));
+  // While the search is in use, `.ls-hf.expanded` reserves scroll runway below
+  // the bar; scroll only after that space is in the DOM, or the pane clamps the
+  // scroll short of the top.
+  const hfExpanded = hfFocused || hfMenuVisible;
+  useEffect(() => {
+    if (hfExpanded) {
+      hfBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [hfExpanded, hfBoxRef]);
 
   const logRef = useRef<HTMLPreElement>(null);
 
@@ -224,7 +235,7 @@ export function LocalSetup() {
               <div className="ls-runtime">
                 {runtimeReady ? (
                   <span className="ls-runtime-ok">
-                    <Check size={14} /> Runtime ready
+                    <Check size={15} /> Runtime ready
                     {runtime?.source === "managed" && ` (${runtime.managed_version})`}
                   </span>
                 ) : runtime?.can_manage ? (
@@ -235,17 +246,17 @@ export function LocalSetup() {
                   >
                     {installingRuntime ? (
                       <>
-                        <Loader size={14} className="spin" /> Setting up runtime…
+                        <Loader size={15} className="spin" /> Setting up runtime…
                       </>
                     ) : (
                       <>
-                        <Download size={14} /> Set up runtime
+                        <Download size={15} /> Set up runtime
                       </>
                     )}
                   </button>
                 ) : (
                   <span className="ls-runtime-warn">
-                    <AlertTriangle size={14} /> No automatic runtime for this platform
+                    <AlertTriangle size={15} /> No automatic runtime for this platform
                   </span>
                 )}
               </div>
@@ -283,7 +294,7 @@ export function LocalSetup() {
               <div className="ls-installed">
                 {installed.models.map((m) => (
                   <div className="ls-installed-row" key={m.id}>
-                    <Cpu size={14} />
+                    <Cpu size={15} />
                     <span className="ls-installed-name">{m.display}</span>
                     <span className="ls-installed-size">{formatBytes(m.size_bytes)}</span>
                     <button
@@ -335,7 +346,7 @@ export function LocalSetup() {
             )}
 
             {tab === "huggingface" && (
-              <div className="ls-hf">
+              <div className={`ls-hf ${hfExpanded ? "expanded" : ""}`}>
                 <div className="ls-combo" ref={hfBoxRef}>
                   <div className="ls-input-wrap">
                     {resolving ? <Loader size={15} className="spin" /> : <Search size={15} />}
@@ -346,13 +357,17 @@ export function LocalSetup() {
                       autoCapitalize="off"
                       autoCorrect="off"
                       onChange={(e) => setHfInput(e.target.value)}
-                      onFocus={() => hfResults.length && setHfOpen(true)}
+                      onFocus={() => {
+                        setHfFocused(true);
+                        if (hfResults.length) setHfOpen(true);
+                      }}
+                      onBlur={() => setHfFocused(false)}
                       onKeyDown={onHfKeyDown}
                     />
-                    {hfSearching && <Loader size={14} className="spin ls-combo-spin" />}
+                    {hfSearching && <Loader size={15} className="spin ls-combo-spin" />}
                   </div>
 
-                  {hfOpen && (hfResults.length > 0 || looksLikeRepo(hfInput)) && (
+                  {hfMenuVisible && (
                     <div className="ls-combo-menu" role="listbox">
                       {looksLikeRepo(hfInput) && (
                         <button
@@ -360,7 +375,7 @@ export function LocalSetup() {
                           onMouseEnter={() => setHfActive(-1)}
                           onClick={() => doResolve(hfInput)}
                         >
-                          <Download size={14} />
+                          <Download size={15} />
                           <span className="ls-hf-name">Load “{hfInput.trim()}”</span>
                         </button>
                       )}
@@ -481,11 +496,11 @@ export function LocalSetup() {
                           </div>
                         ) : noSpace ? (
                           <span className="ls-runtime-warn" title="Free up disk space first">
-                            <AlertTriangle size={14} /> Not enough space
+                            <AlertTriangle size={15} /> Not enough space
                           </span>
                         ) : (
                           <button className="ls-btn" onClick={() => doDownload(q)}>
-                            <Download size={14} /> Download
+                            <Download size={15} /> Download
                           </button>
                         )}
                       </div>
@@ -548,7 +563,7 @@ function ModelCard({
     <button className={`ls-card ${active ? "active" : ""}`} onClick={onClick}>
       <div className="ls-card-top">
         <span className="ls-card-name">{model.display}</span>
-        {anyInstalled && <Check size={14} className="ls-card-installed" />}
+        {anyInstalled && <Check size={15} className="ls-card-installed" />}
       </div>
       {model.params && <span className="ls-card-params">{model.params}</span>}
       <div className="ls-card-bottom">

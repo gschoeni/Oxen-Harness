@@ -19,6 +19,17 @@ if (!window.matchMedia) {
   })) as unknown as typeof window.matchMedia;
 }
 
+// jsdom lacks scrollIntoView; LocalSetup's HF search scrolls itself into view on focus.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+
+// Keep requestAnimationFrame-driven UI deterministic enough for component tests.
+if (!window.requestAnimationFrame) {
+  window.requestAnimationFrame = (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16);
+  window.cancelAnimationFrame = (id: number) => window.clearTimeout(id);
+}
+
 // ThemesModal's "Export" copies to the clipboard.
 if (!navigator.clipboard) {
   Object.defineProperty(navigator, "clipboard", {

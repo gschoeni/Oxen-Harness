@@ -50,7 +50,7 @@ export function ApiKeyPrompt({ item }: { item: ApiKeyItem }) {
     <div className="apikey-card">
       <div className="apikey-head">
         <span className="apikey-icon">
-          <KeyRound size={16} />
+          <KeyRound size={15} />
         </span>
         <div className="apikey-head-text">
           <div className="apikey-title">Connect your Oxen account</div>

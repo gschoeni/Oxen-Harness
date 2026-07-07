@@ -32,7 +32,7 @@ export function StreamingWrite() {
   return (
     <div className="streaming-write">
       <div className="streaming-write-head">
-        <Icon size={14} />
+        <Icon size={15} />
         <span className="streaming-write-verb">{write.verb}</span>
         <span className="streaming-write-path" title={write.path ?? undefined}>
           {label}

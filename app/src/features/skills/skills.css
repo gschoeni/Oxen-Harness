@@ -128,7 +128,7 @@
   align-items: center;
   gap: var(--space-2);
   margin: 0;
-  font-family: var(--font-readout, monospace);
+  font-family: var(--font-readout);
   font-size: var(--text-lg);
   font-weight: 600;
 }
@@ -155,7 +155,7 @@
 }
 .skill-md-preview {
   /* Match the write-mode textarea so toggling doesn't jump the layout. */
-  min-height: 21rem;
+  min-height: 336px;
   background: var(--bg);
 }
 
@@ -188,7 +188,7 @@
   position: absolute;
   left: var(--space-3);
   bottom: var(--space-2);
-  z-index: 5;
+  z-index: var(--z-dropdown);
   margin: 0;
   padding: var(--space-1);
   list-style: none;
@@ -198,7 +198,7 @@
   background: var(--surface);
   border: 1px solid var(--separator-strong);
   border-radius: var(--radius-sm);
-  box-shadow: var(--frame-shadow-hover, 0 8px 24px rgba(0, 0, 0, 0.35));
+  box-shadow: var(--frame-shadow-hover);
 }
 .skill-autocomplete button {
   display: flex;
@@ -341,5 +341,5 @@
 }
 .skill-ref-chip.unknown {
   color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  background: var(--danger-soft);
 }

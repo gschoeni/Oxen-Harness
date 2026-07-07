@@ -103,7 +103,7 @@ export function ToolsPage() {
           {adding ? (
             <div className="tool-row tool-row-new">
               <div className="tool-editor-title">
-                <Globe size={14} className="tool-row-icon" />
+                <Globe size={15} className="tool-row-icon" />
                 New tool
               </div>
               <ToolEditor
@@ -116,7 +116,7 @@ export function ToolsPage() {
             </div>
           ) : (
             <button className="tool-add" onClick={() => setAdding(true)} disabled={tools === null}>
-              <Plus size={16} />
+              <Plus size={15} />
               New tool
             </button>
           )}
@@ -177,8 +177,8 @@ function ToolRow({
   return (
     <div className={`tool-row ${tool.enabled ? "" : "disabled"}`}>
       <button className="tool-row-head" onClick={() => setOpen((v) => !v)}>
-        <ChevronRight size={14} className={`tool-chevron ${open ? "open" : ""}`} />
-        <Wrench size={14} className="tool-row-icon" />
+        <ChevronRight size={15} className={`chevron ${open ? "open" : ""}`} />
+        <Wrench size={15} className="tool-row-icon" />
         <span className="tool-row-name">{tool.name}</span>
         {overridden && <span className="tool-row-badge">edited</span>}
         {!open && <span className="tool-row-desc">{tool.description}</span>}
@@ -212,7 +212,7 @@ function ToolRow({
                 onClick={() => onSaveDescription(tool.name, null)}
                 title="Restore the built-in description"
               >
-                <RotateCcw size={14} /> Reset to default
+                <RotateCcw size={15} /> Reset to default
               </Button>
             )}
           </div>
@@ -247,8 +247,8 @@ function CustomToolRow({
   return (
     <div className={`tool-row ${tool.enabled ? "" : "disabled"}`}>
       <button className="tool-row-head" onClick={() => setOpen((v) => !v)}>
-        <ChevronRight size={14} className={`tool-chevron ${open ? "open" : ""}`} />
-        <Globe size={14} className="tool-row-icon" />
+        <ChevronRight size={15} className={`chevron ${open ? "open" : ""}`} />
+        <Globe size={15} className="tool-row-icon" />
         <span className="tool-row-name">{tool.name}</span>
         {!open && <span className="tool-row-desc">{tool.description}</span>}
       </button>

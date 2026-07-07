@@ -1,6 +1,7 @@
 import { Markdown } from "../../components/ui/Markdown";
 import { ToolCall } from "./ToolCall";
 import { ApiKeyPrompt } from "./ApiKeyPrompt";
+import { RetryPrompt } from "./RetryPrompt";
 import { AttachmentImage } from "./AttachmentImage";
 import type { Item } from "./thread";
 
@@ -29,6 +30,10 @@ export function ThreadItem({ item, now }: { item: Item; now: number }) {
 
   if (item.kind === "apikey") {
     return <ApiKeyPrompt item={item} />;
+  }
+
+  if (item.kind === "retry") {
+    return <RetryPrompt item={item} />;
   }
 
   if (item.kind === "assistant") {

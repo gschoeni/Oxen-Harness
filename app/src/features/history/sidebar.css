@@ -2,7 +2,7 @@
   background: var(--surface);
   border-right: 1px solid var(--separator);
   /* Top padding clears the macOS traffic-light buttons (overlay title bar). */
-  padding: 38px var(--space-4) var(--space-4);
+  padding: var(--titlebar-h) var(--space-4) var(--space-4);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -20,8 +20,8 @@
   top: 0;
   left: 0;
   right: 0;
-  height: 38px;
-  z-index: 1;
+  height: var(--titlebar-h);
+  z-index: var(--z-titlebar);
 }
 
 .brand {
@@ -186,7 +186,7 @@
   color: var(--text);
 }
 .history-item.active {
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+  background: var(--accent-tint-strong);
   border-color: color-mix(in srgb, var(--accent) 30%, var(--separator));
   color: var(--text);
 }
@@ -226,7 +226,7 @@
   opacity: 1;
 }
 .history-delete:hover {
-  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 

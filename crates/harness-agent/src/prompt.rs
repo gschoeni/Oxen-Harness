@@ -99,7 +99,11 @@ pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
            single change, a few edits, or questions you can answer directly, and \
            don't split one logical task into busywork steps just to have a list — \
            when unsure, just do the work. When you do use it, keep exactly one item \
-           in_progress and mark items completed the moment they're done.\n\
+           in_progress and mark items completed the moment they're done. If a step \
+           fails or is blocked (a tool error, missing auth, an impossible subtask), \
+           never abandon the checklist silently: update the plan to reflect it — \
+           annotate or drop the blocked step — continue with the steps that don't \
+           depend on it, and tell the user what's blocked and why.\n\
          - When a product/design/implementation decision is genuinely ambiguous and \
            has multiple reasonable approaches with real trade-offs, call \
            `ask_user_question` to interview the user instead of guessing. Keep \
@@ -137,6 +141,18 @@ pub(crate) const INTENT_NUDGE: &str =
     "You described what you'll do but didn't actually call a tool to do it. \
      If you intended to take an action — open a `canvas`, write or edit a file, run a command — \
      make that tool call now. If you were genuinely finished, reply with your final answer.";
+
+/// The one-shot corrective appended when the model ends its turn while a plan it
+/// updated *this turn* still has unfinished items — the "one subtask failed, so
+/// the whole checklist silently stalls" failure mode (see `Agent::drive_turn`).
+/// Sent only on the retry request and never persisted.
+pub(crate) const PLAN_STALL_NUDGE: &str =
+    "Your plan still has unfinished items. If you can keep working, continue with \
+     the next step now. If a step failed or is blocked, call `update_plan` to make \
+     the checklist reflect reality — keep what's done, drop or annotate the blocked \
+     step, continue any steps that don't depend on it — and then give your final \
+     answer explaining what's blocked and what you completed instead. Do not leave \
+     the checklist stale.";
 
 /// Heuristic: does a text-only reply read as "I'm about to do X" rather than a
 /// finished answer? Used at most once per turn to nudge the model into emitting

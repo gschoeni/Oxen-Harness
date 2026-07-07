@@ -83,6 +83,21 @@ fn validate_plan(mut items: Vec<PlanItem>) -> Result<Vec<PlanItem>, String> {
     Ok(items)
 }
 
+/// Parse an `update_plan` call's raw JSON arguments into a validated plan —
+/// the same parse/validate path a real invocation takes. Returns `None` when
+/// the arguments would have been rejected (i.e. the call errored, so the plan
+/// didn't actually change). Lets the agent loop track plan state from the
+/// tool calls it executes without re-implementing the rules.
+pub fn parse_plan_arguments(arguments: &str) -> Option<Vec<PlanItem>> {
+    let args: PlanArgs = serde_json::from_str(arguments).ok()?;
+    validate_plan(args.plan).ok()
+}
+
+/// Whether a plan still has unfinished (pending or in-progress) items.
+pub fn plan_is_open(items: &[PlanItem]) -> bool {
+    items.iter().any(|it| it.status != PlanStatus::Completed)
+}
+
 /// Number of completed items in a plan.
 fn completed(items: &[PlanItem]) -> usize {
     items
@@ -147,7 +162,12 @@ impl TypedTool for PlanTool {
          completed IMMEDIATELY when it's done — never batch completions; only \
          mark completed when fully done (if it failed or is partial, leave it \
          in_progress and add a follow-up item); drop items that are no longer \
-         relevant."
+         relevant.\n\
+         When a step FAILS (a tool error, missing auth/key, an impossible \
+         subtask), never abandon the checklist silently: update the plan to \
+         reflect reality — annotate or drop the blocked step — then continue \
+         with the remaining steps that don't depend on it, and tell the user \
+         what's blocked and why."
     }
 
     async fn run(&self, args: PlanArgs) -> Result<String, ToolError> {
@@ -230,6 +250,29 @@ mod tests {
         assert!(out.contains("1/2 done"), "out: {out}");
         assert!(out.contains("[x] Research"), "out: {out}");
         assert!(out.contains("[>] Building"), "out: {out}");
+    }
+
+    #[test]
+    fn parse_plan_arguments_accepts_valid_and_rejects_invalid() {
+        let valid = serde_json::json!({
+            "plan": [item("Research", "completed"), item("Build", "in_progress")]
+        })
+        .to_string();
+        let items = parse_plan_arguments(&valid).unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(plan_is_open(&items));
+
+        let all_done = serde_json::json!({ "plan": [item("Research", "completed")] }).to_string();
+        assert!(!plan_is_open(&parse_plan_arguments(&all_done).unwrap()));
+
+        // Anything a real invocation would reject parses to None.
+        assert!(parse_plan_arguments("not json").is_none());
+        assert!(parse_plan_arguments(r#"{"plan": []}"#).is_none());
+        let two_active = serde_json::json!({
+            "plan": [item("A", "in_progress"), item("B", "in_progress")]
+        })
+        .to_string();
+        assert!(parse_plan_arguments(&two_active).is_none());
     }
 
     #[test]

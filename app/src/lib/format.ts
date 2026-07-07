@@ -33,6 +33,18 @@ export function elapsed(ms: number): string {
   return `${Math.floor(secs / 60)}m${String(secs % 60).padStart(2, "0")}s`;
 }
 
+/** Compact token count like "842", "12.3k", or "1.2M" — for tight readouts
+ *  (the token meter's savings annotation) where a full count would crowd. */
+export function compactTokens(n: number): string {
+  if (n < 1000) return `${Math.round(n)}`;
+  if (n < 1_000_000) {
+    const k = n / 1000;
+    return `${k >= 100 ? k.toFixed(0) : k.toFixed(1)}k`;
+  }
+  const m = n / 1_000_000;
+  return `${m >= 100 ? m.toFixed(0) : m.toFixed(1)}M`;
+}
+
 /** Clamp a string to `max` characters, appending an ellipsis when truncated. */
 export function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "…" : s;

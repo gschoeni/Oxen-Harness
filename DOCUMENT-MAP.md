@@ -23,6 +23,7 @@ oxen-harness/
     harness-core/            — Shared message/role types and defaults (leaf crate).
     harness-config/          — Single source for ~/.oxen-harness paths; atomic + schema-versioned config IO; .env secrets (dotenvy).
     harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth; attachment store (content-addressed on-disk files) + hydration.
+    harness-compress/        — Reversible context compression for tool output: JSON-array crushing, log/line collapsing, CCR store (`<<ccr:hash>>` markers resolved by retrieve_original).
     harness-tools/           — TypedTool trait (schemas derived from typed args), fs read/write/edit, glob find, regex search, sandboxed shell, git, Brave web search, ask_user_question, canvas, update_plan, skills (SKILL.md loaded on demand), custom HTTP tools.
     harness-store/           — SQLite history (verbatim) + JSONL export; rusqlite_migration schema versioning; rich session metadata.
     harness-oxen/            — Version config/data + export/share traces via the `oxen` CLI (testable Runner shell-out; no liboxen).

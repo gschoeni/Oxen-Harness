@@ -80,33 +80,7 @@
   font-size: var(--text-xs);
   color: var(--green);
 }
-.dev-segmented {
-  display: inline-flex;
-  background: var(--surface-2);
-  border-radius: var(--radius-sm);
-  padding: 2px;
-  gap: 2px;
-}
-.dev-segmented button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: transparent;
-  color: var(--text-tertiary);
-  border: none;
-  border-radius: var(--radius-xs);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-.dev-segmented button.active {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow-1);
-}
-
+/* The view switcher is the shared .segmented control (ui.css). */
 .dev-copy {
   display: inline-flex;
   align-items: center;
@@ -169,14 +143,7 @@
 .dev-msg-head:hover {
   background: var(--surface-2);
 }
-.dev-chevron {
-  flex-shrink: 0;
-  color: var(--text-tertiary);
-  transition: transform var(--dur-fast) var(--ease);
-}
-.dev-chevron.open {
-  transform: rotate(90deg);
-}
+/* Disclosure chevron: the shared .chevron (ui.css). */
 .dev-role {
   font-size: var(--text-xs);
   font-weight: 700;
@@ -275,7 +242,7 @@
 
 /* tool-definitions panel (a distinct, neutral-accented card) */
 .dev-tools-panel {
-  border-left-color: var(--accent-soft, var(--separator-strong));
+  border-left-color: var(--accent-soft);
 }
 .dev-tooldef-head {
   width: 100%;
@@ -285,12 +252,12 @@
   cursor: pointer;
 }
 .dev-tooldef-head:hover {
-  background: var(--surface-3, var(--surface));
+  background: var(--surface-3);
 }
 .dev-tooldef-desc {
   flex: 1;
   min-width: 0;
-  font-family: var(--font-sans, inherit);
+  font-family: var(--font-ui);
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   white-space: nowrap;
@@ -300,7 +267,7 @@
 
 .dev-code {
   margin: 0;
-  background: var(--bg);
+  background: var(--code-bg);
   border-top: 1px solid var(--separator);
   padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
@@ -317,7 +284,7 @@
 
 .dev-rawjson {
   margin: 0;
-  background: var(--surface-2);
+  background: var(--code-bg);
   border: 1px solid var(--separator);
   border-radius: var(--radius-sm);
   padding: var(--space-3);
@@ -341,7 +308,7 @@
 .inspector-scrim {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: var(--z-drawer);
   background: color-mix(in srgb, var(--bg) 55%, transparent);
   -webkit-backdrop-filter: blur(3px);
   backdrop-filter: blur(3px);
@@ -393,7 +360,7 @@
   flex-shrink: 0;
   font-size: var(--text-xs);
   color: var(--text-tertiary);
-  font-family: var(--font-readout, monospace);
+  font-family: var(--font-readout);
 }
 .inspector-close {
   display: grid;
@@ -458,7 +425,7 @@
   color: var(--green);
 }
 .inspector-keep.active {
-  background: color-mix(in srgb, var(--green) 18%, var(--surface));
+  background: var(--green-soft);
   border-color: var(--green);
   color: var(--green);
 }
@@ -467,7 +434,7 @@
   color: var(--danger);
 }
 .inspector-reject.active {
-  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
+  background: var(--danger-soft);
   border-color: var(--danger);
   color: var(--danger);
 }

@@ -3,6 +3,7 @@
 mod almanac;
 mod ask;
 mod attach;
+mod auth_cmd;
 mod brave;
 mod canvas;
 mod diff;
@@ -34,6 +35,7 @@ use harness_store::{HistoryStore, SessionMeta};
 use harness_tools::{ToolRegistry, Workspace};
 use rustyline::DefaultEditor;
 
+use crate::picker::Choice;
 use crate::queue::MessageQueue;
 use crate::render::{truncate, TurnRenderer};
 use crate::repl::{parse_command, Command};
@@ -285,25 +287,27 @@ async fn resolve_endpoint(args: &Args, resume_meta: Option<&SessionMeta>, ui: &U
 
         // Precedence for the base URL: --base-url > --host > env (OXEN_BASE_URL
         // / OXEN_HOST) > default Oxen.ai endpoint.
-        let base_url_override = args
+        let base_url = args
             .base_url
             .clone()
-            .or_else(|| args.host.as_deref().map(harness_llm::base_url_from_host));
-        let client_result = match base_url_override {
-            Some(base_url) => OxenClient::connect(base_url, &model),
-            None => OxenClient::from_default_config().map(|c| c.with_model(&model)),
-        };
-        let client = match client_result {
+            .or_else(|| args.host.as_deref().map(harness_llm::base_url_from_host))
+            .unwrap_or_else(harness_llm::resolve_base_url);
+        let client = match OxenClient::connect(base_url.clone(), &model) {
             Ok(c) => c,
-            Err(e) => {
-                eprintln!("\n{}", ui.red(&ui.death()));
-                eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
-                eprintln!(
-                    "  {}",
-                    ui.dim("Set OXEN_API_KEY, or log in with the `oxen` CLI, then set out again.")
-                );
-                std::process::exit(1);
-            }
+            // No key resolves anywhere — offer the masked `/auth` entry card
+            // right here so a first run can be authenticated without leaving.
+            Err(e) => match auth_cmd::prompt_for_missing_key(ui, &base_url) {
+                Some(key) => OxenClient::new(base_url, key, &model),
+                None => {
+                    eprintln!("\n{}", ui.red(&ui.death()));
+                    eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
+                    eprintln!(
+                        "  {}",
+                        ui.dim("Set OXEN_API_KEY, or log in with the `oxen` CLI, then set out again.")
+                    );
+                    std::process::exit(1);
+                }
+            },
         };
         Endpoint {
             client,
@@ -402,6 +406,8 @@ fn agent_config(
             workspace.root(),
         )),
         attachment_root: Some(workspace.root().to_path_buf()),
+        // Context compression (off/audit/on) per the user's saved preference.
+        compression: harness_runtime::compression::mode(),
         ..AgentConfig::default()
     }
 }
@@ -516,7 +522,10 @@ async fn run_box_repl(agent: &mut Agent, ui: &mut Ui, ctx: &ReplContext<'_>) -> 
                 ui.dim("— /queue to review, /queue run to send"),
             );
         }
-        let idle = live::read_idle(ui, &mut queue, &mut history, &seed).await?;
+        let status = Some(context_usage_line(agent, ui));
+        let compression = compression_status_line(agent, ui);
+        let idle =
+            live::read_idle(ui, &mut queue, &mut history, &seed, status, compression).await?;
         match idle {
             live::Idle::Exit => {
                 print!("{}", theme::death_screen(ui, ctx.session));
@@ -627,6 +636,8 @@ async fn handle_line(
             );
         }
         Command::Skills => print_skills(ui, ctx.workspace_root),
+        Command::Auth(rest) => auth_cmd::handle_repl(rest, agent, ui, ctx.base_url)?,
+        Command::Compression(rest) => switch_compression(rest, agent, ui)?,
         Command::Model(None) => {
             println!("  {} {}", ui.brown("oxen yoked:"), ui.cream(agent.model()))
         }
@@ -777,18 +788,24 @@ async fn run_prompt(agent: &mut Agent, prompt: &str, ui: &Ui) -> Result<bool> {
         Err(e) => {
             println!("\n{}", ui.red(&ui.death()));
             println!("  {}", ui.dim(&format!("The trail guide says: {e}")));
+            if let Some(hint) = auth_cmd::auth_hint(ui, &e.to_string()) {
+                println!("{hint}");
+            }
             Ok(false)
         }
     }
 }
 
-/// A subtle trailer showing how full the model's context window is.
+/// A subtle trailer showing how full the model's context window is, set apart
+/// from the turn's output by a blank line.
 fn print_context_usage(agent: &Agent, ui: &Ui) {
+    println!();
     println!("{}", context_usage_line(agent, ui));
 }
 
-/// The context-usage trailer as a (themed, indented) line — shared by the
-/// classic prompt and the live composer (which writes it into its scroll region).
+/// The context-usage trailer as a (themed, indented) line — the current model
+/// alongside how full its context window is. Shared by the classic prompt and
+/// the live composer (which pins it just above the input divider).
 pub(crate) fn context_usage_line(agent: &Agent, ui: &Ui) -> String {
     let used = agent.context_tokens();
     let window = agent.context_window();
@@ -798,13 +815,115 @@ pub(crate) fn context_usage_line(agent: &Agent, ui: &Ui) -> String {
         0
     };
     format!(
-        "  {}",
+        "  {} {}",
         ui.dim(&format!(
-            "🧭 context {} / {} tokens ({pct}%)",
+            "🧭 context {} / {} tokens ({pct}%) ·",
             human_tokens(used),
             human_tokens(window),
         )),
+        ui.accent(agent.model()),
     )
+}
+
+/// `/compression [off|audit|on]` — show or switch context compression. With no
+/// argument, opens the interactive picker (current mode marked). Applies to
+/// this live conversation immediately (`Agent::set_compression_mode`) and
+/// persists the preference for new sessions — mirroring the desktop toggle.
+fn switch_compression(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> Result<()> {
+    use harness_compress::CompressionMode;
+
+    let current = agent.compression_mode();
+    let choice = match rest {
+        Some(arg) => arg,
+        None => {
+            let mark = |m: CompressionMode| if m == current { "  ← current" } else { "" };
+            let options = [
+                Choice::new(
+                    "off",
+                    format!("send every tool result untouched{}", mark(CompressionMode::Off)),
+                ),
+                Choice::new(
+                    "audit",
+                    format!(
+                        "measure what compression would save, change nothing{}",
+                        mark(CompressionMode::Audit)
+                    ),
+                ),
+                Choice::new(
+                    "on",
+                    format!(
+                        "compress stale tool output (retrieve_original restores){}",
+                        mark(CompressionMode::On)
+                    ),
+                ),
+            ];
+            match picker::select(
+                ui,
+                "Compression",
+                &format!("Context compression is `{}` — switch it?", current.as_str()),
+                &options,
+                false,
+            )? {
+                Some(sel) => sel.into_iter().next().unwrap_or_default(),
+                // Cancelled (or no interactive terminal) — leave it untouched.
+                None => return Ok(()),
+            }
+        }
+    };
+
+    let mode = match choice.trim().to_ascii_lowercase().as_str() {
+        "off" => CompressionMode::Off,
+        "audit" => CompressionMode::Audit,
+        "on" => CompressionMode::On,
+        other => {
+            println!(
+                "  {} {}",
+                ui.red("✗"),
+                ui.dim(&format!("unknown mode `{other}` — expected off, audit, or on")),
+            );
+            return Ok(());
+        }
+    };
+
+    agent.set_compression_mode(mode);
+    // Persist for future sessions too; failing to persist still leaves the
+    // live session switched.
+    let persisted = harness_runtime::compression::set_mode(mode);
+    let scope = match persisted {
+        Ok(()) => "for this chat and new sessions",
+        Err(_) => "for this chat (couldn't persist the preference)",
+    };
+    println!(
+        "  {} {}",
+        ui.brown("⊙ compression:"),
+        ui.cream(&format!("{} — {scope}", mode.as_str())),
+    );
+    Ok(())
+}
+
+/// The compression-savings trailer, pinned directly above the context meter:
+/// mode plus what compression saved (`on`) or would have saved (`audit`) so
+/// far this session. `None` with compression off, so the row disappears
+/// entirely rather than showing a dead `off` line.
+pub(crate) fn compression_status_line(agent: &Agent, ui: &Ui) -> Option<String> {
+    let mode = agent.compression_mode();
+    if mode == harness_compress::CompressionMode::Off {
+        return None;
+    }
+    let verb = if mode == harness_compress::CompressionMode::Audit {
+        "would save"
+    } else {
+        "saved"
+    };
+    Some(format!(
+        "  {} {}",
+        ui.brown("⊙"),
+        ui.dim(&format!(
+            "compression ({}) {verb} ~{} tokens this session",
+            mode.as_str(),
+            human_tokens(agent.tokens_saved()),
+        )),
+    ))
 }
 
 /// Human-friendly token count: `980`, `12.3k`, `1.2M`.

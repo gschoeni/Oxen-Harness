@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Paperclip, Square } from "lucide-react";
+import { CompressionPicker } from "./CompressionPicker";
 import { ModelPicker } from "./ModelPicker";
 
 export function Composer({
@@ -88,7 +89,7 @@ export function Composer({
             title="Stop generating"
             onClick={onStop}
           >
-            <Square size={14} fill="currentColor" />
+            <Square size={15} fill="currentColor" />
           </button>
         ) : (
           <button type="submit" className="send" aria-label="Send" disabled={!value.trim()}>
@@ -98,6 +99,7 @@ export function Composer({
       </div>
       <div className="composer-toolbar">
         <ModelPicker disabled={busy} />
+        <CompressionPicker disabled={busy} />
       </div>
     </form>
   );

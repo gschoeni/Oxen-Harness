@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, Code2, FileText } from "lucide-react";
+import { ArrowDown, Code2, FileText, Gamepad2 } from "lucide-react";
 import { onFileDrop, pickAttachments } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
@@ -8,6 +8,7 @@ import { Plan } from "./Plan";
 import { Composer } from "./Composer";
 import { Queue } from "./Queue";
 import { Hero } from "./Hero";
+import { GameDock } from "./GameDock";
 import { TokenMeter } from "./TokenMeter";
 import { StreamingWrite } from "./StreamingWrite";
 import { AttachmentImage } from "./AttachmentImage";
@@ -40,6 +41,10 @@ export function Chat() {
   const stop = useStore((s) => s.stop);
   const setQueue = useStore((s) => s.setQueue);
   const openInspector = useStore((s) => s.openInspector);
+  // The floating game dock lets you play a round while a turn streams, so a long
+  // run doesn't send you off to another app.
+  const gameDockOpen = useStore((s) => s.gameDockOpen);
+  const setGameDockOpen = useStore((s) => s.setGameDockOpen);
   // The most recent canvas in this chat, and whether the panel is currently
   // showing it — used to offer a one-click "reopen canvas" when it's closed.
   const sessionCanvases = useStore((s) => (s.session ? s.canvases[s.session.session_id] : undefined));
@@ -139,6 +144,17 @@ export function Chat() {
   return (
     <main className="chat">
       <div className="chat-titlebar" data-tauri-drag-region>
+        {items.length > 0 && (
+          <button
+            className="dev-view-btn"
+            onClick={() => setGameDockOpen(!gameDockOpen)}
+            aria-pressed={gameDockOpen}
+            title="Play a game while your agent works"
+            aria-label="Toggle the arcade"
+          >
+            <Gamepad2 size={15} />
+          </button>
+        )}
         <button
           className="dev-view-btn"
           onClick={() => sessionId && openInspector(sessionId)}
@@ -146,7 +162,7 @@ export function Chat() {
           title="Inspect this chat — the raw LLM inputs and outputs for this session"
           aria-label="Inspect this chat's transcript"
         >
-          <Code2 size={16} />
+          <Code2 size={15} />
         </button>
       </div>
       <div className="messages-wrap">
@@ -157,7 +173,7 @@ export function Chat() {
             onClick={() => setActiveCanvas(lastCanvas.id)}
             title={`Reopen canvas: ${lastCanvas.title}`}
           >
-            <FileText size={14} />
+            <FileText size={15} />
             <span>{lastCanvas.title}</span>
           </button>
         )}
@@ -212,6 +228,7 @@ export function Chat() {
         </div>
       )}
       <QuestionPrompt />
+      {gameDockOpen && items.length > 0 && <GameDock />}
       {items.length > 0 && <TokenMeter />}
       <Composer
         busy={running}

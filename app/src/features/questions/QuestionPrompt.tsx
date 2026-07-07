@@ -120,7 +120,7 @@ function QuestionStepper({ payload }: { payload: QuestionPayload }) {
             </Button>
           ) : (
             <button type="submit" className="qother-send" aria-label="Submit answer" disabled={!other.trim()}>
-              <ArrowRight size={16} />
+              <ArrowRight size={15} />
             </button>
           )}
         </form>

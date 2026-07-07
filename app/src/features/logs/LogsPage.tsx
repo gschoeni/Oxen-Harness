@@ -236,13 +236,13 @@ export function LogsPage() {
         </div>
 
         <div className="log-toolbar">
-          <div className="log-filters" role="tablist">
+          <div className="segmented" role="tablist">
             {FILTERS.map((f) => (
               <button
                 key={f.key}
                 role="tab"
                 aria-selected={status === f.key}
-                className={`log-filter ${status === f.key ? "active" : ""}`}
+                className={status === f.key ? "active" : ""}
                 onClick={() => setStatus(f.key)}
               >
                 {f.label}

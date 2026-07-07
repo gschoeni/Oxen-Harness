@@ -9,12 +9,15 @@ export function resetAll() {
   localStorage.clear();
   useStore.setState({
     theme: null,
+    heroGame: null,
+    gameDockOpen: false,
     session: null,
     sessions: [],
     projects: [],
     projectsOpen: false,
     infos: {},
     threads: {},
+    compression: {},
     runStatus: {},
     queues: {},
     canvases: {},

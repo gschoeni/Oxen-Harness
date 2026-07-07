@@ -10,6 +10,7 @@ description = "Built-in agent tools (fs, shell, git) for oxen-harness"
 
 [dependencies]
 harness-core = { workspace = true }
+harness-compress = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }

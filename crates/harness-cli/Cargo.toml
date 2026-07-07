@@ -22,6 +22,7 @@ harness-oxen = { workspace = true }
 harness-local = { workspace = true }
 harness-theme = { workspace = true }
 harness-agent = { workspace = true }
+harness-compress = { workspace = true }
 harness-runtime = { workspace = true }
 harness-loop = { workspace = true }
 anyhow = { workspace = true }

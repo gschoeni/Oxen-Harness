@@ -22,6 +22,7 @@ import {
   configureOxenKey,
   sessionInfo,
   setActiveProject,
+  setCompressionMode,
   setModel,
   setReviewStatus as setReviewStatusIpc,
   setReviewStatusMany as setReviewStatusManyIpc,
@@ -31,9 +32,13 @@ import {
 import {
   appendApiKeyPrompt,
   appendNotice,
+  appendRetryPrompt,
   appendToken,
+  dropRetryPrompts,
+  endsMidTurn,
   finalizeAssistant,
-  resolveApiKeyPrompt,
+  lastUserText,
+  resolveRecoveryPrompt,
   startTurn,
   toolEnd,
   toolStart,
@@ -59,9 +64,12 @@ import type {
   ToolDeltaEvent,
   UsageEvent,
   CompactedEvent,
+  CompressionEvent,
+  CompressionMode,
 } from "./types";
 
 const MODE_KEY = "oxen-ui-mode";
+const HERO_GAME_KEY = "oxen-hero-game";
 
 /** Mirrors the backend's chars-per-token budgeting heuristic (budget.rs), so the
  *  live streaming estimate lines up with the authoritative count at turn end. */
@@ -97,6 +105,14 @@ function isAuthError(message: string): boolean {
   return /\(401\)/.test(message) || /\b(must be authenticated|unauthorized)\b/i.test(message);
 }
 
+/** Whether a turn's error is an out-of-credits failure (a 402), so the chat can
+ *  offer an inline "add credits, then retry" card instead of a dead-end error.
+ *  Matches the backend's `Oxen API error (402): …` shape and Oxen's
+ *  insufficient-credits wording. */
+export function isCreditsError(message: string): boolean {
+  return /\(402\)/.test(message) || /\b(out of credits|insufficient[_ ]credits)\b/i.test(message);
+}
+
 function reconcileQueueTexts(previous: QueuedPrompt[] = [], texts: string[]): QueuedPrompt[] {
   const remaining = [...previous];
   return texts.map((text) => {
@@ -112,6 +128,12 @@ function reconcileQueueTexts(previous: QueuedPrompt[] = [], texts: string[]): Qu
 interface AppState {
   mode: Mode;
   theme: Theme | null;
+  /** Which empty-state hero game the player has chosen (persisted). Null falls
+   *  back to the active theme's default game. Shared by the hero and the
+   *  play-while-you-work game dock so both show the same cabinet. */
+  heroGame: string | null;
+  /** Whether the floating game dock is open (lets you play during a live turn). */
+  gameDockOpen: boolean;
   /** The chat currently shown. */
   session: SessionInfo | null;
   /** All-time total tokens used across every session (drives the hero's stat). */
@@ -134,6 +156,10 @@ interface AppState {
   /** Generation speed (tokens/sec) per session, measured over the current
    *  streaming burst. Persists the last rate when idle. */
   tokensPerSecond: Record<string, number>;
+  /** Per-session context-compression readout: the mode that ran and the
+   *  session's cumulative tokens saved (or, in audit mode, would-be saved),
+   *  updated per model call from `agent://compression`. Absent = no savings. */
+  compression: Record<string, { mode: CompressionMode; tokensSaved: number }>;
   /** Per-session run state driving the sidebar indicator (absent = idle/read). */
   runStatus: Record<string, RunStatus>;
   /** Prompts queued while a session is mid-turn, sent in order as it frees up. */
@@ -163,6 +189,10 @@ interface AppState {
 
   setMode: (m: Mode) => void;
   toggleMode: () => void;
+  /** Choose (and persist) the empty-state hero game. */
+  setHeroGame: (name: string) => void;
+  /** Open/close the floating game dock. */
+  setGameDockOpen: (open: boolean) => void;
   applyTheme: (t: Theme) => void;
   refreshHistory: () => Promise<void>;
   loadSession: () => Promise<void>;
@@ -183,6 +213,8 @@ interface AppState {
   /** Swap the current chat to a cloud model in place, continuing the same
    *  conversation (keeps the thread; only the model changes). */
   changeModel: (model: string) => Promise<void>;
+  /** Switch context compression for the live chat (persisted for new ones too). */
+  changeCompressionMode: (mode: CompressionMode) => Promise<void>;
   /** Switch to a downloaded local model — starts a fresh chat on it. */
   switchToLocalModel: (id: string) => Promise<void>;
   /** Live status while switching to a local model (its server is starting), so
@@ -198,6 +230,10 @@ interface AppState {
    *  turn that hit the 401 — keeping the same conversation. Rejects if saving the
    *  key fails, so the form can surface the error. */
   submitApiKey: (session: string, itemId: string, key: string) => Promise<void>;
+  /** Continue a chat from its inline retry card (a 402/out-of-credits failure, or
+   *  a resumed transcript that ended mid-turn): retire the card and re-drive the
+   *  transcript's trailing turn — no duplicate user message. */
+  retryBrokenTurn: (session: string, itemId: string) => void;
   /** Replace the current chat's send queue (used by the queue editor). */
   setQueue: (items: string[]) => void;
   /** Route a streamed token / tool event into its session's thread. */
@@ -210,6 +246,9 @@ interface AppState {
   ingestUsage: (e: UsageEvent) => void;
   /** Add a notice to a session's thread when its context was compacted. */
   ingestCompacted: (e: CompactedEvent) => void;
+  /** Update a session's compression savings counters. Fires per model call —
+   *  deliberately no thread notice (that would be far too chatty). */
+  ingestCompression: (e: CompressionEvent) => void;
   /** Refresh the all-time total tokens used from the backend. */
   refreshTotalTokens: () => Promise<void>;
   /** Upsert a canvas document and open it in the side panel. */
@@ -261,25 +300,33 @@ export const useStore = create<AppState>((set, get) => {
     }));
     // A retry continues the failed turn's transcript in place; a fresh turn sends
     // the prompt (and any attachments) for the first time.
-    let awaitingKey = false;
+    let recovering = false;
     const turn = retry ? retryTurn(id) : runTurn(id, text, paths);
     turn
       .then((final) =>
         set((s) => ({ threads: { ...s.threads, [id]: finalizeAssistant(s.threads[id] ?? [], final) } })),
       )
       .catch((e) => {
-        // An auth (401) failure isn't a dead end: swap the reply for an inline
-        // key-entry card carrying this turn, so the user can authenticate and
-        // retry without losing the conversation. Any other error shows normally.
-        awaitingKey = isAuthError(String(e));
-        set((s) => ({
-          threads: {
-            ...s.threads,
-            [id]: awaitingKey
-              ? appendApiKeyPrompt(s.threads[id] ?? [], text, paths)
-              : finalizeAssistant(s.threads[id] ?? [], `⚠ ${e}`, true),
-          },
-        }));
+        // Recoverable failures aren't dead ends: a 401 swaps the reply for an
+        // inline key-entry card, a 402 for an "add credits, then retry" card —
+        // both carry this turn so it continues in place once the user acts.
+        // Any other error shows normally.
+        const message = String(e);
+        const auth = isAuthError(message);
+        recovering = auth || isCreditsError(message);
+        set((s) => {
+          const thread = s.threads[id] ?? [];
+          return {
+            threads: {
+              ...s.threads,
+              [id]: auth
+                ? appendApiKeyPrompt(thread, text, paths)
+                : recovering
+                  ? appendRetryPrompt(thread, text, paths, message)
+                  : finalizeAssistant(thread, `⚠ ${e}`, true),
+            },
+          };
+        });
       })
       .finally(() => {
         // A canvas "writing" signal that never produced a doc (or errored) must
@@ -292,9 +339,10 @@ export const useStore = create<AppState>((set, get) => {
         }));
         get().refreshHistory(); // the first turn gives a new session its title
         get().refreshTotalTokens(); // the turn bumped the all-time total
-        // While waiting on an API key, hold the queue: draining it would just hit
-        // the same 401. Submitting the key retries this turn, then the queue flows.
-        const next = awaitingKey ? undefined : (get().queues[id] ?? [])[0];
+        // While a recovery card is up (missing key, out of credits), hold the
+        // queue: draining it would just hit the same error. The card's action
+        // retries this turn, then the queue flows.
+        const next = recovering ? undefined : (get().queues[id] ?? [])[0];
         if (next !== undefined) {
           set((s) => ({ queues: { ...s.queues, [id]: (s.queues[id] ?? []).slice(1) } }));
           setTimeout(() => runTurnFor(id, next.text, next.attachments), 0); // let state settle first
@@ -310,15 +358,20 @@ export const useStore = create<AppState>((set, get) => {
   }
 
   // Start a fresh turn: append its UI (user bubble + empty streaming reply), then
-  // drive it.
+  // drive it. A pending retry card is dropped — the new prompt supersedes it (its
+  // dangling user turn is still in the transcript for the model to answer).
   function runTurnFor(id: string, text: string, paths: string[]) {
-    set((s) => ({ threads: { ...s.threads, [id]: startTurn(s.threads[id] ?? [], text, paths) } }));
+    set((s) => ({
+      threads: { ...s.threads, [id]: startTurn(dropRetryPrompts(s.threads[id] ?? []), text, paths) },
+    }));
     driveTurn(id, text, paths, false);
   }
 
   return {
     mode: initialMode(),
     theme: null,
+    heroGame: localStorage.getItem(HERO_GAME_KEY),
+    gameDockOpen: false,
     session: null,
     totalTokensUsed: 0,
     sessions: [],
@@ -330,6 +383,7 @@ export const useStore = create<AppState>((set, get) => {
     threads: {},
     liveTokens: {},
     tokensPerSecond: {},
+    compression: {},
     runStatus: {},
     queues: {},
     canvases: {},
@@ -348,6 +402,12 @@ export const useStore = create<AppState>((set, get) => {
       set({ mode });
     },
     toggleMode: () => get().setMode(get().mode === "light" ? "dark" : "light"),
+
+    setHeroGame: (name) => {
+      localStorage.setItem(HERO_GAME_KEY, name);
+      set({ heroGame: name });
+    },
+    setGameDockOpen: (open) => set({ gameDockOpen: open }),
 
     applyTheme: (theme) => {
       applyThemePalette(theme);
@@ -391,10 +451,22 @@ export const useStore = create<AppState>((set, get) => {
       set((s) => {
         // A mid-turn chat (`running`) keeps its live in-memory thread + info; a
         // cold history session seeds its thread and info from the transcript.
-        const threads =
-          view.running || s.threads[id] !== undefined
-            ? s.threads
-            : { ...s.threads, [id]: transcriptToItems(view.messages) };
+        // A cold transcript that stops mid-turn (the reply never arrived — an
+        // error, out of credits, or the app closed) gets an inline retry card
+        // so the chat can be continued with one click.
+        let seeded: Item[] | undefined;
+        if (!view.running && s.threads[id] === undefined) {
+          seeded = transcriptToItems(view.messages);
+          if (endsMidTurn(view.messages)) {
+            seeded = appendRetryPrompt(
+              seeded,
+              lastUserText(view.messages),
+              [],
+              "This chat stopped before the reply finished.",
+            );
+          }
+        }
+        const threads = seeded === undefined ? s.threads : { ...s.threads, [id]: seeded };
         const infos = view.running ? s.infos : { ...s.infos, [id]: view.info };
         const runStatus = { ...s.runStatus };
         if (runStatus[id] === "unread") delete runStatus[id]; // viewing it clears the dot
@@ -427,6 +499,7 @@ export const useStore = create<AppState>((set, get) => {
           streamingCanvas: drop(s.streamingCanvas),
           liveTokens: drop(s.liveTokens),
           tokensPerSecond: drop(s.tokensPerSecond),
+          compression: drop(s.compression),
         };
       });
       await get().refreshHistory();
@@ -467,6 +540,16 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
 
+    changeCompressionMode: async (mode) => {
+      const info = await setCompressionMode(mode);
+      // In-place switch on the same session: refresh its info (which carries
+      // the new mode) and leave the thread untouched.
+      set((s) => ({
+        session: info,
+        infos: { ...s.infos, [info.session_id]: info },
+      }));
+    },
+
     changeModel: async (model) => {
       const info = await setModel(model);
       // In-place swap: the backend kept the same session, so keep the thread and
@@ -493,11 +576,19 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     setLocalStatus: (s) =>
-      set((st) =>
-        st.localSwitch
-          ? { localSwitch: { ...st.localSwitch, model: s.model, phase: s.phase } }
-          : {},
-      ),
+      set((st) => {
+        // "ready"/"error" means the load is over — clear the inline state.
+        if (s.phase === "ready" || s.phase === "error")
+          return st.localSwitch ? { localSwitch: null } : {};
+        // Create-or-update: a load that wasn't user-initiated (a persisted
+        // local model starting lazily on the first call after an app relaunch)
+        // must surface the same way an explicit switch does.
+        return {
+          localSwitch: st.localSwitch
+            ? { ...st.localSwitch, model: s.model, phase: s.phase }
+            : { model: s.model, phase: s.phase, startedAt: Date.now() },
+        };
+      }),
 
     send: (text, attachments = []) => {
       const id = get().session?.session_id;
@@ -534,7 +625,17 @@ export const useStore = create<AppState>((set, get) => {
       // Retire the card, open a fresh reply bubble, and retry the failed turn
       // (which continues the existing transcript — no duplicate user message).
       set((s) => ({
-        threads: { ...s.threads, [session]: resolveApiKeyPrompt(s.threads[session] ?? [], itemId) },
+        threads: { ...s.threads, [session]: resolveRecoveryPrompt(s.threads[session] ?? [], itemId) },
+      }));
+      driveTurn(session, item.text, item.attachments, true);
+    },
+
+    retryBrokenTurn: (session, itemId) => {
+      if (get().runStatus[session] === "running") return; // a turn is already in flight
+      const item = (get().threads[session] ?? []).find((it) => it.id === itemId);
+      if (!item || item.kind !== "retry") return;
+      set((s) => ({
+        threads: { ...s.threads, [session]: resolveRecoveryPrompt(s.threads[session] ?? [], itemId) },
       }));
       driveTurn(session, item.text, item.attachments, true);
     },
@@ -621,6 +722,14 @@ export const useStore = create<AppState>((set, get) => {
           liveTokens: { ...s.liveTokens, [e.session]: 0 },
         };
       }),
+
+    ingestCompression: (e) =>
+      set((s) => ({
+        compression: {
+          ...s.compression,
+          [e.session]: { mode: e.mode, tokensSaved: e.total_saved_tokens },
+        },
+      })),
 
     ingestCompacted: (e) =>
       set((s) => {
