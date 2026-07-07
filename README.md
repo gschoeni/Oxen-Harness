@@ -5,6 +5,30 @@
 
 An open source, hackable agentic coding harness — like Claude Code or Codex, built in Rust and powered by [Oxen.ai](https://oxen.ai).
 
+<p align="center">
+  <img src="assets/oxen-trail-cli.png" alt="The Oxen Trail — the oxen-harness CLI welcome screen" width="760">
+</p>
+
+## Get started
+
+All you need is [Rust](https://www.rust-lang.org/tools/install) and an [Oxen.ai](https://oxen.ai) API key (an existing [`oxen` CLI](https://docs.oxen.ai/getting-started/cli) login is picked up automatically):
+
+```bash
+git clone https://github.com/gschoeni/oxen-harness && cd oxen-harness
+export OXEN_API_KEY=sk-...        # or log in once with the `oxen` CLI
+cargo run -p harness-cli
+```
+
+That's it — you're on the trail. Type what you want done and the agent edits
+code, runs commands, and drives git, right from your terminal.
+
+**No API key handy?** Run an open-weight model fully offline instead
+(see [Running models locally](#running-models-locally-llamacpp)):
+
+```bash
+cargo run -p harness-cli -- --local qwen3-0.6b
+```
+
 `oxen-harness` runs an objective-check-driven agent loop against any model exposed through the Oxen.ai OpenAI-compatible chat completions API, with first-class tool calling for editing code, running commands, and driving git. Every turn is persisted so you can later export your sessions and fine-tune a model on your own coding traces.
 
 > **Status:** Core complete — streaming REPL, Oxen.ai client, sandboxed tools, verbatim SQLite history, the agent loop, local models (llama.cpp), and a scaffolded Tauri desktop app are all built and tested. See [`02-status.md`](02-status.md).
@@ -43,26 +67,6 @@ OXEN_API_KEY=sk-... cargo tauri dev
 ```
 
 See [`app/README.md`](app/README.md) for the npm-based alternative (`npm install && npm run dev`) and platform webview prerequisites.
-
-## Requirements
-
-- Rust (stable) via [rustup](https://www.rust-lang.org/tools/install)
-- An Oxen.ai API key in `OXEN_API_KEY` — or log in with the [`oxen`](https://docs.oxen.ai/getting-started/cli) CLI, which writes `~/.config/oxen/auth_config.toml` (read automatically)
-
-## Quick start
-
-```bash
-# Build everything
-cargo build
-
-# Run the CLI (prints a banner during Phase 0)
-cargo run -p harness-cli
-
-# Run the verification loop
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run   # or: cargo test
-```
 
 ## Configuration
 
