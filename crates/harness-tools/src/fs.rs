@@ -322,7 +322,7 @@ fn find_blocking(root: &Path, pattern: &str, max_results: usize) -> Result<Vec<S
         hits.push((mtime, rel.display().to_string()));
     }
 
-    hits.sort_by(|a, b| b.0.cmp(&a.0));
+    hits.sort_by_key(|hit| std::cmp::Reverse(hit.0));
     hits.truncate(max_results);
     Ok(hits.into_iter().map(|(_, p)| p).collect())
 }

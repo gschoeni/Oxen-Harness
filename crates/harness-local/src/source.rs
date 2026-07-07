@@ -306,7 +306,7 @@ pub async fn hf_list_quants(
         }
     }
     let mut refs: Vec<ModelRef> = by_quant.into_values().collect();
-    refs.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    refs.sort_by_key(|r| std::cmp::Reverse(r.size_bytes));
     if refs.is_empty() {
         return Err(LocalError::Download(format!(
             "no GGUF files found in {repo}"

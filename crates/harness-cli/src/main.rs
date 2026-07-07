@@ -811,11 +811,7 @@ fn print_context_usage(agent: &Agent, ui: &Ui) {
 pub(crate) fn context_usage_line(agent: &Agent, ui: &Ui) -> String {
     let used = agent.context_tokens();
     let window = agent.context_window();
-    let pct = if window > 0 {
-        (used * 100 / window).min(100)
-    } else {
-        0
-    };
+    let pct = (used * 100).checked_div(window).map_or(0, |p| p.min(100));
     format!(
         "  {} {}",
         ui.dim(&format!(

@@ -120,7 +120,7 @@ impl ModelStore {
                 None => out.push(orphan_ref(id, size)),
             }
         }
-        out.sort_by(|a, b| a.display.to_lowercase().cmp(&b.display.to_lowercase()));
+        out.sort_by_key(|m| m.display.to_lowercase());
         out
     }
 
