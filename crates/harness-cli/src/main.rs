@@ -296,18 +296,20 @@ async fn resolve_endpoint(args: &Args, resume_meta: Option<&SessionMeta>, ui: &U
             Ok(c) => c,
             // No key resolves anywhere — offer the masked `/auth` entry card
             // right here so a first run can be authenticated without leaving.
-            Err(e) => match auth_cmd::prompt_for_missing_key(ui, &base_url) {
-                Some(key) => OxenClient::new(base_url, key, &model),
-                None => {
-                    eprintln!("\n{}", ui.red(&ui.death()));
-                    eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
-                    eprintln!(
+            Err(e) => {
+                match auth_cmd::prompt_for_missing_key(ui, &base_url) {
+                    Some(key) => OxenClient::new(base_url, key, &model),
+                    None => {
+                        eprintln!("\n{}", ui.red(&ui.death()));
+                        eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
+                        eprintln!(
                         "  {}",
                         ui.dim("Set OXEN_API_KEY, or log in with the `oxen` CLI, then set out again.")
                     );
-                    std::process::exit(1);
+                        std::process::exit(1);
+                    }
                 }
-            },
+            }
         };
         Endpoint {
             client,
@@ -840,7 +842,10 @@ fn switch_compression(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> Resul
             let options = [
                 Choice::new(
                     "off",
-                    format!("send every tool result untouched{}", mark(CompressionMode::Off)),
+                    format!(
+                        "send every tool result untouched{}",
+                        mark(CompressionMode::Off)
+                    ),
                 ),
                 Choice::new(
                     "audit",
@@ -879,7 +884,9 @@ fn switch_compression(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> Resul
             println!(
                 "  {} {}",
                 ui.red("✗"),
-                ui.dim(&format!("unknown mode `{other}` — expected off, audit, or on")),
+                ui.dim(&format!(
+                    "unknown mode `{other}` — expected off, audit, or on"
+                )),
             );
             return Ok(());
         }

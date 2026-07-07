@@ -908,8 +908,8 @@ impl Live {
         // input), so the prompt always has breathing room and a clear edge, and
         // the meters sit right above the input instead of trailing the last
         // message.
-        let status_rows: u16 = self.compression_line.is_some() as u16
-            + self.status_line.is_some() as u16;
+        let status_rows: u16 =
+            self.compression_line.is_some() as u16 + self.status_line.is_some() as u16;
         let reserved = (plan.len() + chrome) as u16
             + SPACER_ROWS as u16
             + status_rows

@@ -130,9 +130,7 @@ fn read_masked_key(ui: &Ui, host: &str) -> io::Result<Option<String>> {
             crossterm::event::Event::Paste(text) => {
                 key.extend(text.chars().filter(|c| !c.is_control()));
             }
-            crossterm::event::Event::Key(k)
-                if k.kind == crossterm::event::KeyEventKind::Press =>
-            {
+            crossterm::event::Event::Key(k) if k.kind == crossterm::event::KeyEventKind::Press => {
                 match k.code {
                     KeyCode::Esc => break None,
                     KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -145,9 +143,7 @@ fn read_masked_key(ui: &Ui, host: &str) -> io::Result<Option<String>> {
                         key.pop();
                     }
                     KeyCode::Enter => break Some(key.trim().to_string()),
-                    KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        key.push(c)
-                    }
+                    KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => key.push(c),
                     _ => {}
                 }
             }
@@ -157,10 +153,17 @@ fn read_masked_key(ui: &Ui, host: &str) -> io::Result<Option<String>> {
     clear_block(&mut out, prev_lines)?;
     // Collapse the card to a single line echoing what happened (never the key).
     let outcome = match &entered {
-        Some(k) if !k.is_empty() => ui.dim(&format!("key entered ({} characters)", k.chars().count())),
+        Some(k) if !k.is_empty() => {
+            ui.dim(&format!("key entered ({} characters)", k.chars().count()))
+        }
         _ => ui.dim("cancelled"),
     };
-    write!(out, "  {} {} {outcome}\r\n", ui.accent("│"), ui.cream("🔑 Oxen API key:"))?;
+    write!(
+        out,
+        "  {} {} {outcome}\r\n",
+        ui.accent("│"),
+        ui.cream("🔑 Oxen API key:")
+    )?;
     out.flush()?;
     Ok(entered.filter(|k| !k.is_empty()))
 }
@@ -171,11 +174,7 @@ struct MaskedGuard;
 impl Drop for MaskedGuard {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            io::stdout(),
-            event::DisableBracketedPaste,
-            cursor::Show
-        );
+        let _ = crossterm::execute!(io::stdout(), event::DisableBracketedPaste, cursor::Show);
     }
 }
 
