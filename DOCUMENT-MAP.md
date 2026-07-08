@@ -34,10 +34,15 @@ oxen-harness/
     harness-runtime/         — Front-end-agnostic services shared by CLI/desktop: connection settings + secrets (.env), cloud-model catalog, tool prefs + custom tools, skill discovery/prefs/authoring, opt-in Oxen versioning of ~/.oxen-harness.
     harness-loop/            — Goal-driven, self-verifying loops (discover→verify→iterate): LoopSpec/Verify, runner, journal, shareable store + built-ins.
     harness-review/          — Configurable code-review pipeline: ordered prompt steps (find→verify→report default), diff targets (uncommitted / vs base branch), isolated side-agent runner (fan-out steps run as a parallel fleet), structured findings.
-    harness-cli/             — The `oxen-harness` interactive REPL binary (incl. picker, live sticky-bottom composer, /theme + theme subcommand, /loop + loop subcommand, /code-review, `trace export` to share a conversation via Oxen, `oxen` subcommand to version config).
+    harness-cli/             — The `oxen-harness` interactive REPL binary. Slash-command handlers live in commands/ (auth, compression, loops, model, oxen, queue, review, theme, trace); the live sticky-bottom composer in live/; the fleet lanes display in fleet_ui.rs/fleet_sink.rs. Top-level subcommands: theme, loop, trace, oxen.
   app/                       — Tauri v2 desktop app (separate project, excluded
-                               from the core workspace). src-tauri/ = Rust bridge,
-                               dist/ = chat UI. See app/README.md.
+                               from the core workspace). See app/README.md.
+    src-tauri/src/           — Rust bridge, a thin shell: lib.rs (module map +
+                               run()), state.rs (AppState + agent lifecycle),
+                               bridges.rs (host↔agent event bridges), events.rs
+                               (webview payload structs), commands/ (the
+                               #[tauri::command] handlers, one module per feature).
+    src/                     — React + TS chat UI (features/, lib/, components/).
   plans/                     — Actionable execution docs. Pull in per-topic.
     archive/                 — Deprecated plans, kept for historical reference.
 ```
