@@ -125,8 +125,12 @@ impl Live {
         let line = format!(
             "  {} {}",
             self.ui.red("⚠"),
-            self.ui
-                .dim(&crate::retry_notice(attempt, max_attempts, delay_ms, error)),
+            self.ui.dim(&crate::turn::retry_notice(
+                attempt,
+                max_attempts,
+                delay_ms,
+                error
+            )),
         );
         self.write_region(&format!("{line}\n"));
         self.begin_thinking();

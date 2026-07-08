@@ -38,7 +38,7 @@ use super::Live;
 /// message isn't lost when the turn ends).
 pub(crate) async fn run_prompt(
     agent: &mut Agent,
-    first: crate::TurnRequest,
+    first: crate::turn::TurnRequest,
     ui: &Ui,
     queue: &mut MessageQueue,
 ) -> Result<(bool, String)> {
@@ -56,8 +56,8 @@ pub(crate) async fn run_prompt(
     // Show the meters in their pinned slots from the start of the turn.
     {
         let mut s = state.borrow_mut();
-        s.status_line = Some(crate::context_usage_line(agent, ui));
-        s.compression_line = crate::compression_status_line(agent, ui);
+        s.status_line = Some(crate::turn::context_usage_line(agent, ui));
+        s.compression_line = crate::compression_cmd::status_line(agent, ui);
     }
 
     let mut next = Some(first);
@@ -68,14 +68,14 @@ pub(crate) async fn run_prompt(
                 {
                     let mut s = state.borrow_mut();
                     if let Err(e) = &result {
-                        for line in crate::turn_failure_lines(agent, ui, e) {
+                        for line in crate::turn::turn_failure_lines(agent, ui, e) {
                             s.print_line(&line);
                         }
                     }
                     // Refresh the pinned meters (they sit above the divider,
                     // not in the scrollback) with the turn's totals.
-                    s.status_line = Some(crate::context_usage_line(agent, ui));
-                    s.compression_line = crate::compression_status_line(agent, ui);
+                    s.status_line = Some(crate::turn::context_usage_line(agent, ui));
+                    s.compression_line = crate::compression_cmd::status_line(agent, ui);
                     s.render();
                 }
                 // Auto-drain: send the next stacked message (more may still be
@@ -90,7 +90,7 @@ pub(crate) async fn run_prompt(
                         ui.cream(&truncate(&msg, 80)),
                     ));
                     s.render();
-                    next = Some(crate::TurnRequest::Prompt(msg));
+                    next = Some(crate::turn::TurnRequest::Prompt(msg));
                 }
             }
             TurnOutcome::Interrupted | TurnOutcome::Exit => {
@@ -276,7 +276,7 @@ enum TurnOutcome {
 /// the bottom line.
 async fn run_one_turn(
     agent: &mut Agent,
-    request: &crate::TurnRequest,
+    request: &crate::turn::TurnRequest,
     state: &Rc<RefCell<Live>>,
     rx: &mut UnboundedReceiver<Event>,
     queue: &mut MessageQueue,
@@ -286,7 +286,7 @@ async fn run_one_turn(
     // region before the turn starts. A `/retry` continuation carries no new
     // message, so there is nothing to extract or announce.
     let (text, attachments) = match request {
-        crate::TurnRequest::Prompt(prompt) => {
+        crate::turn::TurnRequest::Prompt(prompt) => {
             let (text, attachments, warnings) = crate::attach::extract_attachments(prompt);
             let mut st = state.borrow_mut();
             let ui = st.ui.clone();
@@ -303,7 +303,7 @@ async fn run_one_turn(
             }
             (text, attachments)
         }
-        crate::TurnRequest::Continue => (String::new(), Vec::new()),
+        crate::turn::TurnRequest::Continue => (String::new(), Vec::new()),
     };
 
     state.borrow_mut().begin_turn(queue.items());
@@ -316,10 +316,10 @@ async fn run_one_turn(
     let turn: std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<String, AgentError>> + '_>,
     > = match request {
-        crate::TurnRequest::Prompt(_) => {
+        crate::turn::TurnRequest::Prompt(_) => {
             Box::pin(agent.run_turn_with_attachments(text, attachments, on_event))
         }
-        crate::TurnRequest::Continue => Box::pin(agent.continue_turn(on_event)),
+        crate::turn::TurnRequest::Continue => Box::pin(agent.continue_turn(on_event)),
     };
     tokio::pin!(turn);
 

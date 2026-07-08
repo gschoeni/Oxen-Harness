@@ -221,7 +221,7 @@ impl TurnRenderer {
                 println!(
                     "  {} {}",
                     self.ui.red("⚠"),
-                    self.ui.dim(&crate::retry_notice(
+                    self.ui.dim(&crate::turn::retry_notice(
                         *attempt,
                         *max_attempts,
                         *delay_ms,

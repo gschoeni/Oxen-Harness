@@ -3,7 +3,7 @@
 //!
 //! The [`MessageQueue`] data structure lives in [`crate::queue`]; this module is
 //! its command-line UX. Running the queue drains it through the shared
-//! [`crate::run_turn_and_drain`], so a `/queue run` behaves exactly like sending
+//! [`crate::turn::run_turn_and_drain`], so a `/queue run` behaves exactly like sending
 //! each prompt in turn.
 
 use anyhow::Result;
@@ -103,9 +103,9 @@ async fn run_queue(
         ui.brown("▶ rolling the wagon:"),
         ui.cream(&truncate(&first, 80)),
     );
-    crate::run_turn_and_drain(
+    crate::turn::run_turn_and_drain(
         agent,
-        crate::TurnRequest::Prompt(first),
+        crate::turn::TurnRequest::Prompt(first),
         ui,
         queue,
         carryover,
