@@ -21,7 +21,7 @@ use harness_review::{
 use tokio_util::sync::CancellationToken;
 
 use crate::fleet_ui::{BlockPainter, FleetHub, FleetState};
-use crate::render::{truncate as render_truncate, TurnRenderer};
+use crate::render::TurnRenderer;
 use crate::theme::Ui;
 use crate::turn::human_tokens;
 
@@ -241,11 +241,7 @@ impl ReviewDisplay {
                     state.lane_started(*agent);
                 }
                 if self.plain {
-                    println!(
-                        "  {} {}",
-                        self.ui.green("◆"),
-                        self.ui.dim(&format!("{name} setting out…")),
-                    );
+                    crate::fleet_ui::print_lane_started(&self.ui, name);
                 }
             }
             ReviewEvent::Subagent { agent, event } => {
@@ -264,20 +260,12 @@ impl ReviewDisplay {
                     state.lane_completed(*agent, *ok, *tokens_used, summary);
                 }
                 if self.plain {
-                    let outcome = if *ok {
-                        self.ui.green(&format!("{name} done"))
-                    } else {
-                        self.ui.red(&format!("{name} failed"))
-                    };
-                    println!(
-                        "  {} {} {}",
-                        self.ui.brown("└─"),
-                        outcome,
-                        self.ui.dim(&format!(
-                            "— {} ({} tok)",
-                            render_truncate(summary, 90),
-                            human_tokens(*tokens_used)
-                        )),
+                    crate::fleet_ui::print_lane_completed(
+                        &self.ui,
+                        name,
+                        *ok,
+                        *tokens_used,
+                        summary,
                     );
                 }
             }

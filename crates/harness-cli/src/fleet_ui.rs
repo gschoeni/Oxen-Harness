@@ -583,6 +583,36 @@ fn repaint(out: &mut impl Write, lines: &[String], drawn: &mut usize) {
     let _ = out.flush();
 }
 
+/// Plain-terminal milestones (pipes, `NO_COLOR`): a lane's lifecycle as simple
+/// scrollback lines. Shared by every fleet owner that can't animate — the
+/// `spawn_agents` sink and the review display print identical lines.
+pub(crate) fn print_lane_started(ui: &Ui, label: &str) {
+    println!(
+        "  {} {}",
+        ui.green("◆"),
+        ui.dim(&format!("{label} setting out…")),
+    );
+}
+
+/// The matching completion line: `└─ label done — summary (12.3k tok)`.
+pub(crate) fn print_lane_completed(ui: &Ui, label: &str, ok: bool, tokens: usize, summary: &str) {
+    let outcome = if ok {
+        ui.green(&format!("{label} done"))
+    } else {
+        ui.red(&format!("{label} failed"))
+    };
+    println!(
+        "  {} {} {}",
+        ui.brown("└─"),
+        outcome,
+        ui.dim(&format!(
+            "— {} ({} tok)",
+            crate::render::truncate(summary, 90),
+            human_tokens(tokens)
+        )),
+    );
+}
+
 /// The fleet block composed for the live composer's pinned area (which paints
 /// and drives keys itself — alt+digits — so this is just the lines).
 pub(crate) fn pinned_lines(ui: &Ui, state: &FleetState, width: usize, frame: usize) -> Vec<String> {

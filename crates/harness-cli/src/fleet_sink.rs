@@ -18,9 +18,7 @@ use harness_agent::fleet::{FleetEvent, FleetSink};
 use tokio_util::sync::CancellationToken;
 
 use crate::fleet_ui::{BlockPainter, FleetHub, FleetState};
-use crate::render::truncate;
 use crate::theme::Ui;
-use crate::turn::human_tokens;
 
 pub(crate) struct CliFleetSink {
     ui: Ui,
@@ -70,11 +68,7 @@ impl FleetSink for CliFleetSink {
                     state.lane_started(*index);
                 }
                 if self.plain() {
-                    println!(
-                        "  {} {}",
-                        self.ui.green("◆"),
-                        self.ui.dim(&format!("{label} setting out…")),
-                    );
+                    crate::fleet_ui::print_lane_started(&self.ui, label);
                 }
             }
             FleetEvent::Agent { index, event } => {
@@ -93,20 +87,12 @@ impl FleetSink for CliFleetSink {
                     state.lane_completed(*index, *ok, *tokens_used, summary);
                 }
                 if self.plain() {
-                    let outcome = if *ok {
-                        self.ui.green(&format!("{label} done"))
-                    } else {
-                        self.ui.red(&format!("{label} failed"))
-                    };
-                    println!(
-                        "  {} {} {}",
-                        self.ui.brown("└─"),
-                        outcome,
-                        self.ui.dim(&format!(
-                            "— {} ({} tok)",
-                            truncate(summary, 90),
-                            human_tokens(*tokens_used)
-                        )),
+                    crate::fleet_ui::print_lane_completed(
+                        &self.ui,
+                        label,
+                        *ok,
+                        *tokens_used,
+                        summary,
                     );
                 }
             }
