@@ -107,6 +107,11 @@ Other useful entry points:
   the `skill` tool) and `crates/harness-runtime/src/skills.rs` (discovery,
   preferences, authoring). Skills reference tools by their backticked names;
   the desktop editor autocompletes and lints those references.
+- **The fleet**: `crates/harness-agent/src/fleet.rs` (`run_fleet` — N parallel
+  detached subagents, one multiplexed event stream) and `fleet_tool.rs` (the
+  `spawn_agents` tool + the `FleetSink` hosts implement to render lanes). The
+  review pipeline in `crates/harness-review/` is its biggest consumer, and
+  `crates/harness-cli/src/fleet_ui.rs` shows a full host-side display.
 - **Theme hero scenes**: the scene registry in
   `app/src/features/chat/scenes.tsx` — a new scene is a one-function drop-in.
 
