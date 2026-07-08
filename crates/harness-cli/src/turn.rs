@@ -17,7 +17,7 @@ use harness_agent::Agent;
 use crate::queue::MessageQueue;
 use crate::render::{truncate, TurnRenderer};
 use crate::theme::Ui;
-use crate::{attach, auth_cmd, brave, live};
+use crate::{attach, brave, commands, live};
 
 /// What to drive through the agent for one turn: a fresh prompt (the normal
 /// case), or a continuation of the transcript's dangling last turn — `/retry`
@@ -62,7 +62,7 @@ pub(crate) fn turn_failure_lines(
         format!("  {}", ui.red(&ui.death())),
         format!("  {}", ui.dim(&format!("The trail guide says: {err}"))),
     ];
-    if let Some(hint) = auth_cmd::auth_hint(ui, &err.to_string()) {
+    if let Some(hint) = commands::auth::auth_hint(ui, &err.to_string()) {
         lines.push(hint);
         return lines;
     }

@@ -4,36 +4,28 @@
 //! `models`/`theme`/`loop`/`trace`/`oxen` subcommands), bootstrap a session
 //! (endpoint, tools, store — see [`endpoint`]), and hand control to a REPL
 //! driver in [`repl_loop`]. Turn execution lives in [`turn`], each `/command`
-//! in its `*_cmd` module, and the live bottom-pinned composer in [`live`].
+//! in its [`commands`] module, and the live bottom-pinned composer in [`live`].
 
 mod almanac;
 mod ask;
 mod attach;
-mod auth_cmd;
 mod brave;
 mod canvas;
-mod code_review_cmd;
-mod compression_cmd;
+mod commands;
 mod diff;
 mod endpoint;
 mod fleet_sink;
 mod fleet_ui;
 mod live;
 mod local;
-mod loop_cmd;
 mod markdown;
-mod model_cmd;
-mod oxen_cmd;
 mod picker;
 mod plan;
 mod queue;
-mod queue_cmd;
 mod render;
 mod repl;
 mod repl_loop;
 mod theme;
-mod theme_cmd;
-mod trace_cmd;
 mod turn;
 
 use std::path::PathBuf;
@@ -103,22 +95,22 @@ enum TopCommand {
     /// Manage themes (list / use / export / import / new).
     Theme {
         #[command(subcommand)]
-        action: theme_cmd::ThemeAction,
+        action: commands::theme::ThemeAction,
     },
     /// Run and manage self-verifying agent loops (run / list / new / show ...).
     Loop {
         #[command(subcommand)]
-        action: loop_cmd::LoopAction,
+        action: commands::loops::LoopAction,
     },
     /// Export or share a conversation as an Oxen repo (transcript + attachments).
     Trace {
         #[command(subcommand)]
-        action: trace_cmd::TraceAction,
+        action: commands::trace::TraceAction,
     },
     /// Version your harness config (~/.oxen-harness) with Oxen (init/snapshot/status).
     Oxen {
         #[command(subcommand)]
-        action: oxen_cmd::OxenAction,
+        action: commands::oxen::OxenAction,
     },
 }
 
@@ -148,13 +140,15 @@ async fn main() -> Result<()> {
     let mut pending_loop: Option<harness_loop::LoopSpec> = None;
     match args.command.take() {
         Some(TopCommand::Models { action }) => return local::run_models(action, &ui).await,
-        Some(TopCommand::Theme { action }) => return theme_cmd::run_theme(action, &ui).await,
-        Some(TopCommand::Loop { action }) => match loop_cmd::handle_cli(action, &ui).await? {
-            loop_cmd::Dispatch::Done => return Ok(()),
-            loop_cmd::Dispatch::Run(spec) => pending_loop = Some(*spec),
-        },
-        Some(TopCommand::Trace { action }) => return trace_cmd::run_trace(action, &ui),
-        Some(TopCommand::Oxen { action }) => return oxen_cmd::run_oxen(action, &ui),
+        Some(TopCommand::Theme { action }) => return commands::theme::run_theme(action, &ui).await,
+        Some(TopCommand::Loop { action }) => {
+            match commands::loops::handle_cli(action, &ui).await? {
+                commands::loops::Dispatch::Done => return Ok(()),
+                commands::loops::Dispatch::Run(spec) => pending_loop = Some(*spec),
+            }
+        }
+        Some(TopCommand::Trace { action }) => return commands::trace::run_trace(action, &ui),
+        Some(TopCommand::Oxen { action }) => return commands::oxen::run_oxen(action, &ui),
         None => {}
     }
 
@@ -289,7 +283,7 @@ async fn main() -> Result<()> {
 
     // `oxen-harness loop run ...`: run the loop once, then exit (no REPL).
     if let Some(spec) = pending_loop {
-        loop_cmd::run(spec, &mut agent, &ui, workspace.root()).await?;
+        commands::loops::run(spec, &mut agent, &ui, workspace.root()).await?;
         return Ok(());
     }
 

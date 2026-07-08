@@ -12,7 +12,7 @@ use harness_store::{HistoryStore, SessionMeta};
 use harness_tools::{ToolRegistry, Workspace};
 
 use crate::theme::Ui;
-use crate::{ask, auth_cmd, canvas, local, Args};
+use crate::{ask, canvas, commands, local, Args};
 
 /// The resolved inference endpoint for a session: the model, a client bound to
 /// it, the context window to budget against (a local server's real size, else
@@ -60,7 +60,7 @@ pub(crate) async fn resolve_endpoint(
             // No key resolves anywhere — offer the masked `/auth` entry card
             // right here so a first run can be authenticated without leaving.
             Err(e) => {
-                match auth_cmd::prompt_for_missing_key(ui, &base_url) {
+                match commands::auth::prompt_for_missing_key(ui, &base_url) {
                     Some(key) => OxenClient::new(base_url, key, &model),
                     None => {
                         eprintln!("\n{}", ui.red(&ui.death()));

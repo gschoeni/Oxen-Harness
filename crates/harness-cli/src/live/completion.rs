@@ -222,7 +222,7 @@ impl Live {
                     // serve models we don't know about. An explicit row keeps it
                     // reachable (↑ once) even when fuzzy matches exist; picking
                     // it switches to the id and saves it to the catalog (see
-                    // `model_cmd::handle_repl`).
+                    // `commands::model::handle_repl`).
                     items.push(CompletionItem::new(
                         format!("/model {typed}"),
                         typed,
@@ -250,14 +250,14 @@ impl Live {
     }
 
     /// Model rows for `/model` completion: the shared catalog + installed-local
-    /// rows (see [`crate::model_cmd::model_rows`]), loaded once and cached, with
+    /// rows (see [`crate::commands::model::model_rows`]), loaded once and cached, with
     /// the *persisted* selection marked — the composer's completion list isn't
     /// session-scoped, so it marks what the next launch would ride.
     fn model_candidates(&mut self) -> Vec<CompletionItem> {
         if self.model_items.is_none() {
             let selected = harness_runtime::models::selected();
             let active_local = harness_runtime::models::active_local();
-            let items = crate::model_cmd::model_rows()
+            let items = crate::commands::model::model_rows()
                 .into_iter()
                 .map(|row| {
                     let current = if row.local {

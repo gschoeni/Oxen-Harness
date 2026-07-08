@@ -61,7 +61,7 @@ pub(crate) async fn run_prompt(
     {
         let mut s = state.borrow_mut();
         s.status_line = Some(crate::turn::context_usage_line(agent, ui));
-        s.compression_line = crate::compression_cmd::status_line(agent, ui);
+        s.compression_line = crate::commands::compression::status_line(agent, ui);
     }
 
     let mut next = Some(first);
@@ -79,7 +79,7 @@ pub(crate) async fn run_prompt(
                     // Refresh the pinned meters (they sit above the divider,
                     // not in the scrollback) with the turn's totals.
                     s.status_line = Some(crate::turn::context_usage_line(agent, ui));
-                    s.compression_line = crate::compression_cmd::status_line(agent, ui);
+                    s.compression_line = crate::commands::compression::status_line(agent, ui);
                     s.render();
                 }
                 // Auto-drain: send the next stacked message (more may still be

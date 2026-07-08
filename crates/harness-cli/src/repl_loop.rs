@@ -17,9 +17,7 @@ use crate::queue::MessageQueue;
 use crate::repl::{parse_command, Command};
 use crate::theme::{self, Ui};
 use crate::turn::{ends_mid_turn, run_turn_and_drain, TurnRequest};
-use crate::{
-    auth_cmd, code_review_cmd, compression_cmd, live, loop_cmd, model_cmd, queue_cmd, theme_cmd,
-};
+use crate::{commands, live};
 
 /// Immutable, session-scoped context for a REPL run: the values set once at
 /// startup and threaded through the line handler unchanged. Bundling them keeps
@@ -140,7 +138,7 @@ pub(crate) async fn run_box_repl(
             );
         }
         let status = Some(crate::turn::context_usage_line(agent, ui));
-        let compression = compression_cmd::status_line(agent, ui);
+        let compression = commands::compression::status_line(agent, ui);
         let idle =
             live::read_idle(ui, &mut queue, &mut history, &seed, status, compression).await?;
         match idle {
@@ -185,24 +183,24 @@ async fn handle_line(
             return Ok(true);
         }
         Command::Help => print!("{}", theme::help(ui)),
-        Command::Theme(args) => theme_cmd::handle_repl(args, agent, ui).await?,
+        Command::Theme(args) => commands::theme::handle_repl(args, agent, ui).await?,
         Command::Queue(rest) => {
             // `/queue run` may stream turns that the user can Ctrl-C to quit.
-            if queue_cmd::handle_repl(rest, queue, agent, ui, carryover).await? {
+            if commands::queue::handle_repl(rest, queue, agent, ui, carryover).await? {
                 print!("{}", theme::death_screen(ui, ctx.session));
                 return Ok(true);
             }
         }
         Command::Loop(rest) => {
             // A running loop streams turns the user can Ctrl-C to quit.
-            if loop_cmd::handle_repl(rest, agent, ui, ctx.workspace_root).await? {
+            if commands::loops::handle_repl(rest, agent, ui, ctx.workspace_root).await? {
                 print!("{}", theme::death_screen(ui, ctx.session));
                 return Ok(true);
             }
         }
         Command::CodeReview(rest) => {
             // A running review streams turns the user can Ctrl-C to quit.
-            if code_review_cmd::handle_repl(rest, agent, ui, ctx.workspace_root).await? {
+            if commands::review::handle_repl(rest, agent, ui, ctx.workspace_root).await? {
                 print!("{}", theme::death_screen(ui, ctx.session));
                 return Ok(true);
             }
@@ -235,9 +233,9 @@ async fn handle_line(
             );
         }
         Command::Skills => print_skills(ui, ctx.workspace_root),
-        Command::Auth(rest) => auth_cmd::handle_repl(rest, agent, ui, ctx.base_url)?,
-        Command::Compression(rest) => compression_cmd::handle_repl(rest, agent, ui)?,
-        Command::Model(rest) => model_cmd::handle_repl(rest, agent, ui)?,
+        Command::Auth(rest) => commands::auth::handle_repl(rest, agent, ui, ctx.base_url)?,
+        Command::Compression(rest) => commands::compression::handle_repl(rest, agent, ui)?,
+        Command::Model(rest) => commands::model::handle_repl(rest, agent, ui)?,
         Command::Export(dest) => export(ctx.store, ctx.session, dest, ui)?,
         Command::Retry => {
             // Only a transcript that stops mid-turn has anything to re-drive;
