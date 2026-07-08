@@ -12,9 +12,15 @@ toolchain.
 
 ## How it works
 
-- `src-tauri/` — the Rust backend. `src/lib.rs` exposes the Tauri commands,
-  grouped by concern (each group has a banner comment in the file):
-  - **Turns** — `run_turn(prompt)` drives `harness_agent::Agent`, emitting
+- `src-tauri/` — the Rust backend, a thin shell over four concerns:
+  `state.rs` (the `AppState` and per-session agent lifecycle), `bridges.rs`
+  (the host↔agent bridges that surface `ask_user_question` / `canvas` / fleet
+  lanes as events), `events.rs` (every webview payload struct, in one place so
+  the wire format is auditable at a glance), and `commands/` (the
+  `#[tauri::command]` handlers, one module per feature area — its `mod.rs`
+  spells out how to add a command). `src/lib.rs` is now just the module map and
+  `run()`. The command groups:
+  - **Turns** (`commands/turn.rs`) — `run_turn(prompt)` drives `harness_agent::Agent`, emitting
     `agent://token` / `agent://tool` / `agent://usage` events as the turn
     streams; chats run concurrently per session, so several can be mid-turn.
   - **Sessions & projects** — history CRUD (`list_sessions`, `resume_session`,
@@ -32,6 +38,13 @@ toolchain.
     emits `agent://question` and parks until the UI answers
     (`answer_question`); `canvas` documents stream over `agent://canvas` into
     the side panel.
+  - **Code review & fleets** — `run_code_review` drives the shared
+    `harness-review` pipeline (find → verify → report) over the working diff or
+    a base branch, streaming `review://` progress and injecting the findings
+    into the chat; the pipeline's parallel steps — and any `spawn_agents` fleet
+    the model launches mid-turn — surface as live `fleet://` lanes you can
+    click to watch. `get/save_code_review_config` back the Code-review settings
+    page.
   - **Themes, connection, training data** — theme CRUD shared with the CLI via
     `harness-theme`; endpoint/API-key settings; per-chat review status + JSONL
     fine-tuning export.
@@ -40,11 +53,15 @@ toolchain.
   (a **Projects** page switches between them) with **＋ New chat**, that
   project's history, and **⚙ Settings** in the footer. Settings is a
   full-window surface with pages for **Connection**, **Cloud/Local models**,
-  **Tools**, **Skills**, **Appearance**, and **Training data**. When the agent
-  needs a decision, a **question modal** pops up with multiple-choice options
-  plus a free-text row. You can also **queue messages**: keep typing while the
-  agent works and each message stacks above the composer; the next is sent
-  automatically when the current turn finishes.
+  **Tools**, **Skills**, **Code review**, **Appearance**, and **Training
+  data**. When the agent needs a decision, a **question modal** pops up with
+  multiple-choice options plus a free-text row. You can also **queue
+  messages**: keep typing while the agent works and each message stacks above
+  the composer; the next is sent automatically when the current turn finishes.
+  A **Review** button in the composer runs the code-review pipeline on your
+  changes, and while it (or any `spawn_agents` fleet) runs, a **lanes panel**
+  above the composer shows each parallel agent — click a lane to watch its
+  output stream.
 
 ### Frontend layout (how to extend)
 
@@ -72,8 +89,10 @@ src/
   test/                    # Vitest setup + a controllable mock of lib/ipc
 ```
 
-To **add a Tauri command**: implement it in `src-tauri/src/lib.rs`, add a typed
-wrapper in `lib/ipc.ts` (+ a type in `types.ts`), then call it from a feature.
+To **add a Tauri command**: write the `#[tauri::command]` fn in the right
+`src-tauri/src/commands/` module (see `commands/mod.rs`), list it in the
+`invoke_handler!` in `src-tauri/src/lib.rs`, add a typed wrapper in `lib/ipc.ts`
+(+ a type in `types.ts`), then call it from a feature.
 To **add a view/overlay**: create a `features/<name>/` folder with its `.tsx` +
 colocated `.css`, and mount it from `App.tsx` (store a boolean in `store.ts` if it
 toggles). Keep feature logic out of `components/ui` and reference design tokens —
