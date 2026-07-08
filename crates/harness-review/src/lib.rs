@@ -16,13 +16,15 @@
 
 pub mod config;
 pub mod findings;
+pub mod prompts;
 pub mod runner;
 pub mod target;
 
 pub use config::{
-    default_steps, ReviewConfig, ReviewStep, StepAgent, DEFAULT_MAX_PARALLEL, REVIEW_SCHEMA_VERSION,
+    ReviewConfig, ReviewStep, StepAgent, DEFAULT_MAX_PARALLEL, REVIEW_SCHEMA_VERSION,
 };
 pub use findings::{Finding, ReviewReport};
+pub use prompts::default_steps;
 pub use runner::{session_exchange, ReviewEvent, ReviewRunner};
 pub use target::{resolve_target, ReviewInput, ReviewTarget};
 
