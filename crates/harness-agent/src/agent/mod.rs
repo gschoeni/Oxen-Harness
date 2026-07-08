@@ -22,6 +22,26 @@ use crate::error::AgentError;
 
 use self::compression::setup_compression;
 
+/// Narrow a registry to what a detached subagent (a `side_agent`, a fleet
+/// lane) may hold. Two tools are stripped:
+///
+/// - `spawn_agents` — a subagent must not spawn its own fleet, so fan-out is
+///   exactly one level deep (no fork bombs, bounded cost).
+/// - `ask_user_question` — a subagent has no way to drive the host's single
+///   interactive prompt: N lanes asking at once would each block on a modal
+///   only one of which can be shown, and since a tool call is awaited without
+///   cancellation the un-shown lanes (and the whole turn) would hang forever.
+///   Subagents run headless; a question is the orchestrating turn's job.
+///
+/// Both are host-owned, singular capabilities — this is the one place that
+/// decides a subagent can't have them, so `side_agent` and the fleet
+/// spawner can't drift on the policy.
+pub(crate) fn subagent_tools(mut tools: ToolRegistry) -> ToolRegistry {
+    tools.remove(crate::fleet_tool::FLEET_TOOL);
+    tools.remove(harness_tools::ASK_USER_TOOL);
+    tools
+}
+
 /// A running agent bound to a model, tool set, and history session.
 pub struct Agent {
     client: OxenClient,
@@ -263,22 +283,17 @@ impl Agent {
     /// Spin up a detached agent for an isolated side task (e.g. one step of a
     /// code-review pipeline): same client, tools, and config as this agent, but
     /// backed by an in-memory store, so nothing it does touches the user's
-    /// session, history, or context window.
-    ///
-    /// Side agents are one fan-out level deep by policy: the `spawn_agents`
-    /// fleet tool is stripped from their registry, so a subagent can never
-    /// recursively spawn its own fleet.
+    /// session, history, or context window. Its tool set is narrowed by
+    /// [`subagent_tools`] (no recursion, no interactive tools).
     pub fn side_agent(&self) -> Result<Agent, AgentError> {
         let store = Arc::new(HistoryStore::open_in_memory()?);
         let session = store.create_session(&SessionMeta {
             model: self.config.model.clone(),
             ..Default::default()
         })?;
-        let mut tools = self.tools.clone();
-        tools.remove(crate::fleet_tool::FLEET_TOOL);
         Agent::new(
             self.client.clone(),
-            tools,
+            subagent_tools(self.tools.clone()),
             store,
             session,
             self.config.clone(),

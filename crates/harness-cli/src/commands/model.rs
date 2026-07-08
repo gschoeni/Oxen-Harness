@@ -136,6 +136,9 @@ pub(crate) fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> R
     }
 
     agent.set_model(id);
+    // Follow the swap through to the fleet spawner so a later spawn_agents
+    // fleet runs on the new model, not the one captured at startup.
+    crate::endpoint::update_fleet_endpoint(None, Some(id));
     // An id we've never seen (not in the cloud catalog, not an installed local
     // model) is saved as a custom catalog entry so it shows up in the picker
     // from now on — here and in the desktop. Only a *cataloged* id is

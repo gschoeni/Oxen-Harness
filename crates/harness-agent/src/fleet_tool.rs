@@ -40,26 +40,56 @@ pub const MAX_FLEET_AGENTS: usize = 6;
 /// Default (and ceiling) for how many subagents run at once.
 pub const DEFAULT_FLEET_PARALLEL: usize = 3;
 
-/// Builds the detached agents a fleet runs on: the session agent's client,
-/// tools, and config, captured at registry build time. The registry snapshot
-/// is taken *before* `spawn_agents` registers, so subagents can't recurse.
+/// Builds the detached agents a fleet runs on, from the session agent's
+/// client, tools, and config. The tool registry is snapshotted at build time
+/// (taken *before* `spawn_agents` registers, so subagents can't recurse), but
+/// the client and config live behind a mutex so a host that swaps the live
+/// agent's endpoint or model — a `/model` switch, an API key pasted after a
+/// 401 — can keep the spawner in step; otherwise fleets would keep running on
+/// the stale client/model captured at startup.
 pub struct FleetSpawner {
-    client: OxenClient,
     tools: ToolRegistry,
-    config: AgentConfig,
+    /// The client + config subagents are built from, updated in lockstep with
+    /// the live agent via [`FleetSpawner::set_client`] / [`set_model`].
+    endpoint: StdMutex<Endpoint>,
     /// The current turn's stop signal; hosts refresh it when they install a
     /// turn's token so cancelling the turn cancels any running fleet too.
     cancel: StdMutex<CancellationToken>,
 }
 
+/// The mutable half of a [`FleetSpawner`]: what subagents inherit that can
+/// change over a session's life.
+struct Endpoint {
+    client: OxenClient,
+    config: AgentConfig,
+}
+
 impl FleetSpawner {
     pub fn new(client: OxenClient, tools: ToolRegistry, config: AgentConfig) -> Self {
         Self {
-            client,
             tools,
-            config,
+            endpoint: StdMutex::new(Endpoint { client, config }),
             cancel: StdMutex::new(CancellationToken::new()),
         }
+    }
+
+    /// Point future subagents at a new inference client — call it wherever the
+    /// live agent's client is swapped ([`Agent::set_client`]).
+    pub fn set_client(&self, client: OxenClient) {
+        self.endpoint
+            .lock()
+            .expect("fleet endpoint poisoned")
+            .client = client;
+    }
+
+    /// Point future subagents at a new model — call it wherever the live
+    /// agent's model is swapped ([`Agent::set_model`]).
+    pub fn set_model(&self, model: impl Into<String>) {
+        self.endpoint
+            .lock()
+            .expect("fleet endpoint poisoned")
+            .config
+            .model = model.into();
     }
 
     /// Install the turn's stop signal (hosts call this alongside
@@ -79,19 +109,24 @@ impl FleetSpawner {
             .child_token()
     }
 
-    /// One detached subagent: in-memory store, shared client/tools/config.
+    /// One detached subagent: in-memory store, the current client/config, and
+    /// the subagent-narrowed tool set (no recursion, no interactive tools).
     fn build_agent(&self) -> Result<Agent, AgentError> {
+        let (client, config) = {
+            let endpoint = self.endpoint.lock().expect("fleet endpoint poisoned");
+            (endpoint.client.clone(), endpoint.config.clone())
+        };
         let store = Arc::new(HistoryStore::open_in_memory()?);
         let session = store.create_session(&SessionMeta {
-            model: self.config.model.clone(),
+            model: config.model.clone(),
             ..Default::default()
         })?;
         Agent::new(
-            self.client.clone(),
-            self.tools.clone(),
+            client,
+            crate::agent::subagent_tools(self.tools.clone()),
             store,
             session,
-            self.config.clone(),
+            config,
         )
     }
 }
@@ -265,6 +300,70 @@ mod tests {
             ..AgentConfig::default()
         };
         Arc::new(FleetSpawner::new(client, ToolRegistry::new(), config))
+    }
+
+    #[test]
+    fn subagents_cannot_recurse_or_ask() {
+        use harness_tools::{AskUserTool, Question, QuestionAnswer, QuestionAsker, ToolError};
+
+        struct NoopAsker;
+        #[async_trait]
+        impl QuestionAsker for NoopAsker {
+            async fn ask(&self, _q: &[Question]) -> Result<Option<Vec<QuestionAnswer>>, ToolError> {
+                Ok(None)
+            }
+        }
+
+        // A registry carrying both host-owned singular tools, plus the fleet
+        // tool itself — the shape a real session hands the spawner.
+        let mut tools = ToolRegistry::new();
+        tools.register_typed(AskUserTool::new(Arc::new(NoopAsker)));
+        let sp = FleetSpawner::new(
+            OxenClient::new("http://localhost/api/ai", "k", "m"),
+            tools,
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        );
+        let sub = sp.build_agent().unwrap();
+        let names: Vec<_> = sub
+            .tool_definitions()
+            .iter()
+            .filter_map(|d| d["function"]["name"].as_str().map(str::to_string))
+            .collect();
+        assert!(
+            !names.contains(&harness_tools::ASK_USER_TOOL.to_string()),
+            "a subagent must not inherit ask_user_question (it would deadlock a lane): {names:?}"
+        );
+        assert!(
+            !names.contains(&FLEET_TOOL.to_string()),
+            "a subagent must not inherit spawn_agents (no recursive fan-out): {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_model_switch_reaches_future_subagents() {
+        // Point the spawner at a fresh model; the next subagent must request it.
+        let mut server = mockito::Server::new_async().await;
+        let hit = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                "\"model\":\"swapped-model\"".into(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("ok"))
+            .expect(1)
+            .create_async()
+            .await;
+        let sp = spawner(&server.url());
+        sp.set_model("swapped-model");
+        let tool = FleetTool::new(sp, Arc::new(RecordingSink::default()));
+        tool.invoke(serde_json::json!({ "agents": [{ "name": "a", "prompt": "go" }] }))
+            .await
+            .unwrap();
+        hit.assert_async().await;
     }
 
     #[tokio::test]

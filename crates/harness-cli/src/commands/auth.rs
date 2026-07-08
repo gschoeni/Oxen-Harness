@@ -46,7 +46,11 @@ pub(crate) fn handle_repl(
     // then swap a client carrying the key into the running agent — same
     // endpoint, same model, same transcript.
     let persisted = harness_runtime::connection::set_oxen_key(&key);
-    agent.set_client(OxenClient::new(base_url, &key, agent.model()));
+    let client = OxenClient::new(base_url, &key, agent.model());
+    agent.set_client(client.clone());
+    // Carry the key to the fleet spawner too, so spawn_agents lanes launched
+    // after authenticating don't keep failing on the old key-less client.
+    crate::endpoint::update_fleet_endpoint(Some(&client), None);
     match persisted {
         Ok(()) => println!(
             "  {} {}",

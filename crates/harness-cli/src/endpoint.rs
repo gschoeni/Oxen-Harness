@@ -152,6 +152,13 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui) -> ToolRegistr
     tools
 }
 
+/// The session's fleet spawner, kept reachable so `/model` and `/login` can
+/// point future subagents at a swapped model/client (see [`update_fleet_endpoint`]).
+/// A process-wide slot is honest here: the CLI runs exactly one session, one
+/// agent, one spawner — the same reasoning behind [`crate::fleet_ui::FleetHub::global`].
+static FLEET_SPAWNER: std::sync::OnceLock<Arc<harness_agent::FleetSpawner>> =
+    std::sync::OnceLock::new();
+
 /// Register the `spawn_agents` fleet tool on a finished registry. The spawner
 /// snapshots the registry *before* the tool registers — subagents get every
 /// tool except the fleet itself (one fan-out level deep) — and lanes render
@@ -169,11 +176,30 @@ pub(crate) fn register_fleet_tool(
         tools.clone(),
         config.clone(),
     ));
+    // Keep a handle so a later model/endpoint swap reaches future subagents;
+    // set_or_ignore, since a session registers exactly once.
+    let _ = FLEET_SPAWNER.set(spawner.clone());
     tools.register_typed(harness_agent::FleetTool::new(
         spawner,
         Arc::new(crate::fleet_sink::CliFleetSink::new(ui.clone())),
     ));
     harness_runtime::tools::load().apply(tools);
+}
+
+/// Point the session's fleet spawner at a swapped client and/or model, so a
+/// `spawn_agents` fleet launched after a `/model` or `/login` runs on the new
+/// endpoint rather than the one captured when the tool was registered. A no-op
+/// when the fleet tool isn't registered (the user disabled it).
+pub(crate) fn update_fleet_endpoint(client: Option<&OxenClient>, model: Option<&str>) {
+    let Some(spawner) = FLEET_SPAWNER.get() else {
+        return;
+    };
+    if let Some(client) = client {
+        spawner.set_client(client.clone());
+    }
+    if let Some(model) = model {
+        spawner.set_model(model);
+    }
 }
 
 /// The agent configuration for a CLI session: model + window, a system prompt

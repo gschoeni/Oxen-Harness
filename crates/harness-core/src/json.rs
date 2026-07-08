@@ -22,8 +22,14 @@
 /// assert!(first_object("no json here").is_none());
 /// ```
 pub fn first_object(raw: &str) -> Option<serde_json::Value> {
-    if let Ok(v) = serde_json::from_str(raw) {
-        return Some(v);
+    // Whole-string parse first, but only accept an *object*: a reply that is a
+    // bare array or scalar still gets the brace hunt below (an array wrapping
+    // one object is a shape models actually produce), and a scalar-only reply
+    // yields None so callers keep their raw-text diagnostics.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+        if v.is_object() {
+            return Some(v);
+        }
     }
     let start = raw.find('{')?;
     let end = raw.rfind('}')?;
@@ -47,5 +53,18 @@ mod tests {
     fn rejects_text_without_an_object() {
         assert!(first_object("").is_none());
         assert!(first_object("} backwards {").is_none());
+        // Bare scalars are valid JSON but not objects — callers need None so
+        // their "unparseable reply" diagnostics (with the raw text) still fire.
+        assert!(first_object("42").is_none());
+        assert!(first_object("\"done\"").is_none());
+    }
+
+    #[test]
+    fn salvages_the_object_inside_an_array_reply() {
+        // A verifier reply wrapped in a one-element array: the brace hunt must
+        // recover the inner object rather than returning the array.
+        let v = first_object(r#"[{"scores":[{"criterion":"a","score":9}]}]"#).unwrap();
+        assert!(v.is_object());
+        assert!(v.get("scores").is_some());
     }
 }
