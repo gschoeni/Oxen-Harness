@@ -26,7 +26,7 @@
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **481 tests passing** across the workspace; CI runs fmt + clippy + tests on push.
+> **528 Rust tests + 163 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
 
 ---
 
@@ -140,7 +140,7 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
       reusable `picker.rs` module (single/multi-select, number jumps, "type my own
       answer" row, `esc`/`Ctrl-C` cancel; raw mode via RAII guard; `spawn_blocking`;
       non-TTY fallback). `ask.rs` delegates to it; `/theme` selection reuses it.
-- [x] **Themes** (`theme.rs` reads `harness_theme::Theme`; `theme_cmd.rs`): `/theme`
+- [x] **Themes** (`theme.rs` reads `harness_theme::Theme`; `commands/theme.rs`): `/theme`
       opens the picker, `/theme use|import|export`, and `/theme new [vibe]` runs a
       short interview + model generation to vibe-code a theme. Top-level
       `oxen-harness theme list|use|export|import|path|remove` for sharing/scripting.

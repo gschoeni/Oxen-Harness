@@ -39,13 +39,16 @@ The agent loop: call model → if `finish_reason == tool_calls`, execute tools, 
 
 ## Current Phase
 
-**All core phases shipped (0–9) plus the extensibility, compression, and
-recovery pushes:** the Oxen client, the sandboxed tool set, the verbatim SQLite
-store, the agent loop (with context compaction, reversible compression, and
-transient-failure retry), self-verifying loops with conditional gates, themes,
-local models, skills/custom tools, and both front ends (CLI + Tauri desktop
-app) are built and tested — 481 tests passing, CI green on push. See
-`02-status.md` for the full ledger.
+**All core phases shipped (0–9) plus the extensibility, compression, recovery,
+code-review, and fleet pushes:** the Oxen client, the sandboxed tool set, the
+verbatim SQLite store, the agent loop (with context compaction, reversible
+compression, and transient-failure retry), self-verifying loops with
+conditional gates, a configurable code-review pipeline, a parallel-subagent
+fleet (`spawn_agents` from any turn + `/code-review` fan-out, with live lanes
+in both front ends), themes, local models, skills/custom tools, and both front
+ends (CLI + Tauri desktop app) are built and tested — 528 Rust tests + 163
+frontend tests passing, CI green on push. See `02-status.md` for the full
+ledger.
 
 ## Key Decisions
 
