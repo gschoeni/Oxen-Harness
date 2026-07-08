@@ -96,6 +96,16 @@ impl TurnRenderer {
                 if name == harness_tools::ASK_USER_TOOL {
                     return;
                 }
+                // The fleet paints its own multi-lane block (and owns the keys)
+                // while it runs; keep the spinner out of its way.
+                if name == harness_agent::FLEET_TOOL {
+                    println!(
+                        "  {} {}",
+                        self.ui.green("🐂"),
+                        self.ui.dim("spawning agents…")
+                    );
+                    return;
+                }
                 let target = crate::live::tool_target(arguments);
                 // For a plan update, print the full checklist block (the call's
                 // result is just a text echo, so suppress it on ToolEnd below).

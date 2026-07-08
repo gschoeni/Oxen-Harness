@@ -60,8 +60,9 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crossterm::event::{KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::fleet_ui::FleetHub;
 use crate::markdown::MarkdownStream;
 use crate::render::truncate;
 use crate::theme::{LiveSpinner, Ui};
@@ -177,6 +178,12 @@ struct Live {
     /// Lazily-loaded model candidates (cloud catalog + installed local) for
     /// `/model` argument completion, cached so we don't rescan on every keystroke.
     model_items: Option<Vec<CompletionItem>>,
+    /// The shared fleet hub: while a `spawn_agents` fleet runs mid-turn, its
+    /// lanes paint as a pinned block above the meters, and alt+digits switch
+    /// which lane's output is being watched.
+    fleet: Arc<FleetHub>,
+    /// Advances the fleet block's spinner glyphs on the turn ticker.
+    fleet_frame: usize,
 }
 
 impl Live {
@@ -204,7 +211,50 @@ impl Live {
             comp_applied: false,
             comp_navigated: false,
             model_items: None,
+            fleet: FleetHub::global(),
+            fleet_frame: 0,
         }
+    }
+
+    /// The fleet block for the pinned area (empty when no fleet is running).
+    fn fleet_lines(&self) -> Vec<String> {
+        let guard = self.fleet.lock();
+        match guard.as_ref() {
+            Some(state) => {
+                crate::fleet_ui::pinned_lines(&self.ui, state, self.cols as usize, self.fleet_frame)
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Advance the fleet block's animation; true when a fleet is on screen
+    /// (the caller then repaints the pinned area).
+    pub(super) fn tick_fleet(&mut self) -> bool {
+        let active = self.fleet.lock().is_some();
+        if active {
+            self.fleet_frame = self.fleet_frame.wrapping_add(1);
+        }
+        active
+    }
+
+    /// Alt+digit switches which fleet lane is being watched (alt+0 → overview).
+    /// Only consumes the key while a fleet is actually running.
+    fn handle_fleet_key(&mut self, key: &KeyEvent) -> bool {
+        if !key.modifiers.contains(KeyModifiers::ALT) {
+            return false;
+        }
+        let KeyCode::Char(c @ '0'..='9') = key.code else {
+            return false;
+        };
+        let mut guard = self.fleet.lock();
+        let Some(state) = guard.as_mut() else {
+            return false;
+        };
+        match c {
+            '0' => state.focus(None),
+            _ => state.focus(Some(c as usize - '1' as usize)),
+        }
+        true
     }
 
     // --- queue snapshot + focus -------------------------------------------
@@ -266,6 +316,11 @@ impl Live {
         // Windows reports key releases too; act only on presses.
         if key.kind != KeyEventKind::Press {
             return KeyAction::None;
+        }
+        // Fleet lane switching (alt+digits) outranks composing — but only
+        // while a fleet is actually on screen.
+        if self.handle_fleet_key(&key) {
+            return KeyAction::Redraw;
         }
         match classify_key(
             key.code,

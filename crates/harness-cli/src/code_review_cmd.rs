@@ -10,6 +10,7 @@
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::Result;
 use harness_agent::Agent;
@@ -17,9 +18,12 @@ use harness_review::{
     session_exchange, ReviewConfig, ReviewError, ReviewEvent, ReviewReport, ReviewRunner,
     ReviewTarget,
 };
+use tokio_util::sync::CancellationToken;
 
-use crate::render::TurnRenderer;
+use crate::fleet_ui::{BlockPainter, FleetHub, FleetState};
+use crate::render::{truncate as render_truncate, TurnRenderer};
 use crate::theme::Ui;
+use crate::turn::human_tokens;
 
 /// Handle an in-REPL `/code-review ...` command. Returns `Ok(true)` if a
 /// running review was interrupted (Ctrl-C), so the REPL should end the session.
@@ -71,7 +75,14 @@ async fn run(
     let steps: Vec<String> = config
         .resolved_steps()
         .iter()
-        .map(|s| s.name.clone())
+        .map(|s| {
+            let lanes = s.resolved_agents().len();
+            if lanes > 1 {
+                format!("{}×{lanes}", s.name)
+            } else {
+                s.name.clone()
+            }
+        })
         .collect();
     println!();
     println!(
@@ -83,24 +94,30 @@ async fn run(
         "    {} {}",
         ui.brown("pipeline:"),
         ui.dim(&format!(
-            "{} (up to {} findings)",
+            "{} (up to {} findings, {} lanes at once)",
             steps.join(" → "),
-            config.max_findings
+            config.max_findings,
+            config.max_parallel,
         )),
     );
 
-    let runner = ReviewRunner::new(config, target.clone(), workspace_root);
-    let renderer = Rc::new(RefCell::new(TurnRenderer::new(ui.clone())));
-    let r = renderer.clone();
-    let ev_ui = ui.clone();
+    // One stop signal for the whole review: Ctrl-C fires it — as a signal
+    // during cooked single-agent steps, or as a key the fan-out painter reads
+    // while it owns the keyboard in raw mode.
+    let cancel = CancellationToken::new();
+    let runner =
+        ReviewRunner::new(config, target.clone(), workspace_root).with_cancel(cancel.clone());
+    let display = Rc::new(RefCell::new(ReviewDisplay::new(ui.clone(), cancel.clone())));
+    let d = display.clone();
     let result = tokio::select! {
         _ = tokio::signal::ctrl_c() => {
-            renderer.borrow_mut().finish();
+            display.borrow_mut().finish();
             return Ok(true);
         }
-        res = runner.run(agent, |ev| render_event(ev, &r, &ev_ui)) => res,
+        res = runner.run(agent, |ev| d.borrow_mut().on_event(ev)) => res,
     };
-    renderer.borrow_mut().finish();
+    display.borrow_mut().finish();
+    let tokens_used = display.borrow().tokens_used;
 
     match result {
         Ok(report) => {
@@ -109,6 +126,15 @@ async fn run(
             // ("fix 1 and 3") without re-running anything.
             let (user, assistant) = session_exchange(&target, &report);
             agent.inject_exchange(user, assistant)?;
+            if tokens_used > 0 {
+                println!(
+                    "  {}",
+                    ui.dim(&format!(
+                        "~{} tokens across the pipeline's reviewers",
+                        human_tokens(tokens_used)
+                    )),
+                );
+            }
             if !report.findings.is_empty() {
                 println!(
                     "  {}",
@@ -125,6 +151,14 @@ async fn run(
             );
             Ok(false)
         }
+        Err(ReviewError::Cancelled) => {
+            println!(
+                "  {} {}",
+                ui.brown("⛺"),
+                ui.dim("review stopped — nothing was recorded"),
+            );
+            Ok(false)
+        }
         Err(e) => {
             println!(
                 "  {} {}",
@@ -136,20 +170,133 @@ async fn run(
     }
 }
 
-fn render_event(ev: &ReviewEvent, renderer: &Rc<RefCell<TurnRenderer>>, ui: &Ui) {
-    match ev {
-        ReviewEvent::Started { .. } => {}
-        ReviewEvent::StepStarted { index, total, name } => {
-            println!();
-            println!(
-                "  {}",
-                ui.title(&format!("─── Step {}/{total}: {name} ───", index + 1)),
-            );
-            renderer.borrow_mut().begin_thinking();
+/// Owns the two rendering modes a review flips between: the single-stream
+/// [`TurnRenderer`] for one-agent steps, and the multi-lane fleet block (a
+/// [`FleetHub`] + [`BlockPainter`], with 1-9/esc lane switching) for fan-out
+/// steps. Exactly one is live at a time. On non-animating terminals the
+/// fan-out degrades to milestone lines.
+struct ReviewDisplay {
+    ui: Ui,
+    turn: TurnRenderer,
+    hub: Arc<FleetHub>,
+    painter: Option<BlockPainter>,
+    /// Milestone-print mode (pipes, `NO_COLOR`): no painter thread.
+    plain: bool,
+    /// The review-wide stop signal, handed to each fan-out block so the
+    /// painter's Ctrl-C key can fire it.
+    cancel: CancellationToken,
+    tokens_used: usize,
+}
+
+impl ReviewDisplay {
+    fn new(ui: Ui, cancel: CancellationToken) -> Self {
+        Self {
+            turn: TurnRenderer::new(ui.clone()),
+            plain: !ui.animates(),
+            ui,
+            hub: Arc::new(FleetHub::default()),
+            painter: None,
+            cancel,
+            tokens_used: 0,
         }
-        ReviewEvent::Agent(e) => renderer.borrow_mut().on_event(e),
-        ReviewEvent::StepCompleted { .. } => renderer.borrow_mut().finish(),
-        ReviewEvent::Completed { .. } => {}
+    }
+
+    fn on_event(&mut self, ev: &ReviewEvent) {
+        match ev {
+            ReviewEvent::Started { .. } => {}
+            ReviewEvent::StepStarted {
+                index,
+                total,
+                name,
+                agents,
+            } => {
+                self.settle();
+                println!();
+                if agents.len() > 1 {
+                    println!(
+                        "  {}",
+                        self.ui.title(&format!(
+                            "─── Step {}/{total}: {name} — {} reviewers in parallel ───",
+                            index + 1,
+                            agents.len(),
+                        )),
+                    );
+                    self.hub
+                        .install(FleetState::new(agents, Some(self.cancel.clone())));
+                    if !self.plain {
+                        self.painter = Some(BlockPainter::start(&self.ui, self.hub.clone()));
+                    }
+                } else {
+                    println!(
+                        "  {}",
+                        self.ui
+                            .title(&format!("─── Step {}/{total}: {name} ───", index + 1)),
+                    );
+                    self.turn.begin_thinking();
+                }
+            }
+            ReviewEvent::Agent(e) => self.turn.on_event(e),
+            ReviewEvent::SubagentStarted { agent, name } => {
+                if let Some(state) = self.hub.lock().as_mut() {
+                    state.lane_started(*agent);
+                }
+                if self.plain {
+                    println!(
+                        "  {} {}",
+                        self.ui.green("◆"),
+                        self.ui.dim(&format!("{name} setting out…")),
+                    );
+                }
+            }
+            ReviewEvent::Subagent { agent, event } => {
+                if let Some(state) = self.hub.lock().as_mut() {
+                    state.lane_event(*agent, event, &self.ui);
+                }
+            }
+            ReviewEvent::SubagentCompleted {
+                agent,
+                name,
+                ok,
+                tokens_used,
+                summary,
+            } => {
+                if let Some(state) = self.hub.lock().as_mut() {
+                    state.lane_completed(*agent, *ok, *tokens_used, summary);
+                }
+                if self.plain {
+                    let outcome = if *ok {
+                        self.ui.green(&format!("{name} done"))
+                    } else {
+                        self.ui.red(&format!("{name} failed"))
+                    };
+                    println!(
+                        "  {} {} {}",
+                        self.ui.brown("└─"),
+                        outcome,
+                        self.ui.dim(&format!(
+                            "— {} ({} tok)",
+                            render_truncate(summary, 90),
+                            human_tokens(*tokens_used)
+                        )),
+                    );
+                }
+            }
+            ReviewEvent::StepCompleted { .. } => self.settle(),
+            ReviewEvent::Completed { tokens_used, .. } => self.tokens_used = *tokens_used,
+        }
+    }
+
+    /// Close whichever renderer is live, leaving its final output on screen.
+    fn settle(&mut self) {
+        self.turn.finish();
+        if let Some(painter) = self.painter.take() {
+            painter.finish();
+        }
+        self.hub.clear();
+    }
+
+    fn finish(&mut self) {
+        self.settle();
     }
 }
 

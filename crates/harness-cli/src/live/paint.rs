@@ -58,8 +58,12 @@ impl Live {
         // message.
         let status_rows: u16 =
             self.compression_line.is_some() as u16 + self.status_line.is_some() as u16;
+        // A running `spawn_agents` fleet pins its lanes block (lanes + optional
+        // focused tail + key hint) directly under the spacer, above the meters.
+        let fleet_lines = self.fleet_lines();
         let reserved = (plan.len() + chrome) as u16
             + SPACER_ROWS as u16
+            + fleet_lines.len() as u16
             + status_rows
             + DIVIDER_ROWS as u16
             + box_h;
@@ -87,9 +91,13 @@ impl Live {
         for s in 0..SPACER_ROWS as u16 {
             buf.push_str(&format!("\x1b[{};1H\x1b[2K", new_bottom + 1 + s));
         }
-        // The compression savings and context-usage meters sit under the
-        // spacer, just above the divider (compression on top of context).
+        // The fleet lanes (when a fleet runs), then the compression savings and
+        // context-usage meters, sit under the spacer just above the divider.
         let mut next_row = new_bottom + 1 + SPACER_ROWS as u16;
+        for line in &fleet_lines {
+            buf.push_str(&format!("\x1b[{next_row};1H\x1b[2K{line}"));
+            next_row += 1;
+        }
         for line in [&self.compression_line, &self.status_line]
             .into_iter()
             .flatten()

@@ -44,6 +44,10 @@ pub(crate) async fn run_prompt(
 ) -> Result<(bool, String)> {
     let term = LiveTerminal::new()?;
     let (rows, cols) = (term.rows, term.cols);
+    // While the composer owns the terminal, a `spawn_agents` fleet must paint
+    // through its pinned area (not a painter thread of its own).
+    let fleet_hub = crate::fleet_ui::FleetHub::global();
+    fleet_hub.set_live(true);
 
     // The input thread only ever reads key/resize events and forwards them; it
     // never writes to the terminal. `stop` ends it; `paused` makes it yield the
@@ -114,6 +118,7 @@ pub(crate) async fn run_prompt(
     };
     drop(state);
     drop(term);
+    fleet_hub.set_live(false);
 
     // Now that the alt-screen/raw mode is torn down, offer to set up web search
     // if the agent tried it without a Brave key during the session.
@@ -428,7 +433,12 @@ async fn run_one_turn(
                 }
             }
             _ = ticker.tick() => {
-                state.borrow_mut().tick_spinner();
+                let mut s = state.borrow_mut();
+                s.tick_spinner();
+                // A running fleet animates in the pinned area on the same tick.
+                if s.tick_fleet() {
+                    s.render();
+                }
             }
         }
     }

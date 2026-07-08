@@ -28,6 +28,7 @@ harness-loop = { workspace = true }
 harness-review = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 rustyline = "14"

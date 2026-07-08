@@ -31,7 +31,7 @@ pub(crate) use spinner::LiveSpinner;
 pub use spinner::Spinner;
 
 /// An RGB color for 24-bit ANSI.
-type Rgb = (u8, u8, u8);
+pub(crate) type Rgb = (u8, u8, u8);
 
 /// Whether/how to render color, plus the active theme. Cheap to clone (the
 /// theme sits behind an `Arc`); pass it around freely.
@@ -209,7 +209,7 @@ impl Ui {
     }
 }
 
-fn paint(text: &str, rgb: Rgb) -> String {
+pub(crate) fn paint(text: &str, rgb: Rgb) -> String {
     let (r, g, b) = rgb;
     format!("\x1b[38;2;{r};{g};{b}m{text}\x1b[0m")
 }

@@ -16,6 +16,8 @@ mod code_review_cmd;
 mod compression_cmd;
 mod diff;
 mod endpoint;
+mod fleet_sink;
+mod fleet_ui;
 mod live;
 mod local;
 mod loop_cmd;
@@ -213,9 +215,26 @@ async fn main() -> Result<()> {
     // work without re-entering keys.
     let _ = harness_runtime::connection::load();
 
-    let tools = build_tool_registry(&workspace, &ui);
+    let mut tools = build_tool_registry(&workspace, &ui);
     let base_url = client.base_url().to_string();
     let config = agent_config(&model, context_window, &tools, &workspace);
+
+    // The fleet: `spawn_agents` lets the model fan work out across parallel
+    // subagents. The spawner snapshots the registry *before* the tool registers
+    // (subagents get every tool except the fleet itself — one level deep), and
+    // lanes render through the shared hub (the live composer's pinned block,
+    // or an in-place painter in cooked mode). Prefs re-apply so a disabled
+    // `spawn_agents` stays off.
+    let spawner = Arc::new(harness_agent::FleetSpawner::new(
+        client.clone(),
+        tools.clone(),
+        config.clone(),
+    ));
+    tools.register_typed(harness_agent::FleetTool::new(
+        spawner,
+        Arc::new(fleet_sink::CliFleetSink::new(ui.clone())),
+    ));
+    harness_runtime::tools::load().apply(&mut tools);
 
     // Resume an existing transcript, or strike out on a fresh session.
     let (mut agent, session, resumed_entries) = match &args.resume {
