@@ -49,11 +49,22 @@ pub struct ReviewInput {
 pub fn resolve_target(root: &Path, target: ReviewTarget) -> Result<ReviewInput, ReviewError> {
     match &target {
         ReviewTarget::Uncommitted => {
-            // `HEAD` covers staged + unstaged in one diff; an unborn HEAD
-            // (fresh repo, no commits) falls back to the index diff.
-            let diff = git(root, &["diff", "HEAD"])
-                .or_else(|_| git(root, &["diff"]))
-                .map_err(|e| ReviewError::Git(format!("could not diff the working tree: {e}")))?;
+            // `HEAD` covers staged + unstaged in one diff. An unborn HEAD
+            // (fresh repo, no commits) has no such anchor: staged changes only
+            // show against the empty index side (`--cached`) and unstaged
+            // against the index — combine both so `git init && git add .` is
+            // fully reviewable.
+            let diff = match git(root, &["diff", "HEAD"]) {
+                Ok(diff) => diff,
+                Err(head_err) => match (git(root, &["diff", "--cached"]), git(root, &["diff"])) {
+                    (Ok(staged), Ok(unstaged)) => format!("{staged}{unstaged}"),
+                    _ => {
+                        return Err(ReviewError::Git(format!(
+                            "could not diff the working tree: {head_err}"
+                        )))
+                    }
+                },
+            };
             let untracked =
                 git(root, &["ls-files", "--others", "--exclude-standard"]).unwrap_or_default();
             let untracked: Vec<&str> = untracked.lines().filter(|l| !l.is_empty()).collect();
@@ -174,6 +185,24 @@ mod tests {
             resolve_target(&root, ReviewTarget::Uncommitted),
             Err(ReviewError::NothingToReview)
         ));
+    }
+
+    #[test]
+    fn staged_changes_in_a_fresh_repo_are_reviewable() {
+        // git init && git add . — an unborn HEAD with everything staged. The
+        // review must see the staged diff, not report "nothing to review".
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let Some(()) = run(&root, &["init", "-q"]) else {
+            return;
+        };
+        run(&root, &["config", "user.email", "t@t"]).unwrap();
+        run(&root, &["config", "user.name", "t"]).unwrap();
+        std::fs::write(root.join("a.rs"), "fn staged() {}\n").unwrap();
+        run(&root, &["add", "."]).unwrap();
+
+        let input = resolve_target(&root, ReviewTarget::Uncommitted).unwrap();
+        assert!(input.diff.contains("staged()"));
     }
 
     #[test]

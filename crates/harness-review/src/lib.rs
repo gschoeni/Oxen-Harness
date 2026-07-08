@@ -34,7 +34,10 @@ pub enum ReviewError {
     #[error("nothing to review — the target has no changes")]
     NothingToReview,
     #[error("the review was stopped")]
-    Cancelled,
+    Cancelled {
+        /// Estimated tokens the reviewers spent before the stop landed.
+        tokens_used: usize,
+    },
     #[error("{0}")]
     Git(String),
     #[error(transparent)]

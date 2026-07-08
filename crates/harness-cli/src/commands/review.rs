@@ -101,20 +101,29 @@ async fn run(
         )),
     );
 
-    // One stop signal for the whole review: Ctrl-C fires it — as a signal
-    // during cooked single-agent steps, or as a key the fan-out painter reads
-    // while it owns the keyboard in raw mode.
+    // One stop signal for the whole review, with the same blast radius no
+    // matter which step is running: a Ctrl-C during a cooked single-agent step
+    // trips the signal arm below, which *cancels the review and keeps the
+    // session* — exactly what the fan-out painter does when it reads Ctrl-C as
+    // a key in raw mode. (This arm used to return Ok(true) and end the whole
+    // REPL, so the identical keystroke behaved differently depending on the
+    // step.) After signalling we keep awaiting the runner so it stops
+    // cooperatively and still reports its spend, rather than dropping the
+    // future mid-stream.
     let cancel = CancellationToken::new();
     let runner =
         ReviewRunner::new(config, target.clone(), workspace_root).with_cancel(cancel.clone());
     let display = Rc::new(RefCell::new(ReviewDisplay::new(ui.clone(), cancel.clone())));
     let d = display.clone();
-    let result = tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            display.borrow_mut().finish();
-            return Ok(true);
+    let result = {
+        let run = runner.run(agent, |ev| d.borrow_mut().on_event(ev));
+        tokio::pin!(run);
+        loop {
+            tokio::select! {
+                res = &mut run => break res,
+                _ = tokio::signal::ctrl_c(), if !cancel.is_cancelled() => cancel.cancel(),
+            }
         }
-        res = runner.run(agent, |ev| d.borrow_mut().on_event(ev)) => res,
     };
     display.borrow_mut().finish();
     let tokens_used = display.borrow().tokens_used;
@@ -151,12 +160,21 @@ async fn run(
             );
             Ok(false)
         }
-        Err(ReviewError::Cancelled) => {
+        Err(ReviewError::Cancelled { tokens_used }) => {
             println!(
                 "  {} {}",
                 ui.brown("⛺"),
                 ui.dim("review stopped — nothing was recorded"),
             );
+            if tokens_used > 0 {
+                println!(
+                    "  {}",
+                    ui.dim(&format!(
+                        "~{} tokens spent by the reviewers before stopping",
+                        human_tokens(tokens_used)
+                    )),
+                );
+            }
             Ok(false)
         }
         Err(e) => {
@@ -362,11 +380,31 @@ fn print_steps(ui: &Ui) {
     println!();
     println!("  {}", ui.title("Code-review pipeline"));
     for (i, step) in config.resolved_steps().iter().enumerate() {
-        let first_line = step.prompt.lines().next().unwrap_or_default();
+        let agents = step.resolved_agents();
+        // A fan-out step keeps its prompts in `agents` (its own `prompt` is
+        // empty), so summarize each lane; a single-agent step shows its one
+        // prompt's first line.
+        let summary = if step.is_fan_out() {
+            format!(
+                "{} reviewers in parallel: {}",
+                agents.len(),
+                agents
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+        } else {
+            agents
+                .first()
+                .and_then(|a| a.prompt.lines().next())
+                .unwrap_or_default()
+                .to_string()
+        };
         println!(
             "  {} {}",
             ui.accent(&format!("{}. {:<8}", i + 1, step.name)),
-            ui.dim(&crate::render::truncate(first_line, 80)),
+            ui.dim(&crate::render::truncate(&summary, 80)),
         );
     }
     println!(

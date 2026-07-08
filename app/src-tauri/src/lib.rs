@@ -712,8 +712,28 @@ async fn configure_oxen_key(
     // Rebuild the client for the agent's own model so the key applies without
     // disturbing the model choice or the conversation.
     let client = build_client(agent.model())?;
-    agent.set_client(client);
+    agent.set_client(client.clone());
+    // Keep the fleet spawner on the same endpoint, so a spawn_agents fleet
+    // launched after the key is set doesn't keep failing on the old client.
+    if let Some(spawner) = fleet_spawner_for(&state, &session) {
+        spawner.set_client(client);
+    }
     Ok(())
+}
+
+/// The `spawn_agents` spawner for a session, if one is registered. Callers that
+/// swap the live agent's client/model use it to keep future subagents in step
+/// (the spawner captured client/model when the agent was built).
+fn fleet_spawner_for(
+    state: &AppState,
+    session: &str,
+) -> Option<Arc<harness_agent::FleetSpawner>> {
+    state
+        .fleet_spawners
+        .lock()
+        .expect("fleet spawners poisoned")
+        .get(session)
+        .cloned()
 }
 
 /// Save the Oxen API key + host and rebuild the agent against the new endpoint.
@@ -1231,12 +1251,14 @@ async fn run_code_review(
                 findings: 0,
                 tokens_used: 0,
             }),
-            Err(ReviewError::Cancelled) => Ok(CodeReviewResult {
+            Err(ReviewError::Cancelled { tokens_used }) => Ok(CodeReviewResult {
                 status: "cancelled",
                 user: String::new(),
                 assistant: String::new(),
                 findings: 0,
-                tokens_used: 0,
+                // Reviewers that ran before the stop spent real tokens; report
+                // them so the all-time counter below doesn't undercount.
+                tokens_used,
             }),
             Err(e) => Err(e.to_string()),
         }
@@ -2423,9 +2445,16 @@ async fn set_model(
     let arc = current_agent(&app, &state).await?;
     let client = build_client(&model)?;
     let mut agent = arc.lock().await;
-    agent.set_client(client);
+    agent.set_client(client.clone());
     agent.set_model(&model);
     agent.set_context_window(None);
+    // Follow the swap through to the fleet spawner so a later spawn_agents
+    // fleet runs on the new model/endpoint, not the one captured at build.
+    let session = agent.session_id().to_string();
+    if let Some(spawner) = fleet_spawner_for(&state, &session) {
+        spawner.set_client(client);
+        spawner.set_model(&model);
+    }
     Ok(info_for(&agent))
 }
 

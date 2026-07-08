@@ -125,9 +125,10 @@ impl ReviewRunner {
             tokens_used += step_tokens;
 
             // A cancelled step returns partial text; don't run the rest of the
-            // pipeline on it.
+            // pipeline on it. The spend so far is real — carry it out so hosts
+            // can report it and roll it into their totals.
             if self.cancel.is_cancelled() {
-                return Err(ReviewError::Cancelled);
+                return Err(ReviewError::Cancelled { tokens_used });
             }
             on_event(&ReviewEvent::StepCompleted {
                 index,
@@ -263,8 +264,13 @@ impl ReviewRunner {
     }
 }
 
-/// Fill a step template's placeholders. Unknown placeholders pass through
-/// untouched (a typo shows up in the prompt rather than silently vanishing).
+/// Fill a step template's placeholders in a single pass over the template, so
+/// placeholder-looking text *inside* substituted content is never re-expanded
+/// — a diff that itself contains `{{previous}}` (reviewing this crate's own
+/// prompts, or any mustache-templated codebase) stays literal — and the
+/// up-to-60k diff is copied exactly once per prompt. Unknown placeholders pass
+/// through untouched (a typo shows up in the prompt rather than silently
+/// vanishing).
 fn render_prompt(
     template: &str,
     input: &ReviewInput,
@@ -277,11 +283,35 @@ fn render_prompt(
     } else {
         previous
     };
-    template
-        .replace("{{target}}", &input.description)
-        .replace("{{diff}}", &input.diff)
-        .replace("{{previous}}", previous)
-        .replace("{{max_findings}}", &max_findings.to_string())
+    let max_findings = max_findings.to_string();
+    let values: [(&str, &str); 4] = [
+        ("{{target}}", &input.description),
+        ("{{diff}}", &input.diff),
+        ("{{previous}}", previous),
+        ("{{max_findings}}", &max_findings),
+    ];
+
+    let mut out = String::with_capacity(template.len() + input.diff.len() + previous.len());
+    let mut rest = template;
+    loop {
+        // The earliest placeholder in what remains of the *template* — never
+        // in already-substituted output.
+        let next = values
+            .iter()
+            .filter_map(|(key, value)| rest.find(key).map(|at| (at, *key, *value)))
+            .min_by_key(|(at, _, _)| *at);
+        match next {
+            Some((at, key, value)) => {
+                out.push_str(&rest[..at]);
+                out.push_str(value);
+                rest = &rest[at + key.len()..];
+            }
+            None => {
+                out.push_str(rest);
+                return out;
+            }
+        }
+    }
 }
 
 /// The synthetic exchange a host injects into the real session after a review,
@@ -329,6 +359,23 @@ mod tests {
 
         let later = render_prompt("P:{{previous}}", &input(), "candidates…", 7, 1);
         assert_eq!(later, "P:candidates…");
+    }
+
+    #[test]
+    fn placeholders_inside_substituted_content_stay_literal() {
+        // A diff that itself contains placeholder syntax (reviewing this
+        // crate's own prompts, or any mustache-templated repo) must not be
+        // re-expanded by later substitutions.
+        let tricky = ReviewInput {
+            target: ReviewTarget::Uncommitted,
+            description: "uncommitted changes".into(),
+            diff: "+ keep {{previous}} and {{max_findings}} literal".into(),
+        };
+        let out = render_prompt("D:{{diff}} P:{{previous}}", &tricky, "CANDIDATES", 7, 1);
+        assert_eq!(
+            out,
+            "D:+ keep {{previous}} and {{max_findings}} literal P:CANDIDATES"
+        );
     }
 
     #[test]
