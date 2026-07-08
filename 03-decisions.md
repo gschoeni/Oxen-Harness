@@ -515,3 +515,35 @@ shared domain types.
 **`HistoryStore` is `Send + Sync`** (2026-06-21)
 The SQLite connection is wrapped in a `Mutex` so the store can be shared via `Arc`
 across threads (the agent loop today, the Tauri app later).
+
+**Subagents are one fan-out level deep** (2026-07-08)
+`spawn_agents` lets the model run 2-6 parallel subagents, but a subagent can
+never spawn its own fleet: the `FleetSpawner` snapshots the tool registry
+*before* the fleet tool registers, and `Agent::side_agent` strips it again.
+Recursion would turn one prompt into an unbounded tree of model calls — a cost
+and debugging hazard with no compelling use we could name. Revisit only with a
+depth budget and per-tree token accounting.
+
+**Fleet transcripts are ephemeral; the display is the record** (2026-07-08)
+Subagents run on in-memory stores: you watch their lanes live (TUI focus keys,
+desktop panel) and only their *results* land in the session — as labeled tool
+output or the injected review exchange. Persisting every subagent transcript
+would bloat history.sqlite with reasoning nobody re-reads and clutter the
+sidebar with sessions that aren't conversations. If post-hoc inspection is ever
+needed, the seam is a `kind` column on sessions, not a behavior change.
+
+**One process-wide `FleetHub` coordinates the CLI's fleet display** (2026-07-08)
+The `spawn_agents` sink and the live composer must agree on who paints the
+lanes (a background painter fights raw-mode composers for the cursor). Rather
+than threading a handle through six call sites, `FleetHub::global()` is a
+singleton slot: the sink publishes state, `set_live` says who owns the
+terminal, and whichever display is active reads it. A global is defensible
+here because the terminal itself is a process-wide singleton; the review
+pipeline still uses a local hub since it owns both state and painter.
+
+**The review pipeline runs on isolated side agents** (2026-07-08)
+Each `/code-review` step gets a fresh `side_agent` (fleet lanes too): the
+verifier must judge the finders' candidates against the *code*, not be
+anchored by the finders' reasoning, and a review must never pollute the
+session's context window. Step outputs thread through `{{previous}}` only.
+
