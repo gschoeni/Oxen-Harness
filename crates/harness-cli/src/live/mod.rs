@@ -482,7 +482,7 @@ impl Live {
 mod tests {
     use crossterm::event::KeyCode;
 
-    use super::test_support::{ctrl, key, live};
+    use super::test_support::{alt, ctrl, key, live};
     use super::*;
 
     #[test]
@@ -494,6 +494,35 @@ mod tests {
                 "`{cmd}` is offered by completion but parse_command doesn't recognize it"
             );
         }
+    }
+
+    // --- Fleet lane switching (alt+digits act only while a fleet runs) -----
+
+    #[test]
+    fn alt_digits_switch_fleet_lanes_only_while_a_fleet_runs() {
+        use crate::fleet_ui::{FleetHub, FleetState};
+
+        let mut l = live(80, 24);
+        // No fleet: alt+1 falls through to normal key handling (not consumed),
+        // and plain typing is never hijacked.
+        assert!(!l.handle_fleet_key(&alt(KeyCode::Char('1'))));
+
+        // With a fleet on the hub, alt+digits focus lanes and alt+0 clears —
+        // while an unmodified digit stays ordinary composer input.
+        let hub = FleetHub::global();
+        hub.install(FleetState::new(&["scan".into(), "trace".into()], None));
+        assert!(l.handle_fleet_key(&alt(KeyCode::Char('2'))));
+        assert_eq!(hub.lock().as_ref().unwrap().focused, Some(1));
+        assert!(l.handle_fleet_key(&alt(KeyCode::Char('9')))); // out of range clears
+        assert_eq!(hub.lock().as_ref().unwrap().focused, None);
+        assert!(l.handle_fleet_key(&alt(KeyCode::Char('1'))));
+        assert!(l.handle_fleet_key(&alt(KeyCode::Char('0'))));
+        assert_eq!(hub.lock().as_ref().unwrap().focused, None);
+        assert!(!l.handle_fleet_key(&key(KeyCode::Char('1'))));
+        hub.clear();
+
+        // Cleared hub: back to pass-through.
+        assert!(!l.handle_fleet_key(&alt(KeyCode::Char('1'))));
     }
 
     // --- Live wiring (no TTY: handle_key + buffer state, never paint) ------
