@@ -264,15 +264,21 @@ impl Agent {
     /// code-review pipeline): same client, tools, and config as this agent, but
     /// backed by an in-memory store, so nothing it does touches the user's
     /// session, history, or context window.
+    ///
+    /// Side agents are one fan-out level deep by policy: the `spawn_agents`
+    /// fleet tool is stripped from their registry, so a subagent can never
+    /// recursively spawn its own fleet.
     pub fn side_agent(&self) -> Result<Agent, AgentError> {
         let store = Arc::new(HistoryStore::open_in_memory()?);
         let session = store.create_session(&SessionMeta {
             model: self.config.model.clone(),
             ..Default::default()
         })?;
+        let mut tools = self.tools.clone();
+        tools.remove(crate::fleet_tool::FLEET_TOOL);
         Agent::new(
             self.client.clone(),
-            self.tools.clone(),
+            tools,
             store,
             session,
             self.config.clone(),

@@ -23,6 +23,8 @@
 //! - [`budget`] — token estimation and context-window budgeting.
 //! - [`compact`] — pruning + summarization used when the transcript outgrows
 //!   the window.
+//! - [`fleet`] — run N subagents in parallel on detached side agents, with a
+//!   concurrency cap and one multiplexed event stream.
 //! - `prompt` — the default system prompt and the turn-corrective nudges
 //!   (re-exported below).
 
@@ -34,6 +36,8 @@ mod prompt;
 
 pub mod budget;
 pub mod compact;
+pub mod fleet;
+pub mod fleet_tool;
 
 #[cfg(test)]
 mod test_support;
@@ -42,6 +46,7 @@ pub use agent::Agent;
 pub use config::{AgentConfig, RetryPolicy};
 pub use error::AgentError;
 pub use event::AgentEvent;
+pub use fleet_tool::{FleetSpawner, FleetTool, FLEET_TOOL};
 pub use prompt::{
     default_system_prompt, environment_section, system_prompt_with, system_prompt_with_env,
 };

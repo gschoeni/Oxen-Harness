@@ -628,6 +628,7 @@ dependencies = [
  "harness-store",
  "harness-tools",
  "mockito",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -663,6 +664,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing-subscriber",
 ]
 

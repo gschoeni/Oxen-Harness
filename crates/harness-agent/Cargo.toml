@@ -14,6 +14,8 @@ harness-compress = { workspace = true }
 harness-llm = { workspace = true }
 harness-tools = { workspace = true }
 harness-store = { workspace = true }
+async-trait = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -23,7 +25,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 mockito = "1"
-async-trait = { workspace = true }
 tempfile = "3"
 
 [lints]
