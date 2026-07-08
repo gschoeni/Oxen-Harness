@@ -10,6 +10,7 @@ description = "The configurable code-review pipeline: ordered prompt steps (find
 
 [dependencies]
 harness-agent = { workspace = true }
+harness-core = { workspace = true }
 harness-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

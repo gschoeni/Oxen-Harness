@@ -254,13 +254,7 @@ impl TurnRenderer {
 
 /// Collapse newlines and cap a string to `max` characters, adding an ellipsis.
 pub(crate) fn truncate(s: &str, max: usize) -> String {
-    let s = s.replace('\n', " ");
-    if s.chars().count() <= max {
-        s
-    } else {
-        let kept: String = s.chars().take(max).collect();
-        format!("{kept}…")
-    }
+    harness_core::text::ellipsize(&s.replace('\n', " "), max)
 }
 
 #[cfg(test)]

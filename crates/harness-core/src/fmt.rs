@@ -34,9 +34,37 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Format a token count the way every meter in the harness does: `980`,
+/// `12.3k`, `1.2M`.
+///
+/// ```
+/// use harness_core::fmt::human_tokens;
+/// assert_eq!(human_tokens(980), "980");
+/// assert_eq!(human_tokens(12_300), "12.3k");
+/// assert_eq!(human_tokens(1_200_000), "1.2M");
+/// ```
+pub fn human_tokens(n: usize) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn human_tokens_scales_units() {
+        assert_eq!(human_tokens(0), "0");
+        assert_eq!(human_tokens(999), "999");
+        assert_eq!(human_tokens(1_000), "1.0k");
+        assert_eq!(human_tokens(128_000), "128.0k");
+        assert_eq!(human_tokens(2_500_000), "2.5M");
+    }
 
     #[test]
     fn formats_byte_counts() {

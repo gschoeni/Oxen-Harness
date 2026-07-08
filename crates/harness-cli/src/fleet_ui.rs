@@ -413,39 +413,22 @@ fn tail_rows(tail: &str, width: usize, rows: usize) -> Vec<String> {
 /// Append streamed text to a one-line rolling readout: whitespace collapsed,
 /// only the freshest `cap` characters kept.
 fn roll_tail(current: &str, addition: &str, cap: usize) -> String {
-    let mut joined = String::with_capacity(current.len() + addition.len());
-    joined.push_str(current);
-    joined.push_str(addition);
-    let flat = joined.split_whitespace().collect::<Vec<_>>().join(" ");
-    let count = flat.chars().count();
-    if count <= cap {
-        flat
-    } else {
-        flat.chars().skip(count - cap).collect()
-    }
+    let joined = format!("{current}{addition}");
+    harness_core::text::tail_chars(&harness_core::text::collapse_ws(&joined), cap)
 }
 
 /// Append raw output to a lane's multi-line tail, keeping newlines and only
 /// the freshest [`OUTPUT_TAIL`] characters.
 fn append_tail(current: &str, addition: &str) -> String {
-    let mut joined = String::with_capacity(current.len() + addition.len());
-    joined.push_str(current);
-    joined.push_str(addition);
-    let count = joined.chars().count();
-    if count <= OUTPUT_TAIL {
-        joined
-    } else {
-        joined.chars().skip(count - OUTPUT_TAIL).collect()
-    }
+    harness_core::text::tail_chars(&format!("{current}{addition}"), OUTPUT_TAIL)
 }
 
 /// Truncate (with ellipsis) or right-pad `s` to exactly `width` chars.
 fn fit(s: &str, width: usize) -> String {
     let flat = s.replace('\n', " ");
-    let count = flat.chars().count();
-    if count > width {
-        let kept: String = flat.chars().take(width.saturating_sub(1)).collect();
-        format!("{kept}…")
+    if flat.chars().count() > width {
+        // ellipsize yields kept+…, so budget one cell for the marker.
+        harness_core::text::ellipsize(&flat, width.saturating_sub(1))
     } else {
         pad(&flat, width)
     }

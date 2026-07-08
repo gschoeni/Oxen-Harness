@@ -221,27 +221,14 @@ pub(crate) fn context_usage_line(agent: &Agent, ui: &Ui) -> String {
 }
 
 /// Human-friendly token count: `980`, `12.3k`, `1.2M`.
-pub(crate) fn human_tokens(n: usize) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}k", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
-    }
-}
+// Token counts render identically everywhere; the shared formatter lives in
+// harness-core and is re-exported here for the CLI's meters and lanes.
+pub(crate) use harness_core::fmt::human_tokens;
 
 #[cfg(test)]
 mod tests {
-    use super::{ends_mid_turn, human_tokens, retry_notice};
+    use super::{ends_mid_turn, retry_notice};
     use harness_llm::ChatMessage;
-
-    #[test]
-    fn human_tokens_scales_units() {
-        assert_eq!(human_tokens(980), "980");
-        assert_eq!(human_tokens(12_300), "12.3k");
-        assert_eq!(human_tokens(1_200_000), "1.2M");
-    }
 
     #[test]
     fn ends_mid_turn_flags_dangling_user_and_tool_messages() {

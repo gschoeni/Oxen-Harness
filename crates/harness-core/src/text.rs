@@ -35,9 +35,72 @@ pub fn slug(name: &str, fallback: &str) -> String {
     }
 }
 
+/// Cap `s` at `max` characters, appending `…` when anything was cut.
+///
+/// Char-safe (never splits a multi-byte character) and width-honest: the
+/// result is at most `max + 1` characters — the ellipsis marks the cut rather
+/// than eating into the budget. Callers fitting an exact column width should
+/// budget for that extra cell.
+///
+/// ```
+/// use harness_core::text::ellipsize;
+/// assert_eq!(ellipsize("short", 10), "short");
+/// assert_eq!(ellipsize("a very long line", 6), "a very…");
+/// ```
+pub fn ellipsize(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let kept: String = s.chars().take(max).collect();
+    format!("{kept}…")
+}
+
+/// Collapse every run of whitespace (including newlines) to a single space,
+/// trimming the ends — turning any text into one display-safe line.
+///
+/// ```
+/// use harness_core::text::collapse_ws;
+/// assert_eq!(collapse_ws("reading  the\n parser\tmodule "), "reading the parser module");
+/// ```
+pub fn collapse_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Keep only the freshest `cap` characters of `s` — the rolling-tail buffer
+/// behind live activity readouts, where the newest output matters and the
+/// oldest can fall off. Char-safe.
+///
+/// ```
+/// use harness_core::text::tail_chars;
+/// assert_eq!(tail_chars("abcdef", 4), "cdef");
+/// assert_eq!(tail_chars("abc", 4), "abc");
+/// ```
+pub fn tail_chars(s: &str, cap: usize) -> String {
+    let count = s.chars().count();
+    if count <= cap {
+        s.to_string()
+    } else {
+        s.chars().skip(count - cap).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ellipsize_is_char_safe() {
+        // Multi-byte characters count as one; the cut never splits them.
+        assert_eq!(ellipsize("⠋⠙⠹⠸", 2), "⠋⠙…");
+        assert_eq!(ellipsize("⠋⠙", 2), "⠋⠙");
+    }
+
+    #[test]
+    fn tail_chars_keeps_the_freshest() {
+        let tail = tail_chars(&format!("{}END", "x".repeat(100)), 5);
+        assert_eq!(tail, "xxEND");
+        assert_eq!(tail_chars("⠋⠙⠹", 2), "⠙⠹");
+    }
 
     #[test]
     fn lowercases_and_dashes_separators() {

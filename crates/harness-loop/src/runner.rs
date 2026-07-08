@@ -418,7 +418,7 @@ const RUBRIC_SYSTEM: &str =
 /// Parse the checker's JSON and decide pass/fail. Lenient: if it can't be
 /// parsed, the gate fails with the raw text as feedback (never a silent pass).
 fn score_rubric(raw: &str, threshold: u8) -> VerifyOutcome {
-    let Some(value) = extract_json(raw) else {
+    let Some(value) = harness_core::json::first_object(raw) else {
         return VerifyOutcome::Failed {
             detail: format!(
                 "verifier did not return parseable JSON: {}",
@@ -463,16 +463,6 @@ fn score_rubric(raw: &str, threshold: u8) -> VerifyOutcome {
             detail: format!("below the bar — {}. {feedback}", lows.join("; ")),
         }
     }
-}
-
-/// Pull the first JSON object out of a model response (handles stray prose/fences).
-fn extract_json(raw: &str) -> Option<serde_json::Value> {
-    let start = raw.find('{')?;
-    let end = raw.rfind('}')?;
-    if end < start {
-        return None;
-    }
-    serde_json::from_str(&raw[start..=end]).ok()
 }
 
 /// Keep a worker turn's summary compact for the journal.
@@ -554,13 +544,6 @@ mod tests {
             score_rubric("I think it's fine honestly", 8),
             VerifyOutcome::Failed { .. }
         ));
-    }
-
-    #[test]
-    fn extract_json_finds_object_amid_noise() {
-        let v = extract_json("```json\n{\"a\":1}\n```").unwrap();
-        assert_eq!(v["a"], 1);
-        assert!(extract_json("no json here").is_none());
     }
 
     #[tokio::test]

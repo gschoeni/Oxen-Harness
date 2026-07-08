@@ -68,7 +68,7 @@ impl ReviewReport {
     /// Parse the final step's reply. Tries the whole text as JSON, then the
     /// outermost `{…}` (stray prose/fences), then falls back to raw text.
     pub fn parse(raw: &str) -> Self {
-        let mut report = extract_json(raw)
+        let mut report = harness_core::json::first_object(raw)
             .and_then(|value| serde_json::from_value::<ReviewReport>(value).ok())
             .map(|mut r| {
                 r.parsed = true;
@@ -129,19 +129,6 @@ impl ReviewReport {
         }
         out
     }
-}
-
-/// Pull the outermost JSON object out of a model reply (handles fences/prose).
-fn extract_json(raw: &str) -> Option<serde_json::Value> {
-    if let Ok(v) = serde_json::from_str(raw) {
-        return Some(v);
-    }
-    let start = raw.find('{')?;
-    let end = raw.rfind('}')?;
-    if end < start {
-        return None;
-    }
-    serde_json::from_str(&raw[start..=end]).ok()
 }
 
 #[cfg(test)]

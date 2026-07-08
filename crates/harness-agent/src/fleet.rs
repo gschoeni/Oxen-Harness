@@ -251,12 +251,7 @@ fn summarize(outcome: &SubagentOutcome) -> String {
 }
 
 fn truncate(s: &str) -> String {
-    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() <= SUMMARY_CHARS {
-        return flat;
-    }
-    let kept: String = flat.chars().take(SUMMARY_CHARS).collect();
-    format!("{kept}…")
+    harness_core::text::ellipsize(&harness_core::text::collapse_ws(s), SUMMARY_CHARS)
 }
 
 #[cfg(test)]

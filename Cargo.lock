@@ -769,6 +769,7 @@ version = "0.1.0"
 dependencies = [
  "harness-agent",
  "harness-config",
+ "harness-core",
  "harness-llm",
  "harness-store",
  "harness-tools",
