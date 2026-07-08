@@ -262,6 +262,16 @@ pub(crate) fn tool_target(arguments: &str) -> Option<String> {
 }
 
 /// What happened to a single turn in the live loop.
+/// Whether a mid-turn submission can stack onto the message queue: only plain
+/// prompts — the queue drains as *prompts for the model*, so a recognized
+/// `/command` would reach the LLM as literal chat text instead of running.
+fn stackable(text: &str) -> bool {
+    matches!(
+        crate::repl::parse_command(text),
+        crate::repl::Command::Prompt(_)
+    )
+}
+
 enum TurnOutcome {
     /// The turn finished on its own (success or agent error).
     Done(Result<String, AgentError>),
@@ -341,10 +351,27 @@ async fn run_one_turn(
                             KeyAction::Redraw => state.borrow_mut().render(),
                             KeyAction::Submit(line) => {
                                 let trimmed = line.trim();
-                                if !trimmed.is_empty() {
-                                    queue.add(trimmed);
-                                }
                                 let mut s = state.borrow_mut();
+                                if trimmed.is_empty() {
+                                    // Nothing to stack.
+                                } else if stackable(trimmed) {
+                                    queue.add(trimmed);
+                                } else {
+                                    // A /command can't stack — the queue drains
+                                    // as prompts for the model, which would
+                                    // receive "/model …" as chat text. Keep it
+                                    // in the composer to run once the turn ends.
+                                    let ui = s.ui.clone();
+                                    s.print_line(&format!(
+                                        "  {} {}",
+                                        ui.brown("⛺"),
+                                        ui.dim(
+                                            "commands don't stack in the wagon — \
+                                             kept in the composer to run after this turn"
+                                        ),
+                                    ));
+                                    s.composer.set_text(trimmed);
+                                }
                                 s.sync_queue(queue.items());
                                 s.render();
                             }
@@ -404,5 +431,21 @@ async fn run_one_turn(
                 state.borrow_mut().tick_spinner();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stackable;
+
+    #[test]
+    fn only_plain_prompts_stack_onto_the_queue() {
+        // Prompts (including slash-prefixed text no command recognizes) stack.
+        assert!(stackable("fix the failing test"));
+        assert!(stackable("/unknown thing"));
+        // Recognized commands don't — they'd reach the model as chat text.
+        assert!(!stackable("/model claude-sonnet-4-6"));
+        assert!(!stackable("/retry"));
+        assert!(!stackable("/q"));
     }
 }

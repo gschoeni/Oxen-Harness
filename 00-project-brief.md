@@ -44,7 +44,7 @@ recovery pushes:** the Oxen client, the sandboxed tool set, the verbatim SQLite
 store, the agent loop (with context compaction, reversible compression, and
 transient-failure retry), self-verifying loops with conditional gates, themes,
 local models, skills/custom tools, and both front ends (CLI + Tauri desktop
-app) are built and tested — 474 tests passing, CI green on push. See
+app) are built and tested — 481 tests passing, CI green on push. See
 `02-status.md` for the full ledger.
 
 ## Key Decisions

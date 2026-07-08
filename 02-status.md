@@ -24,7 +24,7 @@
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **474 tests passing** across the workspace; CI runs fmt + clippy + tests on push.
+> **481 tests passing** across the workspace; CI runs fmt + clippy + tests on push.
 
 ---
 
