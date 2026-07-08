@@ -260,6 +260,38 @@ impl Agent {
         Ok(assembled.content)
     }
 
+    /// Spin up a detached agent for an isolated side task (e.g. one step of a
+    /// code-review pipeline): same client, tools, and config as this agent, but
+    /// backed by an in-memory store, so nothing it does touches the user's
+    /// session, history, or context window.
+    pub fn side_agent(&self) -> Result<Agent, AgentError> {
+        let store = Arc::new(HistoryStore::open_in_memory()?);
+        let session = store.create_session(&SessionMeta {
+            model: self.config.model.clone(),
+            ..Default::default()
+        })?;
+        Agent::new(
+            self.client.clone(),
+            self.tools.clone(),
+            store,
+            session,
+            self.config.clone(),
+        )
+    }
+
+    /// Record a synthetic, already-settled user/assistant exchange in the
+    /// session without calling the model — how a side task's result (e.g. a
+    /// code-review report) enters the conversation so follow-up turns can refer
+    /// to it. Both messages persist to the store like any turn's would.
+    pub fn inject_exchange(
+        &mut self,
+        user: impl Into<String>,
+        assistant: impl Into<String>,
+    ) -> Result<(), AgentError> {
+        self.push(ChatMessage::user(user.into()))?;
+        self.push(ChatMessage::assistant(assistant.into()))
+    }
+
     /// The current in-memory transcript.
     pub fn messages(&self) -> &[ChatMessage] {
         &self.messages
@@ -392,6 +424,40 @@ mod tests {
             },
             other => panic!("expected parts, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn side_agent_is_detached_and_inject_exchange_persists() {
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new("http://localhost/api/ai", "key", "claude-opus-4-8");
+        let mut agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store.clone(),
+            session.clone(),
+            AgentConfig::default(),
+        )
+        .unwrap();
+        let before = store.messages(&session).unwrap().len();
+
+        // The side agent lives in its own store/session: working it leaves the
+        // parent session untouched.
+        let mut side = agent.side_agent().unwrap();
+        assert_ne!(side.session_id(), agent.session_id());
+        assert_eq!(side.model(), agent.model());
+        side.inject_exchange("scratch work", "scratch reply")
+            .unwrap();
+        assert_eq!(store.messages(&session).unwrap().len(), before);
+
+        // Injecting into the real agent lands a settled pair in memory + store.
+        agent
+            .inject_exchange("Run a code review.", "## Findings\n(none)")
+            .unwrap();
+        let roles: Vec<_> = agent.messages().iter().map(|m| m.role.clone()).collect();
+        assert_eq!(roles.last().unwrap(), "assistant");
+        assert_eq!(roles[roles.len() - 2], "user");
+        assert_eq!(store.messages(&session).unwrap().len(), before + 2);
     }
 
     #[test]
