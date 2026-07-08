@@ -41,8 +41,9 @@ own:
 ```
 
 - **`harness-core`** — the leaf. Provider-agnostic `Message`/`Role`, the pinned
-  Oxen.ai defaults, and dependency-free string/format helpers (`text::slug`,
-  `fmt::format_bytes`) that would otherwise be copied around.
+  Oxen.ai defaults, and the tiny helpers that would otherwise be copied around:
+  `text::{slug, ellipsize, collapse_ws, tail_chars}`, `fmt::{format_bytes,
+  human_tokens}`, and `json::first_object` (lenient pull-the-JSON-out-of-a-model-reply).
 - **`harness-config`** — the single source of truth for where state lives
   (`~/.oxen-harness/…`), atomic + schema-versioned JSON IO, and `.env` secrets.
 - **capabilities** — each an independent, self-contained skill: the LLM client

@@ -1,14 +1,14 @@
 # Backlog & Future Exploration
 
 **Purpose:** Ideas, links, tools, half-formed thoughts, things to consider later. Pull in during planning sessions, not implementation.
-**Updated:** 2026-07-07
+**Updated:** 2026-07-08
 
 ---
 
 ## Ideas
 
 - **MCP support** — let the harness consume Model Context Protocol servers as additional tools.
-- **Sub-agents / parallel tasks** — spawn scoped agents for isolated subtasks (compare OpenHands).
+- ~~**Sub-agents / parallel tasks**~~ — ✅ shipped as the fleet (2026-07-08): `harness_agent::fleet::run_fleet` + the `spawn_agents` tool, review find fan-out, live lanes in both front ends. Remaining ideas: persistent subagent transcripts (a `kind` column on sessions), depth budgets if recursion is ever wanted.
 - **Permission modes** — optional "ask before edit/shell/commit" mode for cautious use, even though edits are allowed by default.
 - **Checkpoints / undo** — snapshot the working dir per turn so a bad edit can be rolled back.
 - **Session replay** — re-run a recorded JSONL transcript against a different model to compare behavior.

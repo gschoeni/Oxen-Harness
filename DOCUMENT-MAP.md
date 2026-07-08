@@ -21,7 +21,7 @@ oxen-harness/
   Cargo.toml                 — Cargo workspace manifest.
   rust-toolchain.toml        — Pinned toolchain + components.
   crates/
-    harness-core/            — Shared message/role types and defaults (leaf crate).
+    harness-core/            — Shared message/role types, defaults, and the copied-around helpers (slug/ellipsize/tail_chars, format_bytes/human_tokens, lenient JSON extraction). Leaf crate.
     harness-config/          — Single source for ~/.oxen-harness paths; atomic + schema-versioned config IO; .env secrets (dotenvy).
     harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth; attachment store (content-addressed on-disk files) + hydration.
     harness-compress/        — Reversible context compression for tool output: JSON-array crushing, log/line collapsing, CCR store (`<<ccr:hash>>` markers resolved by retrieve_original).
