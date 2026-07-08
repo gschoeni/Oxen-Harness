@@ -1307,11 +1307,13 @@ dependencies = [
 name = "harness-agent"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "harness-compress",
  "harness-core",
  "harness-llm",
  "harness-store",
  "harness-tools",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

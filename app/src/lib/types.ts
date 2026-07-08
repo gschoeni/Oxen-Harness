@@ -400,12 +400,21 @@ export type SettingsPage =
 
 // ---- code review (the configurable find → verify → report pipeline) --------
 
-/** One step of the code-review pipeline: a short name and its prompt template.
- *  Mirrors `harness_review::ReviewStep`. Templates may use `{{target}}`,
- *  `{{diff}}`, `{{previous}}` (the prior step's output), and `{{max_findings}}`. */
+/** One parallel reviewer within a fan-out step. Mirrors
+ *  `harness_review::StepAgent`. */
+export interface CodeReviewStepAgent {
+  name: string;
+  prompt: string;
+}
+
+/** One step of the code-review pipeline: a short name and either a single
+ *  prompt or a set of parallel `agents` (a fan-out). Mirrors
+ *  `harness_review::ReviewStep`. Templates may use `{{target}}`, `{{diff}}`,
+ *  `{{previous}}` (the prior step's output), and `{{max_findings}}`. */
 export interface CodeReviewStep {
   name: string;
   prompt: string;
+  agents?: CodeReviewStepAgent[];
 }
 
 /** The saved pipeline (`~/.oxen-harness/code-review.json`), shared with the
@@ -413,6 +422,8 @@ export interface CodeReviewStep {
 export interface CodeReviewConfig {
   steps: CodeReviewStep[];
   max_findings: number;
+  /** Cap on subagents running at once within a fan-out step. */
+  max_parallel: number;
 }
 
 /** What `run_code_review` resolves with. On `"ok"` the user/assistant exchange
@@ -422,14 +433,47 @@ export interface CodeReviewRunResult {
   user: string;
   assistant: string;
   findings: number;
+  /** Estimated tokens spent across every reviewer agent in the pipeline. */
+  tokens_used: number;
 }
 
-/** `review://progress` — which pipeline step a running review is on. */
+/** `review://progress` — which pipeline step a running review is on. More than
+ *  one entry in `agents` means the step fans out (a fleet panel opens too). */
 export interface CodeReviewProgressEvent {
   session: string;
   step: string;
   index: number;
   total: number;
+  agents: string[];
+}
+
+// ---- fleets (N parallel subagents: review fan-out or spawn_agents) ----------
+
+/** `fleet://started` — a fleet of parallel subagents is spinning up. */
+export interface FleetStartedEvent {
+  session: string;
+  agents: string[];
+  /** `"review"` (a pipeline step) or `"turn"` (the model's spawn_agents). */
+  source: "review" | "turn";
+}
+
+/** `fleet://agent` — one lane changed state. */
+export interface FleetAgentEvent {
+  session: string;
+  agent: number;
+  name: string;
+  phase: "started" | "done" | "failed";
+  tokens: number;
+  summary: string;
+}
+
+/** `fleet://agent-activity` — what one lane is doing right now. */
+export interface FleetActivityEvent {
+  session: string;
+  agent: number;
+  kind: "token" | "tool" | "tokens";
+  text: string;
+  tokens: number | null;
 }
 
 /** `review://token` — streamed text from the current review step's agent. */

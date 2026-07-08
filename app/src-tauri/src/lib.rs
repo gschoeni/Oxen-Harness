@@ -57,6 +57,11 @@ pub struct AppState {
     /// agent) so `cancel_turn` can fire one without taking the agent's lock,
     /// which the running turn holds for its whole duration.
     cancels: Mutex<HashMap<String, CancellationToken>>,
+    /// Each session agent's `spawn_agents` spawner, so `execute_turn` can hand
+    /// it the turn's stop signal — cancelling the turn then cancels any fleet
+    /// the model launched inside it. Std mutex: touched briefly, from sync
+    /// builders too. Evicted alongside the agents map.
+    fleet_spawners: StdMutex<HashMap<String, Arc<harness_agent::FleetSpawner>>>,
 }
 
 /// Bridges the agent's `ask_user_question` tool to the web UI: emits an
@@ -489,6 +494,40 @@ fn finish_tools(
     }
 }
 
+/// Register the `spawn_agents` tool on a session's registry: the spawner
+/// snapshots the registry *before* the tool registers (subagents get every
+/// tool except the fleet itself — one level deep, no fork bombs) and is kept
+/// in [`AppState`] so `execute_turn` can wire each turn's stop signal to it.
+/// Skipped entirely when the user disabled the tool in Settings → Tools.
+fn register_fleet(
+    app: &AppHandle,
+    session: &str,
+    tools: &mut ToolRegistry,
+    client: &OxenClient,
+    config: &AgentConfig,
+) {
+    if !harness_runtime::tools::load().is_enabled(harness_agent::FLEET_TOOL) {
+        return;
+    }
+    let spawner = Arc::new(harness_agent::FleetSpawner::new(
+        client.clone(),
+        tools.clone(),
+        config.clone(),
+    ));
+    tools.register_typed(harness_agent::FleetTool::new(
+        spawner.clone(),
+        Arc::new(TauriFleetSink {
+            app: app.clone(),
+            session: session.to_string(),
+        }),
+    ));
+    app.state::<AppState>()
+        .fleet_spawners
+        .lock()
+        .expect("fleet spawners poisoned")
+        .insert(session.to_string(), spawner);
+}
+
 /// Build an agent for a brand-new session (creates the session row).
 fn new_agent(
     app: &AppHandle,
@@ -517,6 +556,7 @@ fn new_agent(
         context_window,
         workspace_root,
     );
+    register_fleet(app, &session, &mut tools, &client, &config);
     Agent::new(client, tools, store, session, config).map_err(|e| e.to_string())
 }
 
@@ -541,6 +581,7 @@ fn resume_agent(
         context_window,
         workspace_root,
     );
+    register_fleet(app, &session_id, &mut tools, &client, &config);
     Agent::resume_from_store(client, tools, store, session_id, config).map_err(|e| e.to_string())
 }
 
@@ -799,11 +840,19 @@ fn info_for(agent: &Agent) -> SessionInfo {
 /// number of chats in history.
 async fn evict_idle(state: &AppState) {
     let current = { state.current.lock().await.clone() };
+    let kept: std::collections::HashSet<String> = {
+        let mut agents = state.agents.lock().await;
+        agents
+            .retain(|id, arc| Some(id.as_str()) == current.as_deref() || arc.try_lock().is_err());
+        agents.keys().cloned().collect()
+    };
+    // The fleet-spawner map mirrors the agents map (an evicted chat's spawner
+    // rebuilds with its agent), so evict in lockstep.
     state
-        .agents
+        .fleet_spawners
         .lock()
-        .await
-        .retain(|id, arc| Some(id.as_str()) == current.as_deref() || arc.try_lock().is_err());
+        .expect("fleet spawners poisoned")
+        .retain(|id, _| kept.contains(id));
 }
 
 /// Register an agent under its session id, make it the current chat, then evict
@@ -841,13 +890,145 @@ async fn current_agent(app: &AppHandle, state: &AppState) -> Result<Arc<Mutex<Ag
 }
 
 /// A `review://progress` payload: which pipeline step a running code review is
-/// on, so the chat can show a live progress card.
+/// on — and, for a fan-out step, the parallel lanes it runs — so the chat can
+/// show a live progress card.
 #[derive(Clone, Serialize)]
 struct ReviewProgressPayload {
     session: String,
     step: String,
     index: usize,
     total: usize,
+    /// Lane labels for this step, in order. More than one = a fan-out.
+    agents: Vec<String>,
+}
+
+/// A `fleet://started` payload: a fleet of parallel subagents is spinning up
+/// in `session` — from a review fan-out step or the model's `spawn_agents`
+/// call alike. `agents` is the lane labels, in order.
+#[derive(Clone, Serialize)]
+struct FleetStartedPayload {
+    session: String,
+    agents: Vec<String>,
+    /// `"review"` (a pipeline step) or `"turn"` (the model's spawn_agents).
+    source: &'static str,
+}
+
+/// A `fleet://agent` payload: one lane changed state.
+#[derive(Clone, Serialize)]
+struct FleetAgentPayload {
+    session: String,
+    agent: usize,
+    name: String,
+    /// `"started"`, `"done"`, or `"failed"`.
+    phase: &'static str,
+    tokens: usize,
+    /// The lane's truncated reply or error (set on done/failed).
+    summary: String,
+}
+
+/// A `fleet://agent-activity` payload: what one lane is doing right now —
+/// streamed text, a tool invocation, or a token-count update.
+#[derive(Clone, Serialize)]
+struct FleetActivityPayload {
+    session: String,
+    agent: usize,
+    /// `"token"` (append text), `"tool"` (replace with a tool line), or
+    /// `"tokens"` (update the counter).
+    kind: &'static str,
+    text: String,
+    tokens: Option<usize>,
+}
+
+/// Bridges a `spawn_agents` fleet (run by the model from inside a turn) to the
+/// UI's lanes panel: one sink per agent, tagged with its session, emitting the
+/// same `fleet://` events review fan-out steps use.
+struct TauriFleetSink {
+    app: AppHandle,
+    session: String,
+}
+
+impl harness_agent::fleet::FleetSink for TauriFleetSink {
+    fn started(&self, labels: &[String], _cancel: CancellationToken) {
+        let _ = self.app.emit(
+            "fleet://started",
+            FleetStartedPayload {
+                session: self.session.clone(),
+                agents: labels.to_vec(),
+                source: "turn",
+            },
+        );
+    }
+
+    fn event(&self, event: &harness_agent::fleet::FleetEvent) {
+        use harness_agent::fleet::FleetEvent;
+        match event {
+            FleetEvent::TaskStarted { index, label } => {
+                let _ = self.app.emit(
+                    "fleet://agent",
+                    FleetAgentPayload {
+                        session: self.session.clone(),
+                        agent: *index,
+                        name: label.clone(),
+                        phase: "started",
+                        tokens: 0,
+                        summary: String::new(),
+                    },
+                );
+            }
+            FleetEvent::Agent { index, event } => {
+                if let Some((kind, text, tokens)) = activity_payload(event) {
+                    let _ = self.app.emit(
+                        "fleet://agent-activity",
+                        FleetActivityPayload {
+                            session: self.session.clone(),
+                            agent: *index,
+                            kind,
+                            text,
+                            tokens,
+                        },
+                    );
+                }
+            }
+            FleetEvent::TaskCompleted {
+                index,
+                label,
+                ok,
+                tokens_used,
+                summary,
+            } => {
+                let _ = self.app.emit(
+                    "fleet://agent",
+                    FleetAgentPayload {
+                        session: self.session.clone(),
+                        agent: *index,
+                        name: label.clone(),
+                        phase: if *ok { "done" } else { "failed" },
+                        tokens: *tokens_used,
+                        summary: summary.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    fn finished(&self) {
+        let _ = self.app.emit(
+            "fleet://completed",
+            SessionPayload {
+                session: self.session.clone(),
+            },
+        );
+    }
+}
+
+/// The lane-activity slice of one subagent event, if it has one.
+fn activity_payload(event: &AgentEvent) -> Option<(&'static str, String, Option<usize>)> {
+    match event {
+        AgentEvent::Token(t) => Some(("token", t.clone(), None)),
+        AgentEvent::ToolStart { name, .. } => Some(("tool", name.clone(), None)),
+        AgentEvent::Usage { tokens_used, .. } => Some(("tokens", String::new(), Some(*tokens_used))),
+        _ => None,
+    }
 }
 
 /// A `review://token` payload: streamed text from the current review step's
@@ -874,6 +1055,8 @@ struct CodeReviewResult {
     user: String,
     assistant: String,
     findings: usize,
+    /// Estimated tokens spent across every reviewer agent in the pipeline.
+    tokens_used: usize,
 }
 
 /// Run the configurable code-review pipeline for a chat's workspace: uncommitted
@@ -920,9 +1103,15 @@ async fn run_code_review(
         .with_cancel(cancel);
         let sid = session.clone();
         let emitter = app.clone();
+        let mut pipeline_tokens = 0usize;
         let run = runner
-            .run(&agent, move |event| match event {
-                ReviewEvent::StepStarted { index, total, name } => {
+            .run(&agent, |event| match event {
+                ReviewEvent::StepStarted {
+                    index,
+                    total,
+                    name,
+                    agents,
+                } => {
                     let _ = emitter.emit(
                         "review://progress",
                         ReviewProgressPayload {
@@ -930,8 +1119,20 @@ async fn run_code_review(
                             step: name.clone(),
                             index: *index,
                             total: *total,
+                            agents: agents.clone(),
                         },
                     );
+                    // A fan-out step opens a lanes panel like spawn_agents does.
+                    if agents.len() > 1 {
+                        let _ = emitter.emit(
+                            "fleet://started",
+                            FleetStartedPayload {
+                                session: sid.clone(),
+                                agents: agents.clone(),
+                                source: "review",
+                            },
+                        );
+                    }
                 }
                 ReviewEvent::Agent(AgentEvent::Token(t)) => {
                     let _ = emitter.emit(
@@ -951,6 +1152,61 @@ async fn run_code_review(
                         },
                     );
                 }
+                ReviewEvent::SubagentStarted { agent, name } => {
+                    let _ = emitter.emit(
+                        "fleet://agent",
+                        FleetAgentPayload {
+                            session: sid.clone(),
+                            agent: *agent,
+                            name: name.clone(),
+                            phase: "started",
+                            tokens: 0,
+                            summary: String::new(),
+                        },
+                    );
+                }
+                ReviewEvent::Subagent { agent, event } => {
+                    if let Some((kind, text, tokens)) = activity_payload(event) {
+                        let _ = emitter.emit(
+                            "fleet://agent-activity",
+                            FleetActivityPayload {
+                                session: sid.clone(),
+                                agent: *agent,
+                                kind,
+                                text,
+                                tokens,
+                            },
+                        );
+                    }
+                }
+                ReviewEvent::SubagentCompleted {
+                    agent,
+                    name,
+                    ok,
+                    tokens_used,
+                    summary,
+                } => {
+                    let _ = emitter.emit(
+                        "fleet://agent",
+                        FleetAgentPayload {
+                            session: sid.clone(),
+                            agent: *agent,
+                            name: name.clone(),
+                            phase: if *ok { "done" } else { "failed" },
+                            tokens: *tokens_used,
+                            summary: summary.clone(),
+                        },
+                    );
+                }
+                ReviewEvent::StepCompleted { .. } => {
+                    let _ = emitter.emit(
+                        "fleet://completed",
+                        SessionPayload {
+                            session: sid.clone(),
+                        },
+                    );
+                }
+                ReviewEvent::Completed { tokens_used, .. } => pipeline_tokens = *tokens_used,
                 _ => {}
             })
             .await;
@@ -965,6 +1221,7 @@ async fn run_code_review(
                     user,
                     assistant,
                     findings: report.findings.len(),
+                    tokens_used: pipeline_tokens,
                 })
             }
             Err(ReviewError::NothingToReview) => Ok(CodeReviewResult {
@@ -972,17 +1229,24 @@ async fn run_code_review(
                 user: String::new(),
                 assistant: String::new(),
                 findings: 0,
+                tokens_used: 0,
             }),
             Err(ReviewError::Cancelled) => Ok(CodeReviewResult {
                 status: "cancelled",
                 user: String::new(),
                 assistant: String::new(),
                 findings: 0,
+                tokens_used: 0,
             }),
             Err(e) => Err(e.to_string()),
         }
     };
     state.cancels.lock().await.remove(&session);
+    // Reviewer agents are real spend: roll their tokens into the all-time
+    // total (the same counter turns feed).
+    if let Ok(res) = &result {
+        let _ = bump_total_tokens(res.tokens_used);
+    }
     evict_idle(&state).await;
     result
 }
@@ -1087,6 +1351,17 @@ async fn execute_turn(
         .lock()
         .await
         .insert(session.clone(), cancel.clone());
+    // Hand the turn's stop signal to the session's fleet spawner too, so
+    // cancelling the turn also stops any fleet the model launched inside it.
+    if let Some(spawner) = state
+        .fleet_spawners
+        .lock()
+        .expect("fleet spawners poisoned")
+        .get(&session)
+        .cloned()
+    {
+        spawner.set_cancel(cancel.clone());
+    }
     // Track the session's cumulative counts before/after the turn so we can roll
     // just this turn's throughput (and compression savings) into the all-time
     // totals.
@@ -1407,7 +1682,26 @@ async fn settings_registry(state: &AppState) -> Result<ToolRegistry, String> {
     let mut registry = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
     registry.register_typed(AskUserTool::new(Arc::new(NullAsker)));
     registry.register_typed(CanvasTool::new(Arc::new(NullCanvasSink)));
+    // An inert `spawn_agents` (never run — the page only reads name,
+    // description, and schema), so the fleet is manageable like any tool.
+    registry.register_typed(harness_agent::FleetTool::new(
+        Arc::new(harness_agent::FleetSpawner::new(
+            OxenClient::new("http://localhost", "", ""),
+            ToolRegistry::new(),
+            AgentConfig::default(),
+        )),
+        Arc::new(NullFleetSink),
+    ));
     Ok(registry)
+}
+
+/// Inert fleet sink for [`settings_registry`]'s listing-only `spawn_agents`.
+struct NullFleetSink;
+
+impl harness_agent::fleet::FleetSink for NullFleetSink {
+    fn started(&self, _labels: &[String], _cancel: CancellationToken) {}
+    fn event(&self, _event: &harness_agent::fleet::FleetEvent) {}
+    fn finished(&self) {}
 }
 
 /// Every manageable tool with its current enabled/override state, for the Tools

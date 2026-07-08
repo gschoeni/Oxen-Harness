@@ -52,6 +52,9 @@ import type {
   CanvasEvent,
   CloudModel,
   CodeReviewProgressEvent,
+  FleetActivityEvent,
+  FleetAgentEvent,
+  FleetStartedEvent,
   LocalStatus,
   Mode,
   Project,
@@ -73,6 +76,33 @@ import type {
 
 const MODE_KEY = "oxen-ui-mode";
 const HERO_GAME_KEY = "oxen-hero-game";
+
+/** One parallel subagent as shown in the chat's fleet panel. */
+export interface FleetLane {
+  name: string;
+  status: "queued" | "running" | "done" | "failed";
+  /** One-line rolling readout (tool name or the freshest streamed words). */
+  activity: string;
+  /** Rolling tail of everything the lane streamed, for the expanded view. */
+  tail: string;
+  tokens: number;
+}
+
+/** A running fleet: its lanes plus which one is expanded for watching. */
+export interface FleetView {
+  source: "review" | "turn";
+  lanes: FleetLane[];
+  focused: number | null;
+}
+
+/** Cap on a lane's one-line activity readout. */
+const LANE_ACTIVITY_CAP = 160;
+/** Cap on a lane's stored output tail (the expanded watch view). */
+const LANE_TAIL_CAP = 4000;
+
+function keepTail(s: string, cap: number): string {
+  return s.length > cap ? s.slice(s.length - cap) : s;
+}
 
 /** Mirrors the backend's chars-per-token budgeting heuristic (budget.rs), so the
  *  live streaming estimate lines up with the authoritative count at turn end. */
@@ -172,6 +202,11 @@ interface AppState {
     string,
     { step: string; index: number; total: number; activity: string } | undefined
   >;
+  /** A running fleet's lanes per session (absent = none running): one entry per
+   *  parallel subagent, driving the chat's fleet panel. Click a lane to watch
+   *  its live output tail. Fed by review fan-out steps and `spawn_agents`
+   *  alike. */
+  fleets: Record<string, FleetView | undefined>;
   /** Prompts queued while a session is mid-turn, sent in order as it frees up. */
   queues: Record<string, QueuedPrompt[]>;
   /** Documents the agent showed in the canvas, per session (ordered, by id). */
@@ -242,6 +277,16 @@ interface AppState {
   ingestCodeReviewProgress: (e: CodeReviewProgressEvent) => void;
   /** Update the review card's live activity line (streamed text or a tool name). */
   ingestCodeReviewActivity: (session: string, text: string, replace: boolean) => void;
+  /** Open a session's fleet panel with its lanes (all queued). */
+  ingestFleetStarted: (e: FleetStartedEvent) => void;
+  /** A lane changed state (started / done / failed). */
+  ingestFleetAgent: (e: FleetAgentEvent) => void;
+  /** Live activity from one lane (text, a tool, or a token-count update). */
+  ingestFleetActivity: (e: FleetActivityEvent) => void;
+  /** The fleet finished: close the session's panel. */
+  ingestFleetCompleted: (session: string) => void;
+  /** Expand one lane to watch its output (null collapses back to the list). */
+  setFleetFocus: (session: string, index: number | null) => void;
   /** Stop the current chat's in-flight turn, killing the model stream. */
   stop: () => void;
   /** Save the Oxen API key entered in a chat's inline auth prompt, then retry the
@@ -406,6 +451,7 @@ export const useStore = create<AppState>((set, get) => {
     compression: {},
     runStatus: {},
     codeReview: {},
+    fleets: {},
     queues: {},
     canvases: {},
     activeCanvas: {},
@@ -513,6 +559,7 @@ export const useStore = create<AppState>((set, get) => {
           infos: drop(s.infos),
           runStatus: drop(s.runStatus),
           codeReview: drop(s.codeReview),
+          fleets: drop(s.fleets),
           queues: drop(s.queues),
           canvases: drop(s.canvases),
           activeCanvas: drop(s.activeCanvas),
@@ -721,8 +768,85 @@ export const useStore = create<AppState>((set, get) => {
         if (!cur) return {};
         // A one-line rolling tail: newlines flatten, only the end is kept.
         const joined = replace ? text : (cur.activity + text).replace(/\s+/g, " ");
-        const activity = joined.length > 160 ? joined.slice(joined.length - 160) : joined;
+        const activity = keepTail(joined, LANE_ACTIVITY_CAP);
         return { codeReview: { ...s.codeReview, [session]: { ...cur, activity } } };
+      }),
+
+    ingestFleetStarted: (e) =>
+      set((s) => ({
+        fleets: {
+          ...s.fleets,
+          [e.session]: {
+            source: e.source,
+            focused: null,
+            lanes: e.agents.map((name) => ({
+              name,
+              status: "queued" as const,
+              activity: "",
+              tail: "",
+              tokens: 0,
+            })),
+          },
+        },
+      })),
+
+    ingestFleetAgent: (e) =>
+      set((s) => {
+        const fleet = s.fleets[e.session];
+        const lane = fleet?.lanes[e.agent];
+        if (!fleet || !lane) return {};
+        const updated: FleetLane =
+          e.phase === "started"
+            ? { ...lane, status: "running" }
+            : {
+                ...lane,
+                status: e.phase,
+                tokens: e.tokens,
+                activity: e.summary || lane.activity,
+              };
+        const lanes = fleet.lanes.map((l, i) => (i === e.agent ? updated : l));
+        return { fleets: { ...s.fleets, [e.session]: { ...fleet, lanes } } };
+      }),
+
+    ingestFleetActivity: (e) =>
+      set((s) => {
+        const fleet = s.fleets[e.session];
+        const lane = fleet?.lanes[e.agent];
+        if (!fleet || !lane) return {};
+        let updated: FleetLane;
+        if (e.kind === "token") {
+          updated = {
+            ...lane,
+            activity: keepTail((lane.activity + e.text).replace(/\s+/g, " "), LANE_ACTIVITY_CAP),
+            tail: keepTail(lane.tail + e.text, LANE_TAIL_CAP),
+          };
+        } else if (e.kind === "tool") {
+          updated = {
+            ...lane,
+            activity: `⚙ ${e.text}…`,
+            tail: keepTail(`${lane.tail}\n◆ ${e.text}…\n`, LANE_TAIL_CAP),
+          };
+        } else {
+          updated = { ...lane, tokens: e.tokens ?? lane.tokens };
+        }
+        const lanes = fleet.lanes.map((l, i) => (i === e.agent ? updated : l));
+        return { fleets: { ...s.fleets, [e.session]: { ...fleet, lanes } } };
+      }),
+
+    ingestFleetCompleted: (session) =>
+      set((s) => {
+        if (!s.fleets[session]) return {};
+        const fleets = { ...s.fleets };
+        delete fleets[session];
+        return { fleets };
+      }),
+
+    setFleetFocus: (session, index) =>
+      set((s) => {
+        const fleet = s.fleets[session];
+        if (!fleet) return {};
+        const focused = index !== null && index < fleet.lanes.length ? index : null;
+        return { fleets: { ...s.fleets, [session]: { ...fleet, focused } } };
       }),
 
     submitApiKey: async (session, itemId, key) => {

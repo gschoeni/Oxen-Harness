@@ -4,6 +4,7 @@ import { onFileDrop, pickAttachments } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
 import { ThreadItem } from "./ThreadItem";
+import { FleetPanel } from "./FleetPanel";
 import { Plan } from "./Plan";
 import { Composer } from "./Composer";
 import { Queue } from "./Queue";
@@ -217,6 +218,7 @@ export function Chat() {
           {review.activity && <span className="review-progress-activity">{review.activity}</span>}
         </div>
       )}
+      <FleetPanel />
       <Queue items={queue} onChange={setQueue} />
       {attachments.length > 0 && (
         <div className="attachments">

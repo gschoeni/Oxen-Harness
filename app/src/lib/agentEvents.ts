@@ -16,6 +16,10 @@ import {
   onCodeReviewProgress,
   onCodeReviewToken,
   onCodeReviewTool,
+  onFleetActivity,
+  onFleetAgent,
+  onFleetCompleted,
+  onFleetStarted,
   onLocalStatus,
   onQuestion,
   onToken,
@@ -58,6 +62,10 @@ export function startAgentEventBridge(): void {
     onCodeReviewProgress((e) => s().ingestCodeReviewProgress(e)),
     onCodeReviewToken((e) => s().ingestCodeReviewActivity(e.session, e.token, false)),
     onCodeReviewTool((e) => s().ingestCodeReviewActivity(e.session, `⚙ ${e.name}…`, true)),
+    onFleetStarted((e) => s().ingestFleetStarted(e)),
+    onFleetAgent((e) => s().ingestFleetAgent(e)),
+    onFleetActivity((e) => s().ingestFleetActivity(e)),
+    onFleetCompleted((session) => s().ingestFleetCompleted(session)),
   ];
   Promise.all(pending).then((fns) => {
     unlisteners = fns;

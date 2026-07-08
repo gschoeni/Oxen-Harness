@@ -1137,3 +1137,129 @@
   white-space: nowrap;
   color: var(--text-tertiary);
 }
+
+/* --- Fleet panel (N parallel subagents: review fan-out or spawn_agents) --- */
+.fleet-panel {
+  max-width: 740px;
+  width: 100%;
+  margin: var(--space-2) auto 0;
+  background: var(--surface);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.fleet-panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--separator);
+}
+.fleet-panel-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.fleet-panel-title {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.fleet-panel-hint {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-lanes {
+  display: flex;
+  flex-direction: column;
+}
+.fleet-lane {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-3);
+  background: transparent;
+  border: none;
+  text-align: left;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.fleet-lane:hover {
+  background: var(--surface-2);
+}
+.fleet-lane.focused {
+  background: var(--accent-tint-strong);
+}
+.fleet-lane-name {
+  flex-shrink: 0;
+  min-width: 90px;
+  font-weight: 600;
+  color: var(--text);
+}
+.fleet-lane-activity {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, monospace);
+}
+.fleet-lane-tokens {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.fleet-glyph {
+  flex-shrink: 0;
+}
+.fleet-glyph.queued {
+  color: var(--text-tertiary);
+}
+.fleet-glyph.done {
+  color: var(--accent);
+}
+.fleet-glyph.failed {
+  color: var(--danger, #c0392b);
+}
+/* The running glyph: a small pulsing dot. */
+.fleet-glyph.running {
+  width: 8px;
+  height: 8px;
+  margin: 2px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: fleet-pulse 1.1s ease-in-out infinite;
+}
+@keyframes fleet-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.75);
+  }
+}
+/* The expanded lane's live output tail. */
+.fleet-tail {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border-top: 1px solid var(--separator);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

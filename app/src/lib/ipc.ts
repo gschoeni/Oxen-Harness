@@ -45,6 +45,9 @@ import type {
   CodeReviewRunResult,
   CodeReviewTokenEvent,
   CodeReviewToolEvent,
+  FleetActivityEvent,
+  FleetAgentEvent,
+  FleetStartedEvent,
 } from "./types";
 
 // ---- session / agent -------------------------------------------------------
@@ -258,6 +261,24 @@ export const onCodeReviewToken = (handler: (e: CodeReviewTokenEvent) => void) =>
 /** Fires when the current review step's agent invokes a tool. */
 export const onCodeReviewTool = (handler: (e: CodeReviewToolEvent) => void) =>
   listen<CodeReviewToolEvent>("review://tool", (e) => handler(e.payload));
+
+// ---- fleets (N parallel subagents: review fan-out or spawn_agents) ----------
+
+/** A fleet of parallel subagents is spinning up in a session. */
+export const onFleetStarted = (handler: (e: FleetStartedEvent) => void) =>
+  listen<FleetStartedEvent>("fleet://started", (e) => handler(e.payload));
+
+/** One fleet lane changed state (started / done / failed). */
+export const onFleetAgent = (handler: (e: FleetAgentEvent) => void) =>
+  listen<FleetAgentEvent>("fleet://agent", (e) => handler(e.payload));
+
+/** Live activity from one fleet lane (streamed text, a tool, token counts). */
+export const onFleetActivity = (handler: (e: FleetActivityEvent) => void) =>
+  listen<FleetActivityEvent>("fleet://agent-activity", (e) => handler(e.payload));
+
+/** The fleet finished; its lanes panel closes. */
+export const onFleetCompleted = (handler: (session: string) => void) =>
+  listen<{ session: string }>("fleet://completed", (e) => handler(e.payload.session));
 
 // ---- connection settings ---------------------------------------------------
 
