@@ -1,7 +1,7 @@
 //! The pipeline engine: walk the configured steps in order, threading each
 //! step's reply into the next step's prompt. A single-agent step runs on one
 //! fresh, isolated side agent; a fan-out step runs its agents as a parallel
-//! [`fleet`](harness_agent::fleet), capped by `max_parallel`, and concatenates
+//! [`harness_agent::fleet`], capped by `max_parallel`, and concatenates
 //! their outputs (labeled, in agent order) as the step's reply.
 //!
 //! Isolation is the point. The verify step must judge the finders' candidates
