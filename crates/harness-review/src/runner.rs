@@ -18,7 +18,7 @@ use harness_agent::fleet::{self, FleetEvent, SubagentTask};
 use harness_agent::{Agent, AgentEvent};
 use tokio_util::sync::CancellationToken;
 
-use crate::config::ReviewConfig;
+use crate::config::{ReviewConfig, StepAgent};
 use crate::findings::ReviewReport;
 use crate::target::{resolve_target, ReviewInput, ReviewTarget};
 use crate::ReviewError;
@@ -181,7 +181,7 @@ impl ReviewRunner {
     async fn run_fan_out<F>(
         &self,
         agent: &Agent,
-        agents: &[crate::config::StepAgent],
+        agents: &[StepAgent],
         input: &ReviewInput,
         previous: &str,
         step_index: usize,
