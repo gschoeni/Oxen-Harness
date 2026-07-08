@@ -60,13 +60,23 @@ impl Live {
             self.compression_line.is_some() as u16 + self.status_line.is_some() as u16;
         // A running `spawn_agents` fleet pins its lanes block (lanes + optional
         // focused tail + key hint) directly under the spacer, above the meters.
-        let fleet_lines = self.fleet_lines();
-        let reserved = (plan.len() + chrome) as u16
+        // Everything else in the pinned area is bounded already (the queue plan
+        // caps against `rows`, the composer windows to MAX_INPUT_ROWS), but the
+        // fleet block can be tall (up to 6 lanes + an 8-row focused tail), so on
+        // a short terminal it's the one section that could push the reserved
+        // area past the screen and smear addressed rows over the composer. Cap
+        // it to whatever height is left after the fixed sections, keeping at
+        // least one output row; the block trims from the end (hint, then tail
+        // rows) so the lane lines themselves survive.
+        let fixed = (plan.len() + chrome) as u16
             + SPACER_ROWS as u16
-            + fleet_lines.len() as u16
             + status_rows
             + DIVIDER_ROWS as u16
             + box_h;
+        let fleet_budget = self.rows.saturating_sub(fixed + 1) as usize;
+        let mut fleet_lines = self.fleet_lines();
+        fleet_lines.truncate(fleet_budget);
+        let reserved = fixed + fleet_lines.len() as u16;
         let new_bottom = self.rows.saturating_sub(reserved).max(1);
 
         let mut buf = String::new();

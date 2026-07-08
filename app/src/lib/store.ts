@@ -6,6 +6,7 @@
 // open overlays, and any pending clarifying question.
 
 import { create } from "zustand";
+import { tailChars } from "./format";
 import { applyThemePalette, applyThemeStyle } from "./theme";
 import {
   deleteSession,
@@ -95,14 +96,12 @@ export interface FleetView {
   focused: number | null;
 }
 
-/** Cap on a lane's one-line activity readout. */
-const LANE_ACTIVITY_CAP = 160;
-/** Cap on a lane's stored output tail (the expanded watch view). */
+/** Cap on a lane's one-line activity readout — matches the CLI's
+ *  `ACTIVITY_TAIL` (fleet_ui.rs) so both hosts show the same rolling window. */
+const LANE_ACTIVITY_CAP = 120;
+/** Cap on a lane's stored output tail (the expanded watch view) — matches the
+ *  CLI's `OUTPUT_TAIL`. */
 const LANE_TAIL_CAP = 4000;
-
-function keepTail(s: string, cap: number): string {
-  return s.length > cap ? s.slice(s.length - cap) : s;
-}
 
 /** Mirrors the backend's chars-per-token budgeting heuristic (budget.rs), so the
  *  live streaming estimate lines up with the authoritative count at turn end. */
@@ -727,10 +726,17 @@ export const useStore = create<AppState>((set, get) => {
           })),
         )
         .finally(() => {
+          // The review is over however it ended — clear both the progress card
+          // and any fan-out lanes panel. Clearing fleets here (not just on the
+          // backend's fleet://completed) is what closes the panel when a
+          // fan-out step was cancelled or every lane failed: those paths never
+          // emit StepCompleted, so no fleet://completed arrives.
           set((s) => {
             const codeReview = { ...s.codeReview };
             delete codeReview[id];
-            return { codeReview };
+            const fleets = { ...s.fleets };
+            delete fleets[id];
+            return { codeReview, fleets };
           });
           get().refreshHistory();
           get().refreshTotalTokens();
@@ -768,7 +774,7 @@ export const useStore = create<AppState>((set, get) => {
         if (!cur) return {};
         // A one-line rolling tail: newlines flatten, only the end is kept.
         const joined = replace ? text : (cur.activity + text).replace(/\s+/g, " ");
-        const activity = keepTail(joined, LANE_ACTIVITY_CAP);
+        const activity = tailChars(joined, LANE_ACTIVITY_CAP);
         return { codeReview: { ...s.codeReview, [session]: { ...cur, activity } } };
       }),
 
@@ -817,14 +823,14 @@ export const useStore = create<AppState>((set, get) => {
         if (e.kind === "token") {
           updated = {
             ...lane,
-            activity: keepTail((lane.activity + e.text).replace(/\s+/g, " "), LANE_ACTIVITY_CAP),
-            tail: keepTail(lane.tail + e.text, LANE_TAIL_CAP),
+            activity: tailChars((lane.activity + e.text).replace(/\s+/g, " "), LANE_ACTIVITY_CAP),
+            tail: tailChars(lane.tail + e.text, LANE_TAIL_CAP),
           };
         } else if (e.kind === "tool") {
           updated = {
             ...lane,
             activity: `⚙ ${e.text}…`,
-            tail: keepTail(`${lane.tail}\n◆ ${e.text}…\n`, LANE_TAIL_CAP),
+            tail: tailChars(`${lane.tail}\n◆ ${e.text}…\n`, LANE_TAIL_CAP),
           };
         } else {
           updated = { ...lane, tokens: e.tokens ?? lane.tokens };

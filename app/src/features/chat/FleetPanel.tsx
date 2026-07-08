@@ -7,6 +7,7 @@
 
 import { useEffect, useRef } from "react";
 import { Check, CircleDashed, Users, X } from "lucide-react";
+import { compactTokens } from "../../lib/format";
 import { useStore, type FleetLane } from "../../lib/store";
 
 export function FleetPanel() {
@@ -43,7 +44,7 @@ export function FleetPanel() {
             <span className="fleet-lane-name">{lane.name}</span>
             <span className="fleet-lane-activity">{lane.activity}</span>
             {lane.tokens > 0 && (
-              <span className="fleet-lane-tokens">{humanTokens(lane.tokens)}</span>
+              <span className="fleet-lane-tokens">{compactTokens(lane.tokens)}</span>
             )}
           </button>
         ))}
@@ -80,9 +81,3 @@ function LaneTail({ tail }: { tail: string }) {
   );
 }
 
-/** `980`, `12.3k`, `1.2M` — mirrors the CLI's token formatting. */
-function humanTokens(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
-}

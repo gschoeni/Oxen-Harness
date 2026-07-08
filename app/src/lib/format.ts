@@ -45,6 +45,19 @@ export function compactTokens(n: number): string {
   return `${m >= 100 ? m.toFixed(0) : m.toFixed(1)}M`;
 }
 
+/** Keep only the freshest `cap` characters of `s` — the rolling-tail buffer
+ *  behind live activity readouts (fleet lanes, the review card), where the
+ *  newest output matters and the oldest falls off.
+ *
+ *  Char-safe: iterates code points via the spread operator, so a `cap`
+ *  boundary landing inside a surrogate pair (an emoji in streamed tokens)
+ *  never leaves a lone half-character. Mirrors `harness_core::text::tail_chars`
+ *  on the Rust side — keep the two in step. */
+export function tailChars(s: string, cap: number): string {
+  const chars = [...s];
+  return chars.length > cap ? chars.slice(chars.length - cap).join("") : s;
+}
+
 /** Clamp a string to `max` characters, appending an ellipsis when truncated. */
 export function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "…" : s;
