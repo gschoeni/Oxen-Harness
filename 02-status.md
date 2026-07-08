@@ -1,7 +1,7 @@
 # Project Status & Roadmap
 
 **Purpose:** Where we are, what's next, what's done. Pull this in for any working session.
-**Updated:** 2026-07-07
+**Updated:** 2026-07-08
 
 ---
 
@@ -20,6 +20,7 @@
 | **8** | `harness-theme`: configurable + shareable themes (palette + voice) | ✅ Complete |
 | **9** | `harness-loop`: goal-driven, self-verifying loops (discover→verify→iterate) | ✅ Complete |
 | **10** | `harness-compress`: reversible context compression (off/audit/on) | ✅ Complete |
+| **11** | `harness-review`: configurable code review — `/code-review` (find→verify→report, editable step prompts), desktop Settings page + Review button | ✅ Complete |
 
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own

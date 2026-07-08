@@ -12,6 +12,7 @@ mod attach;
 mod auth_cmd;
 mod brave;
 mod canvas;
+mod code_review_cmd;
 mod compression_cmd;
 mod diff;
 mod endpoint;

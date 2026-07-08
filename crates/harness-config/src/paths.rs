@@ -102,6 +102,12 @@ pub fn themes_dir() -> Result<PathBuf, ConfigError> {
     Ok(dir)
 }
 
+/// `~/.oxen-harness/code-review.json` — the code-review pipeline: the ordered
+/// step prompts `/code-review` runs and its output cap.
+pub fn code_review_file() -> Result<PathBuf, ConfigError> {
+    under("code-review.json")
+}
+
 /// `~/.oxen-harness/skills.json` — skill preferences (disabled skills).
 pub fn skills_file() -> Result<PathBuf, ConfigError> {
     under("skills.json")

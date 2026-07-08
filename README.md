@@ -209,7 +209,8 @@ You may:
   5. Change your colors      — /theme  (select, create, import, export)
   6. Pack the wagon          — /queue add <msg> … then /queue run
   7. Set the wagon rolling   — /loop run [name]  (work until the gate is green)
-  8. Make camp / End         — /exit  (or Ctrl-D)
+  8. Inspect the wagon       — /code-review [branch]  (find → verify → report)
+  9. Make camp / End         — /exit  (or Ctrl-D)
 ```
 
 ### Queuing messages
@@ -250,6 +251,38 @@ oxen-harness loop new               # short interview → saved TOML you can sha
 The same commands work inside the REPL as `/loop …`. Loops live as shareable
 TOML under `~/.oxen-harness/loops/`; `default`, `green-tests`, and
 `clean-clippy` ship built in.
+
+### Code review (find → verify → report)
+
+`/code-review` runs a **configurable multi-step review pipeline** over your
+changes — the working diff by default, or PR-style against a base branch:
+
+```
+🐂 trail ❯ /code-review            # staged + unstaged + untracked
+🐂 trail ❯ /code-review main       # everything vs. the merge base with main
+🐂 trail ❯ /code-review steps      # show the configured pipeline
+```
+
+The default pipeline borrows the shape the strongest production reviewers
+(Claude Code, Codex) converged on, with each step running on a **fresh,
+isolated agent** so nothing anchors the next step:
+
+1. **find** — a recall-biased pass over the diff *and* the surrounding code
+   (enclosing functions, callers, removed invariants), told explicitly not to
+   self-censor: every candidate with a nameable failure scenario goes through.
+2. **verify** — an adversarial pass that tries to *refute* each candidate
+   against the actual source, returning CONFIRMED / PLAUSIBLE / REFUTED with
+   quoted evidence. Only CONFIRMED and PLAUSIBLE survive.
+3. **report** — dedups, ranks most-severe first (P0–P3), caps the list, and
+   emits structured findings: `file:line`, a one-line title, and the concrete
+   failure scenario.
+
+The findings then land **in the conversation** as a settled exchange, so the
+natural next message — `fix 1 and 3` — hands them straight to the agent to
+repair. Every step's prompt is editable: the pipeline lives in
+`~/.oxen-harness/code-review.json` (add, remove, reorder, or rewrite steps),
+with a full editor in the desktop app under **Settings → Code review**. The
+desktop composer has the same pipeline behind its **Review** button.
 
 ### Resuming an expedition
 

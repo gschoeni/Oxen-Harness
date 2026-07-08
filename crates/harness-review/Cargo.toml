@@ -1,0 +1,29 @@
+[package]
+name = "harness-review"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The configurable code-review pipeline: ordered prompt steps (find → verify → report) run against a diff, each step feeding the next"
+
+[dependencies]
+harness-agent = { workspace = true }
+harness-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+harness-llm = { workspace = true }
+harness-store = { workspace = true }
+harness-tools = { workspace = true }
+mockito = "1"
+tempfile = "3"
+tokio = { workspace = true }
+
+[lints]
+workspace = true

@@ -16,15 +16,16 @@ own:
   front ends            │ harness-cli │   │ app/  (Tauri v2)   │
                         └──────┬──────┘   └─────────┬──────────┘
                                │                    │
-  orchestration      ┌─────────┴──────────┐  ┌──────┴───────────┐
-                     │    harness-loop     │  │  harness-runtime │  (shared config:
-                     │ (goal/verify loop)  │  │                  │   connection, models,
-                     └─────────┬───────────┘  └──────┬───────────┘   tool prefs)
-                               │                     │
-  agent                 ┌──────┴─────────────────────┴──┐
-                        │         harness-agent          │  (the turn loop:
-                        │   llm + tools + store + budget)│   stream, dispatch, compact)
-                        └───┬───────────┬───────────┬────┘
+                               │                    └───────────────┐
+  orchestration  ┌─────────────┴─────┐  ┌────────────────┐  ┌───────┴─────────┐
+                 │    harness-loop   │  │ harness-review │  │ harness-runtime │  (shared config:
+                 │ (goal/verify loop)│  │ (find→verify→  │  │                 │   connection, models,
+                 └─────────┬─────────┘  │  report steps) │  └───┬─────────────┘   tool prefs)
+                           │            └───────┬────────┘      │
+  agent                 ┌──┴────────────────────┴───────────────┴─┐
+                        │             harness-agent               │  (the turn loop: llm + tools
+                        │      llm + tools + store + budget       │   + store; stream, dispatch,
+                        └───┬───────────┬───────────┬─────────────┘   compact)
                             │           │           │
   capabilities   ┌──────────┴─┐ ┌───────┴─────┐ ┌───┴─────────┐ ┌────────────────┐
                  │ harness-llm│ │harness-tools│ │harness-store│ │ harness-theme  │
@@ -51,8 +52,11 @@ own:
   and reversible tool-output compression (`harness-compress`).
 - **`harness-agent`** — the turn loop that wires an LLM client, a tool registry,
   and a store together, plus token budgeting and context compaction.
-- **`harness-loop`** / **`harness-runtime`** — the goal/verify iteration loop on
-  top of the agent, and the front-end-agnostic configuration both UIs share.
+- **`harness-loop`** / **`harness-review`** / **`harness-runtime`** — the
+  goal/verify iteration loop on top of the agent; the configurable code-review
+  pipeline (ordered prompt steps — find → verify → report by default — each on
+  an isolated side agent, ending in structured findings); and the
+  front-end-agnostic configuration both UIs share.
 - **front ends** — the interactive CLI, and the Tauri desktop app (a separate
   workspace under `app/` so the core verification loop stays fast). Both drive
   the *same* `harness-agent`, so behavior can't drift between them.

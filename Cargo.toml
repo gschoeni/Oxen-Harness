@@ -13,6 +13,7 @@ members = [
     "crates/harness-agent",
     "crates/harness-runtime",
     "crates/harness-loop",
+    "crates/harness-review",
     "crates/harness-cli",
 ]
 # The Tauri desktop app is a separate project (its own Cargo workspace) so the
@@ -41,6 +42,7 @@ harness-theme = { path = "crates/harness-theme" }
 harness-agent = { path = "crates/harness-agent" }
 harness-runtime = { path = "crates/harness-runtime" }
 harness-loop = { path = "crates/harness-loop" }
+harness-review = { path = "crates/harness-review" }
 
 anyhow = "1.0"
 thiserror = "2.0"

@@ -17,7 +17,9 @@ use crate::queue::MessageQueue;
 use crate::repl::{parse_command, Command};
 use crate::theme::{self, Ui};
 use crate::turn::{ends_mid_turn, run_turn_and_drain, TurnRequest};
-use crate::{auth_cmd, compression_cmd, live, loop_cmd, model_cmd, queue_cmd, theme_cmd};
+use crate::{
+    auth_cmd, code_review_cmd, compression_cmd, live, loop_cmd, model_cmd, queue_cmd, theme_cmd,
+};
 
 /// Immutable, session-scoped context for a REPL run: the values set once at
 /// startup and threaded through the line handler unchanged. Bundling them keeps
@@ -194,6 +196,13 @@ async fn handle_line(
         Command::Loop(rest) => {
             // A running loop streams turns the user can Ctrl-C to quit.
             if loop_cmd::handle_repl(rest, agent, ui, ctx.workspace_root).await? {
+                print!("{}", theme::death_screen(ui, ctx.session));
+                return Ok(true);
+            }
+        }
+        Command::CodeReview(rest) => {
+            // A running review streams turns the user can Ctrl-C to quit.
+            if code_review_cmd::handle_repl(rest, agent, ui, ctx.workspace_root).await? {
                 print!("{}", theme::death_screen(ui, ctx.session));
                 return Ok(true);
             }

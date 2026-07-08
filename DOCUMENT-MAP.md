@@ -33,7 +33,8 @@ oxen-harness/
     harness-agent/           — The agent (Ralph) loop (llm + tools + store).
     harness-runtime/         — Front-end-agnostic services shared by CLI/desktop: connection settings + secrets (.env), cloud-model catalog, tool prefs + custom tools, skill discovery/prefs/authoring, opt-in Oxen versioning of ~/.oxen-harness.
     harness-loop/            — Goal-driven, self-verifying loops (discover→verify→iterate): LoopSpec/Verify, runner, journal, shareable store + built-ins.
-    harness-cli/             — The `oxen-harness` interactive REPL binary (incl. picker, live sticky-bottom composer, /theme + theme subcommand, /loop + loop subcommand, `trace export` to share a conversation via Oxen, `oxen` subcommand to version config).
+    harness-review/          — Configurable code-review pipeline: ordered prompt steps (find→verify→report default), diff targets (uncommitted / vs base branch), isolated side-agent runner, structured findings.
+    harness-cli/             — The `oxen-harness` interactive REPL binary (incl. picker, live sticky-bottom composer, /theme + theme subcommand, /loop + loop subcommand, /code-review, `trace export` to share a conversation via Oxen, `oxen` subcommand to version config).
   app/                       — Tauri v2 desktop app (separate project, excluded
                                from the core workspace). src-tauri/ = Rust bridge,
                                dist/ = chat UI. See app/README.md.

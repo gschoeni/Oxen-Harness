@@ -28,6 +28,9 @@ pub enum Command {
     /// `goal make tests pass`), or `None` to list loops. Kept raw so goal text
     /// keeps its spaces.
     Loop(Option<String>),
+    /// Code review: the raw text after `/code-review` (a base branch, or a
+    /// subcommand like `steps`), or `None` to review uncommitted changes.
+    CodeReview(Option<String>),
     /// Set (or, with `None`, show) the "Departing" location shown in the main
     /// menu banner. Kept raw so multi-word place names keep their spaces.
     Departing(Option<String>),
@@ -75,6 +78,7 @@ pub fn parse_command(line: &str) -> Command {
         ),
         "/queue" => Command::Queue(rest),
         "/loop" | "/loops" => Command::Loop(rest),
+        "/code-review" | "/review" => Command::CodeReview(rest),
         "/departing" => Command::Departing(rest),
         "/skills" | "/skill" => Command::Skills,
         "/auth" | "/login" => Command::Auth(rest),
@@ -168,6 +172,20 @@ mod tests {
         assert_eq!(
             parse_command("/loop goal make every test pass"),
             Command::Loop(Some("goal make every test pass".into()))
+        );
+    }
+
+    #[test]
+    fn code_review_aliases_and_remainder() {
+        assert_eq!(parse_command("/code-review"), Command::CodeReview(None));
+        assert_eq!(parse_command("/review"), Command::CodeReview(None));
+        assert_eq!(
+            parse_command("/code-review main"),
+            Command::CodeReview(Some("main".into()))
+        );
+        assert_eq!(
+            parse_command("/review steps"),
+            Command::CodeReview(Some("steps".into()))
         );
     }
 

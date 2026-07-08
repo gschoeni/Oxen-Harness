@@ -96,6 +96,10 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/theme", "change the theme"),
     ("/queue", "manage the message queue"),
     ("/loop", "run or list loops"),
+    (
+        "/code-review",
+        "review your changes (find → verify → report)",
+    ),
     ("/export", "export the transcript"),
     ("/skills", "list the skills on hand"),
     ("/retry", "re-drive a turn that died mid-stream"),

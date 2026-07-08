@@ -654,6 +654,7 @@ dependencies = [
  "harness-local",
  "harness-loop",
  "harness-oxen",
+ "harness-review",
  "harness-runtime",
  "harness-store",
  "harness-theme",
@@ -758,6 +759,25 @@ version = "0.1.0"
 dependencies = [
  "tempfile",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "harness-review"
+version = "0.1.0"
+dependencies = [
+ "harness-agent",
+ "harness-config",
+ "harness-llm",
+ "harness-store",
+ "harness-tools",
+ "mockito",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
