@@ -21,6 +21,7 @@
 | **9** | `harness-loop`: goal-driven, self-verifying loops (discover→verify→iterate) | ✅ Complete |
 | **10** | `harness-compress`: reversible context compression (off/audit/on) | ✅ Complete |
 | **11** | `harness-review`: configurable code review — `/code-review` (find→verify→report, editable step prompts), desktop Settings page + Review button | ✅ Complete |
+| **12** | Fleet: parallel subagents — `fleet::run_fleet` + `spawn_agents` tool (all modes), review find fan-out (3 lenses), live lanes w/ watch-a-lane in TUI (1-9/alt+1-9) and desktop panel | ✅ Complete |
 
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own

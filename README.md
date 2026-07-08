@@ -264,12 +264,15 @@ changes — the working diff by default, or PR-style against a base branch:
 ```
 
 The default pipeline borrows the shape the strongest production reviewers
-(Claude Code, Codex) converged on, with each step running on a **fresh,
+(Claude Code, Codex) converged on, with every reviewer running on a **fresh,
 isolated agent** so nothing anchors the next step:
 
-1. **find** — a recall-biased pass over the diff *and* the surrounding code
-   (enclosing functions, callers, removed invariants), told explicitly not to
-   self-censor: every candidate with a nameable failure scenario goes through.
+1. **find** — three recall-biased reviewers **in parallel**, each with a
+   narrow lens: a line-by-line *diff scan*, a *removed-code* audit (what
+   invariant did each deleted line enforce, and where is it re-established?),
+   and a *callers* trace (which call sites does the change break?). All are
+   told explicitly not to self-censor: every candidate with a nameable
+   failure scenario goes through.
 2. **verify** — an adversarial pass that tries to *refute* each candidate
    against the actual source, returning CONFIRMED / PLAUSIBLE / REFUTED with
    quoted evidence. Only CONFIRMED and PLAUSIBLE survive.
@@ -277,12 +280,37 @@ isolated agent** so nothing anchors the next step:
    emits structured findings: `file:line`, a one-line title, and the concrete
    failure scenario.
 
+While the finders run, each one is a live **lane** — a themed status line with
+what it's reading, its token spend, and its clock. Press **1-9** to watch any
+lane's output stream, **esc** for the overview, **ctrl-c** to stop. Any step
+can be split into parallel agents (or back) in Settings → Code review.
+
 The findings then land **in the conversation** as a settled exchange, so the
 natural next message — `fix 1 and 3` — hands them straight to the agent to
 repair. Every step's prompt is editable: the pipeline lives in
 `~/.oxen-harness/code-review.json` (add, remove, reorder, or rewrite steps),
 with a full editor in the desktop app under **Settings → Code review**. The
 desktop composer has the same pipeline behind its **Review** button.
+
+### Parallel subagents (`spawn_agents`)
+
+The fleet isn't just for reviews. The model itself can fan work out from **any
+turn** — a chat in the CLI or desktop app, a loop pass — with the
+`spawn_agents` tool: up to six parallel agents, each with its own prompt and a
+fresh context plus the full tool set (except `spawn_agents` itself — one level
+deep, no fork bombs). Ask for it naturally:
+
+```
+🐂 trail ❯ search the codebase for every place we touch the filesystem —
+           split the work across a few parallel agents
+```
+
+Each subagent appears as a live lane while it works. In the CLI's interactive
+composer, **alt+1-9** switches which lane you're watching (**alt+0** for the
+overview); in the desktop app the same lanes render as a panel above the
+composer — click a lane to watch that agent's output stream, click again to
+collapse. Results come back labeled by agent, one section each, and the model
+carries on with them in hand. Stopping the turn stops the fleet.
 
 ### Resuming an expedition
 

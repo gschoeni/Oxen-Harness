@@ -51,12 +51,16 @@ own:
   local llama.cpp models (`harness-local`), Oxen versioning (`harness-oxen`),
   and reversible tool-output compression (`harness-compress`).
 - **`harness-agent`** — the turn loop that wires an LLM client, a tool registry,
-  and a store together, plus token budgeting and context compaction.
+  and a store together, plus token budgeting and context compaction. Also home
+  to the **fleet**: `fleet::run_fleet` runs N detached subagents in parallel
+  (semaphore-capped, one multiplexed event stream, per-task outcomes), and the
+  `spawn_agents` tool exposes that to the model from any turn — hosts inject a
+  `FleetSink` to render the lanes.
 - **`harness-loop`** / **`harness-review`** / **`harness-runtime`** — the
   goal/verify iteration loop on top of the agent; the configurable code-review
-  pipeline (ordered prompt steps — find → verify → report by default — each on
-  an isolated side agent, ending in structured findings); and the
-  front-end-agnostic configuration both UIs share.
+  pipeline (ordered prompt steps — a parallel three-lens find, then verify →
+  report by default — every reviewer on an isolated side agent, ending in
+  structured findings); and the front-end-agnostic configuration both UIs share.
 - **front ends** — the interactive CLI, and the Tauri desktop app (a separate
   workspace under `app/` so the core verification loop stays fast). Both drive
   the *same* `harness-agent`, so behavior can't drift between them.
