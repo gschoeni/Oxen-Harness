@@ -840,6 +840,174 @@ async fn current_agent(app: &AppHandle, state: &AppState) -> Result<Arc<Mutex<Ag
     Ok(arc)
 }
 
+/// A `review://progress` payload: which pipeline step a running code review is
+/// on, so the chat can show a live progress card.
+#[derive(Clone, Serialize)]
+struct ReviewProgressPayload {
+    session: String,
+    step: String,
+    index: usize,
+    total: usize,
+}
+
+/// A `review://token` payload: streamed text from the current review step's
+/// agent (the card's live activity feed).
+#[derive(Clone, Serialize)]
+struct ReviewTokenPayload {
+    session: String,
+    token: String,
+}
+
+/// A `review://tool` payload: a tool the current review step's agent invoked.
+#[derive(Clone, Serialize)]
+struct ReviewToolPayload {
+    session: String,
+    name: String,
+}
+
+/// What `run_code_review` resolves with. `status` is `"ok"`, `"nothing"` (the
+/// target had no changes), or `"cancelled"`; on `"ok"` the user/assistant pair
+/// is already persisted to the session, so the UI appends it to the thread.
+#[derive(Clone, Serialize)]
+struct CodeReviewResult {
+    status: &'static str,
+    user: String,
+    assistant: String,
+    findings: usize,
+}
+
+/// Run the configurable code-review pipeline for a chat's workspace: uncommitted
+/// changes by default, or PR-style against `base_branch`. Streams progress via
+/// `review://progress` / `review://token` / `review://tool`, then injects the
+/// findings into the session (as a settled user/assistant exchange) so follow-up
+/// turns can act on them ("fix 1 and 3"). Holds the session's agent lock for the
+/// duration, so it can't interleave with a running turn; `cancel_turn` stops it.
+#[tauri::command]
+async fn run_code_review(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session: String,
+    base_branch: Option<String>,
+) -> Result<CodeReviewResult, String> {
+    use harness_review::{ReviewError, ReviewEvent};
+
+    let arc = agent_or_build(&app, &state, &session).await?;
+    let root = session_workspace(&session);
+    let target = match base_branch.filter(|b| !b.trim().is_empty()) {
+        Some(branch) => harness_review::ReviewTarget::BaseBranch(branch.trim().to_string()),
+        None => harness_review::ReviewTarget::Uncommitted,
+    };
+
+    let cancel = CancellationToken::new();
+    {
+        // Registering under the session's key is also the mutual-exclusion
+        // check: an existing entry means a turn (or another review) is already
+        // in flight, and overwriting its token would orphan its stop button.
+        let mut cancels = state.cancels.lock().await;
+        if cancels.contains_key(&session) {
+            return Err("a turn is already running in this chat".to_string());
+        }
+        cancels.insert(session.clone(), cancel.clone());
+    }
+
+    let result = {
+        let mut agent = arc.lock().await;
+        let runner = harness_review::ReviewRunner::new(
+            harness_review::ReviewConfig::load(),
+            target.clone(),
+            &root,
+        )
+        .with_cancel(cancel);
+        let sid = session.clone();
+        let emitter = app.clone();
+        let run = runner
+            .run(&agent, move |event| match event {
+                ReviewEvent::StepStarted { index, total, name } => {
+                    let _ = emitter.emit(
+                        "review://progress",
+                        ReviewProgressPayload {
+                            session: sid.clone(),
+                            step: name.clone(),
+                            index: *index,
+                            total: *total,
+                        },
+                    );
+                }
+                ReviewEvent::Agent(AgentEvent::Token(t)) => {
+                    let _ = emitter.emit(
+                        "review://token",
+                        ReviewTokenPayload {
+                            session: sid.clone(),
+                            token: t.clone(),
+                        },
+                    );
+                }
+                ReviewEvent::Agent(AgentEvent::ToolStart { name, .. }) => {
+                    let _ = emitter.emit(
+                        "review://tool",
+                        ReviewToolPayload {
+                            session: sid.clone(),
+                            name: name.clone(),
+                        },
+                    );
+                }
+                _ => {}
+            })
+            .await;
+        match run {
+            Ok(report) => {
+                let (user, assistant) = harness_review::session_exchange(&target, &report);
+                agent
+                    .inject_exchange(user.clone(), assistant.clone())
+                    .map_err(|e| e.to_string())?;
+                Ok(CodeReviewResult {
+                    status: "ok",
+                    user,
+                    assistant,
+                    findings: report.findings.len(),
+                })
+            }
+            Err(ReviewError::NothingToReview) => Ok(CodeReviewResult {
+                status: "nothing",
+                user: String::new(),
+                assistant: String::new(),
+                findings: 0,
+            }),
+            Err(ReviewError::Cancelled) => Ok(CodeReviewResult {
+                status: "cancelled",
+                user: String::new(),
+                assistant: String::new(),
+                findings: 0,
+            }),
+            Err(e) => Err(e.to_string()),
+        }
+    };
+    state.cancels.lock().await.remove(&session);
+    evict_idle(&state).await;
+    result
+}
+
+/// The saved code-review pipeline (steps + findings cap) for the Settings page.
+#[tauri::command]
+fn get_code_review_config() -> harness_review::ReviewConfig {
+    harness_review::ReviewConfig::load()
+}
+
+/// Persist the code-review pipeline and snapshot the versioned config repo.
+/// Applies to the next review — a running one keeps the steps it started with.
+#[tauri::command]
+fn save_code_review_config(config: harness_review::ReviewConfig) -> Result<(), String> {
+    config.save().map_err(|e| e.to_string())?;
+    harness_runtime::config_repo::snapshot("Update code review settings");
+    Ok(())
+}
+
+/// The built-in default pipeline, for the Settings page's "reset to defaults".
+#[tauri::command]
+fn default_code_review_config() -> harness_review::ReviewConfig {
+    harness_review::ReviewConfig::default()
+}
+
 /// Whether a turn starts fresh (pushing a new user message) or retries the
 /// existing transcript's trailing user turn (e.g. after authenticating past a
 /// 401). Both drive the identical streaming/accounting scaffold in [`execute_turn`].
@@ -2191,6 +2359,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             run_turn,
             cancel_turn,
+            run_code_review,
+            get_code_review_config,
+            save_code_review_config,
+            default_code_review_config,
             session_info,
             list_sessions,
             session_messages,

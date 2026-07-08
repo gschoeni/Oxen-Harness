@@ -13,6 +13,9 @@ import { useStore } from "./store";
 import {
   onCanvas,
   onCanvasWriting,
+  onCodeReviewProgress,
+  onCodeReviewToken,
+  onCodeReviewTool,
   onLocalStatus,
   onQuestion,
   onToken,
@@ -52,6 +55,9 @@ export function startAgentEventBridge(): void {
     onCanvasWriting((session) => s().setCanvasWriting(session, true)),
     onQuestion((q) => s().setQuestion(q)),
     onLocalStatus((e) => s().setLocalStatus(e)),
+    onCodeReviewProgress((e) => s().ingestCodeReviewProgress(e)),
+    onCodeReviewToken((e) => s().ingestCodeReviewActivity(e.session, e.token, false)),
+    onCodeReviewTool((e) => s().ingestCodeReviewActivity(e.session, `⚙ ${e.name}…`, true)),
   ];
   Promise.all(pending).then((fns) => {
     unlisteners = fns;

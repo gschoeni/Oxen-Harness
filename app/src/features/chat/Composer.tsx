@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Paperclip, Square } from "lucide-react";
+import { CodeReviewPicker } from "./CodeReviewPicker";
 import { CompressionPicker } from "./CompressionPicker";
 import { ModelPicker } from "./ModelPicker";
 
@@ -100,6 +101,7 @@ export function Composer({
       <div className="composer-toolbar">
         <ModelPicker disabled={busy} />
         <CompressionPicker disabled={busy} />
+        <CodeReviewPicker disabled={busy} />
       </div>
     </form>
   );

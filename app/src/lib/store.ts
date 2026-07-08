@@ -16,6 +16,7 @@ import {
   openProject,
   pickFolder,
   resumeSession,
+  runCodeReview as runCodeReviewIpc,
   runTurn,
   retryTurn,
   cancelTurn,
@@ -50,6 +51,7 @@ import type {
   CanvasDoc,
   CanvasEvent,
   CloudModel,
+  CodeReviewProgressEvent,
   LocalStatus,
   Mode,
   Project,
@@ -163,6 +165,13 @@ interface AppState {
   compression: Record<string, { mode: CompressionMode; tokensSaved: number }>;
   /** Per-session run state driving the sidebar indicator (absent = idle/read). */
   runStatus: Record<string, RunStatus>;
+  /** A running code review's live progress per session (absent = none running):
+   *  the current pipeline step plus a rolling snippet of the step agent's
+   *  activity, driving the chat's progress card. */
+  codeReview: Record<
+    string,
+    { step: string; index: number; total: number; activity: string } | undefined
+  >;
   /** Prompts queued while a session is mid-turn, sent in order as it frees up. */
   queues: Record<string, QueuedPrompt[]>;
   /** Documents the agent showed in the canvas, per session (ordered, by id). */
@@ -225,6 +234,14 @@ interface AppState {
   setLocalStatus: (s: LocalStatus) => void;
   /** Send (or queue) a prompt in the current chat. */
   send: (text: string, attachments?: string[]) => void;
+  /** Run the code-review pipeline in the current chat's workspace (uncommitted
+   *  changes, or PR-style against `baseBranch`). The findings land in the thread
+   *  as a settled exchange, so a follow-up "fix 1 and 3" just works. */
+  startCodeReview: (baseBranch?: string) => void;
+  /** Advance a session's review progress card to the next pipeline step. */
+  ingestCodeReviewProgress: (e: CodeReviewProgressEvent) => void;
+  /** Update the review card's live activity line (streamed text or a tool name). */
+  ingestCodeReviewActivity: (session: string, text: string, replace: boolean) => void;
   /** Stop the current chat's in-flight turn, killing the model stream. */
   stop: () => void;
   /** Save the Oxen API key entered in a chat's inline auth prompt, then retry the
@@ -388,6 +405,7 @@ export const useStore = create<AppState>((set, get) => {
     tokensPerSecond: {},
     compression: {},
     runStatus: {},
+    codeReview: {},
     queues: {},
     canvases: {},
     activeCanvas: {},
@@ -494,6 +512,7 @@ export const useStore = create<AppState>((set, get) => {
           threads: drop(s.threads),
           infos: drop(s.infos),
           runStatus: drop(s.runStatus),
+          codeReview: drop(s.codeReview),
           queues: drop(s.queues),
           canvases: drop(s.canvases),
           activeCanvas: drop(s.activeCanvas),
@@ -616,8 +635,95 @@ export const useStore = create<AppState>((set, get) => {
       // Tell the backend to cancel; the in-flight runTurn promise then resolves
       // with its partial reply and runTurnFor's normal completion path clears the
       // "running" status. Fire-and-forget — a failed cancel just leaves it running.
+      // A running code review registers under the same token, so this stops it too.
       void cancelTurn(id).catch(() => {});
     },
+
+    startCodeReview: (baseBranch) => {
+      const id = get().session?.session_id;
+      if (!id) return;
+      if (get().runStatus[id] === "running") return; // never interleave with a turn
+      set((s) => ({
+        runStatus: { ...s.runStatus, [id]: "running" },
+        codeReview: {
+          ...s.codeReview,
+          [id]: { step: "resolving the diff", index: 0, total: 0, activity: "" },
+        },
+      }));
+      runCodeReviewIpc(id, baseBranch)
+        .then((res) =>
+          set((s) => {
+            const thread = s.threads[id] ?? [];
+            // Success: the exchange is already persisted backend-side; mirror it
+            // into the live thread as a settled user + assistant pair.
+            if (res.status === "ok") {
+              return {
+                threads: {
+                  ...s.threads,
+                  [id]: finalizeAssistant(startTurn(thread, res.user), res.assistant),
+                },
+              };
+            }
+            const note =
+              res.status === "nothing"
+                ? "Nothing to review — the workspace has no changes."
+                : "Code review stopped.";
+            return { threads: { ...s.threads, [id]: appendNotice(thread, note) } };
+          }),
+        )
+        .catch((e) =>
+          set((s) => ({
+            threads: {
+              ...s.threads,
+              [id]: appendNotice(s.threads[id] ?? [], `Code review failed: ${e}`),
+            },
+          })),
+        )
+        .finally(() => {
+          set((s) => {
+            const codeReview = { ...s.codeReview };
+            delete codeReview[id];
+            return { codeReview };
+          });
+          get().refreshHistory();
+          get().refreshTotalTokens();
+          // Drain anything queued while the review ran, else settle the status
+          // (read if the chat is in view, unread if it finished offscreen).
+          const next = (get().queues[id] ?? [])[0];
+          if (next !== undefined) {
+            set((s) => ({ queues: { ...s.queues, [id]: (s.queues[id] ?? []).slice(1) } }));
+            setTimeout(() => runTurnFor(id, next.text, next.attachments), 0);
+          } else {
+            set((s) => {
+              const runStatus = { ...s.runStatus };
+              if (s.session?.session_id === id) delete runStatus[id];
+              else runStatus[id] = "unread";
+              return { runStatus };
+            });
+          }
+        });
+    },
+
+    ingestCodeReviewProgress: (e) =>
+      set((s) => {
+        if (!s.codeReview[e.session]) return {}; // no card = not our review
+        return {
+          codeReview: {
+            ...s.codeReview,
+            [e.session]: { step: e.step, index: e.index, total: e.total, activity: "" },
+          },
+        };
+      }),
+
+    ingestCodeReviewActivity: (session, text, replace) =>
+      set((s) => {
+        const cur = s.codeReview[session];
+        if (!cur) return {};
+        // A one-line rolling tail: newlines flatten, only the end is kept.
+        const joined = replace ? text : (cur.activity + text).replace(/\s+/g, " ");
+        const activity = joined.length > 160 ? joined.slice(joined.length - 160) : joined;
+        return { codeReview: { ...s.codeReview, [session]: { ...cur, activity } } };
+      }),
 
     submitApiKey: async (session, itemId, key) => {
       const item = (get().threads[session] ?? []).find((it) => it.id === itemId);

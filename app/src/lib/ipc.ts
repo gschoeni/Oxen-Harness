@@ -40,6 +40,11 @@ import type {
   CustomToolSpec,
   SkillInfo,
   SkillScope,
+  CodeReviewConfig,
+  CodeReviewProgressEvent,
+  CodeReviewRunResult,
+  CodeReviewTokenEvent,
+  CodeReviewToolEvent,
 } from "./types";
 
 // ---- session / agent -------------------------------------------------------
@@ -221,6 +226,38 @@ export const onCanvasWriting = (handler: (session: string) => void) =>
 
 export const answerQuestion = (id: string, answers: QuestionAnswer[]) =>
   invoke<void>("answer_question", { id, answers });
+
+// ---- code review (the configurable find → verify → report pipeline) --------
+
+/** Run the code-review pipeline in `session`'s workspace: uncommitted changes,
+ *  or PR-style against `baseBranch`. Streams `review://progress` / `review://token`
+ *  / `review://tool`; on success the findings are already injected into the
+ *  session as a settled exchange. `cancelTurn(session)` stops it. */
+export const runCodeReview = (session: string, baseBranch?: string) =>
+  invoke<CodeReviewRunResult>("run_code_review", { session, baseBranch: baseBranch ?? null });
+
+/** The saved code-review pipeline (steps + findings cap), for Settings. */
+export const getCodeReviewConfig = () => invoke<CodeReviewConfig>("get_code_review_config");
+
+/** Persist the pipeline; applies to the next review (CLI and desktop share it). */
+export const saveCodeReviewConfig = (config: CodeReviewConfig) =>
+  invoke<void>("save_code_review_config", { config });
+
+/** The built-in default pipeline, for "reset to defaults". */
+export const defaultCodeReviewConfig = () =>
+  invoke<CodeReviewConfig>("default_code_review_config");
+
+/** Fires when a running review moves to its next pipeline step. */
+export const onCodeReviewProgress = (handler: (e: CodeReviewProgressEvent) => void) =>
+  listen<CodeReviewProgressEvent>("review://progress", (e) => handler(e.payload));
+
+/** Streamed text from the current review step's agent (live activity feed). */
+export const onCodeReviewToken = (handler: (e: CodeReviewTokenEvent) => void) =>
+  listen<CodeReviewTokenEvent>("review://token", (e) => handler(e.payload));
+
+/** Fires when the current review step's agent invokes a tool. */
+export const onCodeReviewTool = (handler: (e: CodeReviewToolEvent) => void) =>
+  listen<CodeReviewToolEvent>("review://tool", (e) => handler(e.payload));
 
 // ---- connection settings ---------------------------------------------------
 

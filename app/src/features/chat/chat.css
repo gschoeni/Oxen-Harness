@@ -1067,3 +1067,73 @@
     left: 100%;
   }
 }
+
+/* --- Code review (composer picker + live progress card) --- */
+/* The branch row inside the review picker's menu: type a base branch, go. */
+.review-branch-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+}
+.review-branch-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px var(--space-2);
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+}
+.review-branch-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.review-branch-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  background: var(--accent-tint-strong);
+  color: var(--accent);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.review-branch-go:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The slim status bar shown above the composer while a review pipeline runs. */
+.review-progress {
+  max-width: 740px;
+  width: 100%;
+  margin: var(--space-2) auto 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface-2);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.review-progress-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.review-progress-step {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+.review-progress-activity {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+}

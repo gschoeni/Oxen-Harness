@@ -34,3 +34,4 @@ harness-store = { path = "../../crates/harness-store" }
 harness-local = { path = "../../crates/harness-local" }
 harness-theme = { path = "../../crates/harness-theme" }
 harness-agent = { path = "../../crates/harness-agent" }
+harness-review = { path = "../../crates/harness-review" }

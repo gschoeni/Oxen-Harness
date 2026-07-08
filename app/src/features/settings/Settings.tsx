@@ -11,6 +11,7 @@ import {
   Palette,
   Plus,
   ScrollText,
+  SearchCode,
   Shrink,
   Star,
   Sun,
@@ -32,6 +33,7 @@ import { LocalSetup } from "../models/LocalSetup";
 import { ThemesPanel } from "../themes/ThemesPanel";
 import { ToolsPage } from "../tools/ToolsPage";
 import { SkillsPage } from "../skills/SkillsPage";
+import { CodeReviewPage } from "./CodeReviewPage";
 import { CompressionPage } from "./CompressionPage";
 import { LogsPage } from "../logs/LogsPage";
 import "./settings.css";
@@ -44,6 +46,7 @@ const NAV: { page: SettingsPage; icon: ReactNode; label: string; blurb: string }
   { page: "local-models", icon: <Cpu size={18} />, label: "Local models", blurb: "Download & run on-device" },
   { page: "tools", icon: <Wrench size={18} />, label: "Tools", blurb: "What the agent can do" },
   { page: "skills", icon: <GraduationCap size={18} />, label: "Skills", blurb: "Reusable workflows it can learn" },
+  { page: "code-review", icon: <SearchCode size={18} />, label: "Code review", blurb: "The find → verify → report pipeline" },
   { page: "compression", icon: <Shrink size={18} />, label: "Compression", blurb: "Shrink stale context on the wire" },
   { page: "appearance", icon: <Palette size={18} />, label: "Appearance", blurb: "Theme & light/dark" },
   { page: "logs", icon: <ScrollText size={18} />, label: "Training data", blurb: "Curate chats & export for fine-tuning" },
@@ -55,6 +58,7 @@ const TITLE: Record<SettingsPage, string> = {
   "local-models": "Local models",
   tools: "Tools",
   skills: "Skills",
+  "code-review": "Code review",
   compression: "Compression",
   appearance: "Appearance",
   logs: "Training data",
@@ -123,6 +127,7 @@ export function Settings() {
             {page === "local-models" && <LocalSetup />}
             {page === "tools" && <ToolsPage />}
             {page === "skills" && <SkillsPage />}
+            {page === "code-review" && <CodeReviewPage />}
             {page === "compression" && <CompressionPage />}
             {page === "appearance" && <AppearanceSettings />}
             {page === "logs" && <LogsPage />}

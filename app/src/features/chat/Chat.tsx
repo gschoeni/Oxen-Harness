@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, Code2, FileText, Gamepad2 } from "lucide-react";
+import { ArrowDown, Code2, FileText, Gamepad2, SearchCode } from "lucide-react";
 import { onFileDrop, pickAttachments } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
@@ -37,6 +37,8 @@ export function Chat() {
   const queueEntries = useStore((s) => (s.session ? s.queues[s.session.session_id] : undefined));
   const queue = queueEntries?.map((q) => q.text) ?? NO_QUEUE;
   const running = useStore((s) => !!s.session && s.runStatus[s.session.session_id] === "running");
+  // A running code review's live progress (which step, what the agent is doing).
+  const review = useStore((s) => (s.session ? s.codeReview[s.session.session_id] : undefined));
   const send = useStore((s) => s.send);
   const stop = useStore((s) => s.stop);
   const setQueue = useStore((s) => s.setQueue);
@@ -203,6 +205,18 @@ export function Chat() {
         )}
       </div>
 
+      {review && (
+        <div className="review-progress" role="status">
+          <SearchCode size={14} className="review-progress-icon" />
+          <span className="review-progress-step">
+            Code review
+            {review.total > 0
+              ? ` — step ${review.index + 1}/${review.total}: ${review.step}`
+              : ` — ${review.step}`}
+          </span>
+          {review.activity && <span className="review-progress-activity">{review.activity}</span>}
+        </div>
+      )}
       <Queue items={queue} onChange={setQueue} />
       {attachments.length > 0 && (
         <div className="attachments">

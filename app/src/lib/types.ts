@@ -393,9 +393,56 @@ export type SettingsPage =
   | "local-models"
   | "tools"
   | "skills"
+  | "code-review"
   | "compression"
   | "appearance"
   | "logs";
+
+// ---- code review (the configurable find → verify → report pipeline) --------
+
+/** One step of the code-review pipeline: a short name and its prompt template.
+ *  Mirrors `harness_review::ReviewStep`. Templates may use `{{target}}`,
+ *  `{{diff}}`, `{{previous}}` (the prior step's output), and `{{max_findings}}`. */
+export interface CodeReviewStep {
+  name: string;
+  prompt: string;
+}
+
+/** The saved pipeline (`~/.oxen-harness/code-review.json`), shared with the
+ *  CLI's `/code-review`. Mirrors `harness_review::ReviewConfig`. */
+export interface CodeReviewConfig {
+  steps: CodeReviewStep[];
+  max_findings: number;
+}
+
+/** What `run_code_review` resolves with. On `"ok"` the user/assistant exchange
+ *  is already persisted to the session; the UI appends it to the thread. */
+export interface CodeReviewRunResult {
+  status: "ok" | "nothing" | "cancelled";
+  user: string;
+  assistant: string;
+  findings: number;
+}
+
+/** `review://progress` — which pipeline step a running review is on. */
+export interface CodeReviewProgressEvent {
+  session: string;
+  step: string;
+  index: number;
+  total: number;
+}
+
+/** `review://token` — streamed text from the current review step's agent. */
+export interface CodeReviewTokenEvent {
+  session: string;
+  token: string;
+}
+
+/** `review://tool` — a tool the current review step's agent invoked. */
+export interface CodeReviewToolEvent {
+  session: string;
+  name: string;
+}
 
 /** One agent tool (built-in or custom) as shown on the Tools page: its identity,
  *  the (possibly overridden) description advertised to the model, its JSON schema,
