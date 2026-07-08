@@ -44,3 +44,53 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps
+
+  # The React frontend: typecheck + component tests. Pure Node — no webview
+  # toolchain needed, so this stays fast.
+  frontend:
+    name: app · tsc · vitest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+  # The Tauri bridge: its own Cargo workspace (excluded from the root one), so
+  # the core job never sees it break. Needs the webview system libraries.
+  bridge:
+    name: app · clippy (Tauri bridge)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Webview system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets
