@@ -26,11 +26,12 @@ own:
                         │   llm + tools + store + budget)│   stream, dispatch, compact)
                         └───┬───────────┬───────────┬────┘
                             │           │           │
-  capabilities   ┌──────────┴─┐ ┌───────┴─────┐ ┌───┴─────────┐ ┌──────────────┐
-                 │ harness-llm│ │harness-tools│ │harness-store│ │ harness-theme│
-                 │  (client)  │ │  (Tool reg) │ │  (SQLite)   │ │  harness-local│
-                 └──────┬─────┘ └──────┬──────┘ └──────┬──────┘ │  harness-oxen │
-                        │              │               │        └──────┬───────┘
+  capabilities   ┌──────────┴─┐ ┌───────┴─────┐ ┌───┴─────────┐ ┌────────────────┐
+                 │ harness-llm│ │harness-tools│ │harness-store│ │ harness-theme  │
+                 │  (client)  │ │  (Tool reg) │ │  (SQLite)   │ │ harness-local  │
+                 └──────┬─────┘ └──────┬──────┘ └──────┬──────┘ │ harness-oxen   │
+                        │              │               │        │harness-compress│
+                        │              │               │        └──────┬─────────┘
   foundation      ┌─────┴──────────────┴───────────────┴───────────────┴─────┐
                   │  harness-core (Message/Role, slug, format_bytes)          │
                   │  harness-config (~/.oxen-harness paths, atomic versioned  │
@@ -46,7 +47,8 @@ own:
 - **capabilities** — each an independent, self-contained skill: the LLM client
   and streaming (`harness-llm`), the built-in tools (`harness-tools`), verbatim
   history + fine-tuning export (`harness-store`), themes (`harness-theme`),
-  local llama.cpp models (`harness-local`), and Oxen versioning (`harness-oxen`).
+  local llama.cpp models (`harness-local`), Oxen versioning (`harness-oxen`),
+  and reversible tool-output compression (`harness-compress`).
 - **`harness-agent`** — the turn loop that wires an LLM client, a tool registry,
   and a store together, plus token budgeting and context compaction.
 - **`harness-loop`** / **`harness-runtime`** — the goal/verify iteration loop on
@@ -80,8 +82,8 @@ The crate seams are designed so common extensions touch one place:
 
 | To add… | Do this |
 |---|---|
-| **A tool** | Implement the [`TypedTool`](crates/harness-tools/src/lib.rs) trait (typed args struct; doc comments become the model-facing schema), expose a `*_TOOL` name constant, register it with `with_typed` in the `ToolRegistry`, and add its name to the registry completeness test. Full recipe: ["Adding a tool"](README.md#adding-a-tool) in the README. |
-| **A skill** | No code: drop a `SKILL.md` folder into `~/.oxen-harness/skills/` (global) or `<repo>/.oxen-harness/skills/` (project), or use Settings → Skills in the desktop app. Parsing + the `skill` tool live in [`harness-tools/src/skill.rs`](crates/harness-tools/src/skill.rs); discovery/prefs in [`harness-runtime/src/skills.rs`](crates/harness-runtime/src/skills.rs). See ["Adding a skill"](README.md#adding-a-skill). |
+| **A tool** | Implement the [`TypedTool`](crates/harness-tools/src/lib.rs) trait (typed args struct; doc comments become the model-facing schema), expose a `*_TOOL` name constant, register it with `with_typed` in the `ToolRegistry`, and add its name to the registry completeness test. Full recipe: ["Adding a built-in tool"](AGENTS.md#adding-a-built-in-tool) in AGENTS.md. |
+| **A skill** | No code: drop a `SKILL.md` folder into `~/.oxen-harness/skills/` (global) or `<repo>/.oxen-harness/skills/` (project), or use Settings → Skills in the desktop app. Parsing + the `skill` tool live in [`harness-tools/src/skill.rs`](crates/harness-tools/src/skill.rs); discovery/prefs in [`harness-runtime/src/skills.rs`](crates/harness-runtime/src/skills.rs). See ["Extending the agent"](README.md#extending-the-agent). |
 | **A built-in theme** | Add a factory in [`harness-theme/src/builtins.rs`](crates/harness-theme/src/builtins.rs) (overlay a small patch on `Theme::default()`) and list it in `all()`. Theme *data* all lives in that module. |
 | **A config file** | Define a serde struct and lean on `harness-runtime`'s `config::{load_or_default, write_and_snapshot}`; you get atomic writes + Oxen snapshotting for free. |
 | **A cloud model** | Add an entry to `harness_runtime::models::builtins()`. |

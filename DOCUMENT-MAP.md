@@ -15,6 +15,7 @@ oxen-harness/
   DOCUMENT-MAP.md            — This file. File index and loading strategy.
   ARCHITECTURE.md            — Crate layering, the lifecycle of a turn, and how to extend.
   AGENTS.md                  — The Ralph Wiggum dev loop + project conventions.
+  CONTRIBUTING.md            — Contributor front door: orientation, build/verify, what a good change looks like.
   README.md                  — Public-facing repo README.
   LICENSE                    — Apache-2.0.
   Cargo.toml                 — Cargo workspace manifest.

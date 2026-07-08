@@ -1,7 +1,7 @@
 # Backlog & Future Exploration
 
 **Purpose:** Ideas, links, tools, half-formed thoughts, things to consider later. Pull in during planning sessions, not implementation.
-**Updated:** 2026-06-21
+**Updated:** 2026-07-07
 
 ---
 
@@ -12,11 +12,10 @@
 - **Permission modes** — optional "ask before edit/shell/commit" mode for cautious use, even though edits are allowed by default.
 - **Checkpoints / undo** — snapshot the working dir per turn so a bad edit can be rolled back.
 - **Session replay** — re-run a recorded JSONL transcript against a different model to compare behavior.
-- **Prompt-caching / context compaction** — summarize old turns to control context growth.
+- **Prompt caching** — provider-side caching of the stable prompt prefix to cut cost/latency. (Context *compaction* and reversible *compression* shipped — see `03-decisions.md`.)
 - **Switch local models mid-session** — today `--local <id>` is chosen at startup; allow `/model <local-id>` to stop the current `llama-server` and start another without restarting the session. Could also auto-detect GGUFs already in `~/.cache/huggingface`, `~/.lmstudio/models`, or `~/.ollama/models`.
 - **Per-model llama-server tuning** — expose context size / GPU layers / quant choice per catalog entry, and a way to add custom (non-catalog) GGUFs.
-- **Auto-install `llama-server`** — offer to `brew install llama.cpp` / download a release from within the harness instead of just printing a hint.
-- **Theme gallery + sharing** — a curated, importable set of community themes (e.g. a small index the CLI/app can browse and pull), beyond the three built-ins.
+- **Theme gallery + sharing** — a curated, importable set of community themes (e.g. a small index the CLI/app can browse and pull), beyond the five built-ins.
 - **Live theme preview while editing** — apply changes as you tweak a theme file; per-theme palette swatches in the app's theme list.
 - **Editable/iterate-on themes via the model** — "make the greens warmer", "calmer voice" follow-ups that patch the active theme instead of regenerating from scratch.
 - **Theme the banner ASCII art by vibe** — let generation produce custom `banner_art`/`exit_art`/`wordmark` reliably (currently inherits defaults unless the model fills them in well).

@@ -1,7 +1,7 @@
 # Project Status & Roadmap
 
 **Purpose:** Where we are, what's next, what's done. Pull this in for any working session.
-**Updated:** 2026-07-01
+**Updated:** 2026-07-07
 
 ---
 
@@ -19,11 +19,12 @@
 | **7** | `harness-local`: local models via llama.cpp (Qwen3 GGUFs) | ✅ Complete |
 | **8** | `harness-theme`: configurable + shareable themes (palette + voice) | ✅ Complete |
 | **9** | `harness-loop`: goal-driven, self-verifying loops (discover→verify→iterate) | ✅ Complete |
+| **10** | `harness-compress`: reversible context compression (off/audit/on) | ✅ Complete |
 
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **174 tests passing** across the workspace.
+> **474 tests passing** across the workspace; CI runs fmt + clippy + tests on push.
 
 ---
 
@@ -209,7 +210,9 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
 - [x] TOML (and JSON) load/save with **partial overrides** via deep-merge over the
       default, so a theme file (hand-written or model-generated) can set just a few
       fields; `to_toml` for export; `from_model_output` tolerates fences/prose
-- [x] Built-ins: **Oregon Trail** (default), **Midnight**, **Synthwave**
+- [x] Built-ins: **Oregon Trail** (default), **Midnight**, **Synthwave**,
+      **New York Times**, **Cupertino** — each with its own `[style]` (fonts,
+      framing, hero layout) so they look genuinely different, not just recolored
 - [x] `Store` under `~/.oxen-harness/`: `config.toml` active slug + `themes/<slug>.toml`;
       list (built-ins + installed, installed shadows built-in), resolve, set_active,
       save, import, export, remove; filesystem-safe slugs
@@ -227,6 +230,10 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
 - [x] `LoopSpec` + `Verify` (TOML): a **command** gate (shell exit 0 = pass) or a
       strict **rubric** gate (separate-checker scores 1–10 vs. criteria, threshold);
       `success_criteria`, `max_iterations` (default 8), optional `token_budget`
+- [x] **Conditional gates** (2026-07-06): verify is a list of *named* gates, each
+      with `run_when` (`always`, or `on_change` + glob patterns); a git content
+      snapshot skips e.g. the test gate when no matching code changed, while
+      failed/blocked gates always re-run
 - [x] `LoopRunner`: drives DISCOVER→QUESTION→PLAN→EXECUTE→VERIFY→ITERATE — each
       pass composes goal + criteria + a journal digest of prior attempts, runs one
       agent turn (tools + `ask_user_question`), then runs the gate; stops on success,
@@ -248,7 +255,7 @@ Tools, skills, and the surfaces to manage them, in one sweep:
 
 - **TypedTool refactor** (`harness-tools`): schemas derive from typed args
   structs — advertised interface and parsed arguments can't drift; registry
-  completeness + schema-budget tests; README "Adding a tool" recipe.
+  completeness + schema-budget tests; "Adding a built-in tool" recipe in AGENTS.md.
 - **Custom HTTP tools**: name + description + JSON-schema params + endpoint;
   arguments POST as JSON, response body = tool result. Settings → Tools editor
   with a simple parameter builder (JSON mode for complex schemas).
@@ -256,12 +263,49 @@ Tools, skills, and the surfaces to manage them, in one sweep:
   (`~/.oxen-harness/skills/`) + per-project (`.oxen-harness/skills/`, committed
   — see the repo's own `add-a-tool` skill). Progressive disclosure via a single
   `skill` tool; Settings → Skills page to create/edit/toggle; README
-  "Adding a skill".
+  "Extending the agent".
 - **Host parity**: the CLI now applies tool prefs + skills like the desktop;
   both hosts gate the system prompt on the tools that actually survived
   preferences (canvas was hardcoded before).
 - **Desktop navigation**: projects became a full-window picker page; the
   sidebar scopes to one project's chats.
+
+---
+
+## Recent — resilience push (2026-07-05 → 07)
+
+Context growth, flaky endpoints, and recovering dead turns:
+
+- **Context compression** (`harness-compress`, 2026-07-05): reversible
+  compression of stale tool output before it goes on the wire — off / audit
+  (measure, change nothing) / on. Compressed content leaves a `<<ccr:hash>>`
+  marker the model can resolve with the `retrieve_original` tool; the
+  transcript and store always keep the originals. Savings surface in the CLI
+  meter, the desktop TokenMeter, and Settings.
+- **Context compaction** (2026-07-05): instead of hard-stopping on
+  `ContextWindowExceeded`, the agent prunes stale tool output, then summarizes
+  the oldest turns (on user-turn boundaries) — the session continues with a
+  `Compacted` event; the store keeps the full record.
+- **Model-call retry** (2026-07-06): transient provider/network failures
+  (5xx, rate limits, dead streams) retry with exponential backoff
+  (`RetryPolicy`, default 4 attempts from 1s), emitting `Retrying` events so
+  the UI shows a hiccup, not a hang; exhausted retries report attempts +
+  model + endpoint (`RetriesExhausted`). Non-transient errors fail fast.
+- **Recovery UX** (2026-07-06): `/retry` re-drives a transcript that stopped
+  mid-turn without duplicating the user message (`Agent::continue_turn`);
+  `--continue` reopens the newest session; both terminals print the same
+  failure report with the way out.
+- **Loop conditional gates** (2026-07-06): see Phase 9.
+- **`/model` picker** (2026-07-07): `/model` with no argument opens the
+  interactive picker (cloud catalog + installed local models, current marked);
+  the live composer completes `/model <partial>` against ids *and* display
+  names, and Enter accepts the highlighted completion. Unknown ids are saved
+  as custom catalog entries.
+- **Module shape pass** (2026-07-07): the three files that had grown past
+  ~1200 lines were split by concern with no API changes — `harness-agent`
+  (error/event/config + `agent/{turn,compression}`), the CLI's `live/`
+  (turn/events/paint/completion), and `main.rs` (endpoint/turn/repl_loop +
+  `model_cmd`/`compression_cmd`).
 
 ## What's left / next
 
@@ -269,16 +313,17 @@ Tools, skills, and the surfaces to manage them, in one sweep:
       theme switching + vibe-code generation.
 - [ ] Live end-to-end test against the real Oxen endpoint with a key, and a real
       `llama-server` run of a local model (this machine lacked the binary).
-- [ ] CI workflow running the verification loop (fmt + clippy + tests) on push.
-- [ ] `/model` validation; broaden `~/.oxen-harness/config.toml` beyond the active
-      theme (model, host, defaults).
-- [ ] Switch local models mid-session (currently chosen at startup via `--local`).
-- [ ] Per-theme palette swatches in the app theme list; app session-resume.
+- [ ] Broaden `~/.oxen-harness/config.toml` beyond the active theme
+      (host, defaults) — the selected model now persists via `models.json`.
+- [ ] Switch local models mid-session (currently chosen at startup via `--local`;
+      the desktop starts a fresh session on local switches).
+- [ ] Per-theme palette swatches in the app theme list.
 
 ---
 
 ## Infrastructure TODOs (Cross-Phase)
 
-- [ ] CI workflow running the verification loop (fmt + clippy + tests) on push.
-- [x] Persist/restore previous sessions in the CLI (`--resume <id>`). App resume
-      still pending.
+- [x] CI workflow running the verification loop (fmt + clippy + tests) on push
+      (`.github/workflows/ci.yml`, badge in the README).
+- [x] Persist/restore previous sessions in the CLI (`--resume <id>` /
+      `--continue`) and the desktop app (per-session agents).

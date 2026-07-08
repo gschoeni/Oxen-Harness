@@ -309,11 +309,12 @@ the agent to extend itself with new tools.
 ## Contributing
 
 This is a small, layered Rust workspace — you can hold the whole thing in your
-head in an afternoon. Start with [`ARCHITECTURE.md`](ARCHITECTURE.md) for the
-layering and the lifecycle of a turn. [`AGENTS.md`](AGENTS.md) is the
-contributor protocol — the verification loop, project conventions, a codebase
-reading order, and the add-a-built-in-tool recipe — and
-[`DOCUMENT-MAP.md`](DOCUMENT-MAP.md) indexes every file.
+head in an afternoon. [`CONTRIBUTING.md`](CONTRIBUTING.md) is the front door;
+from there, [`ARCHITECTURE.md`](ARCHITECTURE.md) covers the layering and the
+lifecycle of a turn, [`AGENTS.md`](AGENTS.md) is the contributor protocol — the
+verification loop, project conventions, a codebase reading order, and the
+add-a-built-in-tool recipe — and [`DOCUMENT-MAP.md`](DOCUMENT-MAP.md) indexes
+every file.
 
 ## License
 

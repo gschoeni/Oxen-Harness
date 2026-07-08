@@ -1,7 +1,7 @@
 # Working Decisions & Rationale
 
 **Purpose:** Currently relevant decisions with enough "why" to be useful during implementation. For full deep-dive analysis, cite the source in each entry.
-**Updated:** 2026-06-23
+**Updated:** 2026-07-07
 
 ---
 
@@ -397,6 +397,64 @@ CLI prints a subtle `🧭 context X / Y tokens (Z%)` trailer after each turn.
 *Why revised:* a hard 25-iteration cap killed long-but-legitimate tool-heavy
 turns ("died of measles: reached max iterations"). The real constraint on a
 chat-completions loop is the context window, so we bound on that instead.
+
+**Context overflow compacts instead of erroring** (2026-07-05)
+When the calibrated estimate says the next request won't fit the window, the
+agent frees context in two stages before giving up: prune stale tool output
+(cheap, no model call), then summarize the oldest turns into a single note via
+`Agent::complete` — cut on a *user-turn boundary* so no tool result is orphaned
+from its call. Only if a compacted transcript still can't fit does
+`ContextWindowExceeded` surface. Compaction mutates only the in-memory
+transcript; the store keeps the verbatim record, so exports and resume are
+unaffected. The client-side token estimate is **calibrated** against the real
+prompt sizes the endpoint reports (`token_ratio`), so the budget check tracks
+reality rather than the crude 4-chars/token heuristic.
+
+**Reversible compression over summarization for stale tool output** (2026-07-05)
+`harness-compress` shapes *outbound requests only*: stale tool results are
+crushed (JSON-array sampling, log/line collapsing) and replaced with a digest
+plus a `<<ccr:hash>>` marker; the `retrieve_original` tool restores any marker,
+so nothing the model might need is unrecoverable — unlike summarization, which
+is lossy and needs a model call. Three modes (`off`/`audit`/`on`) because
+trust is earned: `audit` runs the identical pipeline and reports would-be
+savings without changing a byte on the wire. The most recent tool results are
+always protected (the model is still working with them), as are errors, small
+outputs, and `retrieve_original` results (re-compressing them would loop).
+The in-memory transcript and the store always keep the originals.
+
+**Transient model-call failures retry with backoff inside the agent** (2026-07-06)
+Provider 5xx, rate limits, and streams that die mid-reply are facts of life on
+any endpoint; making every host implement recovery would drift. `stream_reply`
+retries per `RetryPolicy` (default 4 attempts, 1s → 2s → 4s), emitting
+`AgentEvent::Retrying` so UIs show the pause as a hiccup rather than a hang.
+Retrying a dead stream is safe because nothing is persisted until a reply
+assembles — the UI may show some text twice, which the event explains.
+Exhausted retries return `RetriesExhausted{attempts, model, endpoint, source}`
+so the failure is debuggable from the message alone; non-transient errors
+(auth, credits, bad request) fail fast and keep their original shape so the
+hosts' 401 handling (`/auth` card) still matches. Recovery on top: `/retry`
+re-drives a transcript that ends mid-turn via `Agent::continue_turn` (no user
+message re-appended, so history and fine-tuning exports stay clean), and
+`--continue` reopens the newest session.
+
+**Loop gates are named and conditional (`run_when`)** (2026-07-06)
+A loop's `verify` became a list of *named* gates, each with `run_when`:
+`always`, or `on_change` with glob patterns checked against a git content
+snapshot of the workspace. A docs-only pass no longer pays for the full test
+suite, while failed or blocked gates always re-run regardless of change
+detection (a gate must never stay red because nothing changed). Single-gate
+TOML files still load (serde back-compat), so shared loops keep working.
+
+**Big files split by module-per-concern, fields stay private** (2026-07-07)
+When a file outgrows ~1000 lines it splits into submodules by concern, not by
+kind: `harness-agent` became `error`/`event`/`config` + an `agent/` directory
+whose `turn` and `compression` children hold the loop and compression `impl`
+blocks — *child* modules, so `Agent`'s fields stay private to the module tree
+(Rust privacy is module-scoped; descendants see an ancestor's private items,
+siblings don't). The CLI's `live/` and `main.rs` split the same way
+(`turn`/`events`/`paint`/`completion`; `endpoint`/`turn`/`repl_loop`/`*_cmd`).
+Public APIs are preserved via re-exports at the old paths; tests move beside
+the code they exercise with shared `cfg(test)` `test_support` helpers.
 
 **Goal-driven loops live in their own `harness-loop` crate** (2026-06-22)
 A *loop* (distinct from a single agent turn) hands the agent a job, a gate that

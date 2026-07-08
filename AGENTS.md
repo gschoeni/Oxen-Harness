@@ -84,16 +84,17 @@ the last file the architecture clicks:
    `ToolRegistry`. The smallest complete concept in the codebase, and the thing
    you're most likely to extend; each tool (fs, shell, git, web, canvas, …)
    lives in its own file beside it.
-3. **`crates/harness-agent/src/lib.rs`** — `Agent::run_turn`, the loop that
-   wires the LLM client, the tools, and the history store together. This is the
-   heart, and it reads top-to-bottom: *make room in the context → stream the
-   reply → run any tool calls → repeat*.
+3. **`crates/harness-agent/src/agent/turn.rs`** — `Agent::run_turn`, the loop
+   that wires the LLM client, the tools, and the history store together. This
+   is the heart, and it reads top-to-bottom: *make room in the context → stream
+   the reply → run any tool calls → repeat*. The crate root (`src/lib.rs`)
+   maps the surrounding modules (config, events, compression, budgeting).
 4. **`crates/harness-llm/src/types.rs`** — the wire types (`ChatMessage`,
    `ToolCall`, streaming events) that flow through that loop.
-5. **`crates/harness-cli/src/main.rs`** — how a real session boots: resolve the
-   model + endpoint, build the tools, create the agent, then hand off to the
-   REPL. The desktop front end in `app/` drives the *same* `harness-agent`
-   (see `app/README.md`).
+5. **`crates/harness-cli/src/main.rs`** — how a real session boots: resolve
+   the model + endpoint and build the tools (`endpoint.rs`), create the agent,
+   then hand off to a REPL driver (`repl_loop.rs`). The desktop front end in
+   `app/` drives the *same* `harness-agent` (see `app/README.md`).
 
 Every crate's `src/lib.rs` opens with a `//!` comment stating what it owns, and
 `DOCUMENT-MAP.md` is the one-line-per-file index for the full layering. Tests
