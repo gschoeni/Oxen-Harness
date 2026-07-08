@@ -1,24 +1,30 @@
 //! The durable definition of the review pipeline: an ordered list of named
-//! steps, each a user-editable prompt template.
+//! steps, each one or more user-editable prompt templates.
 //!
 //! The defaults encode the pipeline the strongest production reviewers
 //! (Claude Code's `/code-review`, Codex's `/review`) converged on: a
-//! recall-biased **find** pass that is told not to self-censor, an adversarial
+//! recall-biased **find** pass that is told not to self-censor — fanned out
+//! across three parallel reviewers, each with a narrow lens — an adversarial
 //! **verify** pass that tries to refute each candidate with quoted evidence,
 //! and a **report** pass that drops refuted candidates, dedups, ranks, caps,
 //! and emits machine-readable findings. Users can edit any prompt, reorder,
-//! add, or remove steps from Settings — the runner just walks the list,
-//! feeding each step's output to the next.
+//! add, or remove steps (and split any step into parallel agents) from
+//! Settings — the runner just walks the list, feeding each step's combined
+//! output to the next.
 
 use serde::{Deserialize, Serialize};
 
 use crate::ReviewError;
 
 /// Current `code-review.json` schema version. Bump on incompatible changes.
-pub const REVIEW_SCHEMA_VERSION: u32 = 1;
+/// v2 added per-step parallel `agents` and `max_parallel`.
+pub const REVIEW_SCHEMA_VERSION: u32 = 2;
 
 /// Default cap on findings in the final report.
 pub const DEFAULT_MAX_FINDINGS: usize = 10;
+
+/// Default cap on subagents running at once within a fan-out step.
+pub const DEFAULT_MAX_PARALLEL: usize = 3;
 
 /// Hard cap on the diff text substituted into a step prompt. Bigger changes
 /// are truncated with a note — the step agents have git and file tools, so
@@ -28,22 +34,66 @@ pub const DIFF_CHAR_BUDGET: usize = 60_000;
 fn default_max_findings() -> usize {
     DEFAULT_MAX_FINDINGS
 }
+fn default_max_parallel() -> usize {
+    DEFAULT_MAX_PARALLEL
+}
 
-/// One step of the pipeline: a name (shown in progress output) and a prompt
-/// template. Templates may use these placeholders, substituted per run:
+/// One parallel reviewer within a fan-out step: a display name and its prompt
+/// template (same placeholders as [`ReviewStep::prompt`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepAgent {
+    /// Short lane label ("diff-scan", "callers") shown in progress output.
+    pub name: String,
+    /// The prompt template this reviewer runs.
+    pub prompt: String,
+}
+
+/// One step of the pipeline: a name, and either a single prompt or a set of
+/// parallel `agents` (a fan-out). Prompt templates may use these placeholders,
+/// substituted per run:
 ///
 /// - `{{target}}` — what is being reviewed ("uncommitted changes", "changes
 ///   against `main`"), plus the untracked-file list when relevant.
 /// - `{{diff}}` — the unified diff of the change (truncated past
 ///   [`DIFF_CHAR_BUDGET`]).
-/// - `{{previous}}` — the previous step's full output (empty note on step 1).
+/// - `{{previous}}` — the previous step's full output (empty note on step 1;
+///   for a fan-out step, the agents' outputs concatenated under `###`
+///   headings, in agent order).
 /// - `{{max_findings}}` — the configured findings cap.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewStep {
     /// Short identifier ("find", "verify") used in events and progress output.
     pub name: String,
-    /// The prompt template sent to this step's agent.
+    /// The prompt template for a single-agent step. Ignored when `agents` is
+    /// non-empty (kept optional so v1 configs load unchanged).
+    #[serde(default)]
     pub prompt: String,
+    /// Parallel reviewers for this step. Empty = a single agent running
+    /// `prompt`; non-empty = a fan-out, all agents run concurrently (capped by
+    /// [`ReviewConfig::max_parallel`]) and their outputs are concatenated as
+    /// the step's output.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<StepAgent>,
+}
+
+impl ReviewStep {
+    /// The reviewers this step actually runs: `agents` when set, else one
+    /// agent named after the step running `prompt`.
+    pub fn resolved_agents(&self) -> Vec<StepAgent> {
+        if self.agents.is_empty() {
+            vec![StepAgent {
+                name: self.name.clone(),
+                prompt: self.prompt.clone(),
+            }]
+        } else {
+            self.agents.clone()
+        }
+    }
+
+    /// Whether this step fans out across parallel agents.
+    pub fn is_fan_out(&self) -> bool {
+        self.agents.len() > 1
+    }
 }
 
 /// The shareable, user-editable review pipeline definition. Persisted inside
@@ -58,6 +108,9 @@ pub struct ReviewConfig {
     /// Cap on findings in the final report.
     #[serde(default = "default_max_findings")]
     pub max_findings: usize,
+    /// Cap on subagents running at once within a fan-out step.
+    #[serde(default = "default_max_parallel")]
+    pub max_parallel: usize,
 }
 
 impl Default for ReviewConfig {
@@ -65,6 +118,7 @@ impl Default for ReviewConfig {
         Self {
             steps: default_steps(),
             max_findings: DEFAULT_MAX_FINDINGS,
+            max_parallel: DEFAULT_MAX_PARALLEL,
         }
     }
 }
@@ -91,8 +145,8 @@ impl ReviewConfig {
                 // emptied step list both mean "the built-in pipeline".
                 if c.steps.is_empty() {
                     Self {
-                        max_findings: c.max_findings,
                         steps: default_steps(),
+                        ..c
                     }
                 } else {
                     c
@@ -109,52 +163,83 @@ impl ReviewConfig {
     }
 }
 
-/// The built-in find → verify → report pipeline.
+/// The built-in find → verify → report pipeline. The find step fans out
+/// across three parallel reviewers, each with a narrow lens (the angles the
+/// strongest production reviewers use): a line-by-line diff scan, a
+/// removed-behavior audit, and a cross-file caller trace.
 pub fn default_steps() -> Vec<ReviewStep> {
     vec![
         ReviewStep {
             name: "find".to_string(),
-            prompt: FIND_PROMPT.to_string(),
+            prompt: String::new(),
+            agents: vec![
+                StepAgent {
+                    name: "diff-scan".to_string(),
+                    prompt: finder_prompt(DIFF_SCAN_LENS),
+                },
+                StepAgent {
+                    name: "removed-code".to_string(),
+                    prompt: finder_prompt(REMOVED_CODE_LENS),
+                },
+                StepAgent {
+                    name: "callers".to_string(),
+                    prompt: finder_prompt(CALLERS_LENS),
+                },
+            ],
         },
         ReviewStep {
             name: "verify".to_string(),
             prompt: VERIFY_PROMPT.to_string(),
+            agents: Vec::new(),
         },
         ReviewStep {
             name: "report".to_string(),
             prompt: REPORT_PROMPT.to_string(),
+            agents: Vec::new(),
         },
     ]
 }
 
-/// Step 1 — recall-biased finder. Told explicitly not to self-censor: the
-/// verify step exists to restore precision, and finders that silently drop
-/// half-believed candidates bypass it.
-pub const FIND_PROMPT: &str = "\
-You are reviewing a code change for a teammate. This pass is about RECALL: surface every candidate issue a careful reviewer could find. An independent verifier will judge each candidate next, so do not self-censor — pass through every candidate with a nameable failure scenario, even ones you only half believe.
+/// Build one finder's prompt: the shared recall framing around a single lens.
+/// Told explicitly not to self-censor — the verify step exists to restore
+/// precision, and finders that silently drop half-believed candidates bypass
+/// it.
+pub fn finder_prompt(lens: &str) -> String {
+    format!(
+        "\
+You are one of several independent reviewers examining the same code change in parallel, each from a different angle. This pass is about RECALL: surface every candidate issue your angle can find. An independent verifier will judge every candidate next, so do not self-censor — pass through every candidate with a nameable failure scenario, even ones you only half believe. Other reviewers cover the other angles; stay on yours.
 
-TARGET: {{target}}
+YOUR ANGLE: {lens}
 
-Use your tools to go beyond the diff: read the enclosing function of every changed hunk, find the callers of changed functions and check each call site, and for every line the diff deletes or replaces, work out what invariant it enforced and where the new code re-establishes it. Read any untracked files listed in the target.
+Flag only issues introduced or re-exposed by this change — not pre-existing problems. Ignore style, naming, formatting, and missing tests unless they hide a real defect. Read any untracked files listed in the target.
 
-Flag only issues introduced or re-exposed by this change — not pre-existing problems. Look for, in priority order:
-1. Runtime correctness: inverted or wrong conditions, off-by-one, null/None/undefined dereference on a reachable path, missing error handling or await, removed guards or validation, wrong-variable copy-paste, swallowed errors that should propagate, ordering/race problems.
-2. Security: injection (SQL, command, path), missing authorization on new surfaces, secrets in code or logs, unsafe deserialization.
-3. Broken contracts: changed return shapes, new preconditions, or new failure modes that break existing callers; API or schema changes without migration.
-
-Ignore style, naming, formatting, and missing tests unless they hide a real defect.
+TARGET: {{{{target}}}}
 
 THE CHANGE:
-{{diff}}
+{{{{diff}}}}
 
 End your reply with ONLY a JSON array of candidates (no code fences, no prose after it):
-[{\"title\": \"<one line, imperative>\", \"file\": \"path/from/repo/root\", \"line\": 123, \"summary\": \"<one sentence: what is wrong>\", \"failure_scenario\": \"<the concrete inputs or state that trigger it, and the wrong output, crash, or data loss that results>\"}]
-If there are no candidates, end with [].";
+[{{\"title\": \"<one line, imperative>\", \"file\": \"path/from/repo/root\", \"line\": 123, \"summary\": \"<one sentence: what is wrong>\", \"failure_scenario\": \"<the concrete inputs or state that trigger it, and the wrong output, crash, or data loss that results>\"}}]
+If there are no candidates, end with []."
+    )
+}
+
+/// Finder lens 1 — line-by-line scan of the hunks themselves.
+pub const DIFF_SCAN_LENS: &str = "\
+Read every hunk in the diff line by line, then use your tools to read the enclosing function of each hunk. For every changed line ask: what input, state, timing, or platform makes this line wrong? Look for inverted or wrong conditions, off-by-one, null/None/undefined dereference on a reachable path, missing error handling or await, wrong-variable copy-paste, swallowed errors that should propagate, falsy-zero checks, and the classic pitfalls of the diff's language (mutable default arguments, closure-captured loop variables, == coercion, integer overflow, races).";
+
+/// Finder lens 2 — what the removed code was protecting.
+pub const REMOVED_CODE_LENS: &str = "\
+For every line the diff DELETES or replaces, name the invariant or behavior it enforced, then search the new code for where that invariant is re-established. If you cannot find it, that is a candidate: a removed guard, a dropped error path, narrowed validation, a deleted check that was covering a real case, cleanup that no longer runs.";
+
+/// Finder lens 3 — the blast radius beyond the diff.
+pub const CALLERS_LENS: &str = "\
+For each function, type, or contract the diff changes, use your tools to find its callers (search for the symbol across the repo) and check whether the change breaks any call site: a new precondition, a changed return shape or error type, a new failure mode, an ordering dependency. Also check the callees the new code relies on — does it hold their contracts? Include security exposure: injection through new inputs (SQL, command, path), missing authorization on new surfaces, secrets in code or logs.";
 
 /// Step 2 — adversarial verifier. Judges each candidate independently against
 /// the actual code, with a three-state verdict and quoted evidence.
 pub const VERIFY_PROMPT: &str = "\
-You are a skeptical, adversarial verifier on a code review. You did NOT write the candidate findings below; your job is to try to REFUTE each one by reading the actual code with your tools. Do not take the finder's word for anything — check every claim against the source.
+You are a skeptical, adversarial verifier on a code review. You did NOT write the candidate findings below; your job is to try to REFUTE each one by reading the actual code with your tools. Do not take the finders' word for anything — check every claim against the source. The candidates come from several independent reviewers working in parallel, so some may overlap or describe the same defect — judge each claim on its own; a later step merges duplicates.
 
 TARGET: {{target}}
 
@@ -198,16 +283,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_the_three_step_pipeline() {
+    fn defaults_are_the_three_step_pipeline_with_a_fanned_out_finder() {
         let config = ReviewConfig::default();
         let names: Vec<_> = config.steps.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["find", "verify", "report"]);
         assert_eq!(config.max_findings, DEFAULT_MAX_FINDINGS);
-        // Every default prompt wires in the placeholders the runner fills.
-        for step in &config.steps {
-            assert!(step.prompt.contains("{{target}}"), "{}", step.name);
+        assert_eq!(config.max_parallel, DEFAULT_MAX_PARALLEL);
+
+        // The find step fans out across three lenses; every finder prompt
+        // wires in the placeholders the runner fills.
+        let find = &config.steps[0];
+        assert!(find.is_fan_out());
+        let lens_names: Vec<_> = find.agents.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(lens_names, ["diff-scan", "removed-code", "callers"]);
+        for agent in &find.agents {
+            assert!(agent.prompt.contains("{{target}}"), "{}", agent.name);
+            assert!(agent.prompt.contains("{{diff}}"), "{}", agent.name);
         }
-        assert!(config.steps[0].prompt.contains("{{diff}}"));
+
+        // Verify and report stay single-agent.
+        assert!(!config.steps[1].is_fan_out());
+        assert_eq!(config.steps[1].resolved_agents().len(), 1);
         assert!(config.steps[1].prompt.contains("{{previous}}"));
         assert!(config.steps[2].prompt.contains("{{max_findings}}"));
     }
@@ -217,18 +313,53 @@ mod tests {
         let config = ReviewConfig {
             steps: Vec::new(),
             max_findings: 5,
+            max_parallel: 2,
         };
         assert_eq!(config.resolved_steps(), default_steps());
     }
 
     #[test]
+    fn a_v1_config_with_only_a_prompt_still_loads_as_one_agent() {
+        let config: ReviewConfig = serde_json::from_str(
+            r#"{"steps":[{"name":"solo","prompt":"Review {{diff}}."}],"max_findings":5}"#,
+        )
+        .unwrap();
+        let step = &config.steps[0];
+        assert!(!step.is_fan_out());
+        let agents = step.resolved_agents();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].name, "solo");
+        assert_eq!(agents[0].prompt, "Review {{diff}}.");
+        // Fields v1 files don't have fill from defaults.
+        assert_eq!(config.max_parallel, DEFAULT_MAX_PARALLEL);
+    }
+
+    #[test]
     fn config_round_trips_through_json() {
         let config = ReviewConfig {
-            steps: vec![ReviewStep {
-                name: "solo".into(),
-                prompt: "Review {{diff}} and report.".into(),
-            }],
+            steps: vec![
+                ReviewStep {
+                    name: "solo".into(),
+                    prompt: "Review {{diff}} and report.".into(),
+                    agents: Vec::new(),
+                },
+                ReviewStep {
+                    name: "fan".into(),
+                    prompt: String::new(),
+                    agents: vec![
+                        StepAgent {
+                            name: "a".into(),
+                            prompt: "look left".into(),
+                        },
+                        StepAgent {
+                            name: "b".into(),
+                            prompt: "look right".into(),
+                        },
+                    ],
+                },
+            ],
             max_findings: 3,
+            max_parallel: 2,
         };
         let json = serde_json::to_string(&config).unwrap();
         let back: ReviewConfig = serde_json::from_str(&json).unwrap();

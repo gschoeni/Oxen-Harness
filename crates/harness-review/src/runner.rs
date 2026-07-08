@@ -1,16 +1,20 @@
-//! The pipeline engine: walk the configured steps in order, each on a fresh,
-//! isolated side agent, threading step N's reply into step N+1's prompt.
+//! The pipeline engine: walk the configured steps in order, threading each
+//! step's reply into the next step's prompt. A single-agent step runs on one
+//! fresh, isolated side agent; a fan-out step runs its agents as a parallel
+//! [`fleet`](harness_agent::fleet), capped by `max_parallel`, and concatenates
+//! their outputs (labeled, in agent order) as the step's reply.
 //!
-//! Isolation is the point. The verify step must judge the finder's candidates
-//! from the *code*, not from the finder's reasoning — sharing a context would
-//! anchor it. Each step therefore runs on [`Agent::side_agent`]: same model,
-//! tools, and config, but an in-memory transcript that vanishes when the step
-//! ends. Only the final report survives, and the host injects it into the real
-//! session (via [`Agent::inject_exchange`]) so a follow-up "fix 1 and 3" has
-//! the findings in context.
+//! Isolation is the point. The verify step must judge the finders' candidates
+//! from the *code*, not from the finders' reasoning — sharing a context would
+//! anchor it. Every reviewer therefore runs on [`Agent::side_agent`]: same
+//! model, tools, and config, but an in-memory transcript that vanishes when
+//! the step ends. Only the final report survives, and the host injects it into
+//! the real session (via [`Agent::inject_exchange`]) so a follow-up "fix 1 and
+//! 3" has the findings in context.
 
 use std::path::{Path, PathBuf};
 
+use harness_agent::fleet::{self, FleetEvent, SubagentTask};
 use harness_agent::{Agent, AgentEvent};
 use tokio_util::sync::CancellationToken;
 
@@ -24,18 +28,37 @@ use crate::ReviewError;
 pub enum ReviewEvent {
     /// The pipeline began: what it reviews and the step names, in order.
     Started { target: String, steps: Vec<String> },
-    /// A step began (index is 0-based; total is the step count).
+    /// A step began (index is 0-based; total is the step count). `agents` is
+    /// the lane labels, in order — more than one means the step fans out.
     StepStarted {
         index: usize,
         total: usize,
         name: String,
+        agents: Vec<String>,
     },
-    /// A streaming/tool event forwarded from the step's agent.
+    /// A streaming/tool event from a single-agent step's reviewer.
     Agent(AgentEvent),
+    /// A fan-out lane acquired a slot and its turn is running.
+    SubagentStarted { agent: usize, name: String },
+    /// A streaming/tool event from one fan-out lane, tagged by lane index.
+    Subagent { agent: usize, event: AgentEvent },
+    /// A fan-out lane finished (`summary` is its truncated reply or error).
+    SubagentCompleted {
+        agent: usize,
+        name: String,
+        ok: bool,
+        tokens_used: usize,
+        summary: String,
+    },
     /// A step finished.
     StepCompleted { index: usize, name: String },
     /// The pipeline finished; the report is also returned from `run`.
-    Completed { findings: usize, parsed: bool },
+    /// `tokens_used` is the estimated total across every reviewer agent.
+    Completed {
+        findings: usize,
+        parsed: bool,
+        tokens_used: usize,
+    },
 }
 
 /// Drives a [`ReviewConfig`] against a workspace.
@@ -79,26 +102,30 @@ impl ReviewRunner {
         });
 
         let mut previous = String::new();
+        let mut tokens_used = 0usize;
         for (index, step) in steps.iter().enumerate() {
+            let agents = step.resolved_agents();
             on_event(&ReviewEvent::StepStarted {
                 index,
                 total: steps.len(),
                 name: step.name.clone(),
+                agents: agents.iter().map(|a| a.name.clone()).collect(),
             });
-            let prompt = render_prompt(
-                &step.prompt,
-                &input,
-                &previous,
-                self.config.max_findings,
-                index,
-            );
-            let mut side = agent.side_agent()?;
-            side.set_cancel_token(self.cancel.clone());
-            previous = side
-                .run_turn(prompt, |e| on_event(&ReviewEvent::Agent(e.clone())))
-                .await?;
-            // A cancelled step returns its partial text; don't run the rest of
-            // the pipeline on it.
+
+            let (text, step_tokens) = if agents.len() == 1 {
+                self.run_single(agent, &agents[0].prompt, &input, &previous, index, |e| {
+                    on_event(e)
+                })
+                .await?
+            } else {
+                self.run_fan_out(agent, &agents, &input, &previous, index, |e| on_event(e))
+                    .await?
+            };
+            previous = text;
+            tokens_used += step_tokens;
+
+            // A cancelled step returns partial text; don't run the rest of the
+            // pipeline on it.
             if self.cancel.is_cancelled() {
                 return Err(ReviewError::Cancelled);
             }
@@ -112,8 +139,127 @@ impl ReviewRunner {
         on_event(&ReviewEvent::Completed {
             findings: report.findings.len(),
             parsed: report.parsed,
+            tokens_used,
         });
         Ok(report)
+    }
+
+    /// One reviewer on one side agent, streaming its events unwrapped.
+    /// Returns the reply and the reviewer's token cost.
+    async fn run_single<F>(
+        &self,
+        agent: &Agent,
+        template: &str,
+        input: &ReviewInput,
+        previous: &str,
+        step_index: usize,
+        mut on_event: F,
+    ) -> Result<(String, usize), ReviewError>
+    where
+        F: FnMut(&ReviewEvent),
+    {
+        let prompt = render_prompt(
+            template,
+            input,
+            previous,
+            self.config.max_findings,
+            step_index,
+        );
+        let mut side = agent.side_agent()?;
+        side.set_cancel_token(self.cancel.clone());
+        let text = side
+            .run_turn(prompt, |e| on_event(&ReviewEvent::Agent(e.clone())))
+            .await?;
+        Ok((text, side.tokens_used()))
+    }
+
+    /// A fan-out step: every reviewer as a parallel fleet task, outputs
+    /// concatenated under `###` headings in agent order. One lane failing is
+    /// reported inline (the verifier reads what survived); every lane failing
+    /// fails the step with the first error. Returns the combined reply and the
+    /// lanes' summed token cost.
+    async fn run_fan_out<F>(
+        &self,
+        agent: &Agent,
+        agents: &[crate::config::StepAgent],
+        input: &ReviewInput,
+        previous: &str,
+        step_index: usize,
+        mut on_event: F,
+    ) -> Result<(String, usize), ReviewError>
+    where
+        F: FnMut(&ReviewEvent),
+    {
+        let tasks: Vec<SubagentTask> = agents
+            .iter()
+            .map(|a| {
+                SubagentTask::new(
+                    a.name.clone(),
+                    render_prompt(
+                        &a.prompt,
+                        input,
+                        previous,
+                        self.config.max_findings,
+                        step_index,
+                    ),
+                )
+            })
+            .collect();
+
+        let outcomes = fleet::run_fleet(
+            || agent.side_agent(),
+            tasks,
+            self.config.max_parallel,
+            self.cancel.clone(),
+            |event| match event {
+                FleetEvent::TaskStarted { index, label } => {
+                    on_event(&ReviewEvent::SubagentStarted {
+                        agent: *index,
+                        name: label.clone(),
+                    })
+                }
+                FleetEvent::Agent { index, event } => on_event(&ReviewEvent::Subagent {
+                    agent: *index,
+                    event: event.clone(),
+                }),
+                FleetEvent::TaskCompleted {
+                    index,
+                    label,
+                    ok,
+                    tokens_used,
+                    summary,
+                } => on_event(&ReviewEvent::SubagentCompleted {
+                    agent: *index,
+                    name: label.clone(),
+                    ok: *ok,
+                    tokens_used: *tokens_used,
+                    summary: summary.clone(),
+                }),
+            },
+        )
+        .await?;
+
+        let tokens: usize = outcomes.iter().map(|o| o.tokens_used).sum();
+        if outcomes.iter().all(|o| !o.ok()) {
+            // Nothing survived; surface the first error rather than feeding the
+            // next step an all-failure report.
+            let first = outcomes
+                .into_iter()
+                .find_map(|o| o.result.err())
+                .expect("all-failed fleet has an error");
+            return Err(first.into());
+        }
+
+        let mut combined = String::new();
+        for outcome in outcomes {
+            combined.push_str(&format!("### {}\n\n", outcome.label));
+            match outcome.result {
+                Ok(text) => combined.push_str(text.trim()),
+                Err(e) => combined.push_str(&format!("(this reviewer failed: {e})")),
+            }
+            combined.push_str("\n\n");
+        }
+        Ok((combined.trim_end().to_string(), tokens))
     }
 }
 

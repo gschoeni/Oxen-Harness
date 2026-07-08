@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use harness_agent::{Agent, AgentConfig};
 use harness_llm::OxenClient;
-use harness_review::{ReviewConfig, ReviewEvent, ReviewRunner, ReviewStep, ReviewTarget};
+use harness_review::{
+    ReviewConfig, ReviewEvent, ReviewRunner, ReviewStep, ReviewTarget, StepAgent,
+};
 use harness_store::{HistoryStore, SessionMeta};
 use harness_tools::ToolRegistry;
 
@@ -99,13 +101,16 @@ async fn two_steps_chain_previous_output_and_yield_parsed_findings() {
             ReviewStep {
                 name: "find".into(),
                 prompt: "Find problems in:\n{{diff}}".into(),
+                agents: Vec::new(),
             },
             ReviewStep {
                 name: "report".into(),
                 prompt: "Report on these candidates:\n{{previous}}".into(),
+                agents: Vec::new(),
             },
         ],
         max_findings: 5,
+        max_parallel: 2,
     };
 
     let (agent, store, session) = agent(&server.url(), &root);
@@ -130,4 +135,106 @@ async fn two_steps_chain_previous_output_and_yield_parsed_findings() {
 
     // The pipeline ran entirely on side agents: the session is untouched.
     assert_eq!(store.messages(&session).unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn a_fan_out_step_runs_agents_in_parallel_and_combines_their_outputs() {
+    let Some((_dir, root)) = dirty_repo() else {
+        return;
+    };
+    let mut server = mockito::Server::new_async().await;
+
+    // Two parallel finders, disambiguated by markers in their prompts; the
+    // report step's request must carry BOTH lanes' replies via {{previous}}.
+    let left = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::Regex("LANE-LEFT".into()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_prose("LEFT-CANDIDATE at a.rs:1"))
+        .expect(1)
+        .create_async()
+        .await;
+    let right = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::Regex("LANE-RIGHT".into()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_prose("RIGHT-CANDIDATE at a.rs:1"))
+        .expect(1)
+        .create_async()
+        .await;
+    let report_mock = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::Regex("LEFT-CANDIDATE".into()),
+            mockito::Matcher::Regex("RIGHT-CANDIDATE".into()),
+            // Lanes arrive labeled, in agent order, under ### headings.
+            mockito::Matcher::Regex("### left[\\s\\S]*### right".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_prose(
+            r#"{"findings":[],"overall_correctness":"correct"}"#,
+        ))
+        .expect(1)
+        .create_async()
+        .await;
+
+    let config = ReviewConfig {
+        steps: vec![
+            ReviewStep {
+                name: "find".into(),
+                prompt: String::new(),
+                agents: vec![
+                    StepAgent {
+                        name: "left".into(),
+                        prompt: "LANE-LEFT: inspect\n{{diff}}".into(),
+                    },
+                    StepAgent {
+                        name: "right".into(),
+                        prompt: "LANE-RIGHT: inspect\n{{diff}}".into(),
+                    },
+                ],
+            },
+            ReviewStep {
+                name: "report".into(),
+                prompt: "Combine:\n{{previous}}".into(),
+                agents: Vec::new(),
+            },
+        ],
+        max_findings: 5,
+        max_parallel: 2,
+    };
+
+    let (agent, _store, _session) = agent(&server.url(), &root);
+    let mut lanes_started = Vec::new();
+    let mut lanes_completed = Vec::new();
+    let mut fan_out_step_agents = Vec::new();
+    let mut total_tokens = 0usize;
+    let report = ReviewRunner::new(config, ReviewTarget::Uncommitted, &root)
+        .run(&agent, |event| match event {
+            ReviewEvent::StepStarted { agents, name, .. } if name == "find" => {
+                fan_out_step_agents = agents.clone();
+            }
+            ReviewEvent::SubagentStarted { name, .. } => lanes_started.push(name.clone()),
+            ReviewEvent::SubagentCompleted { name, ok, .. } => {
+                lanes_completed.push((name.clone(), *ok))
+            }
+            ReviewEvent::Completed { tokens_used, .. } => total_tokens = *tokens_used,
+            _ => {}
+        })
+        .await
+        .unwrap();
+
+    left.assert_async().await;
+    right.assert_async().await;
+    report_mock.assert_async().await;
+
+    assert_eq!(fan_out_step_agents, ["left", "right"]);
+    assert_eq!(lanes_started.len(), 2);
+    assert_eq!(lanes_completed.len(), 2);
+    assert!(lanes_completed.iter().all(|(_, ok)| *ok));
+    assert!(report.parsed);
+    assert!(total_tokens > 0, "fleet tokens roll into the review total");
 }

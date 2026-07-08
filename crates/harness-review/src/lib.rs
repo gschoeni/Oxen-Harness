@@ -19,7 +19,9 @@ pub mod findings;
 pub mod runner;
 pub mod target;
 
-pub use config::{default_steps, ReviewConfig, ReviewStep, REVIEW_SCHEMA_VERSION};
+pub use config::{
+    default_steps, ReviewConfig, ReviewStep, StepAgent, DEFAULT_MAX_PARALLEL, REVIEW_SCHEMA_VERSION,
+};
 pub use findings::{Finding, ReviewReport};
 pub use runner::{session_exchange, ReviewEvent, ReviewRunner};
 pub use target::{resolve_target, ReviewInput, ReviewTarget};
