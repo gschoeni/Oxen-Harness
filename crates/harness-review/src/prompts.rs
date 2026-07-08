@@ -8,7 +8,7 @@
 //! must not self-censor (the adversarial verifier restores precision), quoted
 //! evidence for every verdict, and a report that would rather be empty than
 //! padded. Template placeholders are documented on
-//! [`ReviewStep`](crate::config::ReviewStep).
+//! [`crate::config::ReviewStep`].
 
 use crate::config::{ReviewStep, StepAgent};
 
