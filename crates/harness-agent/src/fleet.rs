@@ -170,9 +170,13 @@ where
         let tx = tx.clone();
         let slots = slots.clone();
         join.spawn(async move {
-            // Closed semaphore can't happen (we never close it); treat a
-            // failed acquire like a cancelled run.
-            let _slot = slots.acquire_owned().await;
+            let _slot = match slots.acquire_owned().await {
+                Ok(permit) => permit,
+                // The semaphore is never closed today; if that ever changes,
+                // bail (the reaper synthesizes a failed outcome) rather than
+                // silently running uncapped.
+                Err(_) => return,
+            };
             let _ = tx.send(Msg::Started {
                 index,
                 label: task.label.clone(),
