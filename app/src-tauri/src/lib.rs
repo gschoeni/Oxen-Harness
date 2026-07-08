@@ -980,55 +980,7 @@ impl harness_agent::fleet::FleetSink for TauriFleetSink {
     }
 
     fn event(&self, event: &harness_agent::fleet::FleetEvent) {
-        use harness_agent::fleet::FleetEvent;
-        match event {
-            FleetEvent::TaskStarted { index, label } => {
-                let _ = self.app.emit(
-                    "fleet://agent",
-                    FleetAgentPayload {
-                        session: self.session.clone(),
-                        agent: *index,
-                        name: label.clone(),
-                        phase: "started",
-                        tokens: 0,
-                        summary: String::new(),
-                    },
-                );
-            }
-            FleetEvent::Agent { index, event } => {
-                if let Some((kind, text, tokens)) = activity_payload(event) {
-                    let _ = self.app.emit(
-                        "fleet://agent-activity",
-                        FleetActivityPayload {
-                            session: self.session.clone(),
-                            agent: *index,
-                            kind,
-                            text,
-                            tokens,
-                        },
-                    );
-                }
-            }
-            FleetEvent::TaskCompleted {
-                index,
-                label,
-                ok,
-                tokens_used,
-                summary,
-            } => {
-                let _ = self.app.emit(
-                    "fleet://agent",
-                    FleetAgentPayload {
-                        session: self.session.clone(),
-                        agent: *index,
-                        name: label.clone(),
-                        phase: if *ok { "done" } else { "failed" },
-                        tokens: *tokens_used,
-                        summary: summary.clone(),
-                    },
-                );
-            }
-        }
+        emit_fleet_event(&self.app, &self.session, event);
     }
 
     fn finished(&self) {
@@ -1038,6 +990,63 @@ impl harness_agent::fleet::FleetSink for TauriFleetSink {
                 session: self.session.clone(),
             },
         );
+    }
+}
+
+/// Emit one fleet lane event as the `fleet://` webview payloads the panel
+/// consumes. The single translation from [`FleetEvent`] to the wire — shared
+/// by [`TauriFleetSink`] (a `spawn_agents` fleet) and `run_code_review`'s
+/// fan-out steps, which map their `ReviewEvent::Subagent*` into `FleetEvent`
+/// and route here, so the two surfaces can't drift on the wire format.
+fn emit_fleet_event(app: &AppHandle, session: &str, event: &harness_agent::fleet::FleetEvent) {
+    use harness_agent::fleet::FleetEvent;
+    match event {
+        FleetEvent::TaskStarted { index, label } => {
+            let _ = app.emit(
+                "fleet://agent",
+                FleetAgentPayload {
+                    session: session.to_string(),
+                    agent: *index,
+                    name: label.clone(),
+                    phase: "started",
+                    tokens: 0,
+                    summary: String::new(),
+                },
+            );
+        }
+        FleetEvent::Agent { index, event } => {
+            if let Some((kind, text, tokens)) = activity_payload(event) {
+                let _ = app.emit(
+                    "fleet://agent-activity",
+                    FleetActivityPayload {
+                        session: session.to_string(),
+                        agent: *index,
+                        kind,
+                        text,
+                        tokens,
+                    },
+                );
+            }
+        }
+        FleetEvent::TaskCompleted {
+            index,
+            label,
+            ok,
+            tokens_used,
+            summary,
+        } => {
+            let _ = app.emit(
+                "fleet://agent",
+                FleetAgentPayload {
+                    session: session.to_string(),
+                    agent: *index,
+                    name: label.clone(),
+                    phase: if *ok { "done" } else { "failed" },
+                    tokens: *tokens_used,
+                    summary: summary.clone(),
+                },
+            );
+        }
     }
 }
 
@@ -1092,6 +1101,7 @@ async fn run_code_review(
     session: String,
     base_branch: Option<String>,
 ) -> Result<CodeReviewResult, String> {
+    use harness_agent::fleet::FleetEvent;
     use harness_review::{ReviewError, ReviewEvent};
 
     let arc = agent_or_build(&app, &state, &session).await?;
@@ -1172,52 +1182,43 @@ async fn run_code_review(
                         },
                     );
                 }
-                ReviewEvent::SubagentStarted { agent, name } => {
-                    let _ = emitter.emit(
-                        "fleet://agent",
-                        FleetAgentPayload {
-                            session: sid.clone(),
-                            agent: *agent,
-                            name: name.clone(),
-                            phase: "started",
-                            tokens: 0,
-                            summary: String::new(),
-                        },
-                    );
-                }
-                ReviewEvent::Subagent { agent, event } => {
-                    if let Some((kind, text, tokens)) = activity_payload(event) {
-                        let _ = emitter.emit(
-                            "fleet://agent-activity",
-                            FleetActivityPayload {
-                                session: sid.clone(),
-                                agent: *agent,
-                                kind,
-                                text,
-                                tokens,
-                            },
-                        );
-                    }
-                }
+                // A fan-out step's lanes ARE a fleet; map the review's
+                // subagent events to FleetEvent and route them through the one
+                // fleet emitter, so review lanes and spawn_agents lanes can't
+                // drift on the wire format.
+                ReviewEvent::SubagentStarted { agent, name } => emit_fleet_event(
+                    &emitter,
+                    &sid,
+                    &FleetEvent::TaskStarted {
+                        index: *agent,
+                        label: name.clone(),
+                    },
+                ),
+                ReviewEvent::Subagent { agent, event } => emit_fleet_event(
+                    &emitter,
+                    &sid,
+                    &FleetEvent::Agent {
+                        index: *agent,
+                        event: event.clone(),
+                    },
+                ),
                 ReviewEvent::SubagentCompleted {
                     agent,
                     name,
                     ok,
                     tokens_used,
                     summary,
-                } => {
-                    let _ = emitter.emit(
-                        "fleet://agent",
-                        FleetAgentPayload {
-                            session: sid.clone(),
-                            agent: *agent,
-                            name: name.clone(),
-                            phase: if *ok { "done" } else { "failed" },
-                            tokens: *tokens_used,
-                            summary: summary.clone(),
-                        },
-                    );
-                }
+                } => emit_fleet_event(
+                    &emitter,
+                    &sid,
+                    &FleetEvent::TaskCompleted {
+                        index: *agent,
+                        label: name.clone(),
+                        ok: *ok,
+                        tokens_used: *tokens_used,
+                        summary: summary.clone(),
+                    },
+                ),
                 ReviewEvent::StepCompleted { .. } => {
                     let _ = emitter.emit(
                         "fleet://completed",
