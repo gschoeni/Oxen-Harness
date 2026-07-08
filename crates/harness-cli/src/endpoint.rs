@@ -152,6 +152,30 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui) -> ToolRegistr
     tools
 }
 
+/// Register the `spawn_agents` fleet tool on a finished registry. The spawner
+/// snapshots the registry *before* the tool registers — subagents get every
+/// tool except the fleet itself (one fan-out level deep) — and lanes render
+/// through the shared hub: the live composer's pinned block during interactive
+/// turns, an in-place painter in cooked mode. Prefs re-apply afterward so a
+/// user-disabled `spawn_agents` stays off.
+pub(crate) fn register_fleet_tool(
+    tools: &mut ToolRegistry,
+    client: &harness_llm::OxenClient,
+    config: &AgentConfig,
+    ui: &Ui,
+) {
+    let spawner = Arc::new(harness_agent::FleetSpawner::new(
+        client.clone(),
+        tools.clone(),
+        config.clone(),
+    ));
+    tools.register_typed(harness_agent::FleetTool::new(
+        spawner,
+        Arc::new(crate::fleet_sink::CliFleetSink::new(ui.clone())),
+    ));
+    harness_runtime::tools::load().apply(tools);
+}
+
 /// The agent configuration for a CLI session: model + window, a system prompt
 /// gated on which tools actually survived the user's preferences (so the model
 /// is never told about web search or the canvas when they're disabled), and an
