@@ -1,12 +1,16 @@
 //! Slash-command and argument completion for the composer.
 //!
-//! Typing `/` offers the command list; `/model <partial>` becomes a small
-//! vertical picker over the cloud catalog + installed local models (matched on
-//! both id and display name), and `/compression <partial>` completes the three
-//! modes. Tab menu-completes and cycles, ↑/↓ move the picker highlight, and
-//! Enter folds the visible selection into the submission (see
-//! [`Live::accept_completion_on_submit`]).
+//! Typing `/` offers the command list; `/model <partial>` and
+//! `/compression <partial>` become a small vertical **picker** (matched on
+//! both id and display name for models), where ↑/↓ move the highlight, Tab
+//! menu-completes and cycles, and Enter folds the visible selection into the
+//! submission (see [`Live::accept_completion_on_submit`]).
+//!
+//! [`Live::accept_completion_on_submit`]: Live#method.accept_completion_on_submit
 
+use crate::repl::{parse_command, Command};
+
+use super::layout::Focus;
 use super::{Live, SLASH_COMMANDS};
 
 /// One slash-command or argument completion row. `replacement` is the whole line
@@ -62,6 +66,17 @@ fn fit_text(s: &str, max: usize) -> FittedText {
 }
 
 impl Live {
+    /// Whether the completion list is currently on screen: composing at idle
+    /// (no spinner), composer focused, no inline edit, and candidates exist.
+    /// The paint path and Enter's fold both key off this, so Enter can only
+    /// ever accept a selection the user can actually see.
+    pub(super) fn completion_showing(&self) -> bool {
+        self.spinner.is_none()
+            && matches!(self.focus, Focus::Composer)
+            && self.edit.is_none()
+            && !self.completion.is_empty()
+    }
+
     /// Completion picker shown above the box. Model names are long and similar,
     /// so render a small vertical list with provider/details instead of squeezing
     /// unlabeled chips into one hard-to-scan line.
@@ -70,15 +85,20 @@ impl Live {
         let total = self.completion.len();
         let current = self.comp_index.unwrap_or(0).min(total.saturating_sub(1));
         let mut lines = Vec::new();
-        let title = if self.is_model_completion() {
-            format!("model picker {}/{}", current + 1, total)
+        let (title, hint) = if self.comp_picker {
+            let text = self.composer.text();
+            let cmd = text
+                .split_whitespace()
+                .next()
+                .unwrap_or("/")
+                .trim_start_matches('/')
+                .to_string();
+            (
+                format!("{cmd} picker {}/{}", current + 1, total),
+                "tab/↑↓ choose · enter run",
+            )
         } else {
-            "completions".to_string()
-        };
-        let hint = if self.is_model_completion() {
-            "tab/↑↓ choose · enter run"
-        } else {
-            "tab cycles"
+            ("completions".to_string(), "tab cycles")
         };
         lines.push(format!(
             "  {} {}  {}",
@@ -128,13 +148,9 @@ impl Live {
         lines
     }
 
-    fn is_model_completion(&self) -> bool {
-        self.composer.text().starts_with("/model")
-    }
-
     fn visible_completion_rows(&self) -> std::ops::Range<usize> {
         let total = self.completion.len();
-        let max = (if self.is_model_completion() { 8 } else { 4 }).min(total);
+        let max = (if self.comp_picker { 8 } else { 4 }).min(total);
         let selected = self.comp_index.unwrap_or(0).min(total.saturating_sub(1));
         let start = selected
             .saturating_sub(max / 2)
@@ -142,28 +158,37 @@ impl Live {
         start..start + max
     }
 
-    /// Candidate full-line replacements for the current composer text: slash
-    /// commands while typing the command word, or model names after `/model `.
-    /// Empty when the text isn't a completable `/command`.
-    fn compute_candidates(&mut self) -> Vec<CompletionItem> {
+    /// Candidate full-line replacements for the current composer text, plus
+    /// whether they form an argument **picker** (highlighted row, ↑/↓
+    /// navigation, Enter runs the selection) as opposed to plain command-word
+    /// completion. Empty when the text isn't a completable `/command`.
+    fn compute_candidates(&mut self) -> (Vec<CompletionItem>, bool) {
         let text = self.composer.text();
         if !text.starts_with('/') {
-            return Vec::new();
+            return (Vec::new(), false);
         }
         let mut parts = text.splitn(2, char::is_whitespace);
         let cmd = parts.next().unwrap_or("");
         match parts.next() {
             // Still typing the command word — match against the command list.
-            None => SLASH_COMMANDS
-                .iter()
-                .filter(|(c, _)| c.starts_with(cmd))
-                .map(|(c, desc)| CompletionItem::new(*c, *c, *desc))
-                .collect(),
+            None => (
+                SLASH_COMMANDS
+                    .iter()
+                    .filter(|(c, _)| c.starts_with(cmd))
+                    .map(|(c, desc)| CompletionItem::new(*c, *c, *desc))
+                    .collect(),
+                false,
+            ),
             // `/model <partial>` — complete model names (cloud + local). Match on
             // both the API id and the friendly display name so typing "sonnet" or
             // "qwen" narrows to what a human remembers.
             Some(arg) if cmd == "/model" => {
                 let typed = arg.trim();
+                // Model ids never contain whitespace: a multi-word argument (or
+                // a multi-line draft) isn't completable — it submits as typed.
+                if typed.contains(char::is_whitespace) {
+                    return (Vec::new(), false);
+                }
                 let needle = typed.to_lowercase();
                 let mut items: Vec<CompletionItem> = self
                     .model_candidates()
@@ -178,18 +203,7 @@ impl Live {
                         m
                     })
                     .collect();
-                // A typed id that matches nothing is still runnable — the
-                // endpoint may serve models we don't know about. Offer it as
-                // the picker's only row so entering a brand-new model id is a
-                // first-class path: Enter switches to it and saves it to the
-                // catalog (see `Command::Model` in main.rs).
-                if items.is_empty() && !typed.is_empty() && !typed.contains(char::is_whitespace) {
-                    items.push(CompletionItem::new(
-                        format!("/model {typed}"),
-                        typed,
-                        "new model id — switch to it and save to the catalog",
-                    ));
-                } else {
+                if typed.is_empty() {
                     // Standing affordance at the bottom of the list: picking it
                     // clears the argument so a fresh id can be typed in.
                     items.push(CompletionItem::new(
@@ -197,13 +211,30 @@ impl Live {
                         "+ add a new model",
                         "type an id — it's switched to and saved to the catalog",
                     ));
+                } else if let Some(exact) = items.iter().position(|m| m.label == typed) {
+                    // An exactly-typed id is hoisted to the highlighted row, so
+                    // Enter runs *it* — never a longer id it happens to be a
+                    // substring of.
+                    let row = items.remove(exact);
+                    items.insert(0, row);
+                } else {
+                    // The typed id itself is always runnable — the endpoint may
+                    // serve models we don't know about. An explicit row keeps it
+                    // reachable (↑ once) even when fuzzy matches exist; picking
+                    // it switches to the id and saves it to the catalog (see
+                    // `model_cmd::handle_repl`).
+                    items.push(CompletionItem::new(
+                        format!("/model {typed}"),
+                        typed,
+                        "new model id — switch to it and save to the catalog",
+                    ));
                 }
-                items
+                (items, true)
             }
-            // `/compression <partial>` — complete the three modes.
+            // `/compression <partial>` — pick one of the three modes.
             Some(arg) if cmd == "/compression" || cmd == "/compress" => {
                 let needle = arg.trim().to_lowercase();
-                [
+                let items = [
                     ("off", "send every tool result untouched"),
                     ("audit", "measure savings, change nothing"),
                     ("on", "compress stale tool output"),
@@ -211,86 +242,75 @@ impl Live {
                 .iter()
                 .filter(|(m, _)| m.starts_with(&needle))
                 .map(|(m, desc)| CompletionItem::new(format!("{cmd} {m}"), *m, *desc))
-                .collect()
+                .collect();
+                (items, true)
             }
-            Some(_) => Vec::new(),
+            Some(_) => (Vec::new(), false),
         }
     }
 
-    /// Model rows for `/model` completion: cloud catalog plus installed local
-    /// models, loaded once and cached with display names and current markers.
+    /// Model rows for `/model` completion: the shared catalog + installed-local
+    /// rows (see [`crate::model_cmd::model_rows`]), loaded once and cached, with
+    /// the *persisted* selection marked — the composer's completion list isn't
+    /// session-scoped, so it marks what the next launch would ride.
     fn model_candidates(&mut self) -> Vec<CompletionItem> {
         if self.model_items.is_none() {
             let selected = harness_runtime::models::selected();
             let active_local = harness_runtime::models::active_local();
-            let mut items: Vec<CompletionItem> = harness_runtime::models::catalog()
+            let items = crate::model_cmd::model_rows()
                 .into_iter()
-                .map(|m| {
-                    let marker = if active_local.is_none() && m.id == selected {
-                        " ← current"
+                .map(|row| {
+                    let current = if row.local {
+                        active_local.as_deref() == Some(row.id.as_str())
                     } else {
-                        ""
+                        active_local.is_none() && row.id == selected
                     };
-                    let source = if m.builtin {
-                        "cloud built-in"
-                    } else {
-                        "cloud custom"
-                    };
+                    let marker = if current { " ← current" } else { "" };
                     CompletionItem::new(
-                        m.id.clone(),
-                        m.id,
-                        format!("{} · {source}{marker}", m.name),
+                        row.id.clone(),
+                        row.id.clone(),
+                        format!("{}{marker}", row.describe()),
                     )
                 })
                 .collect();
-            if let Ok(store) = harness_local::ModelStore::open() {
-                items.extend(store.installed().into_iter().map(|m| {
-                    let marker = if active_local.as_deref() == Some(m.id.as_str()) {
-                        " ← current"
-                    } else {
-                        ""
-                    };
-                    let meta = [m.params.as_str(), m.quant.as_str()]
-                        .into_iter()
-                        .filter(|s| !s.is_empty())
-                        .collect::<Vec<_>>()
-                        .join(" · ");
-                    let meta = if meta.is_empty() {
-                        "local".to_string()
-                    } else {
-                        format!("local · {meta}")
-                    };
-                    CompletionItem::new(
-                        m.id.clone(),
-                        m.id,
-                        format!("{} · {meta}{marker}", m.display),
-                    )
-                }));
-            }
-            items.sort_by_key(|item| item.label.to_lowercase());
-            items.dedup_by(|a, b| a.label == b.label);
             self.model_items = Some(items);
         }
         self.model_items.clone().unwrap_or_default()
     }
 
-    /// On Enter, fold the visible completion into the submission so Enter both
-    /// completes and runs in one stroke: the highlighted row of an argument
-    /// picker (its hint says "enter run"), or the single remaining candidate of
-    /// a command word (`/mo` ↵ runs `/model`). An ambiguous prefix (`/e` could
-    /// be `/export` or `/exit`) is left as typed, and so is a bare `/model ` —
-    /// an empty argument means "show me the choices", which the command itself
-    /// answers with the interactive picker, not whichever row sorts first.
+    /// On Enter, fold the **visible** completion into the submission so Enter
+    /// both completes and runs in one stroke:
+    ///
+    /// - a row the user navigated to (↑/↓/Tab) always runs;
+    /// - an argument picker's auto-highlighted top row runs when an argument
+    ///   was typed (`/model sonnet` ↵ runs the highlighted match — an exact id
+    ///   is hoisted to that row first, so it can't lose to a longer match);
+    /// - a lone command-word candidate completes (`/mo` ↵ runs `/model`) —
+    ///   unless the line already parses as a complete command (`/q` quits; it
+    ///   is not a prefix request for `/queue`).
+    ///
+    /// Everything else — an ambiguous prefix, a bare `/model ` (empty argument
+    /// means "show me the choices", answered by the interactive picker), or a
+    /// list that isn't on screen (mid-turn, queue focus) — submits as typed.
     pub(super) fn accept_completion_on_submit(&mut self) {
+        if !self.completion_showing() {
+            return;
+        }
         let text = self.composer.text();
         let has_arg = text
             .split_once(char::is_whitespace)
             .is_some_and(|(_, arg)| !arg.trim().is_empty());
-        let replacement = match self.comp_index {
-            Some(i) if has_arg => self.completion.get(i),
-            Some(_) => None,
-            None if self.completion.len() == 1 => self.completion.first(),
-            None => None,
+        let replacement = if self.comp_navigated {
+            self.comp_index.and_then(|i| self.completion.get(i))
+        } else if self.comp_picker && has_arg {
+            self.comp_index.and_then(|i| self.completion.get(i))
+        } else if !self.comp_picker
+            && self.completion.len() == 1
+            && matches!(parse_command(&text), Command::Prompt(_))
+        {
+            self.completion.first()
+        } else {
+            None
         };
         if let Some(r) = replacement {
             let text = r.replacement.clone();
@@ -299,18 +319,21 @@ impl Live {
     }
 
     /// Recompute the completion hint after a compose-buffer change, and drop any
-    /// in-progress Tab cycle (the candidates may have changed).
+    /// in-progress Tab cycle or ↑/↓ selection (the candidates may have changed).
     pub(super) fn refresh_completion(&mut self) {
-        self.completion = self.compute_candidates();
-        self.comp_index = (!self.completion.is_empty() && self.is_model_completion()).then_some(0);
+        let (items, picker) = self.compute_candidates();
+        self.completion = items;
+        self.comp_picker = picker && !self.completion.is_empty();
+        self.comp_index = self.comp_picker.then_some(0);
         self.comp_applied = false;
+        self.comp_navigated = false;
     }
 
     /// Move the highlighted completion row without changing the typed prefix.
     /// Only active for argument pickers; a plain Up/Down with no visible picker
     /// keeps its normal history/queue behavior.
     pub(super) fn move_completion(&mut self, delta: isize) -> bool {
-        if self.completion.is_empty() || !self.is_model_completion() {
+        if !self.comp_picker {
             return false;
         }
         let len = self.completion.len() as isize;
@@ -318,6 +341,7 @@ impl Live {
         let next = (current + delta).rem_euclid(len) as usize;
         self.comp_index = Some(next);
         self.comp_applied = false;
+        self.comp_navigated = true;
         true
     }
 
@@ -325,7 +349,9 @@ impl Live {
     /// candidate, cycling on repeated presses. Returns whether anything changed.
     pub(super) fn complete(&mut self) -> bool {
         if self.completion.is_empty() {
-            self.completion = self.compute_candidates();
+            let (items, picker) = self.compute_candidates();
+            self.completion = items;
+            self.comp_picker = picker && !self.completion.is_empty();
         }
         if self.completion.is_empty() {
             return false;
@@ -343,6 +369,7 @@ impl Live {
         self.composer.set_text(&self.completion[next].replacement);
         self.comp_index = Some(next);
         self.comp_applied = true;
+        self.comp_navigated = true;
         true
     }
 }
@@ -354,6 +381,12 @@ mod tests {
     use super::super::keys::KeyAction;
     use super::super::test_support::{key, live};
     use super::super::Live;
+
+    fn type_line(l: &mut Live, text: &str) {
+        for ch in text.chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+    }
 
     #[test]
     fn typing_a_slash_offers_command_suggestions() {
@@ -376,9 +409,7 @@ mod tests {
     #[test]
     fn tab_completes_and_cycles_command_matches() {
         let mut l = live(80, 24);
-        for ch in "/e".chars() {
-            l.handle_key(key(KeyCode::Char(ch)), 0);
-        }
+        type_line(&mut l, "/e");
         // `/export` and `/exit` both match; Tab menu-completes, then cycles.
         l.handle_key(key(KeyCode::Tab), 0);
         let first = l.composer.text();
@@ -391,24 +422,22 @@ mod tests {
     #[test]
     fn editing_after_complete_drops_the_cycle() {
         let mut l = live(80, 24);
-        l.handle_key(key(KeyCode::Char('/')), 0);
-        l.handle_key(key(KeyCode::Char('h')), 0);
+        type_line(&mut l, "/h");
         l.handle_key(key(KeyCode::Tab), 0);
         assert_eq!(l.composer.text(), "/help");
         // A normal edit clears the in-progress cycle selection.
         l.handle_key(key(KeyCode::Char('x')), 0);
         assert_eq!(l.comp_index, None);
+        assert!(!l.comp_navigated);
     }
 
     #[test]
     fn model_completion_filters_by_display_and_arrow_selects() {
         let mut l = live(80, 24);
-        for ch in "/model sonnet".chars() {
-            l.handle_key(key(KeyCode::Char(ch)), 0);
-        }
+        type_line(&mut l, "/model sonnet");
         assert!(l.completion.iter().any(|c| c.label == "claude-sonnet-4-6"));
         assert_eq!(l.comp_index, Some(0));
-        // Down walks the rows and wraps past the trailing "add" row back to
+        // Down walks the rows and wraps past the trailing typed-id row back to
         // the first match.
         for _ in 0..l.completion.len() {
             l.handle_key(key(KeyCode::Down), 0);
@@ -422,9 +451,7 @@ mod tests {
     #[test]
     fn model_completion_ends_with_an_add_row_that_clears_the_argument() {
         let mut l = live(80, 24);
-        for ch in "/model ".chars() {
-            l.handle_key(key(KeyCode::Char(ch)), 0);
-        }
+        type_line(&mut l, "/model ");
         let last = l.completion.last().unwrap();
         assert_eq!(last.label, "+ add a new model");
         assert_eq!(last.replacement, "/model ");
@@ -439,9 +466,7 @@ mod tests {
     #[test]
     fn model_completion_offers_an_unknown_id_as_a_new_model() {
         let mut l = live(80, 24);
-        for ch in "/model some-brand-new-model".chars() {
-            l.handle_key(key(KeyCode::Char(ch)), 0);
-        }
+        type_line(&mut l, "/model some-brand-new-model");
         // Nothing in the catalog matches, so the typed id itself is offered.
         assert_eq!(l.completion.len(), 1);
         assert_eq!(l.completion[0].label, "some-brand-new-model");
@@ -451,15 +476,40 @@ mod tests {
     }
 
     #[test]
-    fn model_completion_does_not_offer_a_new_row_while_matches_exist() {
+    fn model_completion_keeps_the_typed_id_reachable_beside_matches() {
         let mut l = live(80, 24);
-        for ch in "/model sonnet".chars() {
-            l.handle_key(key(KeyCode::Char(ch)), 0);
-        }
-        assert!(l
-            .completion
-            .iter()
-            .all(|c| !c.detail.contains("new model id")));
+        type_line(&mut l, "/model sonnet");
+        // Fuzzy matches exist, and the literally-typed id is still offered as
+        // an explicit last row — so a new id that happens to be a substring of
+        // a catalog entry can always be run as typed.
+        let last = l.completion.last().unwrap();
+        assert_eq!(last.label, "sonnet");
+        assert!(last.detail.contains("new model id"));
+        assert!(
+            l.completion.len() > 1,
+            "fuzzy matches should also be listed"
+        );
+    }
+
+    #[test]
+    fn an_exactly_typed_model_id_is_hoisted_to_the_highlighted_row() {
+        let mut l = live(80, 24);
+        type_line(&mut l, "/model claude-sonnet-4-6");
+        // The exact id holds the highlighted row even if longer ids also
+        // contain it, so Enter runs precisely what was typed.
+        assert_eq!(l.completion[0].label, "claude-sonnet-4-6");
+        assert_eq!(l.comp_index, Some(0));
+        assert_eq!(submit(&mut l), "/model claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn a_multi_word_model_argument_gets_no_completion() {
+        let mut l = live(80, 24);
+        type_line(&mut l, "/model llama 3 8b");
+        // Ids never contain whitespace — nothing to complete, and Enter must
+        // submit the text exactly as typed (never swallow it into a picker row).
+        assert!(l.completion.is_empty());
+        assert_eq!(submit(&mut l), "/model llama 3 8b");
     }
 
     fn submit(l: &mut Live) -> String {
@@ -472,9 +522,7 @@ mod tests {
     #[test]
     fn enter_completes_an_unambiguous_command_word() {
         let mut l = live(80, 24);
-        for ch in "/mo".chars() {
-            l.handle_key(key(KeyCode::Char(ch)), 0);
-        }
+        type_line(&mut l, "/mo");
         // `/model` is the only match, so Enter completes and runs it.
         assert_eq!(submit(&mut l), "/model");
     }
@@ -482,33 +530,64 @@ mod tests {
     #[test]
     fn enter_leaves_an_ambiguous_command_word_as_typed() {
         let mut l = live(80, 24);
-        for ch in "/e".chars() {
-            l.handle_key(key(KeyCode::Char(ch)), 0);
-        }
+        type_line(&mut l, "/e");
         // `/export` and `/exit` both match — don't guess.
         assert_eq!(submit(&mut l), "/e");
     }
 
     #[test]
+    fn enter_never_rewrites_a_recognized_command_alias() {
+        let mut l = live(80, 24);
+        type_line(&mut l, "/q");
+        // `/q` is the exit alias (parse_command → Exit); the fact that it is
+        // also a unique prefix of `/queue` must not hijack it.
+        assert_eq!(submit(&mut l), "/q");
+    }
+
+    #[test]
     fn enter_runs_the_highlighted_model_row() {
         let mut l = live(80, 24);
-        for ch in "/model sonnet".chars() {
-            l.handle_key(key(KeyCode::Char(ch)), 0);
-        }
+        type_line(&mut l, "/model sonnet");
         // The picker hint says "enter run": Enter submits the highlighted
         // row's full id, not the typed fragment.
         let text = submit(&mut l);
-        assert!(text.starts_with("/model claude-sonnet"), "got `{text}`");
+        assert_ne!(text, "/model sonnet");
+        assert!(
+            text.starts_with("/model ") && text.contains("sonnet"),
+            "got `{text}`"
+        );
     }
 
     #[test]
     fn enter_on_a_bare_model_command_submits_as_typed_for_the_picker() {
         let mut l = live(80, 24);
-        for ch in "/model ".chars() {
-            l.handle_key(key(KeyCode::Char(ch)), 0);
-        }
+        type_line(&mut l, "/model ");
         // An empty argument isn't a choice — `/model` goes through unchanged
         // so the command opens the interactive picker.
         assert_eq!(submit(&mut l).trim(), "/model");
+    }
+
+    #[test]
+    fn enter_runs_a_navigated_row_even_with_an_empty_argument() {
+        let mut l = live(80, 24);
+        type_line(&mut l, "/model ");
+        // The hint says "↑↓ choose · enter run" — walking to a row and hitting
+        // Enter must run that row, not fall back to the interactive picker.
+        l.handle_key(key(KeyCode::Down), 0);
+        let expected = l.completion[l.comp_index.unwrap()].replacement.clone();
+        assert_eq!(submit(&mut l), expected);
+    }
+
+    #[test]
+    fn compression_argument_gets_the_same_picker_navigation() {
+        let mut l = live(80, 24);
+        type_line(&mut l, "/compression ");
+        assert!(l.comp_picker, "argument completion should be a picker");
+        assert_eq!(l.comp_index, Some(0));
+        // ↑/↓ move the highlight exactly like the model picker.
+        l.handle_key(key(KeyCode::Down), 0);
+        assert_eq!(l.comp_index, Some(1));
+        let expected = l.completion[1].replacement.clone();
+        assert_eq!(submit(&mut l), expected);
     }
 }

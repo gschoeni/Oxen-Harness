@@ -89,13 +89,16 @@ const MAX_INPUT_ROWS: usize = 8;
 const PREVIEW_CAP: usize = 256;
 
 /// The slash commands offered by Tab completion + the inline hint, with a short
-/// description. Kept in sync with [`crate::repl::parse_command`].
+/// description. Kept in sync with [`crate::repl::parse_command`] — a test below
+/// fails if an entry here stops being a recognized command.
 const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/model", "pick, switch, or add a model"),
     ("/theme", "change the theme"),
     ("/queue", "manage the message queue"),
     ("/loop", "run or list loops"),
     ("/export", "export the transcript"),
+    ("/skills", "list the skills on hand"),
+    ("/retry", "re-drive a turn that died mid-stream"),
     ("/departing", "set the banner location"),
     ("/auth", "set your Oxen API key"),
     ("/compression", "switch context compression (off/audit/on)"),
@@ -153,11 +156,20 @@ struct Live {
     /// The candidate currently selected by Tab cycling (highlights the picker and
     /// drives menu-complete). `None` until the first Tab.
     comp_index: Option<usize>,
+    /// Whether the candidates form an argument *picker* (highlighted row, ↑/↓
+    /// navigation, Enter runs the selection) rather than plain command-word
+    /// completion. Set alongside the candidates in `refresh_completion`.
+    comp_picker: bool,
     /// Whether the composer text was set by the last Tab (menu-complete), so the
     /// next Tab advances the cycle. Cleared by edits and arrow selection — a Tab
     /// after arrowing applies the highlighted row even when its replacement
     /// happens to equal the current text (e.g. the `/model ` "add" row).
     comp_applied: bool,
+    /// Whether the user explicitly walked the completion list (↑/↓/Tab) since
+    /// the last edit. A navigated row is accepted by Enter unconditionally; an
+    /// auto-highlighted one only under the rules in
+    /// `accept_completion_on_submit`.
+    comp_navigated: bool,
     /// Lazily-loaded model candidates (cloud catalog + installed local) for
     /// `/model` argument completion, cached so we don't rescan on every keystroke.
     model_items: Option<Vec<CompletionItem>>,
@@ -184,7 +196,9 @@ impl Live {
             compression_line: None,
             completion: Vec::new(),
             comp_index: None,
+            comp_picker: false,
             comp_applied: false,
+            comp_navigated: false,
             model_items: None,
         }
     }
@@ -284,6 +298,8 @@ impl Live {
                 self.history.push(&text);
                 self.completion.clear();
                 self.comp_index = None;
+                self.comp_picker = false;
+                self.comp_navigated = false;
                 KeyAction::Submit(text)
             }
             KeyIntent::ComposeUp => {
@@ -324,6 +340,8 @@ impl Live {
                 // Leaving the composer for the queue drops the suggestion hint.
                 self.completion.clear();
                 self.comp_index = None;
+                self.comp_picker = false;
+                self.comp_navigated = false;
                 KeyAction::Redraw
             }
             KeyIntent::FocusDown => {
@@ -407,6 +425,17 @@ mod tests {
 
     use super::test_support::{ctrl, key, live};
     use super::*;
+
+    #[test]
+    fn every_completion_entry_is_a_recognized_command() {
+        use crate::repl::{parse_command, Command};
+        for (cmd, _) in SLASH_COMMANDS {
+            assert!(
+                !matches!(parse_command(cmd), Command::Prompt(_)),
+                "`{cmd}` is offered by completion but parse_command doesn't recognize it"
+            );
+        }
+    }
 
     // --- Live wiring (no TTY: handle_key + buffer state, never paint) ------
 

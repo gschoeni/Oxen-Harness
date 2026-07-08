@@ -307,11 +307,9 @@ impl Live {
         let mut out: Vec<String> = Vec::new();
         // A slash-command / argument suggestion hint sits just above the input
         // while composing at idle (no spinner), so completions are discoverable.
-        if self.spinner.is_none()
-            && matches!(self.focus, Focus::Composer)
-            && self.edit.is_none()
-            && !self.completion.is_empty()
-        {
+        // Enter's fold keys off the same predicate, so what it accepts is
+        // always what's on screen.
+        if self.completion_showing() {
             out.extend(self.completion_hint(box_w));
         }
         for (vi, row) in vrows.iter().enumerate().take(hi).skip(lo) {
