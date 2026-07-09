@@ -254,38 +254,11 @@ impl ReviewDisplay {
                 }
             }
             ReviewEvent::Agent(e) => self.turn.on_event(e),
-            ReviewEvent::SubagentStarted { agent, name } => {
-                if let Some(state) = self.hub.lock().as_mut() {
-                    state.lane_started(*agent);
-                }
-                if self.plain {
-                    crate::fleet_ui::print_lane_started(&self.ui, name);
-                }
-            }
-            ReviewEvent::Subagent { agent, event } => {
-                if let Some(state) = self.hub.lock().as_mut() {
-                    state.lane_event(*agent, event, &self.ui);
-                }
-            }
-            ReviewEvent::SubagentCompleted {
-                agent,
-                name,
-                ok,
-                tokens_used,
-                summary,
-            } => {
-                if let Some(state) = self.hub.lock().as_mut() {
-                    state.lane_completed(*agent, *ok, *tokens_used, summary);
-                }
-                if self.plain {
-                    crate::fleet_ui::print_lane_completed(
-                        &self.ui,
-                        name,
-                        *ok,
-                        *tokens_used,
-                        summary,
-                    );
-                }
+            // A fan-out step's lanes are a fleet — route through the same hub
+            // logic the spawn_agents sink uses, so review lanes and turn lanes
+            // behave identically.
+            ReviewEvent::Fleet(event) => {
+                crate::fleet_ui::apply_fleet_event(&self.hub, &self.ui, self.plain, event)
             }
             ReviewEvent::StepCompleted { .. } => self.settle(),
             ReviewEvent::Completed { tokens_used, .. } => self.tokens_used = *tokens_used,

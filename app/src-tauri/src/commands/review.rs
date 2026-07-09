@@ -29,7 +29,6 @@ pub(crate) async fn run_code_review(
     session: String,
     base_branch: Option<String>,
 ) -> Result<CodeReviewResult, String> {
-    use harness_agent::fleet::FleetEvent;
     use harness_review::{ReviewError, ReviewEvent};
 
     let arc = agent_or_build(&app, &state, &session).await?;
@@ -110,43 +109,10 @@ pub(crate) async fn run_code_review(
                         },
                     );
                 }
-                // A fan-out step's lanes ARE a fleet; map the review's
-                // subagent events to FleetEvent and route them through the one
-                // fleet emitter, so review lanes and spawn_agents lanes can't
-                // drift on the wire format.
-                ReviewEvent::SubagentStarted { agent, name } => emit_fleet_event(
-                    &emitter,
-                    &sid,
-                    &FleetEvent::TaskStarted {
-                        index: *agent,
-                        label: name.clone(),
-                    },
-                ),
-                ReviewEvent::Subagent { agent, event } => emit_fleet_event(
-                    &emitter,
-                    &sid,
-                    &FleetEvent::Agent {
-                        index: *agent,
-                        event: event.clone(),
-                    },
-                ),
-                ReviewEvent::SubagentCompleted {
-                    agent,
-                    name,
-                    ok,
-                    tokens_used,
-                    summary,
-                } => emit_fleet_event(
-                    &emitter,
-                    &sid,
-                    &FleetEvent::TaskCompleted {
-                        index: *agent,
-                        label: name.clone(),
-                        ok: *ok,
-                        tokens_used: *tokens_used,
-                        summary: summary.clone(),
-                    },
-                ),
+                // A fan-out step's lanes ARE a fleet; the review forwards the
+                // FleetEvent verbatim, so it rides the exact same emitter (and
+                // wire format) as a spawn_agents fleet.
+                ReviewEvent::Fleet(event) => emit_fleet_event(&emitter, &sid, event),
                 ReviewEvent::StepCompleted { .. } => {
                     let _ = emitter.emit(
                         "fleet://completed",

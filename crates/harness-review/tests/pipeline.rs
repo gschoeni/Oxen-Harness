@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
+use harness_agent::fleet::FleetEvent;
 use harness_agent::{Agent, AgentConfig};
 use harness_llm::OxenClient;
 use harness_review::{
@@ -217,9 +218,11 @@ async fn a_fan_out_step_runs_agents_in_parallel_and_combines_their_outputs() {
             ReviewEvent::StepStarted { agents, name, .. } if name == "find" => {
                 fan_out_step_agents = agents.clone();
             }
-            ReviewEvent::SubagentStarted { name, .. } => lanes_started.push(name.clone()),
-            ReviewEvent::SubagentCompleted { name, ok, .. } => {
-                lanes_completed.push((name.clone(), *ok))
+            ReviewEvent::Fleet(FleetEvent::TaskStarted { label, .. }) => {
+                lanes_started.push(label.clone())
+            }
+            ReviewEvent::Fleet(FleetEvent::TaskCompleted { label, ok, .. }) => {
+                lanes_completed.push((label.clone(), *ok))
             }
             ReviewEvent::Completed { tokens_used, .. } => total_tokens = *tokens_used,
             _ => {}

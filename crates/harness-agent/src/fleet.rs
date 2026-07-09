@@ -47,8 +47,14 @@ impl SubagentTask {
 pub enum FleetEvent {
     /// The task acquired a concurrency slot and its turn is now running.
     TaskStarted { index: usize, label: String },
-    /// A streaming/tool event from one subagent's turn.
-    Agent { index: usize, event: AgentEvent },
+    /// A streaming/tool event from one subagent's turn. Held in an [`Arc`] so
+    /// the event is deep-cloned exactly once (crossing the task→drive-loop
+    /// channel); every hop after — into a `ReviewEvent`, a host payload — is a
+    /// refcount bump, not another copy of a token string.
+    Agent {
+        index: usize,
+        event: Arc<AgentEvent>,
+    },
     /// The task finished (its outcome is in [`run_fleet`]'s return value).
     /// `summary` is a short display string: the truncated final reply, or the
     /// error text when `ok` is false.
@@ -128,7 +134,7 @@ enum Msg {
     },
     Agent {
         index: usize,
-        event: AgentEvent,
+        event: Arc<AgentEvent>,
     },
     Done {
         index: usize,
@@ -204,9 +210,11 @@ where
             let forward = tx.clone();
             let result = agent
                 .run_turn(task.prompt, |event| {
+                    // The one deep clone: from the borrowed callback event into
+                    // an Arc that rides the channel and every downstream hop.
                     let _ = forward.send(Msg::Agent {
                         index,
-                        event: event.clone(),
+                        event: Arc::new(event.clone()),
                     });
                 })
                 .await;

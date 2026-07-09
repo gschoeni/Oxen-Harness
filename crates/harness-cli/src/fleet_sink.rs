@@ -62,41 +62,7 @@ impl FleetSink for CliFleetSink {
     }
 
     fn event(&self, event: &FleetEvent) {
-        match event {
-            FleetEvent::TaskStarted { index, label } => {
-                if let Some(state) = self.hub.lock().as_mut() {
-                    state.lane_started(*index);
-                }
-                if self.plain() {
-                    crate::fleet_ui::print_lane_started(&self.ui, label);
-                }
-            }
-            FleetEvent::Agent { index, event } => {
-                if let Some(state) = self.hub.lock().as_mut() {
-                    state.lane_event(*index, event, &self.ui);
-                }
-            }
-            FleetEvent::TaskCompleted {
-                index,
-                label,
-                ok,
-                tokens_used,
-                summary,
-            } => {
-                if let Some(state) = self.hub.lock().as_mut() {
-                    state.lane_completed(*index, *ok, *tokens_used, summary);
-                }
-                if self.plain() {
-                    crate::fleet_ui::print_lane_completed(
-                        &self.ui,
-                        label,
-                        *ok,
-                        *tokens_used,
-                        summary,
-                    );
-                }
-            }
-        }
+        crate::fleet_ui::apply_fleet_event(&self.hub, &self.ui, self.plain(), event);
     }
 
     fn finished(&self) {

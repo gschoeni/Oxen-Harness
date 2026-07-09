@@ -153,7 +153,7 @@ pub(crate) fn emit_fleet_event(
             );
         }
         FleetEvent::Agent { index, event } => {
-            if let Some((kind, text, tokens)) = activity_payload(event) {
+            if let Some((kind, text, tokens)) = activity_payload(event.as_ref()) {
                 let _ = app.emit(
                     "fleet://agent-activity",
                     FleetActivityPayload {

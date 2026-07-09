@@ -38,18 +38,11 @@ pub enum ReviewEvent {
     },
     /// A streaming/tool event from a single-agent step's reviewer.
     Agent(AgentEvent),
-    /// A fan-out lane acquired a slot and its turn is running.
-    SubagentStarted { agent: usize, name: String },
-    /// A streaming/tool event from one fan-out lane, tagged by lane index.
-    Subagent { agent: usize, event: AgentEvent },
-    /// A fan-out lane finished (`summary` is its truncated reply or error).
-    SubagentCompleted {
-        agent: usize,
-        name: String,
-        ok: bool,
-        tokens_used: usize,
-        summary: String,
-    },
+    /// A lane event from a fan-out step, carried verbatim from the fleet. Hosts
+    /// route it straight through their existing fleet-lane rendering (the
+    /// lanes ARE a fleet), so the two surfaces can't drift; the `index` inside
+    /// is the lane number.
+    Fleet(FleetEvent),
     /// A step finished.
     StepCompleted { index: usize, name: String },
     /// The pipeline finished; the report is also returned from `run`.
@@ -216,31 +209,9 @@ impl ReviewRunner {
             tasks,
             self.config.max_parallel,
             self.cancel.clone(),
-            |event| match event {
-                FleetEvent::TaskStarted { index, label } => {
-                    on_event(&ReviewEvent::SubagentStarted {
-                        agent: *index,
-                        name: label.clone(),
-                    })
-                }
-                FleetEvent::Agent { index, event } => on_event(&ReviewEvent::Subagent {
-                    agent: *index,
-                    event: event.clone(),
-                }),
-                FleetEvent::TaskCompleted {
-                    index,
-                    label,
-                    ok,
-                    tokens_used,
-                    summary,
-                } => on_event(&ReviewEvent::SubagentCompleted {
-                    agent: *index,
-                    name: label.clone(),
-                    ok: *ok,
-                    tokens_used: *tokens_used,
-                    summary: summary.clone(),
-                }),
-            },
+            // A fan-out step's lanes are a fleet; forward each event verbatim so
+            // hosts render it through their existing fleet-lane path.
+            |event| on_event(&ReviewEvent::Fleet(event.clone())),
         )
         .await?;
 

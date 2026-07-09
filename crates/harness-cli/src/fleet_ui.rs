@@ -34,6 +34,7 @@ use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use harness_agent::fleet::FleetEvent;
 use harness_agent::AgentEvent;
 use tokio_util::sync::CancellationToken;
 
@@ -184,6 +185,44 @@ impl FleetState {
     pub(crate) fn stop(&self) {
         if let Some(cancel) = &self.cancel {
             cancel.cancel();
+        }
+    }
+}
+
+/// Apply one [`FleetEvent`] to the shared hub: advance the lane's state, and in
+/// a plain (non-animating) terminal print the matching milestone line. This is
+/// the single place a fleet event drives the CLI display — both the
+/// `spawn_agents` sink and the review fan-out step route their events through
+/// it, so the two surfaces can't drift on lane bookkeeping. `plain` is passed
+/// in (rather than read from `ui`) so the caller decides once per fleet.
+pub(crate) fn apply_fleet_event(hub: &FleetHub, ui: &Ui, plain: bool, event: &FleetEvent) {
+    match event {
+        FleetEvent::TaskStarted { index, label } => {
+            if let Some(state) = hub.lock().as_mut() {
+                state.lane_started(*index);
+            }
+            if plain {
+                print_lane_started(ui, label);
+            }
+        }
+        FleetEvent::Agent { index, event } => {
+            if let Some(state) = hub.lock().as_mut() {
+                state.lane_event(*index, event.as_ref(), ui);
+            }
+        }
+        FleetEvent::TaskCompleted {
+            index,
+            label,
+            ok,
+            tokens_used,
+            summary,
+        } => {
+            if let Some(state) = hub.lock().as_mut() {
+                state.lane_completed(*index, *ok, *tokens_used, summary);
+            }
+            if plain {
+                print_lane_completed(ui, label, *ok, *tokens_used, summary);
+            }
         }
     }
 }
