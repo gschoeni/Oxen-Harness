@@ -252,6 +252,14 @@ export const addCloudModel = vi.fn(async () => sampleCloudModels);
 export const removeCloudModel = vi.fn(async () => sampleCloudModels);
 export const setModel = vi.fn(async () => ({ ...sampleSession, session_id: "model-switched" }));
 
+export const runCodeReview = vi.fn(async () => ({
+  status: "ok" as const,
+  user: "Run a code review of the uncommitted changes in this workspace.",
+  assistant: "## Code review: no findings\n\nNothing qualifying survived verification.",
+  findings: 0,
+  tokens_used: 4200,
+}));
+
 export const listThemes = vi.fn(async () => sampleThemes);
 export const activeTheme = vi.fn(async () => sampleTheme);
 export const useTheme = vi.fn(async () => sampleTheme);
@@ -327,6 +335,13 @@ export function resetIpc() {
   deleteSkill.mockReset().mockResolvedValue(undefined);
   setSkillEnabled.mockReset().mockResolvedValue(undefined);
   attachmentDataUri.mockReset().mockResolvedValue("data:image/png;base64,AAAA");
+  runCodeReview.mockReset().mockResolvedValue({
+    status: "ok",
+    user: "Run a code review of the uncommitted changes in this workspace.",
+    assistant: "## Code review: no findings\n\nNothing qualifying survived verification.",
+    findings: 0,
+    tokens_used: 4200,
+  });
   [
     onToken,
     onTool,

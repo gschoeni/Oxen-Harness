@@ -220,3 +220,90 @@ describe("store: local model load status", () => {
     expect(useStore.getState().localSwitch).toBeNull();
   });
 });
+
+describe("store: code review", () => {
+  // startCodeReview needs a current session with a thread to write into.
+  const seedSession = () =>
+    useStore.setState({
+      session: { ...ipc.sampleSession, session_id: "s1" },
+      infos: { s1: { ...ipc.sampleSession, session_id: "s1" } },
+      threads: { s1: [] },
+    });
+
+  it("runs a review, lands the exchange in the thread, and clears its state", async () => {
+    seedSession();
+    useStore.getState().startCodeReview();
+    // The card and running status appear synchronously, before the IPC settles.
+    expect(useStore.getState().codeReview["s1"]).toBeDefined();
+    expect(useStore.getState().runStatus["s1"]).toBe("running");
+    expect(ipc.runCodeReview).toHaveBeenCalledWith("s1", undefined);
+
+    // Once the (mocked) review resolves: the user+assistant pair is appended,
+    // the card is cleared, and the chat settles back to read (it's in view).
+    await vi.waitFor(() => {
+      const thread = useStore.getState().threads["s1"];
+      expect(thread.some((it) => it.kind === "assistant" && it.text.includes("no findings"))).toBe(
+        true,
+      );
+    });
+    expect(useStore.getState().codeReview["s1"]).toBeUndefined();
+    expect(useStore.getState().fleets["s1"]).toBeUndefined();
+    expect(useStore.getState().runStatus["s1"]).toBeUndefined();
+  });
+
+  it("passes a base branch through to the backend", () => {
+    seedSession();
+    useStore.getState().startCodeReview("main");
+    expect(ipc.runCodeReview).toHaveBeenCalledWith("s1", "main");
+  });
+
+  it("won't start a second review while the chat is already running", () => {
+    seedSession();
+    useStore.setState({ runStatus: { s1: "running" } });
+    useStore.getState().startCodeReview();
+    expect(ipc.runCodeReview).not.toHaveBeenCalled();
+  });
+
+  it("a nothing-to-review result leaves a notice, not an exchange", async () => {
+    seedSession();
+    ipc.runCodeReview.mockResolvedValueOnce({
+      status: "nothing",
+      user: "",
+      assistant: "",
+      findings: 0,
+      tokens_used: 0,
+    });
+    useStore.getState().startCodeReview();
+    await vi.waitFor(() => {
+      const thread = useStore.getState().threads["s1"];
+      expect(thread.some((it) => it.kind === "notice" && /no changes/i.test(it.text))).toBe(true);
+    });
+  });
+
+  it("progress ingestion only updates a live card, and activity is capped", () => {
+    seedSession();
+    // No card yet: a stray progress event is ignored.
+    useStore.getState().ingestCodeReviewProgress({
+      session: "s1",
+      step: "find",
+      index: 0,
+      total: 3,
+      agents: [],
+    });
+    expect(useStore.getState().codeReview["s1"]).toBeUndefined();
+
+    // With a card, progress advances it and activity rolls with a cap.
+    useStore.setState({ codeReview: { s1: { step: "", index: 0, total: 0, activity: "" } } });
+    useStore.getState().ingestCodeReviewProgress({
+      session: "s1",
+      step: "verify",
+      index: 1,
+      total: 3,
+      agents: [],
+    });
+    expect(useStore.getState().codeReview["s1"]).toMatchObject({ step: "verify", index: 1 });
+
+    useStore.getState().ingestCodeReviewActivity("s1", "x".repeat(500), false);
+    expect(useStore.getState().codeReview["s1"]!.activity.length).toBeLessThanOrEqual(120);
+  });
+});
