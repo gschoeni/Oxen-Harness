@@ -219,13 +219,28 @@ impl FleetHub {
         self.state.lock().expect("fleet hub poisoned")
     }
 
-    /// Mark whether the live composer currently owns the terminal.
-    pub(crate) fn set_live(&self, live: bool) {
-        self.live.store(live, Ordering::Relaxed);
+    /// Mark the live composer as owning the terminal for as long as the
+    /// returned guard lives. While it's held, the `spawn_agents` sink paints
+    /// through the composer's pinned block instead of starting its own
+    /// painter; on drop — including any early return or unwind out of the
+    /// composer loop — the flag clears, so a cooked-mode fleet can never be
+    /// left un-painted by a missed reset.
+    pub(crate) fn mark_live(self: &Arc<Self>) -> LiveGuard {
+        self.live.store(true, Ordering::Relaxed);
+        LiveGuard(self.clone())
     }
 
     pub(crate) fn is_live(&self) -> bool {
         self.live.load(Ordering::Relaxed)
+    }
+}
+
+/// Clears [`FleetHub`]'s live flag on drop (see [`FleetHub::mark_live`]).
+pub(crate) struct LiveGuard(Arc<FleetHub>);
+
+impl Drop for LiveGuard {
+    fn drop(&mut self) {
+        self.0.live.store(false, Ordering::Relaxed);
     }
 }
 

@@ -856,6 +856,14 @@ export const useStore = create<AppState>((set, get) => {
       }),
 
     submitApiKey: async (session, itemId, key) => {
+      // Don't drive a retry into a chat that's already busy. A code review
+      // registers the session as "running" and holds its agent lock and its
+      // cancel-map slot for the whole run; letting a key submission start a
+      // turn underneath it would clobber that slot (Stop would then target the
+      // wrong work, and the review's cleanup would delete the turn's token).
+      // The key still saves for next time via configureOxenKey below only if
+      // we proceed — so bail before any state change.
+      if (get().runStatus[session] === "running") return;
       const item = (get().threads[session] ?? []).find((it) => it.id === itemId);
       if (!item || item.kind !== "apikey") return;
       // Save + authenticate the running agent first; if this throws, the card

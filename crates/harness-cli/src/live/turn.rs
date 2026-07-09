@@ -45,9 +45,11 @@ pub(crate) async fn run_prompt(
     let term = LiveTerminal::new()?;
     let (rows, cols) = (term.rows, term.cols);
     // While the composer owns the terminal, a `spawn_agents` fleet must paint
-    // through its pinned area (not a painter thread of its own).
+    // through its pinned area (not a painter thread of its own). The guard
+    // clears the flag on every exit from this function — including the early
+    // returns below — so a cooked-mode fleet is never stranded un-painted.
     let fleet_hub = crate::fleet_ui::FleetHub::global();
-    fleet_hub.set_live(true);
+    let _live = fleet_hub.mark_live();
 
     // The input thread only ever reads key/resize events and forwards them; it
     // never writes to the terminal. `stop` ends it; `paused` makes it yield the
@@ -118,7 +120,7 @@ pub(crate) async fn run_prompt(
     };
     drop(state);
     drop(term);
-    fleet_hub.set_live(false);
+    drop(_live); // clear the live flag before any cooked-mode prompt below
 
     // Now that the alt-screen/raw mode is torn down, offer to set up web search
     // if the agent tried it without a Brave key during the session.

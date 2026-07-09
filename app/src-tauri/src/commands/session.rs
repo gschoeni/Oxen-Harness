@@ -105,6 +105,14 @@ pub(crate) async fn delete_session(state: State<'_, AppState>, id: String) -> Re
         .delete_session(&id)
         .map_err(|e| e.to_string())?;
     state.agents.lock().await.remove(&id);
+    // Drop the session's fleet spawner in lockstep with its agent, so a
+    // deleted chat doesn't leave its spawner (a client + tool-registry +
+    // config clone) stranded in the map until the next eviction sweep.
+    state
+        .fleet_spawners
+        .lock()
+        .expect("fleet spawners poisoned")
+        .remove(&id);
     let mut current = state.current.lock().await;
     if current.as_deref() == Some(id.as_str()) {
         *current = None;
