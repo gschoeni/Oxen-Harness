@@ -124,10 +124,14 @@ impl ReviewRunner {
             previous = text;
             tokens_used += step_tokens;
 
-            // A cancelled step returns partial text; don't run the rest of the
-            // pipeline on it. The spend so far is real — carry it out so hosts
-            // can report it and roll it into their totals.
-            if self.cancel.is_cancelled() {
+            // A cancel means the user stopped the review — but only abandon it
+            // if there is more work to run: a cancel that lands during (or in
+            // the race just after) the *final* step must not throw away a
+            // report that is already in `previous`. So bail only when steps
+            // remain; otherwise fall through and parse what we have. The spend
+            // so far is real — carry it out so hosts can report it.
+            let more_steps = index + 1 < steps.len();
+            if self.cancel.is_cancelled() && more_steps {
                 return Err(ReviewError::Cancelled { tokens_used });
             }
             on_event(&ReviewEvent::StepCompleted {
@@ -251,16 +255,7 @@ impl ReviewRunner {
             return Err(first.into());
         }
 
-        let mut combined = String::new();
-        for outcome in outcomes {
-            combined.push_str(&format!("### {}\n\n", outcome.label));
-            match outcome.result {
-                Ok(text) => combined.push_str(text.trim()),
-                Err(e) => combined.push_str(&format!("(this reviewer failed: {e})")),
-            }
-            combined.push_str("\n\n");
-        }
-        Ok((combined.trim_end().to_string(), tokens))
+        Ok((fleet::combine_outcomes(&outcomes, "reviewer"), tokens))
     }
 }
 

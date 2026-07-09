@@ -240,19 +240,7 @@ impl TypedTool for FleetTool {
                 "NOTE: the fleet was stopped before finishing; results below may be partial.\n\n",
             );
         }
-        for outcome in outcomes {
-            match &outcome.result {
-                Ok(text) => {
-                    out.push_str(&format!("### {}\n\n{}\n\n", outcome.label, text.trim()));
-                }
-                Err(e) => {
-                    out.push_str(&format!(
-                        "### {}\n\n(this agent failed: {e})\n\n",
-                        outcome.label
-                    ));
-                }
-            }
-        }
+        out.push_str(&crate::fleet::combine_outcomes(&outcomes, "agent"));
         Ok(out.trim_end().to_string())
     }
 }

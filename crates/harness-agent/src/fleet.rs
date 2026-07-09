@@ -96,6 +96,26 @@ impl SubagentOutcome {
     }
 }
 
+/// Concatenate fleet outcomes into one labeled document — `### {label}` headings
+/// with each agent's trimmed reply (or an inline failure note), in agent order.
+/// This is the shape a fleet's combined result takes wherever it's read as
+/// model input: the `spawn_agents` tool return and the review pipeline's
+/// fan-out step output both go through here, so the document shape can't drift
+/// between them. `failure_noun` names what failed in the inline note ("agent",
+/// "reviewer").
+pub fn combine_outcomes(outcomes: &[SubagentOutcome], failure_noun: &str) -> String {
+    let mut out = String::new();
+    for outcome in outcomes {
+        out.push_str(&format!("### {}\n\n", outcome.label));
+        match &outcome.result {
+            Ok(text) => out.push_str(text.trim()),
+            Err(e) => out.push_str(&format!("(this {failure_noun} failed: {e})")),
+        }
+        out.push_str("\n\n");
+    }
+    out.trim_end().to_string()
+}
+
 /// Cap on the completion summary carried in [`FleetEvent::TaskCompleted`].
 const SUMMARY_CHARS: usize = 120;
 

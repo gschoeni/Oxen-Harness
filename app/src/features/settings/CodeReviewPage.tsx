@@ -175,7 +175,9 @@ export function CodeReviewPage() {
         </p>
 
         {config.steps.map((step, i) => {
-          const fanOut = (step.agents?.length ?? 0) > 0;
+          // Only 2+ agents is a fan-out (the backend canonicalizes a lone
+          // agent to a plain prompt on load), matching the runtime's is_fan_out.
+          const fanOut = (step.agents?.length ?? 0) > 1;
           return (
             <div className="settings-section" key={i}>
               <div className="settings-label">

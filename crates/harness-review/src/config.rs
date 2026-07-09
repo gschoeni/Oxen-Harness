@@ -95,6 +95,19 @@ impl ReviewStep {
     pub fn is_fan_out(&self) -> bool {
         self.agents.len() > 1
     }
+
+    /// Collapse the two ways a *single*-agent step can be spelled into one: a
+    /// lone `agents` entry becomes a plain `prompt` step. Only `agents.len() > 1`
+    /// is a real fan-out ([`is_fan_out`](Self::is_fan_out)), so a persisted or
+    /// hand-edited one-element list — which the runtime would run as a single
+    /// agent anyway — must not read as a fan-out to the settings UI. Applied at
+    /// [`ReviewConfig::load`], so every surface sees the canonical shape.
+    fn normalized(mut self) -> Self {
+        if self.agents.len() == 1 {
+            self.prompt = self.agents.remove(0).prompt;
+        }
+        self
+    }
 }
 
 /// The shareable, user-editable review pipeline definition. Persisted inside
@@ -144,14 +157,14 @@ impl ReviewConfig {
             .map(|c| {
                 // A default-constructed payload (missing/empty file) or an
                 // emptied step list both mean "the built-in pipeline".
-                if c.steps.is_empty() {
-                    Self {
-                        steps: default_steps(),
-                        ..c
-                    }
+                let steps = if c.steps.is_empty() {
+                    default_steps()
                 } else {
-                    c
-                }
+                    // Canonicalize each step so a one-element `agents` list
+                    // reads as the single-prompt form everywhere.
+                    c.steps.into_iter().map(ReviewStep::normalized).collect()
+                };
+                Self { steps, ..c }
             })
             .unwrap_or_default()
     }
@@ -218,6 +231,44 @@ mod tests {
         assert_eq!(agents[0].prompt, "Review {{diff}}.");
         // Fields v1 files don't have fill from defaults.
         assert_eq!(config.max_parallel, DEFAULT_MAX_PARALLEL);
+    }
+
+    #[test]
+    fn a_one_element_agents_list_normalizes_to_a_single_prompt_step() {
+        // A one-agent fan-out is not a fan-out; normalized() folds it to the
+        // plain-prompt form so the runtime (is_fan_out=false) and the settings
+        // UI can't disagree about the same step.
+        let step = ReviewStep {
+            name: "find".into(),
+            prompt: String::new(),
+            agents: vec![StepAgent {
+                name: "lone".into(),
+                prompt: "look".into(),
+            }],
+        }
+        .normalized();
+        assert!(!step.is_fan_out());
+        assert!(step.agents.is_empty());
+        assert_eq!(step.prompt, "look");
+
+        // Two agents stay a fan-out, untouched.
+        let fan = ReviewStep {
+            name: "find".into(),
+            prompt: String::new(),
+            agents: vec![
+                StepAgent {
+                    name: "a".into(),
+                    prompt: "x".into(),
+                },
+                StepAgent {
+                    name: "b".into(),
+                    prompt: "y".into(),
+                },
+            ],
+        }
+        .normalized();
+        assert!(fan.is_fan_out());
+        assert_eq!(fan.agents.len(), 2);
     }
 
     #[test]
