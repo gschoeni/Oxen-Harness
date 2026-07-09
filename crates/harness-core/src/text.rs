@@ -35,6 +35,18 @@ pub fn slug(name: &str, fallback: &str) -> String {
     }
 }
 
+/// Cap `s` at `max` characters, appending `marker` when anything was cut (and
+/// returning `s` untouched when it fits). Char-safe — never splits a
+/// multi-byte character. The one truncation primitive the workspace shares:
+/// [`ellipsize`] wraps it with `…`, the loop journal with `\n… [truncated]`.
+pub fn truncate_with_marker(s: &str, max: usize, marker: &str) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let kept: String = s.chars().take(max).collect();
+    format!("{kept}{marker}")
+}
+
 /// Cap `s` at `max` characters, appending `…` when anything was cut.
 ///
 /// Char-safe (never splits a multi-byte character) and width-honest: the
@@ -48,11 +60,7 @@ pub fn slug(name: &str, fallback: &str) -> String {
 /// assert_eq!(ellipsize("a very long line", 6), "a very…");
 /// ```
 pub fn ellipsize(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let kept: String = s.chars().take(max).collect();
-    format!("{kept}…")
+    truncate_with_marker(s, max, "…")
 }
 
 /// Collapse every run of whitespace (including newlines) to a single space,

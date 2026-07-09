@@ -12,7 +12,6 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::process::Command;
 
 /// A content fingerprint of the dirty part of a git workspace at one moment.
 pub struct WorkspaceSnapshot {
@@ -87,17 +86,11 @@ impl WorkspaceSnapshot {
     }
 }
 
-/// Run a git command in `root`, returning stdout on success.
+/// Run a git command in `root`, returning stdout on success. Change detection
+/// treats any git failure the same (fall back to "unknown" → run everything),
+/// so this discards the shared runner's error detail into an `Option`.
 fn git(root: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    harness_core::git::capture(root, args).ok()
 }
 
 /// Every path `git status` reports as differing from HEAD (tracked changes,
@@ -143,6 +136,8 @@ fn hash_file(path: &Path) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
 
     /// Set up a committed git repo in a temp dir; skip the test (return None)

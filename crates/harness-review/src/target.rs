@@ -6,7 +6,6 @@
 //! embedded text just pins *which change* is under review.
 
 use std::path::Path;
-use std::process::Command;
 
 use crate::config::DIFF_CHAR_BUDGET;
 use crate::ReviewError;
@@ -54,9 +53,12 @@ pub fn resolve_target(root: &Path, target: ReviewTarget) -> Result<ReviewInput, 
             // show against the empty index side (`--cached`) and unstaged
             // against the index — combine both so `git init && git add .` is
             // fully reviewable.
-            let diff = match git(root, &["diff", "HEAD"]) {
+            let diff = match harness_core::git::capture(root, &["diff", "HEAD"]) {
                 Ok(diff) => diff,
-                Err(head_err) => match (git(root, &["diff", "--cached"]), git(root, &["diff"])) {
+                Err(head_err) => match (
+                    harness_core::git::capture(root, &["diff", "--cached"]),
+                    harness_core::git::capture(root, &["diff"]),
+                ) {
                     (Ok(staged), Ok(unstaged)) => format!("{staged}{unstaged}"),
                     _ => {
                         return Err(ReviewError::Git(format!(
@@ -66,7 +68,8 @@ pub fn resolve_target(root: &Path, target: ReviewTarget) -> Result<ReviewInput, 
                 },
             };
             let untracked =
-                git(root, &["ls-files", "--others", "--exclude-standard"]).unwrap_or_default();
+                harness_core::git::capture(root, &["ls-files", "--others", "--exclude-standard"])
+                    .unwrap_or_default();
             let untracked: Vec<&str> = untracked.lines().filter(|l| !l.is_empty()).collect();
             if diff.trim().is_empty() && untracked.is_empty() {
                 return Err(ReviewError::NothingToReview);
@@ -91,7 +94,7 @@ pub fn resolve_target(root: &Path, target: ReviewTarget) -> Result<ReviewInput, 
             })
         }
         ReviewTarget::BaseBranch(branch) => {
-            let merge_base = git(root, &["merge-base", "HEAD", branch]).map_err(|_| {
+            let merge_base = harness_core::git::capture(root, &["merge-base", "HEAD", branch]).map_err(|_| {
                 ReviewError::Git(format!(
                     "could not find a merge base with `{branch}` — is it a branch or ref in this repo?"
                 ))
@@ -99,7 +102,7 @@ pub fn resolve_target(root: &Path, target: ReviewTarget) -> Result<ReviewInput, 
             let merge_base = merge_base.trim().to_string();
             // Diff the *working tree* against the merge base, so the review
             // covers committed work and anything still uncommitted on top.
-            let diff = git(root, &["diff", &merge_base])
+            let diff = harness_core::git::capture(root, &["diff", &merge_base])
                 .map_err(|e| ReviewError::Git(format!("could not diff against `{branch}`: {e}")))?;
             if diff.trim().is_empty() {
                 return Err(ReviewError::NothingToReview);
@@ -114,21 +117,6 @@ pub fn resolve_target(root: &Path, target: ReviewTarget) -> Result<ReviewInput, 
             })
         }
     }
-}
-
-/// Run a git command in `root`, returning stdout on success and the combined
-/// failure detail otherwise.
-fn git(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("git {} failed: {}", args.join(" "), stderr.trim()));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Truncate an oversized diff on a line boundary, telling the step agents how
@@ -153,6 +141,8 @@ fn budget_diff(diff: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
 
     /// A committed git repo in a temp dir; skips (None) when git is missing.

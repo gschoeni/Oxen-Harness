@@ -405,17 +405,18 @@ fn print_usage(ui: &Ui) {
 
 /// Whether `name` resolves to a commit-ish in this repo (branch, tag, sha).
 fn ref_exists(root: &Path, name: &str) -> bool {
-    std::process::Command::new("git")
-        .args([
+    // `rev-parse --verify` exits non-zero for an unknown ref, which the shared
+    // runner turns into an Err — so "resolved" is simply "Ok".
+    harness_core::git::capture(
+        root,
+        &[
             "rev-parse",
             "--verify",
             "--quiet",
             &format!("{name}^{{commit}}"),
-        ])
-        .current_dir(root)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        ],
+    )
+    .is_ok()
 }
 
 #[cfg(test)]

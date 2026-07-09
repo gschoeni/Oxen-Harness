@@ -4,6 +4,7 @@
 //! through the agent loop, plus the defaults that pin the harness to Oxen.ai.
 
 pub mod fmt;
+pub mod git;
 pub mod json;
 pub mod message;
 pub mod text;

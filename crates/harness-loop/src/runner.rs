@@ -471,11 +471,8 @@ fn summarize(final_text: &str) -> String {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let kept: String = s.chars().take(max).collect();
-    format!("{kept}\n… [truncated]")
+    // Same char-safe cut as everywhere else, with the journal's own marker.
+    harness_core::text::truncate_with_marker(s, max, "\n… [truncated]")
 }
 
 /// Run `command` via the platform shell in `cwd`, returning the exit code (if
