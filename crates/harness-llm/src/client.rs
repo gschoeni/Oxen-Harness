@@ -146,13 +146,17 @@ impl OxenClient {
         let mut assembler = StreamAssembler::new();
         let mut stream = resp.bytes_stream();
 
+        let mut cancelled = false;
         loop {
             // The long wait lives here — a local server processing a large prompt
             // may not emit a byte for many seconds. `select!` lets a stop break
             // out of that pending read immediately instead of hanging on it.
             let bytes = tokio::select! {
                 biased;
-                _ = cancel.cancelled() => break,
+                _ = cancel.cancelled() => {
+                    cancelled = true;
+                    break;
+                }
                 next = stream.next() => match next {
                     Some(bytes) => bytes?,
                     None => break,
@@ -167,6 +171,19 @@ impl OxenClient {
                     break;
                 }
             }
+        }
+
+        // A stream that ends without `[DONE]` or a finish reason was cut off —
+        // typically an upstream timeout dropping the connection mid-reply.
+        // Treating the fragment as a finished answer would end the turn on a
+        // truncated reply (the agent would persist "I'll do X…" and stop), so
+        // surface it as the transient failure it is and let the caller's retry
+        // policy re-send the request. A user stop is different: return whatever
+        // assembled, never an error.
+        if !cancelled && !assembler.is_complete() {
+            return Err(LlmError::Stream(
+                "the connection closed before the reply finished".into(),
+            ));
         }
 
         Ok(assembler.finish())
@@ -310,6 +327,58 @@ mod tests {
             .unwrap();
 
         assert_eq!(tokens, "Hello ox");
+        assert_eq!(assembled.content, "Hello ox");
+        assert_eq!(assembled.finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[tokio::test]
+    async fn stream_chat_errors_when_the_stream_is_cut_off_mid_reply() {
+        // Tokens flow, then the body ends with no finish reason and no [DONE] —
+        // an upstream timeout dropping the connection mid-reply. This must be
+        // an error (and a retryable one), not a "successful" truncated answer.
+        let mut server = mockito::Server::new_async().await;
+        let sse =
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"I'll rewrite \"}}]}\n\n";
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            .create_async()
+            .await;
+
+        let client = OxenClient::new(server.url(), "sk-test", "claude-opus-4-8");
+        let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
+        let err = client
+            .stream_chat(&req, &CancellationToken::new(), |_| {})
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, LlmError::Stream(_)), "got: {err:?}");
+        assert!(err.is_transient(), "a cut-off stream must be retryable");
+    }
+
+    #[tokio::test]
+    async fn stream_chat_accepts_a_finished_reply_without_the_done_sentinel() {
+        // A finish reason arrived, so the reply is complete even though the
+        // server omitted the trailing `data: [DONE]`.
+        let mut server = mockito::Server::new_async().await;
+        let sse = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello ox\"},\"finish_reason\":\"stop\"}]}\n\n";
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            .create_async()
+            .await;
+
+        let client = OxenClient::new(server.url(), "sk-test", "claude-opus-4-8");
+        let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
+        let assembled = client
+            .stream_chat(&req, &CancellationToken::new(), |_| {})
+            .await
+            .unwrap();
+
         assert_eq!(assembled.content, "Hello ox");
         assert_eq!(assembled.finish_reason.as_deref(), Some("stop"));
     }

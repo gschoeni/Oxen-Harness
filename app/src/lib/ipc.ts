@@ -15,6 +15,7 @@ import type {
   InstalledView,
   LocalStatus,
   ModelRef,
+  OxenModelHit,
   RuntimeInstallEvent,
   RuntimeStatus,
   QuestionAnswer,
@@ -342,6 +343,9 @@ export const addCloudModel = (id: string, name: string) =>
 /** Remove a custom cloud model (built-ins can't be removed); returns the catalog. */
 export const removeCloudModel = (id: string) =>
   invoke<CloudModel[]>("remove_cloud_model", { id });
+/** Search the Oxen.ai hosted inference catalog for autocomplete (empty query = all). */
+export const searchOxenModels = (query: string) =>
+  invoke<OxenModelHit[]>("search_oxen_models", { query });
 /** Switch the current chat (and the default for new chats) to a cloud model,
  *  continuing the same conversation. Resolves with the updated session info. */
 export const setModel = (model: string) => invoke<SessionInfo>("set_model", { model });

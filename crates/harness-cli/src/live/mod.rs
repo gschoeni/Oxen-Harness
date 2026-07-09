@@ -351,6 +351,7 @@ impl Live {
                 self.refresh_completion();
                 KeyAction::Redraw
             }
+            KeyIntent::PasteClipboard => self.paste_clipboard(),
             KeyIntent::Complete => {
                 if self.complete() {
                     KeyAction::Redraw
@@ -430,8 +431,11 @@ impl Live {
     /// Insert pasted / drag-dropped text into whichever single-line editor has
     /// focus (the inline item editor while editing, otherwise the composer),
     /// flattening newlines to spaces. Bracketed paste delivers a drop as one
-    /// block, so a path with escaped spaces lands intact.
+    /// block, so a path with escaped spaces lands intact. A pasted image path
+    /// stages the image and shows up as its `[Image N]` chip instead.
     fn insert_paste(&mut self, text: &str) {
+        let rewritten = crate::images::rewrite_paste(text);
+        let text = rewritten.as_deref().unwrap_or(text);
         let target = self.edit.as_mut().unwrap_or(&mut self.composer);
         for ch in text.chars() {
             let ch = if ch == '\n' || ch == '\r' { ' ' } else { ch };
@@ -439,6 +443,24 @@ impl Live {
         }
         if self.edit.is_none() {
             self.refresh_completion();
+        }
+    }
+
+    /// Ctrl+V: read the system clipboard ourselves. A copied image (e.g. a
+    /// screenshot) can't arrive through bracketed paste, so it's staged to a
+    /// temp PNG and inserted as an `[Image N]` chip; clipboard text falls back
+    /// to an ordinary paste for terminals that pass Ctrl+V through.
+    fn paste_clipboard(&mut self) -> KeyAction {
+        match crate::images::paste_from_clipboard() {
+            crate::images::ClipboardPaste::Image(label) => {
+                self.insert_paste(&format!("{label} "));
+                KeyAction::Redraw
+            }
+            crate::images::ClipboardPaste::Text(text) => {
+                self.insert_paste(&text);
+                KeyAction::Redraw
+            }
+            crate::images::ClipboardPaste::None => KeyAction::None,
         }
     }
 
@@ -634,6 +656,24 @@ mod tests {
         // A drag-dropped path (with a trailing newline the terminal appends).
         l.insert_paste("/tmp/My\\ Shot.png\n");
         assert_eq!(l.composer.take(), "/tmp/My\\ Shot.png ");
+    }
+
+    #[test]
+    fn pasted_image_path_becomes_a_chip_that_resolves_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("screen.png");
+        std::fs::write(&img, [7, 7, 7]).unwrap();
+
+        let mut l = live(80, 24);
+        l.insert_paste(&format!("look at {}\n", img.display()));
+        let text = l.composer.take();
+        // The raw path is hidden behind an `[Image N]` chip…
+        assert!(!text.contains("screen.png"), "path leaked: {text}");
+        assert!(text.starts_with("look at [Image "), "no chip: {text}");
+        // …and the chip resolves back to the file at submit time.
+        let (attachments, _) = crate::images::resolve_labels(&text);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].filename, "screen.png");
     }
 
     #[test]

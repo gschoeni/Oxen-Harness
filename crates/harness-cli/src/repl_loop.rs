@@ -53,8 +53,14 @@ pub(crate) async fn run_classic_repl(
     }
     let mut queue = MessageQueue::default();
     // A half-typed message left in the live composer when a turn ends; it seeds
-    // the next idle prompt so typing isn't wiped when the agent finishes.
-    let mut carryover = String::new();
+    // the next idle prompt so typing isn't wiped when the agent finishes. On a
+    // resumed transcript that stopped mid-turn, pre-fill /retry so a bare ⏎
+    // picks the trail back up.
+    let mut carryover = if ends_mid_turn(agent.messages()) {
+        "/retry".to_string()
+    } else {
+        String::new()
+    };
     loop {
         // Remind the user about stacked messages waiting to be sent.
         if !queue.is_empty() {
@@ -127,8 +133,14 @@ pub(crate) async fn run_box_repl(
     let mut history = load_prompt_history(history_path.as_deref());
     let mut queue = MessageQueue::default();
     // A half-typed message left in the live composer when a turn ends, seeding
-    // the next idle box so typing continues uninterrupted.
-    let mut seed = String::new();
+    // the next idle box so typing continues uninterrupted. On a resumed
+    // transcript that stopped mid-turn, pre-fill /retry so a bare ⏎ picks the
+    // trail back up.
+    let mut seed = if ends_mid_turn(agent.messages()) {
+        "/retry".to_string()
+    } else {
+        String::new()
+    };
     loop {
         if !queue.is_empty() {
             println!(

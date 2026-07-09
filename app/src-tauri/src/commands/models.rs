@@ -256,6 +256,19 @@ pub(crate) async fn search_hf_models(query: String) -> Result<Vec<harness_local:
         .map_err(|e| e.to_string())
 }
 
+/// Search the Oxen.ai hosted inference catalog (`hub.oxen.ai/api/ai/models`),
+/// filtered by `query`, for autocompleting the Cloud Models settings. An empty
+/// query returns the full catalog.
+#[tauri::command]
+pub(crate) async fn search_oxen_models(
+    query: String,
+) -> Result<Vec<harness_local::source::OxenModelHit>, String> {
+    let token = harness_config::secrets::get("OXEN_API_KEY").filter(|t| !t.trim().is_empty());
+    harness_local::source::oxen_search_models(&query, token.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The Hugging Face token secret name (stored in `~/.oxen-harness/.env`).
 const HF_TOKEN_ENV: &str = "HF_TOKEN";
 

@@ -16,6 +16,7 @@ mod diff;
 mod endpoint;
 mod fleet_sink;
 mod fleet_ui;
+mod images;
 mod live;
 mod local;
 mod markdown;
@@ -260,7 +261,10 @@ async fn main() -> Result<()> {
             println!(
                 "  {} {}",
                 ui.red("⚠"),
-                ui.dim("this expedition stopped mid-turn — /retry picks up where it left off"),
+                ui.dim(
+                    "this expedition stopped mid-turn — /retry is pre-filled, \
+                     press ⏎ to pick up where it left off"
+                ),
             );
         }
         println!();

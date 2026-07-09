@@ -107,6 +107,7 @@ pub fn run() {
             commands::models::list_model_catalog,
             commands::models::resolve_hf_model,
             commands::models::search_hf_models,
+            commands::models::search_oxen_models,
             commands::models::hf_token_present,
             commands::models::set_hf_token,
             commands::models::download_model,

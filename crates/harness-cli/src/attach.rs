@@ -28,9 +28,13 @@ enum Candidate {
 /// Returns the cleaned prompt (file paths removed), the loaded attachments, and
 /// human-readable warnings for files that looked attachable but couldn't be read.
 pub fn extract_attachments(input: &str) -> (String, Vec<Attachment>, Vec<String>) {
+    // `[Image N]` chips (pasted images) resolve from the session registry. The
+    // label text stays in the prompt so the model can tie "[Image 2]" to its
+    // image part; only real file-path tokens are stripped below.
+    let (mut attachments, mut warnings) = crate::images::resolve_labels(input);
+    let (label_atts, label_warns) = (attachments.len(), warnings.len());
+
     let mut text_tokens = Vec::new();
-    let mut attachments = Vec::new();
-    let mut warnings = Vec::new();
 
     for tok in tokenize(input) {
         match classify(&tok) {
@@ -49,9 +53,10 @@ pub fn extract_attachments(input: &str) -> (String, Vec<Attachment>, Vec<String>
         }
     }
 
-    // Nothing file-like — return the line verbatim so ordinary prompts keep their
-    // exact whitespace/formatting (re-joining tokens would collapse it).
-    if attachments.is_empty() && warnings.is_empty() {
+    // No file-path token pulled out — return the line verbatim so ordinary
+    // prompts keep their exact whitespace/formatting (re-joining tokens would
+    // collapse it). Label-resolved images don't rewrite the text at all.
+    if attachments.len() == label_atts && warnings.len() == label_warns {
         return (input.to_string(), attachments, warnings);
     }
     (text_tokens.join(" "), attachments, warnings)
@@ -78,7 +83,7 @@ fn classify(tok: &str) -> Candidate {
 
 /// Shell-style tokenizer: splits on whitespace, but honors single/double quotes
 /// and backslash escapes so drag-dropped paths with spaces stay one token.
-fn tokenize(input: &str) -> Vec<String> {
+pub(crate) fn tokenize(input: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut cur = String::new();
     let mut has = false; // current token has content (even if empty quotes)
@@ -161,6 +166,31 @@ mod tests {
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0].kind, AttachmentKind::Image);
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn image_labels_resolve_but_stay_in_the_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("chip.png");
+        std::fs::write(&img, [9, 9, 9]).unwrap();
+        let label = crate::images::stage_path(&img);
+
+        let line = format!("what's wrong in {label}?");
+        let (text, attachments, warnings) = extract_attachments(&line);
+        // The chip is a marker for the model, not a path — the text keeps it.
+        assert_eq!(text, line);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].filename, "chip.png");
+        assert!(warnings.is_empty());
+
+        // A chip and a dropped path in one line both attach; only the path is
+        // stripped from the text.
+        let dropped = dir.path().join("drop.png");
+        std::fs::write(&dropped, [1]).unwrap();
+        let line = format!("compare {label} with {}", dropped.display());
+        let (text, attachments, _) = extract_attachments(&line);
+        assert_eq!(text, format!("compare {label} with"));
+        assert_eq!(attachments.len(), 2);
     }
 
     #[test]

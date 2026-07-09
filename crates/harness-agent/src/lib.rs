@@ -30,6 +30,7 @@
 
 mod agent;
 mod config;
+mod errlog;
 mod error;
 mod event;
 mod prompt;

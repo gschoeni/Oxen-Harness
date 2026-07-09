@@ -58,6 +58,10 @@ pub struct AgentConfig {
     pub compression: CompressionMode,
     /// How transient model-call failures are retried before the turn errors.
     pub retry: RetryPolicy,
+    /// Where to append the developer error log (JSONL, one entry per retry
+    /// attempt and per failed turn — see [`crate::errlog`]). `None` disables
+    /// it. Writing is best-effort: log failures never affect the turn.
+    pub error_log: Option<PathBuf>,
 }
 
 impl Default for AgentConfig {
@@ -72,6 +76,7 @@ impl Default for AgentConfig {
             attachment_root: None,
             compression: CompressionMode::Off,
             retry: RetryPolicy::default(),
+            error_log: None,
         }
     }
 }

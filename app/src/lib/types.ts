@@ -104,6 +104,16 @@ export interface CloudModel {
   selected: boolean;
 }
 
+/** A hit from the Oxen.ai hosted inference catalog (for autocomplete). */
+export interface OxenModelHit {
+  id: string;
+  name: string;
+  developer: string;
+  summary: string;
+  inputs: string[];
+  outputs: string[];
+}
+
 // ---- local models ----------------------------------------------------------
 
 export type Accelerator = "metal" | "cuda" | "cpu";

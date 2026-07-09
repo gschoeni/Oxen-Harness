@@ -7,6 +7,7 @@ import {
   FolderOpen,
   GraduationCap,
   Link2,
+  Loader,
   Moon,
   Palette,
   Plus,
@@ -19,16 +20,17 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Button } from "../../components/ui";
 import {
   addCloudModel,
   getConnection,
   removeCloudModel,
+  searchOxenModels,
   setConnection,
 } from "../../lib/ipc";
 import { useActiveProject, useStore } from "../../lib/store";
-import type { SettingsPage } from "../../lib/types";
+import type { OxenModelHit, SettingsPage } from "../../lib/types";
 import { LocalSetup } from "../models/LocalSetup";
 import { ThemesPanel } from "../themes/ThemesPanel";
 import { ToolsPage } from "../tools/ToolsPage";

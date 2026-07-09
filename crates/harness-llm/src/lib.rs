@@ -50,6 +50,10 @@ impl LlmError {
         match self {
             LlmError::Http(e) => !e.is_builder(),
             LlmError::Api { status, .. } => matches!(*status, 408 | 429 | 500..=599),
+            // A stream cut off mid-reply (upstream timeout, dropped connection)
+            // is a network blip: re-sending the same request is safe because
+            // nothing was persisted from the partial reply.
+            LlmError::Stream(_) => true,
             _ => false,
         }
     }
@@ -89,6 +93,8 @@ mod tests {
         assert!(api(529).is_transient());
         assert!(api(429).is_transient());
         assert!(api(408).is_transient());
+        // …as is a stream that died mid-reply (dropped connection)…
+        assert!(LlmError::Stream("cut off".into()).is_transient());
         // …but auth, credits, and bad requests are not.
         assert!(!api(401).is_transient());
         assert!(!api(402).is_transient());

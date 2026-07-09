@@ -223,6 +223,9 @@ pub(crate) fn agent_config(
         attachment_root: Some(workspace.root().to_path_buf()),
         // Context compression (off/audit/on) per the user's saved preference.
         compression: harness_runtime::compression::mode(),
+        // Retry attempts and failed turns append to ~/.oxen-harness/errors.jsonl
+        // so a developer can dig into what the endpoint said later.
+        error_log: harness_config::paths::errors_log().ok(),
         ..AgentConfig::default()
     }
 }

@@ -387,6 +387,134 @@ pub async fn hf_search(query: &str, token: Option<&str>) -> Result<Vec<HfHit>, L
 }
 
 // ===========================================================================
+// Oxen.ai cloud models — the hosted inference catalog served at
+// `hub.oxen.ai/api/ai/models`, for autocompleting the Cloud Models settings.
+// (These are hosted API models, not downloadable GGUF weights.)
+// ===========================================================================
+
+/// A cloud model offered by the Oxen.ai inference API.
+#[derive(Debug, Clone, Serialize)]
+pub struct OxenModelHit {
+    /// The model id sent to the inference API, e.g. `claude-fable-5`.
+    pub id: String,
+    /// A friendly display name, e.g. `Claude Fable 5`.
+    pub name: String,
+    /// The organization/developer that made the model, best-effort.
+    pub developer: String,
+    /// A one-line summary, best-effort (may be empty).
+    pub summary: String,
+    /// The model's input/output modalities, e.g. `["text"]` / `["text","image"]`.
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct OxenModelsResponse {
+    #[serde(default)]
+    data: Vec<OxenModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct OxenModelEntry {
+    id: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    developer: Option<OxenDeveloper>,
+    #[serde(default)]
+    capabilities: Option<OxenCapabilities>,
+}
+
+#[derive(Deserialize)]
+struct OxenDeveloper {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OxenCapabilities {
+    #[serde(default)]
+    input: Vec<String>,
+    #[serde(default)]
+    output: Vec<String>,
+}
+
+/// Fetch the Oxen.ai cloud model catalog and filter it to those matching
+/// `query` (case-insensitive substring over id / name / developer). An empty
+/// query returns the whole catalog. Results are sorted so text models come
+/// first (the common chat case), then alphabetically by name.
+pub async fn oxen_search_models(
+    query: &str,
+    token: Option<&str>,
+) -> Result<Vec<OxenModelHit>, LocalError> {
+    let client = reqwest::Client::new();
+    let mut req = client
+        .get("https://hub.oxen.ai/api/ai/models")
+        .header("User-Agent", "oxen-harness");
+    if let Some(t) = token.filter(|t| !t.trim().is_empty()) {
+        req = req.bearer_auth(t.trim());
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| LocalError::Download(format!("Oxen models request failed: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(LocalError::Download(format!(
+            "Oxen models API returned HTTP {}",
+            resp.status().as_u16()
+        )));
+    }
+    let body: OxenModelsResponse = resp
+        .json()
+        .await
+        .map_err(|e| LocalError::Download(format!("could not read Oxen models response: {e}")))?;
+
+    let needle = query.trim().to_ascii_lowercase();
+    let mut hits: Vec<OxenModelHit> = body
+        .data
+        .into_iter()
+        .map(|e| {
+            let name = e
+                .display_name
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| e.id.clone());
+            let developer = e.developer.and_then(|d| d.name).unwrap_or_default();
+            let (inputs, outputs) = e
+                .capabilities
+                .map(|c| (c.input, c.output))
+                .unwrap_or_default();
+            OxenModelHit {
+                id: e.id,
+                name,
+                developer,
+                summary: e.summary.unwrap_or_default(),
+                inputs,
+                outputs,
+            }
+        })
+        .filter(|h| {
+            needle.is_empty()
+                || h.id.to_ascii_lowercase().contains(&needle)
+                || h.name.to_ascii_lowercase().contains(&needle)
+                || h.developer.to_ascii_lowercase().contains(&needle)
+        })
+        .collect();
+
+    hits.sort_by(|a, b| {
+        let a_text = a.outputs.iter().any(|o| o == "text");
+        let b_text = b.outputs.iter().any(|o| o == "text");
+        b_text.cmp(&a_text).then_with(|| {
+            a.name
+                .to_ascii_lowercase()
+                .cmp(&b.name.to_ascii_lowercase())
+        })
+    });
+    Ok(hits)
+}
+
+// ===========================================================================
 // Oxen.ai-hosted weights — plumbing is real (Origin::Oxen + download_url); the
 // featured catalog is a stub until the hosted-weights repos are published.
 // ===========================================================================

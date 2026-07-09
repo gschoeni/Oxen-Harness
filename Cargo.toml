@@ -59,6 +59,7 @@ async-trait = "0.1"
 base64 = "0.22"
 dotenvy = "0.15"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+htmd = "0.5"
 
 # A shared, deliberately small lint policy every crate inherits via
 # `[lints] workspace = true`. The bar: no unsafe outside audited, annotated

@@ -104,7 +104,7 @@ pub(crate) fn auth_hint(ui: &Ui, err: &str) -> Option<String> {
 }
 
 /// Whether an agent error message reads as an authentication failure.
-fn is_auth_error(err: &str) -> bool {
+pub(crate) fn is_auth_error(err: &str) -> bool {
     err.contains("(401)") || err.to_lowercase().contains("must be authenticated")
 }
 

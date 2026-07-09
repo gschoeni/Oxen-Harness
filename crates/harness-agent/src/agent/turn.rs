@@ -72,7 +72,31 @@ impl Agent {
     /// Drive the model/tool loop against the current transcript to a final reply.
     /// Shared by a fresh turn and a retry — the only difference is whether a user
     /// message was pushed first.
-    async fn drive_turn<F>(&mut self, mut on_event: F) -> Result<String, AgentError>
+    ///
+    /// Every terminal failure is also appended to the developer error log (see
+    /// [`crate::errlog`]) so it stays debuggable after the UI moved on.
+    async fn drive_turn<F>(&mut self, on_event: F) -> Result<String, AgentError>
+    where
+        F: FnMut(&AgentEvent),
+    {
+        let result = self.drive_turn_inner(on_event).await;
+        if let Err(e) = &result {
+            crate::errlog::record(
+                self.config.error_log.as_deref(),
+                "turn_failed",
+                serde_json::json!({
+                    "session": self.session_id(),
+                    "model": self.config.model,
+                    "endpoint": self.client.base_url(),
+                    "kind": error_kind(e),
+                    "error": e.to_string(),
+                }),
+            );
+        }
+        result
+    }
+
+    async fn drive_turn_inner<F>(&mut self, mut on_event: F) -> Result<String, AgentError>
     where
         F: FnMut(&AgentEvent),
     {
@@ -295,6 +319,19 @@ impl Agent {
                 Ok(assembled) => return Ok(assembled),
                 Err(e) if e.is_transient() && attempt < retry.max_attempts => {
                     let delay = retry.delay_after(attempt);
+                    crate::errlog::record(
+                        self.config.error_log.as_deref(),
+                        "retrying",
+                        serde_json::json!({
+                            "session": self.session_id(),
+                            "model": self.config.model,
+                            "endpoint": self.client.base_url(),
+                            "attempt": attempt,
+                            "max_attempts": retry.max_attempts,
+                            "delay_ms": delay.as_millis() as u64,
+                            "error": e.to_string(),
+                        }),
+                    );
                     on_event(&AgentEvent::Retrying {
                         attempt,
                         max_attempts: retry.max_attempts,
@@ -423,6 +460,21 @@ impl Agent {
             result: result.clone(),
         });
         result
+    }
+}
+
+/// A stable machine-readable tag for an [`AgentError`] variant, so the error
+/// log can be filtered (`jq 'select(.kind == "retries_exhausted")'`) without
+/// parsing display strings.
+fn error_kind(e: &AgentError) -> &'static str {
+    match e {
+        AgentError::Llm(_) => "llm",
+        AgentError::Tool(_) => "tool",
+        AgentError::History(_) => "history",
+        AgentError::Io(_) => "io",
+        AgentError::Json(_) => "json",
+        AgentError::ContextWindowExceeded { .. } => "context_window_exceeded",
+        AgentError::RetriesExhausted { .. } => "retries_exhausted",
     }
 }
 
@@ -725,6 +777,96 @@ mod tests {
         assert_eq!((retries[1].0, retries[1].1), (2, 4));
         assert!(retries[0].2.contains("502"), "event should carry the error");
         bad.assert_async().await;
+        good.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn failures_are_appended_to_the_error_log() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(502)
+            .with_body(r#"{"error":{"title":"The model provider returned an error."}}"#)
+            .create_async()
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("errors.jsonl");
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            retry: fast_retry(2),
+            error_log: Some(log.clone()),
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        agent.run_turn("hello", |_| {}).await.unwrap_err();
+
+        let body = std::fs::read_to_string(&log).unwrap();
+        let entries: Vec<serde_json::Value> = body
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        // One "retrying" entry for the backoff attempt, then the terminal
+        // failure — each stamped and self-describing for later digging.
+        assert_eq!(entries.len(), 2, "log should hold retry + failure: {body}");
+        assert_eq!(entries[0]["event"], "retrying");
+        assert_eq!(entries[0]["attempt"], 1);
+        assert!(entries[0]["error"].as_str().unwrap().contains("502"));
+        assert_eq!(entries[1]["event"], "turn_failed");
+        assert_eq!(entries[1]["kind"], "retries_exhausted");
+        assert_eq!(entries[1]["model"], "claude-opus-4-8");
+        assert_eq!(entries[1]["endpoint"], server.url());
+        assert!(entries[1]["ts"].as_str().unwrap().ends_with('Z'));
+    }
+
+    #[tokio::test]
+    async fn a_stream_cut_off_mid_reply_is_retried() {
+        let mut server = mockito::Server::new_async().await;
+        // First call: a 200 whose SSE body stops mid-reply — tokens flowed but
+        // no finish reason / [DONE] ever arrived (an upstream timeout dropping
+        // the connection). The turn must retry, not end on the truncated text.
+        let cut = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"I'll rewrite \"}}]}\n\n",
+            )
+            .expect(1)
+            .create_async()
+            .await;
+        let good = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("recovered"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(4));
+        let mut retries = Vec::new();
+        let out = agent
+            .run_turn("hello", |e| {
+                if let AgentEvent::Retrying { error, .. } = e {
+                    retries.push(error.clone());
+                }
+            })
+            .await
+            .expect("the turn should survive a cut-off stream and finish");
+
+        assert_eq!(out, "recovered");
+        assert_eq!(retries.len(), 1);
+        assert!(
+            retries[0].contains("connection closed"),
+            "event should say the stream was cut off: {}",
+            retries[0]
+        );
+        cut.assert_async().await;
         good.assert_async().await;
     }
 

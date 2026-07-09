@@ -203,6 +203,9 @@ pub(crate) fn finish_tools(
         context_window,
         attachment_root: Some(workspace_root.to_path_buf()),
         compression: harness_runtime::compression::mode(),
+        // Retry attempts and failed turns append to ~/.oxen-harness/errors.jsonl
+        // so a developer can dig into what the endpoint said later.
+        error_log: harness_config::paths::errors_log().ok(),
         ..AgentConfig::default()
     }
 }

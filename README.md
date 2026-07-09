@@ -50,7 +50,7 @@ of focused crates:
 | `harness-core` | Shared domain types (messages, roles) and defaults |
 | `harness-config` | Shared config plumbing: `~/.oxen-harness` paths, versioned JSON files, secrets in `.env` |
 | `harness-llm` | Oxen.ai chat completions client: tool calling + SSE streaming, lightweight auth |
-| `harness-tools` | The `TypedTool` trait + built-in tools: read/write/edit files, glob find, regex search, sandboxed shell, git, web search, interactive questions, canvas documents, plans, skills, and user-defined HTTP tools |
+| `harness-tools` | The `TypedTool` trait + built-in tools: read/write/edit files, glob find, regex search, sandboxed shell, git, web search, web page fetch, interactive questions, canvas documents, plans, skills, and user-defined HTTP tools |
 | `harness-compress` | Reversible context compression for stale tool output before it goes on the wire |
 | `harness-store` | SQLite history (verbatim) + JSONL export for fine-tuning |
 | `harness-local` | Local models: curated Qwen3 GGUF catalog, downloads + disk tracking, `llama-server` launcher |
@@ -107,6 +107,20 @@ and is always available. Set `BRAVE_API_KEY` (or `BRAVE_SEARCH_API_KEY`) in the
 environment or `~/.oxen-harness/.env` — or just paste a key when prompted after
 a failed search; both front ends turn the missing-key error into an inline
 prompt so you can enable it mid-conversation and retry.
+
+### Web page fetch
+
+The `web_fetch` tool reads a single page into context — the "read" half that
+pairs with `web_search`'s "find": the agent searches, then fetches a promising
+URL for its full text. It does an HTTP GET (defaulting a missing scheme to
+`https://`), and when the server returns HTML it converts the page to clean
+Markdown ([`htmd`](https://crates.io/crates/htmd) — dropping `<script>`,
+`<style>`, `<nav>`, and `<head>`), so the model gets prose instead of markup.
+Markdown/plain-text responses pass through untouched. Results are capped
+(default 100K chars, overridable per call via `max_chars`) so one fetch can't
+dominate the window, and the compression layer shrinks them further. No API key
+required. It fetches `localhost`/private addresses too, so the agent can pull in
+docs from a dev server or internal wiki.
 
 ### Clarifying questions
 

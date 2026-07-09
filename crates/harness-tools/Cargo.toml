@@ -21,6 +21,7 @@ ignore = "0.4"
 regex = "1"
 globset = "0.4"
 reqwest = { workspace = true }
+htmd = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

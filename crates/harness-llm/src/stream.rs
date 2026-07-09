@@ -108,6 +108,13 @@ impl StreamAssembler {
         self.done
     }
 
+    /// Whether the stream reached a proper end: the `[DONE]` sentinel arrived,
+    /// or a chunk carried a finish reason (some servers omit the sentinel).
+    /// A stream that ends with neither was cut off mid-reply.
+    pub fn is_complete(&self) -> bool {
+        self.done || self.finish_reason.is_some()
+    }
+
     /// Process one decoded `data:` payload, returning the events it surfaces.
     ///
     /// A single chunk can yield more than one event — e.g. the chunk that first

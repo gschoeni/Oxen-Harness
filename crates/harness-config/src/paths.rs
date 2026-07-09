@@ -92,6 +92,14 @@ pub fn prompt_history_file() -> Result<PathBuf, ConfigError> {
     under("prompt_history.txt")
 }
 
+/// `~/.oxen-harness/errors.jsonl` — the developer error log: one JSON entry
+/// per model-call retry attempt and per failed turn (timestamp, session,
+/// model, endpoint, error), appended by every host so failures stay
+/// debuggable after the UI moved on.
+pub fn errors_log() -> Result<PathBuf, ConfigError> {
+    under("errors.jsonl")
+}
+
 /// `~/.oxen-harness/themes/` — custom + exported themes.
 pub fn themes_dir() -> Result<PathBuf, ConfigError> {
     let dir = under("themes")?;

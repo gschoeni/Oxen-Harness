@@ -48,20 +48,55 @@ pub(crate) fn retry_notice(attempt: u32, max_attempts: u32, delay_ms: u64, error
     )
 }
 
+/// Whether a failed turn is worth pre-filling `/retry` for: the transcript
+/// stops mid-turn (so there's a dangling turn to re-drive) and the failure
+/// isn't an auth one (where `/auth` is the fix, not a retry). Both terminals
+/// use this to seed the next prompt with `/retry` so a bare ⏎ tries again.
+pub(crate) fn seed_retry(
+    messages: &[harness_llm::ChatMessage],
+    err: &harness_agent::AgentError,
+) -> bool {
+    ends_mid_turn(messages) && !commands::auth::is_auth_error(&err.to_string())
+}
+
 /// The failure report for a turn that died even after retries: what happened,
 /// then how to pick the conversation back up — now (`/retry`, `/model`) or
 /// later (`--continue` / `--resume`). Auth failures get the `/auth` hint
-/// instead of the generic recovery lines. Shared by the classic prompt and the
-/// live composer so both terminals explain the same way out.
+/// instead of the generic recovery lines; `retry_seeded` says the prompt was
+/// pre-filled with `/retry`, so the hint points at ⏎ instead. Shared by the
+/// classic prompt and the live composer so both terminals explain the same
+/// way out.
 pub(crate) fn turn_failure_lines(
     agent: &Agent,
     ui: &Ui,
     err: &harness_agent::AgentError,
+    retry_seeded: bool,
 ) -> Vec<String> {
-    let mut lines = vec![
-        format!("  {}", ui.red(&ui.death())),
-        format!("  {}", ui.dim(&format!("The trail guide says: {err}"))),
-    ];
+    let mut lines = vec![format!("  {}", ui.red(&ui.death()))];
+    // Retries exhausted is the "endpoint is down" case: break the report into
+    // what failed, the last error, and where — a headline the eye can't skip,
+    // instead of one long dim line.
+    if let harness_agent::AgentError::RetriesExhausted {
+        attempts,
+        model,
+        endpoint,
+        source,
+    } = err
+    {
+        lines.push(format!(
+            "  {}",
+            ui.red(&format!(
+                "The model endpoint failed {attempts} times in a row — the turn did not finish."
+            )),
+        ));
+        lines.push(format!("  {}", ui.cream(&format!("Last error: {source}"))));
+        lines.push(format!("  {}", ui.dim(&format!("({model} at {endpoint})"))));
+    } else {
+        lines.push(format!(
+            "  {}",
+            ui.dim(&format!("The trail guide says: {err}"))
+        ));
+    }
     if let Some(hint) = commands::auth::auth_hint(ui, &err.to_string()) {
         lines.push(hint);
         return lines;
@@ -73,7 +108,11 @@ pub(crate) fn turn_failure_lines(
     lines.push(format!(
         "  {} {}",
         ui.dim("·"),
-        ui.dim("/retry to try the turn again · /model <name> to switch oxen first"),
+        ui.dim(if retry_seeded {
+            "/retry is ready below — press ⏎ to try again · /model <name> to switch oxen first"
+        } else {
+            "/retry to try the turn again · /model <name> to switch oxen first"
+        }),
     ));
     lines.push(format!(
         "  {} {}",
@@ -82,6 +121,11 @@ pub(crate) fn turn_failure_lines(
             "later: oxen-harness --continue (or --resume {}), then /retry",
             agent.session_id()
         )),
+    ));
+    lines.push(format!(
+        "  {} {}",
+        ui.dim("·"),
+        ui.dim("full error details: ~/.oxen-harness/errors.jsonl"),
     ));
     lines
 }
@@ -113,7 +157,7 @@ pub(crate) async fn run_turn_and_drain(
         *carryover = draft;
         return Ok(exit);
     }
-    if run_prompt(agent, &request, ui).await? {
+    if run_prompt(agent, &request, ui, carryover).await? {
         return Ok(true);
     }
     while !queue.is_empty() {
@@ -123,7 +167,7 @@ pub(crate) async fn run_turn_and_drain(
             ui.brown("▶ rolling the wagon:"),
             ui.cream(&truncate(&next, 80)),
         );
-        if run_prompt(agent, &TurnRequest::Prompt(next), ui).await? {
+        if run_prompt(agent, &TurnRequest::Prompt(next), ui, carryover).await? {
             return Ok(true);
         }
     }
@@ -132,7 +176,17 @@ pub(crate) async fn run_turn_and_drain(
 
 /// Run one turn, racing it against Ctrl-C. Returns `Ok(true)` if the user
 /// interrupted the stream (the caller should then end the session).
-async fn run_prompt(agent: &mut Agent, request: &TurnRequest, ui: &Ui) -> Result<bool> {
+///
+/// `carryover` seeds the next idle prompt: a retryable failure fills it with
+/// `/retry` so a bare ⏎ re-drives the dangling turn; a finished turn clears
+/// any stale seed (in the classic prompt this string is ours alone — there is
+/// no mid-turn composer that could hold the user's typing).
+async fn run_prompt(
+    agent: &mut Agent,
+    request: &TurnRequest,
+    ui: &Ui,
+    carryover: &mut String,
+) -> Result<bool> {
     let (text, attachments) = match request {
         TurnRequest::Prompt(prompt) => {
             let (text, attachments, warnings) = attach::extract_attachments(prompt);
@@ -178,6 +232,7 @@ async fn run_prompt(agent: &mut Agent, request: &TurnRequest, ui: &Ui) -> Result
 
     match result {
         Ok(_) => {
+            carryover.clear();
             print_context_usage(agent, ui);
             // Offer to set up web search if the model tried it without a key.
             if needs_brave_key {
@@ -187,8 +242,12 @@ async fn run_prompt(agent: &mut Agent, request: &TurnRequest, ui: &Ui) -> Result
         }
         Err(e) => {
             println!();
-            for line in turn_failure_lines(agent, ui, &e) {
+            let seeded = seed_retry(agent.messages(), &e);
+            for line in turn_failure_lines(agent, ui, &e, seeded) {
                 println!("{line}");
+            }
+            if seeded {
+                *carryover = "/retry".to_string();
             }
             Ok(false)
         }
@@ -227,8 +286,9 @@ pub(crate) use harness_core::fmt::human_tokens;
 
 #[cfg(test)]
 mod tests {
-    use super::{ends_mid_turn, retry_notice};
-    use harness_llm::ChatMessage;
+    use super::{ends_mid_turn, retry_notice, seed_retry};
+    use harness_agent::AgentError;
+    use harness_llm::{ChatMessage, LlmError};
 
     #[test]
     fn ends_mid_turn_flags_dangling_user_and_tool_messages() {
@@ -247,6 +307,32 @@ mod tests {
         let settled = vec![ChatMessage::user("hi"), ChatMessage::assistant("hello")];
         assert!(!ends_mid_turn(&settled));
         assert!(!ends_mid_turn(&[]));
+    }
+
+    #[test]
+    fn seed_retry_only_for_dangling_retryable_failures() {
+        let dangling = vec![ChatMessage::system("s"), ChatMessage::user("hi")];
+        let settled = vec![ChatMessage::user("hi"), ChatMessage::assistant("done")];
+        let exhausted = AgentError::RetriesExhausted {
+            attempts: 4,
+            model: "claude-opus-4-8".into(),
+            endpoint: "https://hub.oxen.ai/api/ai".into(),
+            source: LlmError::Api {
+                status: 502,
+                message: "The model provider returned an error.".into(),
+            },
+        };
+        let auth = AgentError::Llm(LlmError::Api {
+            status: 401,
+            message: "Invalid API key".into(),
+        });
+
+        // A dangling turn that died on a provider error → pre-fill /retry.
+        assert!(seed_retry(&dangling, &exhausted));
+        // A settled conversation has nothing to re-drive.
+        assert!(!seed_retry(&settled, &exhausted));
+        // Auth failures need /auth first, not a retry.
+        assert!(!seed_retry(&dangling, &auth));
     }
 
     #[test]

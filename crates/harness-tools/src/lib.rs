@@ -30,6 +30,7 @@ pub mod sandbox;
 pub mod shell;
 pub mod skill;
 pub mod web;
+pub mod web_fetch;
 
 pub use ask::{AskUserTool, Choice, Question, QuestionAnswer, QuestionAsker, ASK_USER_TOOL};
 pub use canvas::{CanvasDoc, CanvasSink, CanvasTool, CANVAS_FORMATS, CANVAS_TOOL};
@@ -41,6 +42,7 @@ pub use sandbox::Workspace;
 pub use shell::RUN_SHELL_TOOL;
 pub use skill::{Skill, SkillScope, SkillTool, SKILL_TOOL};
 pub use web::WEB_SEARCH_TOOL;
+pub use web_fetch::{WebFetchTool, WEB_FETCH_TOOL};
 
 /// Errors a tool can return while running.
 #[derive(Debug, thiserror::Error)]
@@ -518,7 +520,10 @@ impl ToolRegistry {
             .with_typed(shell::ShellTool::new(workspace.clone()))
             .with_typed(git::GitTool::new(workspace))
             // Planning/checklist tool — always available so any host gets it.
-            .with_typed(plan::PlanTool::new());
+            .with_typed(plan::PlanTool::new())
+            // Fetch a web page into context (no key needed); pairs with the
+            // web_search tool registered just below.
+            .with_typed(web_fetch::WebFetchTool::new());
 
         // Always register web search so the model can use it; when no Brave key
         // is configured the call fails with a recognizable error that the UIs
@@ -622,6 +627,7 @@ mod tests {
                 shell::RUN_SHELL_TOOL,
                 fs::SEARCH_FILES_TOOL,
                 plan::PLAN_TOOL,
+                web_fetch::WEB_FETCH_TOOL,
                 web::WEB_SEARCH_TOOL,
                 fs::WRITE_FILE_TOOL,
             ],

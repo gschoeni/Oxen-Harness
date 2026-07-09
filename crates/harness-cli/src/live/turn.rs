@@ -74,8 +74,17 @@ pub(crate) async fn run_prompt(
                 {
                     let mut s = state.borrow_mut();
                     if let Err(e) = &result {
-                        for line in crate::turn::turn_failure_lines(agent, ui, e) {
+                        // Pre-fill the composer with /retry when there's a
+                        // dangling turn to re-drive and nothing else pending,
+                        // so a bare ⏎ picks the trail back up.
+                        let seed = crate::turn::seed_retry(agent.messages(), e)
+                            && queue.is_empty()
+                            && s.composer_draft().is_empty();
+                        for line in crate::turn::turn_failure_lines(agent, ui, e, seed) {
                             s.print_line(&line);
+                        }
+                        if seed {
+                            s.composer.set_text("/retry");
                         }
                     }
                     // Refresh the pinned meters (they sit above the divider,

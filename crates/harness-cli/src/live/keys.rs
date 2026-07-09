@@ -82,6 +82,9 @@ pub(super) enum KeyIntent {
     /// Insert a hard line break in the composer (Alt/Shift+Enter, Ctrl+J).
     ComposeNewline,
     ComposerSubmit,
+    /// Ctrl+V: read the system clipboard directly. Bracketed paste can only
+    /// deliver text, so this is how a copied screenshot gets in as an image.
+    PasteClipboard,
     /// Tab in the composer: menu-complete the slash command / argument.
     Complete,
     /// Up in the composer: move a line up, else recall older history / focus the
@@ -114,6 +117,11 @@ pub(super) fn classify_key(
     }
     if ctrl && code == KeyCode::Char('d') && mode == Mode::Compose && composer_empty {
         return KeyIntent::Exit;
+    }
+    // Ctrl+V pastes from the system clipboard into whichever editor is open
+    // (the terminal's own paste arrives as `Event::Paste` instead).
+    if ctrl && code == KeyCode::Char('v') && mode != Mode::Browse {
+        return KeyIntent::PasteClipboard;
     }
     match mode {
         Mode::Compose => {
@@ -271,6 +279,22 @@ mod tests {
         assert_eq!(
             classify_key(KeyCode::Char('a'), n, Mode::Compose, false),
             KeyIntent::Compose(BufOp::Insert('a'))
+        );
+    }
+
+    #[test]
+    fn ctrl_v_reads_the_clipboard_while_an_editor_is_open() {
+        let c = KeyModifiers::CONTROL;
+        for mode in [Mode::Compose, Mode::Edit] {
+            assert_eq!(
+                classify_key(KeyCode::Char('v'), c, mode, false),
+                KeyIntent::PasteClipboard
+            );
+        }
+        // Browsing the queue has nothing to paste into.
+        assert_eq!(
+            classify_key(KeyCode::Char('v'), c, Mode::Browse, false),
+            KeyIntent::Ignore
         );
     }
 
