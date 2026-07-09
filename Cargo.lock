@@ -666,6 +666,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing-subscriber",
+ "unicode-width",
 ]
 
 [[package]]

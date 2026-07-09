@@ -84,9 +84,63 @@ pub fn tail_chars(s: &str, cap: usize) -> String {
     }
 }
 
+/// Append `addition` to a rolling buffer, keeping roughly the freshest `cap`
+/// characters — the in-place, amortized counterpart to [`tail_chars`] for a
+/// buffer that grows token-by-token.
+///
+/// The append is the only work on the common path; the buffer is trimmed back
+/// down to `cap` chars *lazily*, once it has grown past a slack margin, so the
+/// O(len) scan-and-drop runs at most once per `cap` characters appended rather
+/// than on every call (which would make a token stream quadratic). The trim
+/// keeps the freshest `cap` chars and never splits a character; between trims
+/// the buffer may hold up to ~`cap` extra chars of slack, which callers that
+/// display the *end* of the buffer (a rolling tail) don't care about.
+///
+/// ```
+/// use harness_core::text::push_capped;
+/// let mut buf = String::new();
+/// for _ in 0..1000 { push_capped(&mut buf, "x", 8); }
+/// // Bounded near the cap (with up to a few caps of lazy slack), tail kept.
+/// assert!(buf.chars().count() >= 8 && buf.chars().count() <= 32);
+/// assert!(buf.ends_with('x'));
+/// ```
+pub fn push_capped(buf: &mut String, addition: &str, cap: usize) {
+    buf.push_str(addition);
+    // Cheap O(1) gate on byte length (a char is ≤ 4 bytes, so `cap * 4` bytes
+    // is always ≥ `cap` chars): only pay for the char scan once we're clearly
+    // over the cap, then drop the oldest chars back down to it.
+    if buf.len() > cap.saturating_mul(4) {
+        let count = buf.chars().count();
+        if count > cap {
+            if let Some((byte, _)) = buf.char_indices().nth(count - cap) {
+                buf.drain(..byte);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn push_capped_amortizes_and_keeps_the_tail() {
+        let mut buf = String::new();
+        for i in 0..500 {
+            push_capped(&mut buf, &format!("{}", i % 10), 20);
+        }
+        // Bounded near the cap (with lazy slack), char-safe, freshest kept.
+        let n = buf.chars().count();
+        assert!((20..=80).contains(&n), "len {n} out of bounds");
+        assert!(buf.ends_with('9'));
+
+        // Multi-byte safe: never splits a character on trim.
+        let mut emoji = String::new();
+        for _ in 0..100 {
+            push_capped(&mut emoji, "😀", 4);
+        }
+        assert!(emoji.chars().all(|c| c == '😀'));
+    }
 
     #[test]
     fn ellipsize_is_char_safe() {

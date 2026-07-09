@@ -227,14 +227,21 @@ impl Live {
         }
     }
 
-    /// Advance the fleet block's animation; true when a fleet is on screen
-    /// (the caller then repaints the pinned area).
+    /// Advance the fleet block's animation and report whether the pinned area
+    /// needs a repaint this tick — only while a lane is actually running (its
+    /// spinner/clock is moving). A fleet whose lanes have all settled leaves
+    /// the block static, so the composer stops rewriting it 9×/second for a
+    /// picture that no longer changes; a fresh lane event repaints on its own.
     pub(super) fn tick_fleet(&mut self) -> bool {
-        let active = self.fleet.lock().is_some();
-        if active {
+        let animating = self
+            .fleet
+            .lock()
+            .as_ref()
+            .is_some_and(|s| s.has_running_lane());
+        if animating {
             self.fleet_frame = self.fleet_frame.wrapping_add(1);
         }
-        active
+        animating
     }
 
     /// Alt+digit switches which fleet lane is being watched (alt+0 → overview).

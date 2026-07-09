@@ -37,6 +37,7 @@ use std::time::{Duration, Instant};
 use harness_agent::fleet::FleetEvent;
 use harness_agent::AgentEvent;
 use tokio_util::sync::CancellationToken;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::{paint, Rgb, Ui};
 use crate::turn::human_tokens;
@@ -130,8 +131,12 @@ impl FleetState {
         };
         match event {
             AgentEvent::Token(t) => {
+                // Activity is a one-line, whitespace-collapsed rolling readout
+                // (cap ~120, so the collapse is trivial); the tail is the full
+                // multi-line stream (cap ~4000), appended in place so a long
+                // stream doesn't recopy the whole buffer on every token.
                 lane.activity = roll_tail(&lane.activity, t, ACTIVITY_TAIL);
-                lane.tail = append_tail(&lane.tail, t);
+                harness_core::text::push_capped(&mut lane.tail, t, OUTPUT_TAIL);
             }
             AgentEvent::ToolStart { name, arguments } => {
                 let verbs = ui.tool_verbs(name);
@@ -140,7 +145,11 @@ impl FleetState {
                 let line = format!("{verb}… {target}");
                 let line = line.trim_end();
                 lane.activity = line.to_string();
-                lane.tail = append_tail(&lane.tail, &format!("\n◆ {line}\n"));
+                harness_core::text::push_capped(
+                    &mut lane.tail,
+                    &format!("\n◆ {line}\n"),
+                    OUTPUT_TAIL,
+                );
             }
             AgentEvent::Retrying {
                 attempt,
@@ -186,6 +195,14 @@ impl FleetState {
         if let Some(cancel) = &self.cancel {
             cancel.cancel();
         }
+    }
+
+    /// Whether any lane is still running — i.e. whether the block has a
+    /// spinner/clock that needs to keep animating. Once every lane has
+    /// settled (done/failed) or is merely queued, the block is static and the
+    /// live composer can stop repainting it each tick.
+    pub(crate) fn has_running_lane(&self) -> bool {
+        self.lanes.iter().any(|l| l.status == LaneStatus::Running)
     }
 }
 
@@ -332,7 +349,7 @@ pub(crate) fn block_lines(
     let label_width = state
         .lanes
         .iter()
-        .map(|l| l.label.chars().count())
+        .map(|l| disp_width(&l.label))
         .max()
         .unwrap_or(0);
     let now = Instant::now();
@@ -433,9 +450,9 @@ struct LaneCells {
 }
 
 fn lane_cells(lane: &LaneState, label_width: usize, width: usize, meta: &str) -> LaneCells {
-    // Fixed layout: 2 indent + 1 glyph + 1 gap, label field, 2 gap, activity,
-    // 2 gap, meta. Whatever is left after the fixed parts belongs to activity.
-    let fixed = 2 + 1 + 1 + label_width + 2 + 2 + meta.chars().count();
+    // Fixed layout, in display columns: 2 indent + 1 glyph + 1 gap, label
+    // field, 2 gap, activity, 2 gap, meta. Whatever is left belongs to activity.
+    let fixed = 2 + 1 + 1 + label_width + 2 + 2 + disp_width(meta);
     let avail = width.saturating_sub(fixed + 1).max(8);
     LaneCells {
         label: pad(&lane.label, label_width),
@@ -444,17 +461,29 @@ fn lane_cells(lane: &LaneState, label_width: usize, width: usize, meta: &str) ->
     }
 }
 
-/// The last `rows` display rows of a lane's output tail, wrapped to `width`.
+/// The last `rows` display rows of a lane's output tail, wrapped to `width`
+/// columns (splitting on display width so wide characters don't overflow).
 fn tail_rows(tail: &str, width: usize, rows: usize) -> Vec<String> {
     let width = width.max(16);
     let mut wrapped: Vec<String> = Vec::new();
     for line in tail.lines() {
-        let chars: Vec<char> = line.chars().collect();
-        if chars.is_empty() {
+        if line.is_empty() {
             continue;
         }
-        for chunk in chars.chunks(width) {
-            wrapped.push(chunk.iter().collect());
+        // Break the logical line into chunks of ≤ `width` columns.
+        let mut chunk = String::new();
+        let mut used = 0;
+        for ch in line.chars() {
+            let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + w > width && !chunk.is_empty() {
+                wrapped.push(std::mem::take(&mut chunk));
+                used = 0;
+            }
+            chunk.push(ch);
+            used += w;
+        }
+        if !chunk.is_empty() {
+            wrapped.push(chunk);
         }
     }
     if wrapped.len() > rows {
@@ -465,32 +494,56 @@ fn tail_rows(tail: &str, width: usize, rows: usize) -> Vec<String> {
 }
 
 /// Append streamed text to a one-line rolling readout: whitespace collapsed,
-/// only the freshest `cap` characters kept.
+/// only the freshest `cap` characters kept. (The tail buffer, by contrast, is
+/// grown in place with [`harness_core::text::push_capped`].)
 fn roll_tail(current: &str, addition: &str, cap: usize) -> String {
     let joined = format!("{current}{addition}");
     harness_core::text::tail_chars(&harness_core::text::collapse_ws(&joined), cap)
 }
 
-/// Append raw output to a lane's multi-line tail, keeping newlines and only
-/// the freshest [`OUTPUT_TAIL`] characters.
-fn append_tail(current: &str, addition: &str) -> String {
-    harness_core::text::tail_chars(&format!("{current}{addition}"), OUTPUT_TAIL)
+/// The terminal display width of `s` in columns — CJK ideographs and most
+/// emoji are two columns, combining marks zero. All lane geometry measures in
+/// columns, not characters, so a lane line's painted width matches what the
+/// terminal actually advances the cursor by; measuring in `char`s would
+/// under-count wide content, let the line overflow and wrap, and then the
+/// painter's move-up-by-line-count would smear the block.
+fn disp_width(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
 }
 
-/// Truncate (with ellipsis) or right-pad `s` to exactly `width` chars.
+/// Truncate `s` to at most `width` display columns, keeping whole characters
+/// (never splitting a wide char across the boundary).
+fn truncate_to_width(s: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in s.chars() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + w > width {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out
+}
+
+/// Truncate (with a trailing `…`) or right-pad `s` to exactly `width` display
+/// columns.
 fn fit(s: &str, width: usize) -> String {
     let flat = s.replace('\n', " ");
-    if flat.chars().count() > width {
-        // ellipsize yields kept+…, so budget one cell for the marker.
-        harness_core::text::ellipsize(&flat, width.saturating_sub(1))
+    if disp_width(&flat) > width {
+        // Leave one column for the ellipsis marker.
+        format!("{}…", truncate_to_width(&flat, width.saturating_sub(1)))
     } else {
         pad(&flat, width)
     }
 }
 
+/// Right-pad `s` with spaces to `width` display columns (a no-op when it is
+/// already at least that wide).
 fn pad(s: &str, width: usize) -> String {
     let mut out = s.to_string();
-    for _ in s.chars().count()..width {
+    for _ in disp_width(s)..width {
         out.push(' ');
     }
     out
@@ -564,18 +617,31 @@ fn run_painter(stop: &AtomicBool, hub: &FleetHub, style: &FleetStyle) {
     let _raw = RawModeGuard::enable();
     let mut drawn = 0usize;
     let mut frame = 0usize;
+    // The last frame actually written, so we can skip a repaint when nothing
+    // changed. A running lane's spinner glyph and elapsed clock vary by frame,
+    // so it keeps animating; a block of settled (done/queued) lanes composes
+    // identical lines and we go quiet instead of rewriting the terminal 10×/s.
+    let mut last: Vec<String> = Vec::new();
 
     loop {
         let stopping = stop.load(Ordering::Relaxed);
         poll_keys(hub);
-        {
+        // Compose under the lock, then release it before touching stdout — a
+        // slow terminal flush must not stall the fleet's event ingestion,
+        // which contends on this same lock per token.
+        let width = crossterm::terminal::size()
+            .map(|(w, _)| w as usize)
+            .unwrap_or(100);
+        let lines = {
             let state = hub.lock();
-            if let Some(state) = state.as_ref() {
-                let width = crossterm::terminal::size()
-                    .map(|(w, _)| w as usize)
-                    .unwrap_or(100);
-                let lines = block_lines(state, style, width, frame, HintKeys::Plain);
+            state
+                .as_ref()
+                .map(|s| block_lines(s, style, width, frame, HintKeys::Plain))
+        };
+        if let Some(lines) = lines {
+            if lines != last {
                 repaint(&mut out, &lines, &mut drawn);
+                last = lines;
             }
         }
         if stopping {
@@ -789,8 +855,13 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert_eq!(rows.last().unwrap(), "third");
 
-        let huge = append_tail("", &"x".repeat(OUTPUT_TAIL + 50));
-        assert_eq!(huge.chars().count(), OUTPUT_TAIL);
+        // The in-place tail buffer stays bounded near the cap as it grows.
+        let mut huge = String::new();
+        for _ in 0..OUTPUT_TAIL * 3 {
+            harness_core::text::push_capped(&mut huge, "x", OUTPUT_TAIL);
+        }
+        let n = huge.chars().count();
+        assert!((OUTPUT_TAIL..=OUTPUT_TAIL * 4).contains(&n));
     }
 
     #[test]
@@ -813,7 +884,27 @@ mod tests {
 
         let cells = lane_cells(&l, 12, 80, &meta);
         assert_eq!(cells.label, "diff-scan   ");
-        let total = 4 + 12 + 2 + cells.activity.chars().count() + 2 + meta.chars().count();
+        let total = 4 + 12 + 2 + disp_width(&cells.activity) + 2 + disp_width(&meta);
         assert_eq!(total, 79);
+    }
+
+    #[test]
+    fn wide_characters_are_measured_by_display_column_not_char_count() {
+        // Two CJK ideographs are 4 display columns; fit must budget by columns
+        // so the painted cell never overflows the terminal and wraps.
+        assert_eq!(disp_width("你好"), 4);
+        // Fit an all-wide string into an odd column budget: the result must not
+        // exceed it (may be one under, since a wide char can't split a column).
+        let fitted = fit("你好世界", 5);
+        assert!(disp_width(&fitted) <= 5, "over budget: {fitted:?}");
+        assert!(fitted.ends_with('…'));
+
+        // A lane line with CJK activity spans no more than the terminal width.
+        let mut l = LaneState::new("扫描");
+        l.activity = "读取源代码并追踪调用点".into();
+        l.tokens = 12_300;
+        l.elapsed = Some(Duration::from_secs(8));
+        let cells = lane_cells(&l, disp_width("扫描"), 80, &lane_meta(&l, Instant::now()));
+        assert!(disp_width(&cells.activity) <= 80);
     }
 }
