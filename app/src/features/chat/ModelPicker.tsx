@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useState } from "react";
-import { ChevronDown, Cloud, Cpu, Download, Loader, Plus } from "lucide-react";
+import { ChevronDown, Cloud, Cpu, Download, Loader } from "lucide-react";
 import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../components/ui/Menu";
 import { installedLocalModels } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
@@ -163,8 +163,8 @@ export function ModelPicker({ disabled }: { disabled: boolean }) {
           />
           <MenuItem
             manage
-            checkSlot={<Plus size={15} className="menu-check" />}
-            name="Add a cloud model…"
+            checkSlot={<Cloud size={15} className="menu-check" />}
+            name="Configure a cloud model…"
             onSelect={() => {
               setOpen(false);
               openSettings("cloud-models");
