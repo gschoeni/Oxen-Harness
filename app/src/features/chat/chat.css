@@ -967,6 +967,22 @@
   left: 0;
   min-width: 280px;
   max-width: 380px;
+  /* Let the scroll region own the overflow so the setup actions stay pinned. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The model list — the only scrolling part of the picker menu. The footer
+   ("Set up a local model…" / "Configure a cloud model…") lives outside it and
+   never scrolls away, even with a long catalog. */
+.picker-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin: calc(-1 * var(--space-1));
+  margin-bottom: 0;
+  padding: var(--space-1);
 }
 
 /* Reopen the chat's canvas after the panel was closed (top-right of messages). */

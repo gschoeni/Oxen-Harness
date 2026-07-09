@@ -125,31 +125,35 @@ export function ModelPicker({ disabled }: { disabled: boolean }) {
 
       {open && (
         <Menu className="picker-menu">
-          <MenuHead>Cloud models</MenuHead>
-          {cloudModels.map((m) => (
-            <MenuItem
-              key={m.id}
-              active={m.id === model}
-              name={m.name}
-              hint={m.id}
-              onSelect={() => pickCloud(m.id)}
-            />
-          ))}
+          {/* Only the model list scrolls — the setup actions below stay pinned
+              so they're never pushed off-screen by a long catalog. */}
+          <div className="picker-scroll">
+            <MenuHead>Cloud models</MenuHead>
+            {cloudModels.map((m) => (
+              <MenuItem
+                key={m.id}
+                active={m.id === model}
+                name={m.name}
+                hint={m.id}
+                onSelect={() => pickCloud(m.id)}
+              />
+            ))}
 
-          {localModels.length > 0 && (
-            <>
-              <MenuHead>Local models</MenuHead>
-              {localModels.map((m) => (
-                <MenuItem
-                  key={m.id}
-                  active={m.id === model}
-                  icon={<Cpu size={13} className="menu-icon" />}
-                  name={m.display}
-                  onSelect={() => pickLocal(m.id)}
-                />
-              ))}
-            </>
-          )}
+            {localModels.length > 0 && (
+              <>
+                <MenuHead>Local models</MenuHead>
+                {localModels.map((m) => (
+                  <MenuItem
+                    key={m.id}
+                    active={m.id === model}
+                    icon={<Cpu size={13} className="menu-icon" />}
+                    name={m.display}
+                    onSelect={() => pickLocal(m.id)}
+                  />
+                ))}
+              </>
+            )}
+          </div>
 
           <MenuSep />
           <MenuItem
