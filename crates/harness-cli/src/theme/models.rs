@@ -2,14 +2,15 @@
 
 use super::{flourish, Ui};
 
-/// One row in the `models list` table (a catalog model + its local status).
-pub struct ModelRow<'a> {
-    pub id: &'a str,
-    pub params: &'a str,
+/// One row in the `models list` table (a catalog or downloaded model + its
+/// local status).
+pub struct ModelRow {
+    pub id: String,
+    pub params: String,
     /// Pre-formatted size (actual when installed, else the estimate).
     pub size: String,
     pub installed: bool,
-    pub note: &'a str,
+    pub note: String,
 }
 
 /// Render the local-model catalog as an aligned, themed table.
@@ -125,18 +126,18 @@ mod tests {
         let ui = Ui::plain();
         let rows = [
             ModelRow {
-                id: "qwen3-8b",
-                params: "8B",
+                id: "qwen3-8b".to_string(),
+                params: "8B".to_string(),
                 size: "5.0 GB".to_string(),
                 installed: true,
-                note: "all-rounder",
+                note: "all-rounder".to_string(),
             },
             ModelRow {
-                id: "qwen3-32b",
-                params: "32B",
+                id: "qwen3-32b".to_string(),
+                params: "32B".to_string(),
                 size: "20 GB".to_string(),
                 installed: false,
-                note: "heaviest",
+                note: "heaviest".to_string(),
             },
         ];
         let table = models_table(&ui, &rows, "5.0 GB", "/home/me/.oxen-harness/models");

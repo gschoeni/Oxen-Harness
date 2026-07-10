@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "id": "qwen3-0.6b",
+      "display": "Qwen3 0.6B",
+      "params": "0.6B",
+      "repo": "bartowski/Qwen_Qwen3-0.6B-GGUF",
+      "file": "Qwen_Qwen3-0.6B-Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "approx_bytes": 513802240,
+      "context": 40960,
+      "note": "Tiny; runs anywhere. Good for quick edits and testing the loop."
+    },
+    {
+      "id": "qwen3-1.7b",
+      "display": "Qwen3 1.7B",
+      "params": "1.7B",
+      "repo": "bartowski/Qwen_Qwen3-1.7B-GGUF",
+      "file": "Qwen_Qwen3-1.7B-Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "approx_bytes": 1468006400,
+      "context": 40960,
+      "note": "Small and snappy on a laptop CPU."
+    },
+    {
+      "id": "qwen3-4b",
+      "display": "Qwen3 4B",
+      "params": "4B",
+      "repo": "bartowski/Qwen_Qwen3-4B-GGUF",
+      "file": "Qwen_Qwen3-4B-Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "approx_bytes": 2621440000,
+      "context": 40960,
+      "note": "Capable lightweight coder; fits in ~4 GB of RAM/VRAM."
+    },
+    {
+      "id": "qwen3-8b",
+      "display": "Qwen3 8B",
+      "params": "8B",
+      "repo": "bartowski/Qwen_Qwen3-8B-GGUF",
+      "file": "Qwen_Qwen3-8B-Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "approx_bytes": 5368709120,
+      "context": 40960,
+      "note": "Strong all-rounder for an 8-12 GB machine."
+    },
+    {
+      "id": "qwen3-14b",
+      "display": "Qwen3 14B",
+      "params": "14B",
+      "repo": "bartowski/Qwen_Qwen3-14B-GGUF",
+      "file": "Qwen_Qwen3-14B-Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "approx_bytes": 9663676416,
+      "context": 40960,
+      "note": "Noticeably sharper reasoning; wants ~12 GB."
+    },
+    {
+      "id": "qwen3-30b-a3b",
+      "display": "Qwen3 30B-A3B (MoE)",
+      "params": "30B-A3B (MoE)",
+      "repo": "bartowski/Qwen_Qwen3-30B-A3B-GGUF",
+      "file": "Qwen_Qwen3-30B-A3B-Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "approx_bytes": 19327352832,
+      "context": 40960,
+      "note": "Big-model quality at ~3B speed; great on a 24 GB card."
+    },
+    {
+      "id": "qwen3-32b",
+      "display": "Qwen3 32B",
+      "params": "32B",
+      "repo": "bartowski/Qwen_Qwen3-32B-GGUF",
+      "file": "Qwen_Qwen3-32B-Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "approx_bytes": 21474836480,
+      "context": 40960,
+      "note": "Heaviest dense option; needs ~24 GB and patience on CPU."
+    }
+  ]
+}

@@ -1,13 +1,19 @@
 //! CLI glue for local models: the `models` subcommands and starting a
 //! `llama-server` for a `--local` session.
+//!
+//! Model ids resolve offline-first via [`harness_local::resolve_runnable`]:
+//! anything already in the store — a catalog model at any quant, a Hugging
+//! Face model installed from the desktop app, or a GGUF dropped into the
+//! models directory by hand — starts without touching the network. Only a
+//! catalog model with nothing on disk triggers a download.
 
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use harness_local::{
-    catalog, detect_hardware, find, fit, format_bytes, install_hint, llama_server_path,
-    LocalServer, ModelSpec, ModelStore,
+    catalog, detect_hardware, fit, format_bytes, install_hint, llama_server_path, resolve_runnable,
+    LocalServer, ModelRef, ModelStore, Runnable,
 };
 
 use crate::theme::{self, Ui};
@@ -15,16 +21,16 @@ use crate::theme::{self, Ui};
 /// `models` subcommand actions.
 #[derive(Debug, clap::Subcommand)]
 pub enum ModelsAction {
-    /// List local models, their sizes, and what's downloaded.
+    /// List local models — the catalog plus everything downloaded.
     List,
     /// Download a model's weights (shows progress + disk usage).
     Pull {
-        /// Catalog id, e.g. `qwen3-8b`.
+        /// A catalog id (e.g. `qwen3-8b`) — see `models list`.
         id: String,
     },
-    /// Delete a downloaded model and reclaim its disk space.
+    /// Delete a downloaded model (or a stale partial download) by id.
     Remove {
-        /// Catalog id, e.g. `qwen3-8b`.
+        /// A catalog id or an installed model id from `models list`.
         id: String,
     },
     /// Print the directory models are stored in.
@@ -36,8 +42,8 @@ pub async fn run_models(action: ModelsAction, ui: &Ui) -> Result<()> {
     let store = ModelStore::open().context("opening the local model store")?;
     match action {
         ModelsAction::List => list(&store, ui),
-        ModelsAction::Pull { id } => pull(&store, resolve(&id)?, ui).await,
-        ModelsAction::Remove { id } => remove(&store, resolve(&id)?, ui),
+        ModelsAction::Pull { id } => pull(&store, &id, ui).await.map(|_| ()),
+        ModelsAction::Remove { id } => remove(&store, &id, ui),
         ModelsAction::Path => {
             println!("{}", store.dir().display());
             Ok(())
@@ -45,43 +51,69 @@ pub async fn run_models(action: ModelsAction, ui: &Ui) -> Result<()> {
     }
 }
 
-fn resolve(id: &str) -> Result<&'static ModelSpec> {
-    find(id).ok_or_else(|| {
-        let ids: Vec<&str> = catalog().iter().map(|m| m.id).collect();
-        anyhow!("unknown model `{id}`. Known models: {}", ids.join(", "))
+/// Resolve an id, turning "unknown model" into a message that lists what *can*
+/// be named: catalog ids and everything installed.
+fn resolve(store: &ModelStore, id: &str) -> Result<Runnable> {
+    resolve_runnable(store, id).map_err(|e| {
+        let mut known: Vec<String> = catalog().into_iter().map(|m| m.id).collect();
+        let extras: Vec<String> = store
+            .installed()
+            .into_iter()
+            .map(|m| m.id)
+            .filter(|i| !known.contains(i))
+            .collect();
+        known.extend(extras);
+        anyhow::anyhow!("{e}. Known models: {}", known.join(", "))
     })
 }
 
-/// The default download reference (the catalog's published quant) for a curated
-/// model. The store is keyed by a model's ref id, so curated CLI commands map
-/// their spec to this ref to download/check/remove it.
-fn default_ref(spec: &ModelSpec) -> harness_local::ModelRef {
-    harness_local::quant_refs(spec)
-        .into_iter()
-        .find(|r| r.quant == spec.quant)
-        .unwrap_or_else(|| {
-            harness_local::quant_refs(spec)
-                .into_iter()
-                .next()
-                .expect("curated model has at least one quant")
-        })
-}
-
 fn list(store: &ModelStore, ui: &Ui) -> Result<()> {
-    let rows: Vec<theme::ModelRow> = catalog()
+    let installed = store.installed();
+    let mut covered: Vec<String> = Vec::new(); // installed ids shown via a catalog row
+
+    let mut rows: Vec<theme::ModelRow> = catalog()
         .iter()
         .map(|spec| {
-            let r = default_ref(spec);
-            let size = store.installed_size(&r.id).unwrap_or(spec.approx_bytes);
+            // A catalog model is "on disk" when any of its quants is installed.
+            let on_disk = harness_local::quant_refs(spec)
+                .into_iter()
+                .find(|r| store.is_installed(&r.id));
+            let (size, installed) = match &on_disk {
+                Some(r) => {
+                    covered.push(r.id.clone());
+                    (store.installed_size(&r.id).unwrap_or(r.size_bytes), true)
+                }
+                None => (spec.approx_bytes, false),
+            };
             theme::ModelRow {
-                id: spec.id,
-                params: spec.params,
+                id: spec.id.clone(),
+                params: spec.params.clone(),
                 size: format_bytes(size),
-                installed: store.is_installed(&r.id),
-                note: spec.note,
+                installed,
+                note: spec.note.clone(),
             }
         })
         .collect();
+
+    // Everything else on disk (Hugging Face installs, hand-placed GGUFs) is
+    // just as runnable — list it under its store id.
+    for m in installed {
+        if covered.contains(&m.id) || catalog::find(&m.id).is_some() {
+            continue;
+        }
+        rows.push(theme::ModelRow {
+            note: if m.display == m.id {
+                "Downloaded model; runs offline.".to_string()
+            } else {
+                format!("{} — downloaded; runs offline.", m.display)
+            },
+            id: m.id,
+            params: m.params,
+            size: format_bytes(m.size_bytes),
+            installed: true,
+        });
+    }
+
     print!(
         "{}",
         theme::models_table(
@@ -91,53 +123,88 @@ fn list(store: &ModelStore, ui: &Ui) -> Result<()> {
             &store.dir().display().to_string(),
         )
     );
+
+    // Interrupted downloads hold real disk space but never show as installed;
+    // surface them so the bytes aren't silently lost.
+    let partials = store.partial_downloads();
+    if !partials.is_empty() {
+        println!();
+        for (id, bytes) in partials {
+            println!(
+                "  {} {}",
+                ui.brown("◐ partial download:"),
+                ui.dim(&format!(
+                    "{id} ({}) — reclaim the space with `models remove {id}`",
+                    format_bytes(bytes)
+                )),
+            );
+        }
+    }
     Ok(())
 }
 
-fn remove(store: &ModelStore, spec: &ModelSpec, ui: &Ui) -> Result<()> {
-    let r = default_ref(spec);
-    let reclaimed = store.installed_size(&r.id);
-    if store.remove(&r.id)? {
-        let freed = reclaimed.map(format_bytes).unwrap_or_default();
+fn remove(store: &ModelStore, id: &str, ui: &Ui) -> Result<()> {
+    // Candidate store ids: the id itself, plus — for a catalog id — every
+    // quant it may have been downloaded at.
+    let mut ids = vec![id.to_string()];
+    if let Some(spec) = catalog::find(id) {
+        ids.extend(harness_local::quant_refs(&spec).into_iter().map(|r| r.id));
+    }
+
+    let mut freed: u64 = 0;
+    let mut any = false;
+    for candidate in ids {
+        let reclaimed = store.installed_size(&candidate).unwrap_or(0);
+        if store.remove(&candidate)? {
+            any = true;
+            freed += reclaimed;
+        }
+    }
+    if any {
         println!(
             "  {} {}",
             ui.green("Lightened the wagon:"),
-            ui.cream(&format!("removed {} ({freed} freed)", spec.id)),
+            ui.cream(&format!("removed {id} ({} freed)", format_bytes(freed))),
         );
     } else {
         println!(
             "  {} {}",
             ui.brown("Nothing to unpack:"),
-            ui.dim(&format!("{} isn't downloaded", spec.id)),
+            ui.dim(&format!("{id} isn't downloaded")),
         );
     }
     Ok(())
 }
 
-/// Download a model, rendering a live progress bar.
-async fn pull(store: &ModelStore, spec: &ModelSpec, ui: &Ui) -> Result<()> {
-    let model = default_ref(spec);
-    if store.is_installed(&model.id) {
-        println!(
-            "  {} {}",
-            ui.green("Already in the wagon:"),
-            ui.cream(&format!(
-                "{} ({})",
-                spec.id,
-                format_bytes(store.installed_size(&model.id).unwrap_or(spec.approx_bytes))
-            )),
-        );
-        return Ok(());
-    }
+/// Make sure `id`'s weights are on disk, downloading if needed (with a live
+/// progress bar). Returns the ready-to-serve model + path.
+async fn pull(store: &ModelStore, id: &str, ui: &Ui) -> Result<(ModelRef, std::path::PathBuf)> {
+    let (spec_display, model) = match resolve(store, id)? {
+        Runnable::Installed { model, path } => {
+            println!(
+                "  {} {}",
+                ui.green("Already in the wagon:"),
+                ui.cream(&format!(
+                    "{} ({})",
+                    model.id,
+                    format_bytes(store.installed_size(&model.id).unwrap_or(0))
+                )),
+            );
+            return Ok((model, path));
+        }
+        Runnable::Downloadable { spec, model } => (spec.display, model),
+    };
 
+    let (repo, size) = match &model.origin {
+        harness_local::Origin::HuggingFace { repo, .. }
+        | harness_local::Origin::Oxen { repo, .. } => (repo.clone(), model.size_bytes),
+    };
     println!(
         "  {} {}",
         ui.brown("Loading the wagon:"),
         ui.cream(&format!(
-            "{} · ~{} · from {}",
-            spec.display,
-            format_bytes(spec.approx_bytes),
-            spec.repo
+            "{spec_display} · ~{} · from {repo}",
+            format_bytes(size)
         )),
     );
 
@@ -171,43 +238,39 @@ async fn pull(store: &ModelStore, spec: &ModelSpec, ui: &Ui) -> Result<()> {
     if animate {
         println!();
     }
-    let path = result.with_context(|| format!("downloading {}", spec.id))?;
+    let path = result.with_context(|| format!("downloading {id}"))?;
     println!(
         "  {} {}",
         ui.green("🏞  Arrived:"),
         ui.cream(&format!(
-            "{} ready at {} ({})",
-            spec.id,
+            "{id} ready at {} ({})",
             path.display(),
             format_bytes(store.installed_size(&model.id).unwrap_or(0)),
         )),
     );
-    Ok(())
+    Ok((model, path))
 }
 
-/// Ensure a model is downloaded and launch `llama-server` for it, returning the
-/// running server (kept alive for the session). Auto-downloads if missing.
+/// Ensure a model's weights are available and launch `llama-server` for it,
+/// returning the running server (kept alive for the session). Anything already
+/// downloaded starts without touching the network; a catalog model with
+/// nothing on disk is downloaded first.
 pub async fn start_for(id: &str, ui: &Ui) -> Result<(LocalServer, String)> {
-    let spec = resolve(id)?;
-
     // Fail fast if llama-server isn't installed — before any big download.
     if llama_server_path().is_none() {
         bail!("llama-server isn't installed. {}", install_hint());
     }
 
     let store = ModelStore::open().context("opening the local model store")?;
-    let model = default_ref(spec);
-    if !store.is_installed(&model.id) {
-        pull(&store, spec, ui).await?;
-    }
+    let (model, path) = match resolve(&store, id)? {
+        Runnable::Installed { model, path } => (model, path),
+        Runnable::Downloadable { .. } => pull(&store, id, ui).await?,
+    };
 
     println!(
         "  {} {}",
         ui.brown("Hitching the oxen:"),
-        ui.dim(&format!(
-            "starting llama-server for {} (loading model…)",
-            spec.id
-        )),
+        ui.dim(&format!("starting llama-server for {id} (loading model…)")),
     );
     // Size the served context to this machine: weights + KV cache must fit the
     // usable memory budget, capped by the model's native window.
@@ -215,13 +278,13 @@ pub async fn start_for(id: &str, ui: &Ui) -> Result<(LocalServer, String)> {
     let weight_bytes = store.installed_size(&model.id).unwrap_or(0);
     let native = store.native_context(&model.id);
     let context = fit::plan_context(profile.usable_budget, weight_bytes, native);
-    let server = LocalServer::start_with_context(&store.path_for(&model.id), id, context, |_| {})
+    let server = LocalServer::start_with_context(&path, id, context, |_| {})
         .await
         .with_context(|| format!("starting llama-server for {id}"))?;
     println!(
         "  {} {}",
         ui.green("Trail is clear:"),
-        ui.cream(&format!("{} serving at {}", spec.id, server.base_url())),
+        ui.cream(&format!("{id} serving at {}", server.base_url())),
     );
-    Ok((server, spec.id.to_string()))
+    Ok((server, id.to_string()))
 }

@@ -77,8 +77,9 @@ struct Args {
     continue_last: bool,
 
     /// Run a local model with llama.cpp instead of a remote endpoint, by
-    /// catalog id (e.g. qwen3-8b). Downloads it if needed, then serves it
-    /// locally for the session. See `oxen-harness models list`.
+    /// catalog id (e.g. qwen3-8b) or any downloaded model's id. Anything
+    /// already on disk starts fully offline; a catalog model is downloaded
+    /// first if needed. See `oxen-harness models list`.
     #[arg(long, value_name = "MODEL_ID")]
     local: Option<String>,
 

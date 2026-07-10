@@ -1373,9 +1373,9 @@ dependencies = [
 name = "harness-local"
 version = "0.1.0"
 dependencies = [
- "dirs 5.0.1",
  "flate2",
  "futures-util",
+ "harness-config",
  "harness-core",
  "libc",
  "reqwest 0.12.28",
@@ -1455,6 +1455,7 @@ dependencies = [
  "globset",
  "harness-compress",
  "harness-core",
+ "htmd",
  "ignore",
  "regex",
  "reqwest 0.12.28",
@@ -1512,6 +1513,17 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "htmd"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7eee9b00ee2e599b4f86507157e3db786e7a3319fc225f0e9584151dbea2291d"
+dependencies = [
+ "html5ever",
+ "markup5ever_rcdom",
+ "phf",
+]
 
 [[package]]
 name = "html5ever"
@@ -2046,6 +2058,18 @@ dependencies = [
  "log",
  "tendril",
  "web_atoms",
+]
+
+[[package]]
+name = "markup5ever_rcdom"
+version = "0.38.0+unofficial"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "333171ccdf66e915257740d44e38ea5b1b19ce7b45d33cc35cb6f118fbd981ff"
+dependencies = [
+ "html5ever",
+ "markup5ever",
+ "tendril",
+ "xml5ever",
 ]
 
 [[package]]
@@ -3475,6 +3499,7 @@ dependencies = [
  "parking_lot",
  "phf_shared",
  "precomputed-hash",
+ "serde",
 ]
 
 [[package]]
@@ -5319,6 +5344,16 @@ checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
  "rustix",
+]
+
+[[package]]
+name = "xml5ever"
+version = "0.38.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3dc9559429edf0cd3f327cc0afd9d6b36fa8cec6d93107b7fbe64f806b5f2d9"
+dependencies = [
+ "log",
+ "markup5ever",
 ]
 
 [[package]]

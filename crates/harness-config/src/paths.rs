@@ -147,6 +147,12 @@ pub fn models_dir() -> Result<PathBuf, ConfigError> {
     under("models")
 }
 
+/// `~/.oxen-harness/local-models.json` — user additions and overrides to the
+/// curated local (llama.cpp) model catalog.
+pub fn local_models_file() -> Result<PathBuf, ConfigError> {
+    under("local-models.json")
+}
+
 /// `~/.oxen-harness/canvas/` — canvas documents written by the CLI.
 pub fn canvas_dir() -> Result<PathBuf, ConfigError> {
     under("canvas")

@@ -21,11 +21,11 @@ use crate::LocalError;
 /// surface an "update runtime" action) rather than chasing `latest`.
 pub const PINNED_VERSION: &str = "b9835";
 
-/// Where the managed runtime lives: `~/.oxen-harness/runtime/llama.cpp/`.
+/// Where the managed runtime lives: `~/.oxen-harness/runtime/llama.cpp/`
+/// (honoring the `OXEN_HARNESS_DIR` override).
 fn runtime_root() -> Option<PathBuf> {
     Some(
-        dirs::home_dir()?
-            .join(".oxen-harness")
+        harness_config::paths::base_dir_unchecked()?
             .join("runtime")
             .join("llama.cpp"),
     )

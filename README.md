@@ -3,7 +3,7 @@
 [![CI](https://github.com/gschoeni/oxen-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/gschoeni/oxen-harness/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-An open source, hackable agentic coding harness — like Claude Code or Codex, built in Rust and powered by [Oxen.ai](https://oxen.ai).
+An open source, hackable agentic coding harness, built in Rust and powered by [Oxen.ai](https://oxen.ai).
 
 <p align="center">
   <img src="assets/oxen-trail-cli.png" alt="The Oxen Trail — the oxen-harness CLI welcome screen" width="760">
@@ -11,33 +11,31 @@ An open source, hackable agentic coding harness — like Claude Code or Codex, b
 
 ## Get started
 
-All you need is [Rust](https://www.rust-lang.org/tools/install) and an [Oxen.ai](https://oxen.ai) API key (an existing [`oxen` CLI](https://docs.oxen.ai/getting-started/cli) login is picked up automatically):
-
+All you need is an [Oxen.ai](https://oxen.ai) API key
 ```bash
 git clone https://github.com/gschoeni/oxen-harness && cd oxen-harness
-export OXEN_API_KEY=sk-...        # or log in once with the `oxen` CLI
+export OXEN_API_KEY=...
 cargo run -p harness-cli
 ```
 
-That's it — you're on the trail. Type what you want done and the agent edits
-code, runs commands, and drives git, right from your terminal.
+That's it — you're on the trail.
 
-**No API key handy?** Run an open-weight model fully offline instead
+**No API key or internet handy?** Run an open-weight model fully offline instead
 (see [Running models locally](#running-models-locally-llamacpp)):
 
 ```bash
 cargo run -p harness-cli -- --local qwen3-0.6b
 ```
 
-`oxen-harness` runs an objective-check-driven agent loop against any model exposed through the Oxen.ai OpenAI-compatible chat completions API, with first-class tool calling for editing code, running commands, and driving git. Every turn is persisted so you can later export your sessions and fine-tune a model on your own coding traces.
+`oxen-harness` runs an agent loop against any model exposed through the Oxen.ai OpenAI-compatible chat completions API, with first-class tool calling for editing code, running commands, and more. Every turn is persisted so you can later export your sessions and fine-tune a model on your own coding traces.
 
 ## Why
 
 - **Hackable & open source (Apache-2.0).** A small, readable Rust workspace you can fork and extend.
 - **Extend it at three levels, no forking required.** Teach the agent reusable workflows with [skills](#extending-the-agent) (a markdown file — no code), connect your own HTTP endpoints as [custom tools](#extending-the-agent) from the desktop app's Settings, or add a built-in tool in Rust ([`AGENTS.md`](AGENTS.md#adding-a-built-in-tool) has a start-to-finish recipe).
-- **Bring your own model.** Anything with a chat completions endpoint and tool calling — default is `claude-opus-4-8` via Oxen.ai, or run Qwen3 **locally** with llama.cpp (`--local`).
+- **Bring your own model.** Anything with a chat completions endpoint and tool calling — default is `claude-opus-4-8` via Oxen.ai, or run models **locally** with llama.cpp (`--local`).
 - **Your data, exportable.** Full conversation + tool-call history in SQLite, with a JSONL exporter for fine-tuning.
-- **Two front ends.** A `claude`-style interactive CLI and a cross-platform [Tauri v2](https://v2.tauri.app/) desktop app.
+- **Two front ends.** A `claude`-style interactive CLI and a cross-platform [Tauri](https://v2.tauri.app/) desktop app.
 
 ## Architecture
 
@@ -53,7 +51,7 @@ of focused crates:
 | `harness-tools` | The `TypedTool` trait + built-in tools: read/write/edit files, glob find, regex search, sandboxed shell, git, web search, web page fetch, interactive questions, canvas documents, plans, skills, and user-defined HTTP tools |
 | `harness-compress` | Reversible context compression for stale tool output before it goes on the wire |
 | `harness-store` | SQLite history (verbatim) + JSONL export for fine-tuning |
-| `harness-local` | Local models: curated Qwen3 GGUF catalog, downloads + disk tracking, `llama-server` launcher |
+| `harness-local` | Local models: config-file GGUF catalog, downloads + disk tracking, offline-first resolution, `llama-server` launcher |
 | `harness-theme` | Configurable, shareable themes (palette + voice + style): built-ins, TOML/JSON load/save, partial overrides |
 | `harness-oxen` | Version control for config, project data, and shareable traces, via the `oxen` CLI |
 | `harness-agent` | The agent loop, wiring the LLM, tools, and store together |
@@ -61,7 +59,7 @@ of focused crates:
 | `harness-runtime` | Front-end-agnostic runtime services shared by the CLI and desktop app |
 | `harness-cli` | The `oxen-harness` interactive REPL binary |
 
-A cross-platform [Tauri v2](https://v2.tauri.app/) desktop app lives in [`app/`](app/) (a separate project, excluded from this workspace) and reuses `harness-agent`. It needs the Tauri CLI, which is **not** bundled with cargo — install it once, then run from `app/`:
+A cross-platform [Tauri](https://v2.tauri.app/) desktop app lives in [`app/`](app/) (a separate project, excluded from this workspace) and reuses `harness-agent`. It needs the Tauri CLI, which is **not** bundled with cargo — install it once, then run from `app/`:
 
 ```bash
 cargo install tauri-cli --version "^2" --locked   # provides `cargo tauri`
@@ -146,14 +144,28 @@ brew install llama.cpp                       # macOS
 # Or point at any build: export LLAMA_SERVER=/path/to/llama-server
 ```
 
-**2. Browse and download a model.** The curated catalog is the Qwen3 family at
-`Q4_K_M`, from a 0.6B that runs anywhere up to the 32B and the 30B-A3B
-mixture-of-experts:
+**2. Browse and download a model.** The catalog lives in configuration files,
+not code: a built-in list (the Qwen3 family at `Q4_K_M`, from a 0.6B that runs
+anywhere up to the 32B and the 30B-A3B mixture-of-experts) plus your own
+additions in `~/.oxen-harness/local-models.json`:
 
 ```bash
-oxen-harness models list            # table of models, sizes, what's downloaded + disk used
+oxen-harness models list            # catalog + everything downloaded, sizes, disk used
 oxen-harness models pull qwen3-8b   # download with a live progress bar
-oxen-harness models remove qwen3-8b # reclaim the disk
+oxen-harness models remove qwen3-8b # reclaim the disk (also clears stale .part files)
+```
+
+To add your own model (or override a built-in by reusing its `id`), drop an
+entry in `~/.oxen-harness/local-models.json` — only `id`, `repo`, and `file`
+are required:
+
+```json
+{
+  "schema_version": 1,
+  "models": [
+    { "id": "my-model", "repo": "owner/My-Model-GGUF", "file": "My-Model-7B-Q4_K_M.gguf" }
+  ]
+}
 ```
 
 **3. Ride it.** `--local` starts `llama-server` for the session (auto-downloading
@@ -163,9 +175,13 @@ the model first if needed) and points the agent at it:
 oxen-harness --local qwen3-8b
 ```
 
-Weights live in `~/.oxen-harness/models/`. Match the model to your hardware
-(roughly: 0.6B–4B on a CPU/small GPU, 8B–14B on an 8–12 GB machine, 32B or
-30B-A3B on a 24 GB card). The desktop app exposes the same catalog under
+Anything already downloaded — a catalog model at any quant, a model installed
+from the desktop app's Hugging Face search, or a GGUF you dropped into the
+models directory yourself — starts **fully offline**: `--local <id>` resolves
+weights on disk first and only reaches for the network when there's nothing to
+serve. Weights live in `~/.oxen-harness/models/`. Match the model to your
+hardware (roughly: 0.6B–4B on a CPU/small GPU, 8B–14B on an 8–12 GB machine,
+32B or 30B-A3B on a 24 GB card). The desktop app exposes the same catalog under
 **🐂 Local models**.
 
 ## Theming — make it yours

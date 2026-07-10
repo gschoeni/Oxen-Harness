@@ -1,8 +1,8 @@
 # AGENTS.md — How we build oxen-harness
 
-This project is developed with **The Ralph Wiggum loop**: a tight,
-objective-check-driven cycle. Never assume success — rely on test/build output,
-and persist state in files (code, tests, docs) rather than in your head.
+This project is developed with a tight, objective-check-driven cycle.
+Never assume success — rely on test/build output.
+Persist state in files on disk (code, tests, docs) rather than in context.
 
 ## The loop
 
@@ -13,8 +13,7 @@ Each iteration:
 2. **Write or update a test that encodes the change in behavior** — *before* the
    code where practical. A test net first makes refactors safe.
 3. **Make the smallest change** that moves toward green.
-4. **Write to the filesystem directly** — don't hold large diffs in conversation
-   (reduces context rot).
+4. **Write to the filesystem directly** — don't hold large diffs in conversation.
 5. **Run the checks** (below) and *read the actual output*.
 6. **On failure, fix the root cause**, not the symptom; iterate.
 7. **Stop when all checks pass** and the requirement is met — then stop editing.

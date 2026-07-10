@@ -35,12 +35,11 @@ pub struct ModelStore {
 }
 
 impl ModelStore {
-    /// Open the default store at `~/.oxen-harness/models/`, creating it.
+    /// Open the default store at `~/.oxen-harness/models/` (honoring the
+    /// `OXEN_HARNESS_DIR` override), creating it.
     pub fn open() -> Result<Self, LocalError> {
-        let dir = dirs::home_dir()
-            .ok_or_else(|| LocalError::Download("could not determine home directory".to_string()))?
-            .join(".oxen-harness")
-            .join("models");
+        let dir = harness_config::paths::models_dir()
+            .map_err(|e| LocalError::Download(format!("resolving the model store dir: {e}")))?;
         Self::with_dir(dir)
     }
 
@@ -111,13 +110,8 @@ impl ModelStore {
             let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            match self.read_meta(id) {
-                Some(mut m) => {
-                    m.size_bytes = size; // reflect the real on-disk size
-                    out.push(m);
-                }
-                None => out.push(orphan_ref(id, size)),
+            if let Some(m) = self.installed_ref(id) {
+                out.push(m);
             }
         }
         out.sort_by_key(|m| m.display.to_lowercase());
@@ -128,6 +122,39 @@ impl ModelStore {
     pub fn read_meta(&self, id: &str) -> Option<ModelRef> {
         let raw = std::fs::read_to_string(self.meta_path(id)).ok()?;
         serde_json::from_str(&raw).ok()
+    }
+
+    /// The [`ModelRef`] for one *installed* model: the sidecar when present,
+    /// else a minimal entry for a `.gguf` placed by hand — `None` if the
+    /// weights aren't on disk. The size always reflects the real file.
+    pub fn installed_ref(&self, id: &str) -> Option<ModelRef> {
+        let size = self.installed_size(id)?;
+        Some(match self.read_meta(id) {
+            Some(mut m) => {
+                m.size_bytes = size;
+                m
+            }
+            None => orphan_ref(id, size),
+        })
+    }
+
+    /// Leftover `.part` files from interrupted downloads, as `(id, bytes)`
+    /// pairs, so the UI can surface (and reclaim) the dead space.
+    pub fn partial_downloads(&self) -> Vec<(String, u64)> {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, u64)> = entries
+            .flatten()
+            .filter_map(|e| {
+                let path = e.path();
+                let name = path.file_name()?.to_str()?;
+                let id = name.strip_suffix(".gguf.part")?;
+                Some((id.to_string(), e.metadata().ok()?.len()))
+            })
+            .collect();
+        out.sort();
+        out
     }
 
     /// The model's native (training) context window in tokens, or 0 if unknown.
@@ -141,7 +168,8 @@ impl ModelStore {
             .unwrap_or(0)
     }
 
-    /// Remove a downloaded model (GGUF + sidecar), returning `true` if it existed.
+    /// Remove a downloaded model (GGUF + sidecar + any stale `.part` from an
+    /// interrupted download), returning `true` if any of them existed.
     pub fn remove(&self, id: &str) -> Result<bool, LocalError> {
         let gguf = self.path_for(id);
         let existed = gguf.is_file();
@@ -149,7 +177,10 @@ impl ModelStore {
             std::fs::remove_file(&gguf)?;
         }
         let _ = std::fs::remove_file(self.meta_path(id));
-        Ok(existed)
+        let part = gguf.with_extension("gguf.part");
+        let had_part = part.is_file();
+        let _ = std::fs::remove_file(&part);
+        Ok(existed || had_part)
     }
 
     /// Download a model's GGUF, writing its sidecar on success. `token` is an
@@ -327,6 +358,21 @@ mod tests {
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].id, "loose-Q5_K_M");
         assert_eq!(installed[0].quant, "Q5_K_M");
+    }
+
+    #[test]
+    fn partials_are_listed_and_removed_with_their_model() {
+        let (_d, store) = store();
+        // An interrupted download leaves only the .part file behind.
+        std::fs::write(store.dir().join("big-model-q8-0.gguf.part"), vec![1u8; 64]).unwrap();
+        assert!(!store.is_installed("big-model-q8-0"));
+        assert_eq!(
+            store.partial_downloads(),
+            vec![("big-model-q8-0".to_string(), 64)]
+        );
+        // `remove` reclaims the dead space even though no .gguf exists.
+        assert!(store.remove("big-model-q8-0").unwrap());
+        assert!(store.partial_downloads().is_empty());
     }
 
     #[test]
