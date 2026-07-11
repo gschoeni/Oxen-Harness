@@ -1,7 +1,7 @@
 # Working Decisions & Rationale
 
 **Purpose:** Currently relevant decisions with enough "why" to be useful during implementation. For full deep-dive analysis, cite the source in each entry.
-**Updated:** 2026-07-07
+**Updated:** 2026-07-11
 
 ---
 
@@ -532,6 +532,22 @@ would bloat history.sqlite with reasoning nobody re-reads and clutter the
 sidebar with sessions that aren't conversations. If post-hoc inspection is ever
 needed, the seam is a `kind` column on sessions, not a behavior change.
 
+**Usage is a timestamped call ledger; spend is a catalog-rate estimate** (2026-07-11)
+Usage is captured inside `Agent`, immediately after a model call has a settled
+provider count (or the calibrated fallback). This is the only layer that sees
+every request: ordinary turns, repeated tool-loop prompts, detached review/fleet
+agents, and one-shot completions. Detached transcripts stay ephemeral, but they
+inherit the parent history store as a separate aggregate-usage destination.
+
+`harness-store` persists one `usage_events` row per call with model, endpoint
+source, input/output tokens, and timestamp. Append-only events make lifetime,
+per-model, and local-calendar daily aggregation exact without reconstructing
+dates from chat messages. Dollar values are not persisted as fact: the Oxen
+models catalog can change and local/custom endpoints have no known bill. Both
+front ends price recorded `oxen_cloud` rows from one current catalog fetch,
+label the result estimated, and leave unknown rows as `—` rather than silently
+calling them free.
+
 **One process-wide `FleetHub` coordinates the CLI's fleet display** (2026-07-08)
 The `spawn_agents` sink and the live composer must agree on who paints the
 lanes (a background painter fights raw-mode composers for the cursor). Rather
@@ -546,4 +562,3 @@ Each `/code-review` step gets a fresh `side_agent` (fleet lanes too): the
 verifier must judge the finders' candidates against the *code*, not be
 anchored by the finders' reasoning, and a review must never pollute the
 session's context window. Step outputs thread through `{{previous}}` only.
-

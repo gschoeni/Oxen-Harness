@@ -6,6 +6,8 @@
 //! persists a `ModelRef` sidecar next to each download so arbitrary models keep
 //! their identity across restarts.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::LocalError;
@@ -552,6 +554,15 @@ pub async fn oxen_model_pricing(
     model_id: &str,
     token: Option<&str>,
 ) -> Result<Option<ModelPricing>, LocalError> {
+    Ok(oxen_model_pricing_catalog(token).await?.remove(model_id))
+}
+
+/// Fetch all token-priced Oxen cloud models in one catalog request. Usage
+/// reports call this once and price every recorded model from the returned map,
+/// avoiding one network round-trip per row.
+pub async fn oxen_model_pricing_catalog(
+    token: Option<&str>,
+) -> Result<HashMap<String, ModelPricing>, LocalError> {
     let client = reqwest::Client::new();
     let mut req = client
         .get("https://hub.oxen.ai/api/ai/models")
@@ -577,19 +588,23 @@ pub async fn oxen_model_pricing(
     Ok(body
         .data
         .into_iter()
-        .find(|e| e.id == model_id)
-        .and_then(|e| e.pricing)
-        .and_then(
-            |p| match (p.input_cost_per_token, p.output_cost_per_token) {
-                // Only usable when at least one rate is present; missing rates count
-                // as 0 so a model priced only on output still yields a real number.
-                (None, None) => None,
-                (input, output) => Some(ModelPricing {
-                    input_cost_per_token: input.unwrap_or(0.0),
-                    output_cost_per_token: output.unwrap_or(0.0),
-                }),
-            },
-        ))
+        .filter_map(|entry| {
+            entry.pricing.and_then(|p| {
+                match (p.input_cost_per_token, p.output_cost_per_token) {
+                    // Only usable when at least one rate is present; missing rates count
+                    // as 0 so a model priced only on output still yields a real number.
+                    (None, None) => None,
+                    (input, output) => Some((
+                        entry.id,
+                        ModelPricing {
+                            input_cost_per_token: input.unwrap_or(0.0),
+                            output_cost_per_token: output.unwrap_or(0.0),
+                        },
+                    )),
+                }
+            })
+        })
+        .collect())
 }
 
 // ===========================================================================

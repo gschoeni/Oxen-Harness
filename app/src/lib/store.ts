@@ -171,9 +171,8 @@ interface AppState {
   session: SessionInfo | null;
   /** All-time total tokens used across every session (drives the hero's stat). */
   totalTokensUsed: number;
-  /** Estimated all-time dollars spent at the current model's rates, shown under
-   *  the token total. `null` when cost is unavailable (local/unlisted model or
-   *  the pricing catalog couldn't be reached). */
+  /** Estimated all-time Oxen cloud spend across recorded models, shown under
+   *  the token total. `null` when catalog pricing cannot be resolved. */
   totalCostUsd: number | null;
   sessions: SessionSummary[];
   /** Known projects (working directories), refreshed alongside history. */

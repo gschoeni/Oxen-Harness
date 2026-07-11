@@ -206,9 +206,6 @@ async fn main() -> Result<()> {
         context_window,
         local_server: _local_server,
     } = resolve_endpoint(&args, resume_meta.as_ref(), &ui).await;
-    // Whether this session runs on a local llama-server (no cloud $ pricing).
-    let is_local = _local_server.is_some();
-
     // Migrate any legacy plaintext keys out of connection.json into .env (the
     // shared store, already loaded into the env above) so web search and auth
     // work without re-entering keys.
@@ -218,7 +215,7 @@ async fn main() -> Result<()> {
     let base_url = client.base_url().to_string();
     let config = agent_config(&model, context_window, &tools, &workspace);
 
-    endpoint::register_fleet_tool(&mut tools, &client, &config, &ui);
+    endpoint::register_fleet_tool(&mut tools, &client, &config, store.clone(), &ui);
 
     // Resume an existing transcript, or strike out on a fresh session.
     let (mut agent, session, resumed_entries) = match &args.resume {
@@ -241,6 +238,12 @@ async fn main() -> Result<()> {
         }
     };
 
+    // The opening banner shows the all-time grand total spend across every model
+    // and project (best-effort; unavailable reads as `None` → "—"). Per-turn
+    // usage is priced and recorded as the session runs (see `handle_line`).
+    let cost_usd = commands::usage::total_cost_usd(&store).await;
+    let total_tokens = commands::usage::total_tokens(&store);
+
     print!(
         "{}",
         theme::banner(
@@ -249,8 +252,8 @@ async fn main() -> Result<()> {
             &model,
             &workspace.root().display().to_string(),
             &session,
-            agent.tokens_used(),
-            None,
+            total_tokens,
+            cost_usd,
         )
     );
     println!();
@@ -275,9 +278,19 @@ async fn main() -> Result<()> {
         println!();
     }
 
+    // Shared per-run context (store, pricing cache, session) used by both the
+    // one-shot loop path and the interactive REPL.
+    let ctx = ReplContext {
+        store: &store,
+        session: &session,
+        workspace_root: workspace.root(),
+        base_url: &base_url,
+    };
+
     // `oxen-harness loop run ...`: run the loop once, then exit (no REPL).
     if let Some(spec) = pending_loop {
-        commands::loops::run(spec, &mut agent, &ui, workspace.root()).await?;
+        let outcome = commands::loops::run(spec, &mut agent, &ui, workspace.root()).await;
+        outcome?;
         return Ok(());
     }
 
@@ -285,24 +298,6 @@ async fn main() -> Result<()> {
     // history, queue) for both idle and in-turn input. Pipes, dumb terminals, and
     // an explicit `OXEN_HARNESS_CLASSIC_INPUT` fall back to the classic readline.
     let use_box = live_enabled(&ui) && std::env::var_os("OXEN_HARNESS_CLASSIC_INPUT").is_none();
-    // Fetch the active cloud model's per-token pricing once (best-effort), so
-    // the banner can show dollars spent this session. Skipped for local models.
-    let pricing = if is_local {
-        None
-    } else {
-        let token = harness_config::secrets::get("OXEN_API_KEY").filter(|t| !t.trim().is_empty());
-        harness_local::source::oxen_model_pricing(&model, token.as_deref())
-            .await
-            .ok()
-            .flatten()
-    };
-    let ctx = ReplContext {
-        store: &store,
-        session: &session,
-        workspace_root: workspace.root(),
-        base_url: &base_url,
-        pricing,
-    };
     let result = if use_box {
         run_box_repl(&mut agent, &mut ui, &ctx).await
     } else {

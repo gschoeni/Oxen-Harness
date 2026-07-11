@@ -178,6 +178,15 @@ impl Agent {
                 if !assembled.content.is_empty() {
                     self.push(ChatMessage::assistant(assembled.content.clone()))?;
                 }
+                // The provider has already processed the prompt and generated
+                // this partial reply. Count that spend even though the user
+                // stopped before a final usage chunk arrived.
+                if assembled.usage.is_some()
+                    || !assembled.content.is_empty()
+                    || !assembled.tool_calls.is_empty()
+                {
+                    self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens);
+                }
                 return Ok(assembled.content);
             }
 
@@ -379,20 +388,20 @@ impl Agent {
                 self.token_ratio = usage.prompt_tokens as f64 / raw_prompt_tokens as f64;
             }
         }
-        self.tokens_used += match &assembled.usage {
+        let (prompt_delta, completion_delta) = match &assembled.usage {
             Some(u) if u.prompt_tokens + u.completion_tokens > 0 => {
-                self.prompt_tokens_used += u.prompt_tokens as usize;
-                self.completion_tokens_used += u.completion_tokens as usize;
-                (u.prompt_tokens + u.completion_tokens) as usize
+                (u.prompt_tokens as usize, u.completion_tokens as usize)
             }
             _ => {
                 let completion =
                     budget::estimate_completion_tokens(&assembled.content, &assembled.tool_calls);
-                self.prompt_tokens_used += prompt_tokens;
-                self.completion_tokens_used += completion;
-                prompt_tokens + completion
+                (prompt_tokens, completion)
             }
         };
+        self.prompt_tokens_used += prompt_delta;
+        self.completion_tokens_used += completion_delta;
+        self.tokens_used += prompt_delta + completion_delta;
+        self.record_usage(prompt_delta, completion_delta);
     }
 
     /// Free context so the next request fits `budget`, in two stages (see

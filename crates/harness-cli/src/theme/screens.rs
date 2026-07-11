@@ -11,10 +11,10 @@ use super::{flourish, Ui};
 /// replaces the value of any `flavor_bottom` row labelled "Total tokens used"
 /// so the banner reflects real usage rather than static flavor text.
 ///
-/// `cost_usd` is the estimated dollars spent this session (input + output tokens
-/// priced at the model's rates), rendered as a "Total dollars spent" row right
-/// under the token count. `None` when cost is unavailable (a local model, an
-/// unlisted model, or the pricing catalog couldn't be reached).
+/// `cost_usd` is estimated all-time Oxen cloud spend across every model and
+/// project (recorded input/output tokens at current catalog rates), rendered as
+/// a "Total dollars spent" row under the token count. `None` when pricing is
+/// unavailable, shown as "—".
 pub fn banner(
     ui: &Ui,
     base_url: &str,
@@ -61,19 +61,13 @@ pub fn banner(
     out.push_str(&journal_row(ui, &v.label_session, session));
     out.push_str(&journal_row(ui, "Theme", &ui.theme().meta.name));
     for [label, value] in &v.flavor_bottom {
-        // A few rows carry live state, substituted for the static flavor value:
-        // "Total tokens used" gets the real cumulative count, and "Date" gets
-        // today's date so the trail journal opens on the present day.
-        if label == "Total tokens used" {
-            out.push_str(&journal_row(ui, label, &format!("{tokens_used} tokens")));
-            // The dollars-spent readout lives immediately under the token count.
-            let spent = match cost_usd {
-                Some(c) => format_usd(c),
-                None => "—".to_string(),
-            };
-            out.push_str(&journal_row(ui, "Total dollars spent", &spent));
-        } else if label == "Total dollars spent" {
-            // A theme may carry a static row; the live one above replaces it.
+        // A few rows carry live state, substituted for the static flavor value.
+        // The live token count and dollars-spent rows are emitted unconditionally
+        // below (so they show even for a theme loaded from disk that lacks them),
+        // so any static copies carried by the theme are skipped here to avoid
+        // duplicates. "Date" gets today's date so the journal opens on today.
+        if label == "Total tokens used" || label == "Total dollars spent" {
+            // Rendered live after this loop — skip the static flavor copy.
         } else if label == "Date" {
             out.push_str(&journal_row(ui, label, &today()));
         } else if label == "Weather" {
@@ -83,6 +77,19 @@ pub fn banner(
         }
     }
 
+    // Always show the live all-time token count and estimated cloud spend back
+    // to back, regardless of whether the active theme carries these rows.
+    out.push_str(&journal_row(
+        ui,
+        "Total tokens used",
+        &format!("{tokens_used} tokens"),
+    ));
+    let spent = match cost_usd {
+        Some(c) => format_usd(c),
+        None => "—".to_string(),
+    };
+    out.push_str(&journal_row(ui, "Total dollars spent", &spent));
+
     out.push('\n');
     out.push_str(&format!("  {}\n", ui.dim(&v.bottom_hint)));
     out
@@ -91,7 +98,7 @@ pub fn banner(
 /// Format a US-dollar amount for the banner's spend readout. Sub-cent totals
 /// show extra precision (e.g. `$0.0042`) so early usage isn't shown as `$0.00`;
 /// larger amounts use standard two-decimal currency (mirrors the desktop UI).
-fn format_usd(amount: f64) -> String {
+pub(crate) fn format_usd(amount: f64) -> String {
     if amount > 0.0 && amount < 0.01 {
         format!("${amount:.4}")
     } else {
@@ -150,9 +157,11 @@ fn glyph(ch: char) -> [&'static str; 5] {
 }
 
 fn journal_row(ui: &Ui, label: &str, value: &str) -> String {
+    // Right-align labels in a column wide enough for the longest one
+    // ("Total dollars spent", 19 chars) so every colon lines up.
     format!(
         "  {} {}\n",
-        ui.brown(&format!("{label:>17} :")),
+        ui.brown(&format!("{label:>19} :")),
         ui.cream(value)
     )
 }
@@ -273,6 +282,23 @@ mod tests {
         // The live cumulative count replaces the static flavor value.
         assert!(b.contains("Total tokens used"));
         assert!(b.contains("1234 tokens"));
+    }
+
+    #[test]
+    fn banner_shows_token_and_dollar_rows_even_without_theme_flavor() {
+        // A theme loaded from disk may not carry "Total tokens used" /
+        // "Total dollars spent" flavor rows; the banner must still show both.
+        let mut theme = Theme::default();
+        theme.voice.flavor_bottom.clear();
+        let ui = Ui::with(false, Arc::new(theme));
+        let b = banner(&ui, "u", "m", "w", "s", 555, Some(1.25));
+        assert!(b.contains("Total tokens used"));
+        assert!(b.contains("555 tokens"));
+        assert!(b.contains("Total dollars spent"));
+        assert!(b.contains("$1.25"));
+        // No duplicate rows.
+        assert_eq!(b.matches("Total tokens used").count(), 1);
+        assert_eq!(b.matches("Total dollars spent").count(), 1);
     }
 
     #[test]

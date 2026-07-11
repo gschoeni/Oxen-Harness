@@ -9,7 +9,6 @@ use tauri::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::bridges::emit_fleet_event;
-use crate::commands::session::bump_total_tokens;
 use crate::events::{
     CodeReviewResult, FleetStartedPayload, ReviewProgressPayload, ReviewTokenPayload,
     ReviewToolPayload, SessionPayload,
@@ -159,11 +158,7 @@ pub(crate) async fn run_code_review(
         }
     };
     state.cancels.lock().await.remove(&session);
-    // Reviewer agents are real spend: roll their tokens into the all-time
-    // total (the same counter turns feed).
-    if let Ok(res) = &result {
-        let _ = bump_total_tokens(res.tokens_used);
-    }
+    // Detached reviewers record their own provider usage in the shared ledger.
     evict_idle(&state).await;
     result
 }

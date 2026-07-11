@@ -64,6 +64,25 @@ fn migrations() -> Migrations<'static> {
         // 'kept' = include in the fine-tuning dataset, 'rejected' = exclude.
         // Defaults to '' so every existing chat starts unreviewed.
         M::up("ALTER TABLE sessions ADD COLUMN review_status TEXT NOT NULL DEFAULT '';"),
+        // M5 — timestamped per-model usage accounting, one row per model call.
+        // Keeping events (rather than only lifetime counters) supports daily
+        // and yearly reporting without reconstructing usage from transcripts.
+        // Dollar estimates
+        // are derived from the current Oxen catalog when presented; keeping the
+        // observed provider usage separate from mutable pricing avoids silently
+        // recording an unavailable catalog lookup as a real $0 charge.
+        M::up(
+            "CREATE TABLE IF NOT EXISTS usage_events (
+                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                 model             TEXT NOT NULL,
+                 source            TEXT NOT NULL,
+                 prompt_tokens     INTEGER NOT NULL,
+                 completion_tokens INTEGER NOT NULL,
+                 created_at        INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_usage_events_created_at
+                 ON usage_events(created_at);",
+        ),
     ])
 }
 
@@ -117,6 +136,27 @@ pub struct SessionSummary {
     pub message_count: i64,
     /// Training-data review status: `""` (unreviewed), `"kept"`, or `"rejected"`.
     pub review_status: String,
+}
+
+/// Accumulated usage for a single model, summed across every session and
+/// project — the source data for per-model token and dollar summaries.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelUsage {
+    pub model: String,
+    /// `oxen_cloud` for hub.oxen.ai (catalog-priced), otherwise `unpriced`
+    /// for local or custom endpoints whose billing cannot be inferred.
+    pub source: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+}
+
+/// Token throughput for one local-calendar day, used by the yearly activity
+/// grid. `date` is `YYYY-MM-DD` in the machine's local timezone.
+#[derive(Debug, Clone, Serialize)]
+pub struct DailyUsage {
+    pub date: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
 }
 
 /// A SQLite store of sessions and their verbatim message transcripts.
@@ -409,6 +449,125 @@ impl HistoryStore {
         }
         tx.commit()?;
         Ok(changed)
+    }
+
+    /// Record one model call's provider-reported (or fallback-estimated) prompt
+    /// and completion tokens. A zero call is a no-op.
+    pub fn record_model_usage(
+        &self,
+        model: &str,
+        source: &str,
+        prompt_delta: usize,
+        completion_delta: usize,
+    ) -> Result<(), HistoryError> {
+        let prompt = prompt_delta as i64;
+        let completion = completion_delta as i64;
+        if prompt == 0 && completion == 0 {
+            return Ok(());
+        }
+        self.record_model_usage_at(model, source, prompt, completion, now())?;
+        Ok(())
+    }
+
+    fn record_model_usage_at(
+        &self,
+        model: &str,
+        source: &str,
+        prompt_tokens: i64,
+        completion_tokens: i64,
+        created_at: i64,
+    ) -> Result<(), HistoryError> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO usage_events
+                 (model, source, prompt_tokens, completion_tokens, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![model, source, prompt_tokens, completion_tokens, created_at],
+        )?;
+        Ok(())
+    }
+
+    /// The per-model usage breakdown, busiest first — every model that has
+    /// accumulated usage, with separate prompt and completion counts.
+    pub fn model_usage_breakdown(&self) -> Result<Vec<ModelUsage>, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT model, source, SUM(prompt_tokens), SUM(completion_tokens)
+             FROM usage_events
+             GROUP BY model, source
+             ORDER BY SUM(prompt_tokens + completion_tokens) DESC, model ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ModelUsage {
+                model: row.get(0)?,
+                source: row.get(1)?,
+                prompt_tokens: row.get(2)?,
+                completion_tokens: row.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Per-model usage for one local-calendar day (`YYYY-MM-DD`).
+    pub fn model_usage_for_day(&self, date: &str) -> Result<Vec<ModelUsage>, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT model, source, SUM(prompt_tokens), SUM(completion_tokens)
+             FROM usage_events
+             WHERE date(created_at, 'unixepoch', 'localtime') = ?1
+             GROUP BY model, source
+             ORDER BY SUM(prompt_tokens + completion_tokens) DESC, model ASC",
+        )?;
+        let rows = stmt.query_map([date], |row| {
+            Ok(ModelUsage {
+                model: row.get(0)?,
+                source: row.get(1)?,
+                prompt_tokens: row.get(2)?,
+                completion_tokens: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(HistoryError::from)
+    }
+
+    /// Daily token totals for `year`, in the machine's local timezone. Days
+    /// with no activity are omitted; the UI fills those cells with zero.
+    pub fn daily_usage(&self, year: i32) -> Result<Vec<DailyUsage>, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT date(created_at, 'unixepoch', 'localtime') AS day,
+                    SUM(prompt_tokens), SUM(completion_tokens)
+             FROM usage_events
+             WHERE strftime('%Y', created_at, 'unixepoch', 'localtime') = ?1
+             GROUP BY day
+             ORDER BY day ASC",
+        )?;
+        let year = year.to_string();
+        let rows = stmt.query_map([year], |row| {
+            Ok(DailyUsage {
+                date: row.get(0)?,
+                prompt_tokens: row.get(1)?,
+                completion_tokens: row.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(HistoryError::from)
+    }
+
+    /// Total model throughput represented by the per-model ledger.
+    pub fn total_model_tokens(&self) -> Result<i64, HistoryError> {
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0)
+             FROM usage_events",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(HistoryError::from)
     }
 
     /// Export a session's transcript as JSONL (one verbatim message per line).
@@ -768,6 +927,92 @@ mod tests {
     }
 
     #[test]
+    fn model_usage_accumulates_per_model_and_aggregates() {
+        let store = store();
+        // No usage recorded yet: empty breakdown, zero grand total.
+        assert!(store.model_usage_breakdown().unwrap().is_empty());
+        assert_eq!(store.total_model_tokens().unwrap(), 0);
+
+        // Two turns on model A and one on model B accumulate per model.
+        store
+            .record_model_usage("claude-opus-4-8", "oxen_cloud", 1000, 200)
+            .unwrap();
+        store
+            .record_model_usage("claude-opus-4-8", "oxen_cloud", 500, 100)
+            .unwrap();
+        store
+            .record_model_usage("gemini-2-5-flash", "oxen_cloud", 2000, 400)
+            .unwrap();
+
+        let breakdown = store.model_usage_breakdown().unwrap();
+        assert_eq!(breakdown.len(), 2);
+        // Ordered by total throughput, busiest first.
+        assert_eq!(breakdown[0].model, "gemini-2-5-flash");
+        assert_eq!(breakdown[1].model, "claude-opus-4-8");
+        assert_eq!(breakdown[1].prompt_tokens, 1500);
+        assert_eq!(breakdown[1].completion_tokens, 300);
+
+        assert_eq!(store.total_model_tokens().unwrap(), 4200);
+    }
+
+    #[test]
+    fn record_model_usage_ignores_empty_calls() {
+        let store = store();
+        store.record_model_usage("m", "unpriced", 0, 0).unwrap();
+        assert!(store.model_usage_breakdown().unwrap().is_empty());
+    }
+
+    #[test]
+    fn model_usage_persists_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage.sqlite");
+        {
+            let store = HistoryStore::open(&path).unwrap();
+            store
+                .record_model_usage("m", "oxen_cloud", 100, 50)
+                .unwrap();
+        }
+        let reopened = HistoryStore::open(&path).unwrap();
+        assert_eq!(reopened.total_model_tokens().unwrap(), 150);
+    }
+
+    #[test]
+    fn daily_usage_and_day_breakdown_follow_local_calendar_dates() {
+        let store = store();
+        // 2025-06-15 12:00:00 UTC stays near June 15 in every practical local
+        // timezone; derive SQLite's exact local date so the test pins the same
+        // conversion used by production queries.
+        let timestamp = 1_750_003_200_i64;
+        store
+            .record_model_usage_at("model-a", "oxen_cloud", 100, 25, timestamp)
+            .unwrap();
+        store
+            .record_model_usage_at("model-b", "unpriced", 50, 10, timestamp)
+            .unwrap();
+        let (date, year): (String, i32) = {
+            let conn = store.lock();
+            conn.query_row(
+                "SELECT date(?1, 'unixepoch', 'localtime'),
+                        CAST(strftime('%Y', ?1, 'unixepoch', 'localtime') AS INTEGER)",
+                [timestamp],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+        };
+
+        let days = store.daily_usage(year).unwrap();
+        assert_eq!(days.len(), 1);
+        assert_eq!(days[0].date, date);
+        assert_eq!(days[0].prompt_tokens, 150);
+        assert_eq!(days[0].completion_tokens, 35);
+
+        let rows = store.model_usage_for_day(&date).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].model, "model-a");
+        assert_eq!(rows[0].prompt_tokens, 100);
+    }
+
+    #[test]
     fn migrations_are_valid_and_reach_latest_version() {
         // rusqlite_migration checks the chain round-trips and the final
         // user_version matches the migration count.
@@ -777,7 +1022,7 @@ mod tests {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(user_version, 4);
+        assert_eq!(user_version, 5);
     }
 
     #[test]

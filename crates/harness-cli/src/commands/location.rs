@@ -35,7 +35,7 @@ enum Action {
 /// `/location [place|clear]` — configure the location shown on the banner and
 /// the desktop hero. Bare `/location` opens the interactive card; a set/clear
 /// repaints the welcome banner so the new row shows in context.
-pub(crate) fn handle_repl(
+pub(crate) async fn handle_repl(
     rest: Option<String>,
     agent: &Agent,
     ui: &mut Ui,
@@ -64,7 +64,7 @@ pub(crate) fn handle_repl(
             }
             // Reload the active theme so the row reverts to its themed default.
             *ui = ui.with_theme(Arc::new(store.load_active()));
-            reprint_banner(agent, ui, ctx);
+            reprint_banner(agent, ui, ctx).await;
             println!(
                 "  {} {}",
                 ui.green("⛺ location cleared:"),
@@ -77,7 +77,7 @@ pub(crate) fn handle_repl(
                 return Ok(());
             }
             let label = ui.set_departing(&place);
-            reprint_banner(agent, ui, ctx);
+            reprint_banner(agent, ui, ctx).await;
             println!(
                 "  {} {}",
                 ui.green(&format!("⛺ {label} set:")),
@@ -194,7 +194,10 @@ fn show_current(ui: &Ui) {
 }
 
 /// Repaint the welcome banner so the changed row shows in context.
-fn reprint_banner(agent: &Agent, ui: &Ui, ctx: &ReplContext<'_>) {
+async fn reprint_banner(agent: &Agent, ui: &Ui, ctx: &ReplContext<'_>) {
+    // The banner shows the all-time grand total spend across every model and
+    // project (best-effort; unavailable reads as `None` → "—").
+    let cost = crate::commands::usage::total_cost_usd(ctx.store).await;
     print!(
         "{}",
         theme::banner(
@@ -203,8 +206,8 @@ fn reprint_banner(agent: &Agent, ui: &Ui, ctx: &ReplContext<'_>) {
             agent.model(),
             &ctx.workspace_root.display().to_string(),
             ctx.session,
-            agent.tokens_used(),
-            ctx.cost_usd(agent),
+            crate::commands::usage::total_tokens(ctx.store),
+            cost,
         )
     );
     println!();

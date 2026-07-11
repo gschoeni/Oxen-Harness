@@ -31,3 +31,4 @@ pub(crate) mod queue;
 pub(crate) mod review;
 pub(crate) mod theme;
 pub(crate) mod trace;
+pub(crate) mod usage;

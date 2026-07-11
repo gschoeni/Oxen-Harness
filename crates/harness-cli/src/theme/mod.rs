@@ -26,6 +26,7 @@ mod screens;
 mod spinner;
 
 pub use models::{models_table, progress_bar, ModelRow};
+pub(crate) use screens::format_usd;
 pub use screens::{banner, death_screen, help};
 pub(crate) use spinner::LiveSpinner;
 pub use spinner::Spinner;

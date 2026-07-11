@@ -46,8 +46,9 @@ export function Hero(props: HeroProps) {
   // The hero's "Total tokens used" shows the all-time grand total across every
   // session, so a fresh chat opens with your running tally rather than 0.
   const tokensUsed = useStore((s) => s.totalTokensUsed);
-  // Estimated dollars spent at the current model's rates, shown right under the
-  // token total. `null` when unavailable (local/unlisted model, or offline).
+  // Estimated all-time Oxen cloud spend across every model and project, using
+  // recorded per-model tokens and current catalog rates. `null` when pricing
+  // cannot be resolved.
   const costUsd = useStore((s) => s.totalCostUsd);
   const v = theme?.voice;
   const hero = theme?.style?.hero || "pixel";

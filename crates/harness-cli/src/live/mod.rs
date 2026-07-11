@@ -108,6 +108,7 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/departing", "set your location (themed alias)"),
     ("/auth", "set your Oxen API key"),
     ("/compression", "switch context compression (off/audit/on)"),
+    ("/usage", "show tokens and estimated spend by model"),
     ("/help", "show help"),
     ("/exit", "quit"),
 ];

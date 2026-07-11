@@ -55,6 +55,9 @@ pub struct FleetSpawner {
     /// The current turn's stop signal; hosts refresh it when they install a
     /// turn's token so cancelling the turn cancels any running fleet too.
     cancel: StdMutex<CancellationToken>,
+    /// Optional persistent aggregate ledger. Fleet transcripts remain in
+    /// memory, but their provider usage belongs in the host's all-time totals.
+    usage_store: Option<Arc<HistoryStore>>,
 }
 
 /// The mutable half of a [`FleetSpawner`]: what subagents inherit that can
@@ -70,7 +73,14 @@ impl FleetSpawner {
             tools,
             endpoint: StdMutex::new(Endpoint { client, config }),
             cancel: StdMutex::new(CancellationToken::new()),
+            usage_store: None,
         }
+    }
+
+    /// Attach the host's persistent usage ledger to future fleet agents.
+    pub fn with_usage_store(mut self, store: Arc<HistoryStore>) -> Self {
+        self.usage_store = Some(store);
+        self
     }
 
     /// Point future subagents at a new inference client — call it wherever the
@@ -121,13 +131,17 @@ impl FleetSpawner {
             model: config.model.clone(),
             ..Default::default()
         })?;
-        Agent::new(
+        let mut agent = Agent::new(
             client,
             crate::agent::subagent_tools(self.tools.clone()),
             store,
             session,
             config,
-        )
+        )?;
+        if let Some(usage_store) = &self.usage_store {
+            agent.set_usage_store(usage_store.clone());
+        }
+        Ok(agent)
     }
 }
 

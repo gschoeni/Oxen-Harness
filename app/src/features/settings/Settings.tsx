@@ -2,6 +2,7 @@ import {
   Check,
   Cloud,
   Cpu,
+  DollarSign,
   Eye,
   EyeOff,
   FolderOpen,
@@ -35,6 +36,7 @@ import { ToolsPage } from "../tools/ToolsPage";
 import { SkillsPage } from "../skills/SkillsPage";
 import { CodeReviewPage } from "./CodeReviewPage";
 import { CompressionPage } from "./CompressionPage";
+import { UsagePage } from "./UsagePage";
 import { LogsPage } from "../logs/LogsPage";
 import "./settings.css";
 
@@ -48,6 +50,7 @@ const NAV: { page: SettingsPage; icon: ReactNode; label: string; blurb: string }
   { page: "skills", icon: <GraduationCap size={18} />, label: "Skills", blurb: "Reusable workflows it can learn" },
   { page: "code-review", icon: <SearchCode size={18} />, label: "Code review", blurb: "The find → verify → report pipeline" },
   { page: "compression", icon: <Shrink size={18} />, label: "Compression", blurb: "Shrink stale context on the wire" },
+  { page: "usage", icon: <DollarSign size={18} />, label: "Usage", blurb: "Tokens & dollars spent per model" },
   { page: "appearance", icon: <Palette size={18} />, label: "Appearance", blurb: "Theme & light/dark" },
   { page: "logs", icon: <ScrollText size={18} />, label: "Training data", blurb: "Curate chats & export for fine-tuning" },
 ];
@@ -60,6 +63,7 @@ const TITLE: Record<SettingsPage, string> = {
   skills: "Skills",
   "code-review": "Code review",
   compression: "Compression",
+  usage: "Usage",
   appearance: "Appearance",
   logs: "Training data",
 };
@@ -129,6 +133,7 @@ export function Settings() {
             {page === "skills" && <SkillsPage />}
             {page === "code-review" && <CodeReviewPage />}
             {page === "compression" && <CompressionPage />}
+            {page === "usage" && <UsagePage />}
             {page === "appearance" && <AppearanceSettings />}
             {page === "logs" && <LogsPage />}
           </div>

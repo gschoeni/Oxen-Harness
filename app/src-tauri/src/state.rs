@@ -225,11 +225,15 @@ pub(crate) fn register_fleet(
     if !harness_runtime::tools::load().is_enabled(harness_agent::FLEET_TOOL) {
         return;
     }
-    let spawner = Arc::new(harness_agent::FleetSpawner::new(
+    let mut spawner = harness_agent::FleetSpawner::new(
         client.clone(),
         tools.clone(),
         config.clone(),
-    ));
+    );
+    if let Ok(store) = open_history_store() {
+        spawner = spawner.with_usage_store(Arc::new(store));
+    }
+    let spawner = Arc::new(spawner);
     tools.register_typed(harness_agent::FleetTool::new(
         spawner.clone(),
         Arc::new(TauriFleetSink {

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use harness_llm::{Attachment, ChatMessage};
-use harness_store::{HistoryStore, SessionSummary};
+use harness_store::{DailyUsage, HistoryStore, ModelUsage, SessionSummary};
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use tokio::sync::Mutex;
@@ -171,26 +171,134 @@ pub(crate) async fn total_tokens_used() -> Result<usize, String> {
     Ok(ensure_total_tokens(&store)?.max(0) as usize)
 }
 
-/// The estimated all-time dollars spent, priced at the currently-selected cloud
-/// model's per-token rates from the Oxen models API. `None` when no cost can be
-/// computed — a local model is active, the model isn't listed with token
-/// pricing, or the catalog can't be reached. Best-effort: cost is informational,
-/// so we never surface a hard error to the UI (we return `Ok(None)`).
+/// Estimated all-time Oxen cloud spend for the hero, using observed per-model
+/// input/output tokens and current catalog rates. `None` when catalog pricing
+/// is unavailable; local/custom endpoint usage is kept unpriced.
 #[tauri::command]
 pub(crate) async fn total_cost_usd() -> Result<Option<f64>, String> {
-    let model = harness_runtime::models::selected();
-    // A local model has no cloud price; report "unavailable" rather than $0.
-    if model.trim().is_empty() {
-        return Ok(None);
+    let store = open_history_store()?;
+    Ok(price_usage(store.model_usage_breakdown().map_err(|e| e.to_string())?)
+        .await
+        .total_cost_usd)
+}
+
+/// One model's accumulated usage, for the Usage settings breakdown: the model
+/// id, its prompt/completion token totals, and the dollars spent on it.
+#[derive(Serialize)]
+pub(crate) struct ModelUsageRow {
+    pub(crate) model: String,
+    pub(crate) source: String,
+    pub(crate) prompt_tokens: i64,
+    pub(crate) completion_tokens: i64,
+    pub(crate) cost_usd: Option<f64>,
+}
+
+/// The per-model usage breakdown (most-spent first) plus the grand total, for
+/// the Usage settings page. Empty rows and a `0.0` total when nothing's been
+/// recorded yet.
+#[derive(Serialize)]
+pub(crate) struct UsageBreakdown {
+    pub(crate) rows: Vec<ModelUsageRow>,
+    pub(crate) total_cost_usd: Option<f64>,
+    pub(crate) prompt_tokens: i64,
+    pub(crate) completion_tokens: i64,
+    pub(crate) has_unpriced_usage: bool,
+}
+
+/// The per-model usage breakdown behind the Usage settings page: every model
+/// with recorded usage, its tokens and dollars, and the grand total.
+#[tauri::command]
+pub(crate) async fn model_usage_breakdown(
+    date: Option<String>,
+) -> Result<UsageBreakdown, String> {
+    let store = open_history_store()?;
+    let usage = match date {
+        Some(date) => store.model_usage_for_day(&date),
+        None => store.model_usage_breakdown(),
     }
+    .map_err(|e| e.to_string())?;
+    Ok(price_usage(usage).await)
+}
+
+/// One day in the yearly token-activity grid.
+#[derive(Serialize)]
+pub(crate) struct DailyUsageRow {
+    pub(crate) date: String,
+    pub(crate) prompt_tokens: i64,
+    pub(crate) completion_tokens: i64,
+}
+
+/// Daily token totals for a local-calendar year. Zero-usage days are omitted;
+/// the frontend fills the empty grid cells.
+#[tauri::command]
+pub(crate) async fn daily_usage(year: i32) -> Result<Vec<DailyUsageRow>, String> {
+    open_history_store()?
+        .daily_usage(year)
+        .map_err(|e| e.to_string())
+        .map(|days| {
+            days.into_iter()
+                .map(|d: DailyUsage| DailyUsageRow {
+                    date: d.date,
+                    prompt_tokens: d.prompt_tokens,
+                    completion_tokens: d.completion_tokens,
+                })
+                .collect()
+        })
+}
+
+async fn price_usage(usage: Vec<ModelUsage>) -> UsageBreakdown {
     let token = harness_config::secrets::get("OXEN_API_KEY").filter(|t| !t.trim().is_empty());
-    let pricing = match harness_local::source::oxen_model_pricing(&model, token.as_deref()).await {
-        Ok(Some(p)) => p,
-        // No pricing listed, or the catalog was unreachable: treat as unavailable.
-        Ok(None) | Err(_) => return Ok(None),
-    };
-    let (input_tokens, output_tokens) = total_io_tokens();
-    Ok(Some(pricing.cost_of(input_tokens, output_tokens)))
+    let pricing = harness_local::source::oxen_model_pricing_catalog(token.as_deref())
+        .await
+        .ok();
+    let mut rows = Vec::with_capacity(usage.len());
+    let mut total_cost = 0.0;
+    let mut priced_any = usage.is_empty();
+    let mut prompt_tokens = 0;
+    let mut completion_tokens = 0;
+    let mut has_unpriced_usage = false;
+    for u in usage {
+        prompt_tokens += u.prompt_tokens;
+        completion_tokens += u.completion_tokens;
+        let cost_usd = if u.source == "oxen_cloud" {
+            pricing
+                .as_ref()
+                .and_then(|catalog| catalog.get(&u.model))
+                .map(|pricing| {
+                    priced_any = true;
+                    pricing.cost_of(
+                        u.prompt_tokens.max(0) as usize,
+                        u.completion_tokens.max(0) as usize,
+                    )
+                })
+        } else {
+            has_unpriced_usage = true;
+            None
+        };
+        if let Some(cost) = cost_usd {
+            total_cost += cost;
+        }
+        rows.push(ModelUsageRow {
+            model: u.model,
+            source: u.source,
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            cost_usd,
+        });
+    }
+    rows.sort_by(|a, b| {
+        b.cost_usd
+            .partial_cmp(&a.cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.model.cmp(&b.model))
+    });
+    UsageBreakdown {
+        rows,
+        total_cost_usd: priced_any.then_some(total_cost),
+        prompt_tokens,
+        completion_tokens,
+        has_unpriced_usage,
+    }
 }
 
 /// Ensure the running token counter exists, seeding it once from existing
@@ -234,56 +342,6 @@ fn estimate_all_tokens(store: &HistoryStore) -> usize {
 
 /// Add a turn's token throughput to the all-time counter (backfilling once if
 /// needed) and return the new grand total. Best-effort: never fails a turn.
-pub(crate) fn bump_total_tokens(delta: usize) -> usize {
-    let Ok(store) = open_history_store() else {
-        return 0;
-    };
-    let _ = ensure_total_tokens(&store);
-    store
-        .meta_add_i64(TOTAL_TOKENS_KEY, delta as i64)
-        .map(|v| v.max(0) as usize)
-        .unwrap_or(0)
-}
-
-/// `app_meta` keys holding the all-time input (prompt) and output (completion)
-/// token totals, tracked separately so cost can be priced at a model's distinct
-/// input/output rates. Unlike [`TOTAL_TOKENS_KEY`], these aren't backfilled from
-/// history (we can't split an old transcript into prompt vs completion), so they
-/// count only tokens observed since this feature shipped.
-const TOTAL_INPUT_TOKENS_KEY: &str = "total_input_tokens";
-const TOTAL_OUTPUT_TOKENS_KEY: &str = "total_output_tokens";
-
-/// The all-time input/output token totals (prompt, completion). Best-effort:
-/// missing counters read as 0.
-pub(crate) fn total_io_tokens() -> (usize, usize) {
-    let Ok(store) = open_history_store() else {
-        return (0, 0);
-    };
-    let read = |key: &str| {
-        store
-            .meta_get_i64(key)
-            .ok()
-            .flatten()
-            .unwrap_or(0)
-            .max(0) as usize
-    };
-    (read(TOTAL_INPUT_TOKENS_KEY), read(TOTAL_OUTPUT_TOKENS_KEY))
-}
-
-/// Add a turn's input/output token throughput to the all-time split counters.
-/// Best-effort: never fails a turn.
-pub(crate) fn bump_io_tokens(input_delta: usize, output_delta: usize) {
-    let Ok(store) = open_history_store() else {
-        return;
-    };
-    if input_delta > 0 {
-        let _ = store.meta_add_i64(TOTAL_INPUT_TOKENS_KEY, input_delta as i64);
-    }
-    if output_delta > 0 {
-        let _ = store.meta_add_i64(TOTAL_OUTPUT_TOKENS_KEY, output_delta as i64);
-    }
-}
-
 /// The `app_meta` key holding the all-time tokens saved by context compression.
 const TOTAL_TOKENS_SAVED_KEY: &str = "total_tokens_saved";
 

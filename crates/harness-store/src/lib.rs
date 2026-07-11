@@ -12,7 +12,7 @@ mod content;
 mod export;
 pub mod store;
 
-pub use store::{HistoryError, HistoryStore, SessionMeta, SessionSummary};
+pub use store::{DailyUsage, HistoryError, HistoryStore, ModelUsage, SessionMeta, SessionSummary};
 
 use serde::Serialize;
 

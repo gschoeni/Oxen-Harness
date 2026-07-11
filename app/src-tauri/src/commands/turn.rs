@@ -4,7 +4,7 @@
 //! [`execute_turn`] is the single streaming/accounting scaffold both entry
 //! points share: rehydrate the agent, register the turn's cancel token,
 //! forward every [`AgentEvent`] to the webview as session-tagged events, then
-//! roll the turn's token throughput into the all-time totals.
+//! persist usage in the shared agent ledger.
 
 use harness_agent::AgentEvent;
 use harness_llm::Attachment;
@@ -12,7 +12,7 @@ use harness_tools::QuestionAnswer;
 use tauri::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
 
-use crate::commands::session::{bump_io_tokens, bump_total_tokens, bump_total_tokens_saved};
+use crate::commands::session::bump_total_tokens_saved;
 use crate::events::{
     CompactedPayload, CompressionPayload, RetryPayload, SessionPayload, TokenPayload,
     ToolDeltaPayload, ToolEventPayload, UsagePayload,
@@ -109,21 +109,14 @@ async fn execute_turn(
     {
         spawner.set_cancel(cancel.clone());
     }
-    // Track the session's cumulative counts before/after the turn so we can roll
-    // just this turn's throughput (and compression savings) into the all-time
-    // totals.
-    let turn_delta;
+    // Track compression savings around the turn. Model usage itself is recorded
+    // per call inside `Agent`, where provider-reported input/output counts and
+    // the exact model are available (including review/fleet side agents).
     let saved_delta;
-    // This turn's input/output split, so cost can be priced at distinct rates.
-    let input_delta;
-    let output_delta;
     let result = {
         let mut agent = arc.lock().await;
         agent.set_cancel_token(cancel.clone());
-        let before = agent.tokens_used();
         let saved_before = agent.tokens_saved();
-        let input_before = agent.prompt_tokens_used();
-        let output_before = agent.completion_tokens_used();
         let on_event = move |event: &AgentEvent| match event {
             AgentEvent::Token(t) => {
                 let _ = app.emit(
@@ -257,20 +250,12 @@ async fn execute_turn(
             }
             TurnKind::Retry => agent.continue_turn(on_event).await,
         };
-        turn_delta = agent.tokens_used().saturating_sub(before);
         saved_delta = agent.tokens_saved().saturating_sub(saved_before);
-        input_delta = agent.prompt_tokens_used().saturating_sub(input_before);
-        output_delta = agent.completion_tokens_used().saturating_sub(output_before);
         r
     };
     // The turn is over (finished, stopped, or errored): drop its stop signal so a
     // later `cancel_turn` can't fire against a stale token.
     state.cancels.lock().await.remove(&session);
-    // Roll this turn's throughput into the all-time running total (a cheap
-    // persisted counter); the hero refreshes that grand total after the turn.
-    let _ = bump_total_tokens(turn_delta);
-    // Same again, split into input/output, so cost can price them separately.
-    bump_io_tokens(input_delta, output_delta);
     // Same for what compression saved (or would have saved, in audit mode).
     let _ = bump_total_tokens_saved(saved_delta);
     // The turn is persisted message-by-message, so once it's done the agent is

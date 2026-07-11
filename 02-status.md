@@ -1,7 +1,7 @@
 # Project Status & Roadmap
 
 **Purpose:** Where we are, what's next, what's done. Pull this in for any working session.
-**Updated:** 2026-07-08
+**Updated:** 2026-07-11
 
 ---
 
@@ -23,6 +23,7 @@
 | **11** | `harness-review`: configurable code review — `/code-review` (find→verify→report, editable step prompts), desktop Settings page + Review button | ✅ Complete |
 | **12** | Fleet: parallel subagents — `fleet::run_fleet` + `spawn_agents` tool (all modes), review find fan-out (3 lenses), live lanes w/ watch-a-lane in TUI (1-9/alt+1-9) and desktop panel | ✅ Complete |
 | **13** | Cleanup pass: shared helpers → `harness-core` (text/fmt/json), CLI handlers → `commands/`, desktop bridge split (state/bridges/events/commands), a `/code-review` self-review with 17 fixes | ✅ Complete |
+| **14** | Usage accounting: provider/fallback tokens per model call, daily activity ledger, estimated Oxen spend, desktop activity grid + CLI `/usage` | ✅ Complete |
 
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
@@ -309,6 +310,19 @@ Context growth, flaky endpoints, and recovering dead turns:
   (error/event/config + `agent/{turn,compression}`), the CLI's `live/`
   (turn/events/paint/completion), and `main.rs` (endpoint/turn/repl_loop +
   `model_cmd`/`compression_cmd`).
+
+## Recent — model usage reporting (2026-07-11)
+
+- Every completed model call records timestamped prompt/completion tokens under
+  its model and endpoint source. Provider counts win; unsupported endpoints use
+  the existing calibrated estimate. Review agents, fleet lanes, one-shot model
+  helpers, tool-loop calls, and partial replies all share the same ledger.
+- Settings → Usage has a theme-aware yearly activity grid with daily hover
+  totals, year navigation, and click-to-filter stats/model bars for one day.
+- The desktop hero and CLI banner show all-time tokens and estimated Oxen cloud
+  spend; `/usage` prints the CLI's per-model input/output/cost table.
+- Dollar figures use current Oxen catalog rates and are labeled estimates.
+  Local/custom/unlisted usage remains explicitly unpriced rather than `$0.00`.
 
 ## What's left / next
 

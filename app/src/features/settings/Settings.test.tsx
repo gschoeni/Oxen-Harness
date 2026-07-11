@@ -73,4 +73,57 @@ describe("Settings", () => {
     await userEvent.selectOptions(select, "on");
     expect(ipc.setCompressionMode).toHaveBeenCalledWith("on");
   });
+
+  it("shows the per-model usage breakdown and total on the Usage page", async () => {
+    ipc.modelUsageBreakdown.mockResolvedValueOnce({
+      rows: [
+        { model: "claude-sonnet-5", source: "oxen_cloud", prompt_tokens: 9885, completion_tokens: 0, cost_usd: 0.0346 },
+        { model: "gemini-2-5-flash", source: "oxen_cloud", prompt_tokens: 4942, completion_tokens: 0, cost_usd: 0.0015 },
+      ],
+      total_cost_usd: 0.0361,
+      prompt_tokens: 14827,
+      completion_tokens: 0,
+      has_unpriced_usage: false,
+    });
+    render(<Settings />);
+    await userEvent.click(screen.getByRole("button", { name: /usage/i }));
+
+    // Both models are listed with their spend, and the grand total is shown.
+    expect(await screen.findByText("claude-sonnet-5")).toBeInTheDocument();
+    expect(screen.getByText("gemini-2-5-flash")).toBeInTheDocument();
+    expect(screen.getByText("$0.03")).toBeInTheDocument(); // claude row cost
+    // The total appears (in the "dollars spent (all time)" stat and the table
+    // footer), so there are at least two occurrences of the rounded figure.
+    expect(screen.getAllByText("$0.04").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("loads a selected activity day's report from the contribution grid", async () => {
+    const year = new Date().getFullYear();
+    const date = `${year}-01-15`;
+    ipc.dailyUsage.mockResolvedValueOnce([
+      { date, prompt_tokens: 1200, completion_tokens: 300 },
+    ]);
+    ipc.modelUsageBreakdown
+      .mockResolvedValueOnce({
+        rows: [], total_cost_usd: 0, prompt_tokens: 0, completion_tokens: 0,
+        has_unpriced_usage: false,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          model: "claude-opus-4-8", source: "oxen_cloud", prompt_tokens: 1200,
+          completion_tokens: 300, cost_usd: 0.02,
+        }],
+        total_cost_usd: 0.02, prompt_tokens: 1200, completion_tokens: 300,
+        has_unpriced_usage: false,
+      });
+
+    render(<Settings />);
+    await userEvent.click(screen.getByRole("button", { name: /usage/i }));
+    const day = await screen.findByRole("button", { name: /1,500 tokens/i });
+    await userEvent.click(day);
+
+    expect(ipc.modelUsageBreakdown).toHaveBeenLastCalledWith(date);
+    expect(await screen.findByRole("heading", { name: /january 15/i })).toBeInTheDocument();
+    expect(screen.getByText("claude-opus-4-8")).toBeInTheDocument();
+  });
 });

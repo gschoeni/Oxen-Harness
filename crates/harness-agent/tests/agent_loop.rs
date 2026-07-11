@@ -44,11 +44,13 @@ impl Tool for AddTool {
 const TOOL_CALL_SSE: &str = concat!(
     "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"add\",\"arguments\":\"{\\\"a\\\":2,\\\"b\\\":3}\"}}]}}]}\n\n",
     "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":5,\"total_tokens\":105}}\n\n",
     "data: [DONE]\n\n"
 );
 
 const FINAL_SSE: &str = concat!(
     "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"The sum is 5.\"},\"finish_reason\":\"stop\"}]}\n\n",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":10,\"total_tokens\":210}}\n\n",
     "data: [DONE]\n\n"
 );
 
@@ -56,6 +58,7 @@ const FINAL_SSE: &str = concat!(
 // "announce the plan, then stop" shape the nudge is meant to catch.
 const INTENT_SSE: &str = concat!(
     "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Sure! I'll add those two numbers for you.\"},\"finish_reason\":\"stop\"}]}\n\n",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":10,\"total_tokens\":60}}\n\n",
     "data: [DONE]\n\n"
 );
 
@@ -267,4 +270,54 @@ async fn loop_calls_tool_then_returns_final_answer() {
     assert_eq!(roles, vec!["user", "assistant", "tool", "assistant"]);
     assert_eq!(stored[1]["tool_calls"][0]["function"]["name"], "add");
     assert_eq!(stored[2]["content"], "5");
+
+    // Provider-reported input/output counts are captured once per model call.
+    let usage = store.model_usage_breakdown().unwrap();
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0].model, "claude-opus-4-8");
+    assert_eq!(usage[0].prompt_tokens, 300);
+    assert_eq!(usage[0].completion_tokens, 15);
+    assert_eq!(store.meta_get_i64("total_tokens_used").unwrap(), Some(315));
+}
+
+#[tokio::test]
+async fn detached_agent_records_usage_in_parent_ledger() {
+    let mut server = mockito::Server::new_async().await;
+    let response = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(FINAL_SSE)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+    let session = store
+        .create_session(&harness_store::SessionMeta {
+            model: "claude-opus-4-8".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let base = Agent::new(
+        OxenClient::new(server.url(), "sk-test", "claude-opus-4-8"),
+        ToolRegistry::new(),
+        store.clone(),
+        session,
+        AgentConfig {
+            model: "claude-opus-4-8".into(),
+            system_prompt: None,
+            ..AgentConfig::default()
+        },
+    )
+    .unwrap();
+
+    let mut side = base.side_agent().unwrap();
+    side.run_turn("review this", |_| {}).await.unwrap();
+    response.assert_async().await;
+
+    let usage = store.model_usage_breakdown().unwrap();
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0].prompt_tokens, 200);
+    assert_eq!(usage[0].completion_tokens, 10);
 }

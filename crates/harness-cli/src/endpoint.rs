@@ -169,13 +169,13 @@ pub(crate) fn register_fleet_tool(
     tools: &mut ToolRegistry,
     client: &harness_llm::OxenClient,
     config: &AgentConfig,
+    usage_store: Arc<HistoryStore>,
     ui: &Ui,
 ) {
-    let spawner = Arc::new(harness_agent::FleetSpawner::new(
-        client.clone(),
-        tools.clone(),
-        config.clone(),
-    ));
+    let spawner = Arc::new(
+        harness_agent::FleetSpawner::new(client.clone(), tools.clone(), config.clone())
+            .with_usage_store(usage_store),
+    );
     // Keep a handle so a later model/endpoint swap reaches future subagents;
     // set_or_ignore, since a session registers exactly once.
     let _ = FLEET_SPAWNER.set(spawner.clone());

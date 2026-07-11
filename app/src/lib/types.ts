@@ -405,8 +405,36 @@ export type SettingsPage =
   | "skills"
   | "code-review"
   | "compression"
+  | "usage"
   | "appearance"
   | "logs";
+
+/** One model's accumulated usage, mirroring `ModelUsageRow` from the backend —
+ *  the model id, its prompt/completion token totals, and the dollars spent. */
+export interface ModelUsageRow {
+  model: string;
+  source: "oxen_cloud" | "unpriced";
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost_usd: number | null;
+}
+
+/** The per-model usage breakdown (most-spent first) plus the grand total, for
+ *  the Usage settings page. Mirrors `UsageBreakdown` from the backend. */
+export interface UsageBreakdown {
+  rows: ModelUsageRow[];
+  total_cost_usd: number | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  has_unpriced_usage: boolean;
+}
+
+/** One local-calendar day in the yearly usage activity grid. */
+export interface DailyUsageRow {
+  date: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+}
 
 // ---- code review (the configurable find → verify → report pipeline) --------
 

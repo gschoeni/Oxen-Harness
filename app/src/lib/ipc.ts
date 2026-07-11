@@ -31,6 +31,8 @@ import type {
   ToolEvent,
   ToolDeltaEvent,
   UsageEvent,
+  UsageBreakdown,
+  DailyUsageRow,
   CompactedEvent,
   CompressionEvent,
   CompressionMode,
@@ -57,10 +59,15 @@ export const sessionInfo = () => invoke<SessionInfo>("session_info");
 export const listSessions = () => invoke<SessionSummary[]>("list_sessions");
 /** All-time total tokens used across every stored session (a running grand total). */
 export const totalTokensUsed = () => invoke<number>("total_tokens_used");
-/** Estimated all-time dollars spent at the current cloud model's per-token rates.
- *  `null` when cost is unavailable (a local model, an unlisted model, or the
- *  pricing catalog couldn't be reached). */
+/** Estimated all-time Oxen cloud spend from recorded per-model usage and the
+ *  current catalog rates. `null` when pricing cannot be resolved. */
 export const totalCostUsd = () => invoke<number | null>("total_cost_usd");
+/** The per-model usage breakdown (most-spent first) plus the grand total, for
+ *  the Usage settings page. */
+export const modelUsageBreakdown = (date: string | null = null) =>
+  invoke<UsageBreakdown>("model_usage_breakdown", { date });
+/** Daily input/output totals for a local-calendar year, for the activity grid. */
+export const dailyUsage = (year: number) => invoke<DailyUsageRow[]>("daily_usage", { year });
 /** A session's raw persisted transcript (verbatim, read-only) for the dev inspector. */
 export const sessionMessages = (id: string) => invoke<ChatMessage[]>("session_messages", { id });
 /** The tool definitions (JSON schemas) the current agent advertises to the model. */

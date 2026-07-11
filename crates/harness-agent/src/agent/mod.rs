@@ -47,6 +47,10 @@ pub struct Agent {
     client: OxenClient,
     tools: ToolRegistry,
     store: Arc<HistoryStore>,
+    /// Persistent destination for aggregate usage. Usually the session store;
+    /// detached agents keep their transcript in memory but inherit this ledger
+    /// so review/fleet calls still count toward all-time model usage.
+    usage_store: Arc<HistoryStore>,
     session_id: String,
     config: AgentConfig,
     messages: Vec<ChatMessage>,
@@ -103,6 +107,7 @@ impl Agent {
         Ok(Self {
             client,
             tools,
+            usage_store: store.clone(),
             store,
             session_id,
             config,
@@ -145,6 +150,7 @@ impl Agent {
         Ok(Self {
             client,
             tools,
+            usage_store: store.clone(),
             store,
             session_id,
             config,
@@ -281,6 +287,12 @@ impl Agent {
         self.completion_tokens_used
     }
 
+    /// Route aggregate usage to `store` without changing where this agent's
+    /// transcript lives. Used by detached review/fleet agents.
+    pub(crate) fn set_usage_store(&mut self, store: Arc<HistoryStore>) {
+        self.usage_store = store;
+    }
+
     /// The tool definitions (JSON schemas) advertised to the model on every
     /// call this turn — i.e. the tools the agent currently has available.
     pub fn tool_definitions(&self) -> Vec<serde_json::Value> {
@@ -302,6 +314,18 @@ impl Agent {
             .client
             .stream_chat(&request, &CancellationToken::new(), |_| {})
             .await?;
+        let raw_prompt = budget::estimate_prompt_tokens(&request.messages, &[]);
+        let (prompt, completion) = match assembled.usage {
+            Some(usage) if usage.prompt_tokens + usage.completion_tokens > 0 => (
+                usage.prompt_tokens as usize,
+                usage.completion_tokens as usize,
+            ),
+            _ => (
+                raw_prompt,
+                budget::estimate_completion_tokens(&assembled.content, &assembled.tool_calls),
+            ),
+        };
+        self.record_usage(prompt, completion);
         Ok(assembled.content)
     }
 
@@ -316,13 +340,43 @@ impl Agent {
             model: self.config.model.clone(),
             ..Default::default()
         })?;
-        Agent::new(
+        let mut side = Agent::new(
             self.client.clone(),
             subagent_tools(self.tools.clone()),
             store,
             session,
             self.config.clone(),
-        )
+        )?;
+        side.set_usage_store(self.usage_store.clone());
+        Ok(side)
+    }
+
+    /// Persist one model call in the shared per-model ledger. Accounting is
+    /// best-effort and must never turn a successful inference into a failed turn.
+    fn record_usage(&self, prompt_tokens: usize, completion_tokens: usize) {
+        let _ = self.usage_store.record_model_usage(
+            &self.config.model,
+            self.usage_source(),
+            prompt_tokens,
+            completion_tokens,
+        );
+        let total = prompt_tokens.saturating_add(completion_tokens);
+        if total > 0 {
+            let _ = self
+                .usage_store
+                .meta_add_i64("total_tokens_used", total as i64);
+        }
+    }
+
+    /// Only the public Oxen hub catalog has rates this harness can apply. Local
+    /// llama-server and custom/self-hosted endpoints remain explicitly
+    /// unpriced instead of being mislabeled as free cloud usage.
+    fn usage_source(&self) -> &'static str {
+        if harness_llm::host_from_base_url(self.client.base_url()) == "hub.oxen.ai" {
+            "oxen_cloud"
+        } else {
+            "unpriced"
+        }
     }
 
     /// Record a synthetic, already-settled user/assistant exchange in the

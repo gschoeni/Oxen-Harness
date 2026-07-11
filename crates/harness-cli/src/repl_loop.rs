@@ -27,19 +27,6 @@ pub(crate) struct ReplContext<'a> {
     pub(crate) session: &'a str,
     pub(crate) workspace_root: &'a Path,
     pub(crate) base_url: &'a str,
-    /// Per-token pricing for the active model (fetched once at startup), so the
-    /// banner can show dollars spent. `None` for local/unlisted models or when
-    /// the pricing catalog was unreachable.
-    pub(crate) pricing: Option<harness_local::source::ModelPricing>,
-}
-
-impl ReplContext<'_> {
-    /// The estimated dollars `agent` has spent this session at [`Self::pricing`],
-    /// or `None` when no pricing is available.
-    pub(crate) fn cost_usd(&self, agent: &Agent) -> Option<f64> {
-        self.pricing
-            .map(|p| p.cost_of(agent.prompt_tokens_used(), agent.completion_tokens_used()))
-    }
 }
 
 /// The classic readline REPL for pipes, dumb terminals, and
@@ -249,11 +236,12 @@ async fn handle_line(
         }
         // `/departing` is the themed alias of `/location`; both persist.
         Command::Departing(rest) | Command::Location(rest) => {
-            commands::location::handle_repl(rest, agent, ui, ctx)?
+            commands::location::handle_repl(rest, agent, ui, ctx).await?
         }
         Command::Skills => print_skills(ui, ctx.workspace_root),
         Command::Auth(rest) => commands::auth::handle_repl(rest, agent, ui, ctx.base_url)?,
         Command::Compression(rest) => commands::compression::handle_repl(rest, agent, ui)?,
+        Command::Usage => commands::usage::handle_repl(ctx.store, ui).await,
         Command::Model(rest) => commands::model::handle_repl(rest, agent, ui)?,
         Command::Export(dest) => export(ctx.store, ctx.session, dest, ui)?,
         Command::Retry => {

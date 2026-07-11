@@ -179,6 +179,14 @@ export const sessionInfo = vi.fn(async () => sampleSession);
 export const listSessions = vi.fn(async () => []);
 export const totalTokensUsed = vi.fn(async () => 0);
 export const totalCostUsd = vi.fn(async () => null as number | null);
+export const modelUsageBreakdown = vi.fn(async () => ({
+  rows: [] as { model: string; source: "oxen_cloud" | "unpriced"; prompt_tokens: number; completion_tokens: number; cost_usd: number | null }[],
+  total_cost_usd: 0,
+  prompt_tokens: 0,
+  completion_tokens: 0,
+  has_unpriced_usage: false,
+}));
+export const dailyUsage = vi.fn(async () => [] as { date: string; prompt_tokens: number; completion_tokens: number }[]);
 export const sessionMessages = vi.fn(async () => [] as unknown[]);
 export const toolDefinitions = vi.fn(async () => [] as unknown[]);
 export const listTools = vi.fn(async () => [] as unknown[]);
@@ -321,6 +329,10 @@ export function resetIpc() {
   newTheme.mockReset().mockResolvedValue(sampleTheme);
   totalTokensUsed.mockReset().mockResolvedValue(0);
   totalCostUsd.mockReset().mockResolvedValue(null);
+  modelUsageBreakdown.mockReset().mockResolvedValue({
+    rows: [], total_cost_usd: 0, prompt_tokens: 0, completion_tokens: 0, has_unpriced_usage: false,
+  });
+  dailyUsage.mockReset().mockResolvedValue([]);
   sessionMessages.mockReset().mockResolvedValue([]);
   toolDefinitions.mockReset().mockResolvedValue([]);
   listTools.mockReset().mockResolvedValue([]);
