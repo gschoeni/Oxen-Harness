@@ -147,7 +147,8 @@ export function UsagePage() {
 
       <p className="usage-method-note">
         Spend is an estimate using current Oxen catalog rates. Local, custom, and unlisted models
-        remain unpriced instead of being counted as free.
+        remain unpriced instead of being counted as free. Daily and per-model tracking begins with
+        this version; older transcripts remain represented only in the all-time token estimate.
       </p>
       {error && <span className="save-status err">{error}</span>}
     </div>
