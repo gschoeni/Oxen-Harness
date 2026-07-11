@@ -178,6 +178,8 @@ async fn execute_turn(
             AgentEvent::Usage {
                 tokens_used,
                 context_tokens,
+                prompt_tokens_used,
+                completion_tokens_used,
             } => {
                 let _ = app.emit(
                     "agent://usage",
@@ -186,6 +188,8 @@ async fn execute_turn(
                         tokens_used: *tokens_used,
                         context_tokens: *context_tokens,
                         context_window,
+                        prompt_tokens_used: *prompt_tokens_used,
+                        completion_tokens_used: *completion_tokens_used,
                     },
                 );
             }

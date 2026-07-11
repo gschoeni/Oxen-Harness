@@ -189,6 +189,8 @@ interface AppState {
    *  the usage meter tick up live before the authoritative count lands at turn
    *  end. Reset to 0 when that turn's `agent://usage` arrives. */
   liveTokens: Record<string, number>;
+  /** Cumulative input/output tokens for pricing the active session. */
+  sessionUsage: Record<string, { prompt: number; completion: number }>;
   /** Generation speed (tokens/sec) per session, measured over the current
    *  streaming burst. Persists the last rate when idle. */
   tokensPerSecond: Record<string, number>;
@@ -453,6 +455,7 @@ export const useStore = create<AppState>((set, get) => {
     infos: {},
     threads: {},
     liveTokens: {},
+    sessionUsage: {},
     tokensPerSecond: {},
     compression: {},
     runStatus: {},
@@ -573,6 +576,7 @@ export const useStore = create<AppState>((set, get) => {
           streamingTool: drop(s.streamingTool),
           streamingCanvas: drop(s.streamingCanvas),
           liveTokens: drop(s.liveTokens),
+          sessionUsage: drop(s.sessionUsage),
           tokensPerSecond: drop(s.tokensPerSecond),
           compression: drop(s.compression),
         };
@@ -974,6 +978,10 @@ export const useStore = create<AppState>((set, get) => {
           // This event carries the exact count up to the current model call, so
           // drop the live streaming estimate to avoid double-counting.
           liveTokens: { ...s.liveTokens, [e.session]: 0 },
+          sessionUsage: {
+            ...s.sessionUsage,
+            [e.session]: { prompt: e.prompt_tokens_used, completion: e.completion_tokens_used },
+          },
         };
       }),
 

@@ -17,6 +17,7 @@ export function resetAll() {
     projectsOpen: true,
     infos: {},
     threads: {},
+    sessionUsage: {},
     compression: {},
     runStatus: {},
     queues: {},

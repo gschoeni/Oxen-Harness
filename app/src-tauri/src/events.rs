@@ -45,6 +45,8 @@ pub(crate) struct UsagePayload {
     pub(crate) tokens_used: usize,
     pub(crate) context_tokens: usize,
     pub(crate) context_window: usize,
+    pub(crate) prompt_tokens_used: usize,
+    pub(crate) completion_tokens_used: usize,
 }
 
 /// `agent://compacted` payload — the transcript was trimmed to fit the window,

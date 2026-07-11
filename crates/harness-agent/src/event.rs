@@ -29,6 +29,8 @@ pub enum AgentEvent {
     Usage {
         tokens_used: usize,
         context_tokens: usize,
+        prompt_tokens_used: usize,
+        completion_tokens_used: usize,
     },
     /// The transcript was compacted to fit the context window — older history
     /// was pruned and/or summarized so the session can continue instead of

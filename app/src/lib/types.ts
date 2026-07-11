@@ -347,6 +347,8 @@ export interface UsageEvent {
   tokens_used: number;
   context_tokens: number;
   context_window: number;
+  prompt_tokens_used: number;
+  completion_tokens_used: number;
 }
 
 /** `agent://compacted` payload — the transcript was trimmed to fit the context

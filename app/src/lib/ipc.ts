@@ -66,6 +66,8 @@ export const totalCostUsd = () => invoke<number | null>("total_cost_usd");
  *  the Usage settings page. */
 export const modelUsageBreakdown = (date: string | null = null) =>
   invoke<UsageBreakdown>("model_usage_breakdown", { date });
+export const sessionCost = (model: string, promptTokens: number, completionTokens: number) =>
+  invoke<number | null>("session_cost", { model, promptTokens, completionTokens });
 /** Daily input/output totals for a local-calendar year, for the activity grid. */
 export const dailyUsage = (year: number) => invoke<DailyUsageRow[]>("daily_usage", { year });
 /** A session's raw persisted transcript (verbatim, read-only) for the dev inspector. */

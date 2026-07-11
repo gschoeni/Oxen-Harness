@@ -18,6 +18,15 @@ const session = (compression_mode: "off" | "audit" | "on") =>
   });
 
 describe("TokenMeter compression indicator", () => {
+  it("shows the current session's estimated cost", async () => {
+    ipc.sessionCost.mockResolvedValueOnce(0.0123);
+    session("off");
+    useStore.setState({ sessionUsage: { s1: { prompt: 1000, completion: 200 } } });
+    render(<TokenMeter />);
+    expect(await screen.findByText("$0.01")).toBeInTheDocument();
+    expect(ipc.sessionCost).toHaveBeenCalledWith("claude-opus-4-8", 1000, 200);
+  });
+
   it("shows nothing about compression when the session's mode is off", () => {
     session("off");
     render(<TokenMeter />);

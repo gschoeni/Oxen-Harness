@@ -3,7 +3,9 @@
 // stat; this fills the gap during a conversation, where the hero is gone —
 // surfacing this session's live token count and how full the context window is.
 
-import { compactTokens } from "../../lib/format";
+import { useEffect, useState } from "react";
+import { compactTokens, formatUsd } from "../../lib/format";
+import { sessionCost } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import type { CompressionMode } from "../../lib/types";
 
@@ -30,6 +32,19 @@ export function TokenMeter() {
   // lives next to the model name in the composer, where it's reachable before
   // the first message too.
   const mode = useStore((s) => s.session?.compression_mode ?? "off");
+  const model = useStore((s) => s.session?.model ?? "");
+  const sessionId = useStore((s) => s.session?.session_id ?? "");
+  const pricedUsage = useStore((s) => (sessionId ? s.sessionUsage[sessionId] : undefined));
+  const [cost, setCost] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    if (!model || !pricedUsage) { setCost(null); return; }
+    sessionCost(model, pricedUsage.prompt, pricedUsage.completion)
+      .then((next) => active && setCost(next))
+      .catch(() => active && setCost(null));
+    return () => { active = false; };
+  }, [model, pricedUsage?.prompt, pricedUsage?.completion]);
 
   const tokensUsed = baseUsed + live;
   const contextTokens = baseContext + live;
@@ -38,6 +53,12 @@ export function TokenMeter() {
   return (
     <div className="token-meter" title={`${contextTokens.toLocaleString()} / ${contextWindow.toLocaleString()} context tokens`}>
       <span className="token-meter-used">{tokensUsed.toLocaleString()} tokens used</span>
+      {cost !== null && (
+        <>
+          <span className="token-meter-dot">·</span>
+          <span className="token-meter-cost" title="Estimated cost for this session">{formatUsd(cost)}</span>
+        </>
+      )}
       {contextWindow > 0 && (
         <>
           <span className="token-meter-dot">·</span>

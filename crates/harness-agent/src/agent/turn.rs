@@ -148,6 +148,8 @@ impl Agent {
             on_event(&AgentEvent::Usage {
                 tokens_used: self.tokens_used + prompt_tokens,
                 context_tokens: prompt_tokens,
+                prompt_tokens_used: self.prompt_tokens_used + prompt_tokens,
+                completion_tokens_used: self.completion_tokens_used,
             });
 
             // Compress stale tool output in the outbound copy (or, in audit
@@ -202,6 +204,8 @@ impl Agent {
             on_event(&AgentEvent::Usage {
                 tokens_used: self.tokens_used,
                 context_tokens: self.context_tokens(),
+                prompt_tokens_used: self.prompt_tokens_used,
+                completion_tokens_used: self.completion_tokens_used,
             });
 
             if assembled.tool_calls.is_empty() {

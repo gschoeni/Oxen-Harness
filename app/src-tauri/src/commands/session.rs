@@ -221,6 +221,26 @@ pub(crate) async fn model_usage_breakdown(
     Ok(price_usage(usage).await)
 }
 
+#[tauri::command]
+pub(crate) async fn session_cost(
+    model: String,
+    prompt_tokens: usize,
+    completion_tokens: usize,
+) -> Result<Option<f64>, String> {
+    let connection = harness_runtime::connection::load();
+    let base_url = harness_runtime::connection::effective_base_url(&connection);
+    let token = harness_runtime::connection::effective_api_key(&base_url);
+    let pricing = harness_local::source::oxen_model_pricing_catalog_at(
+        &base_url,
+        (!token.trim().is_empty()).then_some(token.as_str()),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(pricing
+        .get(&model)
+        .map(|p| p.cost_of(prompt_tokens, completion_tokens)))
+}
+
 /// One day in the yearly token-activity grid.
 #[derive(Serialize)]
 pub(crate) struct DailyUsageRow {

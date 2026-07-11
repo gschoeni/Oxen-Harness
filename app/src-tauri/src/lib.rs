@@ -91,6 +91,7 @@ pub fn run() {
             commands::session::total_tokens_used,
             commands::session::total_cost_usd,
             commands::session::model_usage_breakdown,
+            commands::session::session_cost,
             commands::session::daily_usage,
             commands::session::new_session,
             commands::session::resume_session,

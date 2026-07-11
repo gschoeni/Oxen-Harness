@@ -793,6 +793,8 @@ mod tests {
             &AgentEvent::Usage {
                 tokens_used: 1234,
                 context_tokens: 0,
+                prompt_tokens_used: 1000,
+                completion_tokens_used: 234,
             },
             &ui,
         );
