@@ -84,6 +84,11 @@ EXISTS`; it runs an ordered migration chain tracked by SQLite's `user_version`.
   `base_url`, `mode` (local/cloud), `context_window`, `system_prompt_version`,
   `theme`, `transcript_version`. New columns default to empty/NULL so existing
   rows migrate without backfill.
+- *M6* repairs the first Usage release's version-5 `model_usage` aggregate
+  table into the timestamped `usage_events` ledger. Its totals are preserved as
+  `unpriced` events at the former row's update time; the original schema did
+  not retain enough information to recover a provider or a cost. This is a
+  forward-only repair because released databases already recorded version 5.
 -> *Why: changing `ChatMessage`, adding columns, or repairing derived fields was
   unsafe once users had real history; and resuming an old session was ambiguous
   with only `workspace` + `model` recorded as local models/tools/providers evolve.*

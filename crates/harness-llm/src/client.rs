@@ -305,8 +305,12 @@ mod tests {
         let sse = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello \"}}]}\n\n\
                    data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ox\"},\"finish_reason\":\"stop\"}]}\n\n\
                    data: [DONE]\n\n";
-        server
+        let mock = server
             .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            })))
             .with_status(200)
             .with_header("content-type", "text/event-stream")
             .with_body(sse)
@@ -329,6 +333,7 @@ mod tests {
         assert_eq!(tokens, "Hello ox");
         assert_eq!(assembled.content, "Hello ox");
         assert_eq!(assembled.finish_reason.as_deref(), Some("stop"));
+        mock.assert_async().await;
     }
 
     #[tokio::test]

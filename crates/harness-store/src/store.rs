@@ -83,6 +83,42 @@ fn migrations() -> Migrations<'static> {
              CREATE INDEX IF NOT EXISTS idx_usage_events_created_at
                  ON usage_events(created_at);",
         ),
+        // M6 — repair the first usage release, which stored aggregate rows in
+        // `model_usage` while already claiming schema version 5. Preserve those
+        // totals as events so the later daily usage queries have a real table.
+        M::up_with_hook(
+            "CREATE TABLE IF NOT EXISTS usage_events (
+                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                 model             TEXT NOT NULL,
+                 source            TEXT NOT NULL,
+                 prompt_tokens     INTEGER NOT NULL,
+                 completion_tokens INTEGER NOT NULL,
+                 created_at        INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_usage_events_created_at
+                 ON usage_events(created_at);",
+            |tx| {
+                let has_legacy_summary: bool = tx.query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM sqlite_master
+                         WHERE type = 'table' AND name = 'model_usage'
+                     )",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if has_legacy_summary {
+                    tx.execute(
+                        "INSERT INTO usage_events
+                             (model, source, prompt_tokens, completion_tokens, created_at)
+                         SELECT model, 'unpriced', prompt_tokens, completion_tokens, updated_at
+                         FROM model_usage",
+                        [],
+                    )?;
+                    tx.execute("DROP TABLE model_usage", [])?;
+                }
+                Ok(())
+            },
+        ),
     ])
 }
 
@@ -1022,7 +1058,42 @@ mod tests {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(user_version, 5);
+        assert_eq!(user_version, 6);
+    }
+
+    #[test]
+    fn upgrades_the_released_v5_usage_summary_to_usage_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v5-usage.sqlite");
+
+        // The first usage release shipped this aggregate table at user_version
+        // 5. Its replacement needs a new migration so existing databases do
+        // not report their obsolete version as current and skip the ledger.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE model_usage (
+                     model             TEXT PRIMARY KEY,
+                     prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+                     completion_tokens INTEGER NOT NULL DEFAULT 0,
+                     cost_micros       INTEGER NOT NULL DEFAULT 0,
+                     updated_at        INTEGER NOT NULL
+                 );
+                 INSERT INTO model_usage
+                     (model, prompt_tokens, completion_tokens, cost_micros, updated_at)
+                 VALUES ('claude-opus-4-8', 1200, 300, 42, 1_700_000_000);
+                 PRAGMA user_version = 5;",
+            )
+            .unwrap();
+        }
+
+        let store = HistoryStore::open(&path).unwrap();
+        let usage = store.model_usage_breakdown().unwrap();
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].model, "claude-opus-4-8");
+        assert_eq!(usage[0].source, "unpriced");
+        assert_eq!(usage[0].prompt_tokens, 1200);
+        assert_eq!(usage[0].completion_tokens, 300);
     }
 
     #[test]
