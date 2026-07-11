@@ -221,19 +221,15 @@ pub(crate) fn register_fleet(
     tools: &mut ToolRegistry,
     client: &OxenClient,
     config: &AgentConfig,
+    usage_store: Arc<HistoryStore>,
 ) {
     if !harness_runtime::tools::load().is_enabled(harness_agent::FLEET_TOOL) {
         return;
     }
-    let mut spawner = harness_agent::FleetSpawner::new(
-        client.clone(),
-        tools.clone(),
-        config.clone(),
+    let spawner = Arc::new(
+        harness_agent::FleetSpawner::new(client.clone(), tools.clone(), config.clone())
+            .with_usage_store(usage_store),
     );
-    if let Ok(store) = open_history_store() {
-        spawner = spawner.with_usage_store(Arc::new(store));
-    }
-    let spawner = Arc::new(spawner);
     tools.register_typed(harness_agent::FleetTool::new(
         spawner.clone(),
         Arc::new(TauriFleetSink {
@@ -276,7 +272,7 @@ pub(crate) fn new_agent(
         context_window,
         workspace_root,
     );
-    register_fleet(app, &session, &mut tools, &client, &config);
+    register_fleet(app, &session, &mut tools, &client, &config, store.clone());
     Agent::new(client, tools, store, session, config).map_err(|e| e.to_string())
 }
 
@@ -301,7 +297,14 @@ pub(crate) fn resume_agent(
         context_window,
         workspace_root,
     );
-    register_fleet(app, &session_id, &mut tools, &client, &config);
+    register_fleet(
+        app,
+        &session_id,
+        &mut tools,
+        &client,
+        &config,
+        store.clone(),
+    );
     Agent::resume_from_store(client, tools, store, session_id, config).map_err(|e| e.to_string())
 }
 

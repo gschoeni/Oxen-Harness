@@ -4,6 +4,7 @@
 //! Compression page read. Everything here goes through the shared history
 //! store — the same DB the agents persist to as they run.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use harness_llm::{Attachment, ChatMessage};
@@ -251,6 +252,13 @@ async fn price_usage(usage: Vec<ModelUsage>) -> UsageBreakdown {
     let pricing = harness_local::source::oxen_model_pricing_catalog(token.as_deref())
         .await
         .ok();
+    price_usage_with_catalog(usage, pricing.as_ref())
+}
+
+fn price_usage_with_catalog(
+    usage: Vec<ModelUsage>,
+    pricing: Option<&HashMap<String, harness_local::source::ModelPricing>>,
+) -> UsageBreakdown {
     let mut rows = Vec::with_capacity(usage.len());
     let mut total_cost = 0.0;
     let mut priced_any = usage.is_empty();
@@ -262,7 +270,6 @@ async fn price_usage(usage: Vec<ModelUsage>) -> UsageBreakdown {
         completion_tokens += u.completion_tokens;
         let cost_usd = if u.source == "oxen_cloud" {
             pricing
-                .as_ref()
                 .and_then(|catalog| catalog.get(&u.model))
                 .map(|pricing| {
                     priced_any = true;
@@ -272,9 +279,11 @@ async fn price_usage(usage: Vec<ModelUsage>) -> UsageBreakdown {
                     )
                 })
         } else {
-            has_unpriced_usage = true;
             None
         };
+        if cost_usd.is_none() {
+            has_unpriced_usage = true;
+        }
         if let Some(cost) = cost_usd {
             total_cost += cost;
         }
@@ -298,6 +307,47 @@ async fn price_usage(usage: Vec<ModelUsage>) -> UsageBreakdown {
         prompt_tokens,
         completion_tokens,
         has_unpriced_usage,
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+
+    #[test]
+    fn missing_catalog_rows_make_a_partial_total_explicit() {
+        let mut catalog = HashMap::new();
+        catalog.insert(
+            "priced".to_string(),
+            harness_local::source::ModelPricing {
+                input_cost_per_token: 0.01,
+                output_cost_per_token: 0.02,
+            },
+        );
+        let report = price_usage_with_catalog(
+            vec![
+                ModelUsage {
+                    model: "priced".into(),
+                    source: "oxen_cloud".into(),
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                },
+                ModelUsage {
+                    model: "missing".into(),
+                    source: "oxen_cloud".into(),
+                    prompt_tokens: 20,
+                    completion_tokens: 5,
+                },
+            ],
+            Some(&catalog),
+        );
+
+        assert_eq!(report.total_cost_usd, Some(0.2));
+        assert!(report.has_unpriced_usage);
+        assert!(report
+            .rows
+            .iter()
+            .any(|row| row.model == "missing" && row.cost_usd.is_none()));
     }
 }
 
