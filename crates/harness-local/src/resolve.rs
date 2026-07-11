@@ -3,7 +3,7 @@
 //! A local model can be named two ways: by the id of a model already in the
 //! [`ModelStore`] (anything ever downloaded — curated, Hugging Face, or a GGUF
 //! dropped in by hand), or by a catalog id from the config-file catalog
-//! ([`crate::catalog`]). Resolution always prefers weights that are already on
+//! ([`crate::catalog`](mod@crate::catalog)). Resolution always prefers weights that are already on
 //! disk, so starting a downloaded model never touches the network — a session
 //! on a plane runs exactly like one at a desk. Only a catalog model with no
 //! quant installed resolves to a download.

@@ -265,7 +265,9 @@ pub(crate) fn oregon_trail() -> Theme {
                 HelpItem {
                     key: s("9."),
                     title: s("Choose your departure"),
-                    hint: s("— /departing <place>  (set where the trail begins)"),
+                    hint: s(
+                        "— /location <place>  (set where the trail begins; /departing works too)",
+                    ),
                 },
                 HelpItem {
                     key: s("10."),

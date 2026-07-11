@@ -142,7 +142,8 @@ pub(crate) fn live_enabled(ui: &Ui) -> bool {
 /// stacked messages in order. On a live TTY this hands off to the sticky
 /// composer (which lets the user keep stacking while turns run); otherwise it
 /// runs the classic prompt and drains after.
-/// Returns `Ok(true)` when the session should end.
+/// Returns `Ok(true)` when the session should end (Ctrl-D). A Ctrl-C only
+/// cancels the running turn and its drain — the caller returns to the prompt.
 pub(crate) async fn run_turn_and_drain(
     agent: &mut Agent,
     request: TurnRequest,
@@ -157,8 +158,11 @@ pub(crate) async fn run_turn_and_drain(
         *carryover = draft;
         return Ok(exit);
     }
-    if run_prompt(agent, &request, ui, carryover).await? {
-        return Ok(true);
+    if matches!(
+        run_prompt(agent, &request, ui, carryover).await?,
+        PromptOutcome::Interrupted
+    ) {
+        return Ok(false);
     }
     while !queue.is_empty() {
         let next = queue.pop_front().expect("queue is non-empty");
@@ -167,15 +171,27 @@ pub(crate) async fn run_turn_and_drain(
             ui.brown("▶ rolling the wagon:"),
             ui.cream(&truncate(&next, 80)),
         );
-        if run_prompt(agent, &TurnRequest::Prompt(next), ui, carryover).await? {
-            return Ok(true);
+        if matches!(
+            run_prompt(agent, &TurnRequest::Prompt(next), ui, carryover).await?,
+            PromptOutcome::Interrupted
+        ) {
+            return Ok(false);
         }
     }
     Ok(false)
 }
 
-/// Run one turn, racing it against Ctrl-C. Returns `Ok(true)` if the user
-/// interrupted the stream (the caller should then end the session).
+/// How one classic-prompt turn ended.
+enum PromptOutcome {
+    /// The turn ran to completion (success or a reported failure).
+    Ran,
+    /// Ctrl-C cancelled the stream — stop draining, but keep the session.
+    Interrupted,
+}
+
+/// Run one turn, racing it against Ctrl-C. A Ctrl-C cancels the in-flight
+/// turn and returns [`PromptOutcome::Interrupted`] so the caller stops
+/// draining the queue — the session itself continues at the prompt.
 ///
 /// `carryover` seeds the next idle prompt: a retryable failure fills it with
 /// `/retry` so a bare ⏎ re-drives the dangling turn; a finished turn clears
@@ -186,7 +202,7 @@ async fn run_prompt(
     request: &TurnRequest,
     ui: &Ui,
     carryover: &mut String,
-) -> Result<bool> {
+) -> Result<PromptOutcome> {
     let (text, attachments) = match request {
         TurnRequest::Prompt(prompt) => {
             let (text, attachments, warnings) = attach::extract_attachments(prompt);
@@ -214,10 +230,24 @@ async fn run_prompt(
     let mut on_event = move |event: &harness_agent::AgentEvent| cb.borrow_mut().on_event(event);
     let is_continue = matches!(request, TurnRequest::Continue);
     let result = tokio::select! {
-        // Cancel the in-flight turn on Ctrl-C and signal an exit.
+        // Ctrl-C cancels the in-flight turn; the session continues.
         _ = tokio::signal::ctrl_c() => {
             renderer.borrow_mut().finish();
-            return Ok(true);
+            println!();
+            println!(
+                "  {} {}",
+                ui.red("⚠ interrupted"),
+                ui.dim("— the oxen pull up short"),
+            );
+            println!(
+                "  {}",
+                ui.dim(if ends_mid_turn(agent.messages()) {
+                    "every step so far is saved · /retry continues this turn, or just give new directions"
+                } else {
+                    "every step so far is saved · give new directions whenever you're ready"
+                }),
+            );
+            return Ok(PromptOutcome::Interrupted);
         }
         result = async {
             if is_continue {
@@ -238,7 +268,7 @@ async fn run_prompt(
             if needs_brave_key {
                 brave::prompt_after_failed_search(ui);
             }
-            Ok(false)
+            Ok(PromptOutcome::Ran)
         }
         Err(e) => {
             println!();
@@ -249,7 +279,7 @@ async fn run_prompt(
             if seeded {
                 *carryover = "/retry".to_string();
             }
-            Ok(false)
+            Ok(PromptOutcome::Ran)
         }
     }
 }

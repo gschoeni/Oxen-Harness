@@ -1,11 +1,15 @@
 //! Where themes live on disk and how they're selected, shared, and persisted.
 //!
 //! Everything lives under `~/.oxen-harness/` (alongside history + models):
-//! - `config.toml` records the active theme by slug.
+//! - `config.toml` records the active theme by slug, plus the user's location
+//!   (the "Departing" line in the CLI banner and the hero screen's first
+//!   status row — user data, so it survives theme switches).
 //! - `themes/<slug>.toml` holds installed/imported/created themes.
 //!
 //! Resolution prefers an installed file over a built-in of the same slug, so a
 //! user can fork and override a built-in just by saving a theme with its name.
+//! The location is overlaid onto the *active* theme as it loads — never onto
+//! saved or exported theme files, which stay shareable.
 
 use std::path::{Path, PathBuf};
 
@@ -28,6 +32,10 @@ pub fn slug(name: &str) -> String {
 struct Config {
     #[serde(default)]
     theme: Option<String>,
+    /// The user's location, overlaid on the active theme's first flavor row
+    /// (the CLI banner's "Departing" line and the hero screen's status rows).
+    #[serde(default)]
+    location: Option<String>,
 }
 
 /// A one-line description of an available theme, for listings/pickers.
@@ -100,19 +108,63 @@ impl Store {
         builtins::by_name(&slug).ok_or_else(|| ThemeError::NotFound(name.to_string()))
     }
 
-    /// The active theme, falling back to the default if anything is amiss.
+    /// The active theme (with the user's location overlaid), falling back to
+    /// the default if anything is amiss.
     pub fn load_active(&self) -> Theme {
-        self.resolve(&self.active_slug()).unwrap_or_default()
+        let mut theme = self.resolve(&self.active_slug()).unwrap_or_default();
+        self.overlay_location(&mut theme);
+        theme
     }
 
-    /// Set the active theme (must resolve). Stores its slug in `config.toml`.
+    /// Set the active theme (must resolve). Stores its slug in `config.toml`
+    /// (preserving the other settings there) and returns the theme with the
+    /// user's location overlaid, ready to render.
     pub fn set_active(&self, name: &str) -> Result<Theme, ThemeError> {
-        let theme = self.resolve(name)?;
-        let cfg = Config {
-            theme: Some(slug(&theme.meta.name)),
-        };
-        std::fs::write(self.config_path(), toml::to_string_pretty(&cfg)?)?;
+        let mut theme = self.resolve(name)?;
+        let mut cfg = self.read_config();
+        cfg.theme = Some(slug(&theme.meta.name));
+        self.write_config(&cfg)?;
+        self.overlay_location(&mut theme);
         Ok(theme)
+    }
+
+    fn write_config(&self, cfg: &Config) -> Result<(), ThemeError> {
+        std::fs::write(self.config_path(), toml::to_string_pretty(cfg)?)?;
+        Ok(())
+    }
+
+    /// The user's saved location, if set.
+    pub fn location(&self) -> Option<String> {
+        self.read_config()
+            .location
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+    }
+
+    /// Persist (or, with `None`/blank, clear) the user's location.
+    pub fn set_location(&self, location: Option<&str>) -> Result<(), ThemeError> {
+        let mut cfg = self.read_config();
+        cfg.location = location
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty());
+        self.write_config(&cfg)
+    }
+
+    /// Write the saved location into a theme's first `flavor_top` row — the
+    /// CLI banner's "Departing" line and the hero screen's first status row.
+    /// The row's themed label is kept; a theme with no rows gains a
+    /// `Location` one. A no-op when no location is saved.
+    fn overlay_location(&self, theme: &mut Theme) {
+        let Some(location) = self.location() else {
+            return;
+        };
+        match theme.voice.flavor_top.first_mut() {
+            Some(row) => row[1] = location,
+            None => theme
+                .voice
+                .flavor_top
+                .push(["Location".to_string(), location]),
+        }
     }
 
     /// Save a theme to `themes/<slug>.toml`, returning its path.
@@ -248,6 +300,53 @@ mod tests {
         store.set_active("Midnight").unwrap();
         assert_eq!(store.active_slug(), "midnight");
         assert_eq!(store.load_active().meta.name, "Midnight");
+    }
+
+    #[test]
+    fn location_persists_and_overlays_the_active_theme() {
+        let (_d, store) = store();
+        // The default theme ships its own departure row.
+        let default_row = store.load_active().voice.flavor_top[0].clone();
+        assert_eq!(default_row[0], "Departing");
+
+        store.set_location(Some("Fort Laramie, Wyoming")).unwrap();
+        assert_eq!(store.location().as_deref(), Some("Fort Laramie, Wyoming"));
+        let theme = store.load_active();
+        // The themed label survives; only the value is the user's.
+        assert_eq!(theme.voice.flavor_top[0][0], "Departing");
+        assert_eq!(theme.voice.flavor_top[0][1], "Fort Laramie, Wyoming");
+
+        // Switching themes keeps the location (returned theme included) …
+        let midnight = store.set_active("Midnight").unwrap();
+        assert!(midnight
+            .voice
+            .flavor_top
+            .iter()
+            .any(|r| r[1] == "Fort Laramie, Wyoming"));
+        assert_eq!(store.location().as_deref(), Some("Fort Laramie, Wyoming"));
+
+        // … and clearing reverts to the theme's own row.
+        store.set_location(None).unwrap();
+        assert_eq!(store.location(), None);
+        store.set_active("Oregon Trail").unwrap();
+        assert_eq!(store.load_active().voice.flavor_top[0], default_row);
+    }
+
+    #[test]
+    fn location_never_bakes_into_exported_themes() {
+        let (_d, store) = store();
+        store.set_location(Some("Independence Rock")).unwrap();
+        let dest = store.themes_dir().join("exported.toml");
+        store.export("Oregon Trail", &dest).unwrap();
+        let raw = std::fs::read_to_string(&dest).unwrap();
+        assert!(!raw.contains("Independence Rock"));
+    }
+
+    #[test]
+    fn blank_location_reads_as_unset() {
+        let (_d, store) = store();
+        store.set_location(Some("   ")).unwrap();
+        assert_eq!(store.location(), None);
     }
 
     #[test]

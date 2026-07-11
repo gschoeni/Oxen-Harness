@@ -171,6 +171,28 @@ pub(crate) async fn total_tokens_used() -> Result<usize, String> {
     Ok(ensure_total_tokens(&store)?.max(0) as usize)
 }
 
+/// The estimated all-time dollars spent, priced at the currently-selected cloud
+/// model's per-token rates from the Oxen models API. `None` when no cost can be
+/// computed — a local model is active, the model isn't listed with token
+/// pricing, or the catalog can't be reached. Best-effort: cost is informational,
+/// so we never surface a hard error to the UI (we return `Ok(None)`).
+#[tauri::command]
+pub(crate) async fn total_cost_usd() -> Result<Option<f64>, String> {
+    let model = harness_runtime::models::selected();
+    // A local model has no cloud price; report "unavailable" rather than $0.
+    if model.trim().is_empty() {
+        return Ok(None);
+    }
+    let token = harness_config::secrets::get("OXEN_API_KEY").filter(|t| !t.trim().is_empty());
+    let pricing = match harness_local::source::oxen_model_pricing(&model, token.as_deref()).await {
+        Ok(Some(p)) => p,
+        // No pricing listed, or the catalog was unreachable: treat as unavailable.
+        Ok(None) | Err(_) => return Ok(None),
+    };
+    let (input_tokens, output_tokens) = total_io_tokens();
+    Ok(Some(pricing.cost_of(input_tokens, output_tokens)))
+}
+
 /// Ensure the running token counter exists, seeding it once from existing
 /// history if it was never set, and return the current total. The expensive
 /// transcript scan runs at most once (the first time); afterwards each turn just
@@ -221,6 +243,45 @@ pub(crate) fn bump_total_tokens(delta: usize) -> usize {
         .meta_add_i64(TOTAL_TOKENS_KEY, delta as i64)
         .map(|v| v.max(0) as usize)
         .unwrap_or(0)
+}
+
+/// `app_meta` keys holding the all-time input (prompt) and output (completion)
+/// token totals, tracked separately so cost can be priced at a model's distinct
+/// input/output rates. Unlike [`TOTAL_TOKENS_KEY`], these aren't backfilled from
+/// history (we can't split an old transcript into prompt vs completion), so they
+/// count only tokens observed since this feature shipped.
+const TOTAL_INPUT_TOKENS_KEY: &str = "total_input_tokens";
+const TOTAL_OUTPUT_TOKENS_KEY: &str = "total_output_tokens";
+
+/// The all-time input/output token totals (prompt, completion). Best-effort:
+/// missing counters read as 0.
+pub(crate) fn total_io_tokens() -> (usize, usize) {
+    let Ok(store) = open_history_store() else {
+        return (0, 0);
+    };
+    let read = |key: &str| {
+        store
+            .meta_get_i64(key)
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+            .max(0) as usize
+    };
+    (read(TOTAL_INPUT_TOKENS_KEY), read(TOTAL_OUTPUT_TOKENS_KEY))
+}
+
+/// Add a turn's input/output token throughput to the all-time split counters.
+/// Best-effort: never fails a turn.
+pub(crate) fn bump_io_tokens(input_delta: usize, output_delta: usize) {
+    let Ok(store) = open_history_store() else {
+        return;
+    };
+    if input_delta > 0 {
+        let _ = store.meta_add_i64(TOTAL_INPUT_TOKENS_KEY, input_delta as i64);
+    }
+    if output_delta > 0 {
+        let _ = store.meta_add_i64(TOTAL_OUTPUT_TOKENS_KEY, output_delta as i64);
+    }
 }
 
 /// The `app_meta` key holding the all-time tokens saved by context compression.

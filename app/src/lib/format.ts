@@ -45,6 +45,14 @@ export function compactTokens(n: number): string {
   return `${m >= 100 ? m.toFixed(0) : m.toFixed(1)}M`;
 }
 
+/** Format a US-dollar amount for the spend readout. Sub-cent totals show more
+ *  precision (e.g. `$0.0042`) so early usage isn't rounded to `$0.00`; larger
+ *  amounts use standard two-decimal currency (e.g. `$12.34`). */
+export function formatUsd(amount: number): string {
+  if (amount > 0 && amount < 0.01) return `$${amount.toFixed(4)}`;
+  return `$${amount.toFixed(2)}`;
+}
+
 /** Keep only the freshest `cap` characters of `s` — the rolling-tail buffer
  *  behind live activity readouts (fleet lanes, the review card), where the
  *  newest output matters and the oldest falls off.

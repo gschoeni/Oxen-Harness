@@ -10,6 +10,11 @@ use super::{flourish, Ui};
 /// `tokens_used` is the cumulative token count for the live session; it
 /// replaces the value of any `flavor_bottom` row labelled "Total tokens used"
 /// so the banner reflects real usage rather than static flavor text.
+///
+/// `cost_usd` is the estimated dollars spent this session (input + output tokens
+/// priced at the model's rates), rendered as a "Total dollars spent" row right
+/// under the token count. `None` when cost is unavailable (a local model, an
+/// unlisted model, or the pricing catalog couldn't be reached).
 pub fn banner(
     ui: &Ui,
     base_url: &str,
@@ -17,6 +22,7 @@ pub fn banner(
     workspace: &str,
     session: &str,
     tokens_used: usize,
+    cost_usd: Option<f64>,
 ) -> String {
     let v = &ui.theme().voice;
     let mut out = String::new();
@@ -60,6 +66,14 @@ pub fn banner(
         // today's date so the trail journal opens on the present day.
         if label == "Total tokens used" {
             out.push_str(&journal_row(ui, label, &format!("{tokens_used} tokens")));
+            // The dollars-spent readout lives immediately under the token count.
+            let spent = match cost_usd {
+                Some(c) => format_usd(c),
+                None => "—".to_string(),
+            };
+            out.push_str(&journal_row(ui, "Total dollars spent", &spent));
+        } else if label == "Total dollars spent" {
+            // A theme may carry a static row; the live one above replaces it.
         } else if label == "Date" {
             out.push_str(&journal_row(ui, label, &today()));
         } else if label == "Weather" {
@@ -72,6 +86,17 @@ pub fn banner(
     out.push('\n');
     out.push_str(&format!("  {}\n", ui.dim(&v.bottom_hint)));
     out
+}
+
+/// Format a US-dollar amount for the banner's spend readout. Sub-cent totals
+/// show extra precision (e.g. `$0.0042`) so early usage isn't shown as `$0.00`;
+/// larger amounts use standard two-decimal currency (mirrors the desktop UI).
+fn format_usd(amount: f64) -> String {
+    if amount > 0.0 && amount < 0.01 {
+        format!("${amount:.4}")
+    } else {
+        format!("${amount:.2}")
+    }
 }
 
 /// Render the word as 5-row block "figlet" letters (only the glyphs we need).
@@ -214,14 +239,14 @@ mod tests {
     fn no_color_screens_are_plain() {
         let ui = Ui::plain();
         assert!(!help(&ui).contains("\x1b["));
-        assert!(!banner(&ui, "u", "m", "w", "s", 0).contains("\x1b["));
+        assert!(!banner(&ui, "u", "m", "w", "s", 0, None).contains("\x1b["));
         assert!(!death_screen(&ui, "abc123").contains("\x1b["));
     }
 
     #[test]
     fn banner_shows_a_live_date_not_the_static_flavor() {
         let ui = colored();
-        let out = banner(&ui, "u", "m", "w", "s", 0);
+        let out = banner(&ui, "u", "m", "w", "s", 0, None);
         // The static flavor year (1848) must be replaced by today's real date.
         assert!(out.contains(&today()));
         assert!(!out.contains("March 21, 1848"));
@@ -238,16 +263,32 @@ mod tests {
         assert_eq!(returned, "Departing");
         assert_eq!(ui.departing(), Some(("Departing", "Fort Laramie, Wyoming")));
         // The banner reflects the new location.
-        assert!(banner(&ui, "u", "m", "w", "s", 0).contains("Fort Laramie, Wyoming"));
+        assert!(banner(&ui, "u", "m", "w", "s", 0, None).contains("Fort Laramie, Wyoming"));
     }
 
     #[test]
     fn banner_shows_live_token_count() {
         let ui = Ui::plain();
-        let b = banner(&ui, "u", "m", "w", "s", 1234);
+        let b = banner(&ui, "u", "m", "w", "s", 1234, None);
         // The live cumulative count replaces the static flavor value.
         assert!(b.contains("Total tokens used"));
         assert!(b.contains("1234 tokens"));
+    }
+
+    #[test]
+    fn banner_shows_dollars_spent_under_tokens() {
+        let ui = Ui::plain();
+        // A known cost renders as a currency row; unavailable renders as "—".
+        let priced = banner(&ui, "u", "m", "w", "s", 1234, Some(0.42));
+        assert!(priced.contains("Total dollars spent"));
+        assert!(priced.contains("$0.42"));
+        // The dollars row follows the tokens row.
+        let toks = priced.find("Total tokens used").unwrap();
+        let cost = priced.find("Total dollars spent").unwrap();
+        assert!(cost > toks);
+
+        let unavailable = banner(&ui, "u", "m", "w", "s", 0, None);
+        assert!(unavailable.contains("Total dollars spent"));
     }
 
     #[test]
@@ -265,7 +306,7 @@ mod tests {
     #[test]
     fn banner_includes_active_theme_name() {
         let ui = Ui::plain();
-        let b = banner(&ui, "host", "model", "ws", "sess", 0);
+        let b = banner(&ui, "host", "model", "ws", "sess", 0, None);
         assert!(b.contains("Oregon Trail"));
         assert!(b.contains("model"));
     }

@@ -7,6 +7,7 @@ import { vi } from "vitest";
 import type {
   CatalogModel,
   CloudModel,
+  CodeReviewRunResult,
   CompressionMode,
   ConnectionView,
   HardwareProfile,
@@ -177,6 +178,7 @@ const emptyView: SessionView = { info: sampleSession, messages: [], running: fal
 export const sessionInfo = vi.fn(async () => sampleSession);
 export const listSessions = vi.fn(async () => []);
 export const totalTokensUsed = vi.fn(async () => 0);
+export const totalCostUsd = vi.fn(async () => null as number | null);
 export const sessionMessages = vi.fn(async () => [] as unknown[]);
 export const toolDefinitions = vi.fn(async () => [] as unknown[]);
 export const listTools = vi.fn(async () => [] as unknown[]);
@@ -252,8 +254,8 @@ export const addCloudModel = vi.fn(async () => sampleCloudModels);
 export const removeCloudModel = vi.fn(async () => sampleCloudModels);
 export const setModel = vi.fn(async () => ({ ...sampleSession, session_id: "model-switched" }));
 
-export const runCodeReview = vi.fn(async () => ({
-  status: "ok" as const,
+export const runCodeReview = vi.fn(async (): Promise<CodeReviewRunResult> => ({
+  status: "ok",
   user: "Run a code review of the uncommitted changes in this workspace.",
   assistant: "## Code review: no findings\n\nNothing qualifying survived verification.",
   findings: 0,
@@ -318,6 +320,7 @@ export function resetIpc() {
   removeTheme.mockReset().mockResolvedValue(undefined);
   newTheme.mockReset().mockResolvedValue(sampleTheme);
   totalTokensUsed.mockReset().mockResolvedValue(0);
+  totalCostUsd.mockReset().mockResolvedValue(null);
   sessionMessages.mockReset().mockResolvedValue([]);
   toolDefinitions.mockReset().mockResolvedValue([]);
   listTools.mockReset().mockResolvedValue([]);

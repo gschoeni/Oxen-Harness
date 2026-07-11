@@ -27,6 +27,19 @@ pub(crate) struct ReplContext<'a> {
     pub(crate) session: &'a str,
     pub(crate) workspace_root: &'a Path,
     pub(crate) base_url: &'a str,
+    /// Per-token pricing for the active model (fetched once at startup), so the
+    /// banner can show dollars spent. `None` for local/unlisted models or when
+    /// the pricing catalog was unreachable.
+    pub(crate) pricing: Option<harness_local::source::ModelPricing>,
+}
+
+impl ReplContext<'_> {
+    /// The estimated dollars `agent` has spent this session at [`Self::pricing`],
+    /// or `None` when no pricing is available.
+    pub(crate) fn cost_usd(&self, agent: &Agent) -> Option<f64> {
+        self.pricing
+            .map(|p| p.cost_of(agent.prompt_tokens_used(), agent.completion_tokens_used()))
+    }
 }
 
 /// The classic readline REPL for pipes, dumb terminals, and
@@ -61,6 +74,9 @@ pub(crate) async fn run_classic_repl(
     } else {
         String::new()
     };
+    // Whether the next Ctrl-C at the prompt exits (armed by the previous one;
+    // rustyline already cleared that press's half-typed line).
+    let mut exit_armed = false;
     loop {
         // Remind the user about stacked messages waiting to be sent.
         if !queue.is_empty() {
@@ -87,6 +103,7 @@ pub(crate) async fn run_classic_repl(
         };
         match read {
             Ok(line) => {
+                exit_armed = false;
                 let mut new_history = editor.add_history_entry(line.as_str()).unwrap_or(false);
                 let exit = handle_line(&line, agent, ui, &mut queue, &mut carryover, ctx).await?;
                 // Fold any prompts queued during the turn — typed into the live
@@ -108,9 +125,22 @@ pub(crate) async fn run_classic_repl(
                     break;
                 }
             }
-            // Ctrl-C / Ctrl-D: leave cleanly.
-            Err(rustyline::error::ReadlineError::Interrupted)
-            | Err(rustyline::error::ReadlineError::Eof) => {
+            // Staged Ctrl-C: the press already cleared the half-typed line
+            // (rustyline discards it); confirm before actually leaving.
+            Err(rustyline::error::ReadlineError::Interrupted) => {
+                if exit_armed {
+                    print!("{}", theme::death_screen(ui, ctx.session));
+                    break;
+                }
+                exit_armed = true;
+                println!(
+                    "  {} {}",
+                    ui.red("⚠"),
+                    ui.dim("press ctrl-c again to leave the trail — or keep typing"),
+                );
+            }
+            // Ctrl-D: leave cleanly.
+            Err(rustyline::error::ReadlineError::Eof) => {
                 print!("{}", theme::death_screen(ui, ctx.session));
                 break;
             }
@@ -217,32 +247,9 @@ async fn handle_line(
                 return Ok(true);
             }
         }
-        Command::Departing(None) => match ui.departing() {
-            Some((label, value)) => {
-                println!("  {} {}", ui.brown(&format!("{label}:")), ui.cream(value))
-            }
-            None => println!("  {}", ui.dim("no departing location set")),
-        },
-        Command::Departing(Some(place)) => {
-            let label = ui.set_departing(&place);
-            // Reprint the whole welcome banner so the new row shows in context.
-            print!(
-                "{}",
-                theme::banner(
-                    ui,
-                    ctx.base_url,
-                    agent.model(),
-                    &ctx.workspace_root.display().to_string(),
-                    ctx.session,
-                    agent.tokens_used(),
-                )
-            );
-            println!();
-            println!(
-                "  {} {}",
-                ui.green(&format!("⛺ {label} set:")),
-                ui.cream(&place),
-            );
+        // `/departing` is the themed alias of `/location`; both persist.
+        Command::Departing(rest) | Command::Location(rest) => {
+            commands::location::handle_repl(rest, agent, ui, ctx)?
         }
         Command::Skills => print_skills(ui, ctx.workspace_root),
         Command::Auth(rest) => commands::auth::handle_repl(rest, agent, ui, ctx.base_url)?,

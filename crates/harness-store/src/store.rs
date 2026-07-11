@@ -374,6 +374,23 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// A session's training-data review status (`""` when unreviewed). Errors
+    /// if the session doesn't exist.
+    pub fn review_status(&self, session_id: &str) -> Result<String, HistoryError> {
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT review_status FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => {
+                HistoryError::SessionNotFound(session_id.to_string())
+            }
+            other => other.into(),
+        })
+    }
+
     /// Set the review status for many sessions at once (bulk keep/reject from the
     /// dataset builder), in a single transaction. Returns how many rows changed.
     pub fn set_review_status_many(
@@ -776,6 +793,11 @@ mod tests {
 
         store.set_review_status(&session, "kept").unwrap();
         assert_eq!(store.list_sessions().unwrap()[0].review_status, "kept");
+        assert_eq!(store.review_status(&session).unwrap(), "kept");
+        assert!(matches!(
+            store.review_status("nope").unwrap_err(),
+            HistoryError::SessionNotFound(_)
+        ));
 
         store.set_review_status(&session, "rejected").unwrap();
         assert_eq!(store.list_sessions().unwrap()[0].review_status, "rejected");

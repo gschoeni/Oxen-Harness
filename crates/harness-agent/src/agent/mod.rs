@@ -55,6 +55,12 @@ pub struct Agent {
     attachments: Option<AttachmentStore>,
     /// Cumulative estimated tokens sent + generated this run (see [`budget`]).
     tokens_used: usize,
+    /// Cumulative prompt (input) tokens this run, tracked separately from
+    /// completion tokens so cost can be priced at the model's distinct
+    /// input/output rates. Sums to `tokens_used` with `completion_tokens_used`.
+    prompt_tokens_used: usize,
+    /// Cumulative completion (output) tokens this run (see above).
+    completion_tokens_used: usize,
     /// Cooperative stop signal for the in-flight turn. Replaced per turn (see
     /// [`Agent::set_cancel_token`]) so the host can cancel a streaming response
     /// without holding the agent's lock; a fresh token each turn keeps a prior
@@ -103,6 +109,8 @@ impl Agent {
             messages,
             attachments,
             tokens_used: 0,
+            prompt_tokens_used: 0,
+            completion_tokens_used: 0,
             cancel: CancellationToken::new(),
             token_ratio: 1.0,
             ccr,
@@ -143,6 +151,11 @@ impl Agent {
             messages,
             attachments,
             tokens_used,
+            // The split input/output counters price only tokens we actually
+            // observe flowing this run; we can't reliably split a whole-transcript
+            // estimate into prompt vs completion, so they start at 0 on resume.
+            prompt_tokens_used: 0,
+            completion_tokens_used: 0,
             cancel: CancellationToken::new(),
             token_ratio: 1.0,
             ccr,
@@ -169,6 +182,8 @@ impl Agent {
         self.session_id = session_id;
         self.messages = messages;
         self.tokens_used = 0;
+        self.prompt_tokens_used = 0;
+        self.completion_tokens_used = 0;
         self.tokens_saved = 0;
         Ok(())
     }
@@ -256,6 +271,16 @@ impl Agent {
         self.tokens_used
     }
 
+    /// Cumulative prompt (input) tokens observed this run, for cost pricing.
+    pub fn prompt_tokens_used(&self) -> usize {
+        self.prompt_tokens_used
+    }
+
+    /// Cumulative completion (output) tokens observed this run, for cost pricing.
+    pub fn completion_tokens_used(&self) -> usize {
+        self.completion_tokens_used
+    }
+
     /// The tool definitions (JSON schemas) advertised to the model on every
     /// call this turn — i.e. the tools the agent currently has available.
     pub fn tool_definitions(&self) -> Vec<serde_json::Value> {
@@ -284,7 +309,7 @@ impl Agent {
     /// code-review pipeline): same client, tools, and config as this agent, but
     /// backed by an in-memory store, so nothing it does touches the user's
     /// session, history, or context window. Its tool set is narrowed by
-    /// [`subagent_tools`] (no recursion, no interactive tools).
+    /// `subagent_tools` (no recursion, no interactive tools).
     pub fn side_agent(&self) -> Result<Agent, AgentError> {
         let store = Arc::new(HistoryStore::open_in_memory()?);
         let session = store.create_session(&SessionMeta {

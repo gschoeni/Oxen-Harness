@@ -6,7 +6,7 @@
 //! `<script>`/`<style>`/`<nav>`/`<head>` and renders headings, lists, code
 //! blocks and links) so the model gets the prose, not the markup. Markdown and
 //! plain-text responses pass through untouched. The result is capped at
-//! [`DEFAULT_MAX_CHARS`] characters so a single fetch can't blow the context
+//! `DEFAULT_MAX_CHARS` characters so a single fetch can't blow the context
 //! window — the agent's compression layer shrinks it further if needed.
 //!
 //! This is the "read" half of autonomous web exploration: the model searches,

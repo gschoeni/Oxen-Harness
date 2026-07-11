@@ -100,8 +100,8 @@ pub async fn handle_cli(action: LoopAction, ui: &Ui) -> Result<Dispatch> {
     Ok(Dispatch::Done)
 }
 
-/// Handle an in-REPL `/loop ...` command. Returns `Ok(true)` if a running loop
-/// was interrupted (Ctrl-C), so the REPL should end the session.
+/// Handle an in-REPL `/loop ...` command. Returns `Ok(true)` only when the
+/// whole session should end; a Ctrl-C merely stops the running loop.
 pub async fn handle_repl(
     rest: Option<String>,
     agent: &mut Agent,
@@ -207,8 +207,9 @@ fn resolve_run_spec(
     Ok(spec)
 }
 
-/// Run a loop to completion, streaming progress. Returns `Ok(true)` if the user
-/// interrupted with Ctrl-C.
+/// Run a loop to completion, streaming progress. A Ctrl-C stops the loop
+/// (keeping the session and the journal's completed steps); the returned bool
+/// is reserved for "end the whole session" and is currently always `false`.
 pub async fn run(
     spec: LoopSpec,
     agent: &mut Agent,
@@ -235,7 +236,13 @@ pub async fn run(
     let result = tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             renderer.borrow_mut().finish();
-            return Ok(true);
+            println!();
+            println!(
+                "  {} {}",
+                ui.red("⚠ loop interrupted"),
+                ui.dim("— stopping here; the journal keeps every completed step"),
+            );
+            return Ok(false);
         }
         res = runner.run(agent, |ev| render_event(ev, &r, &ev_ui)) => res,
     };

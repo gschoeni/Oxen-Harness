@@ -28,6 +28,7 @@ import {
   setModel,
   setReviewStatus as setReviewStatusIpc,
   setReviewStatusMany as setReviewStatusManyIpc,
+  totalCostUsd,
   totalTokensUsed,
   useLocalModel,
 } from "./ipc";
@@ -170,6 +171,10 @@ interface AppState {
   session: SessionInfo | null;
   /** All-time total tokens used across every session (drives the hero's stat). */
   totalTokensUsed: number;
+  /** Estimated all-time dollars spent at the current model's rates, shown under
+   *  the token total. `null` when cost is unavailable (local/unlisted model or
+   *  the pricing catalog couldn't be reached). */
+  totalCostUsd: number | null;
   sessions: SessionSummary[];
   /** Known projects (working directories), refreshed alongside history. */
   projects: Project[];
@@ -438,6 +443,7 @@ export const useStore = create<AppState>((set, get) => {
     gameDockOpen: false,
     session: null,
     totalTokensUsed: 0,
+    totalCostUsd: null,
     sessions: [],
     projects: [],
     cloudModels: [],
@@ -1009,6 +1015,14 @@ export const useStore = create<AppState>((set, get) => {
         set({ totalTokensUsed: await totalTokensUsed() });
       } catch {
         /* leave the previous total in place on a transient error */
+      }
+      // Cost is a separate best-effort call (it hits the network for pricing);
+      // keep it out of the token refresh's try so a pricing hiccup doesn't stop
+      // the token count from updating.
+      try {
+        set({ totalCostUsd: await totalCostUsd() });
+      } catch {
+        /* leave the previous cost in place on a transient error */
       }
     },
 

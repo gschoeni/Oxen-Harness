@@ -34,6 +34,9 @@ pub enum Command {
     /// Set (or, with `None`, show) the "Departing" location shown in the main
     /// menu banner. Kept raw so multi-word place names keep their spaces.
     Departing(Option<String>),
+    /// Set (or, with `None`, show) the "Location" shown in the hero/opening
+    /// screen. Kept raw so multi-word place names keep their spaces.
+    Location(Option<String>),
     /// List the skills discovered for this workspace (global + project).
     Skills,
     /// Set the Oxen API key: `/auth` opens a masked entry box; `/auth <key>`
@@ -80,6 +83,7 @@ pub fn parse_command(line: &str) -> Command {
         "/loop" | "/loops" => Command::Loop(rest),
         "/code-review" | "/review" => Command::CodeReview(rest),
         "/departing" => Command::Departing(rest),
+        "/location" => Command::Location(rest),
         "/skills" | "/skill" => Command::Skills,
         "/auth" | "/login" => Command::Auth(rest),
         "/compression" | "/compress" => Command::Compression(rest),
@@ -195,6 +199,15 @@ mod tests {
         assert_eq!(
             parse_command("/departing Independence, Missouri"),
             Command::Departing(Some("Independence, Missouri".into()))
+        );
+    }
+
+    #[test]
+    fn location_keeps_raw_remainder() {
+        assert_eq!(parse_command("/location"), Command::Location(None));
+        assert_eq!(
+            parse_command("/location Fort Laramie, Wyoming"),
+            Command::Location(Some("Fort Laramie, Wyoming".into()))
         );
     }
 

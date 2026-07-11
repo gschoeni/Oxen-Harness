@@ -3,6 +3,7 @@
 // ways: an 8-bit trail screen, a broadsheet masthead, or a clean app splash.
 
 import { useStore } from "../../lib/store";
+import { formatUsd } from "../../lib/format";
 import { DEFAULT_HERO_GAME, HeroGame } from "./heroGames";
 import { getScene } from "./scenes";
 import { StatusPanel } from "./StatusPanel";
@@ -45,6 +46,9 @@ export function Hero(props: HeroProps) {
   // The hero's "Total tokens used" shows the all-time grand total across every
   // session, so a fresh chat opens with your running tally rather than 0.
   const tokensUsed = useStore((s) => s.totalTokensUsed);
+  // Estimated dollars spent at the current model's rates, shown right under the
+  // token total. `null` when unavailable (local/unlisted model, or offline).
+  const costUsd = useStore((s) => s.totalCostUsd);
   const v = theme?.voice;
   const hero = theme?.style?.hero || "pixel";
 
@@ -55,11 +59,23 @@ export function Hero(props: HeroProps) {
   const hint = bottomHint === "Send a message to begin on your trail" ? "" : bottomHint;
   const icon = v?.prompt_icon || "🐂";
   // Themes carry a static "Total tokens used" flavor row; swap in the live count
-  // for the current session so the dashboard reflects real consumption.
-  const statusRows: [string, string][] = [...(v?.flavor_top || []), ...(v?.flavor_bottom || [])].map(
-    ([label, value]) =>
-      label === "Total tokens used" ? [label, `${tokensUsed.toLocaleString()} tokens`] : [label, value],
-  );
+  // for the current session so the dashboard reflects real consumption, and
+  // inject a "Total dollars spent" row right after it (dropping any static one
+  // the theme carries, since the live value replaces it).
+  const statusRows: [string, string][] = [
+    ...(v?.flavor_top || []),
+    ...(v?.flavor_bottom || []),
+  ]
+    .filter(([label]) => label !== "Total dollars spent")
+    .flatMap(([label, value]): [string, string][] => {
+      if (label !== "Total tokens used") return [[label, value]];
+      const tokenRow: [string, string] = [label, `${tokensUsed.toLocaleString()} tokens`];
+      const costRow: [string, string] = [
+        "Total dollars spent",
+        costUsd == null ? "—" : formatUsd(costUsd),
+      ];
+      return [tokenRow, costRow];
+    });
 
   if (hero === "newspaper") {
     return (

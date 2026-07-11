@@ -381,11 +381,16 @@ impl Agent {
         }
         self.tokens_used += match &assembled.usage {
             Some(u) if u.prompt_tokens + u.completion_tokens > 0 => {
+                self.prompt_tokens_used += u.prompt_tokens as usize;
+                self.completion_tokens_used += u.completion_tokens as usize;
                 (u.prompt_tokens + u.completion_tokens) as usize
             }
             _ => {
-                prompt_tokens
-                    + budget::estimate_completion_tokens(&assembled.content, &assembled.tool_calls)
+                let completion =
+                    budget::estimate_completion_tokens(&assembled.content, &assembled.tool_calls);
+                self.prompt_tokens_used += prompt_tokens;
+                self.completion_tokens_used += completion;
+                prompt_tokens + completion
             }
         };
     }

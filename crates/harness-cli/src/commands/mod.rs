@@ -23,6 +23,7 @@
 
 pub(crate) mod auth;
 pub(crate) mod compression;
+pub(crate) mod location;
 pub(crate) mod loops;
 pub(crate) mod model;
 pub(crate) mod oxen;

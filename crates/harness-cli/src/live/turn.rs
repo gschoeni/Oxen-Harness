@@ -33,9 +33,10 @@ use super::Live;
 /// owned live terminal so the composer stays pinned across the whole sequence.
 ///
 /// Returns `(end_session, draft)`: `end_session` is true when the user asked to
-/// quit (Ctrl-C / Ctrl-D); `draft` is whatever unsent text was left in the
-/// composer, so the caller can seed the idle prompt with it (a half-typed next
-/// message isn't lost when the turn ends).
+/// quit (Ctrl-D on an empty composer); Ctrl-C only cancels the in-flight turn
+/// and hands back to the idle prompt. `draft` is whatever unsent text was left
+/// in the composer, so the caller can seed the idle prompt with it (a
+/// half-typed next message isn't lost when the turn ends or is interrupted).
 pub(crate) async fn run_prompt(
     agent: &mut Agent,
     first: crate::turn::TurnRequest,
@@ -70,6 +71,28 @@ pub(crate) async fn run_prompt(
     let mut exit = false;
     while let Some(request) = next.take() {
         match run_one_turn(agent, &request, &state, &mut rx, queue, &paused).await {
+            TurnOutcome::Interrupted => {
+                // Ctrl-C stops the agentic loop, not the session: cancel the
+                // in-flight turn (and any queued drain), report how to pick it
+                // back up, and fall through to the idle prompt.
+                let mut s = state.borrow_mut();
+                let ui = s.ui.clone();
+                s.print_line(&format!(
+                    "  {} {}",
+                    ui.red("⚠ interrupted"),
+                    ui.dim("— the oxen pull up short"),
+                ));
+                s.print_line(&format!(
+                    "  {}",
+                    ui.dim(if crate::turn::ends_mid_turn(agent.messages()) {
+                        "every step so far is saved · /retry continues this turn, or just give new directions"
+                    } else {
+                        "every step so far is saved · give new directions whenever you're ready"
+                    }),
+                ));
+                s.render();
+                break;
+            }
             TurnOutcome::Done(result) => {
                 {
                     let mut s = state.borrow_mut();
@@ -108,7 +131,7 @@ pub(crate) async fn run_prompt(
                     next = Some(crate::turn::TurnRequest::Prompt(msg));
                 }
             }
-            TurnOutcome::Interrupted | TurnOutcome::Exit => {
+            TurnOutcome::Exit => {
                 exit = true;
                 break;
             }
@@ -143,8 +166,31 @@ pub(crate) async fn run_prompt(
 pub(crate) enum Idle {
     /// The user submitted this (a prompt to run or a `/command`).
     Submit(String),
-    /// Ctrl-D / Ctrl-C on an empty box — end the session.
+    /// Ctrl-D on an empty box, or a confirmed double Ctrl-C — end the session.
     Exit,
+}
+
+/// What one idle-prompt Ctrl-C should do, staged Claude-Code-style: first
+/// clear whatever is being typed, then ask for confirmation, and only a
+/// confirmed second press actually leaves.
+#[derive(Debug, PartialEq, Eq)]
+enum InterruptStage {
+    /// There's a draft (or an in-progress queue edit) — wipe it, stay.
+    ClearDraft,
+    /// Nothing to clear and not yet armed — warn that another Ctrl-C exits.
+    Arm,
+    /// Already armed — leave the session.
+    Exit,
+}
+
+fn interrupt_stage(has_draft: bool, armed: bool) -> InterruptStage {
+    if has_draft {
+        InterruptStage::ClearDraft
+    } else if armed {
+        InterruptStage::Exit
+    } else {
+        InterruptStage::Arm
+    }
 }
 
 /// Read one submission at the idle prompt using the pinned composer, then
@@ -182,10 +228,16 @@ pub(crate) async fn read_idle(
         s.render();
     }
 
+    // Whether the next Ctrl-C exits (armed by a Ctrl-C on an empty composer;
+    // any other key disarms it).
+    let mut exit_armed = false;
     let result = loop {
         match rx.recv().await {
             Some(Event::Key(key)) => {
                 let action = state.borrow_mut().handle_key(key, queue.len());
+                if !matches!(action, KeyAction::Interrupt) {
+                    exit_armed = false;
+                }
                 match action {
                     KeyAction::None => {}
                     KeyAction::Redraw => state.borrow_mut().render(),
@@ -228,13 +280,41 @@ pub(crate) async fn read_idle(
                         s.sync_queue(queue.items());
                         s.render();
                     }
-                    KeyAction::Interrupt | KeyAction::Exit => break Idle::Exit,
+                    KeyAction::Exit => break Idle::Exit,
+                    KeyAction::Interrupt => {
+                        // Staged Ctrl-C: clear the draft first, then confirm,
+                        // then exit — never a surprise quit mid-thought.
+                        let mut s = state.borrow_mut();
+                        let has_draft = !s.composer_draft().is_empty();
+                        match interrupt_stage(has_draft, exit_armed) {
+                            InterruptStage::ClearDraft => {
+                                s.cancel_edit();
+                                s.composer.set_text("");
+                                s.render();
+                            }
+                            InterruptStage::Arm => {
+                                exit_armed = true;
+                                let ui = s.ui.clone();
+                                s.print_line(&format!(
+                                    "  {} {}",
+                                    ui.red("⚠"),
+                                    ui.dim(
+                                        "press ctrl-c again to leave the trail — \
+                                         any other key keeps riding"
+                                    ),
+                                ));
+                                s.render();
+                            }
+                            InterruptStage::Exit => break Idle::Exit,
+                        }
+                    }
                 }
             }
             Some(Event::Resize(c, r)) => {
                 state.borrow_mut().handle_resize(c, r, queue.items());
             }
             Some(Event::Paste(text)) => {
+                exit_armed = false;
                 let mut s = state.borrow_mut();
                 s.insert_paste(&text);
                 s.render();
@@ -291,7 +371,8 @@ fn stackable(text: &str) -> bool {
 enum TurnOutcome {
     /// The turn finished on its own (success or agent error).
     Done(Result<String, AgentError>),
-    /// Ctrl-C — interrupt and end the session.
+    /// Ctrl-C — cancel this turn and its queued drain; the session continues
+    /// at the idle prompt.
     Interrupted,
     /// Ctrl-D on an empty composer — end the session.
     Exit,
@@ -458,6 +539,17 @@ async fn run_one_turn(
 #[cfg(test)]
 mod tests {
     use super::stackable;
+
+    #[test]
+    fn interrupt_stages_clear_then_arm_then_exit() {
+        use super::{interrupt_stage, InterruptStage};
+        // Something typed: the first Ctrl-C only clears it (armed or not).
+        assert_eq!(interrupt_stage(true, false), InterruptStage::ClearDraft);
+        assert_eq!(interrupt_stage(true, true), InterruptStage::ClearDraft);
+        // Nothing typed: warn first, exit only on the confirmed second press.
+        assert_eq!(interrupt_stage(false, false), InterruptStage::Arm);
+        assert_eq!(interrupt_stage(false, true), InterruptStage::Exit);
+    }
 
     #[test]
     fn only_plain_prompts_stack_onto_the_queue() {

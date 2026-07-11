@@ -13,8 +13,8 @@ use crate::queue::MessageQueue;
 use crate::render::truncate;
 use crate::theme::Ui;
 
-/// Handle a `/queue ...` command. Returns `Ok(true)` if the user interrupted a
-/// run (Ctrl-C), which ends the session.
+/// Handle a `/queue ...` command. Returns `Ok(true)` only when the whole
+/// session should end (Ctrl-D); a Ctrl-C stops the run and keeps the session.
 pub async fn handle_repl(
     rest: Option<String>,
     queue: &mut MessageQueue,
@@ -85,8 +85,8 @@ pub async fn handle_repl(
     Ok(false)
 }
 
-/// Run every queued prompt in order, draining the queue. Returns `Ok(true)` if
-/// the user interrupted (Ctrl-C) mid-run.
+/// Run every queued prompt in order, draining the queue. Returns `Ok(true)`
+/// only when the session should end; a Ctrl-C stops the drain in place.
 async fn run_queue(
     queue: &mut MessageQueue,
     agent: &mut Agent,

@@ -12,7 +12,7 @@ use harness_tools::QuestionAnswer;
 use tauri::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
 
-use crate::commands::session::{bump_total_tokens, bump_total_tokens_saved};
+use crate::commands::session::{bump_io_tokens, bump_total_tokens, bump_total_tokens_saved};
 use crate::events::{
     CompactedPayload, CompressionPayload, RetryPayload, SessionPayload, TokenPayload,
     ToolDeltaPayload, ToolEventPayload, UsagePayload,
@@ -114,11 +114,16 @@ async fn execute_turn(
     // totals.
     let turn_delta;
     let saved_delta;
+    // This turn's input/output split, so cost can be priced at distinct rates.
+    let input_delta;
+    let output_delta;
     let result = {
         let mut agent = arc.lock().await;
         agent.set_cancel_token(cancel.clone());
         let before = agent.tokens_used();
         let saved_before = agent.tokens_saved();
+        let input_before = agent.prompt_tokens_used();
+        let output_before = agent.completion_tokens_used();
         let on_event = move |event: &AgentEvent| match event {
             AgentEvent::Token(t) => {
                 let _ = app.emit(
@@ -254,6 +259,8 @@ async fn execute_turn(
         };
         turn_delta = agent.tokens_used().saturating_sub(before);
         saved_delta = agent.tokens_saved().saturating_sub(saved_before);
+        input_delta = agent.prompt_tokens_used().saturating_sub(input_before);
+        output_delta = agent.completion_tokens_used().saturating_sub(output_before);
         r
     };
     // The turn is over (finished, stopped, or errored): drop its stop signal so a
@@ -262,6 +269,8 @@ async fn execute_turn(
     // Roll this turn's throughput into the all-time running total (a cheap
     // persisted counter); the hero refreshes that grand total after the turn.
     let _ = bump_total_tokens(turn_delta);
+    // Same again, split into input/output, so cost can price them separately.
+    bump_io_tokens(input_delta, output_delta);
     // Same for what compression saved (or would have saved, in audit mode).
     let _ = bump_total_tokens_saved(saved_delta);
     // The turn is persisted message-by-message, so once it's done the agent is

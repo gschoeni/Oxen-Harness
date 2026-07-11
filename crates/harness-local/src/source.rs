@@ -425,6 +425,18 @@ struct OxenModelEntry {
     developer: Option<OxenDeveloper>,
     #[serde(default)]
     capabilities: Option<OxenCapabilities>,
+    #[serde(default)]
+    pricing: Option<OxenPricing>,
+}
+
+/// Per-token pricing for a token-billed model, as reported by the Oxen models
+/// API. Costs are in US dollars *per token* (not per million).
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct OxenPricing {
+    #[serde(default)]
+    input_cost_per_token: Option<f64>,
+    #[serde(default)]
+    output_cost_per_token: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -512,6 +524,72 @@ pub async fn oxen_search_models(
         })
     });
     Ok(hits)
+}
+
+/// Per-token US-dollar pricing for a cloud model (input and output priced
+/// separately, matching the Oxen models API's `input_cost_per_token` /
+/// `output_cost_per_token`). Costs are per single token.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ModelPricing {
+    pub input_cost_per_token: f64,
+    pub output_cost_per_token: f64,
+}
+
+impl ModelPricing {
+    /// The dollar cost of `input_tokens` prompt tokens plus `output_tokens`
+    /// completion tokens at these rates.
+    pub fn cost_of(&self, input_tokens: usize, output_tokens: usize) -> f64 {
+        input_tokens as f64 * self.input_cost_per_token
+            + output_tokens as f64 * self.output_cost_per_token
+    }
+}
+
+/// Fetch the Oxen.ai cloud model catalog and return the per-token pricing for
+/// `model_id`, if the API lists it with token-based pricing. Returns `None` for
+/// unknown/local models or when the catalog omits pricing — callers should treat
+/// that as "cost unavailable" rather than $0.
+pub async fn oxen_model_pricing(
+    model_id: &str,
+    token: Option<&str>,
+) -> Result<Option<ModelPricing>, LocalError> {
+    let client = reqwest::Client::new();
+    let mut req = client
+        .get("https://hub.oxen.ai/api/ai/models")
+        .header("User-Agent", "oxen-harness");
+    if let Some(t) = token.filter(|t| !t.trim().is_empty()) {
+        req = req.bearer_auth(t.trim());
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| LocalError::Download(format!("Oxen models request failed: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(LocalError::Download(format!(
+            "Oxen models API returned HTTP {}",
+            resp.status().as_u16()
+        )));
+    }
+    let body: OxenModelsResponse = resp
+        .json()
+        .await
+        .map_err(|e| LocalError::Download(format!("could not read Oxen models response: {e}")))?;
+
+    Ok(body
+        .data
+        .into_iter()
+        .find(|e| e.id == model_id)
+        .and_then(|e| e.pricing)
+        .and_then(
+            |p| match (p.input_cost_per_token, p.output_cost_per_token) {
+                // Only usable when at least one rate is present; missing rates count
+                // as 0 so a model priced only on output still yields a real number.
+                (None, None) => None,
+                (input, output) => Some(ModelPricing {
+                    input_cost_per_token: input.unwrap_or(0.0),
+                    output_cost_per_token: output.unwrap_or(0.0),
+                }),
+            },
+        ))
 }
 
 // ===========================================================================
