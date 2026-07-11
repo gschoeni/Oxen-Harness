@@ -20,6 +20,12 @@ describe("store: mode", () => {
   });
 });
 
+describe("store: navigation", () => {
+  it("starts at Projects, the application's navigation root", () => {
+    expect(useStore.getState().projectsOpen).toBe(true);
+  });
+});
+
 describe("store: theme palette", () => {
   it("maps the active theme's primary color onto the accent token", () => {
     useStore.getState().applyTheme(ipc.sampleTheme);

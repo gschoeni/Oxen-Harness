@@ -46,6 +46,33 @@
   font-weight: 700;
   padding: var(--space-3) var(--space-3) 0;
 }
+.settings-back {
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  margin: 0 0 calc(-1 * var(--space-1)) calc(-1 * var(--space-2));
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.settings-back:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.settings-back > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* The active project — the context that project-scoped settings apply to. */
 .settings-rail-project {
   display: flex;
@@ -142,21 +169,6 @@
   font-size: var(--text-xl);
   font-weight: 700;
   margin: 0;
-}
-.settings-close {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-tertiary);
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-.settings-close:hover {
-  background: var(--surface-2);
-  color: var(--text);
 }
 .settings-main-body {
   flex: 1;

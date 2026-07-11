@@ -49,9 +49,9 @@ describe("Settings", () => {
     expect(useStore.getState().mode).toBe("light");
   });
 
-  it("closes via the header close button", async () => {
+  it("returns to the active project from the sidebar", async () => {
     render(<Settings />);
-    await userEvent.click(screen.getByRole("button", { name: /close settings/i }));
+    await userEvent.click(screen.getByRole("button", { name: /back to project/i }));
     expect(useStore.getState().settingsOpen).toBe(false);
   });
 

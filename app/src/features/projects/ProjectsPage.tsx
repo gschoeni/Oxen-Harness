@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from "react";
-import { FolderOpen, FolderPlus, X } from "lucide-react";
+import { useMemo } from "react";
+import { FolderOpen, FolderPlus } from "lucide-react";
 import { useStore } from "../../lib/store";
 import "./projects.css";
 
@@ -12,18 +12,6 @@ export function ProjectsPage() {
   const activePath = useStore((s) => s.session?.workspace ?? null);
   const enterProject = useStore((s) => s.enterProject);
   const createProject = useStore((s) => s.createProject);
-  const setProjectsOpen = useStore((s) => s.setProjectsOpen);
-
-  // The page is only dismissable when there's a chat to fall back to.
-  const canClose = activePath !== null;
-  const close = () => canClose && setProjectsOpen(false);
-
-  // Esc backs out to the current chat.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
 
   // How many chats are mid-run in each project, for the card indicators.
   const runningByPath = useMemo(() => {
@@ -46,11 +34,6 @@ export function ProjectsPage() {
               each project keeps its own chats.
             </p>
           </div>
-          {canClose && (
-            <button className="projects-close" onClick={close} title="Back to chat" aria-label="Back to chat">
-              <X size={18} />
-            </button>
-          )}
         </header>
 
         <div className="projects-grid">

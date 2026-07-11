@@ -447,7 +447,9 @@ export const useStore = create<AppState>((set, get) => {
     projects: [],
     cloudModels: [],
     localSwitch: null,
-    projectsOpen: false,
+    // Projects is the application's navigation root. A project is selected
+    // before the user enters its scoped chats and settings.
+    projectsOpen: true,
     infos: {},
     threads: {},
     liveTokens: {},

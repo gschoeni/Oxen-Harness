@@ -52,19 +52,10 @@ describe("ProjectsPage", () => {
     expect(ipc.pickFolder).toHaveBeenCalledOnce();
   });
 
-  it("closes back to the chat with the close button and Escape", async () => {
+  it("is the non-dismissible navigation root", async () => {
     render(<ProjectsPage />);
-    await userEvent.click(screen.getByRole("button", { name: /back to chat/i }));
-    expect(useStore.getState().projectsOpen).toBe(false);
-
-    useStore.setState({ projectsOpen: true });
     await userEvent.keyboard("{Escape}");
-    expect(useStore.getState().projectsOpen).toBe(false);
-  });
-
-  it("cannot be dismissed when no project is open", () => {
-    useStore.setState({ session: null });
-    render(<ProjectsPage />);
+    expect(useStore.getState().projectsOpen).toBe(true);
     expect(screen.queryByRole("button", { name: /back to chat/i })).toBeNull();
   });
 

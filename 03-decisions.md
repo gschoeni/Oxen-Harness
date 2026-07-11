@@ -13,6 +13,20 @@ The harness targets the Oxen.ai OpenAI-compatible chat completions API (`https:/
 
 ## Auth & Config
 
+**Projects are the desktop navigation root** (2026-07-11)
+The desktop opens on the Projects page. Selecting a directory enters that
+project's chats; its sidebar leads back to Projects, and Settings leads back to
+that active project through a matching upper-left rail control. Full-window
+surfaces do not use top-right close affordances for primary navigation.
+
+*Why:* the workspace determines where agents execute, which chats belong
+together, and which project-local skills are visible. Making it the first and
+durable piece of context prevents the UI from treating that boundary as an
+incidental detail. This is a navigation decision, not a config migration:
+connection, model, tool, review, compression, usage, appearance, and training
+settings remain global; chats, execution, and project skills retain their
+existing workspace scope.
+
 **Lightweight auth; no `liboxen` dependency** (2026-06-21, revised)
 Auth resolves from `OXEN_API_KEY`, falling back to parsing the Oxen
 `auth_config.toml` directly (`$OXEN_CONFIG_DIR` or `~/.config/oxen/`, looked up

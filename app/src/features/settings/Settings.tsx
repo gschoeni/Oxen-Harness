@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   Check,
   Cloud,
   Cpu,
@@ -18,7 +19,6 @@ import {
   Sun,
   Trash2,
   Wrench,
-  X,
 } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Button } from "../../components/ui";
@@ -88,6 +88,14 @@ export function Settings() {
     <div className="settings-overlay">
       <div className="settings-shell" role="dialog" aria-modal="true" aria-label="Settings">
         <aside className="settings-rail" data-tauri-drag-region>
+          <button
+            className="settings-back"
+            onClick={() => close(false)}
+            aria-label={project ? `Back to project: ${project.name}` : "Back to Projects"}
+          >
+            <ArrowLeft size={16} />
+            <span>{project ? project.name : "Projects"}</span>
+          </button>
           <div className="settings-rail-title">Settings</div>
           {/* The context anything project-scoped (e.g. project skills) applies
               to. Global settings live in ~/.oxen-harness regardless. */}
@@ -121,9 +129,6 @@ export function Settings() {
         <section className="settings-main">
           <header className="settings-main-header" data-tauri-drag-region>
             <h2 className="settings-main-title">{TITLE[page]}</h2>
-            <button className="settings-close" onClick={() => close(false)} aria-label="Close settings">
-              <X size={20} />
-            </button>
           </header>
           <div className="settings-main-body">
             {page === "connection" && <ConnectionSettings />}

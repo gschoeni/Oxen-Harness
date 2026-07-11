@@ -49,9 +49,11 @@ toolchain.
     `harness-theme`; endpoint/API-key settings; per-chat review status + JSONL
     fine-tuning export.
 - `src/` — the frontend: **React 19 + TypeScript**, bundled by **Vite** (which
-  gives hot-module reload in `tauri dev`). The sidebar is scoped to one project
-  (a **Projects** page switches between them) with **＋ New chat**, that
-  project's history, and **⚙ Settings** in the footer. Settings is a
+  gives hot-module reload in `tauri dev`). **Projects** is the navigation root:
+  choose a project, then work within its scoped sidebar of **＋ New chat** and
+  that project's history. The project sidebar leads back to Projects, and
+  Settings leads back to the active project from its upper-left rail rather
+  than a top-right close action. Settings is a
   full-window surface with pages for **Connection**, **Cloud/Local models**,
   **Tools**, **Skills**, **Code review**, **Appearance**, and **Training
   data**. When the agent needs a decision, a **question modal** pops up with
@@ -70,7 +72,7 @@ shared layer:
 
 ```
 src/
-  main.tsx, App.tsx        # entry + shell (sidebar | chat + canvas + overlays)
+  main.tsx, App.tsx        # entry + project-first shell (sidebar | chat + canvas + overlays)
   lib/
     ipc.ts                 # typed wrappers over every Tauri command/event —
                            #   components import from here, never call invoke()
