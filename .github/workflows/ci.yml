@@ -19,7 +19,7 @@ jobs:
     name: fmt · clippy · test · doc
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # rust-toolchain.toml pins the channel (stable) and the rustfmt + clippy
       # components; this installs exactly that.
@@ -54,14 +54,14 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The app is a pnpm project (app/pnpm-lock.yaml is the tracked lockfile).
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
@@ -82,7 +82,7 @@ jobs:
     name: app · clippy (Tauri bridge)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Webview system deps
         run: |
