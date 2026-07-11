@@ -319,10 +319,11 @@ Context growth, flaky endpoints, and recovering dead turns:
   helpers, tool-loop calls, and partial replies all share the same ledger.
 - Settings → Usage has a theme-aware yearly activity grid with daily hover
   totals, year navigation, and click-to-filter stats/model bars for one day.
-- The desktop hero and CLI banner show all-time tokens and estimated Oxen cloud
-  spend; `/usage` prints the CLI's per-model input/output/cost table.
-- Dollar figures use current Oxen catalog rates and are labeled estimates.
-  Local/custom/unlisted usage remains explicitly unpriced rather than `$0.00`.
+- The desktop hero and CLI banner show all-time tokens and estimated spend;
+  `/usage` prints the CLI's per-model input/output/cost table.
+- Dollar figures use rates advertised by the configured Oxen-compatible
+  endpoint's model catalog and are labeled estimates. Models without published
+  rates remain explicitly unpriced rather than `$0.00`.
 
 ## What's left / next
 

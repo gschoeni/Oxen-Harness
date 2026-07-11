@@ -561,11 +561,11 @@ inherit the parent history store as a separate aggregate-usage destination.
 `harness-store` persists one `usage_events` row per call with model, endpoint
 source, input/output tokens, and timestamp. Append-only events make lifetime,
 per-model, and local-calendar daily aggregation exact without reconstructing
-dates from chat messages. Dollar values are not persisted as fact: the Oxen
-models catalog can change and local/custom endpoints have no known bill. Both
-front ends price recorded `oxen_cloud` rows from one current catalog fetch,
-label the result estimated, and leave unknown rows as `—` rather than silently
-calling them free.
+dates from chat messages. Dollar values are not persisted as fact: model
+catalog rates can change. Both front ends price any recorded model that appears
+with token rates in the *configured endpoint's* catalog, so a self-hosted
+Oxen-compatible endpoint can advertise its own prices. Models absent from that
+catalog remain `—` rather than being silently called free.
 
 **One process-wide `FleetHub` coordinates the CLI's fleet display** (2026-07-08)
 The `spawn_agents` sink and the live composer must agree on who paints the

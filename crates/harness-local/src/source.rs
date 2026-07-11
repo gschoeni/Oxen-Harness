@@ -563,9 +563,19 @@ pub async fn oxen_model_pricing(
 pub async fn oxen_model_pricing_catalog(
     token: Option<&str>,
 ) -> Result<HashMap<String, ModelPricing>, LocalError> {
+    oxen_model_pricing_catalog_at("https://hub.oxen.ai/api/ai", token).await
+}
+
+/// Fetch token pricing from an Oxen-compatible inference endpoint's model
+/// catalog. Self-hosted endpoints can advertise their own rates, so callers
+/// should use the same base URL that serves their model requests.
+pub async fn oxen_model_pricing_catalog_at(
+    base_url: &str,
+    token: Option<&str>,
+) -> Result<HashMap<String, ModelPricing>, LocalError> {
     let client = reqwest::Client::new();
     let mut req = client
-        .get("https://hub.oxen.ai/api/ai/models")
+        .get(format!("{}/models", base_url.trim_end_matches('/')))
         .header("User-Agent", "oxen-harness");
     if let Some(t) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(t.trim());
@@ -637,6 +647,33 @@ fn urlencode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn pricing_catalog_uses_the_configured_endpoint() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/api/ai/models")
+            .match_header("authorization", "Bearer endpoint-key")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"data":[{"id":"muse-spark-1-1","pricing":{
+                    "input_cost_per_token":0.000001,"output_cost_per_token":0.000002
+                }}]}"#,
+            )
+            .create_async()
+            .await;
+
+        let pricing = oxen_model_pricing_catalog_at(
+            &format!("{}/api/ai", server.url()),
+            Some("endpoint-key"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(pricing["muse-spark-1-1"].cost_of(1_000, 500), 0.002);
+        mock.assert_async().await;
+    }
 
     #[test]
     fn parses_quant_longest_match() {

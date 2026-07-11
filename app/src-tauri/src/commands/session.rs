@@ -248,8 +248,13 @@ pub(crate) async fn daily_usage(year: i32) -> Result<Vec<DailyUsageRow>, String>
 }
 
 async fn price_usage(usage: Vec<ModelUsage>) -> UsageBreakdown {
-    let token = harness_config::secrets::get("OXEN_API_KEY").filter(|t| !t.trim().is_empty());
-    let pricing = harness_local::source::oxen_model_pricing_catalog(token.as_deref())
+    let connection = harness_runtime::connection::load();
+    let base_url = harness_runtime::connection::effective_base_url(&connection);
+    let token = harness_runtime::connection::effective_api_key(&base_url);
+    let pricing = harness_local::source::oxen_model_pricing_catalog_at(
+        &base_url,
+        (!token.trim().is_empty()).then_some(token.as_str()),
+    )
         .await
         .ok();
     price_usage_with_catalog(usage, pricing.as_ref())
@@ -268,19 +273,15 @@ fn price_usage_with_catalog(
     for u in usage {
         prompt_tokens += u.prompt_tokens;
         completion_tokens += u.completion_tokens;
-        let cost_usd = if u.source == "oxen_cloud" {
-            pricing
-                .and_then(|catalog| catalog.get(&u.model))
-                .map(|pricing| {
-                    priced_any = true;
-                    pricing.cost_of(
-                        u.prompt_tokens.max(0) as usize,
-                        u.completion_tokens.max(0) as usize,
-                    )
-                })
-        } else {
-            None
-        };
+        let cost_usd = pricing
+            .and_then(|catalog| catalog.get(&u.model))
+            .map(|pricing| {
+                priced_any = true;
+                pricing.cost_of(
+                    u.prompt_tokens.max(0) as usize,
+                    u.completion_tokens.max(0) as usize,
+                )
+            });
         if cost_usd.is_none() {
             has_unpriced_usage = true;
         }
@@ -315,7 +316,7 @@ mod usage_tests {
     use super::*;
 
     #[test]
-    fn missing_catalog_rows_make_a_partial_total_explicit() {
+    fn catalog_prices_a_model_even_when_its_endpoint_is_custom() {
         let mut catalog = HashMap::new();
         catalog.insert(
             "priced".to_string(),
@@ -328,7 +329,7 @@ mod usage_tests {
             vec![
                 ModelUsage {
                     model: "priced".into(),
-                    source: "oxen_cloud".into(),
+                    source: "unpriced".into(),
                     prompt_tokens: 10,
                     completion_tokens: 5,
                 },

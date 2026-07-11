@@ -17,25 +17,26 @@ async fn priced_rows(store: &HistoryStore) -> Vec<PricedUsage> {
     let Ok(usage) = store.model_usage_breakdown() else {
         return Vec::new();
     };
-    let token = harness_config::secrets::get("OXEN_API_KEY").filter(|t| !t.trim().is_empty());
-    let pricing = harness_local::source::oxen_model_pricing_catalog(token.as_deref())
-        .await
-        .ok();
+    let connection = harness_runtime::connection::load();
+    let base_url = harness_runtime::connection::effective_base_url(&connection);
+    let token = harness_runtime::connection::effective_api_key(&base_url);
+    let pricing = harness_local::source::oxen_model_pricing_catalog_at(
+        &base_url,
+        (!token.trim().is_empty()).then_some(token.as_str()),
+    )
+    .await
+    .ok();
     let mut rows = Vec::with_capacity(usage.len());
     for usage in usage {
-        let cost = if usage.source == "oxen_cloud" {
-            pricing
-                .as_ref()
-                .and_then(|catalog| catalog.get(&usage.model))
-                .map(|p| {
-                    p.cost_of(
-                        usage.prompt_tokens.max(0) as usize,
-                        usage.completion_tokens.max(0) as usize,
-                    )
-                })
-        } else {
-            None
-        };
+        let cost = pricing
+            .as_ref()
+            .and_then(|catalog| catalog.get(&usage.model))
+            .map(|p| {
+                p.cost_of(
+                    usage.prompt_tokens.max(0) as usize,
+                    usage.completion_tokens.max(0) as usize,
+                )
+            });
         rows.push(PricedUsage { usage, cost });
     }
     rows.sort_by(|a, b| {
@@ -47,13 +48,13 @@ async fn priced_rows(store: &HistoryStore) -> Vec<PricedUsage> {
     rows
 }
 
-/// Known Oxen-cloud cost across every recorded model. Returns `None` when
-/// there is cloud usage but its catalog pricing could not be resolved.
+/// Known cost across every recorded model. Returns `None` when usage exists
+/// but the active endpoint's catalog cannot price any of it.
 pub(crate) async fn total_cost_usd(store: &HistoryStore) -> Option<f64> {
     let rows = priced_rows(store).await;
-    let has_cloud = rows.iter().any(|r| r.usage.source == "oxen_cloud");
+    let has_usage = !rows.is_empty();
     let costs: Vec<f64> = rows.iter().filter_map(|r| r.cost).collect();
-    if has_cloud && costs.is_empty() {
+    if has_usage && costs.is_empty() {
         None
     } else {
         Some(costs.into_iter().sum())
@@ -116,15 +117,12 @@ pub(crate) async fn handle_repl(store: &Arc<HistoryStore>, ui: &Ui) {
     }
     println!(
         "  {}",
-        ui.dim(&format!(
-            "estimated Oxen cloud spend: {}",
-            format_usd(total)
-        ))
+        ui.dim(&format!("estimated spend: {}", format_usd(total)))
     );
     if rows.iter().any(|r| r.cost.is_none()) {
         println!(
             "  {}",
-            ui.dim("— = local/custom endpoint or catalog price unavailable")
+            ui.dim("— = model has no published rate in the endpoint catalog")
         );
     }
 }
