@@ -80,11 +80,13 @@ export function TrailScene({ p }: SceneProps) {
       {poly([[51, 17], [54, 14], [57, 17]], snow)}
       <Px x={0} y={HZ} w={COLS} h={ROWS - HZ} fill={grass} />
       {poly([[30, HZ], [42, HZ], [38, ROWS], [22, ROWS]], trail, 0.5)}
-      {/* ox */}
+      {/* ox with realistic horns — light base curving out, dark tips up */}
+      <Px x={31} y={23} w={2} h={1} fill={ox} />
+      <Px x={33} y={23} w={1} h={1} fill={ox} />
+      <Px x={30} y={22} w={1} h={1} fill={mountainBack} />
+      <Px x={34} y={22} w={1} h={1} fill={mountainBack} />
       <Px x={34} y={24} w={7} h={4} fill={ox} />
       <Px x={31} y={24} w={3} h={3} fill={ox} />
-      <Px x={31} y={23} w={1} h={1} fill={mountainBack} />
-      <Px x={33} y={23} w={1} h={1} fill={mountainBack} />
       <Px x={35} y={28} w={1} h={2} fill={mountainBack} />
       <Px x={37} y={28} w={1} h={2} fill={mountainBack} />
       <Px x={39} y={28} w={1} h={2} fill={mountainBack} />

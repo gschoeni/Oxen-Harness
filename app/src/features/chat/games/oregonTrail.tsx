@@ -850,7 +850,11 @@ function OregonAttract(p: ThemePalette) {
             <Px x={x} y={y + 4} w={11} h={2} fill={c.mountain} />
             <Px x={x + 1} y={y + 6} w={2} h={1} fill={c.line} />
             <Px x={x + 8} y={y + 6} w={2} h={1} fill={c.line} />
-            {/* oxen */}
+            {/* oxen with realistic horns — light base, dark tips curving up */}
+            <Px x={x + 11} y={y + 1} w={2} h={1} fill={c.ox} />
+            <Px x={x + 13} y={y + 1} w={2} h={1} fill={c.ox} />
+            <Px x={x + 10} y={y + 0} w={1} h={1} fill={c.line} />
+            <Px x={x + 15} y={y + 0} w={1} h={1} fill={c.line} />
             <Px x={x + 13} y={y + 2} w={5} h={3} fill={c.ox} />
             <Px x={x + 12} y={y + 2} w={1} h={2} fill={c.ox} />
           </g>

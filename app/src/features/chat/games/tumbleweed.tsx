@@ -158,9 +158,14 @@ function OxSprite({ x, y, step, fill, shadow }: { x: number; y: number; step: nu
   return (
     <g transform={`translate(${(px - 5) * U} ${(py - 3) * U})`}>
       <Px x={1} y={3} w={9} h={4} fill={shadow} o={0.3} />
-      {/* horns, head, eye */}
-      <Px x={0} y={0} w={1} h={1} fill={shadow} />
-      <Px x={3} y={0} w={1} h={1} fill={shadow} />
+      {/* horns — realistic curve: light base, dark keratin tips curling up and out */}
+      <Px x={0} y={0} w={2} h={1} fill={fill} />
+      <Px x={3} y={0} w={1} h={1} fill={fill} />
+      <Px x={-1} y={0} w={1} h={1} fill={fill} />
+      <Px x={4} y={0} w={1} h={1} fill={fill} />
+      <Px x={-2} y={-1} w={1} h={1} fill={shadow} />
+      <Px x={5} y={-1} w={1} h={1} fill={shadow} />
+      {/* head, eye */}
       <Px x={0} y={1} w={4} h={3} fill={fill} />
       <Px x={1} y={2} w={1} h={1} fill={shadow} />
       {/* body and tail */}

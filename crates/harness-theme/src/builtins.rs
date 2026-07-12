@@ -206,9 +206,6 @@ pub(crate) fn oregon_trail() -> Theme {
             // both the CLI banner footer and the desktop hero's status panel.
             flavor_bottom: vec![
                 [s("Date"), s("March 21, 1848")],
-                [s("Weather"), s("warm")],
-                [s("Health"), s("good")],
-                [s("Food"), s("1009 pounds")],
                 [s("Next landmark"), s("128000 tokens")],
                 [s("Total tokens used"), s("0 tokens")],
             ],

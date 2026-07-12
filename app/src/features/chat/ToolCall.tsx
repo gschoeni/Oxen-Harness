@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { Button } from "../../components/ui";
 import { configureBraveKey } from "../../lib/ipc";
-import { basename, elapsed } from "../../lib/format";
+import { elapsed, relPath } from "../../lib/format";
 import { canvasDocFromArgs } from "../../lib/canvas";
 import { planItemsFromArgs, planProgress } from "../../lib/plan";
 import { useStore } from "../../lib/store";
@@ -40,6 +40,7 @@ const WEB_SEARCH_NO_KEY = "Web search needs a Brave Search API key.";
  *  body (a diff for edits, a terminal for shell, result cards for web search). */
 export function ToolCall({ item, now }: { item: ToolItem; now: number }) {
   const [open, setOpen] = useState(false);
+  const root = useStore((s) => s.session?.workspace ?? null);
   const a = parseArgs(item.args);
   // A canvas call is a clickable card that (re)opens the document in the panel —
   // including past versions in a resumed chat, rebuilt from the call's args.
@@ -47,7 +48,7 @@ export function ToolCall({ item, now }: { item: ToolItem; now: number }) {
   // A plan update renders as a checklist snapshot (the live, pinned plan lives
   // above the thread; this card is the in-thread record of each update).
   if (item.name === "update_plan") return <PlanToolCard item={item} a={a} />;
-  const { icon: Icon, verb, target } = present(item.name, a);
+  const { icon: Icon, verb, target } = present(item.name, a, root);
   const duration = toolDuration(item, now);
 
   // A web search that failed for a missing key gets a prominent, always-visible
@@ -257,15 +258,15 @@ interface Presentation {
   target?: string;
 }
 
-function present(name: string, a: Record<string, unknown>): Presentation {
+function present(name: string, a: Record<string, unknown>, root?: string | null): Presentation {
   const s = (k: string) => (typeof a[k] === "string" ? (a[k] as string) : undefined);
   switch (name) {
     case "read_file":
-      return { icon: FileText, verb: "Read", target: pathLabel(s("path")) };
+      return { icon: FileText, verb: "Read", target: pathLabel(s("path"), root) };
     case "write_file":
-      return { icon: FilePlus2, verb: "Wrote", target: pathLabel(s("path")) };
+      return { icon: FilePlus2, verb: "Wrote", target: pathLabel(s("path"), root) };
     case "edit_file":
-      return { icon: PencilLine, verb: "Edited", target: pathLabel(s("path")) };
+      return { icon: PencilLine, verb: "Edited", target: pathLabel(s("path"), root) };
     case "find_files":
       return { icon: FolderSearch, verb: "Found files", target: s("pattern") };
     case "search_files":
@@ -381,10 +382,11 @@ function toolDuration(item: ToolItem, now: number): string | null {
   return null;
 }
 
-function pathLabel(path?: string): string | undefined {
+function pathLabel(path?: string, root?: string | null): string | undefined {
   if (!path) return undefined;
-  // Show the filename; the full path lives in the title attribute.
-  return basename(path);
+  // Show the path relative to the project (e.g. `src/main.rs`), or the full
+  // path when it lives outside the project. The full text is in the title.
+  return relPath(path, root);
 }
 
 function firstLine(s?: string): string | undefined {

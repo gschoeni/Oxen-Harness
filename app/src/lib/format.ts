@@ -76,3 +76,20 @@ export function basename(path: string): string {
   const parts = path.split(/[/\\]/);
   return parts[parts.length - 1] || path;
 }
+
+/** A display label for a file path relative to the project `root`: the path
+ *  with the root prefix stripped (e.g. `src/main.rs`) when it lives inside the
+ *  project, or the unchanged absolute path when it's outside (or when the root
+ *  is unknown). Handles both `/` and `\` separators. */
+export function relPath(path: string, root?: string | null): string {
+  if (!root) return path;
+  // Normalize away a trailing separator on the root so the boundary check is
+  // exact (root `/a/b` should match `/a/b/c` but not `/a/bc`).
+  const base = root.replace(/[/\\]+$/, "");
+  if (path === base) return basename(path);
+  for (const sep of ["/", "\\"]) {
+    const prefix = base + sep;
+    if (path.startsWith(prefix)) return path.slice(prefix.length) || basename(path);
+  }
+  return path;
+}
