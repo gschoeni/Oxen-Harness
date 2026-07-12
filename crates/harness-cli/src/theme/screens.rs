@@ -13,8 +13,8 @@ use super::{flourish, Ui};
 ///
 /// `cost_usd` is estimated all-time Oxen cloud spend across every model and
 /// project (recorded input/output tokens at current catalog rates), rendered as
-/// a "Total dollars spent" row under the token count. `None` when pricing is
-/// unavailable, shown as "—".
+/// a "Total dollars spent" row in place of the old landmark row. `None` when
+/// pricing is unavailable, shown as "—".
 pub fn banner(
     ui: &Ui,
     base_url: &str,
@@ -60,13 +60,18 @@ pub fn banner(
     out.push_str(&journal_row(ui, &v.label_workspace, workspace));
     out.push_str(&journal_row(ui, &v.label_session, session));
     out.push_str(&journal_row(ui, "Theme", &ui.theme().meta.name));
+    let mut spend_rendered = false;
     for [label, value] in &v.flavor_bottom {
         // A few rows carry live state, substituted for the static flavor value.
         // The live token count and dollars-spent rows are emitted unconditionally
         // below (so they show even for a theme loaded from disk that lacks them),
         // so any static copies carried by the theme are skipped here to avoid
         // duplicates. "Date" gets today's date so the journal opens on today.
-        if label == "Total tokens used" || label == "Total dollars spent" {
+        if label == "Next landmark" || label == "Total dollars spent" {
+            let spent = cost_usd.map(format_usd).unwrap_or_else(|| "—".into());
+            out.push_str(&journal_row(ui, "Total dollars spent", &spent));
+            spend_rendered = true;
+        } else if label == "Total tokens used" {
             // Rendered live after this loop — skip the static flavor copy.
         } else if label == "Date" {
             out.push_str(&journal_row(ui, label, &today()));
@@ -77,18 +82,17 @@ pub fn banner(
         }
     }
 
-    // Always show the live all-time token count and estimated cloud spend back
-    // to back, regardless of whether the active theme carries these rows.
+    // Always show the live all-time token count. Custom themes without the
+    // standard landmark/spend slot still get the estimated cloud-spend row.
     out.push_str(&journal_row(
         ui,
         "Total tokens used",
         &format!("{tokens_used} tokens"),
     ));
-    let spent = match cost_usd {
-        Some(c) => format_usd(c),
-        None => "—".to_string(),
-    };
-    out.push_str(&journal_row(ui, "Total dollars spent", &spent));
+    if !spend_rendered {
+        let spent = cost_usd.map(format_usd).unwrap_or_else(|| "—".into());
+        out.push_str(&journal_row(ui, "Total dollars spent", &spent));
+    }
 
     out.push('\n');
     out.push_str(&format!("  {}\n", ui.dim(&v.bottom_hint)));
@@ -302,19 +306,21 @@ mod tests {
     }
 
     #[test]
-    fn banner_shows_dollars_spent_under_tokens() {
+    fn banner_shows_dollars_spent() {
         let ui = Ui::plain();
         // A known cost renders as a currency row; unavailable renders as "—".
         let priced = banner(&ui, "u", "m", "w", "s", 1234, Some(0.42));
         assert!(priced.contains("Total dollars spent"));
         assert!(priced.contains("$0.42"));
-        // The dollars row follows the tokens row.
-        let toks = priced.find("Total tokens used").unwrap();
-        let cost = priced.find("Total dollars spent").unwrap();
-        assert!(cost > toks);
-
         let unavailable = banner(&ui, "u", "m", "w", "s", 0, None);
         assert!(unavailable.contains("Total dollars spent"));
+    }
+
+    #[test]
+    fn banner_replaces_next_landmark_with_dollars_spent() {
+        let b = banner(&Ui::plain(), "u", "m", "w", "s", 1234, Some(0.42));
+        assert!(!b.contains("Next landmark"));
+        assert_eq!(b.matches("Total dollars spent").count(), 1);
     }
 
     #[test]

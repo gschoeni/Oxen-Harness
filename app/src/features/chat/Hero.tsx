@@ -61,21 +61,20 @@ export function Hero(props: HeroProps) {
   const icon = v?.prompt_icon || "🐂";
   // Themes carry a static "Total tokens used" flavor row; swap in the live count
   // for the current session so the dashboard reflects real consumption, and
-  // inject a "Total dollars spent" row right after it (dropping any static one
-  // the theme carries, since the live value replaces it).
+  // replace the old "Next landmark" slot with live total spend (also replacing
+  // any static spend row a custom theme carries).
   const statusRows: [string, string][] = [
     ...(v?.flavor_top || []),
     ...(v?.flavor_bottom || []),
   ]
-    .filter(([label]) => label !== "Total dollars spent")
     .flatMap(([label, value]): [string, string][] => {
-      if (label !== "Total tokens used") return [[label, value]];
-      const tokenRow: [string, string] = [label, `${tokensUsed.toLocaleString()} tokens`];
-      const costRow: [string, string] = [
-        "Total dollars spent",
-        costUsd == null ? "—" : formatUsd(costUsd),
-      ];
-      return [tokenRow, costRow];
+      if (label === "Next landmark" || label === "Total dollars spent") {
+        return [["Total dollars spent", costUsd == null ? "—" : formatUsd(costUsd)]];
+      }
+      if (label === "Total tokens used") {
+        return [[label, `${tokensUsed.toLocaleString()} tokens`]];
+      }
+      return [[label, value]];
     });
 
   if (hero === "newspaper") {
