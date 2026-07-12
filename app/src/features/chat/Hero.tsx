@@ -63,19 +63,25 @@ export function Hero(props: HeroProps) {
   // for the current session so the dashboard reflects real consumption, and
   // replace the old "Next landmark" slot with live total spend (also replacing
   // any static spend row a custom theme carries).
-  const statusRows: [string, string][] = [
+  const themedRows: [string, string][] = [
     ...(v?.flavor_top || []),
     ...(v?.flavor_bottom || []),
-  ]
-    .flatMap(([label, value]): [string, string][] => {
-      if (label === "Next landmark" || label === "Total dollars spent") {
-        return [["Total dollars spent", costUsd == null ? "—" : formatUsd(costUsd)]];
-      }
-      if (label === "Total tokens used") {
-        return [[label, `${tokensUsed.toLocaleString()} tokens`]];
-      }
-      return [[label, value]];
-    });
+  ];
+  const hasSpendSlot = themedRows.some(
+    ([label]) => label === "Next landmark" || label === "Total dollars spent",
+  );
+  const statusRows = themedRows.flatMap(([label, value]): [string, string][] => {
+    if (label === "Next landmark" || label === "Total dollars spent") {
+      return [["Total dollars spent", costUsd == null ? "—" : formatUsd(costUsd)]];
+    }
+    if (label === "Total tokens used") {
+      return [[label, `${tokensUsed.toLocaleString()} tokens`]];
+    }
+    return [[label, value]];
+  });
+  if (!hasSpendSlot) {
+    statusRows.push(["Total dollars spent", costUsd == null ? "—" : formatUsd(costUsd)]);
+  }
 
   if (hero === "newspaper") {
     return (

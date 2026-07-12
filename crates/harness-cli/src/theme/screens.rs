@@ -63,10 +63,9 @@ pub fn banner(
     let mut spend_rendered = false;
     for [label, value] in &v.flavor_bottom {
         // A few rows carry live state, substituted for the static flavor value.
-        // The live token count and dollars-spent rows are emitted unconditionally
-        // below (so they show even for a theme loaded from disk that lacks them),
-        // so any static copies carried by the theme are skipped here to avoid
-        // duplicates. "Date" gets today's date so the journal opens on today.
+        // The live token count is emitted below. Landmark/spend slots are
+        // replaced in place; a fallback spend row is added below for custom
+        // themes without either slot. "Date" always opens on today.
         if label == "Next landmark" || label == "Total dollars spent" {
             let spent = cost_usd.map(format_usd).unwrap_or_else(|| "—".into());
             out.push_str(&journal_row(ui, "Total dollars spent", &spent));

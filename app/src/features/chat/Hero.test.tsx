@@ -33,4 +33,13 @@ describe("Hero usage rows", () => {
     expect(screen.getByText(/Total dollars spent/)).toBeInTheDocument();
     expect(screen.getByText("$12.35")).toBeInTheDocument();
   });
+
+  it("shows total spend when a custom theme has no spend slot", () => {
+    useStore.setState({ theme: sampleTheme, totalCostUsd: 0.0042 });
+
+    render(<Hero examples={[]} busy={false} onPick={() => {}} />);
+
+    expect(screen.getByText(/Total dollars spent/)).toBeInTheDocument();
+    expect(screen.getByText("$0.0042")).toBeInTheDocument();
+  });
 });
