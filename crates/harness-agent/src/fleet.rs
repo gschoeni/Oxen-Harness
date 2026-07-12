@@ -184,7 +184,10 @@ where
         return Ok(Vec::new());
     }
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
+    // Progress is observational and may be coalesced by hosts; never let a slow
+    // UI retain an unbounded token-event backlog. Start/done milestones await
+    // capacity, while intermediate events are dropped when the lane is saturated.
+    let (tx, mut rx) = mpsc::channel::<Msg>(256);
     let slots = Arc::new(Semaphore::new(concurrency.max(1)));
     let mut join = JoinSet::new();
 
@@ -203,29 +206,33 @@ where
                 // silently running uncapped.
                 Err(_) => return,
             };
-            let _ = tx.send(Msg::Started {
-                index,
-                label: task.label.clone(),
-            });
+            let _ = tx
+                .send(Msg::Started {
+                    index,
+                    label: task.label.clone(),
+                })
+                .await;
             let forward = tx.clone();
             let result = agent
                 .run_turn(task.prompt, |event| {
                     // The one deep clone: from the borrowed callback event into
                     // an Arc that rides the channel and every downstream hop.
-                    let _ = forward.send(Msg::Agent {
+                    let _ = forward.try_send(Msg::Agent {
                         index,
                         event: Arc::new(event.clone()),
                     });
                 })
                 .await;
-            let _ = tx.send(Msg::Done {
-                index,
-                outcome: SubagentOutcome {
-                    label: task.label,
-                    result,
-                    tokens_used: agent.tokens_used(),
-                },
-            });
+            let _ = tx
+                .send(Msg::Done {
+                    index,
+                    outcome: SubagentOutcome {
+                        label: task.label,
+                        result,
+                        tokens_used: agent.tokens_used(),
+                    },
+                })
+                .await;
         });
     }
     // Drop the original sender: the channel closes exactly when every task has

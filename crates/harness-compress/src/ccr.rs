@@ -6,11 +6,12 @@
 //! can always recover anything compression removed — "lossy" on the wire, not
 //! in fact. (The scheme and marker format follow headroom's CCR design.)
 //!
-//! The store is in-memory and capacity-bounded (oldest entry evicted first);
-//! originals also survive verbatim in the history store, so eviction only
-//! costs the model the convenient path, never the data.
+//! The index is entry- and byte-bounded (oldest entry evicted first). Production
+//! agents put payloads on disk and retain only metadata in memory; originals
+//! also survive verbatim in history, so eviction never loses conversation data.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
@@ -35,32 +36,56 @@ pub fn marker(hash: &str, note: Option<&str>) -> String {
     }
 }
 
-/// In-memory store of compressed-away originals, shared (via `Arc`) between
-/// the compressor (writes) and the `retrieve_original` tool (reads).
+/// Bounded store of compressed-away originals, shared (via `Arc`) between the
+/// compressor (writes) and the `retrieve_original` tool (reads).
 #[derive(Debug)]
 pub struct CcrStore {
     inner: Mutex<Inner>,
     capacity: usize,
+    max_bytes: usize,
+    directory: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
 struct Inner {
-    entries: HashMap<String, String>,
+    entries: HashMap<String, Entry>,
     /// Insertion order for FIFO eviction.
-    order: Vec<String>,
+    order: VecDeque<String>,
+    bytes: usize,
 }
+
+#[derive(Debug)]
+struct Entry {
+    content: Option<String>,
+    bytes: usize,
+}
+
+pub const DEFAULT_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 impl Default for CcrStore {
     fn default() -> Self {
-        Self::with_capacity(512)
+        Self::with_limits(512, DEFAULT_MAX_BYTES)
     }
 }
 
 impl CcrStore {
     pub fn with_capacity(capacity: usize) -> Self {
+        Self::with_limits(capacity, usize::MAX)
+    }
+
+    pub fn with_limits(capacity: usize, max_bytes: usize) -> Self {
         Self {
             inner: Mutex::new(Inner::default()),
             capacity: capacity.max(1),
+            max_bytes: max_bytes.max(1),
+            directory: None,
+        }
+    }
+
+    pub fn disk_backed(directory: impl Into<PathBuf>) -> Self {
+        Self {
+            directory: Some(directory.into()),
+            ..Self::default()
         }
     }
 
@@ -70,24 +95,57 @@ impl CcrStore {
         let hash = hash_content(content);
         let mut inner = self.inner.lock().expect("ccr store lock");
         if !inner.entries.contains_key(&hash) {
-            while inner.order.len() >= self.capacity {
-                let oldest = inner.order.remove(0);
-                inner.entries.remove(&oldest);
+            let bytes = content.len();
+            if bytes > self.max_bytes {
+                return hash;
             }
-            inner.order.push(hash.clone());
-            inner.entries.insert(hash.clone(), content.to_string());
+            while inner.order.len() >= self.capacity
+                || inner.bytes.saturating_add(bytes) > self.max_bytes
+            {
+                let Some(oldest) = inner.order.pop_front() else {
+                    break;
+                };
+                if let Some(entry) = inner.entries.remove(&oldest) {
+                    inner.bytes = inner.bytes.saturating_sub(entry.bytes);
+                    if let Some(directory) = &self.directory {
+                        let _ = std::fs::remove_file(directory.join(&oldest));
+                    }
+                }
+            }
+            let on_disk = self.directory.as_ref().is_some_and(|directory| {
+                std::fs::create_dir_all(directory).is_ok()
+                    && std::fs::write(directory.join(&hash), content).is_ok()
+            });
+            inner.order.push_back(hash.clone());
+            inner.bytes = inner.bytes.saturating_add(bytes);
+            inner.entries.insert(
+                hash.clone(),
+                Entry {
+                    content: (!on_disk).then(|| content.to_string()),
+                    bytes,
+                },
+            );
         }
         hash
     }
 
     /// Look up a stored original by its marker hash.
     pub fn get(&self, hash: &str) -> Option<String> {
-        self.inner
+        let content = self
+            .inner
             .lock()
             .expect("ccr store lock")
             .entries
             .get(hash)
-            .cloned()
+            .map(|entry| entry.content.clone());
+        match content {
+            Some(Some(content)) => Some(content),
+            Some(None) => self
+                .directory
+                .as_ref()
+                .and_then(|directory| std::fs::read_to_string(directory.join(hash)).ok()),
+            None => None,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -96,6 +154,10 @@ impl CcrStore {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn bytes_len(&self) -> usize {
+        self.inner.lock().expect("ccr store lock").bytes
     }
 }
 
@@ -125,6 +187,33 @@ mod tests {
         assert!(store.get(&h2).is_some());
         assert!(store.get(&h3).is_some());
         assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn byte_budget_evicts_even_below_the_entry_limit() {
+        let store = CcrStore::with_limits(10, 6);
+        let first = store.put("1234");
+        let second = store.put("5678");
+        assert!(store.get(&first).is_none());
+        assert_eq!(store.get(&second).as_deref(), Some("5678"));
+        assert!(store.bytes_len() <= 6);
+    }
+
+    #[test]
+    fn a_single_oversized_value_is_not_retained() {
+        let store = CcrStore::with_limits(10, 3);
+        let hash = store.put("1234");
+        assert!(store.get(&hash).is_none());
+        assert_eq!(store.bytes_len(), 0);
+    }
+
+    #[test]
+    fn disk_backed_store_keeps_originals_out_of_the_heap_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CcrStore::disk_backed(dir.path());
+        let hash = store.put("large original");
+        assert_eq!(store.get(&hash).as_deref(), Some("large original"));
+        assert!(dir.path().join(hash).is_file());
     }
 
     #[test]

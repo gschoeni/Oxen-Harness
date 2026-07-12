@@ -322,6 +322,14 @@ impl ChatRequest {
 
     pub fn streaming(mut self, stream: bool) -> Self {
         self.stream = stream;
+        self.stream_options = stream.then_some(StreamOptions {
+            include_usage: true,
+        });
+        self
+    }
+
+    pub fn max_tokens(mut self, max_tokens: usize) -> Self {
+        self.max_tokens = Some(max_tokens.min(u32::MAX as usize) as u32);
         self
     }
 }

@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 use rusqlite_migration::{Migrations, M};
+use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 /// The ordered schema migrations. The on-disk `user_version` records how many
@@ -118,6 +119,16 @@ fn migrations() -> Migrations<'static> {
                 }
                 Ok(())
             },
+        ),
+        // M7 — a compact active-context checkpoint. The messages table remains
+        // verbatim; this projection lets a resumed agent avoid loading history
+        // that was already summarized or pruned in memory.
+        M::up(
+            "CREATE TABLE IF NOT EXISTS context_snapshots (
+                 session_id  TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+                 through_seq INTEGER NOT NULL,
+                 raw_json    TEXT NOT NULL
+             );",
         ),
     ])
 }
@@ -410,6 +421,38 @@ impl HistoryStore {
         Ok(next_seq)
     }
 
+    /// Append an already-serialized message without building an intermediate
+    /// `serde_json::Value`. `content` is only the small queryable preview/title;
+    /// `raw_json` remains the complete source of truth.
+    pub fn append_raw_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: Option<&str>,
+        raw_json: &str,
+    ) -> Result<i64, HistoryError> {
+        let conn = self.lock();
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            return Err(HistoryError::SessionNotFound(session_id.to_string()));
+        }
+        let next_seq: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(seq), -1) + 1 FROM messages WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )?;
+        conn.execute(
+            "INSERT INTO messages (session_id, seq, role, content, raw_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![session_id, next_seq, role, content, raw_json, now()],
+        )?;
+        Ok(next_seq)
+    }
+
     /// Return the verbatim message JSON values for a session, ordered by `seq`.
     pub fn messages(&self, session_id: &str) -> Result<Vec<serde_json::Value>, HistoryError> {
         let conn = self.lock();
@@ -422,6 +465,66 @@ impl HistoryStore {
             out.push(serde_json::from_str(&raw)?);
         }
         Ok(out)
+    }
+
+    /// Deserialize messages directly into their destination type, avoiding an
+    /// intermediate JSON tree. Only rows after `after_seq` are returned.
+    pub fn messages_typed_after<T: DeserializeOwned>(
+        &self,
+        session_id: &str,
+        after_seq: i64,
+    ) -> Result<Vec<T>, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT raw_json FROM messages
+             WHERE session_id = ?1 AND seq > ?2 ORDER BY seq ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id, after_seq], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(serde_json::from_str(&row?)?);
+        }
+        Ok(out)
+    }
+
+    /// Save the agent's compact active context through a persisted message seq.
+    pub fn save_context_snapshot<T: Serialize>(
+        &self,
+        session_id: &str,
+        through_seq: i64,
+        messages: &T,
+    ) -> Result<(), HistoryError> {
+        let raw = serde_json::to_string(messages)?;
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO context_snapshots (session_id, through_seq, raw_json)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(session_id) DO UPDATE SET
+                 through_seq = excluded.through_seq,
+                 raw_json = excluded.raw_json",
+            rusqlite::params![session_id, through_seq, raw],
+        )?;
+        Ok(())
+    }
+
+    /// Load the latest compact active-context checkpoint, when one exists.
+    pub fn context_snapshot<T: DeserializeOwned>(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<(i64, T)>, HistoryError> {
+        use rusqlite::OptionalExtension;
+        let conn = self.lock();
+        let row = conn
+            .query_row(
+                "SELECT through_seq, raw_json FROM context_snapshots WHERE session_id = ?1",
+                [session_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        row.map(|(seq, raw)| Ok((seq, serde_json::from_str(&raw)?)))
+            .transpose()
     }
 
     /// Permanently delete a session and its messages. Idempotent: deleting a
@@ -689,6 +792,28 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[1]["content"], "hi");
+    }
+
+    #[test]
+    fn compact_context_checkpoint_round_trips_with_later_messages() {
+        let store = store();
+        let session = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&session, &Message::user("old"))
+            .unwrap();
+        store
+            .save_context_snapshot(&session, 0, &vec![Message::user("summary")])
+            .unwrap();
+        store
+            .append_message(&session, &Message::assistant("new"))
+            .unwrap();
+
+        let (seq, compact): (i64, Vec<Message>) =
+            store.context_snapshot(&session).unwrap().unwrap();
+        let later: Vec<Message> = store.messages_typed_after(&session, seq).unwrap();
+        assert_eq!(seq, 0);
+        assert_eq!(compact[0].content, "summary");
+        assert_eq!(later[0].content, "new");
     }
 
     #[test]
@@ -1058,7 +1183,7 @@ mod tests {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(user_version, 6);
+        assert_eq!(user_version, 7);
     }
 
     #[test]

@@ -18,6 +18,9 @@ use crate::{budget, compact, prompt};
 
 use super::{build_user_message, Agent};
 
+const TOOL_ARGUMENT_EVENT_CHARS: usize = 16_000;
+const TOOL_RESULT_EVENT_CHARS: usize = 4_000;
+
 impl Agent {
     /// Run one user turn to completion, returning the assistant's final text.
     ///
@@ -265,6 +268,16 @@ impl Agent {
     where
         F: FnMut(&AgentEvent),
     {
+        let resident_budget =
+            budget::estimate_tokens_for_chars(self.config.max_resident_context_chars).min(budget);
+        let raw = budget::estimate_prompt_tokens(&self.messages, tool_defs);
+        if self.calibrated(raw) > resident_budget && resident_budget < budget {
+            // Best effort: a single recent turn may legitimately exceed the soft
+            // resident target. The real provider window remains authoritative.
+            let _ = self
+                .compact_to_fit(resident_budget, tool_defs, on_event)
+                .await?;
+        }
         let raw = budget::estimate_prompt_tokens(&self.messages, tool_defs);
         if self.calibrated(raw) <= budget {
             return Ok(raw);
@@ -306,6 +319,7 @@ impl Agent {
         outbound.extend(nudge.cloned());
         let request = ChatRequest::new(&self.config.model, outbound)
             .with_tools(tool_defs.to_vec())
+            .max_tokens(self.config.response_reserve)
             .streaming(true);
 
         let retry = self.config.retry.clone();
@@ -434,6 +448,9 @@ impl Agent {
             });
         }
         if self.fits_budget(budget, tool_defs) {
+            if freed > 0 {
+                self.save_context_snapshot();
+            }
             return Ok(true);
         }
 
@@ -447,6 +464,7 @@ impl Agent {
         let summary = self.complete(compact::SUMMARY_PROMPT, &rendered).await?;
         let note = ChatMessage::user(format!("{}\n{}", compact::SUMMARY_MARKER, summary));
         self.messages.splice(start..cut, std::iter::once(note));
+        self.save_context_snapshot();
         on_event(&AgentEvent::Compacted {
             detail: "summarized earlier conversation".to_string(),
         });
@@ -462,7 +480,11 @@ impl Agent {
     {
         on_event(&AgentEvent::ToolStart {
             name: call.function.name.clone(),
-            arguments: call.function.arguments.clone(),
+            arguments: harness_core::text::truncate_with_marker(
+                &call.function.arguments,
+                TOOL_ARGUMENT_EVENT_CHARS,
+                "\n… [arguments omitted from display]",
+            ),
         });
 
         let result = match call.function.parsed_arguments() {
@@ -475,7 +497,11 @@ impl Agent {
 
         on_event(&AgentEvent::ToolEnd {
             name: call.function.name.clone(),
-            result: result.clone(),
+            result: harness_core::text::truncate_with_marker(
+                &result,
+                TOOL_RESULT_EVENT_CHARS,
+                "\n… [full result retained in history]",
+            ),
         });
         result
     }
@@ -491,6 +517,7 @@ fn error_kind(e: &AgentError) -> &'static str {
         AgentError::History(_) => "history",
         AgentError::Io(_) => "io",
         AgentError::Json(_) => "json",
+        AgentError::AttachmentsTooLarge { .. } => "attachments_too_large",
         AgentError::ContextWindowExceeded { .. } => "context_window_exceeded",
         AgentError::RetriesExhausted { .. } => "retries_exhausted",
     }
@@ -1016,5 +1043,27 @@ mod tests {
             .collect();
         assert!(tool_texts.first().unwrap().contains("elided"));
         assert!(tool_texts.last().unwrap().contains(&big));
+
+        // The compact working set is durable: a cold resume must not inflate
+        // the full verbatim transcript back into memory.
+        let store = agent.store.clone();
+        let session = agent.session_id().to_string();
+        let config = agent.config.clone();
+        drop(agent);
+        let resumed = Agent::resume_from_store(
+            OxenClient::new(server.url(), "key", "qwen3-8b"),
+            ToolRegistry::new(),
+            store,
+            session,
+            config,
+        )
+        .unwrap();
+        let first_tool = resumed
+            .messages()
+            .iter()
+            .find(|m| m.role == "tool")
+            .and_then(ChatMessage::content_text)
+            .unwrap();
+        assert!(first_tool.contains("elided"));
     }
 }

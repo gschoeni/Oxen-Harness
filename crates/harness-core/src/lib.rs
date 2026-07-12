@@ -3,6 +3,7 @@
 //! This crate holds the provider-agnostic message and role types that flow
 //! through the agent loop, plus the defaults that pin the harness to Oxen.ai.
 
+pub mod bounded;
 pub mod fmt;
 pub mod git;
 pub mod json;

@@ -8,8 +8,13 @@
 //! message shape) is defined once. It depends only on `std`, so it belongs in
 //! the leaf crate alongside the other cross-cutting helpers.
 
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+
+use crate::bounded::BoundedText;
+
+const MAX_CAPTURE_CHARS: usize = 100_000;
 
 /// Run `git <args>` in `root`, returning captured stdout on success.
 ///
@@ -18,16 +23,45 @@ use std::process::Command;
 /// succeeded can `.ok()` the result. Never panics — a missing `git` binary is
 /// an `Err`, not a crash.
 pub fn capture(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let mut child = Command::new("git")
         .args(args)
         .current_dir(root)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("could not run git: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = child.stdout.take().map(|s| drain(s, MAX_CAPTURE_CHARS));
+    let stderr = child.stderr.take().map(|s| drain(s, MAX_CAPTURE_CHARS));
+    let status = child
+        .wait()
+        .map_err(|e| format!("could not wait for git: {e}"))?;
+    let stdout = stdout.map(join_reader).unwrap_or_default();
+    let stderr = stderr.map(join_reader).unwrap_or_default();
+    if !status.success() {
         return Err(format!("git {} failed: {}", args.join(" "), stderr.trim()));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(stdout)
+}
+
+fn drain(
+    mut reader: impl Read + Send + 'static,
+    max_chars: usize,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut kept = BoundedText::new(max_chars);
+        let mut bytes = [0u8; 8192];
+        loop {
+            match reader.read(&mut bytes) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => kept.push(&String::from_utf8_lossy(&bytes[..n])),
+            }
+        }
+        kept.into_string()
+    })
+}
+
+fn join_reader(handle: std::thread::JoinHandle<String>) -> String {
+    handle.join().unwrap_or_default()
 }
 
 #[cfg(test)]

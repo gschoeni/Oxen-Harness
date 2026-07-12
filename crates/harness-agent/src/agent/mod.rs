@@ -7,11 +7,16 @@
 mod compression;
 mod turn;
 
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use harness_compress::{CcrStore, CompressConfig};
 use harness_llm::types::{ChatMessage, ContentPart};
-use harness_llm::{hydrate_content, Attachment, AttachmentStore, ChatRequest, OxenClient};
+use harness_llm::{
+    hydrate_content_bounded, Attachment, AttachmentStore, ChatRequest, OxenClient,
+    MAX_OUTBOUND_ATTACHMENT_BYTES, MAX_OUTBOUND_ATTACHMENT_PARTS,
+};
 use harness_store::{HistoryStore, SessionMeta};
 use harness_tools::ToolRegistry;
 use tokio_util::sync::CancellationToken;
@@ -54,6 +59,10 @@ pub struct Agent {
     session_id: String,
     config: AgentConfig,
     messages: Vec<ChatMessage>,
+    /// Highest verbatim message sequence persisted for this session.
+    last_persisted_seq: i64,
+    /// Detached agents need a working context, not a second SQLite transcript.
+    persist_transcript: bool,
     /// Where attachments are persisted + resolved, derived from
     /// [`AgentConfig::attachment_root`]. `None` inlines attachments instead.
     attachments: Option<AttachmentStore>,
@@ -81,6 +90,9 @@ pub struct Agent {
     ccr: Option<Arc<CcrStore>>,
     /// Compressor tunables (defaults; not yet user-configurable).
     compress_cfg: CompressConfig,
+    /// Compressed projections keyed by original hash; avoids reparsing the same
+    /// stale JSON/log output on every model call.
+    compression_cache: HashMap<String, Option<String>>,
     /// Cumulative estimated tokens saved (`On`) or would-be saved (`Audit`)
     /// by compression this run.
     tokens_saved: usize,
@@ -97,9 +109,10 @@ impl Agent {
         config: AgentConfig,
     ) -> Result<Self, AgentError> {
         let mut messages = Vec::new();
+        let mut last_persisted_seq = -1;
         if let Some(prompt) = &config.system_prompt {
             let system = ChatMessage::system(prompt.clone());
-            store.append_message(&session_id, &system)?;
+            last_persisted_seq = store.append_message(&session_id, &system)?;
             messages.push(system);
         }
         let attachments = config.attachment_root.clone().map(AttachmentStore::new);
@@ -112,6 +125,8 @@ impl Agent {
             session_id,
             config,
             messages,
+            last_persisted_seq,
+            persist_transcript: true,
             attachments,
             tokens_used: 0,
             prompt_tokens_used: 0,
@@ -120,6 +135,7 @@ impl Agent {
             token_ratio: 1.0,
             ccr,
             compress_cfg: CompressConfig::default(),
+            compression_cache: HashMap::new(),
             tokens_saved: 0,
         })
     }
@@ -137,11 +153,12 @@ impl Agent {
         session_id: String,
         config: AgentConfig,
     ) -> Result<Self, AgentError> {
-        let raw = store.messages(&session_id)?;
-        let mut messages = Vec::with_capacity(raw.len());
-        for value in raw {
-            messages.push(serde_json::from_value::<ChatMessage>(value)?);
-        }
+        let (through_seq, mut messages) = store
+            .context_snapshot::<Vec<ChatMessage>>(&session_id)?
+            .unwrap_or((-1, Vec::new()));
+        let later = store.messages_typed_after::<ChatMessage>(&session_id, through_seq)?;
+        let last_persisted_seq = through_seq + later.len() as i64;
+        messages.extend(later);
         let attachments = config.attachment_root.clone().map(AttachmentStore::new);
         let ccr = setup_compression(&config, &mut tools);
         // Seed the cumulative count from the loaded transcript so a resumed
@@ -155,6 +172,8 @@ impl Agent {
             session_id,
             config,
             messages,
+            last_persisted_seq,
+            persist_transcript: true,
             attachments,
             tokens_used,
             // The split input/output counters price only tokens we actually
@@ -166,6 +185,7 @@ impl Agent {
             token_ratio: 1.0,
             ccr,
             compress_cfg: CompressConfig::default(),
+            compression_cache: HashMap::new(),
             tokens_saved: 0,
         })
     }
@@ -187,6 +207,7 @@ impl Agent {
         }
         self.session_id = session_id;
         self.messages = messages;
+        self.last_persisted_seq = self.messages.len() as i64 - 1;
         self.tokens_used = 0;
         self.prompt_tokens_used = 0;
         self.completion_tokens_used = 0;
@@ -198,11 +219,15 @@ impl Agent {
     /// transcript into memory. Reuses the current client, tools, and config so
     /// subsequent turns continue the loaded conversation.
     pub fn load_session(&mut self, session_id: String) -> Result<(), AgentError> {
-        let raw = self.store.messages(&session_id)?;
-        let mut messages = Vec::with_capacity(raw.len());
-        for value in raw {
-            messages.push(serde_json::from_value::<ChatMessage>(value)?);
-        }
+        let (through_seq, mut messages) = self
+            .store
+            .context_snapshot::<Vec<ChatMessage>>(&session_id)?
+            .unwrap_or((-1, Vec::new()));
+        let later = self
+            .store
+            .messages_typed_after::<ChatMessage>(&session_id, through_seq)?;
+        self.last_persisted_seq = through_seq + later.len() as i64;
+        messages.extend(later);
         self.session_id = session_id;
         self.messages = messages;
         // Seed the cumulative count from the loaded transcript so a resumed
@@ -293,6 +318,10 @@ impl Agent {
         self.usage_store = store;
     }
 
+    pub(crate) fn disable_transcript_persistence(&mut self) {
+        self.persist_transcript = false;
+    }
+
     /// The tool definitions (JSON schemas) advertised to the model on every
     /// call this turn — i.e. the tools the agent currently has available.
     pub fn tool_definitions(&self) -> Vec<serde_json::Value> {
@@ -347,6 +376,7 @@ impl Agent {
             session,
             self.config.clone(),
         )?;
+        side.disable_transcript_persistence();
         side.set_usage_store(self.usage_store.clone());
         Ok(side)
     }
@@ -400,9 +430,43 @@ impl Agent {
     /// Persist a message to the session, then append it to the in-memory
     /// transcript — the order every message takes into history.
     fn push(&mut self, message: ChatMessage) -> Result<(), AgentError> {
-        self.store.append_message(&self.session_id, &message)?;
+        if self.persist_transcript {
+            let raw = serde_json::to_string(&message)?;
+            let title: Option<Cow<'_, str>> = if message.role == "user" {
+                message.content.as_ref().map(|content| match content {
+                    harness_llm::types::MessageContent::Text(text) => Cow::Borrowed(text.as_str()),
+                    parts => Cow::Owned(parts.as_text()),
+                })
+            } else {
+                None
+            };
+            let title = title.map(|text| {
+                Cow::Owned(harness_core::text::truncate_with_marker(
+                    text.as_ref(),
+                    512,
+                    "…",
+                ))
+            });
+            self.last_persisted_seq = self.store.append_raw_message(
+                &self.session_id,
+                &message.role,
+                title.as_deref(),
+                &raw,
+            )?;
+        }
         self.messages.push(message);
         Ok(())
+    }
+
+    /// Persist the compact working set separately from verbatim history.
+    fn save_context_snapshot(&self) {
+        if self.persist_transcript {
+            let _ = self.store.save_context_snapshot(
+                &self.session_id,
+                self.last_persisted_seq,
+                &self.messages,
+            );
+        }
     }
 
     /// The transcript prepared for sending: a clone of the in-memory messages
@@ -412,9 +476,16 @@ impl Agent {
     fn outbound_messages(&self) -> Vec<ChatMessage> {
         let mut messages = self.messages.clone();
         if let Some(store) = &self.attachments {
-            for message in &mut messages {
+            let mut remaining_bytes = MAX_OUTBOUND_ATTACHMENT_BYTES;
+            let mut remaining_parts = MAX_OUTBOUND_ATTACHMENT_PARTS;
+            for message in messages.iter_mut().rev() {
                 if let Some(content) = message.content.as_mut() {
-                    hydrate_content(content, store.root());
+                    hydrate_content_bounded(
+                        content,
+                        store.root(),
+                        &mut remaining_bytes,
+                        &mut remaining_parts,
+                    );
                 }
             }
         }
@@ -436,6 +507,13 @@ fn build_user_message(
 ) -> Result<ChatMessage, AgentError> {
     if attachments.is_empty() {
         return Ok(ChatMessage::user(text));
+    }
+    let total_bytes = attachments.iter().map(|a| a.bytes.len()).sum::<usize>();
+    if total_bytes > MAX_OUTBOUND_ATTACHMENT_BYTES {
+        return Err(AgentError::AttachmentsTooLarge {
+            size: total_bytes,
+            max: MAX_OUTBOUND_ATTACHMENT_BYTES,
+        });
     }
     let mut parts = Vec::with_capacity(attachments.len() + 1);
     if !text.is_empty() {

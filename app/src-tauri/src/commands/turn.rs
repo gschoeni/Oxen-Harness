@@ -9,6 +9,7 @@
 use harness_agent::AgentEvent;
 use harness_llm::Attachment;
 use harness_tools::QuestionAnswer;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
 
@@ -28,6 +29,53 @@ enum TurnKind {
         attachments: Vec<Attachment>,
     },
     Retry,
+}
+
+const TOKEN_BATCH_BYTES: usize = 512;
+
+#[derive(Clone)]
+struct TokenBatch {
+    app: AppHandle,
+    session: String,
+    buffer: Arc<Mutex<String>>,
+}
+
+impl TokenBatch {
+    fn new(app: AppHandle, session: String) -> Self {
+        Self {
+            app,
+            session,
+            buffer: Arc::new(Mutex::new(String::with_capacity(TOKEN_BATCH_BYTES))),
+        }
+    }
+
+    fn push(&self, token: &str) {
+        let ready = {
+            let mut buffer = self.buffer.lock().expect("token batch poisoned");
+            buffer.push_str(token);
+            (buffer.len() >= TOKEN_BATCH_BYTES).then(|| std::mem::take(&mut *buffer))
+        };
+        if let Some(text) = ready {
+            self.emit(text);
+        }
+    }
+
+    fn flush(&self) {
+        let text = std::mem::take(&mut *self.buffer.lock().expect("token batch poisoned"));
+        if !text.is_empty() {
+            self.emit(text);
+        }
+    }
+
+    fn emit(&self, token: String) {
+        let _ = self.app.emit(
+            "agent://token",
+            TokenPayload {
+                session: self.session.clone(),
+                token,
+            },
+        );
+    }
 }
 
 /// Run one user turn for a specific chat, streaming session-tagged events to the
@@ -113,20 +161,18 @@ async fn execute_turn(
     // per call inside `Agent`, where provider-reported input/output counts and
     // the exact model are available (including review/fleet side agents).
     let saved_delta;
+    let token_batch = TokenBatch::new(app.clone(), sid.clone());
     let result = {
         let mut agent = arc.lock().await;
         agent.set_cancel_token(cancel.clone());
         let saved_before = agent.tokens_saved();
-        let on_event = move |event: &AgentEvent| match event {
-            AgentEvent::Token(t) => {
-                let _ = app.emit(
-                    "agent://token",
-                    TokenPayload {
-                        session: sid.clone(),
-                        token: t.clone(),
-                    },
-                );
+        let event_tokens = token_batch.clone();
+        let on_event = move |event: &AgentEvent| {
+            if !matches!(event, AgentEvent::Token(_)) {
+                event_tokens.flush();
             }
+            match event {
+            AgentEvent::Token(t) => event_tokens.push(t),
             // The model started writing a canvas; open the panel in a
             // "writing" state while its content streams in as tool args.
             AgentEvent::ToolPending { name } if name == harness_tools::CANVAS_TOOL => {
@@ -242,6 +288,7 @@ async fn execute_turn(
                     },
                 );
             }
+            }
         };
         let r = match kind {
             TurnKind::Fresh {
@@ -257,6 +304,7 @@ async fn execute_turn(
         saved_delta = agent.tokens_saved().saturating_sub(saved_before);
         r
     };
+    token_batch.flush();
     // The turn is over (finished, stopped, or errored): drop its stop signal so a
     // later `cancel_turn` can't fire against a stale token.
     state.cancels.lock().await.remove(&session);

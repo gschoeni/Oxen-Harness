@@ -47,6 +47,10 @@ pub struct AgentConfig {
     pub context_window: Option<usize>,
     /// Tokens to keep free for the model's reply when budgeting the prompt.
     pub response_reserve: usize,
+    /// Maximum approximate text retained in the active model context. Verbatim
+    /// history remains on disk; older turns are compacted before this grows
+    /// without bound even when the provider advertises a very large window.
+    pub max_resident_context_chars: usize,
     /// Project root under which image/PDF attachments are stored on disk (so the
     /// transcript records a relative path, not inline base64). `None` keeps the
     /// legacy behavior of inlining attachments as data URIs.
@@ -73,6 +77,7 @@ impl Default for AgentConfig {
             system_prompt: Some(default_system_prompt(false)),
             context_window: None,
             response_reserve: 4096,
+            max_resident_context_chars: 1_000_000,
             attachment_root: None,
             compression: CompressionMode::Off,
             retry: RetryPolicy::default(),

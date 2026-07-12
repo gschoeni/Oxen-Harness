@@ -5,6 +5,26 @@
 import type { ChatMessage, MessageContent } from "../../lib/types";
 import { isImagePath } from "../../lib/attachments";
 
+const MAX_THREAD_ITEMS = 300;
+const MAX_TOOL_RESULT_CHARS = 4000;
+const MAX_TOOL_ARGS_CHARS = 16_000;
+const MAX_CANVAS_ARGS_CHARS = 128_000;
+
+function displayText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}\n… [full value remains in history]` : text;
+}
+
+const displayArgs = (name: string, args: string) =>
+  displayText(args, name === "canvas" ? MAX_CANVAS_ARGS_CHARS : MAX_TOOL_ARGS_CHARS);
+
+export function capThread(items: Item[]): Item[] {
+  if (items.length <= MAX_THREAD_ITEMS) return items;
+  return [
+    { id: uid(), kind: "notice", text: "Older messages were released from memory; open the inspector to view them." },
+    ...items.slice(-(MAX_THREAD_ITEMS - 1)),
+  ];
+}
+
 /** The displayable text of a message's content. A plain string passes through;
  *  a multimodal Parts array (from an attachment message) contributes only its
  *  text parts — without this, an array would render as "[object Object]". */
@@ -82,26 +102,26 @@ export function transcriptToItems(messages: ChatMessage[]): Item[] {
           id: uid(),
           kind: "tool",
           name: tc.function?.name || "tool",
-          args: tc.function?.arguments || "",
-          result: (tc.id && results.get(tc.id)) || "",
+          args: displayArgs(tc.function?.name || "tool", tc.function?.arguments || ""),
+          result: displayText((tc.id && results.get(tc.id)) || "", MAX_TOOL_RESULT_CHARS),
           running: false,
           startedAt: 0,
         });
       }
     }
   }
-  return items;
+  return capThread(items);
 }
 
 /** The user's prompt (with any image attachments) plus an empty in-flight
  *  assistant bubble for its reply. */
 export function startTurn(prev: Item[], prompt: string, attachments: string[] = []): Item[] {
   const images = attachments.filter(isImagePath);
-  return [
+  return capThread([
     ...prev,
     { id: uid(), kind: "user", text: prompt, images: images.length ? images : undefined },
     { id: uid(), kind: "assistant", text: "", streaming: true },
-  ];
+  ]);
 }
 
 /** Append a streamed token to the in-flight assistant bubble (creating one if
@@ -112,11 +132,11 @@ export function appendToken(prev: Item[], token: string): Item[] {
     const it = next[i];
     if (it.kind === "assistant" && it.streaming) {
       next[i] = { ...it, text: it.text + token };
-      return next;
+      return capThread(next);
     }
   }
   next.push({ id: uid(), kind: "assistant", text: token, streaming: true });
-  return next;
+  return capThread(next);
 }
 
 /** Begin a tool chip with the call's arguments. Retire an empty "thinking"
@@ -132,8 +152,8 @@ export function toolStart(prev: Item[], name: string, args: string, startedAt: n
       next[next.length - 1] = { ...last, streaming: false };
     }
   }
-  next.push({ id: uid(), kind: "tool", name, args, result: "", running: true, startedAt });
-  return next;
+  next.push({ id: uid(), kind: "tool", name, args: displayArgs(name, args), result: "", running: true, startedAt });
+  return capThread(next);
 }
 
 /** Finish the matching running tool chip (recording its result) and open a
@@ -143,12 +163,12 @@ export function toolEnd(prev: Item[], name: string, result: string, endedAt: num
   for (let i = next.length - 1; i >= 0; i--) {
     const it = next[i];
     if (it.kind === "tool" && it.running && it.name === name) {
-      next[i] = { ...it, running: false, result: result || it.result, endedAt };
+      next[i] = { ...it, running: false, result: displayText(result || it.result, MAX_TOOL_RESULT_CHARS), endedAt };
       break;
     }
   }
   next.push({ id: uid(), kind: "assistant", text: "", streaming: true });
-  return next;
+  return capThread(next);
 }
 
 /** Settle the in-flight assistant bubble: keep streamed text, fall back to the
@@ -161,11 +181,11 @@ export function finalizeAssistant(prev: Item[], final: string, error = false): I
       const text = it.text || final || "";
       if (text === "") next.splice(i, 1);
       else next[i] = { ...it, text, streaming: false, error };
-      return next;
+      return capThread(next);
     }
   }
   if (final) next.push({ id: uid(), kind: "assistant", text: final, streaming: false, error });
-  return next;
+  return capThread(next);
 }
 
 /** Replace the in-flight assistant bubble with an inline API-key prompt after a
@@ -183,7 +203,7 @@ export function appendApiKeyPrompt(prev: Item[], text: string, attachments: stri
     }
   }
   next.push({ id: uid(), kind: "apikey", text, attachments });
-  return next;
+  return capThread(next);
 }
 
 /** Retire an inline recovery card (API-key prompt or retry card) once its
@@ -192,7 +212,7 @@ export function appendApiKeyPrompt(prev: Item[], text: string, attachments: stri
 export function resolveRecoveryPrompt(prev: Item[], id: string): Item[] {
   const next = prev.filter((it) => it.id !== id);
   next.push({ id: uid(), kind: "assistant", text: "", streaming: true });
-  return next;
+  return capThread(next);
 }
 
 /** Replace the in-flight assistant bubble with an inline retry card after a
@@ -215,14 +235,14 @@ export function appendRetryPrompt(
     }
   }
   next.push({ id: uid(), kind: "retry", text, attachments, message });
-  return next;
+  return capThread(next);
 }
 
 /** Drop any pending retry cards — a fresh prompt supersedes them (the dangling
  *  user turn is still in the transcript, so the model answers both), and a
  *  stale card left behind would re-drive an already-settled transcript. */
 export function dropRetryPrompts(prev: Item[]): Item[] {
-  return prev.some((it) => it.kind === "retry") ? prev.filter((it) => it.kind !== "retry") : prev;
+  return capThread(prev.some((it) => it.kind === "retry") ? prev.filter((it) => it.kind !== "retry") : prev);
 }
 
 /** Whether a stored transcript stops mid-turn — it ends on a user message (the
@@ -250,7 +270,7 @@ export function appendNotice(prev: Item[], text: string): Item[] {
   const notice: Item = { id: uid(), kind: "notice", text };
   const last = prev[prev.length - 1];
   if (last && last.kind === "assistant" && last.streaming && last.text === "") {
-    return [...prev.slice(0, -1), notice, last];
+    return capThread([...prev.slice(0, -1), notice, last]);
   }
-  return [...prev, notice];
+  return capThread([...prev, notice]);
 }

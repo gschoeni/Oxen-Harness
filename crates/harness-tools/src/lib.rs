@@ -24,7 +24,9 @@ pub mod ask;
 pub mod canvas;
 pub mod fs;
 pub mod git;
+mod http_body;
 pub mod plan;
+pub mod process;
 pub mod retrieve;
 pub mod sandbox;
 pub mod shell;
@@ -361,10 +363,10 @@ impl Tool for CustomTool {
                     .await
                     .map_err(|e| ToolError::Execution(format!("HTTP request failed: {e}")))?;
                 let status = res.status();
-                let body = res
-                    .text()
+                const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+                let body = crate::http_body::text(res, MAX_RESPONSE_BYTES)
                     .await
-                    .map_err(|e| ToolError::Execution(format!("could not read response: {e}")))?;
+                    .map_err(ToolError::Execution)?;
                 if !status.is_success() {
                     return Err(ToolError::Execution(format!(
                         "HTTP {status}: {}",

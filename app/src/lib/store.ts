@@ -119,6 +119,32 @@ const MAX_QUEUE = 50;
  *  without losing anything — a stale tab is just re-added when its chip is
  *  clicked. Set well above any realistic session so it never trims in practice. */
 const MAX_CANVASES = 12;
+const MAX_CACHED_THREADS = 4;
+const MAX_STREAMING_TOOL_ARGS = 256_000;
+
+function capThreadSessions(
+  threads: Record<string, Item[]>,
+  runStatus: Record<string, RunStatus>,
+  current: string,
+): Record<string, Item[]> {
+  const protectedIds = new Set([
+    current,
+    ...Object.entries(runStatus)
+      .filter(([, status]) => status === "running")
+      .map(([id]) => id),
+  ]);
+  const keep = new Set(protectedIds);
+  for (const id of Object.keys(threads).reverse()) {
+    if (keep.size >= MAX_CACHED_THREADS && !protectedIds.has(id)) continue;
+    keep.add(id);
+  }
+  return Object.fromEntries(Object.entries(threads).filter(([id]) => keep.has(id)));
+}
+
+function retainCached<T>(record: Record<string, T>, threads: Record<string, Item[]>): Record<string, T> {
+  const ids = new Set(Object.keys(threads));
+  return Object.fromEntries(Object.entries(record).filter(([id]) => ids.has(id)));
+}
 
 /** Keep only the newest `MAX_CANVASES` docs. The just-touched doc is appended
  *  last (and is the active one), so it always survives the trim. */
@@ -506,18 +532,27 @@ export const useStore = create<AppState>((set, get) => {
       set((s) => ({
         session: info,
         infos: { ...s.infos, [info.session_id]: info },
-        threads: { ...s.threads, [info.session_id]: s.threads[info.session_id] ?? [] },
+        threads: capThreadSessions(
+          { ...s.threads, [info.session_id]: s.threads[info.session_id] ?? [] },
+          s.runStatus,
+          info.session_id,
+        ),
       }));
     },
 
     // Start a fresh chat. Any running chat keeps going in the background.
     startNewSession: async () => {
       const info = await newSession();
-      set((s) => ({
-        session: info,
-        infos: { ...s.infos, [info.session_id]: info },
-        threads: { ...s.threads, [info.session_id]: [] },
-      }));
+      set((s) => {
+        const threads = capThreadSessions({ ...s.threads, [info.session_id]: [] }, s.runStatus, info.session_id);
+        return {
+          session: info,
+          infos: { ...retainCached(s.infos, threads), [info.session_id]: info },
+          threads,
+          canvases: retainCached(s.canvases, threads),
+          activeCanvas: retainCached(s.activeCanvas, threads),
+        };
+      });
       get().refreshHistory();
     },
 
@@ -542,11 +577,22 @@ export const useStore = create<AppState>((set, get) => {
             );
           }
         }
-        const threads = seeded === undefined ? s.threads : { ...s.threads, [id]: seeded };
+        const threads = capThreadSessions(
+          seeded === undefined ? s.threads : { ...s.threads, [id]: seeded },
+          s.runStatus,
+          id,
+        );
         const infos = view.running ? s.infos : { ...s.infos, [id]: view.info };
         const runStatus = { ...s.runStatus };
         if (runStatus[id] === "unread") delete runStatus[id]; // viewing it clears the dot
-        return { session: infos[id] ?? view.info, threads, infos, runStatus };
+        return {
+          session: infos[id] ?? view.info,
+          threads,
+          infos: retainCached(infos, threads),
+          runStatus,
+          canvases: retainCached(s.canvases, threads),
+          activeCanvas: retainCached(s.activeCanvas, threads),
+        };
       });
       get().refreshHistory();
     },
@@ -605,11 +651,16 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     adoptSession: (info) =>
-      set((s) => ({
-        session: info,
-        infos: { ...s.infos, [info.session_id]: info },
-        threads: { ...s.threads, [info.session_id]: [] },
-      })),
+      set((s) => {
+        const threads = capThreadSessions({ ...s.threads, [info.session_id]: [] }, s.runStatus, info.session_id);
+        return {
+          session: info,
+          infos: { ...retainCached(s.infos, threads), [info.session_id]: info },
+          threads,
+          canvases: retainCached(s.canvases, threads),
+          activeCanvas: retainCached(s.activeCanvas, threads),
+        };
+      }),
 
     loadCloudModels: async () => {
       try {
@@ -949,7 +1000,8 @@ export const useStore = create<AppState>((set, get) => {
     ingestToolDelta: (e) =>
       set((s) => {
         const prev = s.streamingTool[e.session];
-        const args = prev && prev.name === e.name ? prev.args + e.delta : e.delta;
+        const combined = prev && prev.name === e.name ? prev.args + e.delta : e.delta;
+        const args = combined.slice(0, MAX_STREAMING_TOOL_ARGS);
         const update: Partial<AppState> = {
           streamingTool: { ...s.streamingTool, [e.session]: { name: e.name, args } },
         };

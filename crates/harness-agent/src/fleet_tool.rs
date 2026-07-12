@@ -138,6 +138,7 @@ impl FleetSpawner {
             session,
             config,
         )?;
+        agent.disable_transcript_persistence();
         if let Some(usage_store) = &self.usage_store {
             agent.set_usage_store(usage_store.clone());
         }

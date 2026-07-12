@@ -1,7 +1,7 @@
 # Project Status & Roadmap
 
 **Purpose:** Where we are, what's next, what's done. Pull this in for any working session.
-**Updated:** 2026-07-11
+**Updated:** 2026-07-12
 
 ---
 
@@ -24,11 +24,23 @@
 | **12** | Fleet: parallel subagents — `fleet::run_fleet` + `spawn_agents` tool (all modes), review find fan-out (3 lenses), live lanes w/ watch-a-lane in TUI (1-9/alt+1-9) and desktop panel | ✅ Complete |
 | **13** | Cleanup pass: shared helpers → `harness-core` (text/fmt/json), CLI handlers → `commands/`, desktop bridge split (state/bridges/events/commands), a `/code-review` self-review with 17 fixes | ✅ Complete |
 | **14** | Usage accounting: provider/fallback tokens per model call, daily activity ledger, estimated Oxen spend, desktop activity grid + CLI `/usage` | ✅ Complete |
+| **15** | Long-running memory hardening: bounded streaming I/O, durable context checkpoints/CCR payloads, attachment budgets, bounded fleet/UI caches | ✅ Complete |
 
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **534 Rust tests + 168 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
+> **593 Rust tests + 182 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
+
+## Phase 15 — Long-running memory hardening
+
+**Status:** ✅ Complete
+
+- [x] Drain shell, git, verification, HTTP, and file streams incrementally with explicit bounds.
+- [x] Checkpoint compacted active context in SQLite so cold resume avoids rebuilding the full transcript.
+- [x] Bound resident context, attachment hydration, compression caches, fleet channels, and side-agent persistence.
+- [x] Keep CCR originals on disk for workspace-backed agents instead of in heap.
+- [x] Bound desktop session/tool caches, batch token events, and skip offscreen thread rendering.
+- [x] Preserve full history on disk while truncating only transient display projections.
 
 ---
 

@@ -21,11 +21,11 @@ oxen-harness/
   Cargo.toml                 — Cargo workspace manifest.
   rust-toolchain.toml        — Pinned toolchain + components.
   crates/
-    harness-core/            — Shared message/role types, defaults, and the copied-around helpers (slug/ellipsize/tail_chars, format_bytes/human_tokens, lenient JSON extraction). Leaf crate.
+    harness-core/            — Shared message/role types, defaults, bounded stream text, and copied-around helpers (slug/ellipsize/tail_chars, format_bytes/human_tokens, lenient JSON extraction). Leaf crate.
     harness-config/          — Single source for ~/.oxen-harness paths; atomic + schema-versioned config IO; .env secrets (dotenvy).
     harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth; attachment store (content-addressed on-disk files) + hydration.
     harness-compress/        — Reversible context compression for tool output: JSON-array crushing, log/line collapsing, CCR store (`<<ccr:hash>>` markers resolved by retrieve_original).
-    harness-tools/           — TypedTool trait (schemas derived from typed args), fs read/write/edit, glob find, regex search, sandboxed shell, git, Brave web search, ask_user_question, canvas, update_plan, skills (SKILL.md loaded on demand), custom HTTP tools.
+    harness-tools/           — TypedTool trait, bounded process/HTTP capture, fs read/write/edit, glob/search, shell, git, web, questions, canvas, plans, skills, and custom HTTP tools.
     harness-store/           — SQLite history (verbatim) + JSONL export; rusqlite_migration schema versioning; rich session metadata.
     harness-oxen/            — Version config/data + export/share traces via the `oxen` CLI (testable Runner shell-out; no liboxen).
     harness-local/           — Local models: Qwen3 GGUF catalog, downloads + disk tracking, llama-server launcher.

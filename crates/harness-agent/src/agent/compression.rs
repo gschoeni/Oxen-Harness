@@ -35,6 +35,7 @@ impl Agent {
             return;
         }
         self.config.compression = mode;
+        self.compression_cache.clear();
         match mode {
             CompressionMode::On => {
                 self.ccr = setup_compression(&self.config, &mut self.tools);
@@ -63,7 +64,7 @@ impl Agent {
     /// returned; in `Off` this is exactly [`Agent::outbound_messages`].
     ///
     /// [`Agent::outbound_messages`]: Agent#method.outbound_messages
-    pub(super) fn prepare_outbound(&self) -> (Vec<ChatMessage>, CompressionReport) {
+    pub(super) fn prepare_outbound(&mut self) -> (Vec<ChatMessage>, CompressionReport) {
         let mut messages = self.outbound_messages();
         let mut report = CompressionReport::default();
         if self.config.compression == CompressionMode::Off {
@@ -104,13 +105,26 @@ impl Agent {
             let Some(MessageContent::Text(text)) = &messages[i].content else {
                 continue;
             };
-            if let Some(compressed) =
-                harness_compress::compress_tool_result(text, &self.compress_cfg, store)
-            {
-                report.saved_chars += compressed.chars_before - compressed.chars_after;
+            let key = harness_compress::ccr::hash_content(text);
+            let cached = self.compression_cache.get(&key).cloned();
+            let compressed = match cached {
+                Some(value) => value,
+                None => {
+                    let value =
+                        harness_compress::compress_tool_result(text, &self.compress_cfg, store)
+                            .map(|compressed| compressed.text);
+                    if self.compression_cache.len() >= 256 {
+                        self.compression_cache.clear();
+                    }
+                    self.compression_cache.insert(key, value.clone());
+                    value
+                }
+            };
+            if let Some(compressed) = compressed {
+                report.saved_chars += text.len().saturating_sub(compressed.len());
                 report.results_compressed += 1;
                 if apply {
-                    messages[i].content = Some(MessageContent::Text(compressed.text));
+                    messages[i].content = Some(MessageContent::Text(compressed));
                 }
             }
         }
@@ -136,7 +150,10 @@ pub(super) fn setup_compression(
 ) -> Option<Arc<CcrStore>> {
     match config.compression {
         CompressionMode::On => {
-            let store = Arc::new(CcrStore::default());
+            let store = Arc::new(match &config.attachment_root {
+                Some(root) => CcrStore::disk_backed(root.join(".oxen-harness/ccr")),
+                None => CcrStore::default(),
+            });
             tools.register_typed(harness_tools::RetrieveOriginalTool::new(store.clone()));
             Some(store)
         }

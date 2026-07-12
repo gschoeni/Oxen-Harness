@@ -4,6 +4,7 @@ import {
   appendNotice,
   appendRetryPrompt,
   appendToken,
+  capThread,
   dropRetryPrompts,
   endsMidTurn,
   finalizeAssistant,
@@ -241,5 +242,31 @@ describe("thread: startTurn attachments", () => {
     const [user] = startTurn([], "hi", ["/abs/notes.pdf"]);
     expect(user).toMatchObject({ kind: "user" });
     expect((user as { images?: string[] }).images).toBeUndefined();
+  });
+});
+
+describe("thread: resident memory bounds", () => {
+  it("releases old display items while preserving the newest conversation tail", () => {
+    const items: Item[] = Array.from({ length: 350 }, (_, i) => ({
+      id: `u${i}`,
+      kind: "user" as const,
+      text: String(i),
+    }));
+    const bounded = capThread(items);
+    expect(bounded).toHaveLength(300);
+    expect(bounded[0]).toMatchObject({ kind: "notice" });
+    expect(bounded[bounded.length - 1]).toMatchObject({ text: "349" });
+  });
+
+  it("truncates large tool payloads in the display model", () => {
+    const items = toolEnd(
+      toolStart([], "shell", "a".repeat(20_000), 1),
+      "shell",
+      "r".repeat(8_000),
+      2,
+    );
+    const tool = items[0] as Extract<Item, { kind: "tool" }>;
+    expect(tool.args.length).toBeLessThan(20_000);
+    expect(tool.result.length).toBeLessThan(8_000);
   });
 });

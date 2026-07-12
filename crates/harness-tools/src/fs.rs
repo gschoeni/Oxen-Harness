@@ -32,6 +32,10 @@ pub const SEARCH_FILES_TOOL: &str = "search_files";
 const DEFAULT_READ_LIMIT: usize = 2000;
 /// Lines longer than this are truncated in `read_file` output.
 const MAX_LINE_LEN: usize = 2000;
+/// Total text returned by one read, independent of the requested line count.
+const MAX_READ_CHARS: usize = 100_000;
+/// Files larger than this are skipped by the in-process regex search.
+const MAX_SEARCH_FILE_BYTES: u64 = 16 * 1024 * 1024;
 /// Default cap on `find_files` / `search_files` results.
 const DEFAULT_MAX_RESULTS: usize = 200;
 
@@ -72,57 +76,123 @@ impl TypedTool for ReadFileTool {
 
     async fn run(&self, args: ReadFileArgs) -> Result<String, ToolError> {
         let path = self.workspace.resolve(&args.path)?;
-        let contents = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|e| ToolError::Execution(format!("read {}: {e}", path.display())))?;
-        Ok(number_lines(
-            &contents,
+        read_numbered(
+            &path,
             args.offset.unwrap_or(1).max(1),
-            args.limit.unwrap_or(DEFAULT_READ_LIMIT),
-        ))
+            args.limit
+                .unwrap_or(DEFAULT_READ_LIMIT)
+                .min(DEFAULT_READ_LIMIT),
+        )
+        .await
     }
 }
 
-/// Render `contents` with `cat -n` line numbers, applying `offset`/`limit` and
-/// truncating overly long lines. `offset` is 1-based.
-fn number_lines(contents: &str, offset: usize, limit: usize) -> String {
-    if contents.is_empty() {
-        return "(file is empty)".to_string();
-    }
-    let lines: Vec<&str> = contents.lines().collect();
-    let total = lines.len();
-    let start = offset.saturating_sub(1);
+async fn read_numbered(path: &Path, offset: usize, limit: usize) -> Result<String, ToolError> {
+    use tokio::io::AsyncReadExt;
 
-    // An offset past the end would otherwise render as an empty string, which
-    // reads as "the file is empty" — tell the model what actually happened.
-    if start >= total {
-        return format!(
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| ToolError::Execution(format!("read {}: {e}", path.display())))?;
+    let mut chunk = [0u8; 8192];
+    let mut line = Vec::with_capacity(MAX_LINE_LEN.min(8192));
+    let mut out = String::new();
+    let mut line_no = 1usize;
+    let mut total = 0usize;
+    let mut saw_bytes = false;
+    let mut truncated_line = false;
+    let mut output_truncated = false;
+    let mut last_was_newline = false;
+
+    loop {
+        let n = file
+            .read(&mut chunk)
+            .await
+            .map_err(|e| ToolError::Execution(format!("read {}: {e}", path.display())))?;
+        if n == 0 {
+            break;
+        }
+        saw_bytes = true;
+        for &byte in &chunk[..n] {
+            last_was_newline = byte == b'\n';
+            if byte == b'\n' {
+                append_numbered_line(
+                    &mut out,
+                    line_no,
+                    offset,
+                    limit,
+                    &line,
+                    truncated_line,
+                    &mut output_truncated,
+                );
+                line.clear();
+                truncated_line = false;
+                total += 1;
+                line_no += 1;
+            } else if line.len() < MAX_LINE_LEN * 4 {
+                line.push(byte);
+            } else {
+                truncated_line = true;
+            }
+        }
+    }
+    if saw_bytes && !last_was_newline {
+        append_numbered_line(
+            &mut out,
+            line_no,
+            offset,
+            limit,
+            &line,
+            truncated_line,
+            &mut output_truncated,
+        );
+        total += 1;
+    }
+    if !saw_bytes {
+        return Ok("(file is empty)".to_string());
+    }
+    if offset > total {
+        return Ok(format!(
             "(offset {offset} is past the end of the file, which has {total} line{})",
             if total == 1 { "" } else { "s" }
-        );
-    }
-
-    let mut out = String::new();
-    for (i, line) in lines.iter().skip(start).take(limit).enumerate() {
-        let n = start + i + 1;
-        let shown = if line.chars().count() > MAX_LINE_LEN {
-            let kept: String = line.chars().take(MAX_LINE_LEN).collect();
-            format!("{kept}… [line truncated]")
-        } else {
-            (*line).to_string()
-        };
-        out.push_str(&format!("{n:>6}\t{shown}\n"));
-    }
-
-    let shown_end = (start + limit).min(total);
-    if shown_end < total {
-        out.push_str(&format!(
-            "… [showing lines {}-{} of {total}; pass offset to read more]\n",
-            start + 1,
-            shown_end
         ));
     }
-    out
+    let shown_end = (offset.saturating_sub(1) + limit).min(total);
+    if shown_end < total || output_truncated {
+        out.push_str(&format!(
+            "… [showing lines {offset}-{shown_end} of {total}{}]\n",
+            if output_truncated {
+                "; output capped"
+            } else {
+                "; pass offset to read more"
+            }
+        ));
+    }
+    Ok(out)
+}
+
+fn append_numbered_line(
+    out: &mut String,
+    line_no: usize,
+    offset: usize,
+    limit: usize,
+    bytes: &[u8],
+    truncated_line: bool,
+    output_truncated: &mut bool,
+) {
+    if line_no < offset || line_no >= offset.saturating_add(limit) || *output_truncated {
+        return;
+    }
+    let text = String::from_utf8_lossy(bytes);
+    let mut shown: String = text.chars().take(MAX_LINE_LEN).collect();
+    if truncated_line || text.chars().count() > MAX_LINE_LEN {
+        shown.push_str("… [line truncated]");
+    }
+    let rendered = format!("{line_no:>6}\t{shown}\n");
+    if out.chars().count() + rendered.chars().count() > MAX_READ_CHARS {
+        *output_truncated = true;
+    } else {
+        out.push_str(&rendered);
+    }
 }
 
 /// Create or overwrite a text file, creating parent directories as needed.
@@ -281,7 +351,10 @@ impl TypedTool for FindFilesTool {
 
     async fn run(&self, args: FindFilesArgs) -> Result<String, ToolError> {
         let pattern = args.pattern;
-        let max_results = args.max_results.unwrap_or(DEFAULT_MAX_RESULTS);
+        let max_results = args
+            .max_results
+            .unwrap_or(DEFAULT_MAX_RESULTS)
+            .min(DEFAULT_MAX_RESULTS);
         let root = self.workspace.root().to_path_buf();
 
         let results =
@@ -456,6 +529,9 @@ fn grep_blocking(opts: GrepOpts<'_>) -> Result<Vec<String>, ToolError> {
                 continue;
             }
         }
+        if std::fs::metadata(path).is_ok_and(|m| m.len() > MAX_SEARCH_FILE_BYTES) {
+            continue;
+        }
         let Ok(contents) = std::fs::read_to_string(path) else {
             continue; // skip binary / unreadable files
         };
@@ -475,7 +551,8 @@ fn grep_blocking(opts: GrepOpts<'_>) -> Result<Vec<String>, ToolError> {
             OutputMode::Content => {
                 for (i, line) in contents.lines().enumerate() {
                     if re.is_match(line) {
-                        out.push(format!("{}:{}:{}", rel.display(), i + 1, line.trim_end()));
+                        let shown: String = line.trim_end().chars().take(MAX_LINE_LEN).collect();
+                        out.push(format!("{}:{}:{shown}", rel.display(), i + 1));
                         if out.len() >= opts.max_results {
                             return Ok(out);
                         }

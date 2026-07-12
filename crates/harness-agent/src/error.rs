@@ -21,6 +21,8 @@ pub enum AgentError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error("attachments total {size} bytes, over the {max}-byte per-turn limit")]
+    AttachmentsTooLarge { size: usize, max: usize },
     #[error(
         "the conversation grew past the model's context window \
          (~{used} prompt tokens, limit ~{window}); start a fresh session, \

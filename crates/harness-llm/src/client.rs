@@ -110,16 +110,6 @@ impl OxenClient {
     where
         F: FnMut(&StreamEvent),
     {
-        let request = ChatRequest {
-            stream: true,
-            // Ask for a final usage chunk so we can calibrate the token estimate
-            // against reality; ignored by endpoints that don't support it.
-            stream_options: Some(crate::types::StreamOptions {
-                include_usage: true,
-            }),
-            ..request.clone()
-        };
-
         // Race the request against cancellation even before the response headers
         // land, so a stop is honored while we're still waiting to connect.
         let resp = tokio::select! {
@@ -129,7 +119,7 @@ impl OxenClient {
                 .http
                 .post(self.endpoint())
                 .bearer_auth(&self.api_key)
-                .json(&request)
+                .json(request)
                 .send() => resp?,
         };
 
@@ -318,7 +308,8 @@ mod tests {
             .await;
 
         let client = OxenClient::new(server.url(), "sk-test", "claude-opus-4-8");
-        let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
+        let req =
+            ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]).streaming(true);
 
         let mut tokens = String::new();
         let assembled = client

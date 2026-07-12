@@ -5,12 +5,15 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
+use std::time::Duration;
 
 use crate::sandbox::Workspace;
 use crate::{ToolError, TypedTool};
 
 /// Tool name for [`GitTool`].
 pub const GIT_TOOL: &str = "git";
+const MAX_GIT_CHARS: usize = 100_000;
+const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Perform a git operation in the workspace.
 pub struct GitTool {
@@ -23,22 +26,29 @@ impl GitTool {
     }
 
     async fn run_git(&self, args: &[String]) -> Result<String, ToolError> {
-        let output = tokio::process::Command::new("git")
-            .args(args)
-            .current_dir(self.workspace.root())
-            .output()
-            .await
-            .map_err(|e| ToolError::Execution(format!("spawn git: {e}")))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if output.status.success() {
-            Ok(stdout.into_owned())
+        let output = crate::process::run_bounded(
+            tokio::process::Command::new("git")
+                .args(args)
+                .current_dir(self.workspace.root()),
+            GIT_TIMEOUT,
+            MAX_GIT_CHARS,
+        )
+        .await
+        .map_err(|e| ToolError::Execution(format!("spawn git: {e}")))?;
+        if output.timed_out {
+            return Err(ToolError::Execution(format!(
+                "git {} exceeded {} seconds",
+                args.join(" "),
+                GIT_TIMEOUT.as_secs()
+            )));
+        }
+        if output.code == Some(0) {
+            Ok(output.stdout)
         } else {
             Err(ToolError::Execution(format!(
                 "git {} failed: {}",
                 args.join(" "),
-                stderr.trim()
+                output.stderr.trim()
             )))
         }
     }

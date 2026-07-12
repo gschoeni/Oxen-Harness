@@ -22,6 +22,10 @@ use crate::types::{ContentPart, MessageContent};
 
 /// Subdirectory (relative to the project root) holding stored attachments.
 const ATTACHMENTS_SUBDIR: &str = ".oxen-harness/attachments";
+/// Per-request byte budget for rehydrated binary attachments.
+pub const MAX_OUTBOUND_ATTACHMENT_BYTES: usize = 32 * 1024 * 1024;
+/// Per-request count budget for historical binary attachments.
+pub const MAX_OUTBOUND_ATTACHMENT_PARTS: usize = 4;
 
 /// Persists binary attachments under a project root and resolves their stored
 /// paths back to bytes.
@@ -116,6 +120,19 @@ fn hydrate_ref(value: &str, root: &Path) -> Option<std::io::Result<String>> {
 /// replaced with a short text note so a broken request is never sent to the
 /// provider. Plain-text content and already-inline references are left as-is.
 pub fn hydrate_content(content: &mut MessageContent, root: &Path) {
+    let mut bytes = usize::MAX;
+    let mut parts = usize::MAX;
+    hydrate_content_bounded(content, root, &mut bytes, &mut parts);
+}
+
+/// Hydrate attachments while enforcing a request-wide byte and part budget.
+/// Callers walk newest messages first, so stale media is replaced before recent.
+pub fn hydrate_content_bounded(
+    content: &mut MessageContent,
+    root: &Path,
+    remaining_bytes: &mut usize,
+    remaining_parts: &mut usize,
+) {
     let MessageContent::Parts(parts) = content else {
         return;
     };
@@ -125,6 +142,27 @@ pub fn hydrate_content(content: &mut MessageContent, root: &Path) {
             ContentPart::File { file } => (&mut file.file_data, "file"),
             ContentPart::Text { .. } => continue,
         };
+        let inline_data = slot.starts_with("data:");
+        if inline_data || !is_inline_ref(slot) {
+            let size = if inline_data {
+                // Base64 is 4/3 of the source bytes; using encoded length is a
+                // conservative request-memory budget and needs no decoding.
+                slot.len()
+            } else {
+                std::fs::metadata(root.join(&*slot))
+                    .map(|m| m.len() as usize)
+                    .unwrap_or(0)
+            };
+            if *remaining_parts == 0 || size > *remaining_bytes {
+                let omitted = slot.clone();
+                *part = ContentPart::text(format!(
+                    "[older attached {label} `{omitted}` omitted from the active context]"
+                ));
+                continue;
+            }
+            *remaining_parts -= 1;
+            *remaining_bytes -= size;
+        }
         match hydrate_ref(slot, root) {
             None => {}
             Some(Ok(uri)) => *slot = uri,
@@ -219,5 +257,22 @@ mod tests {
             },
             other => panic!("expected parts, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn hydration_omits_older_media_past_the_request_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+        let a = store.store_bytes("png", b"first").unwrap();
+        let b = store.store_bytes("png", b"second").unwrap();
+        let mut content = MessageContent::Parts(vec![ContentPart::image(a), ContentPart::image(b)]);
+        let mut bytes = 1024;
+        let mut parts = 1;
+        hydrate_content_bounded(&mut content, dir.path(), &mut bytes, &mut parts);
+        let MessageContent::Parts(parts) = content else {
+            panic!("expected parts")
+        };
+        assert!(matches!(parts[0], ContentPart::ImageUrl { .. }));
+        assert!(matches!(parts[1], ContentPart::Text { .. }));
     }
 }

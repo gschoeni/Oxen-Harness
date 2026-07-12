@@ -774,6 +774,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -845,6 +846,7 @@ dependencies = [
  "harness-agent",
  "harness-config",
  "harness-core",
+ "harness-tools",
  "serde",
  "serde_json",
  "tempfile",

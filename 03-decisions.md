@@ -581,3 +581,18 @@ Each `/code-review` step gets a fresh `side_agent` (fleet lanes too): the
 verifier must judge the finders' candidates against the *code*, not be
 anchored by the finders' reasoning, and a review must never pollute the
 session's context window. Step outputs thread through `{{previous}}` only.
+
+**Durable history is unbounded; active memory is not** (2026-07-12)
+The SQLite transcript remains verbatim and authoritative, while active agent
+context has a resident ceiling and saves compacted context checkpoints. Cold
+resume loads the checkpoint plus newer rows rather than materializing every
+historical JSON value. Attachments, event payloads, desktop threads, inactive
+sessions, and streaming channels have independent bounds because they serve
+different model and UX constraints.
+
+**Large producers are drained through bounded projections** (2026-07-12)
+Child stdout/stderr and HTTP bodies are consumed incrementally while retaining
+only a useful head and tail; process readers drain concurrently to avoid pipe
+deadlocks. Durable history remains the source of truth, while transient UI
+events carry capped display copies. Compression originals use workspace disk
+storage with only a bounded CCR index in memory.

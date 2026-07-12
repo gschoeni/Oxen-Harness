@@ -12,6 +12,7 @@ description = "Goal-driven, self-verifying agent loops (discover â†’ question â†
 harness-agent = { workspace = true }
 harness-config = { workspace = true }
 harness-core = { workspace = true }
+harness-tools = { workspace = true }
 globset = "0.4"
 serde = { workspace = true }
 serde_json = { workspace = true }

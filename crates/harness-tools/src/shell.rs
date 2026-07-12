@@ -58,43 +58,28 @@ impl TypedTool for ShellTool {
         let command = &args.command;
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
 
-        let mut cmd = shell_command(command);
-        cmd.current_dir(self.workspace.root());
-
-        let output = match tokio::time::timeout(Duration::from_millis(timeout_ms), cmd.output())
-            .await
-        {
-            Ok(result) => {
-                result.map_err(|e| ToolError::Execution(format!("spawn `{command}`: {e}")))?
-            }
-            Err(_) => {
-                return Ok(format!(
-                    "exit_code: timeout\ncommand exceeded {timeout_ms} ms and was abandoned: {command}"
-                ));
-            }
-        };
-
-        let stdout = cap(&String::from_utf8_lossy(&output.stdout));
-        let stderr = cap(&String::from_utf8_lossy(&output.stderr));
+        let output = crate::process::run_bounded(
+            shell_command(command).current_dir(self.workspace.root()),
+            Duration::from_millis(timeout_ms),
+            MAX_STREAM_CHARS,
+        )
+        .await
+        .map_err(|e| ToolError::Execution(format!("spawn `{command}`: {e}")))?;
+        if output.timed_out {
+            return Ok(format!(
+                "exit_code: timeout\ncommand exceeded {timeout_ms} ms and was terminated: {command}"
+            ));
+        }
         let code = output
-            .status
-            .code()
+            .code
             .map(|c| c.to_string())
             .unwrap_or_else(|| "signal".to_string());
 
         Ok(format!(
-            "exit_code: {code}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+            "exit_code: {code}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            output.stdout, output.stderr
         ))
     }
-}
-
-/// Truncate a stream to [`MAX_STREAM_CHARS`], noting how much was dropped.
-fn cap(s: &str) -> String {
-    if s.chars().count() <= MAX_STREAM_CHARS {
-        return s.to_string();
-    }
-    let kept: String = s.chars().take(MAX_STREAM_CHARS).collect();
-    format!("{kept}\n… [output truncated at {MAX_STREAM_CHARS} chars]")
 }
 
 #[cfg(windows)]
@@ -159,5 +144,21 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("exit_code: 3"));
+    }
+
+    #[tokio::test]
+    async fn drains_large_output_but_retains_only_the_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        #[cfg(not(windows))]
+        let command = "yes x | head -c 200000";
+        #[cfg(windows)]
+        let command = "powershell -NoProfile -Command \"'x' * 200000\"";
+        let out = ShellTool::new(ws)
+            .invoke(serde_json::json!({"command": command}))
+            .await
+            .unwrap();
+        assert!(out.chars().count() < MAX_STREAM_CHARS + 500);
+        assert!(out.contains("characters omitted"));
     }
 }

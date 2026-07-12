@@ -138,8 +138,7 @@ impl TypedTool for WebSearchTool {
             .map_err(|e| ToolError::Execution(format!("web search request failed: {e}")))?;
 
         let status = response.status();
-        let body = response
-            .text()
+        let body = crate::http_body::text(response, 2 * 1024 * 1024)
             .await
             .map_err(|e| ToolError::Execution(format!("web search read failed: {e}")))?;
 

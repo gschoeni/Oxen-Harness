@@ -15,7 +15,6 @@
 //! into success.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
 use harness_agent::{Agent, AgentEvent};
@@ -479,26 +478,28 @@ fn truncate(s: &str, max: usize) -> String {
 /// any) and combined stdout+stderr. A timeout abandons a hung command.
 async fn run_command(command: &str, cwd: &Path, timeout_ms: u64) -> (Option<i32>, String) {
     let mut cmd = shell_command(command);
-    cmd.current_dir(cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    match tokio::time::timeout(Duration::from_millis(timeout_ms), cmd.output()).await {
-        Ok(Ok(output)) => {
+    cmd.current_dir(cwd);
+    match harness_tools::process::run_bounded(
+        &mut cmd,
+        Duration::from_millis(timeout_ms),
+        MAX_OUTPUT_CHARS,
+    )
+    .await
+    {
+        Ok(output) if !output.timed_out => {
             let mut combined = String::new();
-            combined.push_str(&String::from_utf8_lossy(&output.stdout));
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !stderr.trim().is_empty() {
+            combined.push_str(&output.stdout);
+            if !output.stderr.trim().is_empty() {
                 combined.push_str("\n--- stderr ---\n");
-                combined.push_str(&stderr);
+                combined.push_str(&output.stderr);
             }
-            (output.status.code(), combined)
+            (output.code, combined)
         }
-        Ok(Err(e)) => (None, format!("could not run `{command}`: {e}")),
-        Err(_) => (
+        Ok(_) => (
             None,
-            format!("`{command}` exceeded {timeout_ms} ms and was abandoned"),
+            format!("`{command}` exceeded {timeout_ms} ms and was terminated"),
         ),
+        Err(e) => (None, format!("could not run `{command}`: {e}")),
     }
 }
 
@@ -559,6 +560,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (code, out) = run_command("sleep 5", dir.path(), 80).await;
         assert_eq!(code, None);
-        assert!(out.contains("abandoned"));
+        assert!(out.contains("terminated"));
     }
 }

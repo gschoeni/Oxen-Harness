@@ -126,7 +126,9 @@ impl TypedTool for WebFetchTool {
             .to_ascii_lowercase();
 
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = crate::http_body::text(response, MAX_FETCH_BYTES as usize)
+                .await
+                .unwrap_or_default();
             let snippet: String = body.trim().chars().take(200).collect();
             return Err(ToolError::Execution(format!(
                 "HTTP {} fetching {final_url}{}",
@@ -140,10 +142,9 @@ impl TypedTool for WebFetchTool {
         }
 
         let is_html = content_type.contains("html");
-        let body = response
-            .text()
+        let body = crate::http_body::text(response, MAX_FETCH_BYTES as usize)
             .await
-            .map_err(|e| ToolError::Execution(format!("could not read response body: {e}")))?;
+            .map_err(ToolError::Execution)?;
 
         let content = if is_html {
             html_to_markdown(&body)

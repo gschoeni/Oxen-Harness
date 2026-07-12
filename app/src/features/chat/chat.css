@@ -110,6 +110,13 @@
   gap: var(--space-5);
 }
 
+/* Long chats keep their retained state, but the browser can skip layout and
+   paint work for messages far outside the scroll viewport. */
+.thread > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
 /* --- Empty state: the "size up the situation" hero --- */
 /* Lives in normal flow inside the scrollable `.messages` so it can never overlap
    the composer (which is its sibling, outside `.messages`). `min-height: 100%`
