@@ -63,6 +63,10 @@ pub(crate) async fn run_prompt(
     // Show the meters in their pinned slots from the start of the turn.
     {
         let mut s = state.borrow_mut();
+        // Remember the model + window so mid-turn `Usage` events can rebuild the
+        // context trailer live (they carry token counts, not these fixed facts).
+        s.model = agent.model().to_string();
+        s.context_window = agent.context_window();
         s.status_line = Some(crate::turn::context_usage_line(agent, ui));
         s.compression_line = crate::commands::compression::status_line(agent, ui);
     }
@@ -94,6 +98,9 @@ pub(crate) async fn run_prompt(
                 break;
             }
             TurnOutcome::Done(result) => {
+                // Learn this model's rate (once) so the refreshed trailer can
+                // show the session's running cost. Cheap when already cached.
+                crate::pricing::warm_for(agent.model()).await;
                 {
                     let mut s = state.borrow_mut();
                     if let Err(e) = &result {

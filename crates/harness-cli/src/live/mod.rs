@@ -152,6 +152,14 @@ struct Live {
     /// rather than printed into the scrollback — so it always sits right above
     /// the input area with the blank spacer separating it from the last message.
     status_line: Option<String>,
+    /// The active model, used to rebuild [`Live::status_line`] from mid-turn
+    /// `Usage` events (which carry token counts but not the model name) so the
+    /// pinned meter's tokens and price update live as the agent works.
+    model: String,
+    /// The session's context window, paired with [`Live::model`] to rebuild the
+    /// trailer's `used / window (pct%)` from mid-turn `Usage` events (which
+    /// carry the current fill but not the fixed window size).
+    context_window: usize,
     /// The compression-savings line (`⊙ compression …`), pinned directly above
     /// [`Live::status_line`]. Updated in place on every `Compression` event
     /// instead of scrolling a new line into the conversation.
@@ -206,6 +214,8 @@ impl Live {
             region_bottom: region_bottom(rows),
             needs_brave_key: false,
             status_line: None,
+            model: String::new(),
+            context_window: 0,
             compression_line: None,
             completion: Vec::new(),
             comp_index: None,

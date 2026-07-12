@@ -22,6 +22,7 @@ mod local;
 mod markdown;
 mod picker;
 mod plan;
+mod pricing;
 mod queue;
 mod render;
 mod repl;
@@ -293,6 +294,11 @@ async fn main() -> Result<()> {
         outcome?;
         return Ok(());
     }
+
+    // Warm the pricing cache before the REPL paints its first context trailer,
+    // so the per-token rate is visible next to the model up front — before the
+    // session has spent a single token.
+    pricing::warm_for(agent.model()).await;
 
     // Interactive TTYs use the bordered, bottom-pinned box composer (multi-line,
     // history, queue) for both idle and in-turn input. Pipes, dumb terminals, and

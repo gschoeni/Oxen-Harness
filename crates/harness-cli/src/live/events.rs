@@ -97,8 +97,16 @@ impl Live {
                 self.on_tool_start(name, arguments, paused)
             }
             AgentEvent::ToolEnd { name, result } => self.on_tool_end(name, result, paused),
-            // Usage is surfaced in the banner/status, not inline during a turn.
-            AgentEvent::Usage { .. } => {}
+            // Rebuild the pinned context trailer from the live figures so the
+            // tokens-used count and running price climb *during* the turn (each
+            // tool-loop iteration re-sends a larger context), not only when it
+            // ends. Chrome, not conversation: update it in place, no scrollback.
+            AgentEvent::Usage {
+                context_tokens,
+                prompt_tokens_used,
+                completion_tokens_used,
+                ..
+            } => self.on_usage(*context_tokens, *prompt_tokens_used, *completion_tokens_used),
             AgentEvent::Compacted { detail } => self.on_compacted(detail),
             AgentEvent::Compression {
                 mode,
@@ -257,6 +265,26 @@ impl Live {
         self.write_region(&format!("{line}\n"));
         self.begin_thinking();
         self.render_composer();
+    }
+
+    /// A mid-turn usage update: rebuild the pinned context trailer from the live
+    /// figures so tokens-used and the running price climb in real time. Only
+    /// touches the pinned meter (no scrollback), then repaints the bottom area.
+    fn on_usage(
+        &mut self,
+        context_tokens: usize,
+        prompt_tokens_used: usize,
+        completion_tokens_used: usize,
+    ) {
+        self.status_line = Some(crate::turn::context_usage_line_from(
+            &self.ui,
+            &self.model,
+            context_tokens,
+            self.context_window,
+            prompt_tokens_used,
+            completion_tokens_used,
+        ));
+        self.render();
     }
 
     fn on_compression(&mut self, mode: &str, saved_tokens: usize, total_saved_tokens: usize) {

@@ -17,7 +17,7 @@ use harness_agent::Agent;
 use crate::queue::MessageQueue;
 use crate::render::{truncate, TurnRenderer};
 use crate::theme::Ui;
-use crate::{attach, brave, commands, live};
+use crate::{attach, brave, commands, live, pricing};
 
 /// What to drive through the agent for one turn: a fresh prompt (the normal
 /// case), or a continuation of the transcript's dangling last turn — `/retry`
@@ -263,6 +263,9 @@ async fn run_prompt(
     match result {
         Ok(_) => {
             carryover.clear();
+            // Learn this model's rate (once) so the trailer can show the
+            // session's running cost. Cheap when already cached.
+            pricing::warm_for(agent.model()).await;
             print_context_usage(agent, ui);
             // Offer to set up web search if the model tried it without a key.
             if needs_brave_key {
@@ -295,17 +298,51 @@ fn print_context_usage(agent: &Agent, ui: &Ui) {
 /// alongside how full its context window is. Shared by the classic prompt and
 /// the live composer (which pins it just above the input divider).
 pub(crate) fn context_usage_line(agent: &Agent, ui: &Ui) -> String {
-    let used = agent.context_tokens();
-    let window = agent.context_window();
+    context_usage_line_from(
+        ui,
+        agent.model(),
+        agent.context_tokens(),
+        agent.context_window(),
+        agent.prompt_tokens_used(),
+        agent.completion_tokens_used(),
+    )
+}
+
+/// The context-usage trailer built from raw figures rather than an [`Agent`], so
+/// the live composer can rebuild it from a mid-turn `Usage` event (which carries
+/// the same numbers) and keep the pinned meter climbing in real time — not just
+/// jump at turn boundaries.
+pub(crate) fn context_usage_line_from(
+    ui: &Ui,
+    model: &str,
+    used: usize,
+    window: usize,
+    prompt_tokens: usize,
+    completion_tokens: usize,
+) -> String {
     let pct = (used * 100).checked_div(window).map_or(0, |p| p.min(100));
+    let cost = crate::pricing::session_cost(model, prompt_tokens, completion_tokens)
+        // Only surface a price once it rounds to something visible, so a session
+        // with a few cheap tokens doesn't read as "$0.00".
+        .filter(|&c| c > 0.0)
+        .map(|c| format!(" · {}", ui.dim(&crate::theme::format_usd(c))))
+        .unwrap_or_default();
+    // The per-token rate, shown right after the model name so the price is
+    // legible before the first token is spent (when the accumulated cost above
+    // is still empty).
+    let rate = crate::pricing::session_rate(model)
+        .as_ref()
+        .and_then(crate::pricing::format_rate)
+        .map(|r| format!(" {}", ui.dim(&r)))
+        .unwrap_or_default();
     format!(
-        "  {} {}",
+        "  {} {}{rate}{cost}",
         ui.dim(&format!(
             "🧭 context {} / {} tokens ({pct}%) ·",
             human_tokens(used),
             human_tokens(window),
         )),
-        ui.accent(agent.model()),
+        ui.accent(model),
     )
 }
 
@@ -316,9 +353,47 @@ pub(crate) use harness_core::fmt::human_tokens;
 
 #[cfg(test)]
 mod tests {
-    use super::{ends_mid_turn, retry_notice, seed_retry};
+    use super::{context_usage_line_from, ends_mid_turn, retry_notice, seed_retry};
+    use crate::theme::Ui;
     use harness_agent::AgentError;
     use harness_llm::{ChatMessage, LlmError};
+
+    fn plain_ui() -> Ui {
+        Ui::with(false, std::sync::Arc::new(harness_theme::Theme::default()))
+    }
+
+    #[test]
+    fn context_line_reflects_live_figures_and_price() {
+        use harness_local::source::ModelPricing;
+        // Prime the cache so the trailer can price this model.
+        crate::pricing::seed_for_test(
+            "live-meter-model",
+            Some(ModelPricing {
+                input_cost_per_token: 0.000_003,
+                output_cost_per_token: 0.000_015,
+            }),
+        );
+        let ui = plain_ui();
+
+        // A mid-turn snapshot: 50k of a 200k window, with some spend.
+        let line = context_usage_line_from(&ui, "live-meter-model", 50_000, 200_000, 40_000, 10_000);
+        assert!(line.contains("50.0k / 200.0k"), "tokens: {line}");
+        assert!(line.contains("(25%)"), "percent: {line}");
+        assert!(line.contains("live-meter-model"), "model: {line}");
+        // Per-token rate is always shown; accumulated cost once it's visible.
+        assert!(line.contains("$3/M in · $15/M out"), "rate: {line}");
+        // 40k * 3e-6 + 10k * 15e-6 = 0.12 + 0.15 = 0.27
+        assert!(line.contains("$0.27"), "cost: {line}");
+
+        // A later snapshot in the same turn climbs — the whole point of wiring
+        // Usage events through: more context, higher percent, higher cost.
+        let later =
+            context_usage_line_from(&ui, "live-meter-model", 120_000, 200_000, 100_000, 40_000);
+        assert!(later.contains("120.0k / 200.0k"), "tokens: {later}");
+        assert!(later.contains("(60%)"), "percent: {later}");
+        // 100k * 3e-6 + 40k * 15e-6 = 0.30 + 0.60 = 0.90
+        assert!(later.contains("$0.90"), "cost: {later}");
+    }
 
     #[test]
     fn ends_mid_turn_flags_dangling_user_and_tool_messages() {
