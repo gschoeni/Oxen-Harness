@@ -551,6 +551,16 @@ export const useStore = create<AppState>((set, get) => {
           threads,
           canvases: retainCached(s.canvases, threads),
           activeCanvas: retainCached(s.activeCanvas, threads),
+          codeReview: retainCached(s.codeReview, threads),
+          fleets: retainCached(s.fleets, threads),
+          queues: retainCached(s.queues, threads),
+          canvasWriting: retainCached(s.canvasWriting, threads),
+          streamingTool: retainCached(s.streamingTool, threads),
+          streamingCanvas: retainCached(s.streamingCanvas, threads),
+          liveTokens: retainCached(s.liveTokens, threads),
+          sessionUsage: retainCached(s.sessionUsage, threads),
+          tokensPerSecond: retainCached(s.tokensPerSecond, threads),
+          compression: retainCached(s.compression, threads),
         };
       });
       get().refreshHistory();
@@ -592,6 +602,16 @@ export const useStore = create<AppState>((set, get) => {
           runStatus,
           canvases: retainCached(s.canvases, threads),
           activeCanvas: retainCached(s.activeCanvas, threads),
+          codeReview: retainCached(s.codeReview, threads),
+          fleets: retainCached(s.fleets, threads),
+          queues: retainCached(s.queues, threads),
+          canvasWriting: retainCached(s.canvasWriting, threads),
+          streamingTool: retainCached(s.streamingTool, threads),
+          streamingCanvas: retainCached(s.streamingCanvas, threads),
+          liveTokens: retainCached(s.liveTokens, threads),
+          sessionUsage: retainCached(s.sessionUsage, threads),
+          tokensPerSecond: retainCached(s.tokensPerSecond, threads),
+          compression: retainCached(s.compression, threads),
         };
       });
       get().refreshHistory();
@@ -659,6 +679,16 @@ export const useStore = create<AppState>((set, get) => {
           threads,
           canvases: retainCached(s.canvases, threads),
           activeCanvas: retainCached(s.activeCanvas, threads),
+          codeReview: retainCached(s.codeReview, threads),
+          fleets: retainCached(s.fleets, threads),
+          queues: retainCached(s.queues, threads),
+          canvasWriting: retainCached(s.canvasWriting, threads),
+          streamingTool: retainCached(s.streamingTool, threads),
+          streamingCanvas: retainCached(s.streamingCanvas, threads),
+          liveTokens: retainCached(s.liveTokens, threads),
+          sessionUsage: retainCached(s.sessionUsage, threads),
+          tokensPerSecond: retainCached(s.tokensPerSecond, threads),
+          compression: retainCached(s.compression, threads),
         };
       }),
 

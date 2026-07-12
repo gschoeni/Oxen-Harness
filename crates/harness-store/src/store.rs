@@ -397,28 +397,13 @@ impl HistoryStore {
         let content = crate::content::derive_content_text(value.get("content"));
         let raw_json = serde_json::to_string(&value)?;
 
-        let conn = self.lock();
-        let exists: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sessions WHERE id = ?1",
-            [session_id],
-            |row| row.get(0),
-        )?;
-        if exists == 0 {
-            return Err(HistoryError::SessionNotFound(session_id.to_string()));
-        }
-
-        let next_seq: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(seq), -1) + 1 FROM messages WHERE session_id = ?1",
-            [session_id],
-            |row| row.get(0),
-        )?;
-
-        conn.execute(
-            "INSERT INTO messages (session_id, seq, role, content, raw_json, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![session_id, next_seq, role, content, raw_json, now()],
-        )?;
-        Ok(next_seq)
+        append_message_row(
+            &self.lock(),
+            session_id,
+            &role,
+            content.as_deref(),
+            &raw_json,
+        )
     }
 
     /// Append an already-serialized message without building an intermediate
@@ -431,26 +416,7 @@ impl HistoryStore {
         content: Option<&str>,
         raw_json: &str,
     ) -> Result<i64, HistoryError> {
-        let conn = self.lock();
-        let exists: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sessions WHERE id = ?1",
-            [session_id],
-            |row| row.get(0),
-        )?;
-        if exists == 0 {
-            return Err(HistoryError::SessionNotFound(session_id.to_string()));
-        }
-        let next_seq: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(seq), -1) + 1 FROM messages WHERE session_id = ?1",
-            [session_id],
-            |row| row.get(0),
-        )?;
-        conn.execute(
-            "INSERT INTO messages (session_id, seq, role, content, raw_json, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![session_id, next_seq, role, content, raw_json, now()],
-        )?;
-        Ok(next_seq)
+        append_message_row(&self.lock(), session_id, role, content, raw_json)
     }
 
     /// Return the verbatim message JSON values for a session, ordered by `seq`.
@@ -750,6 +716,34 @@ impl HistoryStore {
         }
         Ok(out)
     }
+}
+
+fn append_message_row(
+    conn: &Connection,
+    session_id: &str,
+    role: &str,
+    content: Option<&str>,
+    raw_json: &str,
+) -> Result<i64, HistoryError> {
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sessions WHERE id = ?1",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    if exists == 0 {
+        return Err(HistoryError::SessionNotFound(session_id.to_string()));
+    }
+    let next_seq: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(seq), -1) + 1 FROM messages WHERE session_id = ?1",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    conn.execute(
+        "INSERT INTO messages (session_id, seq, role, content, raw_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![session_id, next_seq, role, content, raw_json, now()],
+    )?;
+    Ok(next_seq)
 }
 
 fn now() -> i64 {
