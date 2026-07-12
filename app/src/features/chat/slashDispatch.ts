@@ -19,6 +19,7 @@ import {
 import { useStore } from "../../lib/store";
 import type { CompressionMode, LoopSpec } from "../../lib/types";
 import { parseSlashCommand, SLASH_COMMANDS } from "./slashCommands";
+import { queueCommand } from "./queueCommand";
 
 const help = () => SLASH_COMMANDS.map((c) => `${c.usage ?? c.name} — ${c.description}`).join("\n");
 
@@ -48,9 +49,17 @@ export async function dispatchSlashCommand(text: string): Promise<boolean> {
       }
       case "/queue": {
         const queue = state.session ? state.queues[state.session.session_id] ?? [] : [];
-        if (args === "clear") state.setQueue([]);
-        else if (args.startsWith("add ")) state.send(args.slice(4).trim());
-        else note(queue.length ? queue.map((q, i) => `${i + 1}. ${q.text}`).join("\n") : "The queue is empty.");
+        const result = queueCommand(args, queue.map((q) => q.text));
+        if (result.kind === "show")
+          note(result.items.length ? result.items.map((item, i) => `${i + 1}. ${item}`).join("\n") : "The queue is empty.");
+        else if (result.kind === "update") {
+          state.setQueue(result.items);
+          note(result.message);
+        } else if (result.kind === "run") {
+          const [first, ...rest] = result.items;
+          state.setQueue(rest);
+          state.send(first);
+        } else note(result.message);
         break;
       }
       case "/loop":

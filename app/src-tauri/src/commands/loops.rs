@@ -174,3 +174,25 @@ fn loop_result(journal: &LoopJournal) -> LoopRunResult {
         summary,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use harness_loop::{LoopJournal, StopReason};
+
+    use super::loop_result;
+
+    #[test]
+    fn loop_result_distinguishes_success_from_a_stopped_run() {
+        let mut success = LoopJournal::new("green", "make checks pass");
+        success.finish(StopReason::Succeeded);
+        let result = loop_result(&success);
+        assert!(result.succeeded);
+        assert!(result.summary.contains("all gates passed"));
+
+        let mut stopped = LoopJournal::new("green", "make checks pass");
+        stopped.finish(StopReason::MaxIterations);
+        let result = loop_result(&stopped);
+        assert!(!result.succeeded);
+        assert!(result.summary.contains("iteration limit"));
+    }
+}
