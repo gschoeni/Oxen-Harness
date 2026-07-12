@@ -5,7 +5,7 @@
 //! go through: on a live TTY it hands off to the sticky composer
 //! ([`crate::live`]), otherwise it drives the classic [`TurnRenderer`] path
 //! and drains stacked messages after. The report helpers ([`retry_notice`],
-//! [`turn_failure_lines`], [`context_usage_line`]) live here so the classic
+//! [`turn_failure_lines`], [`context_usage_lines`]) live here so the classic
 //! prompt and the live composer explain a turn the same way.
 
 use std::cell::RefCell;
@@ -291,14 +291,22 @@ async fn run_prompt(
 /// from the turn's output by a blank line.
 fn print_context_usage(agent: &Agent, ui: &Ui) {
     println!();
-    println!("{}", context_usage_line(agent, ui));
+    for line in context_usage_lines(agent, ui) {
+        println!("{line}");
+    }
 }
 
 /// The context-usage trailer as a (themed, indented) line — the current model
 /// alongside how full its context window is. Shared by the classic prompt and
 /// the live composer (which pins it just above the input divider).
-pub(crate) fn context_usage_line(agent: &Agent, ui: &Ui) -> String {
-    context_usage_line_from(
+///
+/// Two stacked lines: the first is the live context-window fill (what's in the
+/// model's head *right now*, which shrinks on compaction); the second is the
+/// session's cumulative spend — total tokens with an input/output breakdown so
+/// it's auditable — and the running price. The two are deliberately distinct:
+/// context fill ≠ total tokens used.
+pub(crate) fn context_usage_lines(agent: &Agent, ui: &Ui) -> Vec<String> {
+    context_usage_lines_from(
         ui,
         agent.model(),
         agent.context_tokens(),
@@ -308,42 +316,59 @@ pub(crate) fn context_usage_line(agent: &Agent, ui: &Ui) -> String {
     )
 }
 
-/// The context-usage trailer built from raw figures rather than an [`Agent`], so
-/// the live composer can rebuild it from a mid-turn `Usage` event (which carries
-/// the same numbers) and keep the pinned meter climbing in real time — not just
-/// jump at turn boundaries.
-pub(crate) fn context_usage_line_from(
+/// The two trailer lines built from raw figures rather than an [`Agent`], so the
+/// live composer can rebuild them from a mid-turn `Usage` event (which carries
+/// the same numbers) and keep the meters climbing in real time — not just jump
+/// at turn boundaries.
+///
+/// `used` is the current context fill; `prompt_tokens`/`completion_tokens` are
+/// the session's cumulative input/output totals (their sum is the total tokens
+/// used, and what the price is computed from).
+pub(crate) fn context_usage_lines_from(
     ui: &Ui,
     model: &str,
     used: usize,
     window: usize,
     prompt_tokens: usize,
     completion_tokens: usize,
-) -> String {
+) -> Vec<String> {
+    // Line 1 — the context window fill, with the model + its per-token rate.
     let pct = (used * 100).checked_div(window).map_or(0, |p| p.min(100));
-    let cost = crate::pricing::session_cost(model, prompt_tokens, completion_tokens)
-        // Only surface a price once it rounds to something visible, so a session
-        // with a few cheap tokens doesn't read as "$0.00".
-        .filter(|&c| c > 0.0)
-        .map(|c| format!(" · {}", ui.dim(&crate::theme::format_usd(c))))
-        .unwrap_or_default();
-    // The per-token rate, shown right after the model name so the price is
-    // legible before the first token is spent (when the accumulated cost above
-    // is still empty).
     let rate = crate::pricing::session_rate(model)
         .as_ref()
         .and_then(crate::pricing::format_rate)
         .map(|r| format!(" {}", ui.dim(&r)))
         .unwrap_or_default();
-    format!(
-        "  {} {}{rate}{cost}",
+    let context_line = format!(
+        "  {} {}{rate}",
         ui.dim(&format!(
             "🧭 context {} / {} tokens ({pct}%) ·",
             human_tokens(used),
             human_tokens(window),
         )),
         ui.accent(model),
-    )
+    );
+
+    // Line 2 — the session's cumulative spend: total tokens = input + output,
+    // spelled out so the figure is auditable, plus the running dollar cost.
+    let total = prompt_tokens + completion_tokens;
+    let cost = crate::pricing::session_cost(model, prompt_tokens, completion_tokens)
+        // Only surface a price once it rounds to something visible, so a session
+        // with a few cheap tokens doesn't read as "$0.00".
+        .filter(|&c| c > 0.0)
+        .map(|c| format!(" · {}", ui.accent(&crate::theme::format_usd(c))))
+        .unwrap_or_default();
+    let usage_line = format!(
+        "  {}{cost}",
+        ui.dim(&format!(
+            "📊 {} tokens used · {} in · {} out",
+            human_tokens(total),
+            human_tokens(prompt_tokens),
+            human_tokens(completion_tokens),
+        )),
+    );
+
+    vec![context_line, usage_line]
 }
 
 /// Human-friendly token count: `980`, `12.3k`, `1.2M`.
@@ -353,7 +378,7 @@ pub(crate) use harness_core::fmt::human_tokens;
 
 #[cfg(test)]
 mod tests {
-    use super::{context_usage_line_from, ends_mid_turn, retry_notice, seed_retry};
+    use super::{context_usage_lines_from, ends_mid_turn, retry_notice, seed_retry};
     use crate::theme::Ui;
     use harness_agent::AgentError;
     use harness_llm::{ChatMessage, LlmError};
@@ -363,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn context_line_reflects_live_figures_and_price() {
+    fn trailer_shows_context_fill_and_auditable_totals_that_climb() {
         use harness_local::source::ModelPricing;
         // Prime the cache so the trailer can price this model.
         crate::pricing::seed_for_test(
@@ -375,24 +400,38 @@ mod tests {
         );
         let ui = plain_ui();
 
-        // A mid-turn snapshot: 50k of a 200k window, with some spend.
-        let line = context_usage_line_from(&ui, "live-meter-model", 50_000, 200_000, 40_000, 10_000);
-        assert!(line.contains("50.0k / 200.0k"), "tokens: {line}");
-        assert!(line.contains("(25%)"), "percent: {line}");
-        assert!(line.contains("live-meter-model"), "model: {line}");
-        // Per-token rate is always shown; accumulated cost once it's visible.
-        assert!(line.contains("$3/M in · $15/M out"), "rate: {line}");
+        // A mid-turn snapshot: 50k of a 200k window; 40k in + 10k out so far.
+        let lines =
+            context_usage_lines_from(&ui, "live-meter-model", 50_000, 200_000, 40_000, 10_000);
+        assert_eq!(lines.len(), 2, "two stacked lines: {lines:?}");
+        let (ctx, usage) = (&lines[0], &lines[1]);
+
+        // Line 1 — the context-window fill, model, and per-token rate.
+        assert!(ctx.contains("50.0k / 200.0k"), "context: {ctx}");
+        assert!(ctx.contains("(25%)"), "percent: {ctx}");
+        assert!(ctx.contains("live-meter-model"), "model: {ctx}");
+        assert!(ctx.contains("$3/M in · $15/M out"), "rate: {ctx}");
+
+        // Line 2 — auditable totals: total = in + out (50k = 40k + 10k), + cost.
+        assert!(usage.contains("50.0k tokens used"), "total: {usage}");
+        assert!(usage.contains("40.0k in"), "input: {usage}");
+        assert!(usage.contains("10.0k out"), "output: {usage}");
         // 40k * 3e-6 + 10k * 15e-6 = 0.12 + 0.15 = 0.27
-        assert!(line.contains("$0.27"), "cost: {line}");
+        assert!(usage.contains("$0.27"), "cost: {usage}");
+        // The context fill and the total are distinct figures, not conflated.
+        assert!(!ctx.contains("tokens used"), "fill leaked into line 1: {ctx}");
 
         // A later snapshot in the same turn climbs — the whole point of wiring
-        // Usage events through: more context, higher percent, higher cost.
+        // Usage events through: more context, more tokens, higher cost.
         let later =
-            context_usage_line_from(&ui, "live-meter-model", 120_000, 200_000, 100_000, 40_000);
-        assert!(later.contains("120.0k / 200.0k"), "tokens: {later}");
-        assert!(later.contains("(60%)"), "percent: {later}");
+            context_usage_lines_from(&ui, "live-meter-model", 120_000, 200_000, 100_000, 40_000);
+        assert!(later[0].contains("120.0k / 200.0k"), "context: {later:?}");
+        assert!(later[0].contains("(60%)"), "percent: {later:?}");
+        assert!(later[1].contains("140.0k tokens used"), "total: {later:?}");
+        assert!(later[1].contains("100.0k in"), "input: {later:?}");
+        assert!(later[1].contains("40.0k out"), "output: {later:?}");
         // 100k * 3e-6 + 40k * 15e-6 = 0.30 + 0.60 = 0.90
-        assert!(later.contains("$0.90"), "cost: {later}");
+        assert!(later[1].contains("$0.90"), "cost: {later:?}");
     }
 
     #[test]

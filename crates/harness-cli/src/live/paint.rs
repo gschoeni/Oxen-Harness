@@ -57,7 +57,7 @@ impl Live {
         // the meters sit right above the input instead of trailing the last
         // message.
         let status_rows: u16 =
-            self.compression_line.is_some() as u16 + self.status_line.is_some() as u16;
+            self.compression_line.is_some() as u16 + self.status_lines.len() as u16;
         // A running `spawn_agents` fleet pins its lanes block (lanes + optional
         // focused tail + key hint) directly under the spacer, above the meters.
         // Everything else in the pinned area is bounded already (the queue plan
@@ -108,9 +108,10 @@ impl Live {
             buf.push_str(&format!("\x1b[{next_row};1H\x1b[2K{line}"));
             next_row += 1;
         }
-        for line in [&self.compression_line, &self.status_line]
-            .into_iter()
-            .flatten()
+        for line in self
+            .compression_line
+            .iter()
+            .chain(self.status_lines.iter())
         {
             buf.push_str(&format!("\x1b[{next_row};1H\x1b[2K{line}"));
             next_row += 1;

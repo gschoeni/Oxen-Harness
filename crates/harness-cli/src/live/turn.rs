@@ -67,7 +67,7 @@ pub(crate) async fn run_prompt(
         // context trailer live (they carry token counts, not these fixed facts).
         s.model = agent.model().to_string();
         s.context_window = agent.context_window();
-        s.status_line = Some(crate::turn::context_usage_line(agent, ui));
+        s.status_lines = crate::turn::context_usage_lines(agent, ui);
         s.compression_line = crate::commands::compression::status_line(agent, ui);
     }
 
@@ -119,7 +119,7 @@ pub(crate) async fn run_prompt(
                     }
                     // Refresh the pinned meters (they sit above the divider,
                     // not in the scrollback) with the turn's totals.
-                    s.status_line = Some(crate::turn::context_usage_line(agent, ui));
+                    s.status_lines = crate::turn::context_usage_lines(agent, ui);
                     s.compression_line = crate::commands::compression::status_line(agent, ui);
                     s.render();
                 }
@@ -204,8 +204,8 @@ fn interrupt_stage(has_draft: bool, armed: bool) -> InterruptStage {
 /// tear the terminal down so the caller can run a turn or a command in cooked
 /// mode. `seed` pre-fills the input (e.g. a draft carried over from a turn);
 /// `history` is loaded for Up/Down recall and updated with the submission;
-/// `status` is the context-usage line pinned just above the divider, and
-/// `compression` the savings line pinned just above that.
+/// `status` is the context-usage trailer (its two lines) pinned just above the
+/// divider, and `compression` the savings line pinned just above that.
 ///
 /// Returns [`Idle::Submit`] with the trimmed text, or [`Idle::Exit`] to quit.
 pub(crate) async fn read_idle(
@@ -213,7 +213,7 @@ pub(crate) async fn read_idle(
     queue: &mut MessageQueue,
     history: &mut Vec<String>,
     seed: &str,
-    status: Option<String>,
+    status: Vec<String>,
     compression: Option<String>,
 ) -> Result<Idle> {
     let term = LiveTerminal::new()?;
@@ -229,7 +229,7 @@ pub(crate) async fn read_idle(
         if !seed.is_empty() {
             s.composer = Composer::seeded(seed);
         }
-        s.status_line = status;
+        s.status_lines = status;
         s.compression_line = compression;
         s.sync_queue(queue.items());
         s.render();

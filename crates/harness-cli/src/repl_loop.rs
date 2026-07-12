@@ -166,7 +166,7 @@ pub(crate) async fn run_box_repl(
                 ui.dim("— /queue to review, /queue run to send"),
             );
         }
-        let status = Some(crate::turn::context_usage_line(agent, ui));
+        let status = crate::turn::context_usage_lines(agent, ui);
         let compression = commands::compression::status_line(agent, ui);
         let idle =
             live::read_idle(ui, &mut queue, &mut history, &seed, status, compression).await?;

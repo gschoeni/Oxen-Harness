@@ -148,11 +148,13 @@ struct Live {
     /// Set when a `web_search` call failed for a missing Brave API key, so the
     /// caller can prompt for one once the composer hands back to cooked mode.
     needs_brave_key: bool,
-    /// The context-usage trailer (`🧭 context …`), pinned just above the divider
-    /// rather than printed into the scrollback — so it always sits right above
-    /// the input area with the blank spacer separating it from the last message.
-    status_line: Option<String>,
-    /// The active model, used to rebuild [`Live::status_line`] from mid-turn
+    /// The context-usage trailer (`🧭 context …` + `📊 … used`), pinned just
+    /// above the divider rather than printed into the scrollback — so it always
+    /// sits right above the input area with the blank spacer separating it from
+    /// the last message. Two lines: the context-window fill, then the session's
+    /// cumulative token/cost totals. Empty when there's nothing to show.
+    status_lines: Vec<String>,
+    /// The active model, used to rebuild [`Live::status_lines`] from mid-turn
     /// `Usage` events (which carry token counts but not the model name) so the
     /// pinned meter's tokens and price update live as the agent works.
     model: String,
@@ -161,7 +163,7 @@ struct Live {
     /// carry the current fill but not the fixed window size).
     context_window: usize,
     /// The compression-savings line (`⊙ compression …`), pinned directly above
-    /// [`Live::status_line`]. Updated in place on every `Compression` event
+    /// [`Live::status_lines`]. Updated in place on every `Compression` event
     /// instead of scrolling a new line into the conversation.
     compression_line: Option<String>,
     /// Slash-command / argument completion candidates for the current composer
@@ -213,7 +215,7 @@ impl Live {
             previews: Vec::new(),
             region_bottom: region_bottom(rows),
             needs_brave_key: false,
-            status_line: None,
+            status_lines: Vec::new(),
             model: String::new(),
             context_window: 0,
             compression_line: None,
