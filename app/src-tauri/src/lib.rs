@@ -67,6 +67,14 @@ pub fn run() {
             commands::review::get_code_review_config,
             commands::review::save_code_review_config,
             commands::review::default_code_review_config,
+            commands::loops::list_loops,
+            commands::loops::loops_path,
+            commands::loops::get_loop,
+            commands::loops::save_loop,
+            commands::loops::import_loop,
+            commands::loops::export_loop,
+            commands::loops::remove_loop,
+            commands::loops::run_loop,
             commands::session::session_info,
             commands::session::list_sessions,
             commands::session::session_messages,
@@ -128,7 +136,9 @@ pub fn run() {
             commands::theme::import_theme,
             commands::theme::export_theme,
             commands::theme::remove_theme,
-            commands::theme::new_theme
+            commands::theme::new_theme,
+            commands::theme::theme_location,
+            commands::theme::set_theme_location
         ])
         .build(tauri::generate_context!())
         .expect("error while building oxen-harness desktop app")

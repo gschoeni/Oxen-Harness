@@ -813,6 +813,7 @@
 
 /* --- Composer --- */
 .composer {
+  position: relative;
   flex-shrink: 0;
   padding: var(--space-3) var(--space-5) var(--space-5);
 }
@@ -829,6 +830,44 @@
   box-shadow: var(--frame-shadow);
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
+
+.slash-menu {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  width: min(716px, calc(100% - 24px));
+  margin: 0 auto;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--separator-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 28%);
+}
+
+.slash-option {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.slash-option.active,
+.slash-option:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.slash-option code { color: var(--accent); }
+.slash-option span { color: var(--text-secondary); }
 .composer-inner:focus-within {
   border-color: var(--accent);
   box-shadow: var(--frame-shadow), var(--focus-ring);

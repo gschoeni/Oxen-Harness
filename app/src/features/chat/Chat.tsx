@@ -17,6 +17,7 @@ import { isImagePath } from "../../lib/attachments";
 import { QuestionPrompt } from "../questions/QuestionPrompt";
 import { type Item } from "./thread";
 import "./chat.css";
+import { dispatchSlashCommand } from "./slashDispatch";
 
 const EXAMPLES = [
   "Explain this codebase",
@@ -136,9 +137,10 @@ export function Chat() {
 
   // Send now (with any staged attachments) or, if this chat is mid-turn, queue
   // the prompt and the same attachment set so the eventual turn is identical.
-  function submit(text: string) {
+  async function submit(text: string) {
     stick.current = true;
     setAtBottom(true);
+    if (await dispatchSlashCommand(text)) return;
     const paths = attachments.map((a) => a.path);
     setAttachments([]);
     send(text, paths);

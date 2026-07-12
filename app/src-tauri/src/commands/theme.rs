@@ -9,6 +9,21 @@ use tokio_util::sync::CancellationToken;
 
 use crate::state::{client_for, AppState};
 
+#[tauri::command]
+pub(crate) fn theme_location() -> Result<Option<String>, String> {
+    Ok(harness_theme::Store::open()
+        .map_err(|e| e.to_string())?
+        .location())
+}
+
+#[tauri::command]
+pub(crate) fn set_theme_location(location: Option<String>) -> Result<(), String> {
+    let store = harness_theme::Store::open().map_err(|e| e.to_string())?;
+    store
+        .set_location(location.as_deref())
+        .map_err(|e| e.to_string())
+}
+
 fn theme_store() -> Result<harness_theme::Store, String> {
     harness_theme::Store::open().map_err(|e| e.to_string())
 }

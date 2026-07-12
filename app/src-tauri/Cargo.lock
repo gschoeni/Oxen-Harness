@@ -1387,6 +1387,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-loop"
+version = "0.1.0"
+dependencies = [
+ "globset",
+ "harness-agent",
+ "harness-config",
+ "harness-core",
+ "harness-tools",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+]
+
+[[package]]
 name = "harness-oxen"
 version = "0.1.0"
 dependencies = [
@@ -2421,6 +2438,7 @@ dependencies = [
  "harness-core",
  "harness-llm",
  "harness-local",
+ "harness-loop",
  "harness-review",
  "harness-runtime",
  "harness-store",

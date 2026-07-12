@@ -29,7 +29,7 @@
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **593 Rust tests + 182 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
+> **593 Rust tests + 190 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
 
 ## Phase 15 — Long-running memory hardening
 
@@ -191,6 +191,11 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
       "🎨 Theme" panel selects themes (applying the palette to CSS variables and
       using the voice phrases), vibe-codes a new theme via the model, and
       imports/exports shareable theme files
+- [x] **Desktop slash commands**: typing `/` opens a keyboard-navigable command
+      list; the CLI command families dispatch to native desktop actions without
+      reaching the model (desktop intentionally omits `/exit`). `/loop` has full
+      list/show/new/run/goal/import/export/remove/path parity and runs through
+      the shared cancellable `harness-loop` runner.
 - [x] Tauri v2 capability granting `core:default`; valid app icon
 - [ ] Run-time GUI verification (needs a desktop session + API key; `cargo tauri dev`)
 - [ ] App icons for bundling + enable `bundle.active` for installers

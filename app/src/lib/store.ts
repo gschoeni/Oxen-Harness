@@ -19,6 +19,7 @@ import {
   resumeSession,
   runCodeReview as runCodeReviewIpc,
   runTurn,
+  runLoop,
   retryTurn,
   cancelTurn,
   configureOxenKey,
@@ -304,6 +305,10 @@ interface AppState {
    *  changes, or PR-style against `baseBranch`). The findings land in the thread
    *  as a settled exchange, so a follow-up "fix 1 and 3" just works. */
   startCodeReview: (baseBranch?: string) => void;
+  /** Run a saved loop, or an ad-hoc goal, in the current chat. */
+  startLoop: (name?: string, goal?: string) => void;
+  /** Add local command output to the current thread. */
+  addNotice: (text: string) => void;
   /** Advance a session's review progress card to the next pipeline step. */
   ingestCodeReviewProgress: (e: CodeReviewProgressEvent) => void;
   /** Update the review card's live activity line (streamed text or a tool name). */
@@ -848,6 +853,48 @@ export const useStore = create<AppState>((set, get) => {
           }
         });
     },
+
+    startLoop: (name, goal) => {
+      const id = get().session?.session_id;
+      if (!id || get().runStatus[id] === "running") return;
+      const label = goal ? `/loop goal ${goal}` : `/loop run ${name ?? "default"}`;
+      set((s) => ({
+        runStatus: { ...s.runStatus, [id]: "running" },
+        threads: { ...s.threads, [id]: startTurn(s.threads[id] ?? [], label, []) },
+      }));
+      runLoop(id, name, goal)
+        .then((result) =>
+          set((s) => ({
+            threads: {
+              ...s.threads,
+              [id]: finalizeAssistant(s.threads[id] ?? [], result.summary),
+            },
+          })),
+        )
+        .catch((error) =>
+          set((s) => ({
+            threads: {
+              ...s.threads,
+              [id]: finalizeAssistant(s.threads[id] ?? [], `Loop failed: ${String(error)}`),
+            },
+          })),
+        )
+        .finally(() => {
+          set((s) => {
+            const runStatus = { ...s.runStatus };
+            delete runStatus[id];
+            return { runStatus };
+          });
+          get().refreshHistory();
+          get().refreshTotalTokens();
+        });
+    },
+
+    addNotice: (text) =>
+      set((s) => {
+        const id = s.session?.session_id;
+        return id ? { threads: { ...s.threads, [id]: appendNotice(s.threads[id] ?? [], text) } } : {};
+      }),
 
     ingestCodeReviewProgress: (e) =>
       set((s) => {

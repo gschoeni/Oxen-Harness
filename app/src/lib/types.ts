@@ -613,3 +613,32 @@ export interface PlanItem {
   active_form: string;
   status: PlanStatus;
 }
+
+// ---- verification loops ---------------------------------------------------
+
+export interface LoopSummary {
+  name: string;
+  slug: string;
+  description: string;
+  verify: string;
+  builtin: boolean;
+  installed: boolean;
+}
+
+export interface LoopSpec {
+  schema_version: number;
+  name: string;
+  description: string;
+  goal: string;
+  success_criteria: string[];
+  verify?: { type: "command"; command: string; timeout_ms: number } | { type: "rubric"; threshold: number } | null;
+  gates: unknown[];
+  max_iterations: number;
+  token_budget?: number | null;
+}
+
+export interface LoopRunResult {
+  succeeded: boolean;
+  iterations: number;
+  summary: string;
+}

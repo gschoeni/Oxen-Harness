@@ -3,6 +3,7 @@ import { ArrowUp, Paperclip, Square } from "lucide-react";
 import { CodeReviewPicker } from "./CodeReviewPicker";
 import { CompressionPicker } from "./CompressionPicker";
 import { ModelPicker } from "./ModelPicker";
+import { parseSlashCommand, slashSuggestions } from "./slashCommands";
 
 export function Composer({
   busy,
@@ -20,7 +21,9 @@ export function Composer({
   onAttach: () => void;
 }) {
   const [value, setValue] = useState("");
+  const [slashIndex, setSlashIndex] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const suggestions = slashSuggestions(value);
 
   // Focus the composer when an empty chat is opened (new chat / initial mount).
   useEffect(() => {
@@ -40,6 +43,14 @@ export function Composer({
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }
+
+  function chooseSlash(index: number) {
+    const command = suggestions[index];
+    if (!command) return;
+    setValue(`${command.name} `);
+    setSlashIndex(0);
+    requestAnimationFrame(() => ref.current?.focus());
   }
 
   return (
@@ -71,15 +82,56 @@ export function Composer({
           }
           onChange={(e) => {
             setValue(e.target.value);
+            setSlashIndex(0);
             resize();
           }}
           onKeyDown={(e) => {
+            if (suggestions.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+              e.preventDefault();
+              setSlashIndex((i) =>
+                e.key === "ArrowDown"
+                  ? (i + 1) % suggestions.length
+                  : (i - 1 + suggestions.length) % suggestions.length,
+              );
+              return;
+            }
+            if (
+              suggestions.length &&
+              (e.key === "Tab" || (e.key === "Enter" && !parseSlashCommand(value)))
+            ) {
+              e.preventDefault();
+              chooseSlash(slashIndex);
+              return;
+            }
+            if (e.key === "Escape" && suggestions.length) {
+              e.preventDefault();
+              setValue("");
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               submit();
             }
           }}
         />
+        {suggestions.length > 0 && (
+          <div className="slash-menu" role="listbox" aria-label="Slash commands">
+            {suggestions.map((command, index) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={index === slashIndex}
+                className={index === slashIndex ? "slash-option active" : "slash-option"}
+                key={command.name}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => chooseSlash(index)}
+              >
+                <code>{command.name}</code>
+                <span>{command.description}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {busy ? (
           // Mid-turn the action button stops the run (killing the model stream);
           // typing + Enter still queues a message (see the placeholder).

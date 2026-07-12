@@ -19,6 +19,7 @@
 //! [`crate::bridges`] — a command module should read as orchestration.
 
 pub(crate) mod connection;
+pub(crate) mod loops;
 pub(crate) mod models;
 pub(crate) mod project;
 pub(crate) mod review;
