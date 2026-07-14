@@ -263,8 +263,8 @@ export const startProject = vi.fn(async (input: StartProjectInput): Promise<Proj
   path: input.createDirectory ? `${input.directory}/${input.name}` : input.directory,
   name: input.name,
   description: input.description,
-  instructions: input.instructions,
-  context: input.contextPaths.map((path) => ({ path, name: path.split("/").pop() ?? path, kind: "text" as const, size_bytes: 42 })),
+  instructions: "",
+  context: [],
   session_count: 0,
   active: true,
 }));
@@ -279,6 +279,8 @@ export const removeProjectContext = vi.fn(async (path: string): Promise<Project>
   path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true,
 }));
 export const setActiveProject = vi.fn(async () => {});
+export const getDefaultProjectLocation = vi.fn(async () => null as string | null);
+export const setDefaultProjectLocation = vi.fn(async (path: string) => path);
 export const pickFolder = vi.fn(async () => null as string | null);
 export const pickProjectParent = vi.fn(async () => null as string | null);
 export const pickProjectContext = vi.fn(async () => [] as string[]);
@@ -390,8 +392,8 @@ export function resetIpc() {
     path: input.createDirectory ? `${input.directory}/${input.name}` : input.directory,
     name: input.name,
     description: input.description,
-    instructions: input.instructions,
-    context: input.contextPaths.map((path) => ({ path, name: path.split("/").pop() ?? path, kind: "text" as const, size_bytes: 42 })),
+    instructions: "",
+    context: [],
     session_count: 0,
     active: true,
   }));
@@ -406,6 +408,8 @@ export function resetIpc() {
     path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true,
   }));
   setActiveProject.mockReset().mockResolvedValue(undefined);
+  getDefaultProjectLocation.mockReset().mockResolvedValue(null);
+  setDefaultProjectLocation.mockReset().mockImplementation(async (path: string) => path);
   pickFolder.mockReset().mockResolvedValue(null);
   pickProjectParent.mockReset().mockResolvedValue(null);
   pickProjectContext.mockReset().mockResolvedValue([]);

@@ -13,12 +13,14 @@ use tauri::State;
 
 use crate::state::{active_root, open_history_store, AppState};
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ProjectsConfig {
     #[serde(default)]
     pub(crate) paths: Vec<String>,
     #[serde(default)]
     pub(crate) active: Option<String>,
+    #[serde(default)]
+    pub(crate) default_location: Option<String>,
 }
 
 /// A project shown in the UI: its directory, display name, chat count, whether
@@ -35,7 +37,7 @@ pub(crate) struct ProjectView {
 }
 
 /// Schema version for `projects.json` (bump when the shape changes).
-const PROJECTS_SCHEMA_VERSION: u32 = 1;
+const PROJECTS_SCHEMA_VERSION: u32 = 2;
 
 fn projects_config_path() -> Result<PathBuf, String> {
     harness_config::paths::projects_file().map_err(|e| e.to_string())
@@ -64,6 +66,36 @@ pub(crate) fn remember_project(path: &str) -> Result<(), String> {
     }
     cfg.active = Some(path.to_string());
     write_projects_config(&cfg)
+}
+
+/// Return the saved parent directory for new projects when it still exists.
+#[tauri::command]
+pub(crate) fn get_default_project_location() -> Option<String> {
+    read_projects_config()
+        .default_location
+        .filter(|path| Path::new(path).is_dir())
+}
+
+/// Persist the parent directory prefilled by future project creation flows.
+#[tauri::command]
+pub(crate) fn set_default_project_location(path: String) -> Result<String, String> {
+    let canonical = canonical_directory(&path)?;
+    let mut config = read_projects_config();
+    config.default_location = Some(canonical.clone());
+    write_projects_config(&config)?;
+    Ok(canonical)
+}
+
+fn canonical_directory(path: &str) -> Result<String, String> {
+    let directory = PathBuf::from(path);
+    if !directory.is_dir() {
+        return Err(format!("project location does not exist: {path}"));
+    }
+    Ok(directory
+        .canonicalize()
+        .unwrap_or(directory)
+        .display()
+        .to_string())
 }
 
 fn project_view(
@@ -147,16 +179,14 @@ pub(crate) async fn open_project(
 }
 
 /// Create a project folder or adopt an existing one, persist its repo-local
-/// metadata/context, and make it the active project for the next chat.
+/// identity, and make it the active project for the next chat.
 #[tauri::command]
 pub(crate) async fn start_project(
     state: State<'_, AppState>,
     name: String,
     description: String,
-    instructions: String,
     directory: String,
     create_directory: bool,
-    context_paths: Vec<String>,
 ) -> Result<ProjectView, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -194,14 +224,10 @@ pub(crate) async fn start_project(
         let config = ProjectConfig {
             name: name.to_string(),
             description,
-            instructions,
+            instructions: existing.instructions,
             context: existing.context,
         };
         project::save(&canonical, &config).map_err(|error| error.to_string())?;
-        let sources = context_paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
-        if !sources.is_empty() {
-            project::add_context(&canonical, &sources).map_err(|error| error.to_string())?;
-        }
         Ok(())
     })();
     if let Err(error) = setup {
@@ -292,5 +318,28 @@ mod tests {
         assert!(!valid_folder_name("../demo"));
         assert!(!valid_folder_name("nested/demo"));
         assert!(!valid_folder_name("."));
+    }
+
+    #[test]
+    fn project_location_config_is_backward_compatible_and_requires_a_directory() {
+        let legacy: ProjectsConfig = serde_json::from_value(serde_json::json!({
+            "paths": ["/work/demo"],
+            "active": "/work/demo"
+        }))
+        .unwrap();
+        assert_eq!(legacy.default_location, None);
+
+        let tmp = std::env::temp_dir().join(format!(
+            "oxen-harness-project-location-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir(&tmp).unwrap();
+        assert_eq!(
+            canonical_directory(&tmp.display().to_string()).unwrap(),
+            tmp.canonicalize().unwrap().display().to_string()
+        );
+        assert!(canonical_directory(&tmp.join("missing").display().to_string()).is_err());
+        std::fs::remove_dir(&tmp).unwrap();
     }
 }

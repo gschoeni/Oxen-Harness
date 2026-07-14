@@ -59,29 +59,56 @@ describe("ProjectsPage", () => {
     expect(useStore.getState().projectsOpen).toBe(true);
   });
 
-  it("creates an existing-folder project with guidance and context", async () => {
+  it("creates an existing-folder project with a name and goal", async () => {
     ipc.pickFolder.mockResolvedValueOnce("/work/demo");
-    ipc.pickProjectContext.mockResolvedValueOnce(["/tmp/brief.md"]);
     render(<ProjectsPage />);
 
     await userEvent.click(screen.getByRole("button", { name: /start a project/i }));
+    expect(screen.queryByLabelText("Project instructions")).toBeNull();
+    expect(screen.queryByText(/starting context/i)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /use existing folder/i }));
     await userEvent.click(screen.getByRole("button", { name: /choose project folder/i }));
     await userEvent.type(screen.getByLabelText("Project name"), "Demo App");
     await userEvent.type(screen.getByLabelText("Project goal"), "Ship a focused single-page app.");
-    await userEvent.type(screen.getByLabelText("Project instructions"), "Keep the interface accessible.");
-    await userEvent.click(screen.getByRole("button", { name: /add context/i }));
     await userEvent.click(screen.getByRole("button", { name: "Create project" }));
 
     expect(ipc.startProject).toHaveBeenCalledWith({
       name: "Demo App",
       description: "Ship a focused single-page app.",
-      instructions: "Keep the interface accessible.",
       directory: "/work/demo",
       createDirectory: false,
-      contextPaths: ["/tmp/brief.md"],
     });
     expect(await screen.findByRole("heading", { name: "Demo App" })).toBeInTheDocument();
+  });
+
+  it("prefills the saved default parent when creating a project", async () => {
+    ipc.getDefaultProjectLocation.mockResolvedValueOnce("/work/Projects");
+    render(<ProjectsPage />);
+
+    await userEvent.click(screen.getByRole("button", { name: /start a project/i }));
+    expect(await screen.findByText("/work/Projects")).toBeInTheDocument();
+    expect(screen.getByText("Default project location")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Project name"), "Demo App");
+    await userEvent.click(screen.getByRole("button", { name: "Create project" }));
+
+    expect(ipc.startProject).toHaveBeenCalledWith({
+      name: "Demo App",
+      description: "",
+      directory: "/work/Projects",
+      createDirectory: true,
+    });
+  });
+
+  it("lets a chosen parent folder become the project default", async () => {
+    ipc.pickProjectParent.mockResolvedValueOnce("/work/Projects");
+    render(<ProjectsPage />);
+
+    await userEvent.click(screen.getByRole("button", { name: /start a project/i }));
+    await userEvent.click(screen.getByRole("button", { name: /choose project folder/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Use as default" }));
+
+    expect(ipc.setDefaultProjectLocation).toHaveBeenCalledWith("/work/Projects");
+    expect(await screen.findByText("Default project location")).toBeInTheDocument();
   });
 
   it("edits project guidance without creating a throwaway chat", async () => {

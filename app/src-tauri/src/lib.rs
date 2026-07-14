@@ -123,6 +123,8 @@ pub fn run() {
             commands::project::add_project_context,
             commands::project::remove_project_context,
             commands::project::set_active_project,
+            commands::project::get_default_project_location,
+            commands::project::set_default_project_location,
             commands::connection::get_connection,
             commands::connection::set_connection,
             commands::connection::configure_brave_key,

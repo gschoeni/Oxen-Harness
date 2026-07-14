@@ -30,7 +30,7 @@
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **649 Rust tests + 219 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
+> **649 Rust tests + 221 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
 
 ## Phase 16 — Durable projects
 
@@ -38,6 +38,8 @@
 
 - [x] Replace the folder-only action with a guided **Start a project** flow for
       creating a new directory or adopting an existing one.
+- [x] Keep creation focused on name, goal, and folder; persist an optional
+      default parent directory for future new projects.
 - [x] Persist project name, goal, instructions, and a context manifest in the
       repository at `.oxen-harness/project.json`; folder-only projects migrate
       implicitly with their directory basename and empty metadata.

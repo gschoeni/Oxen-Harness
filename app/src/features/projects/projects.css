@@ -240,22 +240,18 @@
   text-align: left;
 }
 .project-folder-picker span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-created-path,
-.project-field-hint { color: var(--text-tertiary); font-size: var(--text-xs); line-height: 1.45; }
-.start-context-list { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.start-context-chip {
+.project-location-default { min-height: 30px; display: flex; align-items: center; }
+.project-location-default > span {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  max-width: 100%;
-  color: var(--text-secondary);
-  background: var(--surface-2);
-  border: 1px solid var(--separator);
-  border-radius: var(--radius-pill);
-  padding: 2px 2px 2px var(--space-3);
+  color: var(--accent);
   font-size: var(--text-xs);
+  font-weight: 600;
 }
-.start-context-chip .icon-btn { width: 24px; height: 24px; border-radius: var(--radius-pill); }
+.project-location-default > small { color: var(--text-tertiary); font-size: var(--text-xs); line-height: 1.45; }
+.project-created-path,
+.project-field-hint { color: var(--text-tertiary); font-size: var(--text-xs); line-height: 1.45; }
 .project-form-error { color: var(--danger); background: var(--danger-soft); border-radius: var(--radius-sm); padding: var(--space-3); font-size: var(--text-sm); }
 .project-form-actions { display: flex; justify-content: flex-end; gap: var(--space-3); padding-top: var(--space-2); }
 

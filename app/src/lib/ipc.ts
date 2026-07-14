@@ -166,6 +166,9 @@ export const openProject = (path: string) => invoke<Project>("open_project", { p
 /** Switch the active project to an already-known directory. */
 export const setActiveProject = (path: string) => invoke<void>("set_active_project", { path });
 export const startProject = (input: StartProjectInput) => invoke<Project>("start_project", { ...input });
+export const getDefaultProjectLocation = () => invoke<string | null>("get_default_project_location");
+export const setDefaultProjectLocation = (path: string) =>
+  invoke<string>("set_default_project_location", { path });
 export const updateProject = (path: string, name: string, description: string, instructions: string) =>
   invoke<Project>("update_project", { path, name, description, instructions });
 export const addProjectContext = (path: string, contextPaths: string[]) =>

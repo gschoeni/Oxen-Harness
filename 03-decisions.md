@@ -29,7 +29,8 @@ existing workspace scope.
 
 **Projects are durable repo-local agent context, not only recent folders** (2026-07-14)
 The global `~/.oxen-harness/projects.json` remains the user's recent-project
-index and active-project pointer. A project's shareable identity now lives in
+index, active-project pointer, and preferred parent directory for creating new
+projects. A project's shareable identity now lives in
 its own repository at `.oxen-harness/project.json`: display name, goal,
 instructions, and a manifest of durable references. External references are
 copied content-addressed into `.oxen-harness/context/`; text stays available to
@@ -38,9 +39,9 @@ of a new chat. Both desktop and CLI compose this same project section into the
 agent prompt.
 
 The desktop opens a project home before chat, making its instructions/context
-visible and editable. Saving guidance or changing context starts a fresh chat
-so the persisted transcript's original system prompt stays truthful rather than
-being silently mutated. Existing folder-only projects need no migration file:
+visible and editable. The next project-home prompt starts a fresh chat so the
+persisted transcript's original system prompt stays truthful rather than being
+silently mutated. Existing folder-only projects need no migration file:
 their directory basename is the default name and the new fields are empty.
 
 *Why:* the working directory controls execution, but it does not communicate

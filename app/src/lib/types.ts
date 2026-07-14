@@ -91,10 +91,8 @@ export interface Project {
 export interface StartProjectInput {
   name: string;
   description: string;
-  instructions: string;
   directory: string;
   createDirectory: boolean;
-  contextPaths: string[];
 }
 
 // ---- connection settings ---------------------------------------------------

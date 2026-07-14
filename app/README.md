@@ -25,9 +25,9 @@ toolchain.
     streams; chats run concurrently per session, so several can be mid-turn.
   - **Sessions & projects** — history CRUD (`list_sessions`, `resume_session`,
     `delete_session`, …) plus guided project creation/editing. The recent index
-    stays in `~/.oxen-harness/projects.json`; shareable goals, instructions, and
-    context live in each repository's `.oxen-harness/project.json` and
-    `.oxen-harness/context/`.
+    stays in `~/.oxen-harness/projects.json`, along with the user's preferred
+    parent directory for new projects; shareable goals, instructions, and context
+    live in each repository's `.oxen-harness/project.json` and `.oxen-harness/context/`.
   - **Tools & skills** — `list_tools` / `set_tool_enabled` /
     `set_tool_description` / `add_custom_tool` / `remove_custom_tool` and
     `list_skills` / `save_skill` / `delete_skill` / `set_skill_enabled`, backing
