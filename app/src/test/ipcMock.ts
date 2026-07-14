@@ -108,9 +108,9 @@ export const sampleHardware: HardwareProfile = {
 };
 
 export const sampleRuntime: RuntimeStatus = {
-  binary: "/Users/dev/.oxen-harness/runtime/llama.cpp/llama-b9835/llama-server",
+  binary: "/Users/dev/.oxen-harness/runtime/llama.cpp/llama-b10002/llama-server",
   source: "managed",
-  managed_version: "b9835",
+  managed_version: "b10002",
   can_manage: true,
 };
 

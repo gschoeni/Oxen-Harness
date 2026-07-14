@@ -6,7 +6,7 @@
 //! wired up today; other targets report `can_manage = false` and fall back to the
 //! Homebrew/PATH discovery in [`crate::server`].
 //!
-//! Validated against release `b9835`: the macOS arm64 tarball unpacks to a single
+//! Validated against release `b10002`: the macOS arm64 tarball unpacks to a single
 //! `llama-{version}/` directory holding `llama-server` plus its `.dylib`s (Metal
 //! included); the binary's `@loader_path` rpath loads them in place, so no PATH
 //! or env setup is needed.
@@ -19,7 +19,7 @@ use crate::LocalError;
 
 /// The llama.cpp release we pin to — a known-good build. Bump deliberately (and
 /// surface an "update runtime" action) rather than chasing `latest`.
-pub const PINNED_VERSION: &str = "b9835";
+pub const PINNED_VERSION: &str = "b10002";
 
 /// Where the managed runtime lives: `~/.oxen-harness/runtime/llama.cpp/`
 /// (honoring the `OXEN_HARNESS_DIR` override).
@@ -246,10 +246,10 @@ mod tests {
 
     #[test]
     fn download_url_points_at_the_release_asset() {
-        let url = download_url("b9835", "llama-b9835-bin-macos-arm64.tar.gz");
+        let url = download_url("b10002", "llama-b10002-bin-macos-arm64.tar.gz");
         assert_eq!(
             url,
-            "https://github.com/ggml-org/llama.cpp/releases/download/b9835/llama-b9835-bin-macos-arm64.tar.gz"
+            "https://github.com/ggml-org/llama.cpp/releases/download/b10002/llama-b10002-bin-macos-arm64.tar.gz"
         );
     }
 
@@ -261,6 +261,18 @@ mod tests {
             assert!(a.contains("macos-arm64"));
             assert!(a.ends_with(".tar.gz"));
         }
+    }
+
+    #[test]
+    fn pinned_runtime_postdates_bonsai_27b_upstream_support() {
+        let build: u32 = PINNED_VERSION
+            .strip_prefix('b')
+            .and_then(|value| value.parse().ok())
+            .expect("llama.cpp release tags are b<build>");
+        assert!(
+            build >= 10_002,
+            "Bonsai 27B requires a current llama.cpp runtime"
+        );
     }
 
     /// Real end-to-end install: downloads the pinned runtime into the user's home

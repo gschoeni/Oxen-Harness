@@ -28,7 +28,7 @@ Single Cargo workspace of focused crates (layers + lifecycle: `ARCHITECTURE.md`)
 - `harness-tools` — the `TypedTool` trait (schemas derive from typed args structs) + built-ins: read (line-numbered)/write/edit files, glob find, regex search, sandboxed shell (with timeout), git, Brave web search, `ask_user_question`, canvas documents, `update_plan`, skills, and user-defined HTTP tools.
 - `harness-compress` — reversible context compression for stale tool output (off/audit/on; `<<ccr:hash>>` markers restored by `retrieve_original`).
 - `harness-store` — SQLite history (verbatim) + JSONL export for fine-tuning.
-- `harness-local` — local models: curated Qwen3 GGUF catalog, managed downloads + disk tracking, `llama-server` launcher (OpenAI-compatible, no key).
+- `harness-local` — local models: config-driven GGUF catalog (Qwen3 + Bonsai 27B), managed downloads + disk tracking, `llama-server` launcher (OpenAI-compatible, no key).
 - `harness-theme` — configurable, shareable themes (palette + voice + style) used by both front ends: five built-ins (Oregon Trail/Midnight/Synthwave/New York Times/Cupertino), TOML/JSON load+save with partial overrides, and the active-theme store under `~/.oxen-harness/`.
 - `harness-oxen` — version config/data + export/share conversation traces via the `oxen` CLI.
 - `harness-agent` — the agent (Ralph) loop, wiring llm + tools + store together, with token budgeting, compaction, retry, and compression.
@@ -47,13 +47,13 @@ compression, and transient-failure retry), self-verifying loops with
 conditional gates, a configurable code-review pipeline, a parallel-subagent
 fleet (`spawn_agents` from any turn + `/code-review` fan-out, with live lanes
 in both front ends), themes, local models, skills/custom tools, and both front
-ends (CLI + Tauri desktop app) are built and tested — 649 Rust tests + 224
+ends (CLI + Tauri desktop app) are built and tested — 651 Rust tests + 230
 frontend tests passing, CI green on push. See `02-status.md` for the full
 ledger.
 
 ## Key Decisions
 
-- **Oxen.ai is the default provider** (OpenAI-compatible API); models are swappable, default `claude-opus-4-8`. **Local models** (Qwen3 via llama.cpp) are a first-class alternative through `--local <id>` / `models` subcommands / the desktop UI.
+- **Oxen.ai is the default provider** (OpenAI-compatible API); models are swappable, default `claude-opus-4-8`. **Local GGUF models** (including Qwen3 and Bonsai 27B via llama.cpp) are a first-class alternative through `--local <id>` / `models` subcommands / the desktop UI.
 - **Lightweight auth** (no `liboxen` dependency): `OXEN_API_KEY` or parse `auth_config.toml` directly. (`liboxen` won't build without its heavy DuckDB/RocksDB tree — see `03-decisions.md`.)
 - **SQLite history, stored verbatim**, with a JSONL exporter for fine-tuning.
 - **SSE streaming in the REPL from day one**; single working directory per session; cross-platform from day one.

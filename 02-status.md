@@ -16,7 +16,7 @@
 | **4** | `harness-agent`: the agent (Ralph) loop | ✅ Complete |
 | **5** | `harness-cli`: interactive streaming REPL | ✅ Complete |
 | **6** | `app/`: Tauri v2 cross-platform desktop app | ✅ Scaffolded (compiles) |
-| **7** | `harness-local`: local models via llama.cpp (Qwen3 GGUFs) | ✅ Complete |
+| **7** | `harness-local`: extensible local GGUF models via llama.cpp | ✅ Complete |
 | **8** | `harness-theme`: configurable + shareable themes (palette + voice) | ✅ Complete |
 | **9** | `harness-loop`: goal-driven, self-verifying loops (discover→verify→iterate) | ✅ Complete |
 | **10** | `harness-compress`: reversible context compression (off/audit/on) | ✅ Complete |
@@ -30,7 +30,7 @@
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **649 Rust tests + 230 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
+> **651 Rust tests + 230 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
 
 ## Phase 16 — Durable projects
 
@@ -225,16 +225,23 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
 
 ## Phase 7 — harness-local (local models via llama.cpp)
 
-**Status:** ✅ Complete (13 tests passing)
+**Status:** ✅ Complete (53 tests passing)
 
-- [x] `catalog`: curated Qwen3 GGUFs (`Q4_K_M`) from 0.6B → 32B + 30B-A3B MoE,
-      with HF repo/file, approx size, and a hardware note (URLs HEAD-verified)
+- [x] Config-driven `catalog`: curated Qwen3 GGUFs (`Q4_K_M`) from 0.6B →
+      32B + 30B-A3B MoE, plus Bonsai 27B binary (`Q1_0`) and mainline-compatible
+      ternary (`Q2_g64`) builds, with exact HF repo/file/size/context metadata
+- [x] New model families default to one exact artifact; the standard Q8→Q3
+      filename ladder is opt-in (`derive_quants`) so the catalog never invents
+      unsupported downloads. User additions/overrides live in
+      `~/.oxen-harness/local-models.json`.
 - [x] `ModelStore`: `~/.oxen-harness/models/` dir — installed status, per-model +
       total disk usage, streaming download (atomic `.part` → rename) with progress,
       and remove
-- [x] `LocalServer`: locate `llama-server` (`LLAMA_SERVER` override or `PATH`), pick
-      a free port, spawn against a GGUF (`--jinja` for tool calling), poll `/health`
-      until loaded, and kill on drop (no leaked background server)
+- [x] `LocalServer`: locate `llama-server` (`LLAMA_SERVER` override, managed
+      runtime, or `PATH`), pick a free port, spawn against a GGUF (`--jinja` for
+      tool calling), poll `/health` until loaded, and kill on drop (no leaked
+      background server). The managed Apple Silicon runtime is pinned to
+      llama.cpp `b10002` for Bonsai Q1 plus Q2 CPU/Metal support.
 - [x] Talks to the agent as just another OpenAI-compatible endpoint
       (`http://127.0.0.1:<port>/v1`, throwaway key) — no client changes needed
 - [x] Downloads managed in-process (not delegated to `llama-server --hf`) so both

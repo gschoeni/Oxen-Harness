@@ -1,6 +1,6 @@
 //! Local LLM management for oxen-harness.
 //!
-//! Runs open-weight models (the Qwen3 family) on your own machine via
+//! Runs open-weight GGUF models (including Qwen3 and Bonsai) on your own machine via
 //! [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`, which
 //! speaks the same OpenAI-compatible API the rest of the harness already uses.
 //! The flow is:

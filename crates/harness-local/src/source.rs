@@ -14,9 +14,9 @@ use crate::LocalError;
 
 /// Known GGUF quantization tokens, longest-first so `Q4_K_M` matches before `Q4`.
 const KNOWN_QUANTS: &[&str] = &[
-    "IQ2_XXS", "IQ3_XXS", "IQ4_XS", "IQ4_NL", "IQ2_XS", "IQ3_XS", "IQ3_M", "IQ3_S", "IQ2_M",
-    "Q3_K_L", "Q3_K_M", "Q3_K_S", "Q4_K_M", "Q4_K_S", "Q5_K_M", "Q5_K_S", "Q2_K", "Q6_K", "Q4_0",
-    "Q4_1", "Q5_0", "Q5_1", "Q8_0", "BF16", "F16", "F32",
+    "IQ2_XXS", "IQ3_XXS", "Q2_G64", "PQ2_0", "IQ4_XS", "IQ4_NL", "IQ2_XS", "IQ3_XS", "IQ3_M",
+    "IQ3_S", "IQ2_M", "Q3_K_L", "Q3_K_M", "Q3_K_S", "Q4_K_M", "Q4_K_S", "Q5_K_M", "Q5_K_S", "Q1_0",
+    "Q2_0", "Q2_K", "Q6_K", "Q4_0", "Q4_1", "Q5_0", "Q5_1", "Q8_0", "BF16", "F16", "F32",
 ];
 
 /// Best-effort: extract the quant token from a GGUF filename (e.g.
@@ -317,12 +317,12 @@ pub async fn hf_list_quants(
     Ok(refs)
 }
 
-/// Whether a GGUF is an auxiliary file rather than a standalone model — e.g. an
-/// `mmproj-*` multimodal projector, which only works paired with a base model
-/// and shouldn't be offered as a downloadable model on its own.
+/// Whether a GGUF is an auxiliary file rather than a standalone model — e.g. a
+/// multimodal projector or speculative-decoding drafter, both of which only
+/// work paired with a base model and should not be offered on their own.
 fn is_auxiliary_gguf(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
-    name.starts_with("mmproj") || name.contains("-mmproj")
+    name.starts_with("mmproj") || name.contains("-mmproj") || name.contains("-dspark-")
 }
 
 /// The GGUF filename length for an HF ref (for picking the canonical/shortest
@@ -750,6 +750,11 @@ mod tests {
         );
         assert_eq!(parse_quant("model-Q8_0.gguf").as_deref(), Some("Q8_0"));
         assert_eq!(parse_quant("model-IQ4_XS.gguf").as_deref(), Some("IQ4_XS"));
+        assert_eq!(parse_quant("Bonsai-27B-Q1_0.gguf").as_deref(), Some("Q1_0"));
+        assert_eq!(
+            parse_quant("Ternary-Bonsai-27B-Q2_g64.gguf").as_deref(),
+            Some("Q2_G64")
+        );
         assert_eq!(parse_quant("model.gguf"), None);
     }
 
@@ -810,6 +815,7 @@ mod tests {
         assert!(is_auxiliary_gguf("mmproj-Qwythos-9B-F16.gguf"));
         assert!(is_auxiliary_gguf("mmproj-Qwythos-9B-f16.gguf"));
         assert!(is_auxiliary_gguf("some/path/mmproj-model.gguf"));
+        assert!(is_auxiliary_gguf("Bonsai-27B-dspark-Q4_1.gguf"));
         assert!(!is_auxiliary_gguf("Qwythos-9B-Q4_K_M.gguf"));
     }
 

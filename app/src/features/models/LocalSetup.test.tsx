@@ -26,7 +26,7 @@ describe("LocalSetup", () => {
     ipc.runtimeStatus.mockResolvedValue({
       binary: null,
       source: "none",
-      managed_version: "b9835",
+      managed_version: "b10002",
       can_manage: true,
     });
     render(<LocalSetup />);

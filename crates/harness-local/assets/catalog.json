@@ -2,6 +2,28 @@
   "schema_version": 1,
   "models": [
     {
+      "id": "bonsai-27b",
+      "display": "Bonsai 27B (1-bit)",
+      "params": "27B",
+      "repo": "prism-ml/Bonsai-27B-gguf",
+      "file": "Bonsai-27B-Q1_0.gguf",
+      "quant": "Q1_0",
+      "approx_bytes": 3803452480,
+      "context": 262144,
+      "note": "27B reasoning and native tool calling in a ~3.8 GB download; supported by current stock llama.cpp."
+    },
+    {
+      "id": "ternary-bonsai-27b",
+      "display": "Ternary Bonsai 27B",
+      "params": "27B",
+      "repo": "prism-ml/Ternary-Bonsai-27B-gguf",
+      "file": "Ternary-Bonsai-27B-Q2_g64.gguf",
+      "quant": "Q2_G64",
+      "approx_bytes": 7585330240,
+      "context": 262144,
+      "note": "Higher-quality 27B Q2 build for a current stock llama.cpp CPU or Metal runtime; ~7.6 GB download."
+    },
+    {
       "id": "qwen3-0.6b",
       "display": "Qwen3 0.6B",
       "params": "0.6B",
@@ -10,6 +32,7 @@
       "quant": "Q4_K_M",
       "approx_bytes": 513802240,
       "context": 40960,
+      "derive_quants": true,
       "note": "Tiny; runs anywhere. Good for quick edits and testing the loop."
     },
     {
@@ -21,6 +44,7 @@
       "quant": "Q4_K_M",
       "approx_bytes": 1468006400,
       "context": 40960,
+      "derive_quants": true,
       "note": "Small and snappy on a laptop CPU."
     },
     {
@@ -32,6 +56,7 @@
       "quant": "Q4_K_M",
       "approx_bytes": 2621440000,
       "context": 40960,
+      "derive_quants": true,
       "note": "Capable lightweight coder; fits in ~4 GB of RAM/VRAM."
     },
     {
@@ -43,6 +68,7 @@
       "quant": "Q4_K_M",
       "approx_bytes": 5368709120,
       "context": 40960,
+      "derive_quants": true,
       "note": "Strong all-rounder for an 8-12 GB machine."
     },
     {
@@ -54,6 +80,7 @@
       "quant": "Q4_K_M",
       "approx_bytes": 9663676416,
       "context": 40960,
+      "derive_quants": true,
       "note": "Noticeably sharper reasoning; wants ~12 GB."
     },
     {
@@ -65,6 +92,7 @@
       "quant": "Q4_K_M",
       "approx_bytes": 19327352832,
       "context": 40960,
+      "derive_quants": true,
       "note": "Big-model quality at ~3B speed; great on a 24 GB card."
     },
     {
@@ -76,6 +104,7 @@
       "quant": "Q4_K_M",
       "approx_bytes": 21474836480,
       "context": 40960,
+      "derive_quants": true,
       "note": "Heaviest dense option; needs ~24 GB and patience on CPU."
     }
   ]

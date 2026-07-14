@@ -144,14 +144,20 @@ brew install llama.cpp                       # macOS
 # Or point at any build: export LLAMA_SERVER=/path/to/llama-server
 ```
 
+Use a current build for newer formats. The desktop setup manages a pinned
+Apple Silicon build (`b10002`); if Homebrew is already installed, run
+`brew upgrade llama.cpp` before using Bonsai 27B.
+
 **2. Browse and download a model.** The catalog lives in configuration files,
-not code: a built-in list (the Qwen3 family at `Q4_K_M`, from a 0.6B that runs
-anywhere up to the 32B and the 30B-A3B mixture-of-experts) plus your own
-additions in `~/.oxen-harness/local-models.json`:
+not code: Qwen3 at `Q4_K_M` (0.6B through 32B and 30B-A3B), plus
+[Bonsai 27B](https://huggingface.co/collections/prism-ml/bonsai-27b) at its
+native 1-bit and ternary formats. Your own additions live in
+`~/.oxen-harness/local-models.json`:
 
 ```bash
 oxen-harness models list            # catalog + everything downloaded, sizes, disk used
 oxen-harness models pull qwen3-8b   # download with a live progress bar
+oxen-harness models pull bonsai-27b # 27B reasoning/tool calling in ~3.8 GB
 oxen-harness models remove qwen3-8b # reclaim the disk (also clears stale .part files)
 ```
 
@@ -168,11 +174,25 @@ are required:
 }
 ```
 
+An entry names one exact GGUF by default. If—and only if—the repository ships
+the standard sibling filenames (`Q8_0`, `Q6_K`, …, `Q3_K_M`), add
+`"derive_quants": true` to offer that ladder. This makes a new native format a
+safe JSON-only addition instead of guessing download URLs. The Bonsai entries
+use the standalone language weights for text, reasoning, and native tool calls;
+optional vision projectors and speculative-decoding drafters are not presented
+as standalone models.
+
+`bonsai-27b` is the broadly supported stock-llama.cpp choice.
+`ternary-bonsai-27b` uses the higher-quality mainline `Q2_g64` file and currently
+targets CPU or Metal; CUDA users should use the 1-bit entry or point
+`LLAMA_SERVER` at PrismML's fork. See the
+[official demo compatibility table](https://github.com/PrismML-Eng/Bonsai-demo#upstream-status-for-ternary).
+
 **3. Ride it.** `--local` starts `llama-server` for the session (auto-downloading
 the model first if needed) and points the agent at it:
 
 ```bash
-oxen-harness --local qwen3-8b
+oxen-harness --local bonsai-27b
 ```
 
 Anything already downloaded — a catalog model at any quant, a model installed
@@ -180,8 +200,9 @@ from the desktop app's Hugging Face search, or a GGUF you dropped into the
 models directory yourself — starts **fully offline**: `--local <id>` resolves
 weights on disk first and only reaches for the network when there's nothing to
 serve. Weights live in `~/.oxen-harness/models/`. Match the model to your
-hardware (roughly: 0.6B–4B on a CPU/small GPU, 8B–14B on an 8–12 GB machine,
-32B or 30B-A3B on a 24 GB card). The desktop app exposes the same catalog under
+hardware (roughly: 0.6B–4B on a CPU/small GPU, 8B–14B on an 8–12 GB machine;
+the 1-bit Bonsai 27B also fits there despite its parameter count; conventional
+32B or 30B-A3B Q4 builds want a 24 GB card). The desktop app exposes the same catalog under
 **🐂 Local models**.
 
 ## Theming — make it yours

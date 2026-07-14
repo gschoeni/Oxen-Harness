@@ -28,7 +28,7 @@ oxen-harness/
     harness-tools/           — TypedTool trait, bounded process/HTTP capture, fs read/write/edit, glob/search, shell, git, web, questions, canvas, plans, skills, and custom HTTP tools.
     harness-store/           — SQLite history (verbatim) + JSONL export; rusqlite_migration schema versioning; rich session metadata.
     harness-oxen/            — Version config/data + export/share traces via the `oxen` CLI (testable Runner shell-out; no liboxen).
-    harness-local/           — Local models: Qwen3 GGUF catalog, downloads + disk tracking, llama-server launcher.
+    harness-local/           — Local models: extensible GGUF catalog (Qwen3 + Bonsai), downloads + disk tracking, llama-server launcher.
     harness-theme/           — Configurable themes (palette + voice): built-ins, TOML/JSON load/save with partial overrides, active-theme store.
     harness-agent/           — The agent (Ralph) loop (llm + tools + store); the fleet (run_fleet: N parallel detached subagents) + the model-facing spawn_agents tool (FleetSpawner/FleetSink).
     harness-runtime/         — Front-end-agnostic services shared by CLI/desktop: connection settings + secrets (.env), cloud-model catalog, tool prefs + custom tools, skill discovery/prefs/authoring, opt-in Oxen versioning of ~/.oxen-harness.

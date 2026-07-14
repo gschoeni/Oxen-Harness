@@ -389,25 +389,35 @@ palette to its CSS variables and uses the voice phrases for status + tool chips.
 
 ## Local models (llama.cpp)
 
-**Run open-weight models locally via `llama-server`** (2026-06-21)
-Added a `harness-local` crate so the agent can run Qwen3 models on the user's own
+**Run open-weight models locally via `llama-server`** (2026-06-21; revised 2026-07-14)
+Added a `harness-local` crate so the agent can run GGUF models on the user's own
 machine, fully offline. llama.cpp's `llama-server` was chosen because it exposes
 the *same* OpenAI-compatible chat-completions API the harness already speaks — so a
 local model is just `OxenClient::new("http://127.0.0.1:<port>/v1", "local", id)`
 with a throwaway key, **no client changes**. `--jinja` is passed so the model's
 chat template (and thus tool calling) works.
 
-- **Catalog** = curated Qwen3 GGUFs at `Q4_K_M` (the consumer sweet spot: ~4.5
-  bits/weight, near-FP16 quality at ~28% size), 0.6B → 32B plus the 30B-A3B MoE,
-  from the de-facto-standard `bartowski` repos. All repo/file URLs were
-  HEAD-verified against Hugging Face before shipping.
+- **Catalog is data, not Rust**: built-ins live in `assets/catalog.json`; users
+  add or override entries in `~/.oxen-harness/local-models.json`. It includes
+  Qwen3 `Q4_K_M` models from 0.6B → 32B plus 30B-A3B, and the July 2026 Bonsai
+  27B release: the 3,803,452,480-byte `Q1_0` binary GGUF and the
+  7,585,330,240-byte mainline-compatible `Q2_g64` ternary GGUF, both with a
+  262,144-token native window. The standard Q8→Q3 filename ladder is explicitly
+  opt-in per entry (`derive_quants`); native/one-off formats get exactly their
+  published file. This keeps adding a model a JSON-only change without making
+  guessed URLs part of the UI.
+- **Low-bit discovery is first-class**: Q1/Q2/PQ2 names parse like conventional
+  quants, while optional `mmproj` vision projectors and DSpark speculative
+  drafters are filtered from the generic standalone-model picker.
 - **Downloads are managed in-process** (streamed via `reqwest` to a `.part` file,
   atomically renamed) rather than delegated to `llama-server --hf`, *specifically*
   so the CLI and UI can show real download progress and per-model disk usage — the
   feature the user asked for. Weights live in `~/.oxen-harness/models/`.
-- **`llama-server` is detected, not bundled** (`LLAMA_SERVER` override or `PATH`);
-  when missing we fail fast with a platform-specific install hint (`brew install
-  llama.cpp`, a release download, or the env override) instead of a cryptic error.
+- **`llama-server` resolution** prefers `LLAMA_SERVER`, then the desktop-managed
+  runtime, then `PATH`/Homebrew. The managed Apple Silicon build is deliberately
+  pinned (now llama.cpp `b10002`, new enough for Bonsai Q1 and mainline Q2 on
+  CPU/Metal); other platforms get an actionable install hint rather than a
+  cryptic spawn error.
 - **Server lifecycle**: a free port is picked, the process spawned, `/health`
   polled until the model loads, and the process killed on `Drop` so a session never
   leaks a background server. Selected at startup via `--local`; mid-session

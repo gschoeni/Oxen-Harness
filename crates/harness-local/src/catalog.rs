@@ -19,6 +19,7 @@
 //!       "quant": "Q4_K_M",
 //!       "approx_bytes": 5368709120,
 //!       "context": 40960,
+//!       "derive_quants": true,
 //!       "note": "Strong all-rounder for an 8-12 GB machine."
 //!     }
 //!   ]
@@ -27,9 +28,9 @@
 //!
 //! Only `id`, `repo`, and `file` are required in a user entry — `display`,
 //! `params`, and `quant` are derived from the repo/filename when omitted.
-//! The built-ins point at public Hugging Face GGUFs (the `bartowski` Qwen3
-//! quants) at `Q4_K_M`, the consumer sweet spot; `approx_bytes` is the
-//! published download size, and the real size is measured once on disk.
+//! `derive_quants` is opt-in: use it only when the repository publishes the
+//! standard Q8-to-Q3 filename ladder. This keeps one-off/native formats such as
+//! Bonsai's Q1/Q2 packs from advertising files that do not exist.
 
 use std::sync::OnceLock;
 
@@ -62,6 +63,9 @@ pub struct ModelSpec {
     /// Native context window in tokens (0 = read it from the GGUF once local).
     #[serde(default)]
     pub context: u32,
+    /// Derive the standard Q8-to-Q3 sibling filenames from `file`.
+    #[serde(default)]
+    pub derive_quants: bool,
     /// A short "who is this for" note.
     #[serde(default)]
     pub note: String,
@@ -140,8 +144,9 @@ pub fn find(id: &str) -> Option<ModelSpec> {
     catalog().into_iter().find(|m| m.id == id)
 }
 
-/// Quants offered for a curated model, largest (best quality) first. These all
-/// exist in the bartowski Qwen3 GGUF repos the built-in catalog draws from.
+/// Standard sibling quants for entries that opt into filename derivation,
+/// largest (best quality) first. The built-in bartowski Qwen3 repos publish all
+/// of these; native and one-off formats leave `derive_quants` disabled.
 const CURATED_QUANTS: &[&str] = &["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "Q3_K_M"];
 
 /// The installable [`ModelRef`](crate::source::ModelRef)s for a catalog model — one per quant, with
@@ -174,7 +179,7 @@ pub fn quant_refs(spec: &ModelSpec) -> Vec<crate::source::ModelRef> {
 
     // Without a quant token in the filename there's nothing to derive siblings
     // from — offer the one file the spec names.
-    if spec.quant.is_empty() || !spec.file.contains(&spec.quant) {
+    if !spec.derive_quants || spec.quant.is_empty() || !spec.file.contains(&spec.quant) {
         return vec![make_ref(&spec.quant, spec.file.clone(), spec.approx_bytes)];
     }
 
@@ -259,6 +264,11 @@ mod tests {
             assert_eq!(added.display, "my-model");
             assert_eq!(added.quant, "Q5_K_M");
             assert_eq!(added.params, "7B");
+            assert_eq!(
+                quant_refs(&added).len(),
+                1,
+                "custom entries must not invent sibling filenames"
+            );
 
             // The override replaces the built-in (no duplicate id).
             let cat = catalog();
@@ -307,6 +317,32 @@ mod tests {
     }
 
     #[test]
+    fn bonsai_27b_entries_match_the_published_mainline_ggufs() {
+        with_temp_harness_dir(|| {
+            let binary = find("bonsai-27b").expect("1-bit Bonsai 27B should be built in");
+            assert_eq!(binary.repo, "prism-ml/Bonsai-27B-gguf");
+            assert_eq!(binary.file, "Bonsai-27B-Q1_0.gguf");
+            assert_eq!(binary.quant, "Q1_0");
+            assert_eq!(binary.approx_bytes, 3_803_452_480);
+            assert_eq!(binary.context, 262_144);
+            let binary_refs = quant_refs(&binary);
+            assert_eq!(binary_refs.len(), 1);
+            assert_eq!(binary_refs[0].size_bytes, binary.approx_bytes);
+
+            let ternary =
+                find("ternary-bonsai-27b").expect("ternary Bonsai 27B should be built in");
+            assert_eq!(ternary.repo, "prism-ml/Ternary-Bonsai-27B-gguf");
+            assert_eq!(ternary.file, "Ternary-Bonsai-27B-Q2_g64.gguf");
+            assert_eq!(ternary.quant, "Q2_G64");
+            assert_eq!(ternary.approx_bytes, 7_585_330_240);
+            assert_eq!(ternary.context, 262_144);
+            let ternary_refs = quant_refs(&ternary);
+            assert_eq!(ternary_refs.len(), 1);
+            assert_eq!(ternary_refs[0].size_bytes, ternary.approx_bytes);
+        });
+    }
+
+    #[test]
     fn quant_refs_fall_back_to_a_single_file_without_a_quant_token() {
         let spec = normalize(ModelSpec {
             id: "custom".into(),
@@ -317,6 +353,7 @@ mod tests {
             quant: String::new(),
             approx_bytes: 42,
             context: 0,
+            derive_quants: false,
             note: String::new(),
         });
         let refs = quant_refs(&spec);
