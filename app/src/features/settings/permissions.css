@@ -1,0 +1,185 @@
+/* Settings → Permissions: mode selector + allow/deny rule management. */
+.perms-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  max-width: 720px;
+}
+.perms-error {
+  color: var(--danger, #c0392b);
+  font-size: var(--text-sm);
+}
+.perms-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.perms-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--text);
+}
+.perms-shield {
+  color: var(--accent);
+}
+.perms-blurb {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.perms-blurb code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9em;
+}
+
+.perms-modes {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.perms-mode {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+.perms-mode.active {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.perms-mode-blurb {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  min-height: 2.5em;
+}
+
+.perms-scope {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  margin-top: var(--space-2);
+}
+.perms-scope-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.perms-scope-title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text);
+}
+.perms-scope-path {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+.perms-empty {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.perms-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.perms-kind {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+.perms-kind.deny {
+  color: var(--danger, #c0392b);
+}
+.perms-rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.perms-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.05));
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+}
+.perms-rule code {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.perms-rule-x {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  background: none;
+  border: none;
+  padding: 2px;
+  cursor: pointer;
+}
+.perms-rule-x:hover {
+  color: var(--danger, #c0392b);
+}
+
+.perms-add {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  flex-wrap: wrap;
+}
+.perms-select {
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+.perms-input {
+  flex: 1;
+  min-width: 220px;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+.perms-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.perms-add-btn {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+.perms-add-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

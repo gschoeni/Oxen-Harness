@@ -14,6 +14,7 @@ import {
   Palette,
   ScrollText,
   SearchCode,
+  ShieldCheck,
   Shrink,
   Sun,
   Wrench,
@@ -29,6 +30,7 @@ import { ToolsPage } from "../tools/ToolsPage";
 import { SkillsPage } from "../skills/SkillsPage";
 import { CloudModelsPage } from "./CloudModelsPage";
 import { CodeReviewPage } from "./CodeReviewPage";
+import { PermissionsPage } from "./PermissionsPage";
 import { PreviewPage } from "./PreviewPage";
 import { CompressionPage } from "./CompressionPage";
 import { UsagePage } from "./UsagePage";
@@ -42,6 +44,7 @@ const NAV: { page: SettingsPage; icon: ReactNode; label: string; blurb: string }
   { page: "cloud-models", icon: <Cloud size={18} />, label: "Cloud models", blurb: "Hosted model catalog" },
   { page: "local-models", icon: <Cpu size={18} />, label: "Local models", blurb: "Download & run on-device" },
   { page: "tools", icon: <Wrench size={18} />, label: "Tools", blurb: "What the agent can do" },
+  { page: "permissions", icon: <ShieldCheck size={18} />, label: "Permissions", blurb: "When the agent asks first" },
   { page: "skills", icon: <GraduationCap size={18} />, label: "Skills", blurb: "Reusable workflows it can learn" },
   { page: "preview", icon: <Globe size={18} />, label: "Preview", blurb: "Live app preview & dev servers" },
   { page: "code-review", icon: <SearchCode size={18} />, label: "Code review", blurb: "The find → verify → report pipeline" },
@@ -56,6 +59,7 @@ const TITLE: Record<SettingsPage, string> = {
   "cloud-models": "Cloud models",
   "local-models": "Local models",
   tools: "Tools",
+  permissions: "Permissions",
   skills: "Skills",
   preview: "Preview",
   "code-review": "Code review",
@@ -132,6 +136,7 @@ export function Settings() {
             {page === "cloud-models" && <CloudModelsPage />}
             {page === "local-models" && <LocalSetup />}
             {page === "tools" && <ToolsPage />}
+            {page === "permissions" && <PermissionsPage />}
             {page === "skills" && <SkillsPage />}
             {page === "preview" && <PreviewPage />}
             {page === "code-review" && <CodeReviewPage />}

@@ -241,6 +241,7 @@ async fn handle_line(
         Command::Skills => print_skills(ui, ctx.workspace_root),
         Command::Auth(rest) => commands::auth::handle_repl(rest, agent, ui, ctx.base_url)?,
         Command::Compression(rest) => commands::compression::handle_repl(rest, agent, ui)?,
+        Command::Permissions(rest) => commands::permissions::handle_repl(rest, agent, ui)?,
         Command::Usage => commands::usage::handle_repl(ctx.store, ui).await,
         Command::Preview => commands::preview::handle_repl(ui),
         Command::Model(rest) => commands::model::handle_repl(rest, agent, ui).await?,

@@ -353,6 +353,55 @@ export interface QuestionAnswer {
   selected: string[];
 }
 
+/** `agent://approval-request` payload — a gated tool call waiting on the
+ *  user's decision (the permission gate's approval card). */
+export interface ApprovalRequestEvent {
+  session: string;
+  id: string;
+  kind: "shell" | "file_edit" | "git_commit";
+  tool: string;
+  command: string;
+  risk: string;
+  reasons: string[];
+  grant_label: string;
+  offer_project_grant: boolean;
+  offer_trash: boolean;
+}
+
+/** `agent://approval` payload — a pending/resolved marker for the thread. */
+export interface ApprovalEvent {
+  session: string;
+  phase: "pending" | "resolved";
+  name: string;
+  command: string;
+  decision: string;
+}
+
+/** The decision sent back through `answer_approval`. */
+export type ApprovalChoice = "once" | "session" | "project" | "trash" | "deny";
+
+// ---- permissions settings ---------------------------------------------------
+
+export type PermissionScope = "global" | "project";
+export type PermissionRuleKind = "allow" | "allow_exact" | "deny";
+
+/** One scope's saved permission rules (Settings → Permissions). */
+export interface PermissionRuleSet {
+  mode: string | null;
+  allow: string[];
+  allow_exact: string[];
+  deny: string[];
+}
+
+/** Everything the Permissions settings page renders. */
+export interface PermissionsView {
+  /** The effective default mode: "relaxed" | "cautious" | "bypass". */
+  mode: string;
+  global: PermissionRuleSet;
+  project: PermissionRuleSet;
+  project_path: string;
+}
+
 // ---- streamed agent events -------------------------------------------------
 
 /** `agent://token` payload — a streamed token tagged with its chat session. */
@@ -442,6 +491,7 @@ export type SettingsPage =
   | "cloud-models"
   | "local-models"
   | "tools"
+  | "permissions"
   | "skills"
   | "preview"
   | "code-review"

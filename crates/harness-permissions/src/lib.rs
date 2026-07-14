@@ -147,9 +147,36 @@ impl PermissionGate {
         self.policy.read().expect("policy poisoned").mode
     }
 
+    /// The workspace this gate scopes (where project grants persist).
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+
+    /// A snapshot of the merged rules currently in force (for `/permissions`).
+    pub fn policy_snapshot(&self) -> PolicySet {
+        self.policy.read().expect("policy poisoned").clone()
+    }
+
     /// Whether approval prompts reach a human (drives host screen hand-off).
     pub fn is_interactive(&self) -> bool {
         self.approver.is_interactive()
+    }
+
+    /// Switch the live mode (mid-session `/permissions` toggle) and persist it
+    /// as the global default. The policy is shared with this session's
+    /// subagent gates, so future lanes see the new mode too.
+    pub fn set_mode(&self, mode: PermissionMode) {
+        self.policy.write().expect("policy poisoned").mode = mode;
+        if let Err(e) = policy::persist_global_mode(mode) {
+            tracing::warn!("could not persist permission mode: {e}");
+        }
+    }
+
+    /// Reload allow/deny rules and mode from disk (after Settings edits), for
+    /// the live session. Keeps in-memory session grants.
+    pub fn reload_policy(&self) {
+        let mut policy = self.policy.write().expect("policy poisoned");
+        *policy = PolicySet::load(&self.workspace);
     }
 
     /// First stage: classify + apply policy, no user interaction. `args` are

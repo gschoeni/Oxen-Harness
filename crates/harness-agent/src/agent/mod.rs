@@ -328,6 +328,12 @@ impl Agent {
         self.tools.definitions()
     }
 
+    /// The session's permission gate, if one is configured — for the host's
+    /// `/permissions` command (live mode switches, rule display).
+    pub fn permission_gate(&self) -> Option<&Arc<harness_permissions::PermissionGate>> {
+        self.config.permissions.as_ref()
+    }
+
     /// Run a one-shot completion that is *not* part of the session transcript
     /// (no tools, nothing persisted). Used for side tasks like generating a
     /// theme from a natural-language description, reusing the session's model

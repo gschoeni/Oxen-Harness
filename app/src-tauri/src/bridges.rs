@@ -62,6 +62,109 @@ impl QuestionAsker for TauriAsker {
     }
 }
 
+/// The UI's reply to one approval request (the `answer_approval` command's
+/// payload): a decision keyword plus an optional free-text denial reason.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub(crate) struct ApprovalAnswer {
+    /// "once" | "session" | "project" | "trash" | "deny".
+    pub(crate) decision: String,
+    /// The user's own words when denying (sent back to the model).
+    #[serde(default)]
+    pub(crate) message: Option<String>,
+}
+
+impl ApprovalAnswer {
+    fn into_decision(self) -> harness_permissions::ApprovalDecision {
+        use harness_permissions::ApprovalDecision;
+        match self.decision.as_str() {
+            "once" => ApprovalDecision::AllowOnce,
+            "session" => ApprovalDecision::AllowSession,
+            "project" => ApprovalDecision::AllowProject,
+            "trash" => ApprovalDecision::MoveToTrash,
+            _ => match self.message {
+                Some(msg) if !msg.trim().is_empty() => ApprovalDecision::DenyWithMessage(msg),
+                _ => ApprovalDecision::Deny,
+            },
+        }
+    }
+}
+
+/// Bridges the permission gate's approval prompts to the web UI: emits an
+/// `agent://approval-request` event and parks on a channel until
+/// `answer_approval` delivers the user's decision. A dropped channel (chat
+/// evicted, app shutting down) reads as "no interactive user" and the gate
+/// declines the command.
+pub(crate) struct TauriApprover {
+    pub(crate) app: AppHandle,
+    pub(crate) pending: crate::state::PendingApprovals,
+    pub(crate) session: String,
+}
+
+#[async_trait]
+impl harness_permissions::CommandApprover for TauriApprover {
+    async fn approve(
+        &self,
+        request: &harness_permissions::ApprovalRequest,
+    ) -> Result<Option<harness_permissions::ApprovalDecision>, String> {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = format!("a{}", COUNTER.fetch_add(1, Ordering::Relaxed));
+
+        let (tx, rx) = oneshot::channel();
+        self.pending
+            .lock()
+            .expect("pending approvals poisoned")
+            .insert(id.clone(), tx);
+
+        self.app
+            .emit(
+                "agent://approval-request",
+                ApprovalRequestPayload {
+                    session: self.session.clone(),
+                    id: id.clone(),
+                    kind: match request.kind {
+                        harness_permissions::ApprovalKind::Shell => "shell",
+                        harness_permissions::ApprovalKind::FileEdit => "file_edit",
+                        harness_permissions::ApprovalKind::GitCommit => "git_commit",
+                    },
+                    tool: request.tool.clone(),
+                    command: request.command.clone(),
+                    risk: request.risk.label(),
+                    reasons: request.reasons.clone(),
+                    grant_label: request.grant_label.clone(),
+                    offer_project_grant: request.offer_project_grant,
+                    offer_trash: request.offer_trash,
+                },
+            )
+            .map_err(|e| e.to_string())?;
+
+        match rx.await {
+            Ok(answer) => Ok(Some(answer.into_decision())),
+            Err(_) => {
+                self.pending
+                    .lock()
+                    .expect("pending approvals poisoned")
+                    .remove(&id);
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// The `agent://approval-request` payload: everything the approval card needs.
+#[derive(Clone, serde::Serialize)]
+pub(crate) struct ApprovalRequestPayload {
+    pub(crate) session: String,
+    pub(crate) id: String,
+    pub(crate) kind: &'static str,
+    pub(crate) tool: String,
+    pub(crate) command: String,
+    pub(crate) risk: &'static str,
+    pub(crate) reasons: Vec<String>,
+    pub(crate) grant_label: String,
+    pub(crate) offer_project_grant: bool,
+    pub(crate) offer_trash: bool,
+}
+
 /// Bridges the agent's `canvas` tool to the desktop side panel: emits an
 /// `agent://canvas` event with the document. One sink per agent, so it carries
 /// that agent's session id.

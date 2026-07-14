@@ -309,6 +309,21 @@ export const onQuestion = listener("question");
 export const onFileDrop = listener("fileDrop");
 export const pickAttachments = vi.fn(async () => [] as string[]);
 export const answerQuestion = vi.fn(async () => {});
+export const onApprovalRequest = listener("approvalRequest");
+export const onApproval = listener("approval");
+export const answerApproval = vi.fn(async () => {});
+
+// ---- permissions (Settings → Permissions) -----------------------------------
+const emptyRules = { mode: null, allow: [], allow_exact: [], deny: [] };
+export const getPermissions = vi.fn(async () => ({
+  mode: "relaxed",
+  global: { ...emptyRules },
+  project: { ...emptyRules },
+  project_path: "/tmp/proj",
+}));
+export const setPermissionMode = vi.fn(async () => {});
+export const addPermissionRule = vi.fn(async () => {});
+export const removePermissionRule = vi.fn(async () => {});
 
 // ---- live preview ------------------------------------------------------------
 export const onPreviewStatus = listener("previewStatus");
@@ -431,6 +446,16 @@ export function resetIpc() {
   configureOxenKey.mockReset().mockResolvedValue(undefined);
   pickAttachments.mockReset().mockResolvedValue([]);
   answerQuestion.mockReset().mockResolvedValue(undefined);
+  answerApproval.mockReset().mockResolvedValue(undefined);
+  setPermissionMode.mockReset().mockResolvedValue(undefined);
+  addPermissionRule.mockReset().mockResolvedValue(undefined);
+  removePermissionRule.mockReset().mockResolvedValue(undefined);
+  getPermissions.mockReset().mockResolvedValue({
+    mode: "relaxed",
+    global: { mode: null, allow: [], allow_exact: [], deny: [] },
+    project: { mode: null, allow: [], allow_exact: [], deny: [] },
+    project_path: "/tmp/proj",
+  });
   previewAttach.mockReset().mockResolvedValue(undefined);
   previewDetach.mockReset().mockResolvedValue(undefined);
   previewReload.mockReset().mockResolvedValue(undefined);
@@ -504,6 +529,8 @@ export function resetIpc() {
     onCompression,
     onRetry,
     onQuestion,
+    onApprovalRequest,
+    onApproval,
     onFileDrop,
     onModelProgress,
     onRuntimeInstall,

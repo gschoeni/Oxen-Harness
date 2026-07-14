@@ -15,6 +15,7 @@ import { StreamingWrite } from "./StreamingWrite";
 import { AttachmentImage } from "./AttachmentImage";
 import { isImagePath } from "../../lib/attachments";
 import { QuestionPrompt } from "../questions/QuestionPrompt";
+import { ApprovalPrompt } from "../approvals/ApprovalPrompt";
 import { type Item } from "./thread";
 import "./chat.css";
 import { dispatchSlashCommand } from "./slashDispatch";
@@ -261,6 +262,7 @@ export function Chat() {
         </div>
       )}
       <QuestionPrompt />
+      <ApprovalPrompt />
       {gameDockOpen && items.length > 0 && <GameDock />}
       {items.length > 0 && <TokenMeter />}
       <Composer

@@ -6,7 +6,13 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
+  ApprovalChoice,
+  ApprovalEvent,
+  ApprovalRequestEvent,
   CatalogModel,
+  PermissionRuleKind,
+  PermissionScope,
+  PermissionsView,
   CloudModel,
   ConnectionView,
   DownloadProgress,
@@ -314,6 +320,39 @@ export const onCanvasWriting = (handler: (session: string) => void) =>
 
 export const answerQuestion = (id: string, answers: QuestionAnswer[]) =>
   invoke<void>("answer_question", { id, answers });
+
+/** A gated tool call is waiting on the user's approval decision. */
+export const onApprovalRequest = (handler: (e: ApprovalRequestEvent) => void) =>
+  listen<ApprovalRequestEvent>("agent://approval-request", (e) => handler(e.payload));
+
+/** Pending/resolved approval markers (the resolved one closes the card and
+ *  leaves a notice line in the thread). */
+export const onApproval = (handler: (e: ApprovalEvent) => void) =>
+  listen<ApprovalEvent>("agent://approval", (e) => handler(e.payload));
+
+/** Deliver the user's decision on a pending approval, unblocking the tool. */
+export const answerApproval = (id: string, decision: ApprovalChoice, message?: string) =>
+  invoke<void>("answer_approval", { id, answer: { decision, message: message ?? null } });
+
+// ---- permissions (Settings → Permissions) -----------------------------------
+
+/** The permission mode + allow/deny rules (global and active project). */
+export const getPermissions = () => invoke<PermissionsView>("get_permissions");
+
+/** Set the global default mode; applies to new and resumed chats. */
+export const setPermissionMode = (mode: string) => invoke<void>("set_permission_mode", { mode });
+
+export const addPermissionRule = (
+  scope: PermissionScope,
+  kind: PermissionRuleKind,
+  value: string,
+) => invoke<void>("add_permission_rule", { scope, kind, value });
+
+export const removePermissionRule = (
+  scope: PermissionScope,
+  kind: PermissionRuleKind,
+  value: string,
+) => invoke<void>("remove_permission_rule", { scope, kind, value });
 
 // ---- code review (the configurable find → verify → report pipeline) --------
 

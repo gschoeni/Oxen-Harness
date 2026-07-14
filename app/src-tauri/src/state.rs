@@ -30,6 +30,12 @@ use crate::events::{emit_local_status, local_status_emitter};
 /// Outstanding `ask_user_question` prompts awaiting a UI answer, keyed by id.
 pub(crate) type Pending = Arc<StdMutex<HashMap<String, oneshot::Sender<Vec<QuestionAnswer>>>>>;
 
+/// Outstanding permission-approval prompts awaiting a UI decision, keyed by id
+/// (the `agent://approval-request` ↔ `answer_approval` bridge — the same
+/// oneshot pattern as [`Pending`]).
+pub(crate) type PendingApprovals =
+    Arc<StdMutex<HashMap<String, oneshot::Sender<crate::bridges::ApprovalAnswer>>>>;
+
 /// Per-session agents, each behind its own lock so turns in different chats run
 /// concurrently — a background chat keeps streaming while you start or read
 /// another. The map lock is held only briefly to look an agent up; the turn
@@ -53,6 +59,8 @@ pub struct AppState {
     pub(crate) active_project: Mutex<PathBuf>,
     /// Questions the agent is currently waiting on the user to answer.
     pub(crate) pending: Pending,
+    /// Permission approvals the agent is currently waiting on the user for.
+    pub(crate) pending_approvals: PendingApprovals,
     /// Stop signals for in-flight turns, keyed by session. Held here (not on the
     /// agent) so `cancel_turn` can fire one without taking the agent's lock,
     /// which the running turn holds for its whole duration.
@@ -256,6 +264,17 @@ pub(crate) fn finish_tools(
         // Retry attempts and failed turns append to ~/.oxen-harness/errors.jsonl
         // so a developer can dig into what the endpoint said later.
         error_log: harness_config::paths::errors_log().ok(),
+        // Gate tool calls behind the permission layer, with approval prompts
+        // rendered as chat cards (agent://approval-request ↔ answer_approval).
+        // Fleet/review subagents get the gate's auto-deny form automatically.
+        permissions: Some(Arc::new(harness_permissions::PermissionGate::new(
+            workspace_root,
+            Arc::new(crate::bridges::TauriApprover {
+                app: app.clone(),
+                pending: app.state::<AppState>().pending_approvals.clone(),
+                session: session.to_string(),
+            }),
+        ))),
         ..AgentConfig::default()
     }
 }

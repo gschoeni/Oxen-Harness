@@ -11,6 +11,8 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "./store";
 import {
+  onApproval,
+  onApprovalRequest,
   onCanvas,
   onCanvasWriting,
   onCodeReviewProgress,
@@ -60,6 +62,8 @@ export function startAgentEventBridge(): void {
     onCanvas((e) => s().ingestCanvas(e)),
     onCanvasWriting((session) => s().setCanvasWriting(session, true)),
     onQuestion((q) => s().setQuestion(q)),
+    onApprovalRequest((e) => s().ingestApprovalRequest(e)),
+    onApproval((e) => s().ingestApprovalResolved(e)),
     onLocalStatus((e) => s().setLocalStatus(e)),
     onPreviewStatus((e) => s().ingestPreviewStatus(e)),
     onPreviewConsole((e) => s().ingestPreviewConsole(e)),

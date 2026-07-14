@@ -2599,6 +2599,7 @@ dependencies = [
  "harness-llm",
  "harness-local",
  "harness-loop",
+ "harness-permissions",
  "harness-preview",
  "harness-review",
  "harness-runtime",

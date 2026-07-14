@@ -259,6 +259,20 @@ impl Live {
                 .collect();
                 (items, true)
             }
+            // `/permissions <partial>` — pick one of the three modes.
+            Some(arg) if cmd == "/permissions" || cmd == "/permission" || cmd == "/perms" => {
+                let needle = arg.trim().to_lowercase();
+                let items = [
+                    ("relaxed", "only dangerous commands ask first"),
+                    ("cautious", "only read-only commands run unprompted"),
+                    ("bypass", "never ask (circuit breakers still refuse)"),
+                ]
+                .iter()
+                .filter(|(m, _)| m.starts_with(&needle))
+                .map(|(m, desc)| CompletionItem::new(format!("{cmd} {m}"), *m, *desc))
+                .collect();
+                (items, true)
+            }
             Some(_) => (Vec::new(), false),
         }
     }

@@ -146,6 +146,44 @@ pub fn prefix_matches(rule: &str, command: &str) -> bool {
         && rule_tokens.iter().zip(&cmd_tokens).all(|(r, c)| r == c)
 }
 
+/// Read the global permissions config (defaults when missing/unreadable).
+pub fn load_global() -> PermissionsConfig {
+    harness_config::paths::permissions_file()
+        .map(|p| harness_config::io::read_versioned::<PermissionsConfig>(&p).1)
+        .unwrap_or_default()
+}
+
+/// Atomically persist the global permissions config.
+pub fn save_global(config: &PermissionsConfig) -> Result<(), harness_config::ConfigError> {
+    let path = harness_config::paths::permissions_file()?;
+    harness_config::io::write_versioned(&path, SCHEMA_VERSION, config)
+}
+
+/// Read a project's permissions config (defaults when missing/unreadable).
+pub fn load_project(workspace: &Path) -> PermissionsConfig {
+    harness_config::io::read_versioned::<PermissionsConfig>(&project_permissions_file(workspace)).1
+}
+
+/// Atomically persist a project's permissions config.
+pub fn save_project(
+    workspace: &Path,
+    config: &PermissionsConfig,
+) -> Result<(), harness_config::ConfigError> {
+    harness_config::io::write_versioned(
+        &project_permissions_file(workspace),
+        SCHEMA_VERSION,
+        config,
+    )
+}
+
+/// Persist the default mode into the global config (the Settings/`/permissions`
+/// mode switch).
+pub fn persist_global_mode(mode: PermissionMode) -> Result<(), harness_config::ConfigError> {
+    let mut config = load_global();
+    config.mode = Some(mode);
+    save_global(&config)
+}
+
 /// Persist a grant into the *project* permissions file (the "always allow for
 /// this project" decision) and return the updated merged policy.
 pub fn persist_project_grant(

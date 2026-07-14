@@ -1,0 +1,140 @@
+/* The permission-approval card: pinned above the composer while a gated tool
+   call waits on the user's decision. Mirrors the clarifying-question card. */
+.aprompt {
+  flex-shrink: 0;
+  padding: 0 var(--space-5);
+}
+.aprompt-card {
+  max-width: 740px;
+  margin: 0 auto var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 52vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow), 0 -8px 24px rgba(0, 0, 0, 0.12);
+  padding: var(--space-4);
+  animation: aprompt-in var(--dur) var(--ease);
+}
+@keyframes aprompt-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.aprompt-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.achip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--on-accent);
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+}
+.aprompt-title {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.arisk {
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--danger, #c0392b);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+}
+
+.aprompt-command {
+  margin: 0;
+  padding: var(--space-3);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.06));
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 20vh;
+  overflow-y: auto;
+}
+.aprompt-reasons {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.aprompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.abtn {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+.abtn:hover {
+  border-color: var(--accent);
+}
+.abtn.primary {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.abtn.deny {
+  color: var(--danger, #c0392b);
+}
+.abtn.sm {
+  padding: var(--space-1) var(--space-2);
+}
+.abtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.aprompt-reason {
+  display: flex;
+  gap: var(--space-2);
+}
+.aprompt-reason-input {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+.aprompt-reason-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}

@@ -388,3 +388,23 @@ pub(crate) async fn answer_question(
     }
     Ok(())
 }
+
+/// Deliver the user's decision on a pending permission approval, unblocking
+/// the gated tool call. Unknown ids are ignored (the request may have been
+/// cancelled or its chat evicted).
+#[tauri::command]
+pub(crate) async fn answer_approval(
+    state: State<'_, AppState>,
+    id: String,
+    answer: crate::bridges::ApprovalAnswer,
+) -> Result<(), String> {
+    let sender = state
+        .pending_approvals
+        .lock()
+        .expect("pending approvals poisoned")
+        .remove(&id);
+    if let Some(tx) = sender {
+        let _ = tx.send(answer);
+    }
+    Ok(())
+}

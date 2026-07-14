@@ -45,6 +45,10 @@ pub enum Command {
     /// Show or switch context compression: `/compression` opens a picker;
     /// `/compression off|audit|on` switches directly.
     Compression(Option<String>),
+    /// Show or switch the permission mode: `/permissions` prints the rules in
+    /// force and opens a picker; `/permissions relaxed|cautious|bypass`
+    /// switches directly.
+    Permissions(Option<String>),
     /// Show all-time input/output tokens and estimated spend by model.
     Usage,
     /// Open the agent-started dev server in the browser (live preview).
@@ -91,6 +95,7 @@ pub fn parse_command(line: &str) -> Command {
         "/skills" | "/skill" => Command::Skills,
         "/auth" | "/login" => Command::Auth(rest),
         "/compression" | "/compress" => Command::Compression(rest),
+        "/permissions" | "/permission" | "/perms" => Command::Permissions(rest),
         "/usage" => Command::Usage,
         "/preview" | "/browser" => Command::Preview,
         "/retry" | "/continue" => Command::Retry,

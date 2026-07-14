@@ -51,6 +51,8 @@ import {
 } from "../features/chat/thread";
 import { partialCanvasDoc } from "./streamingArgs";
 import type {
+  ApprovalEvent,
+  ApprovalRequestEvent,
   CanvasDoc,
   CanvasEvent,
   CloudModel,
@@ -312,6 +314,9 @@ interface AppState {
    *  plain inspection (e.g. the chat's </> button). Absent = drawer closed. */
   inspector: { sessionId: string; review: { queue: string[]; index: number } | null } | null;
   question: QuestionPayload | null;
+  /** Pending permission approvals, keyed by session — a background chat's
+   *  approval card must not pop into the visible one. */
+  approvals: Record<string, ApprovalRequestEvent | undefined>;
 
   setMode: (m: Mode) => void;
   toggleMode: () => void;
@@ -450,6 +455,12 @@ interface AppState {
   /** Bulk-apply a keep/reject status to many chats (dataset builder bulk actions). */
   setReviewStatusMany: (ids: string[], status: ReviewStatus) => Promise<void>;
   setQuestion: (q: QuestionPayload | null) => void;
+  /** A gated tool call is waiting on (or done with) the user's decision. */
+  ingestApprovalRequest: (e: ApprovalRequestEvent) => void;
+  /** Clear the card and leave a notice line once the approval resolves. */
+  ingestApprovalResolved: (e: ApprovalEvent) => void;
+  /** Drop a session's pending approval card (after answering). */
+  clearApproval: (session: string) => void;
 }
 
 export const useStore = create<AppState>((set, get) => {
@@ -581,6 +592,7 @@ export const useStore = create<AppState>((set, get) => {
     settingsPage: "connection",
     inspector: null,
     question: null,
+    approvals: {},
 
     setMode: (mode) => {
       document.documentElement.dataset.theme = mode;
@@ -1447,6 +1459,32 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     setQuestion: (question) => set({ question }),
+
+    ingestApprovalRequest: (e) =>
+      set((s) => ({ approvals: { ...s.approvals, [e.session]: e } })),
+
+    ingestApprovalResolved: (e) =>
+      set((s) => {
+        if (e.phase !== "resolved") return {};
+        const approvals = { ...s.approvals };
+        delete approvals[e.session];
+        const thread = s.threads[e.session];
+        if (thread === undefined) return { approvals };
+        return {
+          approvals,
+          threads: {
+            ...s.threads,
+            [e.session]: appendNotice(thread, `🛡 ${e.decision} — ${e.command}`),
+          },
+        };
+      }),
+
+    clearApproval: (session) =>
+      set((s) => {
+        const approvals = { ...s.approvals };
+        delete approvals[session];
+        return { approvals };
+      }),
   };
 });
 
