@@ -1,12 +1,11 @@
 //! The cloud model catalog, shared by the CLI and desktop app.
 //!
-//! A short list of built-in models is always offered; on top of that the user
-//! can add their own (any model id the configured Oxen endpoint serves). The
-//! custom additions and the currently selected default live in
-//! `~/.oxen-harness/models.json` (versioned, safe to share — no secrets).
-//!
-//! Built-ins are merged in at read time rather than written to disk, so the set
-//! the app ships with can change without rewriting every user's file.
+//! The catalog is entirely user-curated: models are added from the configured
+//! endpoint's hosted catalog (or manually by id) and live, along with the
+//! currently selected default, in `~/.oxen-harness/models.json` (versioned,
+//! safe to share — no secrets). Nothing ships pre-seeded; an empty catalog
+//! falls back to [`harness_core::DEFAULT_MODEL`] so a fresh install can still
+//! chat before configuring one.
 
 use harness_config::paths;
 use serde::{Deserialize, Serialize};
@@ -24,13 +23,12 @@ pub struct ModelEntry {
     pub name: String,
 }
 
-/// A catalog entry as rendered in the UI: a model plus whether it's a built-in
-/// (so it can't be removed) and whether it's the currently selected default.
+/// A catalog entry as rendered in the UI: a model plus whether it's the
+/// currently selected default.
 #[derive(Debug, Clone, Serialize)]
 pub struct CloudModel {
     pub id: String,
     pub name: String,
-    pub builtin: bool,
     pub selected: bool,
 }
 
@@ -50,24 +48,6 @@ pub struct ModelsConfig {
     pub active_local: String,
 }
 
-/// The built-in cloud models, always offered. The first is the default.
-pub fn builtins() -> Vec<ModelEntry> {
-    vec![
-        ModelEntry {
-            id: "claude-opus-4-8".into(),
-            name: "Claude Opus 4.8".into(),
-        },
-        ModelEntry {
-            id: "claude-sonnet-4-6".into(),
-            name: "Claude Sonnet 4.6".into(),
-        },
-        ModelEntry {
-            id: "claude-haiku-4-5-20251001".into(),
-            name: "Claude Haiku 4.5".into(),
-        },
-    ]
-}
-
 /// Read the persisted config (empty if the file is absent or unreadable).
 pub fn load() -> ModelsConfig {
     crate::config::load_or_default(paths::models_file())
@@ -78,61 +58,43 @@ fn write(cfg: &ModelsConfig) -> Result<(), RuntimeError> {
     crate::config::write_and_snapshot(&paths::models_file()?, SCHEMA_VERSION, cfg, "Update models")
 }
 
-/// The selected default model id, falling back to the first built-in when none
-/// has been chosen (or the chosen one was removed).
+/// The selected default model id: the persisted choice, else the first model
+/// the user added, else the system fallback ([`harness_core::DEFAULT_MODEL`])
+/// so a fresh install can still chat before curating a catalog.
 pub fn selected() -> String {
     let cfg = load();
     let s = cfg.selected.trim();
-    if s.is_empty() {
-        builtins()
-            .into_iter()
-            .next()
-            .map(|m| m.id)
-            .unwrap_or_default()
-    } else {
-        s.to_string()
+    if !s.is_empty() {
+        return s.to_string();
     }
+    cfg.custom
+        .into_iter()
+        .next()
+        .map(|m| m.id)
+        .unwrap_or_else(|| harness_core::DEFAULT_MODEL.to_string())
 }
 
-/// The full catalog — built-ins first, then custom — with the builtin/selected
-/// flags set for the UI.
+/// The full catalog — every model the user has added, in the order added —
+/// with the selected flag set for the UI. Empty until the user adds one.
 pub fn catalog() -> Vec<CloudModel> {
     let cfg = load();
     let sel = selected();
-    let mut out: Vec<CloudModel> = Vec::new();
-    for b in builtins() {
-        out.push(CloudModel {
-            selected: b.id == sel,
-            id: b.id,
-            name: b.name,
-            builtin: true,
-        });
-    }
-    for c in cfg.custom {
-        // A custom entry that shadows a built-in id is ignored — the built-in wins.
-        if out.iter().any(|m| m.id == c.id) {
-            continue;
-        }
-        out.push(CloudModel {
+    cfg.custom
+        .into_iter()
+        .map(|c| CloudModel {
             selected: c.id == sel,
             id: c.id,
             name: c.name,
-            builtin: false,
-        });
-    }
-    out
+        })
+        .collect()
 }
 
-/// Add a custom model (or rename an existing one). Built-in ids are left to the
-/// built-in list. Returns the updated catalog.
+/// Add a model (or rename an existing one). Returns the updated catalog. The
+/// first model added becomes the default via [`selected`]'s fallback.
 pub fn add(id: &str, name: &str) -> Result<Vec<CloudModel>, RuntimeError> {
     let id = id.trim();
     if id.is_empty() {
         return Err(RuntimeError::Invalid("model id cannot be empty".into()));
-    }
-    // Don't persist a custom that just shadows a built-in.
-    if builtins().iter().any(|b| b.id == id) {
-        return Ok(catalog());
     }
     let name = if name.trim().is_empty() {
         id
@@ -152,8 +114,8 @@ pub fn add(id: &str, name: &str) -> Result<Vec<CloudModel>, RuntimeError> {
     Ok(catalog())
 }
 
-/// Remove a custom model (built-ins can't be removed). If it was selected, the
-/// selection falls back to the default. Returns the updated catalog.
+/// Remove a model. If it was selected, the selection falls back to the first
+/// remaining model (or the system default). Returns the updated catalog.
 pub fn remove(id: &str) -> Result<Vec<CloudModel>, RuntimeError> {
     let mut cfg = load();
     cfg.custom.retain(|e| e.id != id);
@@ -193,20 +155,29 @@ mod tests {
     use crate::with_temp_home;
 
     #[test]
-    fn defaults_to_first_builtin_and_lists_builtins() {
+    fn empty_catalog_falls_back_to_the_system_default() {
         with_temp_home(|| {
-            assert_eq!(selected(), builtins()[0].id);
-            let cat = catalog();
-            assert!(cat.iter().all(|m| m.builtin));
-            assert!(cat.iter().any(|m| m.selected));
+            assert!(catalog().is_empty());
+            assert_eq!(selected(), harness_core::DEFAULT_MODEL);
         });
     }
 
     #[test]
-    fn add_select_remove_custom_model() {
+    fn first_added_model_becomes_the_default() {
         with_temp_home(|| {
             add("my-model", "My Model").unwrap();
-            assert!(catalog().iter().any(|m| m.id == "my-model" && !m.builtin));
+            add("other-model", "Other").unwrap();
+            // No explicit selection yet — the first addition is the default.
+            assert_eq!(selected(), "my-model");
+            assert!(catalog().iter().any(|m| m.id == "my-model" && m.selected));
+        });
+    }
+
+    #[test]
+    fn add_select_remove_model() {
+        with_temp_home(|| {
+            add("my-model", "My Model").unwrap();
+            assert!(catalog().iter().any(|m| m.id == "my-model"));
 
             set_selected("my-model").unwrap();
             assert_eq!(selected(), "my-model");
@@ -214,8 +185,8 @@ mod tests {
 
             remove("my-model").unwrap();
             assert!(!catalog().iter().any(|m| m.id == "my-model"));
-            // Selection fell back to the default once its model was removed.
-            assert_eq!(selected(), builtins()[0].id);
+            // Selection fell back to the system default once its model was removed.
+            assert_eq!(selected(), harness_core::DEFAULT_MODEL);
         });
     }
 
@@ -233,11 +204,13 @@ mod tests {
     }
 
     #[test]
-    fn custom_cannot_shadow_a_builtin() {
+    fn re_adding_a_model_renames_instead_of_duplicating() {
         with_temp_home(|| {
-            let before = catalog().len();
-            add(&builtins()[0].id, "Shadow").unwrap();
-            assert_eq!(catalog().len(), before);
+            add("my-model", "My Model").unwrap();
+            add("my-model", "Renamed").unwrap();
+            let cat = catalog();
+            assert_eq!(cat.len(), 1);
+            assert_eq!(cat[0].name, "Renamed");
         });
     }
 }

@@ -21,6 +21,7 @@
 pub(crate) mod connection;
 pub(crate) mod loops;
 pub(crate) mod models;
+pub(crate) mod preview;
 pub(crate) mod project;
 pub(crate) mod review;
 pub(crate) mod session;

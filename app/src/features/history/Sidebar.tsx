@@ -176,6 +176,12 @@ function ChatRow({
   const title = row.title?.trim() || "New chat";
   const model = shortModel(row.model);
   const when = row.created_at ? relativeTime(row.created_at) : "Not started yet";
+  // A live dev server for this chat: show its port so the running app is
+  // findable from the sidebar.
+  const previewPort = useStore((s) => {
+    const p = s.previews[row.id];
+    return p && p.phase === "ready" ? p.port : null;
+  });
   return (
     <div className={`history-item ${current ? "active" : ""}`}>
       <button className="history-open" onClick={onOpen}>
@@ -188,6 +194,14 @@ function ChatRow({
                 <span className="history-sep">·</span>
                 <span className="history-model" title={row.model}>
                   {model}
+                </span>
+              </>
+            )}
+            {previewPort != null && (
+              <>
+                <span className="history-sep">·</span>
+                <span className="history-preview" title={`Dev server on port ${previewPort}`}>
+                  🌐:{previewPort}
                 </span>
               </>
             )}

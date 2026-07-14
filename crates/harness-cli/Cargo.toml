@@ -26,6 +26,7 @@ harness-compress = { workspace = true }
 harness-runtime = { workspace = true }
 harness-loop = { workspace = true }
 harness-review = { workspace = true }
+harness-preview = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

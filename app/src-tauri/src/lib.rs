@@ -29,6 +29,9 @@ use tokio::sync::Mutex;
 mod bridges;
 mod commands;
 mod events;
+mod preview;
+#[cfg(target_os = "macos")]
+mod snapshot;
 mod state;
 
 use commands::project::read_projects_config;
@@ -103,6 +106,16 @@ pub fn run() {
             commands::session::daily_usage,
             commands::session::new_session,
             commands::session::resume_session,
+            commands::preview::preview_attach,
+            commands::preview::preview_detach,
+            commands::preview::preview_reload,
+            commands::preview::preview_stop,
+            commands::preview::preview_open_external,
+            commands::preview::preview_status,
+            commands::preview::preview_statuses,
+            commands::preview::preview_restart,
+            commands::preview::get_preview_prefs,
+            commands::preview::set_preview_auto_verify,
             commands::project::list_projects,
             commands::project::open_project,
             commands::project::set_active_project,
@@ -148,10 +161,16 @@ pub fn run() {
             // linger after the app is gone — dropping the `LocalServer` kills the
             // child (it spawned with `kill_on_drop`). A SIGKILL of the app itself
             // can't be intercepted, so that case can still orphan the server.
+            // `ExitRequested` fires before `Exit`; both are idempotent here
+            // (the server slot and the dev-server map are drained the first
+            // time), and handling both means an `Exit` without a preceding
+            // request still cleans up.
             if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
                 let state = app.state::<AppState>();
                 tauri::async_runtime::block_on(async {
                     state.local_server.lock().await.take();
+                    // Dev servers are children too — never outlive the app.
+                    state.dev_servers.stop_all().await;
                 });
             }
         });

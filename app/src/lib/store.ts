@@ -29,6 +29,7 @@ import {
   setModel,
   setReviewStatus as setReviewStatusIpc,
   setReviewStatusMany as setReviewStatusManyIpc,
+  previewStatus,
   totalCostUsd,
   totalTokensUsed,
   useLocalModel,
@@ -74,6 +75,9 @@ import type {
   CompactedEvent,
   CompressionEvent,
   CompressionMode,
+  PreviewConsoleEvent,
+  PreviewEvent,
+  PreviewStatus,
   RetryEvent,
 } from "./types";
 
@@ -255,6 +259,17 @@ interface AppState {
   /** A provisional canvas doc built from the in-flight canvas call's streaming
    *  args, so the panel shows the document forming before it's committed. */
   streamingCanvas: Record<string, CanvasDoc | undefined>;
+  /** Each session's dev-server status (absent = never started). Drives the
+   *  live-preview pane and the sidebar port chips. */
+  previews: Record<string, PreviewStatus | undefined>;
+  /** Sessions whose preview pane the user closed (a later "ready" reopens it). */
+  previewClosed: Record<string, boolean>;
+  /** The preview page's most recent JavaScript error per session (absent =
+   *  none) — drives the pane's "Fix it" banner. */
+  previewErrors: Record<string, string | undefined>;
+  /** Which right-panel tab is active per session when both preview and canvas
+   *  have content. */
+  rightTab: Record<string, "preview" | "canvas">;
   settingsOpen: boolean;
   /** Which subpage the full-screen Settings surface shows when open. */
   settingsPage: SettingsPage;
@@ -361,6 +376,19 @@ interface AppState {
   openCanvasDoc: (doc: CanvasDoc) => void;
   /** Mark a session as (not) currently writing a canvas. */
   setCanvasWriting: (session: string, writing: boolean) => void;
+  /** Route a dev-server lifecycle change into the preview pane + sidebar chips. */
+  ingestPreviewStatus: (e: PreviewEvent) => void;
+  /** Show the "Fix it" banner for a preview page error. */
+  ingestPreviewConsole: (e: PreviewConsoleEvent) => void;
+  /** Dismiss `session`'s preview error banner; with `fix`, also send a prompt
+   *  asking the agent to fix the error (only if that chat is still open). */
+  resolvePreviewError: (session: string, fix: boolean) => void;
+  /** Sync a session's dev-server status from the backend (cold mounts/resumes). */
+  syncPreview: (session: string) => Promise<void>;
+  /** Close the current chat's preview pane (the server keeps running). */
+  closePreview: () => void;
+  /** Switch the current chat's right-panel tab (preview ⇄ canvas). */
+  setRightTab: (tab: "preview" | "canvas") => void;
   setSettingsOpen: (open: boolean) => void;
   /** Open the Settings surface, optionally jumping straight to a subpage. */
   openSettings: (page?: SettingsPage) => void;
@@ -498,6 +526,10 @@ export const useStore = create<AppState>((set, get) => {
     canvasWriting: {},
     streamingTool: {},
     streamingCanvas: {},
+    previews: {},
+    previewClosed: {},
+    previewErrors: {},
+    rightTab: {},
     settingsOpen: false,
     settingsPage: "connection",
     inspector: null,
@@ -650,6 +682,13 @@ export const useStore = create<AppState>((set, get) => {
           sessionUsage: drop(s.sessionUsage),
           tokensPerSecond: drop(s.tokensPerSecond),
           compression: drop(s.compression),
+          // The backend stops the deleted chat's dev server and closes its
+          // webview; drop the mirrored state so no stopped server lingers in
+          // the sidebar chips or the Settings → Preview list.
+          previews: drop(s.previews),
+          previewClosed: drop(s.previewClosed),
+          previewErrors: drop(s.previewErrors),
+          rightTab: drop(s.rightTab),
         };
       });
       await get().refreshHistory();
@@ -1175,6 +1214,8 @@ export const useStore = create<AppState>((set, get) => {
           canvases: { ...s.canvases, [session]: next },
           activeCanvas: { ...s.activeCanvas, [session]: doc.id },
           canvasWriting: { ...s.canvasWriting, [session]: false },
+          // A fresh document takes the panel over from the live preview.
+          rightTab: { ...s.rightTab, [session]: "canvas" as const },
           // The committed doc supersedes both streaming buffers; release the raw
           // arg string too so a large doc isn't held twice once it lands.
           streamingCanvas: { ...s.streamingCanvas, [session]: undefined },
@@ -1185,7 +1226,13 @@ export const useStore = create<AppState>((set, get) => {
     setActiveCanvas: (id) =>
       set((s) => {
         const cur = s.session?.session_id;
-        return cur ? { activeCanvas: { ...s.activeCanvas, [cur]: id } } : {};
+        if (!cur) return {};
+        return {
+          activeCanvas: { ...s.activeCanvas, [cur]: id },
+          // Opening a document must bring it to the front, even when the
+          // preview currently owns the panel — otherwise the click is dead.
+          ...(id ? { rightTab: { ...s.rightTab, [cur]: "canvas" as const } } : {}),
+        };
       }),
 
     openCanvasDoc: (doc) =>
@@ -1198,11 +1245,92 @@ export const useStore = create<AppState>((set, get) => {
         return {
           canvases: { ...s.canvases, [session]: next },
           activeCanvas: { ...s.activeCanvas, [session]: doc.id },
+          rightTab: { ...s.rightTab, [session]: "canvas" as const },
         };
       }),
 
     setCanvasWriting: (session, writing) =>
-      set((s) => ({ canvasWriting: { ...s.canvasWriting, [session]: writing } })),
+      set((s) => ({
+        canvasWriting: { ...s.canvasWriting, [session]: writing },
+        // The panel follows the document the moment the model starts writing.
+        ...(writing ? { rightTab: { ...s.rightTab, [session]: "canvas" as const } } : {}),
+      })),
+
+    ingestPreviewStatus: ({ session, ...status }) =>
+      set((s) => {
+        const was = s.previews[session]?.phase;
+        // Only a *transition* into ready opens the pane. Re-firing on every
+        // ready (a restart, an auto-verify cycle) would yank the panel away
+        // from a canvas the model is mid-write on, and would keep reopening a
+        // pane the user deliberately closed.
+        const cameUp = status.phase === "ready" && was !== "ready";
+        if (!cameUp) {
+          return { previews: { ...s.previews, [session]: status } };
+        }
+        return {
+          previews: { ...s.previews, [session]: status },
+          previewClosed: { ...s.previewClosed, [session]: false },
+          // A fresh page retires any stale error banner.
+          previewErrors: { ...s.previewErrors, [session]: undefined },
+          // Don't steal the panel from a document being written right now.
+          rightTab: s.canvasWriting[session]
+            ? s.rightTab
+            : { ...s.rightTab, [session]: "preview" as const },
+        };
+      }),
+
+    // An empty text means the page (re)loaded: whatever it complained about
+    // belongs to a document that no longer exists — and the reload may well
+    // have been the fix, so the banner must go.
+    ingestPreviewConsole: ({ session, text }) =>
+      set((s) => ({ previewErrors: { ...s.previewErrors, [session]: text || undefined } })),
+
+    resolvePreviewError: (session, fix) => {
+      const error = get().previewErrors[session];
+      set((s) => ({ previewErrors: { ...s.previewErrors, [session]: undefined } }));
+      // Only send when it's still the chat on screen — a prompt belongs to the
+      // conversation the user was looking at when they clicked.
+      if (fix && error && get().session?.session_id === session) {
+        get().send(
+          `The app in the live preview hit a JavaScript error:\n\n${error}\n\nFind the cause and fix it, then verify the fix in the preview.`,
+        );
+      }
+    },
+
+    syncPreview: async (session) => {
+      // A cold-mount sync must never overwrite a live event that landed while
+      // the round trip was in flight (it would flash the pane back to an old
+      // phase, or make it vanish).
+      const before = get().previews[session];
+      try {
+        const status = await previewStatus(session);
+        set((s) =>
+          s.previews[session] === before
+            ? { previews: { ...s.previews, [session]: status ?? undefined } }
+            : {},
+        );
+      } catch {
+        /* preview status is best-effort */
+      }
+    },
+
+    closePreview: () =>
+      set((s) => {
+        const cur = s.session?.session_id;
+        return cur ? { previewClosed: { ...s.previewClosed, [cur]: true } } : {};
+      }),
+
+    setRightTab: (tab) =>
+      set((s) => {
+        const cur = s.session?.session_id;
+        if (!cur) return {};
+        return {
+          rightTab: { ...s.rightTab, [cur]: tab },
+          // Choosing the Preview tab means "show me the preview" — a pane the
+          // user closed earlier must reopen, or the tab would be a dead click.
+          ...(tab === "preview" ? { previewClosed: { ...s.previewClosed, [cur]: false } } : {}),
+        };
+      }),
 
     setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
     openSettings: (page) =>

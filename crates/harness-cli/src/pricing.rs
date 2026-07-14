@@ -25,6 +25,10 @@ static CACHE: Mutex<Option<HashMap<String, Option<ModelPricing>>>> = Mutex::new(
 /// Fetch pricing for `model` from the active endpoint's catalog and cache it,
 /// unless it's already cached. Call at turn boundaries (it's async); the sync
 /// trailer then reads the result via [`session_cost`].
+///
+/// The request returns the whole catalog, so every listed model's rate is
+/// cached too — that's what lets other synchronous surfaces (the `/model`
+/// completion picker's price tags) read rates without their own request.
 pub(crate) async fn warm_for(model: &str) {
     if cached(model).is_some() {
         return;
@@ -39,12 +43,15 @@ pub(crate) async fn warm_for(model: &str) {
     .await
     .ok();
     // A failed catalog request leaves the model uncached, so a later turn
-    // retries; a successful one records the rate (or `None` when unlisted).
+    // retries; a successful one records every listed rate, plus an explicit
+    // `None` for the asked-about model when the catalog doesn't list it.
     if let Some(catalog) = pricing {
         let mut guard = CACHE.lock().expect("pricing cache poisoned");
-        guard
-            .get_or_insert_with(HashMap::new)
-            .insert(model.to_string(), catalog.get(model).copied());
+        let cache = guard.get_or_insert_with(HashMap::new);
+        cache.insert(model.to_string(), catalog.get(model).copied());
+        for (id, rate) in catalog {
+            cache.insert(id, Some(rate));
+        }
     }
 }
 
@@ -58,7 +65,11 @@ fn cached(model: &str) -> Option<Option<ModelPricing>> {
 /// The dollar cost of `prompt_tokens` + `completion_tokens` at `model`'s cached
 /// rate, or `None` when the model isn't priced (unfetched, or absent from the
 /// catalog) — in which case the trailer omits the cost segment.
-pub(crate) fn session_cost(model: &str, prompt_tokens: usize, completion_tokens: usize) -> Option<f64> {
+pub(crate) fn session_cost(
+    model: &str,
+    prompt_tokens: usize,
+    completion_tokens: usize,
+) -> Option<f64> {
     cached(model)?.map(|p| p.cost_of(prompt_tokens, completion_tokens))
 }
 

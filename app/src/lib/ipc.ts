@@ -54,6 +54,11 @@ import type {
   LoopRunResult,
   LoopSpec,
   LoopSummary,
+  PreviewBounds,
+  PreviewConsoleEvent,
+  PreviewEvent,
+  PreviewPrefs,
+  PreviewStatus,
 } from "./types";
 
 // ---- session / agent -------------------------------------------------------
@@ -321,6 +326,65 @@ export const onFleetActivity = (handler: (e: FleetActivityEvent) => void) =>
 export const onFleetCompleted = (handler: (session: string) => void) =>
   listen<{ session: string }>("fleet://completed", (e) => handler(e.payload.session));
 
+// ---- live preview (dev servers) ---------------------------------------------
+
+/** Fires whenever a session's dev server changes lifecycle phase. */
+export const onPreviewStatus = (handler: (e: PreviewEvent) => void) =>
+  listen<PreviewEvent>("preview://status", (e) => handler(e.payload));
+
+/** Fires when the preview page hits a JavaScript error (the "Fix it" banner). */
+export const onPreviewConsole = (handler: (e: PreviewConsoleEvent) => void) =>
+  listen<PreviewConsoleEvent>("preview://console", (e) => handler(e.payload));
+
+// Attach and detach must not reorder: the native webview paints above ALL DOM,
+// so a detach (hide, for an overlay) that lands *before* a slow first attach
+// (which creates the webview) would leave the preview covering the overlay.
+// Tauri gives no ordering guarantee across invokes — async commands run
+// concurrently — so both go through one promise chain.
+let previewQueue: Promise<unknown> = Promise.resolve();
+const queuePreview = <T,>(op: () => Promise<T>): Promise<T> => {
+  const next = previewQueue.then(op, op);
+  // Keep the chain alive regardless of failures.
+  previewQueue = next.catch(() => {});
+  return next;
+};
+
+/** Show the session's preview webview over the placeholder rect (CSS pixels).
+ *  Creates the native webview on first call; later calls reposition it. */
+export const previewAttach = (session: string, bounds: PreviewBounds) =>
+  queuePreview(() => invoke<void>("preview_attach", { session, bounds }));
+
+/** Hide all preview webviews (tab switched away, overlay opened, pane closed). */
+export const previewDetach = () => queuePreview(() => invoke<void>("preview_detach"));
+
+/** Reload the session's preview page (manual refresh). */
+export const previewReload = (session: string) => invoke<void>("preview_reload", { session });
+
+/** Stop the session's dev server and drop its preview webview. */
+export const previewStop = (session: string) => invoke<void>("preview_stop", { session });
+
+/** Open the session's running app in the system browser (pop-out). */
+export const previewOpenExternal = (session: string) =>
+  invoke<void>("preview_open_external", { session });
+
+/** The session's dev-server status, if one was started (cold-mount sync). */
+export const previewStatus = (session: string) =>
+  invoke<PreviewStatus | null>("preview_status", { session });
+
+/** Status of every session's dev server (sidebar chips / settings). */
+export const previewStatuses = () => invoke<[string, PreviewStatus][]>("preview_statuses");
+
+/** Restart the session's dev server from its last/saved command (no agent turn). */
+export const previewRestart = (session: string) =>
+  invoke<void>("preview_restart", { session });
+
+/** The persisted live-preview preferences (Settings → Preview). */
+export const getPreviewPrefs = () => invoke<PreviewPrefs>("get_preview_prefs");
+
+/** Persist auto-verify; applies to newly built (or resumed) agents. */
+export const setPreviewAutoVerify = (autoVerify: boolean) =>
+  invoke<void>("set_preview_auto_verify", { autoVerify });
+
 // ---- connection settings ---------------------------------------------------
 
 /** Current Oxen API key + host overrides, with context for the Settings page. */
@@ -383,7 +447,8 @@ export const addCloudModel = (id: string, name: string) =>
 /** Remove a custom cloud model (built-ins can't be removed); returns the catalog. */
 export const removeCloudModel = (id: string) =>
   invoke<CloudModel[]>("remove_cloud_model", { id });
-/** Search the Oxen.ai hosted inference catalog for autocomplete (empty query = all). */
+/** Search the configured endpoint's hosted model catalog — pricing and
+ *  descriptions included (empty query = the full catalog). */
 export const searchOxenModels = (query: string) =>
   invoke<OxenModelHit[]>("search_oxen_models", { query });
 /** Switch the current chat (and the default for new chats) to a cloud model,

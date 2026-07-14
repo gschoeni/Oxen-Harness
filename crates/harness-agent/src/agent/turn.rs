@@ -245,7 +245,17 @@ impl Agent {
                         plan_open_this_turn = harness_tools::plan_is_open(&items);
                     }
                 }
-                self.push(ChatMessage::tool_result(call.id.clone(), result))?;
+                // A tool that produced an image (e.g. the preview screenshot)
+                // marks it in-band; the `tool` role is text-only, so the image
+                // rides in as a user message right after the result.
+                match harness_core::attach::extract_image_markers(&result, "(image attached below)")
+                {
+                    Some((cleaned, paths)) => {
+                        self.push(ChatMessage::tool_result(call.id.clone(), cleaned))?;
+                        self.push_tool_images(&paths)?;
+                    }
+                    None => self.push(ChatMessage::tool_result(call.id.clone(), result))?,
+                }
             }
         }
     }
@@ -754,6 +764,109 @@ mod tests {
         let out = agent.run_turn("research this topic", |_| {}).await.unwrap();
         assert_eq!(out, "All done.");
         nudge.assert_async().await;
+    }
+
+    /// SSE for a reply that calls a tool named `snap` with empty args.
+    fn sse_snap_call() -> String {
+        let chunk = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": "",
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_snap",
+                        "function": { "name": "snap", "arguments": "{}" }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
+
+    #[tokio::test]
+    async fn image_marker_in_a_tool_result_attaches_the_image() {
+        // A tool that "captures" an image file and marks it in its result.
+        struct SnapTool(std::path::PathBuf);
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        struct SnapArgs {}
+        #[async_trait::async_trait]
+        impl harness_tools::TypedTool for SnapTool {
+            const NAME: &'static str = "snap";
+            type Args = SnapArgs;
+            fn description(&self) -> &str {
+                "take a snapshot"
+            }
+            async fn run(&self, _: SnapArgs) -> Result<String, harness_tools::ToolError> {
+                // A minimal 1x1 PNG so attachment classification sees an image.
+                const PNG: &[u8] = &[
+                    0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D',
+                    b'R', 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1f, 0x15, 0xc4, 0x89,
+                ];
+                std::fs::write(&self.0, PNG).unwrap();
+                Ok(format!(
+                    "Captured the preview. {}",
+                    harness_core::attach::image_marker(&self.0.display().to_string())
+                ))
+            }
+        }
+
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_snap_call())
+            .create_async()
+            .await;
+        // The follow-up call (the one carrying the image) ends the turn.
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("image attached below".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("looks good"))
+            .create_async()
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut tools = ToolRegistry::new();
+        tools.register_typed(SnapTool(dir.path().join("shot.png")));
+        let config = AgentConfig {
+            system_prompt: None,
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, tools, store, session, config).unwrap();
+
+        let out = agent.run_turn("check the preview", |_| {}).await.unwrap();
+        assert_eq!(out, "looks good");
+
+        // The tool result the model reads has the marker replaced…
+        let tool_msg = agent
+            .messages()
+            .iter()
+            .find(|m| m.role == "tool")
+            .and_then(ChatMessage::content_text)
+            .unwrap();
+        assert!(tool_msg.contains("(image attached below)"), "{tool_msg}");
+        assert!(!tool_msg.contains("<<attach-image:"), "{tool_msg}");
+        // …and the image follows as a multimodal user message (text + image).
+        let image_msg = agent
+            .messages()
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .unwrap();
+        match &image_msg.content {
+            Some(harness_llm::types::MessageContent::Parts(parts)) => {
+                assert_eq!(parts.len(), 2, "text part + image part");
+            }
+            other => panic!("expected multimodal user message, got {other:?}"),
+        }
     }
 
     /// A retry policy with near-zero waits so backoff tests run instantly.

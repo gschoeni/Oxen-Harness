@@ -14,9 +14,9 @@ use crate::picker::{self, Choice};
 use crate::theme::Ui;
 
 /// The labels offered at exit and the `review_status` each maps to.
-const KEEP: &str = "It was great!";
-const REJECT: &str = "Leave it behind";
-const LATER: &str = "Decide later";
+const LATER: &str = "Choose later";
+const KEEP: &str = "Yes, mark as good";
+const REJECT: &str = "Reject";
 
 /// Map a picked label to the review status to persist (`None` = leave as-is).
 /// Typed free-text answers also count when they clearly mean keep/reject.
@@ -53,9 +53,9 @@ pub(crate) fn prompt_session_review(store: &HistoryStore, session: &str, agent: 
     }
 
     let options = [
+        Choice::new(LATER, "leave it unreviewed for now"),
         Choice::new(KEEP, "a good run — include it in the fine-tuning export"),
         Choice::new(REJECT, "not a good example — exclude it from the export"),
-        Choice::new(LATER, "leave it unreviewed for now"),
     ];
     let picked = match picker::select(
         ui,
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn labels_map_to_review_statuses() {
         assert_eq!(status_for(KEEP), Some("kept"));
-        assert_eq!(status_for("It Was Great!"), Some("kept"));
+        assert_eq!(status_for("YES, MARK AS GOOD"), Some("kept"));
         assert_eq!(status_for("keep"), Some("kept"));
         assert_eq!(status_for("great"), Some("kept"));
         assert_eq!(status_for("YES"), Some("kept"));

@@ -13,6 +13,7 @@ import type {
   HardwareProfile,
   HfHit,
   InstalledView,
+  OxenModelHit,
   Project,
   RuntimeStatus,
   SessionInfo,
@@ -132,8 +133,44 @@ export const sampleInstalled: InstalledView = {
 };
 
 export const sampleCloudModels: CloudModel[] = [
-  { id: "claude-opus-4-8", name: "Claude Opus 4.8", builtin: true, selected: true },
-  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", builtin: true, selected: false },
+  { id: "claude-opus-4-8", name: "Claude Opus 4.8", selected: true },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", selected: false },
+];
+
+export const sampleOxenHits: OxenModelHit[] = [
+  {
+    id: "claude-sonnet-4-6",
+    name: "Claude Sonnet 4.6",
+    developer: "Anthropic",
+    summary: "Balanced performance and speed",
+    description: "Anthropic's **balanced** model.",
+    endpoint: "/chat/completions",
+    pricing: { input_cost_per_token: 3e-6, output_cost_per_token: 1.5e-5 },
+    inputs: ["text", "image"],
+    outputs: ["text"],
+  },
+  {
+    id: "muse-spark-1-1",
+    name: "Muse Spark 1.1",
+    developer: "Muse",
+    summary: "Fast and cheap",
+    description: "A speedy little model.",
+    endpoint: "/chat/completions",
+    pricing: { input_cost_per_token: 2.5e-7, output_cost_per_token: 1e-6 },
+    inputs: ["text"],
+    outputs: ["text"],
+  },
+  {
+    id: "pix-gen",
+    name: "Pix Gen",
+    developer: "Pix",
+    summary: "Text-to-image",
+    description: "",
+    endpoint: "/images/generate",
+    pricing: null,
+    inputs: ["text"],
+    outputs: ["image"],
+  },
 ];
 
 export const sampleThemes: ThemeSummary[] = [
@@ -245,6 +282,20 @@ export const onFileDrop = listener("fileDrop");
 export const pickAttachments = vi.fn(async () => [] as string[]);
 export const answerQuestion = vi.fn(async () => {});
 
+// ---- live preview ------------------------------------------------------------
+export const onPreviewStatus = listener("previewStatus");
+export const onPreviewConsole = listener("previewConsole");
+export const previewAttach = vi.fn(async () => {});
+export const previewDetach = vi.fn(async () => {});
+export const previewReload = vi.fn(async () => {});
+export const previewStop = vi.fn(async () => {});
+export const previewOpenExternal = vi.fn(async () => {});
+export const previewStatus = vi.fn(async () => null);
+export const previewStatuses = vi.fn(async () => [] as unknown[]);
+export const previewRestart = vi.fn(async () => {});
+export const getPreviewPrefs = vi.fn(async () => ({ auto_verify: true }));
+export const setPreviewAutoVerify = vi.fn(async () => {});
+
 export const getConnection = vi.fn(async () => sampleConnection);
 export const setConnection = vi.fn(async () => ({ ...sampleSession, session_id: "reconnected" }));
 export const configureBraveKey = vi.fn(async () => {});
@@ -273,6 +324,7 @@ export const onLlamaInstall = listener("llamaInstall");
 export const listCloudModels = vi.fn(async () => sampleCloudModels);
 export const addCloudModel = vi.fn(async () => sampleCloudModels);
 export const removeCloudModel = vi.fn(async () => sampleCloudModels);
+export const searchOxenModels = vi.fn(async () => sampleOxenHits);
 export const setModel = vi.fn(async () => ({ ...sampleSession, session_id: "model-switched" }));
 
 export const runCodeReview = vi.fn(async (): Promise<CodeReviewRunResult> => ({
@@ -324,6 +376,16 @@ export function resetIpc() {
   configureOxenKey.mockReset().mockResolvedValue(undefined);
   pickAttachments.mockReset().mockResolvedValue([]);
   answerQuestion.mockReset().mockResolvedValue(undefined);
+  previewAttach.mockReset().mockResolvedValue(undefined);
+  previewDetach.mockReset().mockResolvedValue(undefined);
+  previewReload.mockReset().mockResolvedValue(undefined);
+  previewStop.mockReset().mockResolvedValue(undefined);
+  previewOpenExternal.mockReset().mockResolvedValue(undefined);
+  previewStatus.mockReset().mockResolvedValue(null);
+  previewStatuses.mockReset().mockResolvedValue([]);
+  previewRestart.mockReset().mockResolvedValue(undefined);
+  getPreviewPrefs.mockReset().mockResolvedValue({ auto_verify: true });
+  setPreviewAutoVerify.mockReset().mockResolvedValue(undefined);
   getConnection.mockReset().mockResolvedValue(sampleConnection);
   setConnection.mockReset().mockResolvedValue({ ...sampleSession, session_id: "reconnected" });
   configureBraveKey.mockReset().mockResolvedValue(undefined);
@@ -342,6 +404,7 @@ export function resetIpc() {
   listCloudModels.mockReset().mockResolvedValue(sampleCloudModels);
   addCloudModel.mockReset().mockResolvedValue(sampleCloudModels);
   removeCloudModel.mockReset().mockResolvedValue(sampleCloudModels);
+  searchOxenModels.mockReset().mockResolvedValue(sampleOxenHits);
   setModel.mockReset().mockResolvedValue({ ...sampleSession, session_id: "model-switched" });
   listThemes.mockReset().mockResolvedValue(sampleThemes);
   activeTheme.mockReset().mockResolvedValue(sampleTheme);
@@ -391,5 +454,7 @@ export function resetIpc() {
     onRuntimeInstall,
     onLocalStatus,
     onLlamaInstall,
+    onPreviewStatus,
+    onPreviewConsole,
   ].forEach((fn) => fn.mockClear());
 }

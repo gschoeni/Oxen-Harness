@@ -1,0 +1,157 @@
+/* The live-preview pane. Reuses the .canvas column shell (border, header) —
+   this file styles only what's preview-specific: the placeholder stage the
+   native webview is glued to, the toolbar extras, and the error state. */
+
+.preview-url {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.preview-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 var(--space-1);
+  background: var(--separator);
+}
+
+.icon-btn.preview-vp-active {
+  color: var(--accent);
+}
+
+.preview-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The stage centers the (possibly viewport-narrowed) frame; the frame's rect
+   is where the native webview is positioned, so whatever size it takes, the
+   running app takes. The checker background only shows in the letterboxed
+   margins around narrow viewports (and for the instant before attach). */
+.preview-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  background: var(--bg-secondary, var(--bg));
+}
+
+/* Fills the stage by default. A viewport preset overrides `flex` inline with
+   `0 0 <width>` — a grown flex item ignores `width`, so the preset must set
+   the basis, not the width, or the native webview would keep filling the pane
+   and the presets would do nothing. */
+.preview-frame {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.preview-hint {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  text-align: center;
+  padding: var(--space-3);
+}
+
+/* The "something broke in the app" banner with its one-click Fix it button —
+   sits above the stage so the running app stays visible below it. */
+.preview-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+  background: color-mix(in srgb, var(--danger, #c33) 12%, var(--bg));
+  flex-shrink: 0;
+}
+
+.preview-banner-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-fix-btn {
+  flex-shrink: 0;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--frame-radius);
+  padding: 4px var(--space-3);
+  font-size: var(--text-sm);
+  font-family: var(--font-display);
+  cursor: pointer;
+}
+
+.preview-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  text-align: center;
+}
+
+.preview-error-title {
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+  color: var(--text);
+}
+
+.preview-error-msg {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  color: var(--danger, #c33);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* The Preview ⇄ Canvas switcher shared by both panes' headers. */
+.panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-right: var(--space-2);
+}
+
+.panel-tab {
+  background: transparent;
+  border: 1px solid var(--separator);
+  border-radius: var(--frame-radius);
+  color: var(--text-secondary);
+  padding: 3px var(--space-2);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.panel-tab.active {
+  color: var(--text);
+  border-color: var(--accent);
+}

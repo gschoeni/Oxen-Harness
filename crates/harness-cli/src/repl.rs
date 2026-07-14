@@ -47,6 +47,8 @@ pub enum Command {
     Compression(Option<String>),
     /// Show all-time input/output tokens and estimated spend by model.
     Usage,
+    /// Open the agent-started dev server in the browser (live preview).
+    Preview,
     /// Re-drive the last turn against the existing transcript — for a turn
     /// that died (provider error, no internet), possibly after `/model`
     /// switched to a working endpoint. No user message is re-appended.
@@ -90,6 +92,7 @@ pub fn parse_command(line: &str) -> Command {
         "/auth" | "/login" => Command::Auth(rest),
         "/compression" | "/compress" => Command::Compression(rest),
         "/usage" => Command::Usage,
+        "/preview" | "/browser" => Command::Preview,
         "/retry" | "/continue" => Command::Retry,
         // Unknown slash command: treat the whole line as a prompt so users can
         // still send text that happens to start with a slash.

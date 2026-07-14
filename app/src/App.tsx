@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties, type PointerEvent } from "reac
 import { Sidebar } from "./features/history/Sidebar";
 import { Chat } from "./features/chat/Chat";
 import { Canvas } from "./features/canvas/Canvas";
+import { Preview } from "./features/preview/Preview";
 import { Settings } from "./features/settings/Settings";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
 import { InspectorDrawer } from "./features/inspector/Inspector";
@@ -26,6 +27,30 @@ export default function App() {
     const active = s.activeCanvas[id];
     return !!active && !!s.canvases[id]?.some((d) => d.id === active);
   });
+  // Show the preview column when the current chat has a dev server that is
+  // starting, serving, or worth explaining (error/stopped — the pane holds the
+  // Restart button, so it must not vanish the moment a server goes down).
+  const previewOpen = useStore((s) => {
+    const id = s.session?.session_id;
+    if (!id || s.previewClosed[id]) return false;
+    return !!s.previews[id];
+  });
+  // When both surfaces have content, the per-session tab decides which shows.
+  const rightTab = useStore((s) => {
+    const id = s.session?.session_id;
+    return id ? s.rightTab[id] : undefined;
+  });
+  const sessionId = useStore((s) => s.session?.session_id);
+  const syncPreview = useStore((s) => s.syncPreview);
+  const showPreview = previewOpen && (!canvasOpen || rightTab !== "canvas");
+  const showCanvas = canvasOpen && !showPreview;
+  const panelOpen = showPreview || showCanvas;
+
+  // A freshly opened/resumed chat may already have a running server (they
+  // outlive agent eviction) — sync its status so the pane reappears.
+  useEffect(() => {
+    if (sessionId) syncPreview(sessionId).catch(() => {});
+  }, [sessionId, syncPreview]);
 
   // Width (px) of the canvas column, drag-resizable and remembered across runs.
   const [canvasWidth, setCanvasWidth] = useState(() => {
@@ -73,12 +98,13 @@ export default function App() {
 
   return (
     <div
-      className={`app${canvasOpen ? " canvas-open" : ""}${resizing ? " resizing" : ""}`}
-      style={canvasOpen ? ({ "--canvas-w": `${canvasWidth}px` } as CSSProperties) : undefined}
+      className={`app${panelOpen ? " canvas-open" : ""}${resizing ? " resizing" : ""}`}
+      style={panelOpen ? ({ "--canvas-w": `${canvasWidth}px` } as CSSProperties) : undefined}
     >
       <Sidebar />
       <Chat />
-      {canvasOpen && <Canvas onResizeStart={beginResize} />}
+      {showPreview && <Preview onResizeStart={beginResize} />}
+      {showCanvas && <Canvas onResizeStart={beginResize} />}
       {settingsOpen && <Settings />}
       {projectsOpen && <ProjectsPage />}
       <InspectorDrawer />

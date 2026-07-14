@@ -469,6 +469,46 @@ impl Agent {
         }
     }
 
+    /// Follow an image-bearing tool result with the images themselves, as a
+    /// multimodal user message (the `tool` role is text-only on the wire; see
+    /// [`harness_core::attach`]). Only files that classify as images are
+    /// attached — the marker mechanism must never become a way to inline
+    /// arbitrary local files (keys, configs) into the transcript. Best-effort:
+    /// a failure pushes a short note instead, so the model isn't left hunting
+    /// for an image the result text promised.
+    pub(crate) fn push_tool_images(&mut self, paths: &[String]) -> Result<(), AgentError> {
+        use harness_llm::AttachmentKind;
+
+        let mut images = Vec::new();
+        for path in paths {
+            match Attachment::from_path(path) {
+                Ok(att) if att.kind == AttachmentKind::Image => images.push(att),
+                Ok(att) => {
+                    tracing::warn!("refusing non-image tool attachment {path} ({:?})", att.kind)
+                }
+                Err(e) => tracing::warn!("skipping tool image {path}: {e}"),
+            }
+        }
+        let attached = if images.is_empty() {
+            None
+        } else {
+            build_user_message(
+                "The image(s) produced by the tool call above:".into(),
+                &images,
+                self.attachments.as_ref(),
+            )
+            .map_err(|e| tracing::warn!("could not attach tool images: {e}"))
+            .ok()
+        };
+        match attached {
+            Some(message) => self.push(message),
+            None => self.push(ChatMessage::user(
+                "(the tool's image could not be attached — verify another way, e.g. logs)"
+                    .to_string(),
+            )),
+        }
+    }
+
     /// The transcript prepared for sending: a clone of the in-memory messages
     /// with any on-disk attachment references hydrated back into inline data
     /// URIs the provider can consume. When no attachment store is configured the

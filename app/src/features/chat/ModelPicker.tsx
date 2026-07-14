@@ -1,7 +1,8 @@
 import { useEffect, useReducer, useState } from "react";
 import { ChevronDown, Cloud, Cpu, Download, Loader } from "lucide-react";
 import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../components/ui/Menu";
-import { installedLocalModels } from "../../lib/ipc";
+import { installedLocalModels, searchOxenModels } from "../../lib/ipc";
+import { ratesById } from "../../lib/rates";
 import { useStore } from "../../lib/store";
 import type { ModelRef } from "../../lib/types";
 
@@ -22,6 +23,10 @@ export function ModelPicker({ disabled }: { disabled: boolean }) {
   const { open, setOpen, ref } = useMenuState();
   const [busy, setBusy] = useState(false);
   const [localModels, setLocalModels] = useState<ModelRef[]>([]);
+  // Per-million price labels from the endpoint catalog, keyed by model id.
+  // Kept across opens so rows show a (possibly stale) rate instantly while a
+  // refresh is in flight; a failed fetch just means no tags.
+  const [rates, setRates] = useState<Map<string, string>>(new Map());
 
   // Tick once a second so the local-switch elapsed counter advances in place.
   const [, tick] = useReducer((n: number) => n + 1, 0);
@@ -55,13 +60,17 @@ export function ModelPicker({ disabled }: { disabled: boolean }) {
   // A cold first run compiles GPU kernels (one-time) — explain a long first wait.
   const firstRunHint = localSwitch?.phase === "starting" && elapsed >= 4;
 
-  // Refresh the catalog + installed local models when the menu opens.
+  // Refresh the catalog, installed local models, and price tags when the menu
+  // opens.
   useEffect(() => {
     if (!open) return;
     loadCloudModels();
     installedLocalModels()
       .then((v) => setLocalModels(v.models))
       .catch(() => setLocalModels([]));
+    searchOxenModels("")
+      .then((hits) => setRates(ratesById(hits)))
+      .catch(() => {});
   }, [open, loadCloudModels]);
 
   async function pickCloud(id: string) {
@@ -129,12 +138,31 @@ export function ModelPicker({ disabled }: { disabled: boolean }) {
               so they're never pushed off-screen by a long catalog. */}
           <div className="picker-scroll">
             <MenuHead>Cloud models</MenuHead>
+            {cloudModels.length === 0 && (
+              <MenuItem
+                manage
+                name="None yet — add one from the catalog…"
+                onSelect={() => {
+                  setOpen(false);
+                  openSettings("cloud-models");
+                }}
+              />
+            )}
             {cloudModels.map((m) => (
               <MenuItem
                 key={m.id}
                 active={m.id === model}
                 name={m.name}
-                hint={m.id}
+                hint={
+                  rates.has(m.id) ? (
+                    <span className="menu-hint-stack">
+                      <span>{m.id}</span>
+                      <span className="menu-rate">{rates.get(m.id)}</span>
+                    </span>
+                  ) : (
+                    m.id
+                  )
+                }
                 onSelect={() => pickCloud(m.id)}
               />
             ))}
@@ -148,6 +176,7 @@ export function ModelPicker({ disabled }: { disabled: boolean }) {
                     active={m.id === model}
                     icon={<Cpu size={13} className="menu-icon" />}
                     name={m.display}
+                    hint={<span className="menu-rate">free</span>}
                     onSelect={() => pickLocal(m.id)}
                   />
                 ))}

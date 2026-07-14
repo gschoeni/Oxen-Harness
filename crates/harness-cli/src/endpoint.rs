@@ -140,6 +140,21 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui) -> ToolRegistr
     tools.register_typed(harness_tools::CanvasTool::new(Arc::new(
         canvas::CliCanvasSink,
     )));
+    // Dev servers for live preview: the terminal can't embed a browser, so the
+    // trio registers with a status-remembering sink and `/preview` opens the
+    // app in the user's browser. (No screenshot/console sight tools here.)
+    let (start_server, stop_server, server_logs) = harness_preview::session_tools(
+        crate::preview::manager(),
+        crate::preview::SESSION_KEY,
+        workspace.root(),
+        Arc::new(crate::preview::CliPreviewSink),
+    );
+    tools.register_typed(start_server.with_verify_hint(
+        "The user can open the running app in their browser with /preview — \
+         mention that. Check dev_server_logs after exercising the app.",
+    ));
+    tools.register_typed(stop_server);
+    tools.register_typed(server_logs);
     // Honor the user's saved tool preferences (Settings → Tools in the desktop
     // app): custom HTTP tools register, disabled tools drop, and description
     // overrides layer into the definitions the model sees.

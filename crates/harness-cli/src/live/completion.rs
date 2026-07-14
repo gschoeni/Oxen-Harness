@@ -200,6 +200,20 @@ impl Live {
                     })
                     .map(|mut m| {
                         m.replacement = format!("/model {}", m.replacement);
+                        // Price transparency: tag cloud rows with their cached
+                        // per-million rate (warmed at startup/turn boundaries;
+                        // local rows carry a static "free" instead). Read per
+                        // keystroke rather than baked into the cached rows, so
+                        // a late-warming cache still shows up. Slots in before
+                        // the "← current" marker when one is present.
+                        if let Some(rate) = crate::pricing::session_rate(&m.label)
+                            .and_then(|r| crate::pricing::format_rate(&r))
+                        {
+                            match m.detail.find(" ← current") {
+                                Some(pos) => m.detail.insert_str(pos, &format!(" · {rate}")),
+                                None => m.detail = format!("{} · {rate}", m.detail),
+                            }
+                        }
                         m
                     })
                     .collect();
@@ -266,10 +280,13 @@ impl Live {
                         active_local.is_none() && row.id == selected
                     };
                     let marker = if current { " ← current" } else { "" };
+                    // Local models run on your own hardware — free, and never
+                    // in the endpoint catalog, so the tag is static.
+                    let free = if row.local { " · free" } else { "" };
                     CompletionItem::new(
                         row.id.clone(),
                         row.id.clone(),
-                        format!("{}{marker}", row.describe()),
+                        format!("{}{free}{marker}", row.describe()),
                     )
                 })
                 .collect();
@@ -381,6 +398,7 @@ mod tests {
     use super::super::keys::KeyAction;
     use super::super::test_support::{key, live};
     use super::super::Live;
+    use super::CompletionItem;
 
     fn type_line(l: &mut Live, text: &str) {
         for ch in text.chars() {
@@ -434,6 +452,20 @@ mod tests {
     #[test]
     fn model_completion_filters_by_display_and_arrow_selects() {
         let mut l = live(80, 24);
+        // Seed the cached catalog rows — the catalog is user-curated (nothing
+        // ships built in), so the test provides what the user would have added.
+        l.model_items = Some(vec![
+            CompletionItem::new(
+                "claude-sonnet-4-6",
+                "claude-sonnet-4-6",
+                "Claude Sonnet 4.6 · cloud",
+            ),
+            CompletionItem::new(
+                "claude-opus-4-8",
+                "claude-opus-4-8",
+                "Claude Opus 4.8 · cloud",
+            ),
+        ]);
         type_line(&mut l, "/model sonnet");
         assert!(l.completion.iter().any(|c| c.label == "claude-sonnet-4-6"));
         assert_eq!(l.comp_index, Some(0));
@@ -446,6 +478,43 @@ mod tests {
         l.handle_key(key(KeyCode::Tab), 0);
         assert!(l.composer.text().starts_with("/model "));
         assert!(l.composer.text().contains("claude-sonnet"));
+    }
+
+    #[test]
+    fn model_completion_tags_rows_with_cached_rates() {
+        crate::pricing::seed_for_test(
+            "priced-picker-model",
+            Some(harness_local::source::ModelPricing {
+                input_cost_per_token: 0.000_003,
+                output_cost_per_token: 0.000_015,
+            }),
+        );
+        let mut l = live(80, 24);
+        l.model_items = Some(vec![
+            CompletionItem::new(
+                "priced-picker-model",
+                "priced-picker-model",
+                "Priced · cloud ← current",
+            ),
+            CompletionItem::new("unpriced-model", "unpriced-model", "Mystery · cloud"),
+        ]);
+        type_line(&mut l, "/model model");
+        let priced = l
+            .completion
+            .iter()
+            .find(|c| c.label == "priced-picker-model")
+            .expect("priced row listed");
+        // The rate slots in before the current marker; unpriced rows are untouched.
+        assert_eq!(
+            priced.detail,
+            "Priced · cloud · $3/M in · $15/M out ← current"
+        );
+        let unpriced = l
+            .completion
+            .iter()
+            .find(|c| c.label == "unpriced-model")
+            .expect("unpriced row listed");
+        assert_eq!(unpriced.detail, "Mystery · cloud");
     }
 
     #[test]

@@ -22,6 +22,7 @@ mod local;
 mod markdown;
 mod picker;
 mod plan;
+mod preview;
 mod pricing;
 mod queue;
 mod render;
@@ -289,8 +290,11 @@ async fn main() -> Result<()> {
     };
 
     // `oxen-harness loop run ...`: run the loop once, then exit (no REPL).
+    // Dev servers the loop started must be stopped on *both* paths — the
+    // manager is a process-wide static, so nothing drops them for us.
     if let Some(spec) = pending_loop {
         let outcome = commands::loops::run(spec, &mut agent, &ui, workspace.root()).await;
+        preview::shutdown().await;
         outcome?;
         return Ok(());
     }
@@ -313,5 +317,8 @@ async fn main() -> Result<()> {
     // On the way out, offer to label the run for the training-data export —
     // while the user still remembers whether it was a good one.
     training::prompt_session_review(&store, &session, &agent, &ui);
+    // Dev servers live in a process-wide manager (nothing drops it): stop them
+    // explicitly so an `npm run dev` never outlives the expedition.
+    preview::shutdown().await;
     result
 }

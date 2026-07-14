@@ -77,6 +77,13 @@ pub fn compression_file() -> Result<PathBuf, ConfigError> {
     under("compression.json")
 }
 
+/// `~/.oxen-harness/preview.json` — live-preview preferences (auto-verify).
+/// Distinct from the *per-project* `<workspace>/.oxen-harness/preview.json`
+/// that remembers a project's dev-server command.
+pub fn preview_file() -> Result<PathBuf, ConfigError> {
+    under("preview.json")
+}
+
 /// `~/.oxen-harness/config.toml` — the active theme selection.
 pub fn config_file() -> Result<PathBuf, ConfigError> {
     under("config.toml")

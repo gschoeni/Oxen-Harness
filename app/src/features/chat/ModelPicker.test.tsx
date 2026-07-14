@@ -21,7 +21,7 @@ describe("ModelPicker", () => {
         context_window: 200000,
       compression_mode: "off",
       },
-      cloudModels: [{ id: "claude-opus-4-8", name: "Claude Opus 4.8", builtin: true, selected: true }],
+      cloudModels: [{ id: "claude-opus-4-8", name: "Claude Opus 4.8", selected: true }],
     });
     render(<ModelPicker disabled={false} />);
     expect(screen.getByText("Claude Opus 4.8")).toBeInTheDocument();
@@ -55,13 +55,36 @@ describe("ModelPicker", () => {
         context_window: 200000,
         compression_mode: "off",
       },
-      cloudModels: [{ id: "claude-opus-4-8", name: "Claude Opus 4.8", builtin: true, selected: true }],
+      cloudModels: [{ id: "claude-opus-4-8", name: "Claude Opus 4.8", selected: true }],
       localSwitch: null,
     });
     render(<ModelPicker disabled={false} />);
     fireEvent.click(screen.getByText("Claude Opus 4.8"));
     expect(screen.getByText("Set up a local model…")).toBeInTheDocument();
     expect(screen.getByText("Configure a cloud model…")).toBeInTheDocument();
+  });
+
+  it("shows per-million rates on cloud rows and 'free' on local rows", async () => {
+    useStore.setState({
+      session: {
+        model: "claude-sonnet-4-6",
+        workspace: "/x",
+        session_id: "s1",
+        tokens_used: 0,
+        context_tokens: 0,
+        context_window: 200000,
+        compression_mode: "off",
+      },
+      cloudModels: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", selected: true }],
+      localSwitch: null,
+    });
+    render(<ModelPicker disabled={false} />);
+    fireEvent.click(screen.getByText("Claude Sonnet 4.6"));
+    // The cloud row carries its catalog rate (from search_oxen_models)…
+    expect(await screen.findByText("$3/M in · $15/M out")).toBeInTheDocument();
+    // …and the installed local model is labeled free.
+    expect(await screen.findByText("Qwen3 8B · Q4_K_M")).toBeInTheDocument();
+    expect(screen.getByText("free")).toBeInTheDocument();
   });
 
   it("jumps to the cloud-models settings page from the configure button", () => {
@@ -75,7 +98,7 @@ describe("ModelPicker", () => {
         context_window: 200000,
         compression_mode: "off",
       },
-      cloudModels: [{ id: "claude-opus-4-8", name: "Claude Opus 4.8", builtin: true, selected: true }],
+      cloudModels: [{ id: "claude-opus-4-8", name: "Claude Opus 4.8", selected: true }],
       localSwitch: null,
     });
     render(<ModelPicker disabled={false} />);

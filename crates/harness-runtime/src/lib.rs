@@ -23,6 +23,7 @@ mod config;
 pub mod config_repo;
 pub mod connection;
 pub mod models;
+pub mod preview;
 pub mod skills;
 pub mod tools;
 

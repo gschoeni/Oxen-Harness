@@ -162,6 +162,11 @@ async fn execute_turn(
     // the exact model are available (including review/fleet side agents).
     let saved_delta;
     let token_batch = TokenBatch::new(app.clone(), sid.clone());
+    // A dev server that died between turns is otherwise invisible to the
+    // model: `start_dev_server` told it "this keeps running across turns", so
+    // it would happily answer "look at the preview" while the pane shows a
+    // crash. Read it before `app` moves into the event closure below.
+    let crash_note = crate::preview::crash_note(&app, &session);
     let result = {
         let mut agent = arc.lock().await;
         agent.set_cancel_token(cancel.clone());
@@ -295,6 +300,10 @@ async fn execute_turn(
                 prompt,
                 attachments,
             } => {
+                let prompt = match crash_note {
+                    Some(note) => format!("{prompt}\n\n{note}"),
+                    None => prompt,
+                };
                 agent
                     .run_turn_with_attachments(prompt, attachments, on_event)
                     .await

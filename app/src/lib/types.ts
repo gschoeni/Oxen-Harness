@@ -94,22 +94,34 @@ export interface ConnectionView {
 
 // ---- cloud models ----------------------------------------------------------
 
-/** A cloud model in the catalog. `id` is sent to the inference API; `name` is a
- *  friendly label. `builtin` models can't be removed; `selected` is the current
- *  default. */
+/** A cloud model in the user-curated catalog. `id` is sent to the inference
+ *  API; `name` is a friendly label; `selected` is the current default. */
 export interface CloudModel {
   id: string;
   name: string;
-  builtin: boolean;
   selected: boolean;
 }
 
-/** A hit from the Oxen.ai hosted inference catalog (for autocomplete). */
+/** Per-token USD rates for a token-billed hosted model (per single token —
+ *  multiply by 1e6 for the conventional $/M display). */
+export interface ModelPricing {
+  input_cost_per_token: number;
+  output_cost_per_token: number;
+}
+
+/** A hit from the configured endpoint's hosted model catalog. */
 export interface OxenModelHit {
   id: string;
   name: string;
   developer: string;
+  /** One-line summary (may be empty). */
   summary: string;
+  /** Longer markdown description (may be empty). */
+  description: string;
+  /** The API route the model serves, e.g. `/chat/completions`. */
+  endpoint: string;
+  /** Per-token pricing, absent for image/time-billed models. */
+  pricing: ModelPricing | null;
   inputs: string[];
   outputs: string[];
 }
@@ -405,11 +417,17 @@ export type SettingsPage =
   | "local-models"
   | "tools"
   | "skills"
+  | "preview"
   | "code-review"
   | "compression"
   | "usage"
   | "appearance"
   | "logs";
+
+/** Persisted live-preview preferences (mirrors `harness_runtime::preview`). */
+export interface PreviewPrefs {
+  auto_verify: boolean;
+}
 
 /** One model's accumulated usage, mirroring `ModelUsageRow` from the backend —
  *  the model id, its prompt/completion token totals, and the dollars spent. */
@@ -598,6 +616,43 @@ export interface CanvasDoc {
 /** `agent://canvas` payload — a CanvasDoc tagged with its chat session. */
 export interface CanvasEvent extends CanvasDoc {
   session: string;
+}
+
+// ---- live preview (dev servers) ---------------------------------------------
+
+export type PreviewPhase = "starting" | "ready" | "error" | "stopped";
+
+/** A dev server's lifecycle snapshot (mirrors `harness_preview::PreviewStatus`). */
+export interface PreviewStatus {
+  phase: PreviewPhase;
+  /** Short server name, e.g. "dev". */
+  name: string;
+  /** The shell command the server was started with. */
+  command: string;
+  /** Loadable URL, once known (always set when phase is "ready"). */
+  url: string | null;
+  port: number | null;
+  /** Human-readable detail for error/stopped phases. */
+  message: string | null;
+}
+
+/** `preview://status` payload — a PreviewStatus tagged with its chat session. */
+export interface PreviewEvent extends PreviewStatus {
+  session: string;
+}
+
+/** `preview://console` payload — the preview page hit a JavaScript error. */
+export interface PreviewConsoleEvent {
+  session: string;
+  text: string;
+}
+
+/** The preview placeholder's rectangle, in CSS pixels. */
+export interface PreviewBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 // ---- plan (task checklist) -------------------------------------------------

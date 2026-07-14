@@ -30,6 +30,16 @@ if (!window.requestAnimationFrame) {
   window.cancelAnimationFrame = (id: number) => window.clearTimeout(id);
 }
 
+// jsdom lacks ResizeObserver; the preview pane observes its placeholder to keep
+// the native webview glued to it.
+if (!window.ResizeObserver) {
+  window.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}
+
 // ThemesModal's "Export" copies to the clipboard.
 if (!navigator.clipboard) {
   Object.defineProperty(navigator, "clipboard", {

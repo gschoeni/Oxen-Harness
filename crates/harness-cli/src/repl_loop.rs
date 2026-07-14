@@ -242,7 +242,8 @@ async fn handle_line(
         Command::Auth(rest) => commands::auth::handle_repl(rest, agent, ui, ctx.base_url)?,
         Command::Compression(rest) => commands::compression::handle_repl(rest, agent, ui)?,
         Command::Usage => commands::usage::handle_repl(ctx.store, ui).await,
-        Command::Model(rest) => commands::model::handle_repl(rest, agent, ui)?,
+        Command::Preview => commands::preview::handle_repl(ui),
+        Command::Model(rest) => commands::model::handle_repl(rest, agent, ui).await?,
         Command::Export(dest) => export(ctx.store, ctx.session, dest, ui)?,
         Command::Retry => {
             // Only a transcript that stops mid-turn has anything to re-drive;

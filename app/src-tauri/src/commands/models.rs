@@ -256,15 +256,19 @@ pub(crate) async fn search_hf_models(query: String) -> Result<Vec<harness_local:
         .map_err(|e| e.to_string())
 }
 
-/// Search the Oxen.ai hosted inference catalog (`hub.oxen.ai/api/ai/models`),
-/// filtered by `query`, for autocompleting the Cloud Models settings. An empty
-/// query returns the full catalog.
+/// Search the hosted model catalog served by the *configured* Oxen endpoint
+/// (the Connection page's host, or the default hub), filtered by `query`, for
+/// browsing/autocompleting the Cloud Models settings. An empty query returns
+/// the full catalog, including per-token pricing and descriptions.
 #[tauri::command]
 pub(crate) async fn search_oxen_models(
     query: String,
 ) -> Result<Vec<harness_local::source::OxenModelHit>, String> {
-    let token = harness_config::secrets::get("OXEN_API_KEY").filter(|t| !t.trim().is_empty());
-    harness_local::source::oxen_search_models(&query, token.as_deref())
+    let cfg = harness_runtime::connection::load();
+    let base_url = harness_runtime::connection::effective_base_url(&cfg);
+    let key = harness_runtime::connection::effective_api_key(&base_url);
+    let token = (!key.trim().is_empty()).then_some(key);
+    harness_local::source::oxen_search_models(&base_url, &query, token.as_deref())
         .await
         .map_err(|e| e.to_string())
 }

@@ -39,7 +39,84 @@ describe("Settings", () => {
     render(<Settings />);
     // Jump to Cloud models — the catalog renders the built-in model ids.
     await userEvent.click(screen.getByRole("button", { name: /cloud models/i }));
-    expect(await screen.findByText("Claude Sonnet 4.6")).toBeInTheDocument();
+    expect((await screen.findAllByText("Claude Sonnet 4.6")).length).toBeGreaterThan(0);
+  });
+
+  it("lists the endpoint's hosted chat models with rates on the Cloud models page", async () => {
+    render(<Settings />);
+    await userEvent.click(screen.getByRole("button", { name: /cloud models/i }));
+
+    // Chat models from the endpoint's catalog appear with per-million rates…
+    expect(await screen.findByText("Muse Spark 1.1")).toBeInTheDocument();
+    expect(screen.getByText("$0.25/M in · $1/M out")).toBeInTheDocument();
+    // …a saved model is annotated with its rate and marked as already added…
+    expect(screen.getAllByText("$3/M in · $15/M out").length).toBe(2);
+    expect(screen.getByText("Added")).toBeInTheDocument();
+    // …and non-chat models (image generation) are filtered out.
+    expect(screen.queryByText("Pix Gen")).not.toBeInTheDocument();
+
+    // Expanding a hit reveals its description.
+    await userEvent.click(screen.getByRole("button", { name: /show muse spark 1.1 details/i }));
+    expect(screen.getByText(/speedy little model/i)).toBeInTheDocument();
+  });
+
+  it("shows an empty state that points at the catalog when no models are saved", async () => {
+    ipc.listCloudModels.mockResolvedValue([]);
+    render(<Settings />);
+    await userEvent.click(screen.getByRole("button", { name: /cloud models/i }));
+
+    // The guidance card renders in place of the saved-model list…
+    expect(await screen.findByText("No models yet")).toBeInTheDocument();
+    expect(screen.getByText(/pick one from the catalog below/i)).toBeInTheDocument();
+    // …and every catalog hit is addable (nothing is pre-seeded as built-in).
+    expect(await screen.findByRole("button", { name: /add claude sonnet 4.6/i })).toBeInTheDocument();
+    expect(screen.queryByText("Added")).not.toBeInTheDocument();
+  });
+
+  it("removes a saved model after confirming in the modal", async () => {
+    render(<Settings />);
+    await userEvent.click(screen.getByRole("button", { name: /cloud models/i }));
+    await screen.findByText("Claude Opus 4.8");
+    expect(screen.queryByText("built-in")).not.toBeInTheDocument();
+
+    // The trash icon asks first — nothing is removed yet.
+    await userEvent.click(screen.getByRole("button", { name: /remove claude opus 4.8/i }));
+    expect(await screen.findByText("Remove model?")).toBeInTheDocument();
+    expect(ipc.removeCloudModel).not.toHaveBeenCalled();
+
+    // Cancel keeps the model and closes the modal.
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Remove model?")).toBeNull();
+    expect(ipc.removeCloudModel).not.toHaveBeenCalled();
+
+    // Confirming actually deletes and refreshes the list.
+    ipc.listCloudModels.mockResolvedValue([
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", selected: true },
+    ]);
+    await userEvent.click(screen.getByRole("button", { name: /remove claude opus 4.8/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(ipc.removeCloudModel).toHaveBeenCalledWith("claude-opus-4-8");
+    await vi.waitFor(() =>
+      expect(
+        screen.queryByText("Claude Opus 4.8", { selector: ".model-item .model-item-name" }),
+      ).toBeNull(),
+    );
+  });
+
+  it("searches the catalog and adds a hit to the saved models", async () => {
+    render(<Settings />);
+    await userEvent.click(screen.getByRole("button", { name: /cloud models/i }));
+    await screen.findByText("Muse Spark 1.1");
+
+    // Filtering by developer narrows the list client-side.
+    await userEvent.type(screen.getByRole("searchbox", { name: /search hosted models/i }), "muse");
+    expect(
+      screen.queryByText("Claude Sonnet 4.6", { selector: ".catalog-item .model-item-name" }),
+    ).not.toBeInTheDocument();
+
+    // Adding a hit persists it by id + display name.
+    await userEvent.click(screen.getByRole("button", { name: /add muse spark 1.1/i }));
+    expect(ipc.addCloudModel).toHaveBeenCalledWith("muse-spark-1-1", "Muse Spark 1.1");
   });
 
   it("toggles light/dark mode on the Appearance page", async () => {

@@ -405,6 +405,14 @@ pub struct OxenModelHit {
     pub developer: String,
     /// A one-line summary, best-effort (may be empty).
     pub summary: String,
+    /// The longer markdown description from the catalog (may be empty).
+    pub description: String,
+    /// The API route the model serves, e.g. `/chat/completions` (chat models)
+    /// or `/images/generate` — lets callers filter to what they can run.
+    pub endpoint: String,
+    /// Per-token pricing when the model is token-billed (absent for image/
+    /// time-billed models or when the catalog omits rates).
+    pub pricing: Option<ModelPricing>,
     /// The model's input/output modalities, e.g. `["text"]` / `["text","image"]`.
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
@@ -424,6 +432,10 @@ struct OxenModelEntry {
     #[serde(default)]
     summary: Option<String>,
     #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    endpoint: Option<String>,
+    #[serde(default)]
     developer: Option<OxenDeveloper>,
     #[serde(default)]
     capabilities: Option<OxenCapabilities>,
@@ -441,6 +453,20 @@ struct OxenPricing {
     output_cost_per_token: Option<f64>,
 }
 
+impl OxenPricing {
+    /// Usable per-token rates, when at least one is present; missing rates count
+    /// as 0 so a model priced only on output still yields a real number.
+    fn rates(self) -> Option<ModelPricing> {
+        match (self.input_cost_per_token, self.output_cost_per_token) {
+            (None, None) => None,
+            (input, output) => Some(ModelPricing {
+                input_cost_per_token: input.unwrap_or(0.0),
+                output_cost_per_token: output.unwrap_or(0.0),
+            }),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct OxenDeveloper {
     #[serde(default)]
@@ -455,17 +481,16 @@ struct OxenCapabilities {
     output: Vec<String>,
 }
 
-/// Fetch the Oxen.ai cloud model catalog and filter it to those matching
-/// `query` (case-insensitive substring over id / name / developer). An empty
-/// query returns the whole catalog. Results are sorted so text models come
-/// first (the common chat case), then alphabetically by name.
-pub async fn oxen_search_models(
-    query: &str,
+/// GET `{base_url}/models` from an Oxen-compatible inference endpoint and parse
+/// the catalog. `base_url` is the same base that serves model requests (e.g.
+/// `https://hub.oxen.ai/api/ai`), so self-hosted endpoints list their own models.
+async fn fetch_oxen_models(
+    base_url: &str,
     token: Option<&str>,
-) -> Result<Vec<OxenModelHit>, LocalError> {
+) -> Result<Vec<OxenModelEntry>, LocalError> {
     let client = reqwest::Client::new();
     let mut req = client
-        .get("https://hub.oxen.ai/api/ai/models")
+        .get(format!("{}/models", base_url.trim_end_matches('/')))
         .header("User-Agent", "oxen-harness");
     if let Some(t) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(t.trim());
@@ -484,10 +509,21 @@ pub async fn oxen_search_models(
         .json()
         .await
         .map_err(|e| LocalError::Download(format!("could not read Oxen models response: {e}")))?;
+    Ok(body.data)
+}
 
+/// Fetch `base_url`'s model catalog and filter it to those matching `query`
+/// (case-insensitive substring over id / name / developer). An empty query
+/// returns the whole catalog. Results are sorted so text models come first
+/// (the common chat case), then alphabetically by name.
+pub async fn oxen_search_models(
+    base_url: &str,
+    query: &str,
+    token: Option<&str>,
+) -> Result<Vec<OxenModelHit>, LocalError> {
     let needle = query.trim().to_ascii_lowercase();
-    let mut hits: Vec<OxenModelHit> = body
-        .data
+    let mut hits: Vec<OxenModelHit> = fetch_oxen_models(base_url, token)
+        .await?
         .into_iter()
         .map(|e| {
             let name = e
@@ -504,6 +540,9 @@ pub async fn oxen_search_models(
                 name,
                 developer,
                 summary: e.summary.unwrap_or_default(),
+                description: e.description.unwrap_or_default(),
+                endpoint: e.endpoint.unwrap_or_default(),
+                pricing: e.pricing.and_then(OxenPricing::rates),
                 inputs,
                 outputs,
             }
@@ -573,46 +612,14 @@ pub async fn oxen_model_pricing_catalog_at(
     base_url: &str,
     token: Option<&str>,
 ) -> Result<HashMap<String, ModelPricing>, LocalError> {
-    let client = reqwest::Client::new();
-    let mut req = client
-        .get(format!("{}/models", base_url.trim_end_matches('/')))
-        .header("User-Agent", "oxen-harness");
-    if let Some(t) = token.filter(|t| !t.trim().is_empty()) {
-        req = req.bearer_auth(t.trim());
-    }
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| LocalError::Download(format!("Oxen models request failed: {e}")))?;
-    if !resp.status().is_success() {
-        return Err(LocalError::Download(format!(
-            "Oxen models API returned HTTP {}",
-            resp.status().as_u16()
-        )));
-    }
-    let body: OxenModelsResponse = resp
-        .json()
-        .await
-        .map_err(|e| LocalError::Download(format!("could not read Oxen models response: {e}")))?;
-
-    Ok(body
-        .data
+    Ok(fetch_oxen_models(base_url, token)
+        .await?
         .into_iter()
         .filter_map(|entry| {
-            entry.pricing.and_then(|p| {
-                match (p.input_cost_per_token, p.output_cost_per_token) {
-                    // Only usable when at least one rate is present; missing rates count
-                    // as 0 so a model priced only on output still yields a real number.
-                    (None, None) => None,
-                    (input, output) => Some((
-                        entry.id,
-                        ModelPricing {
-                            input_cost_per_token: input.unwrap_or(0.0),
-                            output_cost_per_token: output.unwrap_or(0.0),
-                        },
-                    )),
-                }
-            })
+            entry
+                .pricing
+                .and_then(OxenPricing::rates)
+                .map(|rates| (entry.id, rates))
         })
         .collect())
 }
@@ -672,6 +679,66 @@ mod tests {
         .unwrap();
 
         assert_eq!(pricing["muse-spark-1-1"].cost_of(1_000, 500), 0.002);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn model_search_uses_the_configured_endpoint_and_carries_details() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/api/ai/models")
+            .match_header("authorization", "Bearer endpoint-key")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"data":[
+                    {"id":"muse-spark-1-1","display_name":"Muse Spark 1.1",
+                     "summary":"Fast and cheap","description":"A **speedy** model.",
+                     "endpoint":"/chat/completions",
+                     "developer":{"name":"Muse"},
+                     "capabilities":{"input":["text"],"output":["text"]},
+                     "pricing":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002}},
+                    {"id":"pix-gen","display_name":"Pix Gen",
+                     "endpoint":"/images/generate",
+                     "capabilities":{"input":["text"],"output":["image"]},
+                     "pricing":{"cost_per_image":0.01,"method":"per_image"}}
+                ]}"#,
+            )
+            .expect(2)
+            .create_async()
+            .await;
+
+        let hits = oxen_search_models(
+            &format!("{}/api/ai", server.url()),
+            "",
+            Some("endpoint-key"),
+        )
+        .await
+        .unwrap();
+
+        // Text-output models sort first; image models still list (no pricing).
+        assert_eq!(hits.len(), 2);
+        let muse = &hits[0];
+        assert_eq!(muse.id, "muse-spark-1-1");
+        assert_eq!(muse.developer, "Muse");
+        assert_eq!(muse.summary, "Fast and cheap");
+        assert_eq!(muse.description, "A **speedy** model.");
+        assert_eq!(muse.endpoint, "/chat/completions");
+        let rates = muse.pricing.unwrap();
+        assert_eq!(rates.input_cost_per_token, 0.000001);
+        assert_eq!(rates.output_cost_per_token, 0.000002);
+        assert!(hits[1].pricing.is_none());
+
+        // Query filters over id / name / developer.
+        let hits = oxen_search_models(
+            &format!("{}/api/ai", server.url()),
+            "muse",
+            Some("endpoint-key"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "muse-spark-1-1");
         mock.assert_async().await;
     }
 

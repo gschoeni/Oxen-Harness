@@ -7,34 +7,29 @@ import {
   Eye,
   EyeOff,
   FolderOpen,
+  Globe,
   GraduationCap,
   Link2,
   Moon,
   Palette,
-  Plus,
   ScrollText,
   SearchCode,
   Shrink,
-  Star,
   Sun,
-  Trash2,
   Wrench,
 } from "lucide-react";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "../../components/ui";
-import {
-  addCloudModel,
-  getConnection,
-  removeCloudModel,
-  setConnection,
-} from "../../lib/ipc";
+import { getConnection, setConnection } from "../../lib/ipc";
 import { useActiveProject, useStore } from "../../lib/store";
 import type { SettingsPage } from "../../lib/types";
 import { LocalSetup } from "../models/LocalSetup";
 import { ThemesPanel } from "../themes/ThemesPanel";
 import { ToolsPage } from "../tools/ToolsPage";
 import { SkillsPage } from "../skills/SkillsPage";
+import { CloudModelsPage } from "./CloudModelsPage";
 import { CodeReviewPage } from "./CodeReviewPage";
+import { PreviewPage } from "./PreviewPage";
 import { CompressionPage } from "./CompressionPage";
 import { UsagePage } from "./UsagePage";
 import { LogsPage } from "../logs/LogsPage";
@@ -48,6 +43,7 @@ const NAV: { page: SettingsPage; icon: ReactNode; label: string; blurb: string }
   { page: "local-models", icon: <Cpu size={18} />, label: "Local models", blurb: "Download & run on-device" },
   { page: "tools", icon: <Wrench size={18} />, label: "Tools", blurb: "What the agent can do" },
   { page: "skills", icon: <GraduationCap size={18} />, label: "Skills", blurb: "Reusable workflows it can learn" },
+  { page: "preview", icon: <Globe size={18} />, label: "Preview", blurb: "Live app preview & dev servers" },
   { page: "code-review", icon: <SearchCode size={18} />, label: "Code review", blurb: "The find → verify → report pipeline" },
   { page: "compression", icon: <Shrink size={18} />, label: "Compression", blurb: "Shrink stale context on the wire" },
   { page: "usage", icon: <DollarSign size={18} />, label: "Usage", blurb: "Tokens & dollars spent per model" },
@@ -61,6 +57,7 @@ const TITLE: Record<SettingsPage, string> = {
   "local-models": "Local models",
   tools: "Tools",
   skills: "Skills",
+  preview: "Preview",
   "code-review": "Code review",
   compression: "Compression",
   usage: "Usage",
@@ -132,10 +129,11 @@ export function Settings() {
           </header>
           <div className="settings-main-body">
             {page === "connection" && <ConnectionSettings />}
-            {page === "cloud-models" && <CloudModelsSettings />}
+            {page === "cloud-models" && <CloudModelsPage />}
             {page === "local-models" && <LocalSetup />}
             {page === "tools" && <ToolsPage />}
             {page === "skills" && <SkillsPage />}
+            {page === "preview" && <PreviewPage />}
             {page === "code-review" && <CodeReviewPage />}
             {page === "compression" && <CompressionPage />}
             {page === "usage" && <UsagePage />}
@@ -290,125 +288,6 @@ function ConnectionSettings() {
           The agent can read, write, and search files, run shell commands, and use git —
           scoped to the workspace above. Manage exactly which tools it may call on the{" "}
           <strong>Tools</strong> page.
-        </p>
-      </section>
-    </div>
-  );
-}
-
-/** Manage the cloud model catalog: list built-in + custom models, add a new one
- *  by id, remove custom ones, and pick the default. The default also swaps the
- *  current chat (continuing the conversation), matching the composer picker. */
-function CloudModelsSettings() {
-  const cloudModels = useStore((s) => s.cloudModels);
-  const loadCloudModels = useStore((s) => s.loadCloudModels);
-  const changeModel = useStore((s) => s.changeModel);
-
-  const [id, setId] = useState("");
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    loadCloudModels();
-  }, [loadCloudModels]);
-
-  async function add(e: FormEvent) {
-    e.preventDefault();
-    const trimmed = id.trim();
-    if (!trimmed) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await addCloudModel(trimmed, name.trim());
-      await loadCloudModels();
-      setId("");
-      setName("");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove(modelId: string) {
-    try {
-      await removeCloudModel(modelId);
-      await loadCloudModels();
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
-  async function makeDefault(modelId: string) {
-    try {
-      await changeModel(modelId);
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
-  return (
-    <div className="settings-page">
-      <section className="settings-section">
-        <div className="settings-label">Models</div>
-        <div className="model-list">
-          {cloudModels.map((m) => (
-            <div className={`model-item ${m.selected ? "selected" : ""}`} key={m.id}>
-              <button
-                className="model-default"
-                title={m.selected ? "Current default" : "Make default"}
-                aria-label={m.selected ? "Current default model" : "Make default model"}
-                onClick={() => !m.selected && makeDefault(m.id)}
-                disabled={m.selected}
-              >
-                <Star size={15} fill={m.selected ? "currentColor" : "none"} />
-              </button>
-              <div className="model-item-info">
-                <span className="model-item-name">{m.name}</span>
-                <span className="model-item-id">{m.id}</span>
-              </div>
-              {m.builtin ? (
-                <span className="model-item-tag">built-in</span>
-              ) : (
-                <button
-                  className="model-remove"
-                  title="Remove model"
-                  aria-label={`Remove ${m.name}`}
-                  onClick={() => remove(m.id)}
-                >
-                  <Trash2 size={15} />
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-
-        <form className="model-add" onSubmit={add}>
-          <input
-            className="field-input"
-            placeholder="Model id (e.g. claude-sonnet-4-6)"
-            value={id}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            onChange={(e) => setId(e.target.value)}
-          />
-          <input
-            className="field-input"
-            placeholder="Display name (optional)"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <Button variant="primary" size="sm" type="submit" disabled={busy || !id.trim()}>
-            <Plus size={15} />
-            Add
-          </Button>
-        </form>
-        {error && <span className="save-status err">{error}</span>}
-        <p className="hint">
-          Add any model your Oxen endpoint serves by its id. Switch between models anytime
-          from the picker beneath the chat box — the star marks the default for new chats.
         </p>
       </section>
     </div>

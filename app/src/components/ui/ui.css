@@ -306,6 +306,17 @@
   font-size: var(--text-3xs);
   color: var(--text-tertiary);
 }
+/* Two-line hint: the model id with its per-million rate underneath. */
+.menu-hint-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+.menu-rate {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
 .menu-sep {
   height: 1px;
   margin: var(--space-1) 0;

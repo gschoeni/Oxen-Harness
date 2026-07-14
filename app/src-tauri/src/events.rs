@@ -108,6 +108,26 @@ pub(crate) struct CanvasPayload {
     pub(crate) content: String,
 }
 
+// --- Live preview ------------------------------------------------------------
+
+/// A `preview://status` payload: the session's dev server changed lifecycle
+/// phase (starting/ready/error/stopped). The flattened status carries the
+/// name, command, URL, port, and any error message.
+#[derive(Clone, Serialize)]
+pub(crate) struct PreviewStatusPayload {
+    pub(crate) session: String,
+    #[serde(flatten)]
+    pub(crate) status: harness_preview::PreviewStatus,
+}
+
+/// A `preview://console` payload: the preview page hit a JavaScript error —
+/// drives the pane's "Fix it" banner.
+#[derive(Clone, Serialize)]
+pub(crate) struct PreviewConsolePayload {
+    pub(crate) session: String,
+    pub(crate) text: String,
+}
+
 // --- Local models ----------------------------------------------------------
 
 /// A `local://status` payload: a phase of bringing a local model online, so the

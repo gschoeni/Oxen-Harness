@@ -62,6 +62,16 @@ pub struct AppState {
     /// the model launched inside it. Std mutex: touched briefly, from sync
     /// builders too. Evicted alongside the agents map.
     pub(crate) fleet_spawners: StdMutex<HashMap<String, Arc<harness_agent::FleetSpawner>>>,
+    /// Dev servers the agent started for live preview, at most one per session.
+    /// NOT evicted with the agents map — a background chat's server keeps
+    /// serving its preview until stopped or the app exits.
+    pub(crate) dev_servers: harness_preview::DevServerManager,
+    /// The console bridge preview pages beacon their errors to, started on
+    /// first preview attach (see `crate::preview::console_bridge`).
+    pub(crate) console_bridge: tokio::sync::OnceCell<std::sync::Arc<harness_preview::ConsoleBridge>>,
+    /// Serializes `preview_attach` (see its docs): the frontend calls it at
+    /// frame rate during a resize, and webview creation must not race itself.
+    pub(crate) preview_attach: Mutex<()>,
 }
 
 /// The client, model label, and context window for a new agent: the selected
@@ -182,6 +192,44 @@ pub(crate) fn finish_tools(
         app: app.clone(),
         session: session.to_string(),
     })));
+    // Live preview: the dev-server trio plus the sight pair (screenshot +
+    // console), sharing the app-wide manager so the preview pane/commands see
+    // the servers the tools start.
+    let manager = app.state::<AppState>().dev_servers.clone();
+    let (start_server, stop_server, server_logs) = harness_preview::session_tools(
+        manager.clone(),
+        session,
+        workspace_root,
+        Arc::new(crate::preview::TauriPreviewSink {
+            app: app.clone(),
+            session: session.to_string(),
+        }),
+    );
+    // Auto-verify (Settings → Preview) decides how hard the model is pushed
+    // to look at what it built before reporting done.
+    let verify_hint = if harness_runtime::preview::auto_verify() {
+        "The user can see the live app in the Preview panel next to the chat. \
+         After each batch of code edits, verify your work before reporting \
+         done: call preview_screenshot to look at the app and preview_console \
+         to check for browser errors, and fix what you find."
+    } else {
+        "The user can see the live app in the Preview panel next to the chat. \
+         The preview_screenshot and preview_console tools are available when \
+         you need to check the running app."
+    };
+    tools.register_typed(start_server.with_verify_hint(verify_hint));
+    tools.register_typed(stop_server);
+    tools.register_typed(server_logs);
+    let (screenshot, console) = harness_preview::sight_tools(
+        manager,
+        session,
+        Arc::new(crate::preview::TauriPreviewLens {
+            app: app.clone(),
+            session: session.to_string(),
+        }),
+    );
+    tools.register_typed(screenshot);
+    tools.register_typed(console);
     harness_runtime::tools::load().apply(tools);
     // Skills load on demand through the `skill` tool; it's only registered when
     // the user has enabled skills, so an empty set costs no prompt tokens.
@@ -497,6 +545,24 @@ pub(crate) async fn settings_registry(state: &AppState) -> Result<ToolRegistry, 
     let mut registry = ToolRegistry::default_for_workspace_with_web_key(workspace, brave_key);
     registry.register_typed(AskUserTool::new(Arc::new(NullAsker)));
     registry.register_typed(CanvasTool::new(Arc::new(NullCanvasSink)));
+    // Inert dev-server trio + sight pair (fresh manager, never started) for
+    // listing.
+    let (start_server, stop_server, server_logs) = harness_preview::session_tools(
+        harness_preview::DevServerManager::new(),
+        "settings",
+        &root,
+        Arc::new(crate::preview::NullPreviewSink),
+    );
+    registry.register_typed(start_server);
+    registry.register_typed(stop_server);
+    registry.register_typed(server_logs);
+    let (screenshot, console) = harness_preview::sight_tools(
+        harness_preview::DevServerManager::new(),
+        "settings",
+        Arc::new(crate::preview::NullPreviewLens),
+    );
+    registry.register_typed(screenshot);
+    registry.register_typed(console);
     // An inert `spawn_agents` (never run — the page only reads name,
     // description, and schema), so the fleet is manageable like any tool.
     registry.register_typed(harness_agent::FleetTool::new(

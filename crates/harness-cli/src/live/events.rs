@@ -106,7 +106,11 @@ impl Live {
                 prompt_tokens_used,
                 completion_tokens_used,
                 ..
-            } => self.on_usage(*context_tokens, *prompt_tokens_used, *completion_tokens_used),
+            } => self.on_usage(
+                *context_tokens,
+                *prompt_tokens_used,
+                *completion_tokens_used,
+            ),
             AgentEvent::Compacted { detail } => self.on_compacted(detail),
             AgentEvent::Compression {
                 mode,

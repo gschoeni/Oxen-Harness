@@ -27,6 +27,7 @@ pub(crate) mod location;
 pub(crate) mod loops;
 pub(crate) mod model;
 pub(crate) mod oxen;
+pub(crate) mod preview;
 pub(crate) mod queue;
 pub(crate) mod review;
 pub(crate) mod theme;

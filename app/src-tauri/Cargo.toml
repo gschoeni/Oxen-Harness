@@ -15,7 +15,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `unstable` for multi-webview: the live-preview pane is a native child
+# webview positioned over the React layout (see src/preview.rs).
+tauri = { version = "2", features = ["unstable"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -35,4 +37,14 @@ harness-local = { path = "../../crates/harness-local" }
 harness-theme = { path = "../../crates/harness-theme" }
 harness-agent = { path = "../../crates/harness-agent" }
 harness-review = { path = "../../crates/harness-review" }
+harness-preview = { path = "../../crates/harness-preview" }
 harness-loop = { path = "../../crates/harness-loop" }
+
+# Native WKWebView snapshot for the preview_screenshot tool (versions match
+# the objc2 stack wry already pulls in).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSError", "NSString", "NSValue"] }
+objc2-app-kit = { version = "0.3", features = ["NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKSnapshotConfiguration", "block2"] }

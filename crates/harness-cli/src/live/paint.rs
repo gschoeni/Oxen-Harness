@@ -108,11 +108,7 @@ impl Live {
             buf.push_str(&format!("\x1b[{next_row};1H\x1b[2K{line}"));
             next_row += 1;
         }
-        for line in self
-            .compression_line
-            .iter()
-            .chain(self.status_lines.iter())
-        {
+        for line in self.compression_line.iter().chain(self.status_lines.iter()) {
             buf.push_str(&format!("\x1b[{next_row};1H\x1b[2K{line}"));
             next_row += 1;
         }

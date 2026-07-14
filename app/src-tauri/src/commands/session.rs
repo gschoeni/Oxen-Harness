@@ -99,13 +99,24 @@ pub(crate) async fn set_review_status_many(
 }
 
 /// Permanently delete a chat session: remove it (and its messages) from history,
-/// drop any cached live agent, and clear it as the current chat if it was active.
+/// drop any cached live agent, stop its dev server, and clear it as the current
+/// chat if it was active.
 #[tauri::command]
-pub(crate) async fn delete_session(state: State<'_, AppState>, id: String) -> Result<(), String> {
+pub(crate) async fn delete_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
     open_history_store()?
         .delete_session(&id)
         .map_err(|e| e.to_string())?;
     state.agents.lock().await.remove(&id);
+    // A deleted chat's dev server has no owner left — stop it and drop its
+    // preview webview. Close unconditionally: the server may already have been
+    // stopped (by the agent, or the toolbar), which only *hides* the webview —
+    // a hidden view for a deleted chat would live until app exit.
+    state.dev_servers.stop(&id).await;
+    crate::preview::close(&app, &id);
     // Drop the session's fleet spawner in lockstep with its agent, so a
     // deleted chat doesn't leave its spawner (a client + tool-registry +
     // config clone) stranded in the map until the next eviction sweep.

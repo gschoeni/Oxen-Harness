@@ -8,6 +8,7 @@ import { X } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { Markdown } from "../../components/ui/Markdown";
 import { HighlightedCode } from "../../components/ui/HighlightedCode";
+import { PanelTabs } from "../preview/PanelTabs";
 import type { CanvasDoc } from "../../lib/types";
 import "./canvas.css";
 
@@ -45,6 +46,7 @@ export function Canvas({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =>
       )}
       <header className="canvas-head">
         <div className="canvas-tabs">
+          <PanelTabs active="canvas" />
           {doc && docs && docs.length > 1 ? (
             docs.map((d) => (
               <button

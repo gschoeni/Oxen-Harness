@@ -419,7 +419,10 @@ mod tests {
         // 40k * 3e-6 + 10k * 15e-6 = 0.12 + 0.15 = 0.27
         assert!(usage.contains("$0.27"), "cost: {usage}");
         // The context fill and the total are distinct figures, not conflated.
-        assert!(!ctx.contains("tokens used"), "fill leaked into line 1: {ctx}");
+        assert!(
+            !ctx.contains("tokens used"),
+            "fill leaked into line 1: {ctx}"
+        );
 
         // A later snapshot in the same turn climbs — the whole point of wiring
         // Usage events through: more context, more tokens, higher cost.
