@@ -211,6 +211,23 @@ describe("ProjectsPage", () => {
     expect(ipc.newSession).not.toHaveBeenCalled();
   });
 
+  it("saves an inline project name with Enter", async () => {
+    render(<ProjectsPage />);
+    await userEvent.click(screen.getByText("Writer"));
+    await screen.findByRole("heading", { name: "Writer" });
+
+    const name = screen.getByLabelText("Project name");
+    await userEvent.clear(name);
+    await userEvent.type(name, "Writer Studio{Enter}");
+
+    expect(ipc.updateProject).toHaveBeenCalledWith(
+      "/w",
+      "Writer Studio",
+      "A calm place to draft essays.",
+      "Use plain language.",
+    );
+  });
+
   it("adds and removes durable project context", async () => {
     ipc.pickProjectContext.mockResolvedValueOnce(["/tmp/research.pdf"]);
     ipc.addProjectContext.mockResolvedValueOnce({

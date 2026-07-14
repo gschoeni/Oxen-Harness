@@ -29,7 +29,7 @@ export function ProjectHome({
   const [startupModel, setStartupModel] = useState<StartupModelChoice | null>(null);
   const cleanName = name.trim();
   const cleanGoal = goal.trim();
-  const detailsChanged = cleanName !== project.name || cleanGoal !== project.description;
+  const detailsChanged = name !== project.name || goal !== project.description;
 
   async function saveDetails() {
     if (!cleanName || !detailsChanged || savingDetails) return;
@@ -93,6 +93,12 @@ export function ProjectHome({
                 aria-label="Project name"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void saveDetails();
+                  }
+                }}
                 spellCheck={false}
               />
             </h1>
@@ -221,7 +227,7 @@ function EditInstructionsModal({
   const [saving, setSaving] = useState(false);
 
   return (
-    <Modal title="Edit instructions" onClose={onClose} wide>
+    <Modal title="Edit instructions" onClose={onClose}>
       <div className="start-project-form">
         <label className="project-field"><span>Project instructions</span><textarea rows={7} value={instructions} onChange={(event) => setInstructions(event.target.value)} /></label>
         <small className="project-field-hint">These instructions are included in every new chat for this project.</small>
