@@ -369,12 +369,14 @@ impl Agent {
             model: self.config.model.clone(),
             ..Default::default()
         })?;
+        let mut config = self.config.clone();
+        config.initial_attachments.clear();
         let mut side = Agent::new(
             self.client.clone(),
             subagent_tools(self.tools.clone()),
             store,
             session,
-            self.config.clone(),
+            config,
         )?;
         side.disable_transcript_persistence();
         side.set_usage_store(self.usage_store.clone());
@@ -456,6 +458,22 @@ impl Agent {
         }
         self.messages.push(message);
         Ok(())
+    }
+
+    /// Merge durable project media into the first real user turn. A resumed
+    /// chat that already has a user message never reattaches it, and detached
+    /// side agents clear this list when they are built.
+    fn attachments_for_turn(
+        &self,
+        mut attachments: Vec<Attachment>,
+    ) -> Result<Vec<Attachment>, AgentError> {
+        if self.messages.iter().any(|message| message.role == "user") {
+            return Ok(attachments);
+        }
+        for path in &self.config.initial_attachments {
+            attachments.push(Attachment::from_path(path)?);
+        }
+        Ok(attachments)
     }
 
     /// Persist the compact working set separately from verbatim history.
@@ -642,6 +660,25 @@ mod tests {
             },
             other => panic!("expected parts, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn durable_project_media_is_only_added_to_the_first_user_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("reference.png");
+        std::fs::write(&image, [1, 2, 3]).unwrap();
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new("http://localhost/api/ai", "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            initial_attachments: vec![image],
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        assert_eq!(agent.attachments_for_turn(vec![]).unwrap().len(), 1);
+        agent.push(ChatMessage::user("first")).unwrap();
+        assert!(agent.attachments_for_turn(vec![]).unwrap().is_empty());
     }
 
     #[test]

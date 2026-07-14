@@ -50,6 +50,7 @@ impl Agent {
     where
         F: FnMut(&AgentEvent),
     {
+        let attachments = self.attachments_for_turn(attachments)?;
         self.push(build_user_message(
             user_input.into(),
             &attachments,
@@ -526,6 +527,7 @@ fn error_kind(e: &AgentError) -> &'static str {
         AgentError::Tool(_) => "tool",
         AgentError::History(_) => "history",
         AgentError::Io(_) => "io",
+        AgentError::Attachment(_) => "attachment",
         AgentError::Json(_) => "json",
         AgentError::AttachmentsTooLarge { .. } => "attachments_too_large",
         AgentError::ContextWindowExceeded { .. } => "context_window_exceeded",

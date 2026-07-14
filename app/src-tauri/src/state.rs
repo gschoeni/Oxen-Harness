@@ -241,15 +241,17 @@ pub(crate) fn finish_tools(
 
     let web_search = tools.get(harness_tools::WEB_SEARCH_TOOL).is_some();
     let canvas = tools.get(harness_tools::CANVAS_TOOL).is_some();
+    let system_prompt = format!(
+        "{}{}",
+        harness_agent::system_prompt_with_env(web_search, canvas, workspace_root),
+        harness_runtime::project::prompt_section(workspace_root)
+    );
     AgentConfig {
         model: model_label.to_string(),
-        system_prompt: Some(harness_agent::system_prompt_with_env(
-            web_search,
-            canvas,
-            workspace_root,
-        )),
+        system_prompt: Some(system_prompt),
         context_window,
         attachment_root: Some(workspace_root.to_path_buf()),
+        initial_attachments: harness_runtime::project::binary_context_paths(workspace_root),
         compression: harness_runtime::compression::mode(),
         // Retry attempts and failed turns append to ~/.oxen-harness/errors.jsonl
         // so a developer can dig into what the endpoint said later.

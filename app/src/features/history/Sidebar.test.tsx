@@ -16,8 +16,8 @@ const sessions: SessionSummary[] = [
   { id: "other", workspace: "/elsewhere", model: "m", created_at: 1_700_000_000, title: "Other project chat", message_count: 1, review_status: "" },
 ];
 const projects: Project[] = [
-  { path: "/w", name: "w", session_count: 2, active: true },
-  { path: "/elsewhere", name: "elsewhere", session_count: 1, active: false },
+  { path: "/w", name: "w", description: "", instructions: "", context: [], session_count: 2, active: true },
+  { path: "/elsewhere", name: "elsewhere", description: "", instructions: "", context: [], session_count: 1, active: false },
 ];
 
 beforeEach(() => {

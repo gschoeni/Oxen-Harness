@@ -1,7 +1,7 @@
 # Project Status & Roadmap
 
 **Purpose:** Where we are, what's next, what's done. Pull this in for any working session.
-**Updated:** 2026-07-12
+**Updated:** 2026-07-14
 
 ---
 
@@ -25,11 +25,28 @@
 | **13** | Cleanup pass: shared helpers → `harness-core` (text/fmt/json), CLI handlers → `commands/`, desktop bridge split (state/bridges/events/commands), a `/code-review` self-review with 17 fixes | ✅ Complete |
 | **14** | Usage accounting: provider/fallback tokens per model call, daily activity ledger, estimated Oxen spend, desktop activity grid + CLI `/usage` | ✅ Complete |
 | **15** | Long-running memory hardening: bounded streaming I/O, durable context checkpoints/CCR payloads, attachment budgets, bounded fleet/UI caches | ✅ Complete |
+| **16** | Durable projects: guided creation, repo-local goals/instructions/context, project home | ✅ Complete |
 
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **594 Rust tests + 193 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
+> **649 Rust tests + 218 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
+
+## Phase 16 — Durable projects
+
+**Status:** ✅ Complete
+
+- [x] Replace the folder-only action with a guided **Start a project** flow for
+      creating a new directory or adopting an existing one.
+- [x] Persist project name, goal, instructions, and a context manifest in the
+      repository at `.oxen-harness/project.json`; folder-only projects migrate
+      implicitly with their directory basename and empty metadata.
+- [x] Copy text/PDF/image references content-addressed into
+      `.oxen-harness/context/`, with add/remove/deduplication behavior.
+- [x] Add a project home with a context-aware composer plus editable
+      Instructions and Context cards.
+- [x] Feed goals/instructions/context manifests into both desktop and CLI agent
+      prompts; attach durable PDF/image context to the first prompt of new chats.
 
 ## Phase 15 — Long-running memory hardening
 

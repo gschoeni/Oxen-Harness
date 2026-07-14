@@ -68,12 +68,33 @@ export interface ToolDefinition {
   function?: { name?: string; description?: string; parameters?: unknown };
 }
 
-/** A project = a working directory the agent runs in. Chats are grouped by it. */
+export type ProjectContextKind = "text" | "pdf" | "image";
+
+export interface ProjectContext {
+  path: string;
+  name: string;
+  kind: ProjectContextKind;
+  size_bytes: number;
+}
+
+/** A project is a working directory plus durable, repository-local guidance. */
 export interface Project {
   path: string;
   name: string;
+  description: string;
+  instructions: string;
+  context: ProjectContext[];
   session_count: number;
   active: boolean;
+}
+
+export interface StartProjectInput {
+  name: string;
+  description: string;
+  instructions: string;
+  directory: string;
+  createDirectory: boolean;
+  contextPaths: string[];
 }
 
 // ---- connection settings ---------------------------------------------------

@@ -55,6 +55,10 @@ pub struct AgentConfig {
     /// transcript records a relative path, not inline base64). `None` keeps the
     /// legacy behavior of inlining attachments as data URIs.
     pub attachment_root: Option<PathBuf>,
+    /// Durable project PDFs/images attached automatically to the first user
+    /// prompt in a new chat. Text project context stays on disk and is read on
+    /// demand with `read_file`.
+    pub initial_attachments: Vec<PathBuf>,
     /// Context compression for outbound requests (see [`harness_compress`]):
     /// `Off` sends the transcript as-is, `Audit` measures would-be savings
     /// without changing anything, `On` compresses stale tool output and
@@ -79,6 +83,7 @@ impl Default for AgentConfig {
             response_reserve: 4096,
             max_resident_context_chars: 1_000_000,
             attachment_root: None,
+            initial_attachments: Vec::new(),
             compression: CompressionMode::Off,
             retry: RetryPolicy::default(),
             error_log: None,

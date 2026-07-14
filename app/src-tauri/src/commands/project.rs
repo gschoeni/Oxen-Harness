@@ -5,21 +5,13 @@
 //! that already have history always show up.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
+use harness_runtime::project::{self, ProjectConfig, ProjectContext};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::state::{active_root, open_history_store, AppState};
-
-/// A friendly display name for a project directory (its last path segment).
-fn project_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| path.to_string())
-}
 
 #[derive(Default, Serialize, Deserialize)]
 pub(crate) struct ProjectsConfig {
@@ -35,6 +27,9 @@ pub(crate) struct ProjectsConfig {
 pub(crate) struct ProjectView {
     path: String,
     name: String,
+    description: String,
+    instructions: String,
+    context: Vec<ProjectContext>,
     session_count: usize,
     active: bool,
 }
@@ -71,6 +66,23 @@ pub(crate) fn remember_project(path: &str) -> Result<(), String> {
     write_projects_config(&cfg)
 }
 
+fn project_view(
+    path: String,
+    session_count: usize,
+    active: bool,
+) -> ProjectView {
+    let metadata = project::load(Path::new(&path));
+    ProjectView {
+        path,
+        name: metadata.name,
+        description: metadata.description,
+        instructions: metadata.instructions,
+        context: metadata.context,
+        session_count,
+        active,
+    }
+}
+
 /// List known projects — the persisted set unioned with every directory that
 /// already has chats — with chat counts and the active one flagged.
 #[tauri::command]
@@ -99,11 +111,10 @@ pub(crate) async fn list_projects(state: State<'_, AppState>) -> Result<Vec<Proj
 
     let mut projects: Vec<ProjectView> = paths
         .into_iter()
-        .map(|p| ProjectView {
-            name: project_name(&p),
-            session_count: counts.get(&p).copied().unwrap_or(0),
-            active: p == active,
-            path: p,
+        .map(|p| {
+            let count = counts.get(&p).copied().unwrap_or(0);
+            let is_active = p == active;
+            project_view(p, count, is_active)
         })
         .collect();
     // Active first, then busiest, then alphabetical.
@@ -132,12 +143,117 @@ pub(crate) async fn open_project(
         .unwrap_or(path);
     remember_project(&canonical)?;
     *state.active_project.lock().await = PathBuf::from(&canonical);
-    Ok(ProjectView {
-        name: project_name(&canonical),
-        session_count: 0,
-        active: true,
-        path: canonical,
-    })
+    Ok(project_view(canonical, 0, true))
+}
+
+/// Create a project folder or adopt an existing one, persist its repo-local
+/// metadata/context, and make it the active project for the next chat.
+#[tauri::command]
+pub(crate) async fn start_project(
+    state: State<'_, AppState>,
+    name: String,
+    description: String,
+    instructions: String,
+    directory: String,
+    create_directory: bool,
+    context_paths: Vec<String>,
+) -> Result<ProjectView, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("project name is required".into());
+    }
+    let chosen = PathBuf::from(&directory);
+    let root = if create_directory {
+        if !chosen.is_dir() {
+            return Err(format!("parent folder does not exist: {directory}"));
+        }
+        if !valid_folder_name(name) {
+            return Err("project name cannot contain path separators".into());
+        }
+        let root = chosen.join(name);
+        if root.exists() {
+            return Err(format!(
+                "{} already exists; choose it as an existing project instead",
+                root.display()
+            ));
+        }
+        std::fs::create_dir(&root).map_err(|error| {
+            format!("could not create project folder {}: {error}", root.display())
+        })?;
+        root
+    } else {
+        if !chosen.is_dir() {
+            return Err(format!("project folder does not exist: {directory}"));
+        }
+        chosen
+    };
+    let canonical = root.canonicalize().unwrap_or(root);
+    let existing = project::load(&canonical);
+    let config = ProjectConfig {
+        name: name.to_string(),
+        description,
+        instructions,
+        context: existing.context,
+    };
+    project::save(&canonical, &config).map_err(|error| error.to_string())?;
+    let sources = context_paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    if !sources.is_empty() {
+        project::add_context(&canonical, &sources).map_err(|error| error.to_string())?;
+    }
+    let canonical = canonical.display().to_string();
+    remember_project(&canonical)?;
+    *state.active_project.lock().await = PathBuf::from(&canonical);
+    Ok(project_view(canonical, 0, true))
+}
+
+/// Edit durable project metadata. The frontend starts a fresh chat afterward
+/// so the updated prompt takes effect without mutating existing transcripts.
+#[tauri::command]
+pub(crate) async fn update_project(
+    path: String,
+    name: String,
+    description: String,
+    instructions: String,
+) -> Result<ProjectView, String> {
+    let root = PathBuf::from(&path);
+    let existing = project::load(&root);
+    let config = ProjectConfig {
+        name,
+        description,
+        instructions,
+        context: existing.context,
+    };
+    project::save(&root, &config).map_err(|error| error.to_string())?;
+    Ok(project_view(path, 0, false))
+}
+
+/// Copy files into the project's durable context directory and return the
+/// refreshed project metadata.
+#[tauri::command]
+pub(crate) async fn add_project_context(
+    path: String,
+    context_paths: Vec<String>,
+) -> Result<ProjectView, String> {
+    let root = PathBuf::from(&path);
+    let sources = context_paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    project::add_context(&root, &sources).map_err(|error| error.to_string())?;
+    Ok(project_view(path, 0, false))
+}
+
+/// Remove one manifest entry and its repository-local context copy.
+#[tauri::command]
+pub(crate) async fn remove_project_context(
+    path: String,
+    context_path: String,
+) -> Result<ProjectView, String> {
+    let root = PathBuf::from(&path);
+    project::remove_context(&root, &context_path).map_err(|error| error.to_string())?;
+    Ok(project_view(path, 0, false))
+}
+
+fn valid_folder_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 /// Switch the active project to an already-known directory.
@@ -148,4 +264,18 @@ pub(crate) async fn set_active_project(
 ) -> Result<(), String> {
     *state.active_project.lock().await = PathBuf::from(&path);
     remember_project(&path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_project_names_are_single_safe_path_components() {
+        assert!(valid_folder_name("Demo App"));
+        assert!(valid_folder_name("demo-app"));
+        assert!(!valid_folder_name("../demo"));
+        assert!(!valid_folder_name("nested/demo"));
+        assert!(!valid_folder_name("."));
+    }
 }

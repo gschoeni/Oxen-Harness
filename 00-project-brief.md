@@ -1,7 +1,7 @@
 # oxen-harness — Project Brief
 
 **Purpose:** Condensed project context for all conversations. Vision, goals, current state, key decisions.
-**Created:** 2026-06-21 · **Updated:** 2026-07-07
+**Created:** 2026-06-21 · **Updated:** 2026-07-14
 
 ---
 
@@ -15,6 +15,7 @@
 - A cross-platform **Tauri v2 desktop app** (UI like Cursor agents / Claude Cowork), sharing the same agent core.
 - **Bring-your-own-model**: any Oxen.ai chat-completions model with tool calling; default `claude-opus-4-8`.
 - **Exportable history**: full SQLite log of conversations + tool calls, with a JSONL exporter for fine-tuning.
+- **Durable projects**: repository-local goals, instructions, and reference context shared by the CLI and desktop agent.
 - Stay small, readable, and forkable (Apache-2.0).
 
 ## Architecture / Approach
@@ -46,7 +47,7 @@ compression, and transient-failure retry), self-verifying loops with
 conditional gates, a configurable code-review pipeline, a parallel-subagent
 fleet (`spawn_agents` from any turn + `/code-review` fan-out, with live lanes
 in both front ends), themes, local models, skills/custom tools, and both front
-ends (CLI + Tauri desktop app) are built and tested — 528 Rust tests + 163
+ends (CLI + Tauri desktop app) are built and tested — 649 Rust tests + 218
 frontend tests passing, CI green on push. See `02-status.md` for the full
 ledger.
 

@@ -24,8 +24,10 @@ toolchain.
     `agent://token` / `agent://tool` / `agent://usage` events as the turn
     streams; chats run concurrently per session, so several can be mid-turn.
   - **Sessions & projects** — history CRUD (`list_sessions`, `resume_session`,
-    `delete_session`, …) plus projects (`list_projects`, `open_project`,
-    `set_active_project`): a project is a working directory chats are rooted in.
+    `delete_session`, …) plus guided project creation/editing. The recent index
+    stays in `~/.oxen-harness/projects.json`; shareable goals, instructions, and
+    context live in each repository's `.oxen-harness/project.json` and
+    `.oxen-harness/context/`.
   - **Tools & skills** — `list_tools` / `set_tool_enabled` /
     `set_tool_description` / `add_custom_tool` / `remove_custom_tool` and
     `list_skills` / `save_skill` / `delete_skill` / `set_skill_enabled`, backing
@@ -50,8 +52,9 @@ toolchain.
     fine-tuning export.
 - `src/` — the frontend: **React 19 + TypeScript**, bundled by **Vite** (which
   gives hot-module reload in `tauri dev`). **Projects** is the navigation root:
-  choose a project, then work within its scoped sidebar of **＋ New chat** and
-  that project's history. The project sidebar leads back to Projects, and
+  choose a project to open its home (context-aware composer plus editable
+  Instructions and Context cards), then work within its scoped sidebar of
+  **＋ New chat** and that project's history. The project sidebar leads back to Projects, and
   Settings leads back to the active project from its upper-left rail rather
   than a top-right close action. Settings is a
   full-window surface with pages for **Connection**, **Cloud/Local models**,
@@ -83,7 +86,7 @@ src/
   styles/                  # tokens.css (the only source of color/space) + global
   features/
     history/Sidebar.tsx    # the active project's chats + new chat + settings
-    projects/              # the full-window project picker
+    projects/              # project list, guided creation, and durable project home
     chat/                  # Chat orchestration; thread.ts = pure stream reducers;
                            #   ThreadItem, Composer, Queue are presentational
     canvas/                # the side-panel document viewer

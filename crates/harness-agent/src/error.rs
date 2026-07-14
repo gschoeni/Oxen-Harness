@@ -1,6 +1,6 @@
 //! The error type for the agent loop.
 
-use harness_llm::LlmError;
+use harness_llm::{AttachmentError, LlmError};
 use harness_store::HistoryError;
 use harness_tools::ToolError;
 
@@ -19,6 +19,8 @@ pub enum AgentError {
     History(#[from] HistoryError),
     #[error("attachment IO failed: {0}")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Attachment(#[from] AttachmentError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error("attachments total {size} bytes, over the {max}-byte per-turn limit")]

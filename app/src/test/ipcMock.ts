@@ -16,6 +16,7 @@ import type {
   OxenModelHit,
   Project,
   RuntimeStatus,
+  StartProjectInput,
   SessionInfo,
   SessionView,
   Theme,
@@ -252,11 +253,35 @@ export const listProjects = vi.fn(async () => [] as Project[]);
 export const openProject = vi.fn(async (path: string) => ({
   path,
   name: path,
+  description: "",
+  instructions: "",
+  context: [],
   session_count: 0,
   active: true,
 }));
+export const startProject = vi.fn(async (input: StartProjectInput): Promise<Project> => ({
+  path: input.createDirectory ? `${input.directory}/${input.name}` : input.directory,
+  name: input.name,
+  description: input.description,
+  instructions: input.instructions,
+  context: input.contextPaths.map((path) => ({ path, name: path.split("/").pop() ?? path, kind: "text" as const, size_bytes: 42 })),
+  session_count: 0,
+  active: true,
+}));
+export const updateProject = vi.fn(async (path: string, name: string, description: string, instructions: string): Promise<Project> => ({
+  path, name, description, instructions, context: [], session_count: 0, active: true,
+}));
+export const addProjectContext = vi.fn(async (path: string, contextPaths: string[]): Promise<Project> => ({
+  path, name: "Demo", description: "", instructions: "", session_count: 0, active: true,
+  context: contextPaths.map((source) => ({ path: source, name: source.split("/").pop() ?? source, kind: "text" as const, size_bytes: 42 })),
+}));
+export const removeProjectContext = vi.fn(async (path: string): Promise<Project> => ({
+  path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true,
+}));
 export const setActiveProject = vi.fn(async () => {});
 export const pickFolder = vi.fn(async () => null as string | null);
+export const pickProjectParent = vi.fn(async () => null as string | null);
+export const pickProjectContext = vi.fn(async () => [] as string[]);
 export const runTurn = vi.fn(async () => "Done.");
 export const runLoop = vi.fn(async () => ({ succeeded: true, iterations: 1, summary: "Loop complete." }));
 export const listLoops = vi.fn(async () => []);
@@ -355,11 +380,35 @@ export function resetIpc() {
   openProject.mockReset().mockImplementation(async (path: string) => ({
     path,
     name: path,
+    description: "",
+    instructions: "",
+    context: [],
     session_count: 0,
     active: true,
   }));
+  startProject.mockReset().mockImplementation(async (input: StartProjectInput): Promise<Project> => ({
+    path: input.createDirectory ? `${input.directory}/${input.name}` : input.directory,
+    name: input.name,
+    description: input.description,
+    instructions: input.instructions,
+    context: input.contextPaths.map((path) => ({ path, name: path.split("/").pop() ?? path, kind: "text" as const, size_bytes: 42 })),
+    session_count: 0,
+    active: true,
+  }));
+  updateProject.mockReset().mockImplementation(async (path: string, name: string, description: string, instructions: string): Promise<Project> => ({
+    path, name, description, instructions, context: [], session_count: 0, active: true,
+  }));
+  addProjectContext.mockReset().mockImplementation(async (path: string, contextPaths: string[]): Promise<Project> => ({
+    path, name: "Demo", description: "", instructions: "", session_count: 0, active: true,
+    context: contextPaths.map((source) => ({ path: source, name: source.split("/").pop() ?? source, kind: "text" as const, size_bytes: 42 })),
+  }));
+  removeProjectContext.mockReset().mockImplementation(async (path: string): Promise<Project> => ({
+    path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true,
+  }));
   setActiveProject.mockReset().mockResolvedValue(undefined);
   pickFolder.mockReset().mockResolvedValue(null);
+  pickProjectParent.mockReset().mockResolvedValue(null);
+  pickProjectContext.mockReset().mockResolvedValue([]);
   runTurn.mockReset().mockResolvedValue("Done.");
   runLoop.mockReset().mockResolvedValue({ succeeded: true, iterations: 1, summary: "Loop complete." });
   listLoops.mockReset().mockResolvedValue([]);

@@ -24,6 +24,7 @@ import type {
   SessionSummary,
   CanvasEvent,
   Project,
+  StartProjectInput,
   SessionView,
   Theme,
   ThemeSummary,
@@ -164,11 +165,43 @@ export const listProjects = () => invoke<Project[]>("list_projects");
 export const openProject = (path: string) => invoke<Project>("open_project", { path });
 /** Switch the active project to an already-known directory. */
 export const setActiveProject = (path: string) => invoke<void>("set_active_project", { path });
+export const startProject = (input: StartProjectInput) => invoke<Project>("start_project", { ...input });
+export const updateProject = (path: string, name: string, description: string, instructions: string) =>
+  invoke<Project>("update_project", { path, name, description, instructions });
+export const addProjectContext = (path: string, contextPaths: string[]) =>
+  invoke<Project>("add_project_context", { path, contextPaths });
+export const removeProjectContext = (path: string, contextPath: string) =>
+  invoke<Project>("remove_project_context", { path, contextPath });
 
 /** Open a native folder picker, returning the chosen directory (or null). */
 export async function pickFolder(): Promise<string | null> {
   const selected = await open({ directory: true, multiple: false, title: "Open a project folder" });
   return typeof selected === "string" ? selected : null;
+}
+
+/** Choose a parent directory for a new project folder. */
+export async function pickProjectParent(): Promise<string | null> {
+  const selected = await open({ directory: true, multiple: false, title: "Choose where to create the project" });
+  return typeof selected === "string" ? selected : null;
+}
+
+/** Choose durable text, PDF, or image references for a project. */
+export async function pickProjectContext(): Promise<string[]> {
+  const selected = await open({
+    multiple: true,
+    title: "Add project context",
+    filters: [{
+      name: "Project context",
+      extensions: [
+        "txt", "md", "markdown", "rst", "csv", "tsv", "json", "jsonl", "toml", "yaml", "yml",
+        "xml", "html", "css", "js", "jsx", "ts", "tsx", "py", "rs", "go", "java", "kt", "swift",
+        "c", "h", "cpp", "hpp", "rb", "php", "sh", "sql", "log", "pdf", "png", "jpg", "jpeg",
+        "gif", "webp", "bmp", "tiff", "heic",
+      ],
+    }],
+  });
+  if (!selected) return [];
+  return Array.isArray(selected) ? selected : [selected];
 }
 
 /** Run one user turn in `session`; streams via session-tagged `agent://token` /

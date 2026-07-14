@@ -1,7 +1,7 @@
 # Working Decisions & Rationale
 
 **Purpose:** Currently relevant decisions with enough "why" to be useful during implementation. For full deep-dive analysis, cite the source in each entry.
-**Updated:** 2026-07-11
+**Updated:** 2026-07-14
 
 ---
 
@@ -26,6 +26,27 @@ incidental detail. This is a navigation decision, not a config migration:
 connection, model, tool, review, compression, usage, appearance, and training
 settings remain global; chats, execution, and project skills retain their
 existing workspace scope.
+
+**Projects are durable repo-local agent context, not only recent folders** (2026-07-14)
+The global `~/.oxen-harness/projects.json` remains the user's recent-project
+index and active-project pointer. A project's shareable identity now lives in
+its own repository at `.oxen-harness/project.json`: display name, goal,
+instructions, and a manifest of durable references. External references are
+copied content-addressed into `.oxen-harness/context/`; text stays available to
+`read_file` on demand, while PDFs/images are attached to the first user prompt
+of a new chat. Both desktop and CLI compose this same project section into the
+agent prompt.
+
+The desktop opens a project home before chat, making its instructions/context
+visible and editable. Saving guidance or changing context starts a fresh chat
+so the persisted transcript's original system prompt stays truthful rather than
+being silently mutated. Existing folder-only projects need no migration file:
+their directory basename is the default name and the new fields are empty.
+
+*Why:* the working directory controls execution, but it does not communicate
+the user's goal or stable constraints. Keeping this metadata with the codebase
+makes project behavior portable across machines/front ends, reviewable in
+version control, and explicit at the point a conversation begins.
 
 **Lightweight auth; no `liboxen` dependency** (2026-06-21, revised)
 Auth resolves from `OXEN_API_KEY`, falling back to parsing the Oxen

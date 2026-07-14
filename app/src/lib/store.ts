@@ -14,8 +14,6 @@ import {
   listProjects,
   listSessions,
   newSession,
-  openProject,
-  pickFolder,
   resumeSession,
   runCodeReview as runCodeReviewIpc,
   runTurn,
@@ -293,10 +291,10 @@ interface AppState {
   /** Permanently delete a chat; if it was the current one, open a fresh chat. */
   removeSession: (id: string) => Promise<void>;
   setProjectsOpen: (open: boolean) => void;
-  /** Switch to a known project and start a fresh chat in it. */
+  /** Prepare a known project and fresh chat while keeping its home visible. */
+  prepareProject: (path: string) => Promise<void>;
+  /** Switch to a known project and enter its fresh chat. */
   enterProject: (path: string) => Promise<void>;
-  /** Pick a folder, register it as a project, and start a fresh chat in it. */
-  createProject: () => Promise<void>;
   /** Adopt a fresh session created by a model/connection switch as the current
    *  chat (it starts empty on a new endpoint). */
   adoptSession: (info: SessionInfo) => void;
@@ -698,20 +696,14 @@ export const useStore = create<AppState>((set, get) => {
 
     setProjectsOpen: (projectsOpen) => set({ projectsOpen }),
 
-    enterProject: async (path) => {
+    prepareProject: async (path) => {
       await setActiveProject(path);
-      set({ projectsOpen: false });
-      // A fresh chat in the entered project; its existing chats stay in the
-      // sidebar folder. startNewSession refreshes history + projects.
       await get().startNewSession();
     },
 
-    createProject: async () => {
-      const path = await pickFolder();
-      if (!path) return;
-      await openProject(path); // registers + makes active on the backend
+    enterProject: async (path) => {
+      await get().prepareProject(path);
       set({ projectsOpen: false });
-      await get().startNewSession();
     },
 
     adoptSession: (info) =>

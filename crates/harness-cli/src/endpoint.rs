@@ -227,15 +227,21 @@ pub(crate) fn agent_config(
     tools: &ToolRegistry,
     workspace: &Workspace,
 ) -> AgentConfig {
-    AgentConfig {
-        model: model.to_string(),
-        context_window,
-        system_prompt: Some(harness_agent::system_prompt_with_env(
+    let system_prompt = format!(
+        "{}{}",
+        harness_agent::system_prompt_with_env(
             tools.get(harness_tools::WEB_SEARCH_TOOL).is_some(),
             tools.get(harness_tools::CANVAS_TOOL).is_some(),
             workspace.root(),
-        )),
+        ),
+        harness_runtime::project::prompt_section(workspace.root())
+    );
+    AgentConfig {
+        model: model.to_string(),
+        context_window,
+        system_prompt: Some(system_prompt),
         attachment_root: Some(workspace.root().to_path_buf()),
+        initial_attachments: harness_runtime::project::binary_context_paths(workspace.root()),
         // Context compression (off/audit/on) per the user's saved preference.
         compression: harness_runtime::compression::mode(),
         // Retry attempts and failed turns append to ~/.oxen-harness/errors.jsonl
