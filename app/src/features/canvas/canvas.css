@@ -16,7 +16,6 @@
   bottom: 0;
   left: 0;
   width: 9px;
-  transform: translateX(-50%);
   cursor: col-resize;
   z-index: var(--z-sticky);
   touch-action: none;

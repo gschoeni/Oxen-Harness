@@ -19,7 +19,6 @@ import {
   previewRestart,
   previewStop,
 } from "../../lib/ipc";
-import { PanelTabs } from "./PanelTabs";
 import { useOverlayOpen } from "./useOverlayOpen";
 import "./preview.css";
 
@@ -129,7 +128,6 @@ export function Preview({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
       )}
       <header className="canvas-head">
         <div className="canvas-tabs">
-          <PanelTabs active="preview" />
           <span className="preview-url" title={status.command}>
             {status.url ?? status.name}
           </span>

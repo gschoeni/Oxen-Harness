@@ -1,6 +1,5 @@
 .sidebar {
   background: var(--surface);
-  border-right: 1px solid var(--separator);
   /* Top padding clears the macOS traffic-light buttons (overlay title bar). */
   padding: var(--titlebar-h) var(--space-4) var(--space-4);
   position: relative;
@@ -86,7 +85,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 2px;
+  padding: 0;
   flex-shrink: 0;
   color: var(--text);
 }
@@ -344,4 +343,33 @@
 .foot-btn:hover {
   background: var(--surface-2);
   color: var(--text);
+}
+
+/* Drag handle on the sidebar's inner edge — the mirror of the canvas/preview
+   resizer, so every dock column resizes the same way. */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 9px;
+  cursor: col-resize;
+  z-index: var(--z-sticky);
+  touch-action: none;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.sidebar-resizer:hover::after,
+body.dock-resizing .sidebar-resizer::after {
+  opacity: 1;
 }

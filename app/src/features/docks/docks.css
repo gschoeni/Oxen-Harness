@@ -1,0 +1,211 @@
+/* Dock columns: the resizable, collapsible panels flanking the chat. The
+   column itself only frames its dock — the dock's own CSS (sidebar.css,
+   canvas.css, preview.css) still styles the content. */
+
+.dock-column {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dock-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* The docked panes (sidebar/canvas/preview) fill their column. */
+.dock-body > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* The tab strip appears only when a side has more than one dock with content. */
+.dock-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-2) var(--space-2) 0;
+  padding-top: var(--titlebar-h);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.dock-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--frame-radius);
+  color: var(--text-secondary);
+  padding: 4px var(--space-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.dock-tab:hover {
+  color: var(--text);
+}
+.dock-tab.active {
+  color: var(--text);
+  border-color: var(--separator);
+  background: var(--surface, transparent);
+}
+/* With the strip present, the dock's own header shouldn't also clear the
+   traffic lights — the strip already did. */
+.dock-tabs ~ .dock-body .canvas-head {
+  padding-top: 10px;
+}
+
+/* The collapse control lives in the column's HEADER band, always visible, in
+   the same place every time: beside the project title on the left, at the head
+   of the panel on the right. Never on the draggable edge, never hover-only —
+   the user should never have to hunt for it. */
+/* A bordered square, not a bare glyph: an icon alone is optically inset from
+   its box, so it always reads as "not quite aligned" next to the framed New
+   chat button. Giving it the same framing puts its edge honestly on the
+   column's content edge — and matches the panel's other controls. */
+.dock-toggle {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: var(--bg);
+  border: 1px solid var(--separator);
+  border-radius: var(--frame-radius);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.dock-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Left: at the end of the project-title row, its right edge on the column's
+   content edge — the same line as the New chat button and the chat rows. */
+.dock-toggle.left {
+  margin-left: auto;
+}
+
+/* Right: the panel owns its header, so the toggle is pinned into that band and
+   the header reserves room for it (below) — same vertical line as the left
+   one, mirrored. */
+.dock-toggle.right {
+  position: absolute;
+  top: calc(var(--titlebar-h) + 6px);
+  left: var(--space-2);
+  z-index: var(--z-sticky);
+}
+/* Reserve the toggle's slot in whichever element is the column's first row:
+   the tab strip when several docks share the side, else the panel's header. */
+.dock-column.right .dock-tabs {
+  padding-left: 36px;
+}
+.dock-column.right:not(:has(.dock-tabs)) .canvas-head {
+  padding-left: 40px;
+}
+
+/* A collapsed column: a rail of icons. Clicking one brings its dock back.
+   The rail is narrower than the macOS traffic lights, so its separator — like
+   the sidebar's — starts BELOW the title bar (see the shared rule at the
+   bottom of this file). Otherwise the border would cut straight through the
+   window buttons. */
+.dock-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-2) 0;
+  /* Same top inset as the expanded sidebar, so the logo below sits on exactly
+     the same line in both states — collapsing must not make the app lurch. */
+  padding-top: var(--titlebar-h);
+  background: var(--surface);
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The app's mark, held in place when the column collapses (see `railHeader`).
+   Its bottom margin matches the expanded sidebar's brand→content gap. */
+.dock-rail-brand {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  margin-bottom: var(--space-3);
+}
+.dock-rail-btn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--frame-radius);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.dock-rail-btn:hover {
+  color: var(--text);
+  background: var(--bg);
+  border-color: var(--separator);
+}
+.dock-rail-sep {
+  width: 18px;
+  height: 1px;
+  background: var(--separator);
+  margin: 2px 0 4px;
+}
+
+/* The window's drag strip: without it, a collapsed rail leaves the top of the
+   window undraggable. */
+.dock-rail-titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar-h);
+  z-index: var(--z-titlebar);
+}
+
+/* The left column's separator, drawn only below the title bar so it never
+   crosses the traffic lights — the top strip reads as one continuous title
+   bar across the whole window. */
+.dock-rail.left::after,
+.dock-column.left::after {
+  content: "";
+  position: absolute;
+  top: var(--titlebar-h);
+  bottom: 0;
+  right: 0;
+  width: var(--frame-border-w);
+  background: var(--separator-strong);
+  pointer-events: none;
+}
+.dock-column.left,
+.dock-rail.left {
+  position: relative;
+}
+
+/* While dragging any divider: lock the cursor, kill text selection, and stop
+   embedded frames from swallowing the pointer mid-drag. */
+body.dock-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+body.dock-resizing .canvas-frame,
+body.dock-resizing iframe {
+  pointer-events: none;
+}

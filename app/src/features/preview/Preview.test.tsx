@@ -5,7 +5,6 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { Preview } from "./Preview";
-import { PanelTabs } from "./PanelTabs";
 import { useStore } from "../../lib/store";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
@@ -278,26 +277,5 @@ describe("Preview panel arbitration", () => {
     });
     await act(() => useStore.getState().syncPreview("s1"));
     expect(useStore.getState().previews.s1?.phase).toBe("ready");
-  });
-});
-
-describe("PanelTabs", () => {
-  it("appears only when both a preview and a canvas exist, and switches tabs", async () => {
-    ready();
-    const { container } = render(<PanelTabs active="preview" />);
-    expect(container).toBeEmptyDOMElement();
-
-    act(() =>
-      useStore.getState().ingestCanvas({
-        session: "s1",
-        id: "report",
-        title: "Report",
-        format: "markdown",
-        content: "# hi",
-      }),
-    );
-    expect(screen.getByRole("tab", { name: "Canvas" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("tab", { name: "Preview" }));
-    expect(useStore.getState().rightTab.s1).toBe("preview");
   });
 });

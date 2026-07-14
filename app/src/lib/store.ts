@@ -83,6 +83,33 @@ import type {
 
 const MODE_KEY = "oxen-ui-mode";
 const HERO_GAME_KEY = "oxen-hero-game";
+/** Dock layout (per-side widths + collapsed sides), remembered across runs. */
+const DOCKS_KEY = "oxen-docks";
+
+interface DockLayout {
+  widths: Record<string, number>;
+  collapsed: Record<string, boolean>;
+}
+
+function loadDockLayout(): DockLayout {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DOCKS_KEY) ?? "{}");
+    return {
+      widths: typeof raw.widths === "object" && raw.widths ? raw.widths : {},
+      collapsed: typeof raw.collapsed === "object" && raw.collapsed ? raw.collapsed : {},
+    };
+  } catch {
+    return { widths: {}, collapsed: {} };
+  }
+}
+
+function saveDockLayout(layout: DockLayout) {
+  try {
+    localStorage.setItem(DOCKS_KEY, JSON.stringify(layout));
+  } catch {
+    /* a full/blocked localStorage must never break the layout */
+  }
+}
 
 /** One parallel subagent as shown in the chat's fleet panel. */
 export interface FleetLane {
@@ -270,9 +297,13 @@ interface AppState {
   /** The preview page's most recent JavaScript error per session (absent =
    *  none) — drives the pane's "Fix it" banner. */
   previewErrors: Record<string, string | undefined>;
-  /** Which right-panel tab is active per session when both preview and canvas
-   *  have content. */
+  /** Which right-dock is active per session when more than one has content
+   *  (a dock id from the registry — see `features/docks/docks.tsx`). */
   rightTab: Record<string, "preview" | "canvas">;
+  /** Each dock column's width in px, keyed by side. Drag-resized, persisted. */
+  dockWidths: Record<string, number>;
+  /** Sides the user collapsed to a rail, keyed by side. Persisted. */
+  dockCollapsed: Record<string, boolean>;
   settingsOpen: boolean;
   /** Which subpage the full-screen Settings surface shows when open. */
   settingsPage: SettingsPage;
@@ -396,6 +427,12 @@ interface AppState {
   closePreview: () => void;
   /** Switch the current chat's right-panel tab (preview ⇄ canvas). */
   setRightTab: (tab: "preview" | "canvas") => void;
+  /** Resize a dock column (persisted). */
+  setDockWidth: (side: string, width: number) => void;
+  /** Collapse/expand a dock column to a rail (persisted). */
+  setDockCollapsed: (side: string, collapsed: boolean) => void;
+  /** Toggle a dock column's collapsed state (the ⌘B / ⌘⌥B shortcuts). */
+  toggleDock: (side: string) => void;
   setSettingsOpen: (open: boolean) => void;
   /** Open the Settings surface, optionally jumping straight to a subpage. */
   openSettings: (page?: SettingsPage) => void;
@@ -538,6 +575,8 @@ export const useStore = create<AppState>((set, get) => {
     previewClosed: {},
     previewErrors: {},
     rightTab: {},
+    dockWidths: loadDockLayout().widths,
+    dockCollapsed: loadDockLayout().collapsed,
     settingsOpen: false,
     settingsPage: "connection",
     inspector: null,
@@ -1334,7 +1373,26 @@ export const useStore = create<AppState>((set, get) => {
         return cur ? { previewClosed: { ...s.previewClosed, [cur]: true } } : {};
       }),
 
-    setRightTab: (tab) =>
+    setDockWidth: (side, width) =>
+      set((s) => {
+        const dockWidths = { ...s.dockWidths, [side]: width };
+        saveDockLayout({ widths: dockWidths, collapsed: s.dockCollapsed });
+        return { dockWidths };
+      }),
+
+    setDockCollapsed: (side, collapsed) =>
+      set((s) => {
+        const dockCollapsed = { ...s.dockCollapsed, [side]: collapsed };
+        saveDockLayout({ widths: s.dockWidths, collapsed: dockCollapsed });
+        return { dockCollapsed };
+      }),
+
+    toggleDock: (side) => get().setDockCollapsed(side, !get().dockCollapsed[side]),
+
+    setRightTab: (tab) => {
+      // Picking a dock means "show me this" — expand the column if the user
+      // had collapsed it, or the click would do nothing visible.
+      if (get().dockCollapsed.right) get().setDockCollapsed("right", false);
       set((s) => {
         const cur = s.session?.session_id;
         if (!cur) return {};
@@ -1344,7 +1402,8 @@ export const useStore = create<AppState>((set, get) => {
           // user closed earlier must reopen, or the tab would be a dead click.
           ...(tab === "preview" ? { previewClosed: { ...s.previewClosed, [cur]: false } } : {}),
         };
-      }),
+      });
+    },
 
     setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
     openSettings: (page) =>

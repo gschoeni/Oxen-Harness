@@ -20,10 +20,12 @@
 .env.*
 !.env.example
 
+# Node / Vite (root node_modules holds only Vite's dep cache)
+node_modules/
+
 # Tauri (added in a later phase)
 /app/target
 /app/dist
-/app/node_modules
 
 # Editor / OS
 .DS_Store

@@ -1,26 +1,14 @@
+/* Three tracks: left docks | chat | right docks. Each dock column's width is
+   set by the dock system (collapsed → a thin rail, absent → 0), so the chat
+   simply takes what's left. Adding a panel changes no CSS — see
+   `features/docks/docks.tsx`. */
 .app {
   display: grid;
-  grid-template-columns: 272px 1fr;
+  grid-template-columns: var(--dock-left-w, 0px) minmax(0, 1fr) var(--dock-right-w, 0px);
   /* Cap the single row at the viewport height (minmax floor of 0) so a long
      history list scrolls inside the sidebar instead of stretching the row past
      the viewport and clipping the footer/composer under `overflow: hidden`. */
   grid-template-rows: minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
-}
-
-/* When the agent opens a document, the chat shares the stage with the canvas.
-   The canvas column width is drag-resizable (`--canvas-w`, set on the element). */
-.app.canvas-open {
-  grid-template-columns: 272px minmax(0, 1fr) var(--canvas-w, 480px);
-}
-
-/* While dragging the divider: lock the cursor, suppress text selection, and stop
-   the canvas iframe from swallowing pointer moves mid-drag. */
-.app.resizing {
-  cursor: col-resize;
-  user-select: none;
-}
-.app.resizing .canvas-frame {
-  pointer-events: none;
 }

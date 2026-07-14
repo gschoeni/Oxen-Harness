@@ -1,8 +1,7 @@
-import { useEffect, useState, type CSSProperties, type PointerEvent } from "react";
-import { Sidebar } from "./features/history/Sidebar";
+import { useEffect, type CSSProperties } from "react";
 import { Chat } from "./features/chat/Chat";
-import { Canvas } from "./features/canvas/Canvas";
-import { Preview } from "./features/preview/Preview";
+import { DockColumn, RAIL_W, useDockShortcuts } from "./features/docks/DockColumn";
+import { docksOnSide, useAvailableDocks } from "./features/docks/docks";
 import { Settings } from "./features/settings/Settings";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
 import { InspectorDrawer } from "./features/inspector/Inspector";
@@ -18,70 +17,21 @@ export default function App() {
   const loadCloudModels = useStore((s) => s.loadCloudModels);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const projectsOpen = useStore((s) => s.projectsOpen);
-  // Show the canvas column when the current chat has an open document OR is
-  // mid-write (so the panel appears the moment the model starts a canvas).
-  const canvasOpen = useStore((s) => {
-    const id = s.session?.session_id;
-    if (!id) return false;
-    if (s.canvasWriting[id]) return true;
-    const active = s.activeCanvas[id];
-    return !!active && !!s.canvases[id]?.some((d) => d.id === active);
-  });
-  // Show the preview column when the current chat has a dev server that is
-  // starting, serving, or worth explaining (error/stopped — the pane holds the
-  // Restart button, so it must not vanish the moment a server goes down).
-  const previewOpen = useStore((s) => {
-    const id = s.session?.session_id;
-    if (!id || s.previewClosed[id]) return false;
-    return !!s.previews[id];
-  });
-  // When both surfaces have content, the per-session tab decides which shows.
-  const rightTab = useStore((s) => {
-    const id = s.session?.session_id;
-    return id ? s.rightTab[id] : undefined;
-  });
   const sessionId = useStore((s) => s.session?.session_id);
   const syncPreview = useStore((s) => s.syncPreview);
-  const showPreview = previewOpen && (!canvasOpen || rightTab !== "canvas");
-  const showCanvas = canvasOpen && !showPreview;
-  const panelOpen = showPreview || showCanvas;
+
+  // The layout is whatever the dock registry says: each side is a column of
+  // however many docks currently have content (tabbed), independently sized
+  // and collapsible. Adding a panel is a registry entry — see docks.tsx.
+  const leftWidth = useDockWidth("left");
+  const rightWidth = useDockWidth("right");
+  useDockShortcuts();
 
   // A freshly opened/resumed chat may already have a running server (they
   // outlive agent eviction) — sync its status so the pane reappears.
   useEffect(() => {
     if (sessionId) syncPreview(sessionId).catch(() => {});
   }, [sessionId, syncPreview]);
-
-  // Width (px) of the canvas column, drag-resizable and remembered across runs.
-  const [canvasWidth, setCanvasWidth] = useState(() => {
-    const saved = Number(localStorage.getItem(CANVAS_W_KEY));
-    return saved >= CANVAS_MIN ? saved : 480;
-  });
-  const [resizing, setResizing] = useState(false);
-
-  // Drag the divider: the canvas grows to the left as the cursor moves left,
-  // clamped so the sidebar and a usable chat column always remain.
-  function beginResize(e: PointerEvent) {
-    e.preventDefault();
-    setResizing(true);
-    const move = (ev: globalThis.PointerEvent) => {
-      const max = window.innerWidth - SIDEBAR_W - CHAT_MIN;
-      const w = Math.max(CANVAS_MIN, Math.min(window.innerWidth - ev.clientX, max));
-      setCanvasWidth(w);
-    };
-    const up = () => {
-      setResizing(false);
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      // Persist whatever width we ended on.
-      setCanvasWidth((w) => {
-        localStorage.setItem(CANVAS_W_KEY, String(w));
-        return w;
-      });
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  }
 
   // Load the active theme, current session, and history once at startup.
   useEffect(() => {
@@ -98,13 +48,17 @@ export default function App() {
 
   return (
     <div
-      className={`app${panelOpen ? " canvas-open" : ""}${resizing ? " resizing" : ""}`}
-      style={panelOpen ? ({ "--canvas-w": `${canvasWidth}px` } as CSSProperties) : undefined}
+      className="app"
+      style={
+        {
+          "--dock-left-w": leftWidth == null ? "0px" : `${leftWidth}px`,
+          "--dock-right-w": rightWidth == null ? "0px" : `${rightWidth}px`,
+        } as CSSProperties
+      }
     >
-      <Sidebar />
+      <DockColumn side="left" />
       <Chat />
-      {showPreview && <Preview onResizeStart={beginResize} />}
-      {showCanvas && <Canvas onResizeStart={beginResize} />}
+      <DockColumn side="right" />
       {settingsOpen && <Settings />}
       {projectsOpen && <ProjectsPage />}
       <InspectorDrawer />
@@ -112,7 +66,16 @@ export default function App() {
   );
 }
 
-const CANVAS_W_KEY = "oxen-canvas-w";
-const CANVAS_MIN = 320; // smallest the canvas column may shrink to
-const CHAT_MIN = 380; // keep at least this much chat visible
-const SIDEBAR_W = 272;
+/** The grid width for a side: `null` when nothing is docked there (no column),
+ *  the rail width when collapsed, else the (persisted, drag-set) width. */
+function useDockWidth(side: "left" | "right"): number | null {
+  const available = useAvailableDocks(side);
+  const collapsed = useStore((s) => !!s.dockCollapsed[side]);
+  const width = useStore((s) => s.dockWidths[side]);
+  if (!available.length) return null;
+  if (collapsed) return RAIL_W;
+  // Fall back to the widest default among this side's docks, so a new dock
+  // gets a sensible size before the user ever drags it.
+  const fallback = Math.max(...docksOnSide(side).map((d) => d.defaultWidth));
+  return width ?? fallback;
+}

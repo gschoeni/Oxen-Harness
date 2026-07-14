@@ -1,13 +1,14 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type PointerEvent } from "react";
 import { ArrowLeft, FolderOpen, Plus, Settings as SettingsIcon, Trash2 } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { relativeTime } from "../../lib/format";
 import { Button, Modal } from "../../components/ui";
+import { DockToggle } from "../docks/DockToggle";
+import { BrandMark } from "./BrandMark";
 import type { RunStatus, SessionSummary } from "../../lib/types";
 import "./sidebar.css";
 
-export function Sidebar() {
-  const theme = useStore((s) => s.theme);
+export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) => void }) {
   const sessions = useStore((s) => s.sessions);
   const projects = useStore((s) => s.projects);
   const session = useStore((s) => s.session);
@@ -34,7 +35,6 @@ export function Sidebar() {
     }
   }
 
-  const icon = theme?.voice.prompt_icon || "🐂";
   const currentId = session?.session_id ?? null;
   const activePath = session?.workspace ?? projects.find((p) => p.active)?.path ?? null;
   const activeProject = projects.find((p) => p.path === activePath) ?? null;
@@ -71,11 +71,20 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar">
+      {onResizeStart && (
+        <div
+          className="sidebar-resizer"
+          onPointerDown={onResizeStart}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize chat list"
+        />
+      )}
       {/* Transparent strip over the traffic-light row so the empty space above
           the brand drags the window (overlay title bar). */}
       <div className="sidebar-titlebar" data-tauri-drag-region />
       <div className="brand" data-tauri-drag-region>
-        <span className="brand-icon">{icon}</span>
+        <BrandMark />
         <span>oxen-harness</span>
       </div>
 
@@ -95,6 +104,9 @@ export function Sidebar() {
           <div className="current-project" title={activePath}>
             <FolderOpen size={18} />
             <span className="current-project-name">{projectName}</span>
+            {/* The panel control lives here — by the project title, where the
+                user looks for it — not on the draggable edge. */}
+            <DockToggle side="left" />
           </div>
 
           <button className="new-chat" onClick={() => startNewSession()}>
@@ -124,11 +136,19 @@ export function Sidebar() {
           </div>
         </>
       ) : (
-        <div className="history">
-          <div className="history-empty">
-            No project open. Pick one from the Projects page to start chatting.
+        <>
+          {/* No project yet — keep the panel control reachable in the same
+              band it lives in once a project is open. */}
+          <div className="current-project">
+            <span className="current-project-name">No project</span>
+            <DockToggle side="left" />
           </div>
-        </div>
+          <div className="history">
+            <div className="history-empty">
+              No project open. Pick one from the Projects page to start chatting.
+            </div>
+          </div>
+        </>
       )}
 
       <div className="sidebar-foot">
