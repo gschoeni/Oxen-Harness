@@ -286,7 +286,8 @@
 .project-home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--space-7); align-items: start; }
 .project-home-main { min-width: 0; }
 .project-composer {
-  overflow: hidden;
+  /* The model picker opens upward; clipping here hides its first rows. */
+  overflow: visible;
   background: var(--surface);
   border: 1px solid var(--separator-strong);
   border-radius: var(--radius-lg);
