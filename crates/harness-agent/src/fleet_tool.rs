@@ -122,10 +122,16 @@ impl FleetSpawner {
     /// One detached subagent: in-memory store, the current client/config, and
     /// the subagent-narrowed tool set (no recursion, no interactive tools).
     fn build_agent(&self) -> Result<Agent, AgentError> {
-        let (client, config) = {
+        let (client, mut config) = {
             let endpoint = self.endpoint.lock().expect("fleet endpoint poisoned");
             (endpoint.client.clone(), endpoint.config.clone())
         };
+        // Lanes can't share the host's single approval prompt (the same
+        // deadlock reasoning as `subagent_tools` stripping `ask_user_question`):
+        // their gate auto-denies and tells the lane to report the command back.
+        config.permissions = config
+            .permissions
+            .map(|gate| Arc::new(gate.for_subagent()));
         let store = Arc::new(HistoryStore::open_in_memory()?);
         let session = store.create_session(&SessionMeta {
             model: config.model.clone(),

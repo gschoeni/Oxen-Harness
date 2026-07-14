@@ -45,6 +45,23 @@ pub enum AgentEvent {
         total_saved_tokens: usize,
         results_compressed: usize,
     },
+    /// A gated tool call is waiting on the user's approval decision. An
+    /// interactive host hands the screen to its approval prompt on this event
+    /// (the way `ask_user_question` hands off to the picker); the decision
+    /// itself flows through the host's injected `CommandApprover`, not the
+    /// event stream.
+    ApprovalPending { name: String, command: String },
+    /// The approval prompt resolved; `decision` is a short human-readable
+    /// label ("approved", "approved for this session", "denied", …) for the
+    /// host to print, and the matching [`AgentEvent::ToolStart`]/[`ToolEnd`]
+    /// (or a refusal result) follows.
+    ///
+    /// [`ToolEnd`]: AgentEvent::ToolEnd
+    ApprovalResolved {
+        name: String,
+        command: String,
+        decision: String,
+    },
     /// A model call hit a transient provider/network error and will be retried
     /// after `delay_ms`. Surfaced so a UI can show that the turn is still alive
     /// (and why it paused) instead of appearing hung — and, if the stream died

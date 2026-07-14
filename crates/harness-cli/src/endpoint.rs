@@ -219,13 +219,15 @@ pub(crate) fn update_fleet_endpoint(client: Option<&OxenClient>, model: Option<&
 
 /// The agent configuration for a CLI session: model + window, a system prompt
 /// gated on which tools actually survived the user's preferences (so the model
-/// is never told about web search or the canvas when they're disabled), and an
-/// attachment root so images/PDFs are stored on disk rather than inlined.
+/// is never told about web search or the canvas when they're disabled), an
+/// attachment root so images/PDFs are stored on disk rather than inlined, and
+/// the permission gate wired to the terminal approval prompt.
 pub(crate) fn agent_config(
     model: &str,
     context_window: Option<usize>,
     tools: &ToolRegistry,
     workspace: &Workspace,
+    ui: &Ui,
 ) -> AgentConfig {
     let system_prompt = format!(
         "{}{}",
@@ -247,6 +249,13 @@ pub(crate) fn agent_config(
         // Retry attempts and failed turns append to ~/.oxen-harness/errors.jsonl
         // so a developer can dig into what the endpoint said later.
         error_log: harness_config::paths::errors_log().ok(),
+        // Gate tool calls behind the permission layer, with approval prompts
+        // rendered through the terminal picker. Fleet/review subagents get the
+        // gate's auto-deny form automatically (see AgentConfig::permissions).
+        permissions: Some(Arc::new(harness_permissions::PermissionGate::new(
+            workspace.root(),
+            Arc::new(crate::approve::CliApprover::new(ui.clone())),
+        ))),
         ..AgentConfig::default()
     }
 }

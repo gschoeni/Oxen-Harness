@@ -109,6 +109,13 @@ pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
            `ask_user_question` to interview the user instead of guessing. Keep \
            options concise and distinct; don't add an 'Other' option (the user can \
            always type their own). Don't ask about trivia you can decide yourself.{canvas_guideline}\n\
+         - Be careful with destructive commands. Prefer reversible, narrowly-scoped \
+           operations, and never chain a destructive action (deleting files, killing \
+           processes, force-pushing, rewriting git history) with unrelated commands in \
+           one `run_shell` call — run it alone, right after saying why it's needed, so \
+           any approval prompt covers exactly that action. If the user declines a \
+           command, do not retry it or pursue the same effect another way; adjust your \
+           approach or ask what they'd prefer.\n\
          - Keep changes surgical and simple. Write the minimum code that solves the \
            problem in front of you — resist premature abstraction and configuration you \
            don't need yet. Make the smallest diff the task allows: match the existing \

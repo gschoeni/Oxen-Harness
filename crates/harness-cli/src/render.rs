@@ -183,6 +183,21 @@ impl TurnRenderer {
                 );
                 self.begin_thinking();
             }
+            // A gated tool call is about to show the approval picker (which
+            // owns the terminal itself in cooked mode); stop the spinner so
+            // they don't fight over the line.
+            AgentEvent::ApprovalPending { .. } => {
+                self.stop_spinner();
+            }
+            AgentEvent::ApprovalResolved { command, decision, .. } => {
+                println!(
+                    "  {} {}",
+                    self.ui.brown("🛡"),
+                    self.ui
+                        .dim(&format!("{decision} — {}", truncate(command, 100))),
+                );
+                self.begin_thinking();
+            }
             // Usage is surfaced in the banner/status, not inline during a turn.
             AgentEvent::Usage { .. } => {}
             // The context filled and was compacted to keep the session going;

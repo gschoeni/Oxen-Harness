@@ -123,6 +123,33 @@ pub fn code_review_file() -> Result<PathBuf, ConfigError> {
     under("code-review.json")
 }
 
+/// `~/.oxen-harness/permissions.json` — the global permission mode and
+/// allow/deny command rules for the tool-call gate. Distinct from the
+/// *per-project* `<workspace>/.oxen-harness/permissions.json` where "always
+/// allow for this project" grants persist.
+pub fn permissions_file() -> Result<PathBuf, ConfigError> {
+    under("permissions.json")
+}
+
+/// `~/.oxen-harness/permissions.jsonl` — the gate's audit log: one JSON entry
+/// per permission decision (what ran or was refused, and which rule/choice
+/// decided it).
+pub fn permissions_log() -> Result<PathBuf, ConfigError> {
+    under("permissions.jsonl")
+}
+
+/// `~/.oxen-harness/trash/` — where "move to trash instead" relocates files a
+/// command would have deleted (pruned after a TTL by the permission gate).
+pub fn trash_dir() -> Result<PathBuf, ConfigError> {
+    under("trash")
+}
+
+/// `~/.oxen-harness/snapshots/` — shadow git repositories holding pre-command
+/// workspace snapshots taken before approved dangerous commands.
+pub fn snapshots_dir() -> Result<PathBuf, ConfigError> {
+    under("snapshots")
+}
+
 /// `~/.oxen-harness/skills.json` — skill preferences (disabled skills).
 pub fn skills_file() -> Result<PathBuf, ConfigError> {
     under("skills.json")

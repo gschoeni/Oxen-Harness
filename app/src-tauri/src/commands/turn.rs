@@ -255,6 +255,37 @@ async fn execute_turn(
                     },
                 );
             }
+            // A gated tool call awaiting / resolved from the user's approval.
+            // The desktop doesn't attach a permission gate yet (no approval
+            // card UI); translated anyway so the wire contract is in place.
+            AgentEvent::ApprovalPending { name, command } => {
+                let _ = app.emit(
+                    "agent://approval",
+                    crate::events::ApprovalPayload {
+                        session: sid.clone(),
+                        phase: "pending",
+                        name: name.clone(),
+                        command: command.clone(),
+                        decision: String::new(),
+                    },
+                );
+            }
+            AgentEvent::ApprovalResolved {
+                name,
+                command,
+                decision,
+            } => {
+                let _ = app.emit(
+                    "agent://approval",
+                    crate::events::ApprovalPayload {
+                        session: sid.clone(),
+                        phase: "resolved",
+                        name: name.clone(),
+                        command: command.clone(),
+                        decision: decision.clone(),
+                    },
+                );
+            }
             // A transient provider/network failure being retried with backoff;
             // surface it so the turn reads as alive (and debuggable), not hung.
             AgentEvent::Retrying {

@@ -97,6 +97,26 @@ impl Live {
                 self.on_tool_start(name, arguments, paused)
             }
             AgentEvent::ToolEnd { name, result } => self.on_tool_end(name, result, paused),
+            // A gated tool call needs the user's decision: hand the screen to
+            // the approval picker (the ask_user_question hand-off, same rules).
+            AgentEvent::ApprovalPending { .. } => {
+                self.stop_spinner();
+                self.end_markdown();
+                self.suspend(paused);
+            }
+            AgentEvent::ApprovalResolved { command, decision, .. } => {
+                self.resume(paused);
+                let line = format!(
+                    "  {} {}",
+                    self.ui.brown("🛡"),
+                    self.ui
+                        .dim(&format!("{decision} — {}", truncate(command, 90))),
+                );
+                self.write_region(&format!("{line}\n"));
+                self.begin_thinking();
+                // Repaint the full layout: the picker drew over the screen.
+                self.render_forcing_region();
+            }
             // Rebuild the pinned context trailer from the live figures so the
             // tokens-used count and running price climb *during* the turn (each
             // tool-loop iteration re-sends a larger context), not only when it

@@ -2,10 +2,12 @@
 //! budgeting, attachments, compression, and the retry policy.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use harness_compress::CompressionMode;
 use harness_core::DEFAULT_MODEL;
+use harness_permissions::PermissionGate;
 
 use crate::prompt::default_system_prompt;
 
@@ -70,6 +72,13 @@ pub struct AgentConfig {
     /// attempt and per failed turn — see `crate::errlog`). `None` disables
     /// it. Writing is best-effort: log failures never affect the turn.
     pub error_log: Option<PathBuf>,
+    /// The permission gate consulted before every tool call (classification,
+    /// approval prompts, circuit breakers — see `harness-permissions`).
+    /// `None` runs tools ungated. Subagents automatically get the gate's
+    /// non-interactive [`for_subagent`] form (see `subagent_tools`' reasoning).
+    ///
+    /// [`for_subagent`]: harness_permissions::PermissionGate::for_subagent
+    pub permissions: Option<Arc<PermissionGate>>,
 }
 
 impl Default for AgentConfig {
@@ -87,6 +96,7 @@ impl Default for AgentConfig {
             compression: CompressionMode::Off,
             retry: RetryPolicy::default(),
             error_log: None,
+            permissions: None,
         }
     }
 }

@@ -7,6 +7,7 @@
 //! in its [`commands`] module, and the live bottom-pinned composer in [`live`].
 
 mod almanac;
+mod approve;
 mod ask;
 mod attach;
 mod brave;
@@ -215,7 +216,7 @@ async fn main() -> Result<()> {
 
     let mut tools = build_tool_registry(&workspace, &ui);
     let base_url = client.base_url().to_string();
-    let config = agent_config(&model, context_window, &tools, &workspace);
+    let config = agent_config(&model, context_window, &tools, &workspace, &ui);
 
     endpoint::register_fleet_tool(&mut tools, &client, &config, store.clone(), &ui);
 

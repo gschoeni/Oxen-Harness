@@ -6,6 +6,7 @@ members = [
     "crates/harness-llm",
     "crates/harness-compress",
     "crates/harness-tools",
+    "crates/harness-permissions",
     "crates/harness-store",
     "crates/harness-oxen",
     "crates/harness-local",
@@ -36,6 +37,7 @@ harness-config = { path = "crates/harness-config" }
 harness-llm = { path = "crates/harness-llm" }
 harness-compress = { path = "crates/harness-compress" }
 harness-tools = { path = "crates/harness-tools" }
+harness-permissions = { path = "crates/harness-permissions" }
 harness-store = { path = "crates/harness-store" }
 harness-oxen = { path = "crates/harness-oxen" }
 harness-local = { path = "crates/harness-local" }
@@ -62,6 +64,8 @@ base64 = "0.22"
 dotenvy = "0.15"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 htmd = "0.5"
+tree-sitter = "0.25"
+tree-sitter-bash = "0.25"
 
 # A shared, deliberately small lint policy every crate inherits via
 # `[lints] workspace = true`. The bar: no unsafe outside audited, annotated

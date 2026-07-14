@@ -96,6 +96,21 @@ pub(crate) struct SessionPayload {
     pub(crate) session: String,
 }
 
+/// The `agent://approval` payload: a gated tool call awaiting (phase
+/// "pending") or resolved from (phase "resolved") the user's approval
+/// decision. The desktop host doesn't attach a permission gate yet, so these
+/// don't fire today — the payload keeps the wire contract ready for the
+/// approval-card UI.
+#[derive(Clone, Serialize)]
+pub(crate) struct ApprovalPayload {
+    pub(crate) session: String,
+    pub(crate) phase: &'static str,
+    pub(crate) name: String,
+    pub(crate) command: String,
+    /// Empty while pending; the decision label once resolved.
+    pub(crate) decision: String,
+}
+
 /// The `agent://canvas` payload: a document for the UI's side panel, tagged with
 /// the session it belongs to so a background chat's canvas doesn't pop into view.
 #[derive(Clone, Serialize)]

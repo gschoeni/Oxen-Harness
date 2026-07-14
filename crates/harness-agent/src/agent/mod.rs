@@ -371,6 +371,11 @@ impl Agent {
         })?;
         let mut config = self.config.clone();
         config.initial_attachments.clear();
+        // A side agent can't drive the host's approval prompt any more than it
+        // can drive the question picker: demote its gate to auto-deny.
+        config.permissions = config
+            .permissions
+            .map(|gate| Arc::new(gate.for_subagent()));
         let mut side = Agent::new(
             self.client.clone(),
             subagent_tools(self.tools.clone()),

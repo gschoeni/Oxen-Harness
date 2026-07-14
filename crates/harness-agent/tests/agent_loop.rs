@@ -321,3 +321,134 @@ async fn detached_agent_records_usage_in_parent_ledger() {
     assert_eq!(usage[0].prompt_tokens, 200);
     assert_eq!(usage[0].completion_tokens, 10);
 }
+
+// A model response that calls `run_shell` with a recursive delete — the shape
+// the permission gate must intercept before execution.
+const RM_CALL_SSE: &str = concat!(
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_rm\",\"type\":\"function\",\"function\":{\"name\":\"run_shell\",\"arguments\":\"{\\\"command\\\":\\\"rm -rf marker\\\"}\"}}]}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+    "data: [DONE]\n\n"
+);
+
+/// An approver scripted to return one fixed decision, recording that it was
+/// actually consulted.
+struct ScriptedApprover {
+    decision: harness_permissions::ApprovalDecision,
+    consulted: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait]
+impl harness_permissions::CommandApprover for ScriptedApprover {
+    async fn approve(
+        &self,
+        _request: &harness_permissions::ApprovalRequest,
+    ) -> Result<Option<harness_permissions::ApprovalDecision>, String> {
+        self.consulted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(Some(self.decision.clone()))
+    }
+}
+
+/// End to end through the real turn loop: a dangerous `run_shell` call is
+/// intercepted by the permission gate, the approver decides, and a denial
+/// reaches the model as the tool result without the command ever running —
+/// while an approval lets it execute.
+#[tokio::test]
+async fn permission_gate_intercepts_dangerous_shell_calls_in_the_loop() {
+    let harness_home = tempfile::tempdir().unwrap();
+    std::env::set_var("OXEN_HARNESS_DIR", harness_home.path());
+
+    for (decision, expect_deleted) in [
+        (harness_permissions::ApprovalDecision::Deny, false),
+        (harness_permissions::ApprovalDecision::AllowOnce, true),
+    ] {
+        let mut server = mockito::Server::new_async().await;
+        let m1 = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(RM_CALL_SSE)
+            .expect(1)
+            .create_async()
+            .await;
+        let m2 = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(FINAL_SSE)
+            .expect(1)
+            .create_async()
+            .await;
+
+        // A real workspace with a marker directory the command would delete.
+        let workspace_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(workspace_dir.path().join("marker")).unwrap();
+        let workspace = harness_tools::Workspace::new(workspace_dir.path()).unwrap();
+        let tools = ToolRegistry::new()
+            .with_typed(harness_tools::shell::ShellTool::new(workspace));
+
+        let approver = Arc::new(ScriptedApprover {
+            decision: decision.clone(),
+            consulted: std::sync::atomic::AtomicBool::new(false),
+        });
+        let gate = harness_permissions::PermissionGate::new(
+            workspace_dir.path(),
+            approver.clone() as Arc<dyn harness_permissions::CommandApprover>,
+        );
+
+        let client = OxenClient::new(server.url(), "sk-test", "claude-opus-4-8");
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = store
+            .create_session(&harness_store::SessionMeta {
+                workspace: workspace_dir.path().display().to_string(),
+                model: "claude-opus-4-8".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let config = AgentConfig {
+            model: "claude-opus-4-8".into(),
+            system_prompt: None,
+            permissions: Some(Arc::new(gate)),
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, tools, store.clone(), session.clone(), config).unwrap();
+
+        let mut events = Vec::new();
+        agent
+            .run_turn("clean up the build", |e| events.push(e.clone()))
+            .await
+            .unwrap();
+        m1.assert_async().await;
+        m2.assert_async().await;
+
+        // The gate consulted the approver and emitted the approval bracket.
+        assert!(approver.consulted.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ApprovalPending { command, .. } if command == "rm -rf marker")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ApprovalResolved { .. })));
+
+        let marker_exists = workspace_dir.path().join("marker").exists();
+        assert_eq!(
+            marker_exists, !expect_deleted,
+            "decision {decision:?}: marker existence should be {}",
+            !expect_deleted
+        );
+
+        // The tool result the model read reflects the decision.
+        let stored = store.messages(&session).unwrap();
+        let tool_result = stored
+            .iter()
+            .find(|m| m["role"] == "tool")
+            .and_then(|m| m["content"].as_str().map(str::to_string))
+            .unwrap_or_default();
+        if expect_deleted {
+            assert!(tool_result.contains("exit_code: 0"), "got: {tool_result}");
+        } else {
+            assert!(tool_result.contains("declined"), "got: {tool_result}");
+        }
+    }
+    std::env::remove_var("OXEN_HARNESS_DIR");
+}
