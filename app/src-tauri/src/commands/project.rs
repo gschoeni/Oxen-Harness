@@ -187,18 +187,33 @@ pub(crate) async fn start_project(
         }
         chosen
     };
+    let created_root = create_directory.then(|| root.clone());
     let canonical = root.canonicalize().unwrap_or(root);
-    let existing = project::load(&canonical);
-    let config = ProjectConfig {
-        name: name.to_string(),
-        description,
-        instructions,
-        context: existing.context,
-    };
-    project::save(&canonical, &config).map_err(|error| error.to_string())?;
-    let sources = context_paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
-    if !sources.is_empty() {
-        project::add_context(&canonical, &sources).map_err(|error| error.to_string())?;
+    let setup = (|| -> Result<(), String> {
+        let existing = project::load(&canonical);
+        let config = ProjectConfig {
+            name: name.to_string(),
+            description,
+            instructions,
+            context: existing.context,
+        };
+        project::save(&canonical, &config).map_err(|error| error.to_string())?;
+        let sources = context_paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+        if !sources.is_empty() {
+            project::add_context(&canonical, &sources).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = setup {
+        if let Some(created_root) = created_root {
+            if let Err(cleanup_error) = std::fs::remove_dir_all(&created_root) {
+                return Err(format!(
+                    "{error}; could not remove incomplete project folder {}: {cleanup_error}",
+                    created_root.display()
+                ));
+            }
+        }
+        return Err(error);
     }
     let canonical = canonical.display().to_string();
     remember_project(&canonical)?;

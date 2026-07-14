@@ -15,7 +15,7 @@ export function ProjectsPage() {
   const sessions = useStore((state) => state.sessions);
   const runStatus = useStore((state) => state.runStatus);
   const activePath = useStore((state) => state.session?.workspace ?? null);
-  const prepareProject = useStore((state) => state.prepareProject);
+  const selectProject = useStore((state) => state.selectProject);
   const refreshHistory = useStore((state) => state.refreshHistory);
   const [selected, setSelected] = useState<Project | null>(null);
   const [starting, setStarting] = useState(false);
@@ -32,7 +32,7 @@ export function ProjectsPage() {
 
   async function openHome(project: Project) {
     setSelected(project);
-    await prepareProject(project.path);
+    await selectProject(project.path);
   }
 
   async function projectChanged(project: Project) {
@@ -119,7 +119,7 @@ export function ProjectsPage() {
           onCreated={async (project) => {
             setStarting(false);
             setSelected(project);
-            await prepareProject(project.path);
+            await selectProject(project.path);
           }}
         />
       )}

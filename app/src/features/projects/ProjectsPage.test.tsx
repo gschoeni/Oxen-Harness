@@ -55,7 +55,7 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("Use plain language.")).toBeInTheDocument();
     expect(screen.getByText("brief.md")).toBeInTheDocument();
     expect(ipc.setActiveProject).toHaveBeenCalledWith("/w");
-    expect(ipc.newSession).toHaveBeenCalledOnce();
+    expect(ipc.newSession).not.toHaveBeenCalled();
     expect(useStore.getState().projectsOpen).toBe(true);
   });
 
@@ -84,7 +84,7 @@ describe("ProjectsPage", () => {
     expect(await screen.findByRole("heading", { name: "Demo App" })).toBeInTheDocument();
   });
 
-  it("edits project guidance and starts a fresh prompt context", async () => {
+  it("edits project guidance without creating a throwaway chat", async () => {
     render(<ProjectsPage />);
     await userEvent.click(screen.getByText("Writer"));
     await screen.findByRole("heading", { name: "Writer" });
@@ -102,7 +102,7 @@ describe("ProjectsPage", () => {
       "A calm place to draft essays.",
       "Write for curious beginners.",
     );
-    expect(ipc.newSession).toHaveBeenCalledOnce();
+    expect(ipc.newSession).not.toHaveBeenCalled();
   });
 
   it("adds and removes durable project context", async () => {
@@ -132,12 +132,26 @@ describe("ProjectsPage", () => {
     await userEvent.type(screen.getByLabelText("Ask about this project"), "Build the landing page");
     await userEvent.click(screen.getByRole("button", { name: "Send project prompt" }));
 
-    expect(useStore.getState().projectsOpen).toBe(false);
+    await waitFor(() => expect(useStore.getState().projectsOpen).toBe(false));
+    expect(ipc.newSession).toHaveBeenCalledOnce();
     const session = useStore.getState().session!;
     expect(useStore.getState().threads[session.session_id]?.[0]).toMatchObject({
       kind: "user",
       text: "Build the landing page",
     });
+  });
+
+  it("keeps project home open when a fresh chat cannot be created", async () => {
+    ipc.newSession.mockRejectedValueOnce(new Error("agent initialization failed"));
+    render(<ProjectsPage />);
+    await userEvent.click(screen.getByText("Writer"));
+    await screen.findByRole("heading", { name: "Writer" });
+    await userEvent.type(screen.getByLabelText("Ask about this project"), "Build the landing page");
+    await userEvent.click(screen.getByRole("button", { name: "Send project prompt" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("agent initialization failed");
+    expect(useStore.getState().projectsOpen).toBe(true);
+    expect(ipc.runTurn).not.toHaveBeenCalled();
   });
 
   it("is a non-dismissible navigation root", async () => {

@@ -15,18 +15,29 @@ export function ProjectHome({
   onProjectChanged: (project: Project) => Promise<void> | void;
 }) {
   const setProjectsOpen = useStore((state) => state.setProjectsOpen);
+  const prepareProject = useStore((state) => state.prepareProject);
   const send = useStore((state) => state.send);
-  const startNewSession = useStore((state) => state.startNewSession);
   const [prompt, setPrompt] = useState("");
   const [editing, setEditing] = useState(false);
   const [busyContext, setBusyContext] = useState(false);
+  const [startingChat, setStartingChat] = useState(false);
+  const [chatError, setChatError] = useState("");
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     const text = prompt.trim();
-    if (!text) return;
-    setProjectsOpen(false);
-    send(text);
+    if (!text || startingChat) return;
+    setStartingChat(true);
+    setChatError("");
+    try {
+      await prepareProject(project.path);
+      setProjectsOpen(false);
+      send(text);
+    } catch (reason) {
+      setChatError(String(reason));
+    } finally {
+      setStartingChat(false);
+    }
   }
 
   async function addContext() {
@@ -35,7 +46,6 @@ export function ProjectHome({
     setBusyContext(true);
     try {
       await onProjectChanged(await addProjectContext(project.path, paths));
-      await startNewSession();
     } finally {
       setBusyContext(false);
     }
@@ -45,7 +55,6 @@ export function ProjectHome({
     setBusyContext(true);
     try {
       await onProjectChanged(await removeProjectContext(project.path, context.path));
-      await startNewSession();
     } finally {
       setBusyContext(false);
     }
@@ -67,7 +76,7 @@ export function ProjectHome({
 
       <div className="project-home-grid">
         <section className="project-home-main">
-          <form className="project-composer" onSubmit={submit}>
+          <form className="project-composer" onSubmit={(event) => void submit(event)}>
             <textarea
               aria-label="Ask about this project"
               value={prompt}
@@ -83,11 +92,12 @@ export function ProjectHome({
             />
             <div className="project-composer-footer">
               <span><MessageSquare size={15} /> A fresh chat with this project’s context</span>
-              <IconButton type="submit" className="project-send" aria-label="Send project prompt" disabled={!prompt.trim()}>
+              <IconButton type="submit" className="project-send" aria-label="Send project prompt" disabled={!prompt.trim() || startingChat}>
                 <Send size={17} />
               </IconButton>
             </div>
           </form>
+          {chatError && <div className="project-home-error" role="alert">Could not start this chat: {chatError}</div>}
           <div className="project-home-empty">
             <MessageSquare size={28} />
             <p>Start with a task and the agent will pick up the project goal, instructions, and references automatically.</p>
@@ -135,7 +145,6 @@ export function ProjectHome({
           onClose={() => setEditing(false)}
           onSave={async (name, description, instructions) => {
             await onProjectChanged(await updateProject(project.path, name, description, instructions));
-            await startNewSession();
             setEditing(false);
           }}
         />
@@ -164,7 +173,7 @@ function EditProjectModal({
         <label className="project-field"><span>Project name</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
         <label className="project-field"><span>Project goal</span><textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
         <label className="project-field"><span>Project instructions</span><textarea rows={7} value={instructions} onChange={(event) => setInstructions(event.target.value)} /></label>
-        <small className="project-field-hint">Saving starts a fresh chat so the updated guidance is present from its first message.</small>
+        <small className="project-field-hint">The next prompt starts a fresh chat with this updated guidance.</small>
         <div className="project-form-actions">
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={!name.trim() || saving} onClick={async () => {

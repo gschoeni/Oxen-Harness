@@ -92,7 +92,12 @@ pub fn add_context(root: &Path, sources: &[PathBuf]) -> Result<ProjectConfig, Ru
             })?;
         let kind = context_kind(source)?;
         let (hash, size_bytes) = hash_file(source)?;
-        let stored_name = format!("{}-{}", &hash[..12], safe_filename(&name));
+        let extension = source
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let stored_name = format!("{hash}.{extension}");
         let relative = Path::new(CONTEXT_DIR).join(stored_name);
         let destination = root.join(&relative);
         if !destination.exists() {
@@ -254,25 +259,6 @@ fn copy_file(source: &Path, destination: &Path) -> Result<(), RuntimeError> {
     result.map_err(Into::into)
 }
 
-fn safe_filename(name: &str) -> String {
-    let safe: String = name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let safe = safe.trim_matches(['.', '-']).to_string();
-    if safe.is_empty() {
-        "context".into()
-    } else {
-        safe
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,10 +311,12 @@ mod tests {
         )
         .unwrap();
         let source = tmp.path().join("Product brief.md");
+        let duplicate = tmp.path().join("same words.md");
         std::fs::write(&source, "# Product brief\nMake it warm.").unwrap();
+        std::fs::write(&duplicate, "# Product brief\nMake it warm.").unwrap();
 
         let first = add_context(&root, std::slice::from_ref(&source)).unwrap();
-        let second = add_context(&root, &[source]).unwrap();
+        let second = add_context(&root, &[source, duplicate]).unwrap();
 
         assert_eq!(first.context.len(), 1);
         assert_eq!(second.context.len(), 1);
@@ -336,6 +324,15 @@ mod tests {
         assert_eq!(entry.name, "Product brief.md");
         assert_eq!(entry.kind, ContextKind::Text);
         assert!(entry.path.starts_with(".oxen-harness/context/"));
+        assert!(entry.path.ends_with(".md"));
+        assert_eq!(
+            entry
+                .path
+                .trim_start_matches(".oxen-harness/context/")
+                .trim_end_matches(".md")
+                .len(),
+            64
+        );
         assert_eq!(
             std::fs::read_to_string(root.join(&entry.path)).unwrap(),
             "# Product brief\nMake it warm."

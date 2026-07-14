@@ -317,6 +317,7 @@
 .project-send:hover { color: var(--on-accent); background: var(--accent-hover); }
 .project-home-empty { min-height: 270px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); color: var(--text-tertiary); text-align: center; }
 .project-home-empty p { max-width: 460px; line-height: 1.55; }
+.project-home-error { margin-top: var(--space-3); padding: var(--space-3); color: var(--danger); background: var(--danger-soft); border-radius: var(--radius-sm); font-size: var(--text-sm); }
 .project-context-panel { display: flex; flex-direction: column; border: 1px solid var(--separator); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface) 86%, transparent); overflow: hidden; box-shadow: var(--shadow-1); }
 .project-context-card { padding: var(--space-5); }
 .project-context-card + .project-context-card { border-top: 1px solid var(--separator); }

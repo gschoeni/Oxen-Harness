@@ -291,6 +291,8 @@ interface AppState {
   /** Permanently delete a chat; if it was the current one, open a fresh chat. */
   removeSession: (id: string) => Promise<void>;
   setProjectsOpen: (open: boolean) => void;
+  /** Make project-scoped surfaces point at a project without creating a chat. */
+  selectProject: (path: string) => Promise<void>;
   /** Prepare a known project and fresh chat while keeping its home visible. */
   prepareProject: (path: string) => Promise<void>;
   /** Switch to a known project and enter its fresh chat. */
@@ -695,6 +697,11 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     setProjectsOpen: (projectsOpen) => set({ projectsOpen }),
+
+    selectProject: async (path) => {
+      await setActiveProject(path);
+      await get().refreshHistory();
+    },
 
     prepareProject: async (path) => {
       await setActiveProject(path);
