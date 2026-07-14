@@ -7,17 +7,21 @@ import { ProjectHome } from "./ProjectHome";
 import { StartProjectModal } from "./StartProjectModal";
 import "./projects.css";
 
-/** The top-level project navigator. Selecting a project opens its durable home
- * before entering chat, so guidance and context are visible rather than hidden
- * behind settings. */
+/** The top-level project navigator. Established projects resume their newest
+ * chat; projects without history open the getting-started surface. */
 export function ProjectsPage() {
   const projects = useStore((state) => state.projects);
   const sessions = useStore((state) => state.sessions);
   const runStatus = useStore((state) => state.runStatus);
   const activePath = useStore((state) => state.session?.workspace ?? null);
   const selectProject = useStore((state) => state.selectProject);
+  const resume = useStore((state) => state.resume);
+  const setProjectsOpen = useStore((state) => state.setProjectsOpen);
+  const projectHomePath = useStore((state) => state.projectHomePath);
   const refreshHistory = useStore((state) => state.refreshHistory);
-  const [selected, setSelected] = useState<Project | null>(null);
+  const [selected, setSelected] = useState<Project | null>(() =>
+    projectHomePath ? projects.find((project) => project.path === projectHomePath) ?? null : null,
+  );
   const [starting, setStarting] = useState(false);
 
   const runningByPath = useMemo(() => {
@@ -30,7 +34,16 @@ export function ProjectsPage() {
     return counts;
   }, [sessions, runStatus]);
 
-  async function openHome(project: Project) {
+  async function openProject(project: Project) {
+    if (project.session_count > 0) {
+      // History is returned newest-first by the durable session store.
+      const latest = sessions.find((session) => session.workspace === project.path);
+      if (latest) {
+        await resume(latest.id);
+        setProjectsOpen(false);
+        return;
+      }
+    }
     setSelected(project);
     await selectProject(project.path);
   }
@@ -75,7 +88,7 @@ export function ProjectsPage() {
                 <button
                   key={project.path}
                   className={`project-card ${project.path === activePath ? "active" : ""}`}
-                  onClick={() => void openHome(project)}
+                  onClick={() => void openProject(project)}
                 >
                   <span className="project-card-icon"><FolderOpen size={20} /></span>
                   <span className="project-card-main">

@@ -24,6 +24,15 @@ describe("store: navigation", () => {
   it("starts at Projects, the application's navigation root", () => {
     expect(useStore.getState().projectsOpen).toBe(true);
   });
+
+  it("targets a project home explicitly and clears that target for the project list", () => {
+    useStore.getState().openProjectHome("/work/demo");
+    expect(useStore.getState().projectsOpen).toBe(true);
+    expect(useStore.getState().projectHomePath).toBe("/work/demo");
+
+    useStore.getState().setProjectsOpen(true);
+    expect(useStore.getState().projectHomePath).toBeNull();
+  });
 });
 
 describe("store: theme palette", () => {

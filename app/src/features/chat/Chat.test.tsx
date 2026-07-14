@@ -27,6 +27,27 @@ beforeEach(() => {
 });
 
 describe("Chat", () => {
+  it("opens the active project's files and settings from the titlebar", async () => {
+    useStore.setState({
+      projectsOpen: false,
+      projects: [{
+        path: ipc.sampleSession.workspace,
+        name: "Demo",
+        description: "",
+        instructions: "",
+        context: [],
+        session_count: 1,
+        active: true,
+      }],
+    });
+    render(<Chat />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Project files and settings" }));
+
+    expect(useStore.getState().projectsOpen).toBe(true);
+    expect(useStore.getState().projectHomePath).toBe(ipc.sampleSession.workspace);
+  });
+
   it("lists desktop slash commands on slash and omits exit", async () => {
     render(<Chat />);
     const box = screen.getByPlaceholderText(/ask the agent/i);

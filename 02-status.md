@@ -25,12 +25,12 @@
 | **13** | Cleanup pass: shared helpers → `harness-core` (text/fmt/json), CLI handlers → `commands/`, desktop bridge split (state/bridges/events/commands), a `/code-review` self-review with 17 fixes | ✅ Complete |
 | **14** | Usage accounting: provider/fallback tokens per model call, daily activity ledger, estimated Oxen spend, desktop activity grid + CLI `/usage` | ✅ Complete |
 | **15** | Long-running memory hardening: bounded streaming I/O, durable context checkpoints/CCR payloads, attachment budgets, bounded fleet/UI caches | ✅ Complete |
-| **16** | Durable projects: guided creation, repo-local goals/instructions/context, project home | ✅ Complete |
+| **16** | Durable projects: guided creation, repo-local goals/instructions/context, project getting-started/settings page | ✅ Complete |
 
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **649 Rust tests + 224 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
+> **649 Rust tests + 228 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
 
 ## Phase 16 — Durable projects
 
@@ -45,8 +45,10 @@
       implicitly with their directory basename and empty metadata.
 - [x] Copy text/PDF/image references content-addressed into
       `.oxen-harness/context/`, with add/remove/deduplication behavior.
-- [x] Add a project home with a model-selectable, context-aware composer plus
-      editable Instructions and Context cards.
+- [x] Add a model-selectable project getting-started/settings page with editable
+      Instructions and Context cards. New projects land there; established
+      projects resume their newest chat and expose the page from a files button
+      in the chat titlebar.
 - [x] Feed goals/instructions/context manifests into both desktop and CLI agent
       prompts; attach durable PDF/image context to the first prompt of new chats.
 

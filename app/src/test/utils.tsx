@@ -15,6 +15,7 @@ export function resetAll() {
     sessions: [],
     projects: [],
     projectsOpen: true,
+    projectHomePath: null,
     infos: {},
     threads: {},
     sessionUsage: {},

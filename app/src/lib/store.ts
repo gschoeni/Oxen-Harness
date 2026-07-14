@@ -212,6 +212,9 @@ interface AppState {
   cloudModels: CloudModel[];
   /** Whether the projects screen overlay is open. */
   projectsOpen: boolean;
+  /** Project whose getting-started/files page was opened explicitly. Null shows
+   *  the project list instead. */
+  projectHomePath: string | null;
   /** Known session infos by id, so switching to a live chat keeps its header. */
   infos: Record<string, SessionInfo>;
   /** Live thread items per session id. */
@@ -293,6 +296,8 @@ interface AppState {
   /** Permanently delete a chat; if it was the current one, open a fresh chat. */
   removeSession: (id: string) => Promise<void>;
   setProjectsOpen: (open: boolean) => void;
+  /** Open a project's getting-started, guidance, and reference-files page. */
+  openProjectHome: (path: string) => void;
   /** Make project-scoped surfaces point at a project without creating a chat. */
   selectProject: (path: string) => Promise<void>;
   /** Prepare a known project and fresh chat while keeping its home visible. */
@@ -510,9 +515,10 @@ export const useStore = create<AppState>((set, get) => {
     projects: [],
     cloudModels: [],
     localSwitch: null,
-    // Projects is the application's navigation root. A project is selected
-    // before the user enters its scoped chats and settings.
+    // Projects is the application's navigation root. Established projects
+    // enter their latest chat; their home is opened explicitly from chat.
     projectsOpen: true,
+    projectHomePath: null,
     infos: {},
     threads: {},
     liveTokens: {},
@@ -698,7 +704,9 @@ export const useStore = create<AppState>((set, get) => {
       if (wasCurrent) await get().startNewSession();
     },
 
-    setProjectsOpen: (projectsOpen) => set({ projectsOpen }),
+    setProjectsOpen: (projectsOpen) => set({ projectsOpen, projectHomePath: null }),
+
+    openProjectHome: (projectHomePath) => set({ projectsOpen: true, projectHomePath }),
 
     selectProject: async (path) => {
       await setActiveProject(path);

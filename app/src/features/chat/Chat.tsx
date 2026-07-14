@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, Code2, FileText, Gamepad2, SearchCode } from "lucide-react";
+import { ArrowDown, Code2, Files, FileText, Gamepad2, SearchCode } from "lucide-react";
 import { onFileDrop, pickAttachments } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
@@ -45,6 +45,12 @@ export function Chat() {
   const stop = useStore((s) => s.stop);
   const setQueue = useStore((s) => s.setQueue);
   const openInspector = useStore((s) => s.openInspector);
+  const workspace = useStore((s) => s.session?.workspace ?? null);
+  const hasProject = useStore((s) => {
+    const path = s.session?.workspace;
+    return !!path && s.projects.some((project) => project.path === path);
+  });
+  const openProjectHome = useStore((s) => s.openProjectHome);
   // The floating game dock lets you play a round while a turn streams, so a long
   // run doesn't send you off to another app.
   const gameDockOpen = useStore((s) => s.gameDockOpen);
@@ -149,6 +155,16 @@ export function Chat() {
   return (
     <main className="chat">
       <div className="chat-titlebar" data-tauri-drag-region>
+        {workspace && hasProject && (
+          <button
+            className="dev-view-btn"
+            onClick={() => openProjectHome(workspace)}
+            title="Open this project's getting started, instructions, and files"
+            aria-label="Project files and settings"
+          >
+            <Files size={15} />
+          </button>
+        )}
         {items.length > 0 && (
           <button
             className="dev-view-btn"

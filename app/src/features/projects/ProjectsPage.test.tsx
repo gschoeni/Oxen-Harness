@@ -21,7 +21,7 @@ const projects: Project[] = [
     description: "A calm place to draft essays.",
     instructions: "Use plain language.",
     context: [{ path: ".oxen-harness/context/brief.md", name: "brief.md", kind: "text", size_bytes: 42 }],
-    session_count: 1,
+    session_count: 0,
     active: true,
   },
   { path: "/elsewhere", name: "Elsewhere", description: "", instructions: "", context: [], session_count: 1, active: false },
@@ -46,7 +46,27 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("Writer").closest(".project-card")).toHaveClass("active");
   });
 
-  it("opens a project home with durable instructions and context", async () => {
+  it("resumes the newest chat when an established project is selected", async () => {
+    const latest = { ...sessions[0], id: "latest", created_at: 1_800_000_000, title: "Latest chat" };
+    useStore.setState({
+      projects: [{ ...projects[0], session_count: 2 }, projects[1]],
+      sessions: [latest, ...sessions],
+    });
+    ipc.resumeSession.mockResolvedValueOnce({
+      info: { ...ipc.sampleSession, session_id: "latest", workspace: "/w" },
+      messages: [],
+      running: false,
+    });
+    render(<ProjectsPage />);
+
+    await userEvent.click(screen.getByText("Writer"));
+
+    expect(ipc.resumeSession).toHaveBeenCalledWith("latest");
+    expect(useStore.getState().projectsOpen).toBe(false);
+    expect(screen.queryByRole("heading", { name: "Writer" })).toBeNull();
+  });
+
+  it("opens getting started for a project without chat history", async () => {
     render(<ProjectsPage />);
     await userEvent.click(screen.getByText("Writer"));
 
@@ -57,6 +77,20 @@ describe("ProjectsPage", () => {
     expect(ipc.setActiveProject).toHaveBeenCalledWith("/w");
     expect(ipc.newSession).not.toHaveBeenCalled();
     expect(useStore.getState().projectsOpen).toBe(true);
+  });
+
+  it("opens an established project's files and settings when explicitly targeted", () => {
+    useStore.setState({
+      projects: [{ ...projects[0], session_count: 1 }, projects[1]],
+      projectHomePath: "/w",
+    });
+
+    render(<ProjectsPage />);
+
+    expect(screen.getByRole("heading", { name: "Writer" })).toBeInTheDocument();
+    expect(screen.getByText("Use plain language.")).toBeInTheDocument();
+    expect(screen.getByText("brief.md")).toBeInTheDocument();
+    expect(ipc.resumeSession).not.toHaveBeenCalled();
   });
 
   it("creates an existing-folder project with a name and goal", async () => {
