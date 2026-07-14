@@ -166,17 +166,41 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("Choose the project folder…")).toBeInTheDocument();
   });
 
-  it("edits project guidance without creating a throwaway chat", async () => {
+  it("edits the project name and goal directly on the page", async () => {
     render(<ProjectsPage />);
     await userEvent.click(screen.getByText("Writer"));
     await screen.findByRole("heading", { name: "Writer" });
     ipc.newSession.mockClear();
 
-    await userEvent.click(screen.getByRole("button", { name: "Edit project" }));
+    expect(screen.queryByRole("button", { name: "Edit project" })).toBeNull();
+    const name = screen.getByLabelText("Project name");
+    const goal = screen.getByLabelText("Project goal");
+    await userEvent.clear(name);
+    await userEvent.type(name, "Writer Studio");
+    await userEvent.clear(goal);
+    await userEvent.type(goal, "Draft thoughtful essays for curious readers.");
+    await userEvent.click(screen.getByRole("button", { name: "Save project details" }));
+
+    expect(ipc.updateProject).toHaveBeenCalledWith(
+      "/w",
+      "Writer Studio",
+      "Draft thoughtful essays for curious readers.",
+      "Use plain language.",
+    );
+    expect(ipc.newSession).not.toHaveBeenCalled();
+  });
+
+  it("edits project instructions from their focused control", async () => {
+    render(<ProjectsPage />);
+    await userEvent.click(screen.getByText("Writer"));
+    await screen.findByRole("heading", { name: "Writer" });
+    ipc.newSession.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit project instructions" }));
     const instructions = screen.getByLabelText("Project instructions");
     await userEvent.clear(instructions);
     await userEvent.type(instructions, "Write for curious beginners.");
-    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save instructions" }));
 
     expect(ipc.updateProject).toHaveBeenCalledWith(
       "/w",

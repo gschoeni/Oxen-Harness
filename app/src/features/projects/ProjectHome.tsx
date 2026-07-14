@@ -19,11 +19,31 @@ export function ProjectHome({
   const prepareProject = useStore((state) => state.prepareProject);
   const send = useStore((state) => state.send);
   const [prompt, setPrompt] = useState("");
-  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(project.name);
+  const [goal, setGoal] = useState(project.description);
+  const [savingDetails, setSavingDetails] = useState(false);
+  const [editingInstructions, setEditingInstructions] = useState(false);
   const [busyContext, setBusyContext] = useState(false);
   const [startingChat, setStartingChat] = useState(false);
   const [chatError, setChatError] = useState("");
   const [startupModel, setStartupModel] = useState<StartupModelChoice | null>(null);
+  const cleanName = name.trim();
+  const cleanGoal = goal.trim();
+  const detailsChanged = cleanName !== project.name || cleanGoal !== project.description;
+
+  async function saveDetails() {
+    if (!cleanName || !detailsChanged || savingDetails) return;
+    setSavingDetails(true);
+    try {
+      await onProjectChanged(
+        await updateProject(project.path, cleanName, cleanGoal, project.instructions),
+      );
+      setName(cleanName);
+      setGoal(cleanGoal);
+    } finally {
+      setSavingDetails(false);
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -67,12 +87,36 @@ export function ProjectHome({
       <header className="project-home-header">
         <button className="project-breadcrumb" onClick={onBack}><ArrowLeft size={15} /> Projects</button>
         <div className="project-home-heading">
-          <div>
-            <h1>{project.name}</h1>
-            <p>{project.description || "Add a goal so every chat starts with a shared destination."}</p>
-            <span className="project-home-path"><FolderOpen size={13} /> {project.path}</span>
+          <div className="project-home-identity">
+            <h1 aria-label={cleanName || "Untitled project"}>
+              <input
+                aria-label="Project name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                spellCheck={false}
+              />
+            </h1>
+            <textarea
+              className="project-home-goal"
+              aria-label="Project goal"
+              value={goal}
+              onChange={(event) => setGoal(event.target.value)}
+              placeholder="Add a goal so every chat starts with a shared destination."
+              rows={2}
+            />
+            <div className="project-home-meta">
+              <span className="project-home-path"><FolderOpen size={13} /> {project.path}</span>
+              {detailsChanged && (
+                <Button
+                  variant="primary"
+                  disabled={!cleanName || savingDetails}
+                  onClick={() => void saveDetails()}
+                >
+                  {savingDetails ? "Saving…" : "Save project details"}
+                </Button>
+              )}
+            </div>
           </div>
-          <Button onClick={() => setEditing(true)} aria-label="Edit project"><Pencil size={15} /> Edit project</Button>
         </div>
       </header>
 
@@ -117,7 +161,7 @@ export function ProjectHome({
           <section className="project-context-card">
             <div className="project-context-card-header">
               <div><h2>Instructions</h2><p>Durable guidance for every new chat.</p></div>
-              <IconButton aria-label="Edit project instructions" onClick={() => setEditing(true)}><Pencil size={16} /></IconButton>
+              <IconButton aria-label="Edit project instructions" onClick={() => setEditingInstructions(true)}><Pencil size={16} /></IconButton>
             </div>
             <div className={project.instructions ? "project-instructions" : "project-instructions empty"}>
               {project.instructions || "No special instructions yet."}
@@ -148,13 +192,15 @@ export function ProjectHome({
         </aside>
       </div>
 
-      {editing && (
-        <EditProjectModal
-          project={project}
-          onClose={() => setEditing(false)}
-          onSave={async (name, description, instructions) => {
-            await onProjectChanged(await updateProject(project.path, name, description, instructions));
-            setEditing(false);
+      {editingInstructions && (
+        <EditInstructionsModal
+          instructions={project.instructions}
+          onClose={() => setEditingInstructions(false)}
+          onSave={async (instructions) => {
+            await onProjectChanged(
+              await updateProject(project.path, project.name, project.description, instructions),
+            );
+            setEditingInstructions(false);
           }}
         />
       )}
@@ -162,33 +208,29 @@ export function ProjectHome({
   );
 }
 
-function EditProjectModal({
-  project,
+function EditInstructionsModal({
+  instructions: initialInstructions,
   onClose,
   onSave,
 }: {
-  project: Project;
+  instructions: string;
   onClose: () => void;
-  onSave: (name: string, description: string, instructions: string) => Promise<void>;
+  onSave: (instructions: string) => Promise<void>;
 }) {
-  const [name, setName] = useState(project.name);
-  const [description, setDescription] = useState(project.description);
-  const [instructions, setInstructions] = useState(project.instructions);
+  const [instructions, setInstructions] = useState(initialInstructions);
   const [saving, setSaving] = useState(false);
 
   return (
-    <Modal title="Edit project" onClose={onClose} wide>
+    <Modal title="Edit instructions" onClose={onClose} wide>
       <div className="start-project-form">
-        <label className="project-field"><span>Project name</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
-        <label className="project-field"><span>Project goal</span><textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
         <label className="project-field"><span>Project instructions</span><textarea rows={7} value={instructions} onChange={(event) => setInstructions(event.target.value)} /></label>
-        <small className="project-field-hint">The next prompt starts a fresh chat with this updated guidance.</small>
+        <small className="project-field-hint">These instructions are included in every new chat for this project.</small>
         <div className="project-form-actions">
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!name.trim() || saving} onClick={async () => {
+          <Button variant="primary" disabled={saving} onClick={async () => {
             setSaving(true);
-            try { await onSave(name.trim(), description.trim(), instructions.trim()); } finally { setSaving(false); }
-          }}>{saving ? "Saving…" : "Save changes"}</Button>
+            try { await onSave(instructions.trim()); } finally { setSaving(false); }
+          }}>{saving ? "Saving…" : "Save instructions"}</Button>
         </div>
       </div>
     </Modal>

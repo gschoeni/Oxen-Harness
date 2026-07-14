@@ -30,7 +30,7 @@
 > Build order note: independent crates (tools, store) were built before the LLM
 > client to keep each phase fast to verify. The agent loop lives in its own
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
-> **649 Rust tests + 228 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
+> **649 Rust tests + 229 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
 
 ## Phase 16 — Durable projects
 
@@ -46,9 +46,9 @@
 - [x] Copy text/PDF/image references content-addressed into
       `.oxen-harness/context/`, with add/remove/deduplication behavior.
 - [x] Add a model-selectable project getting-started/settings page with editable
-      Instructions and Context cards. New projects land there; established
-      projects resume their newest chat and expose the page from a files button
-      in the chat titlebar.
+      inline name/goal plus Instructions and Context cards. New projects land
+      there; established projects resume their newest chat and expose the page
+      from a files button in the chat titlebar.
 - [x] Feed goals/instructions/context manifests into both desktop and CLI agent
       prompts; attach durable PDF/image context to the first prompt of new chats.
 
