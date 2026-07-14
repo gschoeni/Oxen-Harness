@@ -55,12 +55,15 @@ export function StartProjectModal({
 
   async function makeDefault() {
     if (!directory || savingDefault) return;
+    const requestedDirectory = directory;
     setSavingDefault(true);
     setError("");
     try {
-      const canonical = await setDefaultProjectLocation(directory);
+      const canonical = await setDefaultProjectLocation(requestedDirectory);
       setDefaultDirectory(canonical);
-      setDirectory(canonical);
+      setDirectory((current) => (
+        modeRef.current === "new" && current === requestedDirectory ? canonical : current
+      ));
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -69,7 +72,7 @@ export function StartProjectModal({
   }
 
   async function submit() {
-    if (!name.trim() || !directory) return;
+    if (!name.trim() || !directory || savingDefault) return;
     setSaving(true);
     setError("");
     try {
@@ -137,7 +140,7 @@ export function StartProjectModal({
         {error && <div className="project-form-error" role="alert">{error}</div>}
         <div className="project-form-actions">
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!name.trim() || !directory || saving} onClick={() => void submit()}>
+          <Button variant="primary" disabled={!name.trim() || !directory || saving || savingDefault} onClick={() => void submit()}>
             {saving ? "Creating…" : "Create project"}
           </Button>
         </div>

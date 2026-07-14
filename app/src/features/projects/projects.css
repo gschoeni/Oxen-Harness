@@ -308,7 +308,8 @@
 }
 .project-composer textarea::placeholder { color: var(--text-tertiary); }
 .project-composer-footer { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--separator); color: var(--text-tertiary); font-size: var(--text-xs); }
-.project-composer-footer > span { display: flex; align-items: center; gap: var(--space-2); }
+.project-composer-options { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.project-composer-options > span { display: flex; align-items: center; gap: var(--space-2); }
 .project-send { color: var(--on-accent); background: var(--accent); border-radius: var(--radius-pill); }
 .project-send:hover { color: var(--on-accent); background: var(--accent-hover); }
 .project-home-empty { min-height: 270px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); color: var(--text-tertiary); text-align: center; }

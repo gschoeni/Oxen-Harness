@@ -22,6 +22,7 @@ import {
   cancelTurn,
   configureOxenKey,
   sessionInfo,
+  selectCloudModelForNewChats,
   setActiveProject,
   setCompressionMode,
   setModel,
@@ -66,6 +67,7 @@ import type {
   SessionInfo,
   SessionSummary,
   SettingsPage,
+  StartupModelChoice,
   Theme,
   ToolEvent,
   ToolDeltaEvent,
@@ -294,7 +296,7 @@ interface AppState {
   /** Make project-scoped surfaces point at a project without creating a chat. */
   selectProject: (path: string) => Promise<void>;
   /** Prepare a known project and fresh chat while keeping its home visible. */
-  prepareProject: (path: string) => Promise<void>;
+  prepareProject: (path: string, model?: StartupModelChoice) => Promise<void>;
   /** Switch to a known project and enter its fresh chat. */
   enterProject: (path: string) => Promise<void>;
   /** Adopt a fresh session created by a model/connection switch as the current
@@ -703,9 +705,14 @@ export const useStore = create<AppState>((set, get) => {
       await get().refreshHistory();
     },
 
-    prepareProject: async (path) => {
+    prepareProject: async (path, model) => {
       await setActiveProject(path);
-      await get().startNewSession();
+      if (model?.local) {
+        await get().switchToLocalModel(model.id);
+      } else {
+        if (model) await selectCloudModelForNewChats(model.id);
+        await get().startNewSession();
+      }
     },
 
     enterProject: async (path) => {

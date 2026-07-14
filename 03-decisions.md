@@ -39,9 +39,10 @@ of a new chat. Both desktop and CLI compose this same project section into the
 agent prompt.
 
 The desktop opens a project home before chat, making its instructions/context
-visible and editable. The next project-home prompt starts a fresh chat so the
-persisted transcript's original system prompt stays truthful rather than being
-silently mutated. Existing folder-only projects need no migration file:
+visible and editable and letting the user stage the cloud or local model for
+the new chat. The next project-home prompt starts a fresh chat so the persisted
+transcript's original system prompt stays truthful rather than being silently
+mutated. Existing folder-only projects need no migration file:
 their directory basename is the default name and the new fields are empty.
 
 *Why:* the working directory controls execution, but it does not communicate

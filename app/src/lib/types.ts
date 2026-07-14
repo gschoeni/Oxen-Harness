@@ -95,6 +95,13 @@ export interface StartProjectInput {
   createDirectory: boolean;
 }
 
+/** A model staged for the fresh chat started from a project home. */
+export interface StartupModelChoice {
+  id: string;
+  label: string;
+  local: boolean;
+}
+
 // ---- connection settings ---------------------------------------------------
 
 export interface ConnectionView {

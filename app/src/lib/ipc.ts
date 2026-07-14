@@ -165,6 +165,9 @@ export const listProjects = () => invoke<Project[]>("list_projects");
 export const openProject = (path: string) => invoke<Project>("open_project", { path });
 /** Switch the active project to an already-known directory. */
 export const setActiveProject = (path: string) => invoke<void>("set_active_project", { path });
+/** Select a cloud model for future chats without mutating the chat currently on screen. */
+export const selectCloudModelForNewChats = (model: string) =>
+  invoke<void>("select_cloud_model_for_new_chats", { model });
 export const startProject = (input: StartProjectInput) => invoke<Project>("start_project", { ...input });
 export const getDefaultProjectLocation = () => invoke<string | null>("get_default_project_location");
 export const setDefaultProjectLocation = (path: string) =>

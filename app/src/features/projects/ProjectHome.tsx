@@ -3,7 +3,8 @@ import { ArrowLeft, FileImage, FileText, FolderOpen, MessageSquare, Paperclip, P
 import { Button, IconButton, Modal } from "../../components/ui";
 import { addProjectContext, pickProjectContext, removeProjectContext, updateProject } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
-import type { Project, ProjectContext } from "../../lib/types";
+import type { Project, ProjectContext, StartupModelChoice } from "../../lib/types";
+import { ModelPicker } from "../chat/ModelPicker";
 
 export function ProjectHome({
   project,
@@ -22,6 +23,7 @@ export function ProjectHome({
   const [busyContext, setBusyContext] = useState(false);
   const [startingChat, setStartingChat] = useState(false);
   const [chatError, setChatError] = useState("");
+  const [startupModel, setStartupModel] = useState<StartupModelChoice | null>(null);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -30,7 +32,7 @@ export function ProjectHome({
     setStartingChat(true);
     setChatError("");
     try {
-      await prepareProject(project.path);
+      await prepareProject(project.path, startupModel ?? undefined);
       setProjectsOpen(false);
       send(text);
     } catch (reason) {
@@ -91,7 +93,14 @@ export function ProjectHome({
               }}
             />
             <div className="project-composer-footer">
-              <span><MessageSquare size={15} /> A fresh chat with this project’s context</span>
+              <div className="project-composer-options">
+                <ModelPicker
+                  disabled={startingChat}
+                  startupChoice={startupModel}
+                  onStartupChoice={setStartupModel}
+                />
+                <span><MessageSquare size={15} /> A fresh chat with this project’s context</span>
+              </div>
               <IconButton type="submit" className="project-send" aria-label="Send project prompt" disabled={!prompt.trim() || startingChat}>
                 <Send size={17} />
               </IconButton>

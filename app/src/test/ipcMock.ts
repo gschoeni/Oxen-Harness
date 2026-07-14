@@ -279,6 +279,7 @@ export const removeProjectContext = vi.fn(async (path: string): Promise<Project>
   path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true,
 }));
 export const setActiveProject = vi.fn(async () => {});
+export const selectCloudModelForNewChats = vi.fn(async () => {});
 export const getDefaultProjectLocation = vi.fn(async () => null as string | null);
 export const setDefaultProjectLocation = vi.fn(async (path: string) => path);
 export const pickFolder = vi.fn(async () => null as string | null);
@@ -408,6 +409,7 @@ export function resetIpc() {
     path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true,
   }));
   setActiveProject.mockReset().mockResolvedValue(undefined);
+  selectCloudModelForNewChats.mockReset().mockResolvedValue(undefined);
   getDefaultProjectLocation.mockReset().mockResolvedValue(null);
   setDefaultProjectLocation.mockReset().mockImplementation(async (path: string) => path);
   pickFolder.mockReset().mockResolvedValue(null);

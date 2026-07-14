@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -111,6 +111,24 @@ describe("ProjectsPage", () => {
     expect(await screen.findByText("Default project location")).toBeInTheDocument();
   });
 
+  it("does not race project creation or replace an existing-folder choice while saving a default", async () => {
+    let finishSaving!: (path: string) => void;
+    ipc.pickProjectParent.mockResolvedValueOnce("/work/Projects");
+    ipc.setDefaultProjectLocation.mockImplementationOnce(() => new Promise((resolve) => { finishSaving = resolve; }));
+    render(<ProjectsPage />);
+
+    await userEvent.click(screen.getByRole("button", { name: /start a project/i }));
+    await userEvent.type(screen.getByLabelText("Project name"), "Demo App");
+    await userEvent.click(screen.getByRole("button", { name: /choose project folder/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Use as default" }));
+    expect(screen.getByRole("button", { name: "Create project" })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: /use existing folder/i }));
+    await act(async () => { finishSaving("/work/Projects"); });
+
+    expect(screen.getByText("Choose the project folder…")).toBeInTheDocument();
+  });
+
   it("edits project guidance without creating a throwaway chat", async () => {
     render(<ProjectsPage />);
     await userEvent.click(screen.getByText("Writer"));
@@ -166,6 +184,50 @@ describe("ProjectsPage", () => {
       kind: "user",
       text: "Build the landing page",
     });
+  });
+
+  it("starts a project chat with the cloud model selected in its composer", async () => {
+    useStore.setState({
+      session: { ...ipc.sampleSession, session_id: "s1", workspace: "/w" },
+      cloudModels: ipc.sampleCloudModels,
+    });
+    render(<ProjectsPage />);
+    await userEvent.click(screen.getByText("Writer"));
+    await screen.findByRole("heading", { name: "Writer" });
+
+    await userEvent.click(screen.getByRole("button", { name: /claude opus 4\.8/i }));
+    await userEvent.click(screen.getByText("Claude Sonnet 4.6"));
+    await userEvent.type(screen.getByLabelText("Ask about this project"), "Build the landing page");
+    await userEvent.click(screen.getByRole("button", { name: "Send project prompt" }));
+
+    await waitFor(() => expect(ipc.newSession).toHaveBeenCalledOnce());
+    expect(ipc.selectCloudModelForNewChats).toHaveBeenCalledWith("claude-sonnet-4-6");
+    expect(ipc.setModel).not.toHaveBeenCalled();
+  });
+
+  it("uses a selected local model as the project chat's fresh session", async () => {
+    useStore.setState({
+      session: { ...ipc.sampleSession, session_id: "s1", workspace: "/w" },
+      cloudModels: ipc.sampleCloudModels,
+    });
+    ipc.useLocalModel.mockResolvedValueOnce({
+      ...ipc.sampleSession,
+      model: "qwen3-8b-q4-k-m",
+      session_id: "local-project-session",
+      workspace: "/w",
+    });
+    render(<ProjectsPage />);
+    await userEvent.click(screen.getByText("Writer"));
+    await screen.findByRole("heading", { name: "Writer" });
+
+    await userEvent.click(screen.getByRole("button", { name: /claude opus 4\.8/i }));
+    await userEvent.click(await screen.findByText("Qwen3 8B · Q4_K_M"));
+    await userEvent.type(screen.getByLabelText("Ask about this project"), "Build the landing page");
+    await userEvent.click(screen.getByRole("button", { name: "Send project prompt" }));
+
+    await waitFor(() => expect(ipc.useLocalModel).toHaveBeenCalledWith("qwen3-8b-q4-k-m"));
+    expect(ipc.newSession).not.toHaveBeenCalled();
+    expect(ipc.selectCloudModelForNewChats).not.toHaveBeenCalled();
   });
 
   it("keeps project home open when a fresh chat cannot be created", async () => {

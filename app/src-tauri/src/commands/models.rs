@@ -496,3 +496,20 @@ pub(crate) async fn set_model(
     }
     Ok(info_for(&agent))
 }
+
+/// Select the cloud model used by future chats without changing any live chat.
+#[tauri::command]
+pub(crate) async fn select_cloud_model_for_new_chats(
+    state: State<'_, AppState>,
+    model: String,
+) -> Result<(), String> {
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return Err("model id cannot be empty".into());
+    }
+    harness_runtime::models::set_selected(&model).map_err(|error| error.to_string())?;
+    *state.cloud_model.lock().await = model;
+    *state.local_server.lock().await = None;
+    *state.local_model.lock().await = None;
+    Ok(())
+}

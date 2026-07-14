@@ -148,6 +148,7 @@ pub fn run() {
             commands::models::add_cloud_model,
             commands::models::remove_cloud_model,
             commands::models::set_model,
+            commands::models::select_cloud_model_for_new_chats,
             commands::turn::answer_question,
             commands::theme::list_themes,
             commands::theme::active_theme,

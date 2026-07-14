@@ -52,8 +52,8 @@ toolchain.
     fine-tuning export.
 - `src/` — the frontend: **React 19 + TypeScript**, bundled by **Vite** (which
   gives hot-module reload in `tauri dev`). **Projects** is the navigation root:
-  choose a project to open its home (context-aware composer plus editable
-  Instructions and Context cards), then work within its scoped sidebar of
+  choose a project to open its home (model-selectable, context-aware composer
+  plus editable Instructions and Context cards), then work within its scoped sidebar of
   **＋ New chat** and that project's history. The project sidebar leads back to Projects, and
   Settings leads back to the active project from its upper-left rail rather
   than a top-right close action. Settings is a
