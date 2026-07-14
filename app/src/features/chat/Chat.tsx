@@ -45,10 +45,9 @@ export function Chat() {
   const stop = useStore((s) => s.stop);
   const setQueue = useStore((s) => s.setQueue);
   const openInspector = useStore((s) => s.openInspector);
-  const workspace = useStore((s) => s.session?.workspace ?? null);
-  const hasProject = useStore((s) => {
+  const projectPath = useStore((s) => {
     const path = s.session?.workspace;
-    return !!path && s.projects.some((project) => project.path === path);
+    return path && s.projects.some((project) => project.path === path) ? path : null;
   });
   const openProjectHome = useStore((s) => s.openProjectHome);
   // The floating game dock lets you play a round while a turn streams, so a long
@@ -155,10 +154,10 @@ export function Chat() {
   return (
     <main className="chat">
       <div className="chat-titlebar" data-tauri-drag-region>
-        {workspace && hasProject && (
+        {projectPath && (
           <button
             className="dev-view-btn"
-            onClick={() => openProjectHome(workspace)}
+            onClick={() => openProjectHome(projectPath)}
             title="Open this project's getting started, instructions, and files"
             aria-label="Project files and settings"
           >

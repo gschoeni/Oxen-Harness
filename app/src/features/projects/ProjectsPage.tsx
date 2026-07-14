@@ -35,14 +35,13 @@ export function ProjectsPage() {
   }, [sessions, runStatus]);
 
   async function openProject(project: Project) {
-    if (project.session_count > 0) {
-      // History is returned newest-first by the durable session store.
-      const latest = sessions.find((session) => session.workspace === project.path);
-      if (latest) {
-        await resume(latest.id);
-        setProjectsOpen(false);
-        return;
-      }
+    // History is returned newest-first by the durable session store. Use it
+    // directly so navigation cannot drift from a separately derived count.
+    const latest = sessions.find((session) => session.workspace === project.path);
+    if (latest) {
+      await resume(latest.id);
+      setProjectsOpen(false);
+      return;
     }
     setSelected(project);
     await selectProject(project.path);

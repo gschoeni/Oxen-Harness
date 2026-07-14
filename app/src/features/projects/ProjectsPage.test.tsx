@@ -10,8 +10,10 @@ import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
 import type { Project, SessionSummary } from "../../lib/types";
 
+const writerSession: SessionSummary = {
+  id: "s1", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "",
+};
 const sessions: SessionSummary[] = [
-  { id: "s1", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "" },
   { id: "e1", workspace: "/elsewhere", model: "m", created_at: 1_700_000_000, title: "Elsewhere chat", message_count: 1, review_status: "" },
 ];
 const projects: Project[] = [
@@ -47,10 +49,10 @@ describe("ProjectsPage", () => {
   });
 
   it("resumes the newest chat when an established project is selected", async () => {
-    const latest = { ...sessions[0], id: "latest", created_at: 1_800_000_000, title: "Latest chat" };
+    const latest = { ...writerSession, id: "latest", created_at: 1_800_000_000, title: "Latest chat" };
     useStore.setState({
       projects: [{ ...projects[0], session_count: 2 }, projects[1]],
-      sessions: [latest, ...sessions],
+      sessions: [latest, writerSession, ...sessions],
     });
     ipc.resumeSession.mockResolvedValueOnce({
       info: { ...ipc.sampleSession, session_id: "latest", workspace: "/w" },
@@ -82,6 +84,7 @@ describe("ProjectsPage", () => {
   it("opens an established project's files and settings when explicitly targeted", () => {
     useStore.setState({
       projects: [{ ...projects[0], session_count: 1 }, projects[1]],
+      sessions: [writerSession, ...sessions],
       projectHomePath: "/w",
     });
 
