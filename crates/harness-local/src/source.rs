@@ -12,20 +12,33 @@ use serde::{Deserialize, Serialize};
 
 use crate::LocalError;
 
-/// Known GGUF quantization tokens, longest-first so `Q4_K_M` matches before `Q4`.
+/// Canonical GGUF quantization tokens understood by the sizing and display code.
 const KNOWN_QUANTS: &[&str] = &[
     "IQ2_XXS", "IQ3_XXS", "Q2_G64", "PQ2_0", "IQ4_XS", "IQ4_NL", "IQ2_XS", "IQ3_XS", "IQ3_M",
     "IQ3_S", "IQ2_M", "Q3_K_L", "Q3_K_M", "Q3_K_S", "Q4_K_M", "Q4_K_S", "Q5_K_M", "Q5_K_S", "Q1_0",
     "Q2_0", "Q2_K", "Q6_K", "Q4_0", "Q4_1", "Q5_0", "Q5_1", "Q8_0", "BF16", "F16", "F32",
 ];
 
+/// Published filename spellings that normalize to a canonical quant name.
+const QUANT_ALIASES: &[(&str, &str)] = &[("Q2_0_G64", "Q2_G64")];
+
 /// Best-effort: extract the quant token from a GGUF filename (e.g.
 /// `Qwen3-8B-Q4_K_M.gguf` → `Q4_K_M`). Returns the longest known token present.
 pub fn parse_quant(file: &str) -> Option<String> {
     let upper = file.to_ascii_uppercase();
+
+    if let Some((_, canonical)) = QUANT_ALIASES
+        .iter()
+        .filter(|(pattern, _)| upper.contains(pattern))
+        .max_by_key(|(pattern, _)| pattern.len())
+    {
+        return Some((*canonical).to_string());
+    }
+
     KNOWN_QUANTS
         .iter()
-        .find(|q| upper.contains(*q))
+        .filter(|q| upper.contains(*q))
+        .max_by_key(|q| q.len())
         .map(|q| q.to_string())
 }
 
@@ -750,10 +763,16 @@ mod tests {
         );
         assert_eq!(parse_quant("model-Q8_0.gguf").as_deref(), Some("Q8_0"));
         assert_eq!(parse_quant("model-IQ4_XS.gguf").as_deref(), Some("IQ4_XS"));
+        assert_eq!(parse_quant("model-PQ2_0.gguf").as_deref(), Some("PQ2_0"));
         assert_eq!(parse_quant("Bonsai-27B-Q1_0.gguf").as_deref(), Some("Q1_0"));
         assert_eq!(
             parse_quant("Ternary-Bonsai-27B-Q2_g64.gguf").as_deref(),
             Some("Q2_G64")
+        );
+        assert_eq!(
+            parse_quant("Ternary-Bonsai-8B-Q2_0_g64.gguf").as_deref(),
+            Some("Q2_G64"),
+            "the alternate group-64 spelling must not collapse into Q2_0"
         );
         assert_eq!(parse_quant("model.gguf"), None);
     }

@@ -47,7 +47,7 @@ compression, and transient-failure retry), self-verifying loops with
 conditional gates, a configurable code-review pipeline, a parallel-subagent
 fleet (`spawn_agents` from any turn + `/code-review` fan-out, with live lanes
 in both front ends), themes, local models, skills/custom tools, and both front
-ends (CLI + Tauri desktop app) are built and tested — 651 Rust tests + 230
+ends (CLI + Tauri desktop app) are built and tested — 652 Rust tests + 230
 frontend tests passing, CI green on push. See `02-status.md` for the full
 ledger.
 

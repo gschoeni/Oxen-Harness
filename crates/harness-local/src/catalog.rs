@@ -147,14 +147,16 @@ pub fn find(id: &str) -> Option<ModelSpec> {
 /// Standard sibling quants for entries that opt into filename derivation,
 /// largest (best quality) first. The built-in bartowski Qwen3 repos publish all
 /// of these; native and one-off formats leave `derive_quants` disabled.
-const CURATED_QUANTS: &[&str] = &["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "Q3_K_M"];
+const DERIVED_QUANTS: &[&str] = &["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "Q3_K_M"];
 
-/// The installable [`ModelRef`](crate::source::ModelRef)s for a catalog model — one per quant, with
-/// filenames derived from the spec's published file and sizes scaled by
-/// bits-per-weight. Largest-first so quant auto-pick takes the best that fits.
+/// The installable [`ModelRef`](crate::source::ModelRef)s for a catalog model —
+/// one per quant, with filenames derived from the spec's published file and
+/// sizes scaled by bits-per-weight. Largest-first so quant auto-pick takes the
+/// best that fits.
 ///
-/// A spec whose filename doesn't carry its quant token (so sibling quants can't
-/// be derived) gets exactly one ref: the file it names.
+/// Exact-file mode is the safe default. Siblings are derived only when the spec
+/// opts in, its filename carries the quant token, and that quant has sizing
+/// metadata.
 pub fn quant_refs(spec: &ModelSpec) -> Vec<crate::source::ModelRef> {
     use crate::fit;
     use crate::source::{slug, ModelRef, Origin};
@@ -177,19 +179,21 @@ pub fn quant_refs(spec: &ModelSpec) -> Vec<crate::source::ModelRef> {
         },
     };
 
-    // Without a quant token in the filename there's nothing to derive siblings
-    // from — offer the one file the spec names.
+    // Offer only the published file unless sibling derivation is explicitly
+    // enabled and the filename has a safely replaceable quant token.
     if !spec.derive_quants || spec.quant.is_empty() || !spec.file.contains(&spec.quant) {
         return vec![make_ref(&spec.quant, spec.file.clone(), spec.approx_bytes)];
     }
 
-    let ref_bpw = fit::QUANTS
+    let Some(ref_bpw) = fit::QUANTS
         .iter()
         .find(|q| q.name == spec.quant)
         .map(|q| q.bits_per_weight)
-        .unwrap_or(4.9);
+    else {
+        return vec![make_ref(&spec.quant, spec.file.clone(), spec.approx_bytes)];
+    };
 
-    CURATED_QUANTS
+    DERIVED_QUANTS
         .iter()
         .filter_map(|&name| {
             let bpw = fit::QUANTS.iter().find(|q| q.name == name)?.bits_per_weight;
@@ -229,6 +233,20 @@ mod tests {
             assert!(m.approx_bytes > 0);
             assert!(!m.display.is_empty());
             assert!(!m.quant.is_empty());
+            if m.derive_quants {
+                assert!(
+                    m.file.contains(&m.quant),
+                    "{} opts into quant derivation, but its file lacks {}",
+                    m.id,
+                    m.quant
+                );
+                assert!(
+                    crate::fit::QUANTS.iter().any(|q| q.name == m.quant),
+                    "{} derives siblings from unsized quant {}",
+                    m.id,
+                    m.quant
+                );
+            }
         }
     }
 
@@ -291,14 +309,14 @@ mod tests {
     }
 
     #[test]
-    fn curated_quants_all_have_a_bits_per_weight_in_fit() {
+    fn derived_quants_all_have_a_bits_per_weight_in_fit() {
         // quant_refs() sizes each offered quant by looking it up in fit::QUANTS;
-        // a curated quant missing there would be silently dropped. Guard the
+        // a derived quant missing there would be silently dropped. Guard the
         // invariant so renaming a quant fails loudly here instead.
-        for name in CURATED_QUANTS {
+        for name in DERIVED_QUANTS {
             assert!(
                 crate::fit::QUANTS.iter().any(|q| &q.name == name),
-                "CURATED_QUANTS has `{name}`, absent from fit::QUANTS"
+                "DERIVED_QUANTS has `{name}`, absent from fit::QUANTS"
             );
         }
     }
@@ -308,7 +326,7 @@ mod tests {
         with_temp_harness_dir(|| {
             let spec = find("qwen3-8b").unwrap();
             let refs = quant_refs(&spec);
-            assert_eq!(refs.len(), CURATED_QUANTS.len());
+            assert_eq!(refs.len(), DERIVED_QUANTS.len());
             // Largest-first, and the published quant keeps its exact size.
             assert_eq!(refs[0].quant, "Q8_0");
             let published = refs.iter().find(|r| r.quant == spec.quant).unwrap();
@@ -365,6 +383,27 @@ mod tests {
             }
             other => panic!("unexpected origin {other:?}"),
         }
+    }
+
+    #[test]
+    fn quant_refs_do_not_derive_from_an_unsized_quant() {
+        let spec = ModelSpec {
+            id: "experimental".into(),
+            display: "Experimental".into(),
+            params: "7B".into(),
+            repo: "me/experimental".into(),
+            file: "experimental-NATIVE_1.gguf".into(),
+            quant: "NATIVE_1".into(),
+            approx_bytes: 42,
+            context: 0,
+            derive_quants: true,
+            note: String::new(),
+        };
+
+        let refs = quant_refs(&spec);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].quant, "NATIVE_1");
+        assert_eq!(refs[0].size_bytes, 42);
     }
 
     #[test]
