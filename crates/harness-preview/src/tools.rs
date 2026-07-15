@@ -14,6 +14,7 @@ use harness_tools::{ToolError, TypedTool};
 use serde::Deserialize;
 
 use crate::config::{self, SavedServer};
+use crate::manager::StartOutcome;
 use crate::server::{PreviewSink, ServerSpec, DEFAULT_READY_TIMEOUT};
 use crate::DevServerManager;
 
@@ -134,6 +135,10 @@ pub struct StartDevServerArgs {
     /// How long to wait for the server to accept connections, in milliseconds
     /// (default 90000).
     pub wait_timeout_ms: Option<u64>,
+    /// Force stopping and relaunching even when this exact command is already
+    /// running (use after changing server config or environment). Default
+    /// false: a running matching server is reused as-is.
+    pub restart: Option<bool>,
 }
 
 #[async_trait]
@@ -146,11 +151,13 @@ impl TypedTool for StartDevServerTool {
          wait until it is reachable, then show the running app to the user in a \
          live preview panel. Use this — never `run_shell` — for anything \
          long-running that serves HTTP (vite, next, python http.server, …). \
-         Call it as soon as there is something to look at, and again to restart \
-         after changing server config. Each call replaces the session's \
-         previous server. Returns the URL; the server keeps running in the \
-         background (check output with dev_server_logs, stop with \
-         stop_dev_server)."
+         Idempotent: if this command is already running (here or started by \
+         another chat in this project), the running server is reused and its \
+         URL returned — code edits are already live on it, so never start a \
+         second copy. Pass restart: true only when the server itself must \
+         relaunch (changed server config/env/command). Returns the URL; the \
+         server keeps running in the background (check output with \
+         dev_server_logs, stop with stop_dev_server)."
     }
 
     async fn run(&self, args: StartDevServerArgs) -> Result<String, ToolError> {
@@ -179,19 +186,21 @@ impl TypedTool for StartDevServerTool {
             auto_port: args.port.is_none(),
         };
 
-        // Starting replaces (and first stops) any server this session had, so
-        // say so on failure — otherwise the model reports "it's still running"
-        // when nothing is.
+        // A forced restart replaces (and first stops) any server this session
+        // had, so say so on failure — otherwise the model reports "it's still
+        // running" when nothing is.
+        let restart = args.restart.unwrap_or(false);
         let replaced = self.ctx.manager.get(&self.ctx.session).is_some();
-        let server = self
+        let outcome = self
             .ctx
             .manager
-            .start(
+            .start_or_reuse(
                 &self.ctx.session,
                 spec,
                 &self.ctx.root,
                 self.ctx.sink.clone(),
                 timeout,
+                restart,
             )
             .await
             .map_err(|e| {
@@ -202,8 +211,10 @@ impl TypedTool for StartDevServerTool {
                 })
             })?;
 
+        let server = outcome.server().clone();
         let status = server.status();
         let url = status.url.clone().unwrap_or_default();
+        let port = status.port.unwrap_or_default();
         // Remember the working spec so future sessions can one-click start it.
         let _ = config::remember(
             &self.ctx.root,
@@ -215,13 +226,29 @@ impl TypedTool for StartDevServerTool {
             },
         );
 
-        let mut message = format!(
-            "Dev server \"{}\" is running at {url} (port {}). It keeps running \
-             across turns — do NOT start it again unless it stopped or its \
-             command changed.",
-            status.name,
-            status.port.unwrap_or_default(),
-        );
+        // Word the result by what actually happened: "already running" must
+        // never read as "freshly started", or the model re-starts on a hunch.
+        let mut message = match &outcome {
+            StartOutcome::Reused(_) => format!(
+                "Dev server \"{}\" was ALREADY running at {url} (port {port}) — reused it; \
+                 nothing was restarted. Your code edits are already served (hot reload / \
+                 auto-refresh). Only pass restart: true if the server command, config, or \
+                 environment changed.",
+                status.name,
+            ),
+            StartOutcome::Adopted { .. } => format!(
+                "Adopted the dev server already running for this project (started by another \
+                 chat): \"{}\" at {url} (port {port}). It now belongs to this session — reuse \
+                 this URL; do NOT start another copy.",
+                status.name,
+            ),
+            StartOutcome::Started(_) => format!(
+                "Dev server \"{}\" is running at {url} (port {port}). It keeps running \
+                 across turns — do NOT start it again unless it stopped or its \
+                 command changed.",
+                status.name,
+            ),
+        };
         if let Some(hint) = &self.verify_hint {
             message.push(' ');
             message.push_str(hint);
@@ -559,7 +586,50 @@ mod tests {
         // The whole trio is resent on every model call; keep the schemas tiny.
         let schema = harness_tools::schema_for::<StartDevServerArgs>();
         let props = schema["properties"].as_object().unwrap();
-        assert_eq!(props.len(), 4);
+        assert_eq!(props.len(), 5);
         assert_eq!(schema["required"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn starting_the_same_command_again_reuses_the_running_server() {
+        let Some(py) = python3() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let (start, _stop, _logs) = session_tools(
+            DevServerManager::new(),
+            "s1",
+            dir.path(),
+            RecordingSink::new(),
+        );
+        let command = format!("{py} -m http.server \"$PORT\" --bind 127.0.0.1");
+
+        let first = start
+            .invoke(serde_json::json!({ "command": command }))
+            .await
+            .unwrap();
+        let port = |msg: &str| {
+            msg.split("(port ")
+                .nth(1)
+                .and_then(|s| s.split(')').next())
+                .unwrap()
+                .to_string()
+        };
+        let first_port = port(&first);
+
+        // A repeat call must hand back the same server — same port, and a
+        // result that says "already running", not "started".
+        let second = start
+            .invoke(serde_json::json!({ "command": command }))
+            .await
+            .unwrap();
+        assert!(second.contains("ALREADY running"), "second: {second}");
+        assert_eq!(port(&second), first_port, "port must not churn on reuse");
+
+        // restart: true is the explicit relaunch escape hatch.
+        let third = start
+            .invoke(serde_json::json!({ "command": command, "restart": true }))
+            .await
+            .unwrap();
+        assert!(third.contains("is running at"), "third: {third}");
+        assert!(!third.contains("ALREADY"), "third: {third}");
     }
 }

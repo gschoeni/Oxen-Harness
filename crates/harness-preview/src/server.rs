@@ -93,7 +93,11 @@ pub struct DevServer {
     child: Mutex<Option<Child>>,
     logs: Arc<Mutex<VecDeque<String>>>,
     state: RwLock<State>,
-    sink: Arc<dyn PreviewSink>,
+    /// Where lifecycle changes are reported. Swappable ([`Self::replace_sink`])
+    /// because a server can be *adopted* by another session (a second chat in
+    /// the same project reuses the running server instead of duplicating it),
+    /// and from then on its events belong to the adopting session's UI.
+    sink: RwLock<Arc<dyn PreviewSink>>,
     /// Reload-on-change watcher for servers without their own hot reload
     /// (see [`crate::watch`]); dropping it ends the watch.
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
@@ -179,7 +183,7 @@ impl DevServer {
                 url: None,
                 message: None,
             }),
-            sink,
+            sink: RwLock::new(sink),
             watcher: Mutex::new(None),
             group_killed: std::sync::atomic::AtomicBool::new(false),
         });
@@ -241,8 +245,14 @@ impl DevServer {
                     // else gets a workspace watch that reloads the preview
                     // after each edit batch.
                     if !crate::watch::hmr_capable(&server.root, &server.spec.command) {
-                        let sink = server.sink.clone();
-                        match crate::watch::spawn(&server.root, move || sink.reload_needed()) {
+                        // Resolve the sink at fire time (not capture time) so
+                        // reloads reach whichever session owns the server now.
+                        let weak = Arc::downgrade(&server);
+                        match crate::watch::spawn(&server.root, move || {
+                            if let Some(server) = weak.upgrade() {
+                                server.current_sink().reload_needed();
+                            }
+                        }) {
                             Ok(watcher) => *server.watcher.lock().unwrap() = Some(watcher),
                             Err(e) => tracing::warn!("preview reload watch failed: {e}"),
                         }
@@ -344,7 +354,21 @@ impl DevServer {
     }
 
     fn emit(&self) {
-        self.sink.status(&self.status());
+        self.current_sink().status(&self.status());
+    }
+
+    fn current_sink(&self) -> Arc<dyn PreviewSink> {
+        self.sink.read().unwrap().clone()
+    }
+
+    /// Point lifecycle events at a new host surface (session adoption) and
+    /// immediately report the current status through it, so the adopting
+    /// session's UI shows the running preview. Returns the previous sink so
+    /// the caller can tell the old session's UI the server moved.
+    pub fn replace_sink(&self, sink: Arc<dyn PreviewSink>) -> Arc<dyn PreviewSink> {
+        let old = std::mem::replace(&mut *self.sink.write().unwrap(), sink);
+        self.emit();
+        old
     }
 
     /// SIGKILL the process group, at most once for this server's lifetime —

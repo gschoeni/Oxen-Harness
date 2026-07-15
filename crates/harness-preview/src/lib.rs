@@ -28,7 +28,7 @@ mod tools;
 mod watch;
 
 pub use console::{ConsoleBridge, ConsoleLine};
-pub use manager::DevServerManager;
+pub use manager::{DevServerManager, StartOutcome};
 pub use server::{
     DevServer, PreviewPhase, PreviewSink, PreviewStatus, ServerSpec, DEFAULT_READY_TIMEOUT,
 };

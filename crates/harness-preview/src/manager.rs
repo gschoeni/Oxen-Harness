@@ -31,6 +31,34 @@ struct Inner {
     closed: AtomicBool,
 }
 
+/// How [`DevServerManager::start_or_reuse`] satisfied a start request — the
+/// tool words its result to the model differently for each, so "already
+/// running" never reads as "freshly started".
+pub enum StartOutcome {
+    /// A new process was spawned (any previous server for the session was
+    /// stopped first).
+    Started(Arc<DevServer>),
+    /// The session's own server was already running this command — handed
+    /// back untouched.
+    Reused(Arc<DevServer>),
+    /// Another session's server in the same workspace was already running
+    /// this command; it now belongs to the requesting session (its lifecycle
+    /// events re-point at the new session's sink).
+    Adopted {
+        server: Arc<DevServer>,
+        from_session: String,
+    },
+}
+
+impl StartOutcome {
+    pub fn server(&self) -> &Arc<DevServer> {
+        match self {
+            StartOutcome::Started(s) | StartOutcome::Reused(s) => s,
+            StartOutcome::Adopted { server, .. } => server,
+        }
+    }
+}
+
 impl DevServerManager {
     pub fn new() -> Self {
         Self::default()
@@ -48,12 +76,100 @@ impl DevServerManager {
         sink: Arc<dyn PreviewSink>,
         ready_timeout: Duration,
     ) -> Result<Arc<DevServer>, PreviewError> {
-        let session_lock = {
-            let mut starting = self.inner.starting.lock().unwrap();
-            starting.entry(session.to_string()).or_default().clone()
-        };
+        let session_lock = self.session_lock(session);
+        let _guard = session_lock.lock().await;
+        self.start_locked(session, spec, root, sink, ready_timeout)
+            .await
+    }
+
+    /// Satisfy a start request without needlessly spawning a duplicate:
+    ///
+    /// 1. The session's own server already runs this command and is serving →
+    ///    **reuse** it (nothing restarts, the port stays put).
+    /// 2. Another session's server in the same workspace runs this command →
+    ///    **adopt** it: re-key it to this session and point its events at
+    ///    this session's sink (the old session's UI is told it moved).
+    /// 3. Otherwise — different command, dead server, or `force_restart` —
+    ///    replace-and-start like [`DevServerManager::start`].
+    ///
+    /// The matching rule is deliberately strict (same trimmed command, and the
+    /// declared port if any): two *different* commands in one workspace are a
+    /// legitimate pair (frontend + api), never merged.
+    pub async fn start_or_reuse(
+        &self,
+        session: &str,
+        spec: ServerSpec,
+        root: &Path,
+        sink: Arc<dyn PreviewSink>,
+        ready_timeout: Duration,
+        force_restart: bool,
+    ) -> Result<StartOutcome, PreviewError> {
+        let session_lock = self.session_lock(session);
         let _guard = session_lock.lock().await;
 
+        if !force_restart {
+            if let Some(existing) = self.get(session) {
+                if serves_spec(&existing, &spec) {
+                    return Ok(StartOutcome::Reused(existing));
+                }
+            }
+            // Find-and-move under one lock so a racing start can't adopt the
+            // same server twice.
+            let adopted = {
+                let mut servers = self.inner.servers.lock().unwrap();
+                let found = servers
+                    .iter()
+                    .find(|(owner, server)| {
+                        owner.as_str() != session
+                            && server.root() == root
+                            && serves_spec(server, &spec)
+                    })
+                    .map(|(owner, server)| (owner.clone(), server.clone()));
+                found.map(|(owner, server)| {
+                    servers.remove(&owner);
+                    let displaced = servers.remove(session);
+                    servers.insert(session.to_string(), server.clone());
+                    (owner, server, displaced)
+                })
+            };
+            if let Some((from_session, server, displaced)) = adopted {
+                // This session's own (non-matching or dead) server gives way.
+                if let Some(displaced) = displaced {
+                    displaced.stop().await;
+                }
+                // New sink first (announces Ready to the adopting session's
+                // UI), then tell the old session's UI its preview moved on.
+                let old_sink = server.replace_sink(sink);
+                let mut moved = server.status();
+                moved.phase = crate::PreviewPhase::Stopped;
+                moved.message = Some("the preview was adopted by another chat".into());
+                old_sink.status(&moved);
+                return Ok(StartOutcome::Adopted {
+                    server,
+                    from_session,
+                });
+            }
+        }
+
+        self.start_locked(session, spec, root, sink, ready_timeout)
+            .await
+            .map(StartOutcome::Started)
+    }
+
+    fn session_lock(&self, session: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut starting = self.inner.starting.lock().unwrap();
+        starting.entry(session.to_string()).or_default().clone()
+    }
+
+    /// The replace-and-start body; callers hold the session's start lock.
+    async fn start_locked(
+        &self,
+        session: &str,
+        spec: ServerSpec,
+        root: &Path,
+        sink: Arc<dyn PreviewSink>,
+        ready_timeout: Duration,
+    ) -> Result<Arc<DevServer>, PreviewError> {
         if self.inner.closed.load(Ordering::SeqCst) {
             return Err(PreviewError::Server("the app is shutting down".into()));
         }
@@ -113,6 +229,16 @@ impl DevServerManager {
             .map(|(session, server)| (session.clone(), server.status()))
             .collect()
     }
+}
+
+/// Whether `server` is currently serving exactly what `spec` asks for: it is
+/// `Ready` and runs the same (trimmed) command — and the same port, when the
+/// request declares one. Display `name` differences don't matter.
+fn serves_spec(server: &DevServer, spec: &ServerSpec) -> bool {
+    let status = server.status();
+    status.phase == crate::PreviewPhase::Ready
+        && status.command.trim() == spec.command.trim()
+        && spec.port.is_none_or(|p| status.port == Some(p))
 }
 
 #[cfg(test)]
@@ -203,6 +329,145 @@ mod tests {
         assert_eq!(live, 1, "exactly one of the racing starts survives");
         assert_eq!(manager.statuses().len(), 1);
         manager.stop_all().await;
+    }
+
+    #[tokio::test]
+    async fn start_or_reuse_hands_back_the_running_server() {
+        let Some(py) = python3() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let manager = DevServerManager::new();
+        let serve = format!("{py} -m http.server \"$PORT\" --bind 127.0.0.1");
+
+        let first = match manager
+            .start_or_reuse(
+                "s1",
+                spec(&serve),
+                dir.path(),
+                RecordingSink::new(),
+                Duration::from_secs(30),
+                false,
+            )
+            .await
+            .unwrap()
+        {
+            StartOutcome::Started(s) => s,
+            other => panic!("expected Started, got {}", outcome_name(&other)),
+        };
+        let port = first.status().port.unwrap();
+
+        // Same command, still serving → reused untouched.
+        let outcome = manager
+            .start_or_reuse(
+                "s1",
+                spec(&serve),
+                dir.path(),
+                RecordingSink::new(),
+                Duration::from_secs(30),
+                false,
+            )
+            .await
+            .unwrap();
+        match &outcome {
+            StartOutcome::Reused(s) => {
+                assert_eq!(s.status().port, Some(port), "reuse must not churn the port")
+            }
+            other => panic!("expected Reused, got {}", outcome_name(other)),
+        }
+        assert_eq!(manager.statuses().len(), 1);
+
+        // A different command replaces; force_restart replaces even when equal.
+        let outcome = manager
+            .start_or_reuse(
+                "s1",
+                spec(&serve),
+                dir.path(),
+                RecordingSink::new(),
+                Duration::from_secs(30),
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, StartOutcome::Started(_)));
+        assert_eq!(first.status().phase, PreviewPhase::Stopped);
+        manager.stop_all().await;
+    }
+
+    #[tokio::test]
+    async fn a_matching_server_from_another_session_is_adopted_not_duplicated() {
+        let Some(py) = python3() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let manager = DevServerManager::new();
+        let serve = format!("{py} -m http.server \"$PORT\" --bind 127.0.0.1");
+        let old_sink = RecordingSink::new();
+
+        let original = manager
+            .start(
+                "old-chat",
+                spec(&serve),
+                dir.path(),
+                old_sink.clone(),
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+        let port = original.status().port.unwrap();
+
+        // A new chat in the same workspace asking for the same command gets
+        // the running server, re-keyed — never a duplicate on another port.
+        let new_sink = RecordingSink::new();
+        let outcome = manager
+            .start_or_reuse(
+                "new-chat",
+                spec(&serve),
+                dir.path(),
+                new_sink.clone(),
+                Duration::from_secs(30),
+                false,
+            )
+            .await
+            .unwrap();
+        match &outcome {
+            StartOutcome::Adopted {
+                server,
+                from_session,
+            } => {
+                assert_eq!(from_session, "old-chat");
+                assert_eq!(server.status().port, Some(port));
+                assert_eq!(server.status().phase, PreviewPhase::Ready);
+            }
+            other => panic!("expected Adopted, got {}", outcome_name(other)),
+        }
+        assert_eq!(manager.statuses().len(), 1, "exactly one server remains");
+        assert!(manager.get("old-chat").is_none());
+        assert!(manager.get("new-chat").is_some());
+        // The adopting session's UI saw it come up; the old one saw it move on.
+        assert!(new_sink.phases().contains(&PreviewPhase::Ready));
+        assert_eq!(old_sink.phases().last(), Some(&PreviewPhase::Stopped));
+
+        // A *different* command in the same workspace is a second server
+        // (frontend + api is legitimate), not an adoption target.
+        let outcome = manager
+            .start_or_reuse(
+                "api-chat",
+                spec(&format!("{py} -m http.server \"$PORT\" --bind 127.0.0.1 --directory .")),
+                dir.path(),
+                RecordingSink::new(),
+                Duration::from_secs(30),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, StartOutcome::Started(_)));
+        assert_eq!(manager.statuses().len(), 2);
+        manager.stop_all().await;
+    }
+
+    fn outcome_name(outcome: &StartOutcome) -> &'static str {
+        match outcome {
+            StartOutcome::Started(_) => "Started",
+            StartOutcome::Reused(_) => "Reused",
+            StartOutcome::Adopted { .. } => "Adopted",
+        }
     }
 
     #[tokio::test]
