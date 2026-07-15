@@ -394,6 +394,16 @@ impl PermissionGate {
                 self.snapshot_if_dangerous(&request).await;
                 GateOutcome::Allow
             }
+            ApprovalDecision::AllowAllBypass => {
+                // Live-only: the shared policy flips to bypass (future fleet
+                // lanes included) but nothing persists — a new chat starts
+                // back at the configured default, and circuit breakers keep
+                // refusing regardless.
+                self.policy.write().expect("policy poisoned").mode = PermissionMode::Bypass;
+                self.audit(&request.tool, &request.command, "allow", "user_bypass_session", &policy);
+                self.snapshot_if_dangerous(&request).await;
+                GateOutcome::Allow
+            }
             ApprovalDecision::MoveToTrash => {
                 // Re-derive the plan from the command (the request only carries
                 // the flag); classification is deterministic.
@@ -717,6 +727,36 @@ mod tests {
             other => panic!("expected rewrite, got {other:?}"),
         }
         std::env::remove_var("OXEN_HARNESS_DIR");
+    }
+
+    #[tokio::test]
+    async fn allow_all_bypass_silences_the_session_but_not_the_breakers() {
+        let _env = testutil::env_guard();
+        let (_home, _ws, gate) = gate(Some(ApprovalDecision::AllowAllBypass));
+
+        let GateReview::Ask(request) = gate.review("run_shell", &shell_args("rm -rf ./build"))
+        else {
+            panic!("expected ask");
+        };
+        let (outcome, decision) = gate.resolve(*request).await;
+        assert!(matches!(outcome, GateOutcome::Allow));
+        assert_eq!(decision, ApprovalDecision::AllowAllBypass);
+
+        // The live session (and its future subagent gates) is now in bypass:
+        // dangerous commands run without asking…
+        assert_eq!(gate.mode(), PermissionMode::Bypass);
+        assert!(matches!(
+            gate.review("run_shell", &shell_args("git push --force")),
+            GateReview::Allow
+        ));
+        assert_eq!(gate.for_subagent().mode(), PermissionMode::Bypass);
+        // …but circuit breakers still refuse, and nothing was persisted (a
+        // fresh gate for the same workspace starts back at the default).
+        assert!(matches!(
+            gate.review("run_shell", &shell_args("rm -rf ~")),
+            GateReview::Deny { .. }
+        ));
+        assert_eq!(policy::load_global().mode, None);
     }
 
     #[test]

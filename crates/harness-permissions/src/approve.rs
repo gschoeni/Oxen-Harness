@@ -56,6 +56,11 @@ pub enum ApprovalDecision {
     AllowSession,
     /// Run it, and persist the grant to the project's permissions file.
     AllowProject,
+    /// Run it, and switch this session's gate to bypass mode — nothing asks
+    /// again (circuit breakers still refuse). The "dangerously allow
+    /// everything" escape hatch, deliberately session-scoped and not
+    /// persisted: a new chat starts back at the configured default.
+    AllowAllBypass,
     /// Don't delete — relocate the targets into the harness trash instead.
     MoveToTrash,
     /// Don't run it.
@@ -71,6 +76,9 @@ impl ApprovalDecision {
             ApprovalDecision::AllowOnce => "approved",
             ApprovalDecision::AllowSession => "approved for this session",
             ApprovalDecision::AllowProject => "approved for this project",
+            ApprovalDecision::AllowAllBypass => {
+                "approved — allowing everything this session (bypass)"
+            }
             ApprovalDecision::MoveToTrash => "moved to trash instead",
             ApprovalDecision::Deny | ApprovalDecision::DenyWithMessage(_) => "denied",
         }

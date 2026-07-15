@@ -66,7 +66,7 @@ impl QuestionAsker for TauriAsker {
 /// payload): a decision keyword plus an optional free-text denial reason.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct ApprovalAnswer {
-    /// "once" | "session" | "project" | "trash" | "deny".
+    /// "once" | "session" | "project" | "trash" | "bypass" | "deny".
     pub(crate) decision: String,
     /// The user's own words when denying (sent back to the model).
     #[serde(default)]
@@ -81,6 +81,7 @@ impl ApprovalAnswer {
             "session" => ApprovalDecision::AllowSession,
             "project" => ApprovalDecision::AllowProject,
             "trash" => ApprovalDecision::MoveToTrash,
+            "bypass" => ApprovalDecision::AllowAllBypass,
             _ => match self.message {
                 Some(msg) if !msg.trim().is_empty() => ApprovalDecision::DenyWithMessage(msg),
                 _ => ApprovalDecision::Deny,

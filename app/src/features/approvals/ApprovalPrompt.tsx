@@ -86,6 +86,14 @@ function ApprovalCard({ request }: { request: ApprovalRequestEvent }) {
           <button type="button" className="abtn deny" onClick={() => decide("deny")}>
             Deny
           </button>
+          <button
+            type="button"
+            className="abtn bypass"
+            title="Switch this session to bypass mode — nothing asks again (hard limits like rm -rf / still refuse). Session-only; new chats return to your configured mode."
+            onClick={() => decide("bypass")}
+          >
+            Dangerously allow everything
+          </button>
         </div>
 
         <form

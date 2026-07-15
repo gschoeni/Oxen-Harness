@@ -378,7 +378,7 @@ export interface ApprovalEvent {
 }
 
 /** The decision sent back through `answer_approval`. */
-export type ApprovalChoice = "once" | "session" | "project" | "trash" | "deny";
+export type ApprovalChoice = "once" | "session" | "project" | "trash" | "bypass" | "deny";
 
 // ---- permissions settings ---------------------------------------------------
 

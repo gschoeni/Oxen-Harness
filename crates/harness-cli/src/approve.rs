@@ -19,6 +19,7 @@ const RUN_ONCE: &str = "Run once";
 const ALLOW_SESSION: &str = "Allow for this session";
 const ALLOW_PROJECT: &str = "Allow for this project";
 const MOVE_TO_TRASH: &str = "Move to trash instead";
+const ALLOW_ALL: &str = "Dangerously allow everything";
 const DENY: &str = "Deny";
 
 /// Asks for command approval through the terminal picker.
@@ -74,6 +75,11 @@ fn prompt(ui: &Ui, request: &ApprovalRequest) -> Result<Option<ApprovalDecision>
         ));
     }
     options.push(Choice::new(
+        ALLOW_ALL,
+        "Switch this session to bypass mode — nothing asks again (hard limits \
+         like `rm -rf /` still refuse). /permissions switches back.",
+    ));
+    options.push(Choice::new(
         DENY,
         "Don't run it — or type your own reason to send back to the model",
     ));
@@ -90,6 +96,7 @@ fn prompt(ui: &Ui, request: &ApprovalRequest) -> Result<Option<ApprovalDecision>
         ALLOW_SESSION => ApprovalDecision::AllowSession,
         ALLOW_PROJECT => ApprovalDecision::AllowProject,
         MOVE_TO_TRASH => ApprovalDecision::MoveToTrash,
+        ALLOW_ALL => ApprovalDecision::AllowAllBypass,
         DENY => ApprovalDecision::Deny,
         // Anything else is the free-text row: a denial in the user's words.
         other => ApprovalDecision::DenyWithMessage(other.to_string()),

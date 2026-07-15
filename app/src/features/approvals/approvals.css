@@ -115,6 +115,18 @@
 .abtn.sm {
   padding: var(--space-1) var(--space-2);
 }
+/* The escape hatch reads as deliberately different: subdued until hovered,
+   never mistakable for a routine approval. */
+.abtn.bypass {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  border-style: dashed;
+  font-weight: 500;
+}
+.abtn.bypass:hover {
+  color: var(--danger, #c0392b);
+  border-color: var(--danger, #c0392b);
+}
 .abtn:disabled {
   opacity: 0.5;
   cursor: default;

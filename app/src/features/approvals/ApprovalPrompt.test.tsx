@@ -67,6 +67,15 @@ describe("ApprovalPrompt", () => {
     expect(screen.getByRole("button", { name: "Allow for session" })).toBeInTheDocument();
   });
 
+  it("offers the dangerously-allow-everything escape hatch", async () => {
+    act(() => useStore.getState().ingestApprovalRequest(request()));
+    render(<ApprovalPrompt />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Dangerously allow everything" }));
+    expect(ipc.answerApproval).toHaveBeenCalledWith("a0", "bypass", undefined);
+    expect(useStore.getState().approvals["s1"]).toBeUndefined();
+  });
+
   it("denies with the user's typed reason", async () => {
     act(() => useStore.getState().ingestApprovalRequest(request()));
     render(<ApprovalPrompt />);
