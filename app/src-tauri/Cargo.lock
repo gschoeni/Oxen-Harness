@@ -1362,6 +1362,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-crash"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "harness-host"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "harness-agent",
+ "harness-compress",
+ "harness-config",
+ "harness-llm",
+ "harness-local",
+ "harness-loop",
+ "harness-permissions",
+ "harness-preview",
+ "harness-protocol",
+ "harness-review",
+ "harness-runtime",
+ "harness-store",
+ "harness-tools",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "harness-llm"
 version = "0.1.0"
 dependencies = [
@@ -1455,6 +1485,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-protocol"
+version = "0.1.0"
+dependencies = [
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "harness-review"
 version = "0.1.0"
 dependencies = [
@@ -1489,6 +1528,7 @@ name = "harness-store"
 version = "0.1.0"
 dependencies = [
  "harness-core",
+ "libc",
  "rusqlite",
  "rusqlite_migration",
  "serde",
@@ -1520,6 +1560,7 @@ dependencies = [
  "harness-core",
  "htmd",
  "ignore",
+ "libc",
  "regex",
  "reqwest 0.12.28",
  "schemars 1.2.1",
@@ -1630,6 +1671,12 @@ dependencies = [
  "http-body",
  "pin-project-lite",
 ]
+
+[[package]]
+name = "http-range"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21dec9db110f5f872ed9699c3ecf50cf16f423502706ba5c72462e28d3157573"
 
 [[package]]
 name = "httparse"
@@ -2596,11 +2643,14 @@ dependencies = [
  "harness-compress",
  "harness-config",
  "harness-core",
+ "harness-crash",
+ "harness-host",
  "harness-llm",
  "harness-local",
  "harness-loop",
  "harness-permissions",
  "harness-preview",
+ "harness-protocol",
  "harness-review",
  "harness-runtime",
  "harness-store",
@@ -3867,6 +3917,7 @@ dependencies = [
  "gtk",
  "heck 0.5.0",
  "http",
+ "http-range",
  "jni",
  "libc",
  "log",

@@ -24,6 +24,9 @@ pub enum ApprovalKind {
     FileEdit,
     /// A `git` tool commit (cautious mode).
     GitCommit,
+    /// A `kill_task` call terminating a background task's process group
+    /// (cautious mode) — gated like the equivalent `run_shell` kill would be.
+    TaskKill,
 }
 
 /// Everything a host needs to render one approval prompt.
@@ -90,8 +93,7 @@ impl ApprovalDecision {
 pub trait CommandApprover: Send + Sync {
     /// Present the request and collect a decision. `Ok(None)` means no
     /// interactive user is available; the gate treats that as a decline.
-    async fn approve(&self, request: &ApprovalRequest)
-        -> Result<Option<ApprovalDecision>, String>;
+    async fn approve(&self, request: &ApprovalRequest) -> Result<Option<ApprovalDecision>, String>;
 
     /// Whether this approver actually prompts a human (drives whether the
     /// agent emits approval events for the host to hand the screen over).

@@ -1,4 +1,5 @@
 import { Markdown } from "../../components/ui/Markdown";
+import { ThinkingIndicator } from "./ThinkingIndicator";
 import { ToolCall } from "./ToolCall";
 import { ApiKeyPrompt } from "./ApiKeyPrompt";
 import { RetryPrompt } from "./RetryPrompt";
@@ -48,11 +49,7 @@ export function ThreadItem({ item, now }: { item: Item; now: number }) {
             tool call's arguments (a canvas document, clarifying questions) after
             a short preamble, when the bubble already has text. */}
         {item.streaming && (
-          <span className={`thinking ${item.text ? "trailing" : ""}`}>
-            <span />
-            <span />
-            <span />
-          </span>
+          <ThinkingIndicator writing={!!item.text} trailing={!!item.text} />
         )}
       </div>
     );

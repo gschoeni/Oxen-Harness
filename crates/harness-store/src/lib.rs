@@ -10,6 +10,7 @@
 
 mod content;
 mod export;
+mod netfs;
 pub mod store;
 
 pub use store::{DailyUsage, HistoryError, HistoryStore, ModelUsage, SessionMeta, SessionSummary};

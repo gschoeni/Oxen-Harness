@@ -1,11 +1,29 @@
 import { useMemo, useState } from "react";
-import { FolderOpen, FolderPlus, Sparkles } from "lucide-react";
+import { ArrowDownAZ, Clock, FolderOpen, FolderPlus, Sparkles } from "lucide-react";
 import { Button } from "../../components/ui";
+import { relativeTime } from "../../lib/format";
 import { useStore } from "../../lib/store";
 import type { Project } from "../../lib/types";
 import { ProjectHome } from "./ProjectHome";
 import { StartProjectModal } from "./StartProjectModal";
 import "./projects.css";
+
+type ProjectSort = "recent" | "name";
+
+const SORT_STORAGE_KEY = "oxen-harness.projects-sort";
+
+function savedSort(): ProjectSort {
+  return localStorage.getItem(SORT_STORAGE_KEY) === "name" ? "name" : "recent";
+}
+
+/** Order projects for the grid: by last activity (never-used ones last) or by name. */
+export function sortProjects(projects: Project[], sort: ProjectSort): Project[] {
+  const byName = (a: Project, b: Project) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  const sorted = [...projects];
+  sorted.sort(sort === "name" ? byName : (a, b) => (b.last_used_at ?? 0) - (a.last_used_at ?? 0) || byName(a, b));
+  return sorted;
+}
 
 /** The top-level project navigator. Established projects resume their newest
  * chat; projects without history open the getting-started surface. */
@@ -23,6 +41,14 @@ export function ProjectsPage() {
     projectHomePath ? projects.find((project) => project.path === projectHomePath) ?? null : null,
   );
   const [starting, setStarting] = useState(false);
+  const [sort, setSort] = useState<ProjectSort>(savedSort);
+
+  function changeSort(next: ProjectSort) {
+    setSort(next);
+    localStorage.setItem(SORT_STORAGE_KEY, next);
+  }
+
+  const sorted = useMemo(() => sortProjects(projects, sort), [projects, sort]);
 
   const runningByPath = useMemo(() => {
     const counts = new Map<string, number>();
@@ -58,7 +84,6 @@ export function ProjectsPage() {
 
   return (
     <div className="projects-overlay" role="dialog" aria-modal="true" aria-label="Projects">
-      <div className="projects-titlebar" data-tauri-drag-region />
       {selected ? (
         <ProjectHome
           project={selected}
@@ -80,8 +105,29 @@ export function ProjectsPage() {
             </Button>
           </header>
 
+          {projects.length > 1 && (
+            <div className="projects-toolbar">
+              <div className="projects-sort" role="group" aria-label="Sort projects">
+                <button
+                  className={`projects-sort-option ${sort === "recent" ? "selected" : ""}`}
+                  aria-pressed={sort === "recent"}
+                  onClick={() => changeSort("recent")}
+                >
+                  <Clock size={13} /> Recent
+                </button>
+                <button
+                  className={`projects-sort-option ${sort === "name" ? "selected" : ""}`}
+                  aria-pressed={sort === "name"}
+                  onClick={() => changeSort("name")}
+                >
+                  <ArrowDownAZ size={13} /> Name
+                </button>
+              </div>
+            </div>
+          )}
+
           <section className="projects-grid" aria-label="Your projects">
-            {projects.map((project) => {
+            {sorted.map((project) => {
               const running = runningByPath.get(project.path) ?? 0;
               return (
                 <button
@@ -110,6 +156,9 @@ export function ProjectsPage() {
                       <span>{project.context.length} ref{project.context.length === 1 ? "" : "s"}</span>
                     )}
                     <span>{project.session_count} chat{project.session_count === 1 ? "" : "s"}</span>
+                    {project.last_used_at != null && (
+                      <span className="project-card-used">{relativeTime(project.last_used_at)}</span>
+                    )}
                   </span>
                 </button>
               );

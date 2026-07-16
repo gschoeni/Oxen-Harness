@@ -307,7 +307,8 @@
    =========================================================================== */
 .inspector-scrim {
   position: fixed;
-  inset: 0;
+  /* Below the app title bar, which must stay draggable everywhere. */
+  inset: var(--titlebar-h) 0 0;
   z-index: var(--z-drawer);
   background: color-mix(in srgb, var(--bg) 55%, transparent);
   -webkit-backdrop-filter: blur(3px);

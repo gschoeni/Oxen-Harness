@@ -50,10 +50,12 @@ import {
   type Item,
 } from "../features/chat/thread";
 import { partialCanvasDoc } from "./streamingArgs";
+import { withSnippetContext } from "./snippets";
 import type {
   ApprovalEvent,
   ApprovalRequestEvent,
   CanvasDoc,
+  CodeSnippet,
   CanvasEvent,
   CloudModel,
   CodeReviewProgressEvent,
@@ -62,6 +64,7 @@ import type {
   FleetStartedEvent,
   LocalStatus,
   Mode,
+  OpenFileEvent,
   Project,
   QuestionPayload,
   ReviewStatus,
@@ -112,6 +115,10 @@ function saveDockLayout(layout: DockLayout) {
     /* a full/blocked localStorage must never break the layout */
   }
 }
+
+/** The right-column dock ids a user can pick as the active tab
+ *  (see `features/docks/docks.tsx`). */
+export type RightTabId = "preview" | "canvas" | "browser" | "editor";
 
 /** One parallel subagent as shown in the chat's fleet panel. */
 export interface FleetLane {
@@ -301,7 +308,21 @@ interface AppState {
   previewErrors: Record<string, string | undefined>;
   /** Which right-dock is active per session when more than one has content
    *  (a dock id from the registry — see `features/docks/docks.tsx`). */
-  rightTab: Record<string, "preview" | "canvas">;
+  rightTab: Record<string, RightTabId>;
+  /** The URL open in the link-browser side panel (null = pane closed).
+   *  App-wide, not per-session: it's a page the user is reading, not part of
+   *  any chat's state. */
+  browserUrl: string | null;
+  /** Which left-dock is active when more than one has content (a dock id from
+   *  the registry). App-wide: the file tree follows the workspace, not the chat. */
+  leftTab: string | null;
+  /** The workspace-relative paths open in the Editor/viewer dock per session:
+   *  one text file for the code editor, one media file for the media view, or
+   *  several images for the gallery grid. Absent/empty = pane closed. */
+  editorFiles: Record<string, string[] | undefined>;
+  /** Code selections staged as context for the next prompt, per session —
+   *  shown as chips by the composer, baked into the prompt at send time. */
+  snippets: Record<string, CodeSnippet[]>;
   /** Each dock column's width in px, keyed by side. Drag-resized, persisted. */
   dockWidths: Record<string, number>;
   /** Sides the user collapsed to a rail, keyed by side. Persisted. */
@@ -412,6 +433,10 @@ interface AppState {
   refreshTotalTokens: () => Promise<void>;
   /** Upsert a canvas document and open it in the side panel. */
   ingestCanvas: (e: CanvasEvent) => void;
+  /** The model's `open_file` tool: show project files in the session's
+   *  Editor/viewer dock (session-tagged, so a background chat's file doesn't
+   *  pop into the foreground). */
+  ingestOpenFile: (e: OpenFileEvent) => void;
   /** Show a specific canvas doc (or close the panel with null) for the current chat. */
   setActiveCanvas: (id: string | null) => void;
   /** Open (or reopen) a canvas document in the current chat — used to revisit a
@@ -430,8 +455,23 @@ interface AppState {
   syncPreview: (session: string) => Promise<void>;
   /** Close the current chat's preview pane (the server keeps running). */
   closePreview: () => void;
-  /** Switch the current chat's right-panel tab (preview ⇄ canvas). */
-  setRightTab: (tab: "preview" | "canvas") => void;
+  /** Open a URL in the link-browser side panel (a chat link was clicked). */
+  openBrowser: (url: string) => void;
+  /** Close the link-browser side panel. */
+  closeBrowser: () => void;
+  /** Switch the current chat's right-panel tab (preview / canvas / browser / editor). */
+  setRightTab: (tab: RightTabId) => void;
+  /** Switch the left column's active tab (chats / files). */
+  setLeftTab: (id: string) => void;
+  /** Open workspace files in the Editor/viewer dock: one text file for the
+   *  editor, one media file for the media view, or several images as a grid. */
+  openInViewer: (paths: string[]) => void;
+  /** Close the current chat's Editor/viewer pane. */
+  closeViewer: () => void;
+  /** Stage a code selection as context for the current chat's next prompt. */
+  addSnippet: (snippet: CodeSnippet) => void;
+  /** Unstage one snippet chip by index. */
+  removeSnippet: (index: number) => void;
   /** Resize a dock column (persisted). */
   setDockWidth: (side: string, width: number) => void;
   /** Collapse/expand a dock column to a rail (persisted). */
@@ -586,6 +626,10 @@ export const useStore = create<AppState>((set, get) => {
     previewClosed: {},
     previewErrors: {},
     rightTab: {},
+    browserUrl: null,
+    leftTab: null,
+    editorFiles: {},
+    snippets: {},
     dockWidths: loadDockLayout().widths,
     dockCollapsed: loadDockLayout().collapsed,
     settingsOpen: false,
@@ -748,6 +792,8 @@ export const useStore = create<AppState>((set, get) => {
           previewClosed: drop(s.previewClosed),
           previewErrors: drop(s.previewErrors),
           rightTab: drop(s.rightTab),
+          editorFiles: drop(s.editorFiles),
+          snippets: drop(s.snippets),
         };
       });
       await get().refreshHistory();
@@ -862,6 +908,14 @@ export const useStore = create<AppState>((set, get) => {
     send: (text, attachments = []) => {
       const id = get().session?.session_id;
       if (!id) return;
+      // Bake staged code snippets into the prompt now (not at turn time), so a
+      // queued prompt carries exactly the context that was on screen when it
+      // was written, and the chips clear the moment they're consumed.
+      const staged = get().snippets[id] ?? [];
+      if (staged.length) {
+        text = withSnippetContext(text, staged);
+        set((s) => ({ snippets: { ...s.snippets, [id]: [] } }));
+      }
       if (get().runStatus[id] === "running") {
         const prompt = { text, attachments };
         set((s) => {
@@ -1288,6 +1342,17 @@ export const useStore = create<AppState>((set, get) => {
         };
       }),
 
+    ingestOpenFile: (e) =>
+      set((s) => {
+        if (!e.paths.length) return {};
+        return {
+          editorFiles: { ...s.editorFiles, [e.session]: e.paths },
+          // Front the editor tab for that session (mirrors ingestCanvas: no
+          // global side effects, so a background chat can't grab the UI).
+          rightTab: { ...s.rightTab, [e.session]: "editor" as const },
+        };
+      }),
+
     setActiveCanvas: (id) =>
       set((s) => {
         const cur = s.session?.session_id;
@@ -1385,6 +1450,15 @@ export const useStore = create<AppState>((set, get) => {
         return cur ? { previewClosed: { ...s.previewClosed, [cur]: true } } : {};
       }),
 
+    openBrowser: (url) => {
+      set({ browserUrl: url });
+      // A clicked link means "show me this page" — bring the pane to the
+      // front even if another tab (or a collapsed column) is hiding it.
+      get().setRightTab("browser");
+    },
+
+    closeBrowser: () => set({ browserUrl: null }),
+
     setDockWidth: (side, width) =>
       set((s) => {
         const dockWidths = { ...s.dockWidths, [side]: width };
@@ -1416,6 +1490,44 @@ export const useStore = create<AppState>((set, get) => {
         };
       });
     },
+
+    setLeftTab: (id) => {
+      // Picking a dock means "show me this" — expand a collapsed column first.
+      if (get().dockCollapsed.left) get().setDockCollapsed("left", false);
+      set({ leftTab: id });
+    },
+
+    openInViewer: (paths) => {
+      const id = get().session?.session_id;
+      if (!id || paths.length === 0) return;
+      set((s) => ({ editorFiles: { ...s.editorFiles, [id]: paths } }));
+      // Opening a file means "show me this" — bring the pane to the front.
+      get().setRightTab("editor");
+    },
+
+    closeViewer: () =>
+      set((s) => {
+        const id = s.session?.session_id;
+        if (!id) return {};
+        const editorFiles = { ...s.editorFiles };
+        delete editorFiles[id];
+        return { editorFiles };
+      }),
+
+    addSnippet: (snippet) =>
+      set((s) => {
+        const id = s.session?.session_id;
+        if (!id) return {};
+        return { snippets: { ...s.snippets, [id]: [...(s.snippets[id] ?? []), snippet] } };
+      }),
+
+    removeSnippet: (index) =>
+      set((s) => {
+        const id = s.session?.session_id;
+        if (!id) return {};
+        const staged = (s.snippets[id] ?? []).filter((_, i) => i !== index);
+        return { snippets: { ...s.snippets, [id]: staged } };
+      }),
 
     setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
     openSettings: (page) =>

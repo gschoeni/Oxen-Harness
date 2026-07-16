@@ -95,6 +95,29 @@ pub fn estimate_completion_tokens(content: &str, tool_calls: &[ToolCall]) -> usi
     chars / CHARS_PER_TOKEN
 }
 
+/// Split one side-completion's usage into (prompt, completion) tokens:
+/// provider-reported counts when the stream carried them, else
+/// `fallback_prompt` plus an estimate of the generated reply. The one policy
+/// for accounting one-shot calls ([`Agent::complete`], the prefire
+/// summarizer), so speculative and synchronous spend can't drift.
+///
+/// [`Agent::complete`]: crate::Agent::complete
+pub fn split_oneshot_usage(
+    assembled: &harness_llm::stream::AssembledMessage,
+    fallback_prompt: usize,
+) -> (usize, usize) {
+    match &assembled.usage {
+        Some(usage) if usage.prompt_tokens + usage.completion_tokens > 0 => (
+            usage.prompt_tokens as usize,
+            usage.completion_tokens as usize,
+        ),
+        _ => (
+            fallback_prompt,
+            estimate_completion_tokens(&assembled.content, &assembled.tool_calls),
+        ),
+    }
+}
+
 /// The prompt-token budget for a context `window`, reserving room for the reply.
 ///
 /// The reserve is clamped to half the window so small (e.g. local) windows still

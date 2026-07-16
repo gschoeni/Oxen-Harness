@@ -3,16 +3,20 @@ resolver = "2"
 members = [
     "crates/harness-core",
     "crates/harness-config",
+    "crates/harness-protocol",
     "crates/harness-llm",
     "crates/harness-compress",
     "crates/harness-tools",
     "crates/harness-permissions",
     "crates/harness-store",
+    "crates/harness-crash",
     "crates/harness-oxen",
     "crates/harness-local",
     "crates/harness-theme",
     "crates/harness-agent",
     "crates/harness-runtime",
+    "crates/harness-host",
+    "crates/harness-server",
     "crates/harness-loop",
     "crates/harness-review",
     "crates/harness-preview",
@@ -34,16 +38,19 @@ description = "An open source, hackable agentic coding harness powered by Oxen.a
 [workspace.dependencies]
 harness-core = { path = "crates/harness-core" }
 harness-config = { path = "crates/harness-config" }
+harness-protocol = { path = "crates/harness-protocol" }
 harness-llm = { path = "crates/harness-llm" }
 harness-compress = { path = "crates/harness-compress" }
 harness-tools = { path = "crates/harness-tools" }
 harness-permissions = { path = "crates/harness-permissions" }
 harness-store = { path = "crates/harness-store" }
+harness-crash = { path = "crates/harness-crash" }
 harness-oxen = { path = "crates/harness-oxen" }
 harness-local = { path = "crates/harness-local" }
 harness-theme = { path = "crates/harness-theme" }
 harness-agent = { path = "crates/harness-agent" }
 harness-runtime = { path = "crates/harness-runtime" }
+harness-host = { path = "crates/harness-host" }
 harness-loop = { path = "crates/harness-loop" }
 harness-review = { path = "crates/harness-review" }
 harness-preview = { path = "crates/harness-preview" }

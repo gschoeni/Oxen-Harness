@@ -18,7 +18,9 @@
 //! webview payloads in [`crate::events`], host↔agent bridges in
 //! [`crate::bridges`] — a command module should read as orchestration.
 
+pub(crate) mod browser;
 pub(crate) mod connection;
+pub(crate) mod files;
 pub(crate) mod loops;
 pub(crate) mod models;
 pub(crate) mod permissions;

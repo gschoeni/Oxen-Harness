@@ -449,7 +449,9 @@ mod tests {
         let outcome = manager
             .start_or_reuse(
                 "api-chat",
-                spec(&format!("{py} -m http.server \"$PORT\" --bind 127.0.0.1 --directory .")),
+                spec(&format!(
+                    "{py} -m http.server \"$PORT\" --bind 127.0.0.1 --directory ."
+                )),
                 dir.path(),
                 RecordingSink::new(),
                 Duration::from_secs(30),

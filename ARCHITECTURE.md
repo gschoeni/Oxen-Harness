@@ -12,10 +12,15 @@ below it, so the dependency graph is acyclic and each layer is testable on its
 own:
 
 ```
-                        ┌─────────────┐   ┌────────────────────┐
-  front ends            │ harness-cli │   │ app/  (Tauri v2)   │
-                        └──────┬──────┘   └─────────┬──────────┘
-                               │                    │
+                        ┌─────────────┐   ┌────────────────────┐   ┌────────────────┐
+  front ends            │ harness-cli │   │ app/  (Tauri v2)   │   │ harness-server │  (HTTP: REST + SSE,
+                        └──────┬──────┘   └─────────┬──────────┘   └───────┬────────┘   see PROTOCOL.md)
+                               │                    │                      │
+                               │              ┌─────┴──────────────────────┴─┐
+  host layer                   │              │  harness-host (SessionService │  (multi-session cache,
+                               │              │  over an EventSink) +        │   turns, round-trips —
+                               │              │  harness-protocol (wire types)│   shared by app + server)
+                               │              └─────┬─────────────────────────┘
                                │                    └───────────────┐
   orchestration  ┌─────────────┴─────┐  ┌────────────────┐  ┌───────┴─────────┐
                  │    harness-loop   │  │ harness-review │  │ harness-runtime │  (shared config:
@@ -62,9 +67,18 @@ own:
   pipeline (ordered prompt steps — a parallel three-lens find, then verify →
   report by default — every reviewer on an isolated side agent, ending in
   structured findings); and the front-end-agnostic configuration both UIs share.
-- **front ends** — the interactive CLI, and the Tauri desktop app (a separate
-  workspace under `app/` so the core verification loop stays fast). Both drive
-  the *same* `harness-agent`, so behavior can't drift between them.
+- **`harness-protocol`** / **`harness-host`** — the wire types every UI speaks
+  (one tagged `ProtocolEvent` enum + command DTOs, JSON-Schema-exportable) and
+  the transport-agnostic host layer above the agent: `SessionService` owns the
+  multi-session agent cache, turn driving with cancel tokens, the
+  question/approval round-trips, model swaps, and the review/loop runners —
+  generic over one `EventSink` seam.
+- **front ends** — the interactive CLI; the Tauri desktop app (a separate
+  workspace under `app/`, a thin adapter putting protocol events on the webview
+  bus); and `harness-server`, the same service exposed as localhost HTTP
+  (REST + an SSE event stream) so third-party UIs need no Rust at all — see
+  [`PROTOCOL.md`](PROTOCOL.md) and `examples/web-chat.html`. All drive the
+  *same* `harness-agent`, so behavior can't drift between them.
 
 ## The lifecycle of a turn
 

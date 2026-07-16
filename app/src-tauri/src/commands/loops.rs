@@ -1,22 +1,14 @@
 //! Desktop bridge for the same saved, shareable verification loops as `/loop`
-//! in the CLI. Management calls are deliberately small; `run_loop` owns the
-//! session lock and cancellation token for the whole discover/verify cycle.
+//! in the CLI. Management calls are deliberately small; `run_loop` delegates
+//! to the shared `harness_host::SessionService`, which owns the session lock
+//! and cancellation token for the whole discover/verify cycle and streams the
+//! loop's agent activity as `agent://token` / `agent://tool` events.
 
-use harness_agent::AgentEvent;
-use harness_loop::{LoopEvent, LoopJournal, LoopRunner, LoopSpec, LoopStore, LoopSummary};
-use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
-use tokio_util::sync::CancellationToken;
+use harness_loop::{LoopSpec, LoopStore, LoopSummary};
+use harness_protocol::LoopResult;
+use tauri::State;
 
-use crate::events::{TokenPayload, ToolEventPayload};
-use crate::state::{agent_or_build, evict_idle, session_workspace, AppState};
-
-#[derive(Serialize)]
-pub(crate) struct LoopRunResult {
-    succeeded: bool,
-    iterations: u32,
-    summary: String,
-}
+use crate::state::AppState;
 
 #[tauri::command]
 pub(crate) fn list_loops() -> Result<Vec<LoopSummary>, String> {
@@ -76,123 +68,10 @@ pub(crate) fn remove_loop(name: String) -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) async fn run_loop(
-    app: AppHandle,
     state: State<'_, AppState>,
     session: String,
     name: Option<String>,
     goal: Option<String>,
-) -> Result<LoopRunResult, String> {
-    let store = LoopStore::open().map_err(|e| e.to_string())?;
-    let spec = if let Some(goal) = goal.filter(|s| !s.trim().is_empty()) {
-        LoopSpec::from_goal(goal)
-    } else {
-        store
-            .resolve(name.as_deref().unwrap_or("default"))
-            .map_err(|e| e.to_string())?
-    };
-    let arc = agent_or_build(&app, &state, &session).await?;
-    let cancel = CancellationToken::new();
-    {
-        let mut cancels = state.cancels.lock().await;
-        if cancels.contains_key(&session) {
-            return Err("a turn is already running in this chat".to_string());
-        }
-        cancels.insert(session.clone(), cancel.clone());
-    }
-    let root = session_workspace(&session);
-    let runner =
-        LoopRunner::new(spec.clone(), root).persisting_to(store.journal_path_for(&spec.name));
-    let sid = session.clone();
-    let emitter = app.clone();
-    let result = {
-        let mut agent = arc.lock().await;
-        agent.set_cancel_token(cancel);
-        runner
-            .run(&mut agent, |event| emit_loop_event(&emitter, &sid, event))
-            .await
-            .map(|journal| loop_result(&journal))
-            .map_err(|e| e.to_string())
-    };
-    state.cancels.lock().await.remove(&session);
-    evict_idle(&state).await;
-    result
-}
-
-fn emit_loop_event(app: &AppHandle, session: &str, event: &LoopEvent) {
-    match event {
-        LoopEvent::Agent(AgentEvent::Token(token)) => {
-            let _ = app.emit(
-                "agent://token",
-                TokenPayload {
-                    session: session.to_string(),
-                    token: token.clone(),
-                },
-            );
-        }
-        LoopEvent::Agent(AgentEvent::ToolStart { name, arguments }) => {
-            let _ = app.emit(
-                "agent://tool",
-                ToolEventPayload {
-                    session: session.to_string(),
-                    phase: "start",
-                    name: name.clone(),
-                    detail: arguments.clone(),
-                },
-            );
-        }
-        LoopEvent::Agent(AgentEvent::ToolEnd { name, result }) => {
-            let _ = app.emit(
-                "agent://tool",
-                ToolEventPayload {
-                    session: session.to_string(),
-                    phase: "end",
-                    name: name.clone(),
-                    detail: result.clone(),
-                },
-            );
-        }
-        _ => {}
-    }
-}
-
-fn loop_result(journal: &LoopJournal) -> LoopRunResult {
-    let succeeded = journal.succeeded();
-    let iterations = journal.iterations();
-    let summary = if succeeded {
-        format!("Loop complete: all gates passed after {iterations} iteration(s).")
-    } else {
-        let reason = journal
-            .stop
-            .clone()
-            .map(|s| s.headline())
-            .unwrap_or_else(|| "stopped".into());
-        format!("Loop stopped after {iterations} iteration(s): {reason}.")
-    };
-    LoopRunResult {
-        succeeded,
-        iterations,
-        summary,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use harness_loop::{LoopJournal, StopReason};
-
-    use super::loop_result;
-
-    #[test]
-    fn loop_result_distinguishes_success_from_a_stopped_run() {
-        let mut success = LoopJournal::new("green", "make checks pass");
-        success.finish(StopReason::Succeeded);
-        let result = loop_result(&success);
-        assert!(result.succeeded);
-        assert!(result.summary.contains("all gates passed"));
-
-        let mut stopped = LoopJournal::new("green", "make checks pass");
-        stopped.finish(StopReason::MaxIterations);
-        let result = loop_result(&stopped);
-        assert!(!result.succeeded);
-        assert!(result.summary.contains("iteration limit"));
-    }
+) -> Result<LoopResult, String> {
+    state.run_loop(&session, name, goal).await
 }

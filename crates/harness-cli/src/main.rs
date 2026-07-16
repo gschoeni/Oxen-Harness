@@ -134,6 +134,24 @@ async fn main() -> Result<()> {
     // already set) so saved API keys are available before anything reads them.
     harness_config::secrets::load();
 
+    // Surface a crash from the previous run — a fatal signal leaves no other
+    // trace — then arm the handler for this one. Check-before-install, so the
+    // old marker is read before it could be clobbered.
+    if let Ok(marker) = harness_config::paths::last_crash_file() {
+        if let Some(signal) = harness_crash::arm(&marker) {
+            let log = harness_config::paths::errors_log().ok();
+            harness_agent::errlog::record(
+                log.as_deref(),
+                "crashed",
+                serde_json::json!({ "signal": signal }),
+            );
+            eprintln!(
+                "note: the previous oxen-harness run crashed ({signal}) — \
+                 details, if any, are in ~/.oxen-harness/errors.jsonl"
+            );
+        }
+    }
+
     let theme = harness_theme::Store::open()
         .map(|s| s.load_active())
         .unwrap_or_default();

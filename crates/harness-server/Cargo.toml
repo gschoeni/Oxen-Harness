@@ -1,0 +1,39 @@
+[package]
+name = "harness-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The oxen-harness agent backend as a standalone HTTP server: REST commands + an SSE protocol-event stream any UI can build on"
+
+[[bin]]
+name = "oxen-harness-server"
+path = "src/main.rs"
+
+[dependencies]
+harness-protocol = { workspace = true }
+harness-host = { workspace = true }
+harness-llm = { workspace = true }
+harness-runtime = { workspace = true }
+harness-store = { workspace = true }
+harness-config = { workspace = true }
+harness-crash = { workspace = true }
+harness-agent = { workspace = true }
+axum = { version = "0.8", features = ["json", "query", "tokio", "http1"], default-features = false }
+tokio = { workspace = true }
+tokio-stream = { version = "0.1", features = ["sync"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures-core = "0.3"
+rand = "0.8"
+
+[dev-dependencies]
+mockito = "1"
+tempfile = "3"
+reqwest = { workspace = true, features = ["stream"] }
+futures-util = "0.3"
+
+[lints]
+workspace = true

@@ -129,9 +129,7 @@ impl FleetSpawner {
         // Lanes can't share the host's single approval prompt (the same
         // deadlock reasoning as `subagent_tools` stripping `ask_user_question`):
         // their gate auto-denies and tells the lane to report the command back.
-        config.permissions = config
-            .permissions
-            .map(|gate| Arc::new(gate.for_subagent()));
+        config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
         let store = Arc::new(HistoryStore::open_in_memory()?);
         let session = store.create_session(&SessionMeta {
             model: config.model.clone(),

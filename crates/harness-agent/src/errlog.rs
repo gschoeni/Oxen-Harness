@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Append one entry to the error log at `path`. `None` (no log configured)
 /// and any IO failure are silently ignored — the log is diagnostics, not
 /// state.
-pub(crate) fn record(path: Option<&Path>, event: &str, mut entry: serde_json::Value) {
+pub fn record(path: Option<&Path>, event: &str, mut entry: serde_json::Value) {
     let Some(path) = path else { return };
     let (epoch_ms, ts) = now();
     if let Some(map) = entry.as_object_mut() {

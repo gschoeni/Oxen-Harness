@@ -365,8 +365,20 @@ pub(crate) fn tool_target(arguments: &str) -> Option<String> {
 }
 
 /// What happened to a single turn in the live loop.
-/// Whether a mid-turn submission can stack onto the message queue: only plain
-/// prompts — the queue drains as *prompts for the model*, so a recognized
+/// A message pushed in the instant after the turn's final drain (or during a
+/// cancelled turn) would otherwise vanish — recover it onto the queue so it
+/// still runs, as the next prompt.
+fn recover_interjections(
+    interject: &harness_agent::Interjections,
+    queue: &mut crate::queue::MessageQueue,
+) {
+    for msg in interject.take_all() {
+        queue.add(msg);
+    }
+}
+
+/// Whether a mid-turn submission can be sent to the model as chat (steered
+/// into a running turn, or queued): only plain prompts — a recognized
 /// `/command` would reach the LLM as literal chat text instead of running.
 fn stackable(text: &str) -> bool {
     matches!(
@@ -422,6 +434,11 @@ async fn run_one_turn(
 
     state.borrow_mut().begin_turn(queue.items());
 
+    // The steering channel into the running turn: messages pushed here are
+    // drained at the loop's safe points, so the model sees them mid-work.
+    // Cloned before the turn future takes `agent` (like the cancel token).
+    let interject = agent.interjections();
+
     let cb = state.clone();
     let cb_paused = paused.clone();
     let on_event = move |event: &AgentEvent| {
@@ -444,6 +461,7 @@ async fn run_one_turn(
         tokio::select! {
             result = &mut turn => {
                 state.borrow_mut().finish();
+                recover_interjections(&interject, queue);
                 return TurnOutcome::Done(result);
             }
             maybe_event = rx.recv() => {
@@ -457,9 +475,19 @@ async fn run_one_turn(
                                 let trimmed = line.trim();
                                 let mut s = state.borrow_mut();
                                 if trimmed.is_empty() {
-                                    // Nothing to stack.
+                                    // Nothing to send.
                                 } else if stackable(trimmed) {
-                                    queue.add(trimmed);
+                                    // Steer the running turn: the message is
+                                    // delivered into it at the next safe point
+                                    // (not queued for after). Stack follow-up
+                                    // prompts for later with /queue instead.
+                                    interject.push(trimmed);
+                                    let ui = s.ui.clone();
+                                    s.print_line(&format!(
+                                        "  {} {}",
+                                        ui.brown("🗣 steering:"),
+                                        ui.cream(&truncate(trimmed, 80)),
+                                    ));
                                 } else {
                                     // A /command can't stack — the queue drains
                                     // as prompts for the model, which would
@@ -511,6 +539,7 @@ async fn run_one_turn(
                             }
                             KeyAction::Interrupt => {
                                 state.borrow_mut().finish();
+                                recover_interjections(&interject, queue);
                                 return TurnOutcome::Interrupted;
                             }
                             KeyAction::Exit => {

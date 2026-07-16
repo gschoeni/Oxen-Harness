@@ -104,7 +104,9 @@ impl Live {
                 self.end_markdown();
                 self.suspend(paused);
             }
-            AgentEvent::ApprovalResolved { command, decision, .. } => {
+            AgentEvent::ApprovalResolved {
+                command, decision, ..
+            } => {
                 self.resume(paused);
                 let line = format!(
                     "  {} {}",

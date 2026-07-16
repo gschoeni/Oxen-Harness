@@ -1,15 +1,43 @@
 //! The agent's system prompt and the "unfulfilled intent" nudge.
 //!
-//! The prompt is assembled from a fixed core plus two optional sections that are
-//! only included when the host actually registered the `web_search` and `canvas`
-//! tools, so the model is never told about a tool the registry would reject.
+//! The prompt is assembled from a fixed core plus optional sections that are
+//! only included when the host actually registered the corresponding tool
+//! (`web_search`, `canvas`, `open_file`), so the model is never told about a
+//! tool the registry would reject. Hosts derive that set straight from their
+//! finished registry with [`OptionalTools::from_registry`].
+
+/// Which host-optional tools survived registration — drives the prompt
+/// sections that advertise them. Derive it from the finished registry
+/// ([`OptionalTools::from_registry`]) so the prompt can't drift from what the
+/// registry will actually accept.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OptionalTools {
+    pub web_search: bool,
+    pub canvas: bool,
+    pub open_file: bool,
+}
+
+impl OptionalTools {
+    /// Read the optional-tool set off a finished registry (call after user
+    /// preferences are applied, so a disabled tool is not advertised).
+    pub fn from_registry(tools: &harness_tools::ToolRegistry) -> Self {
+        Self {
+            web_search: tools.get(harness_tools::WEB_SEARCH_TOOL).is_some(),
+            canvas: tools.get(harness_tools::CANVAS_TOOL).is_some(),
+            open_file: tools.get(harness_tools::OPEN_FILE_TOOL).is_some(),
+        }
+    }
+}
 
 /// Build the default system prompt. `web_search` controls whether the
 /// `web_search` tool is advertised — pass whether it's actually registered, so
 /// the model is never offered (and never tries to call) a tool that the
 /// registry would reject as unknown.
 pub fn default_system_prompt(web_search: bool) -> String {
-    system_prompt_with(web_search, false)
+    system_prompt_with(OptionalTools {
+        web_search,
+        ..OptionalTools::default()
+    })
 }
 
 /// A note pinning the agent to a concrete working directory, so the model knows
@@ -29,39 +57,40 @@ pub fn environment_section(workspace: &std::path::Path) -> String {
 /// The system prompt with an [`environment_section`] appended, pinning the
 /// working directory. Use this at agent construction so every new session knows
 /// its project root.
-pub fn system_prompt_with_env(
-    web_search: bool,
-    canvas: bool,
-    workspace: &std::path::Path,
-) -> String {
+pub fn system_prompt_with_env(tools: OptionalTools, workspace: &std::path::Path) -> String {
     format!(
         "{}{}",
-        system_prompt_with(web_search, canvas),
+        system_prompt_with(tools),
         environment_section(workspace)
     )
 }
 
-/// The system prompt, advertising the optional `web_search` and `canvas` tools
-/// only when the host actually registered them.
-pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
-    let web_tool = if web_search {
+/// The system prompt, advertising the host-optional tools (`web_search`,
+/// `canvas`, `open_file`) only when the host actually registered them.
+pub fn system_prompt_with(tools: OptionalTools) -> String {
+    let web_tool = if tools.web_search {
         ", `web_search` (Brave web search)"
     } else {
         ""
     };
-    let canvas_tool = if canvas {
-        ", and `canvas` (show a document in a side panel)"
+    let canvas_tool = if tools.canvas {
+        ", `canvas` (show a document in a side panel)"
     } else {
         ""
     };
-    let web_guideline = if web_search {
+    let open_file_tool = if tools.open_file {
+        ", `open_file` (show a project file in the user's file viewer)"
+    } else {
+        ""
+    };
+    let web_guideline = if tools.web_search {
         "\n- Use `web_search` when something may be newer than your training or \
          isn't in the workspace: library/API docs, current events, or an \
          unfamiliar error."
     } else {
         ""
     };
-    let canvas_guideline = if canvas {
+    let canvas_guideline = if tools.canvas {
         "\n- When you produce a substantial, self-contained deliverable the user \
          will read, iterate on, or keep — a report/article (markdown), a rendered \
          web page or interactive demo (html), a sizeable code file (code), or a \
@@ -72,13 +101,22 @@ pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
     } else {
         ""
     };
+    let open_file_guideline = if tools.open_file {
+        "\n- After creating or substantially rewriting a project file the user \
+         will want to look at — or when walking them through one — call \
+         `open_file` to put it in their file viewer beside the chat instead of \
+         pasting its contents. Open the one or two files that matter, not every \
+         file you touch."
+    } else {
+        ""
+    };
     format!(
         "You are oxen-harness, an open source coding agent working in the user's \
          project directory. Available tools: `find_files` (locate files by glob), \
          `search_files` (regex content search), `read_file` (line-numbered, supports \
          offset/limit), `write_file`, `edit_file` (exact-string patch), `run_shell`, \
          `git`, `update_plan` (maintain a task checklist), \
-         `ask_user_question` (interview the user){web_tool}{canvas_tool}.\n\n\
+         `ask_user_question` (interview the user){web_tool}{canvas_tool}{open_file_tool}.\n\n\
          Guidelines:\n\
          - Prefer the dedicated tools over shell equivalents: use `find_files` not \
            `find`/`ls`, `search_files` not `grep`, `read_file` not `cat`, and \
@@ -108,7 +146,7 @@ pub fn system_prompt_with(web_search: bool, canvas: bool) -> String {
            has multiple reasonable approaches with real trade-offs, call \
            `ask_user_question` to interview the user instead of guessing. Keep \
            options concise and distinct; don't add an 'Other' option (the user can \
-           always type their own). Don't ask about trivia you can decide yourself.{canvas_guideline}\n\
+           always type their own). Don't ask about trivia you can decide yourself.{canvas_guideline}{open_file_guideline}\n\
          - Be careful with destructive commands. Prefer reversible, narrowly-scoped \
            operations, and never chain a destructive action (deleting files, killing \
            processes, force-pushing, rewriting git history) with unrelated commands in \
@@ -161,6 +199,26 @@ pub(crate) const PLAN_STALL_NUDGE: &str =
      answer explaining what's blocked and what you completed instead. Do not leave \
      the checklist stale.";
 
+/// The most of an interjection that reaches the transcript — a paste-bomb
+/// mid-turn must not blow the context budget the turn was working within.
+const INTERJECTION_MAX_CHARS: usize = 25_000;
+
+/// Bound a message the user sent mid-turn. It enters the transcript as an
+/// ordinary user message — no framing wrapper: the store is verbatim history
+/// (renderers and fine-tuning exports read it back), and the message's
+/// position between tool rounds already tells the model it arrived
+/// mid-work. Deliberately no "defer this" instruction either — the model
+/// weighs it against the work in flight (an urgent "stop, wrong file!"
+/// should win; an "also bump the version" can wait for the natural next
+/// step).
+pub(crate) fn clip_interjection(text: &str) -> String {
+    harness_core::text::truncate_with_marker(
+        text,
+        INTERJECTION_MAX_CHARS,
+        "\n… [interjection truncated]",
+    )
+}
+
 /// Heuristic: does a text-only reply read as "I'm about to do X" rather than a
 /// finished answer? Used at most once per turn to nudge the model into emitting
 /// the tool call it announced instead of ending the turn on the plan.
@@ -195,11 +253,15 @@ mod tests {
         let needle = "Never end a turn with only a statement of intent";
         for web_search in [false, true] {
             for canvas in [false, true] {
-                let prompt = system_prompt_with(web_search, canvas);
-                assert!(
-                    prompt.contains(needle),
-                    "guardrail missing for web_search={web_search}, canvas={canvas}"
-                );
+                for open_file in [false, true] {
+                    let tools = OptionalTools {
+                        web_search,
+                        canvas,
+                        open_file,
+                    };
+                    let prompt = system_prompt_with(tools);
+                    assert!(prompt.contains(needle), "guardrail missing for {tools:?}");
+                }
             }
         }
         // ...and via the public convenience wrapper the host uses by default.
@@ -214,20 +276,40 @@ mod tests {
 
     #[test]
     fn optional_tool_sections_appear_only_when_enabled() {
-        let bare = system_prompt_with(false, false);
+        let bare = system_prompt_with(OptionalTools::default());
         assert!(!bare.contains("web_search"));
         assert!(!bare.contains("`canvas`"));
+        assert!(!bare.contains("`open_file`"));
 
-        let full = system_prompt_with(true, true);
+        let full = system_prompt_with(OptionalTools {
+            web_search: true,
+            canvas: true,
+            open_file: true,
+        });
         assert!(full.contains("`web_search` (Brave web search)"));
         assert!(full.contains("`canvas` (show a document in a side panel)"));
+        assert!(full.contains("`open_file` (show a project file in the user's file viewer)"));
+        assert!(full.contains("`open_file` to put it in their file viewer"));
+    }
+
+    #[test]
+    fn optional_tools_derive_from_the_registry() {
+        // The prompt must reflect what the finished registry actually accepts.
+        let registry = harness_tools::ToolRegistry::new();
+        assert_eq!(
+            OptionalTools::from_registry(&registry),
+            OptionalTools::default()
+        );
     }
 
     #[test]
     fn environment_section_names_the_working_directory() {
         let section = environment_section(std::path::Path::new("/tmp/project"));
         assert!(section.contains("/tmp/project"));
-        assert!(system_prompt_with_env(false, false, std::path::Path::new("/w")).contains("/w"));
+        assert!(
+            system_prompt_with_env(OptionalTools::default(), std::path::Path::new("/w"))
+                .contains("/w")
+        );
     }
 
     #[test]

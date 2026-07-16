@@ -11,7 +11,7 @@ use harness_permissions::{policy, PermissionMode, PermissionsConfig};
 use serde::Serialize;
 use tauri::State;
 
-use crate::state::{active_root, AppState};
+use crate::state::AppState;
 
 /// One scope's rules as shown on the page.
 #[derive(Debug, Clone, Serialize)]
@@ -45,7 +45,7 @@ pub(crate) struct PermissionsView {
 
 #[tauri::command]
 pub(crate) async fn get_permissions(state: State<'_, AppState>) -> Result<PermissionsView, String> {
-    let root = active_root(&state).await;
+    let root = state.active_root().await;
     let global = policy::load_global();
     let project = policy::load_project(&root);
     let mode = project
@@ -139,7 +139,7 @@ async fn edit_rules(
             policy::save_global(&config).map_err(|e| e.to_string())
         }
         "project" => {
-            let root = active_root(state).await;
+            let root = state.active_root().await;
             let mut config = policy::load_project(&root);
             edit(&mut config)?;
             policy::save_project(&root, &config).map_err(|e| e.to_string())

@@ -7,12 +7,23 @@
 //! and regex content search ([`fs`]), sandboxed shell execution ([`shell`]),
 //! git operations ([`git`]), Brave-backed web search ([`web`]), the task
 //! checklist ([`plan`]), asking the user structured multiple-choice questions
-//! ([`ask`]), and side-panel documents ([`canvas`]). All file access is
-//! confined to a [`sandbox::Workspace`].
+//! ([`ask`]), side-panel documents ([`canvas`]), and opening project files in
+//! the user's viewer ([`viewer`]). All file access is confined to a
+//! [`sandbox::Workspace`].
 //!
 //! The lower-level [`Tool`] trait (raw JSON in, string out) exists for tools
 //! whose schema is only known at runtime — user-defined [`CustomToolSpec`]
 //! tools are the one case. New built-in tools should implement [`TypedTool`].
+//!
+//! **Host-surface tools** — tools whose whole effect is showing something in
+//! the host's UI ([`ask`], [`canvas`], [`viewer`]) — follow one pattern: a
+//! plain data struct describing what to show, a `…Sink` trait each front end
+//! implements, and a [`TypedTool`] that validates arguments and forwards to
+//! the sink. They register per host (never in the default registry): a host
+//! that lacks the surface either degrades inside its sink (the CLI writes
+//! canvas docs to disk) or doesn't register the tool at all, so the model is
+//! never promised a panel that can't appear. [`viewer`] is the documented
+//! reference implementation.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -31,6 +42,8 @@ pub mod retrieve;
 pub mod sandbox;
 pub mod shell;
 pub mod skill;
+pub mod tasks;
+pub mod viewer;
 pub mod web;
 pub mod web_fetch;
 
@@ -43,6 +56,7 @@ pub use retrieve::{RetrieveOriginalTool, RETRIEVE_ORIGINAL_TOOL};
 pub use sandbox::Workspace;
 pub use shell::RUN_SHELL_TOOL;
 pub use skill::{Skill, SkillScope, SkillTool, SKILL_TOOL};
+pub use viewer::{FileView, OpenFileTool, ViewerSink, OPEN_FILE_TOOL};
 pub use web::WEB_SEARCH_TOOL;
 pub use web_fetch::{WebFetchTool, WEB_FETCH_TOOL};
 
@@ -519,13 +533,19 @@ impl ToolRegistry {
             .with_typed(fs::EditFileTool::new(workspace.clone()))
             .with_typed(fs::FindFilesTool::new(workspace.clone()))
             .with_typed(fs::SearchTool::new(workspace.clone()))
-            .with_typed(shell::ShellTool::new(workspace.clone()))
-            .with_typed(git::GitTool::new(workspace))
+            .with_typed(git::GitTool::new(workspace.clone()))
             // Planning/checklist tool — always available so any host gets it.
             .with_typed(plan::PlanTool::new())
             // Fetch a web page into context (no key needed); pairs with the
             // web_search tool registered just below.
             .with_typed(web_fetch::WebFetchTool::new());
+
+        // The shell + background-task trio share one registry, so the task
+        // ids `run_shell` hands out resolve in `task_output`/`kill_task`.
+        let tasks = tasks::BackgroundTasks::in_temp();
+        registry.register_typed(shell::ShellTool::with_tasks(workspace, tasks.clone()));
+        registry.register_typed(tasks::TaskOutputTool::new(tasks.clone()));
+        registry.register_typed(tasks::KillTaskTool::new(tasks));
 
         // Always register web search so the model can use it; when no Brave key
         // is configured the call fails with a recognizable error that the UIs
@@ -625,9 +645,11 @@ mod tests {
                 fs::EDIT_FILE_TOOL,
                 fs::FIND_FILES_TOOL,
                 git::GIT_TOOL,
+                tasks::KILL_TASK_TOOL,
                 fs::READ_FILE_TOOL,
                 shell::RUN_SHELL_TOOL,
                 fs::SEARCH_FILES_TOOL,
+                tasks::TASK_OUTPUT_TOOL,
                 plan::PLAN_TOOL,
                 web_fetch::WEB_FETCH_TOOL,
                 web::WEB_SEARCH_TOOL,
@@ -642,10 +664,11 @@ mod tests {
         // The tool-schema block is fixed overhead resent on every model call, so
         // it directly shrinks the usable context window. Pin its size so a new
         // tool or a verbose schema can't silently balloon the prefix. Current
-        // size is ~8.2K chars (~2K tokens) — derived schemas document every
-        // field and enum variant, which is deliberate spend; `schema_for`
-        // strips what carries no meaning. The ceiling leaves headroom for a
-        // tool or two without inviting unchecked growth.
+        // size is ~10.3K chars (~2.6K tokens) after the background-task trio
+        // (`is_background` + `task_output` + `kill_task`) — derived schemas
+        // document every field and enum variant, which is deliberate spend;
+        // `schema_for` strips what carries no meaning. The ceiling leaves
+        // headroom for a tool or two without inviting unchecked growth.
         let workspace = Workspace::new(".").unwrap();
         let registry = ToolRegistry::default_for_workspace(workspace);
         let chars: usize = registry
@@ -654,8 +677,8 @@ mod tests {
             .map(|d| d.to_string().len())
             .sum();
         assert!(
-            chars < 9_500,
-            "default tool definitions grew to {chars} chars (budget 9500)"
+            chars < 11_500,
+            "default tool definitions grew to {chars} chars (budget 11500)"
         );
     }
 }

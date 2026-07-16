@@ -23,11 +23,11 @@
 
 pub(crate) mod auth;
 pub(crate) mod compression;
-pub(crate) mod permissions;
 pub(crate) mod location;
 pub(crate) mod loops;
 pub(crate) mod model;
 pub(crate) mod oxen;
+pub(crate) mod permissions;
 pub(crate) mod preview;
 pub(crate) mod queue;
 pub(crate) mod review;

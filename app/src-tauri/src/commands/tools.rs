@@ -4,9 +4,9 @@
 //! take effect for new and resumed chats. The full manageable set comes from
 //! [`crate::state::settings_registry`], which mirrors what a real agent gets.
 
-use tauri::{AppHandle, State};
+use tauri::State;
 
-use crate::state::{current_agent, settings_registry, AppState};
+use crate::state::AppState;
 
 /// The tool definitions (JSON schemas) the current session's agent advertises to
 /// the model on every call — surfaced in the developer view so the full request
@@ -14,10 +14,9 @@ use crate::state::{current_agent, settings_registry, AppState};
 /// we read them from the live agent.
 #[tauri::command]
 pub(crate) async fn tool_definitions(
-    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let arc = current_agent(&app, &state).await?;
+    let arc = state.current_agent().await?;
     let agent = arc.lock().await;
     Ok(agent.tool_definitions())
 }
@@ -29,7 +28,7 @@ pub(crate) async fn tool_definitions(
 pub(crate) async fn list_tools(
     state: State<'_, AppState>,
 ) -> Result<Vec<harness_runtime::tools::ToolInfo>, String> {
-    let registry = settings_registry(&state).await?;
+    let registry = state.settings_registry().await?;
     let prefs = harness_runtime::tools::load();
     Ok(harness_runtime::tools::list(&registry, &prefs))
 }
@@ -40,7 +39,7 @@ pub(crate) async fn add_custom_tool(
     state: State<'_, AppState>,
     spec: harness_tools::CustomToolSpec,
 ) -> Result<(), String> {
-    let registry = settings_registry(&state).await?;
+    let registry = state.settings_registry().await?;
     harness_runtime::tools::add_custom(spec, &registry).map_err(|e| e.to_string())
 }
 

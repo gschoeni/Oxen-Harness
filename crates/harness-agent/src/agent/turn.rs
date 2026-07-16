@@ -9,17 +9,26 @@
 
 use harness_llm::stream::{AssembledMessage, StreamEvent};
 use harness_llm::types::ChatMessage;
-use harness_llm::{Attachment, ChatRequest, ToolCall};
+use harness_llm::{Attachment, ChatRequest, OxenClient, ToolCall};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::AgentError;
 use crate::event::AgentEvent;
 use crate::{budget, compact, prompt};
 
-use super::{build_user_message, Agent};
+use super::{build_user_message, Agent, PrefireSummary};
 
 const TOOL_ARGUMENT_EVENT_CHARS: usize = 16_000;
 const TOOL_RESULT_EVENT_CHARS: usize = 4_000;
+
+// Compaction keeps the latest few tool outputs and the last few turns verbatim.
+const KEEP_RECENT_TOOLS: usize = 2;
+const KEEP_RECENT_TURNS: usize = 3;
+
+/// At this percentage of the prompt budget, a compaction summary starts
+/// cooking speculatively in the background (see [`Agent::maybe_prefire`]) so
+/// it's warm when the hard 100% line forces a splice.
+const PREFIRE_THRESHOLD_PERCENT: usize = 85;
 
 impl Agent {
     /// Run one user turn to completion, returning the assistant's final text.
@@ -130,6 +139,14 @@ impl Agent {
         // doesn't require the agent lock the turn is holding).
         let cancel = self.cancel.clone();
 
+        // Consecutive degenerate rounds: a reply with no prose and no tool
+        // calls (a provider anomaly — the stream completed but carried
+        // nothing). Re-sampled a bounded number of times before giving up, so
+        // one bad generation doesn't silently end the turn with an empty
+        // answer, and a provider stuck returning nothing can't loop forever.
+        const MAX_EMPTY_RESAMPLES: u32 = 2;
+        let mut empty_rounds: u32 = 0;
+
         // No fixed iteration cap: the loop runs until the model returns a final
         // answer, bounded only by how much fits in the context window.
         loop {
@@ -137,6 +154,11 @@ impl Agent {
             if cancel.is_cancelled() {
                 return Ok(String::new());
             }
+
+            // Messages the user sent while the last round ran enter the
+            // transcript here — before the next model call — so steering
+            // lands mid-work, not after the turn ends.
+            self.drain_interjections()?;
 
             // Make room for the next request, then send it and fold the round's
             // token usage back into the running totals.
@@ -198,6 +220,28 @@ impl Agent {
 
             self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens);
 
+            // A round that produced neither prose nor a tool call is
+            // re-sampled (nothing is persisted, so re-asking is safe); past
+            // the bound it falls through and ends the turn empty as before.
+            if assembled.content.is_empty() && assembled.tool_calls.is_empty() {
+                if empty_rounds < MAX_EMPTY_RESAMPLES {
+                    empty_rounds += 1;
+                    crate::errlog::record(
+                        self.config.error_log.as_deref(),
+                        "empty_reply_resampled",
+                        serde_json::json!({
+                            "session": self.session_id(),
+                            "model": self.config.model,
+                            "attempt": empty_rounds,
+                            "max_attempts": MAX_EMPTY_RESAMPLES,
+                        }),
+                    );
+                    continue;
+                }
+            } else {
+                empty_rounds = 0;
+            }
+
             self.push(ChatMessage::assistant_with_tools(
                 assembled.content.clone(),
                 assembled.tool_calls.clone(),
@@ -213,6 +257,13 @@ impl Agent {
             });
 
             if assembled.tool_calls.is_empty() {
+                // A message the user sent while the final reply streamed must
+                // be seen before the turn ends: drain it and go around again.
+                // Checked before the nudges — a real user message outranks a
+                // synthetic corrective.
+                if self.drain_interjections()? {
+                    continue;
+                }
                 // The model replied with prose and no tool call. If it reads as
                 // an announced-but-unperformed action, nudge it once to actually
                 // emit the call; otherwise this is its final answer.
@@ -281,16 +332,26 @@ impl Agent {
     {
         let resident_budget =
             budget::estimate_tokens_for_chars(self.config.max_resident_context_chars).min(budget);
-        let raw = budget::estimate_prompt_tokens(&self.messages, tool_defs);
+        let mut raw = budget::estimate_prompt_tokens(&self.messages, tool_defs);
         if self.calibrated(raw) > resident_budget && resident_budget < budget {
             // Best effort: a single recent turn may legitimately exceed the soft
             // resident target. The real provider window remains authoritative.
             let _ = self
                 .compact_to_fit(resident_budget, tool_defs, on_event)
                 .await?;
+            // Only a compaction changes the transcript; re-estimate just then.
+            raw = budget::estimate_prompt_tokens(&self.messages, tool_defs);
         }
-        let raw = budget::estimate_prompt_tokens(&self.messages, tool_defs);
         if self.calibrated(raw) <= budget {
+            // Nearing the line: start preparing the summary in the background
+            // now, so when compaction actually triggers the summary is
+            // already warm and the turn doesn't stall on a model call it
+            // could have made minutes earlier.
+            if self.calibrated(raw).saturating_mul(100)
+                >= budget.saturating_mul(PREFIRE_THRESHOLD_PERCENT)
+            {
+                self.maybe_prefire();
+            }
             return Ok(raw);
         }
         let fit = self.compact_to_fit(budget, tool_defs, on_event).await?;
@@ -447,10 +508,6 @@ impl Agent {
     where
         F: FnMut(&AgentEvent),
     {
-        // Keep the latest few tool outputs and the last few turns verbatim.
-        const KEEP_RECENT_TOOLS: usize = 2;
-        const KEEP_RECENT_TURNS: usize = 3;
-
         // Stage 1: prune stale tool output — cheap, no model call.
         let freed = compact::prune_tool_results(&mut self.messages, KEEP_RECENT_TOOLS);
         if freed > 0 {
@@ -465,21 +522,141 @@ impl Agent {
             return Ok(true);
         }
 
+        // Stage 2a: a summary prepared speculatively in the background (see
+        // [`Agent::maybe_prefire`]) is spliced in first — usually making the
+        // synchronous model call below unnecessary, so compaction costs no
+        // wall-clock the user can feel.
+        if self.consume_prefire(on_event).await && self.fits_budget(budget, tool_defs) {
+            return Ok(true);
+        }
+
         // Stage 2: summarize the oldest turns into a single message. The cut is
         // on a user-turn boundary, so no tool result is orphaned from its call.
+        // When stage 2a spliced but didn't free enough, this pass re-summarizes
+        // the remainder — the fresh summary message participates via the
+        // prompt's carry-forward instruction, so nothing it held is lost.
         let Some(cut) = compact::summary_cut_index(&self.messages, KEEP_RECENT_TURNS) else {
             return Ok(self.fits_budget(budget, tool_defs));
         };
-        let start = usize::from(self.messages.first().is_some_and(|m| m.role == "system"));
+        let start = self.transcript_start();
         let rendered = compact::render_for_summary(&self.messages[start..cut]);
         let summary = self.complete(compact::SUMMARY_PROMPT, &rendered).await?;
+        self.apply_summary(cut, &summary, "summarized earlier conversation", on_event);
+        Ok(self.fits_budget(budget, tool_defs))
+    }
+
+    /// Move everything the user sent mid-turn into the transcript, each as
+    /// its own user message (FIFO, never merged — see [`crate::interject`]).
+    /// Returns whether anything was drained, so the caller can force another
+    /// model round when the turn was about to end.
+    fn drain_interjections(&mut self) -> Result<bool, AgentError> {
+        let pending = self.interjections.take_all();
+        let drained = !pending.is_empty();
+        for text in pending {
+            self.push(ChatMessage::user(prompt::clip_interjection(&text)))?;
+        }
+        Ok(drained)
+    }
+
+    /// Where the summarizable transcript begins: past the leading system
+    /// prompt when there is one.
+    fn transcript_start(&self) -> usize {
+        usize::from(self.messages.first().is_some_and(|m| m.role == "system"))
+    }
+
+    /// Replace `[transcript_start()..cut)` with one summary message, then do
+    /// everything a splice obligates: drop any in-flight prefire (its prefix
+    /// is now stale), persist the compact snapshot, and tell the host. The
+    /// one place splice bookkeeping lives, so the prefire and synchronous
+    /// paths can't drift on it.
+    fn apply_summary<F>(&mut self, cut: usize, summary: &str, detail: &str, on_event: &mut F)
+    where
+        F: FnMut(&AgentEvent),
+    {
+        let start = self.transcript_start();
         let note = ChatMessage::user(format!("{}\n{}", compact::SUMMARY_MARKER, summary));
         self.messages.splice(start..cut, std::iter::once(note));
+        self.invalidate_prefire();
         self.save_context_snapshot();
         on_event(&AgentEvent::Compacted {
-            detail: "summarized earlier conversation".to_string(),
+            detail: detail.to_string(),
         });
-        Ok(self.fits_budget(budget, tool_defs))
+    }
+
+    /// Kick off a background summarization of the oldest turns if none is in
+    /// flight. Called when the transcript nears (but hasn't hit) the budget;
+    /// the result is consumed by [`Agent::consume_prefire`] when compaction
+    /// actually triggers. Costs one speculative model call; if compaction
+    /// never triggers the result is simply dropped.
+    fn maybe_prefire(&mut self) {
+        if self.prefire.is_some() {
+            return;
+        }
+        let Some(cut) = compact::summary_cut_index(&self.messages, KEEP_RECENT_TURNS) else {
+            return;
+        };
+        let start = self.transcript_start();
+        if cut <= start {
+            return;
+        }
+        let rendered = compact::render_for_summary(&self.messages[start..cut]);
+        // The call's approximate input cost, kept so its spend is accounted
+        // even when the provider reports no usage (or the summary is later
+        // discarded) — the request hits the provider either way.
+        let prompt_estimate =
+            budget::estimate_tokens_for_chars(compact::SUMMARY_PROMPT.len() + rendered.len());
+        let client = self.client.clone();
+        let model = self.config.model.clone();
+        let handle = tokio::spawn(async move { summarize(&client, &model, rendered).await });
+        self.prefire = Some(PrefireSummary {
+            cut,
+            prompt_estimate,
+            handle,
+        });
+    }
+
+    /// Splice in the prefire summary if one is ready and still valid,
+    /// returning whether the transcript changed. Validity holds because the
+    /// transcript is append-only between splices, and every splice calls
+    /// [`Agent::invalidate_prefire`] (see [`Agent::apply_summary`]) — a
+    /// prefire that survives to this point covers an intact prefix. A
+    /// failed or empty summary is discarded (its estimated spend still
+    /// accounted) and the caller falls back to the synchronous path.
+    async fn consume_prefire<F>(&mut self, on_event: &mut F) -> bool
+    where
+        F: FnMut(&AgentEvent),
+    {
+        let Some(pre) = self.prefire.take() else {
+            return false;
+        };
+        let start = self.transcript_start();
+        if pre.cut <= start || pre.cut > self.messages.len() {
+            // Defensive: shouldn't happen while every splice invalidates.
+            self.record_usage(pre.prompt_estimate, 0);
+            pre.handle.abort();
+            return false;
+        }
+        let prompt_estimate = pre.prompt_estimate;
+        // Usually already finished; if the hard threshold arrived first, this
+        // waits out the remainder — no worse than the synchronous call.
+        let Ok(Ok(assembled)) = pre.handle.await else {
+            self.record_usage(prompt_estimate, 0);
+            return false;
+        };
+        // Account the speculative call's spend (provider-reported when
+        // available, estimated otherwise) — same policy as [`Agent::complete`].
+        let (prompt, completion) = budget::split_oneshot_usage(&assembled, prompt_estimate);
+        self.record_usage(prompt, completion);
+        if assembled.content.is_empty() {
+            return false;
+        }
+        self.apply_summary(
+            pre.cut,
+            &assembled.content,
+            "summarized earlier conversation (prepared in background)",
+            on_event,
+        );
+        true
     }
 
     /// Run one tool call, bracketing it with [`AgentEvent::ToolStart`] and
@@ -614,10 +791,31 @@ impl Agent {
     }
 }
 
+/// One-shot summarization call used by the background prefire task — free of
+/// `&self` so it can run on a spawned task while the agent keeps working.
+/// Usage is accounted by the consumer (see [`Agent::consume_prefire`]).
+async fn summarize(
+    client: &OxenClient,
+    model: &str,
+    rendered: String,
+) -> Result<AssembledMessage, harness_llm::LlmError> {
+    let messages = vec![
+        ChatMessage::system(compact::SUMMARY_PROMPT.to_string()),
+        ChatMessage::user(rendered),
+    ];
+    let request = ChatRequest::new(model, messages).streaming(true);
+    client
+        .stream_chat(&request, &CancellationToken::new(), |_| {})
+        .await
+}
+
 /// What the permission gate decided about one tool call.
 enum GateVerdict {
     Proceed,
-    ProceedRewritten { args: serde_json::Value, note: String },
+    ProceedRewritten {
+        args: serde_json::Value,
+        note: String,
+    },
     Refused(String),
 }
 
@@ -1198,6 +1396,250 @@ mod tests {
             AgentError::Llm(LlmError::Api { status: 401, .. })
         ));
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn an_interjection_sent_during_the_final_reply_forces_another_round() {
+        let mut server = mockito::Server::new_async().await;
+        // The follow-up round is the request that carries the interjection;
+        // define it first so body matching routes it here.
+        let followup = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("also check the tests".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("addressed the steering"))
+            .expect(1)
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("first answer"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(2));
+        let handle = agent.interjections();
+
+        // Push from the event callback — i.e. while the first reply is
+        // streaming, exactly when a real user would be typing.
+        let pushed = std::cell::Cell::new(false);
+        let out = agent
+            .run_turn("hello", |e| {
+                if matches!(e, AgentEvent::Token(_)) && !pushed.get() {
+                    pushed.set(true);
+                    handle.push("wait — also check the tests");
+                }
+            })
+            .await
+            .unwrap();
+
+        // The turn did not end on "first answer": the interjection forced a
+        // second round whose reply is the final one.
+        assert_eq!(out, "addressed the steering");
+        // The transcript carries the user's clean text — no framing wrapper
+        // (the store is verbatim history: renderers and exports read it back).
+        let stored = agent
+            .messages()
+            .iter()
+            .find(|m| {
+                m.role == "user"
+                    && m.content_text()
+                        .is_some_and(|t| t.contains("also check the tests"))
+            })
+            .expect("the interjection should be in the transcript");
+        assert_eq!(
+            stored.content_text().as_deref(),
+            Some("wait — also check the tests")
+        );
+        followup.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn interjections_pending_at_turn_start_land_before_the_first_model_call() {
+        let mut server = mockito::Server::new_async().await;
+        // One call total: both the prompt and the interjection are in it.
+        let only = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("left over from the last turn".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("done"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(2));
+        agent.interjections().push("left over from the last turn");
+
+        let out = agent.run_turn("hello", |_| {}).await.unwrap();
+        assert_eq!(out, "done");
+        only.assert_async().await;
+        // FIFO in the transcript: prompt first, then the framed interjection.
+        let users: Vec<String> = agent
+            .messages()
+            .iter()
+            .filter(|m| m.role == "user")
+            .filter_map(|m| m.content_text())
+            .collect();
+        assert_eq!(users.len(), 2);
+        assert_eq!(users[0], "hello");
+        assert_eq!(users[1], "left over from the last turn");
+    }
+
+    #[tokio::test]
+    async fn a_prefired_summary_is_consumed_when_compaction_triggers() {
+        let mut server = mockito::Server::new_async().await;
+        // Defined first so the background summarization request (the only one
+        // whose body carries the structured summary prompt) matches it and
+        // ordinary turn requests fall through to the mocks below. expect(1)
+        // also proves the synchronous summarize path never ran.
+        let summary = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("Structure the summary".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("PREFIRED SUMMARY"))
+            .expect(1)
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("ok"))
+            .expect(1)
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("done"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Seed three turns of big assistant prose — nothing for the
+        // tool-prune stage to reclaim, so only summarization can free room.
+        // ~24k chars ≈ 6k tokens: above 85% of the 7000 budget, below 100%.
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "qwen3-8b");
+        let big = "x".repeat(8000);
+        for i in 0..3 {
+            store
+                .append_message(&session, &ChatMessage::user(format!("q{i}")))
+                .unwrap();
+            store
+                .append_message(&session, &ChatMessage::assistant(big.clone()))
+                .unwrap();
+        }
+        let client = OxenClient::new(server.url(), "key", "qwen3-8b");
+        let config = AgentConfig {
+            model: "qwen3-8b".into(),
+            system_prompt: None,
+            context_window: Some(7000),
+            response_reserve: 0,
+            ..AgentConfig::default()
+        };
+        let mut agent =
+            Agent::resume_from_store(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        // Turn 1 fits but crosses the 85% prefire line: the background
+        // summarization is spawned; the turn itself completes normally.
+        let out = agent.run_turn("continue", |_| {}).await.unwrap();
+        assert_eq!(out, "ok");
+        assert!(agent.prefire.is_some(), "the prefire should be in flight");
+
+        // Turn 2 pushes the transcript over budget: compaction consumes the
+        // warm summary instead of making a synchronous model call.
+        let mut details = Vec::new();
+        let out = agent
+            .run_turn("y".repeat(8000), |e| {
+                if let AgentEvent::Compacted { detail } = e {
+                    details.push(detail.clone());
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(out, "done");
+        assert!(
+            details.iter().any(|d| d.contains("prepared in background")),
+            "compaction should have used the prefired summary: {details:?}"
+        );
+        let note = agent
+            .messages()
+            .iter()
+            .find(|m| {
+                m.content_text()
+                    .is_some_and(|t| t.contains("PREFIRED SUMMARY"))
+            })
+            .expect("the prefired summary should be spliced into the transcript");
+        assert_eq!(note.role, "user");
+        summary.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn an_empty_reply_is_resampled_instead_of_ending_the_turn_silently() {
+        let mut server = mockito::Server::new_async().await;
+        // First call: the stream completes cleanly but carries no content and
+        // no tool calls — a degenerate generation. The turn must ask again.
+        let empty = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose(""))
+            .expect(1)
+            .create_async()
+            .await;
+        let good = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("recovered"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(2));
+        let out = agent.run_turn("hello", |_| {}).await.unwrap();
+
+        assert_eq!(out, "recovered");
+        // The degenerate round left nothing behind: exactly one assistant
+        // message, the real one.
+        let assistant_count = agent
+            .messages()
+            .iter()
+            .filter(|m| m.role == "assistant")
+            .count();
+        assert_eq!(assistant_count, 1);
+        empty.assert_async().await;
+        good.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn empty_reply_resampling_is_bounded() {
+        let mut server = mockito::Server::new_async().await;
+        // Every call returns the degenerate empty reply: first round + two
+        // re-samples = exactly three calls, then the turn ends empty rather
+        // than looping forever.
+        let empty = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose(""))
+            .expect(3)
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(2));
+        let out = agent.run_turn("hello", |_| {}).await.unwrap();
+
+        assert_eq!(out, "");
+        empty.assert_async().await;
     }
 
     #[tokio::test]

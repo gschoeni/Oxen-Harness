@@ -8,36 +8,69 @@
 
 import { useCallback, useEffect, type PointerEvent } from "react";
 import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
-import { useStore } from "../../lib/store";
+import { useStore, type RightTabId } from "../../lib/store";
 import { DockToggle } from "./DockToggle";
 import { useAvailableDocks, type DockSide, type DockSpec } from "./docks";
+import { CHAT_MIN_FIT, RAIL_W } from "./layout";
 import "./docks.css";
+
+export { RAIL_W };
 
 /** Smallest the chat column may be squeezed to by a dock drag. */
 const CHAT_MIN = 380;
-/** Width of a collapsed column's icon rail. */
-export const RAIL_W = 52;
 
 /** The dock the user is looking at on `side` (falls back to the first with
  *  content, so a side always shows *something* when it's open). */
 export function useActiveDock(side: DockSide): DockSpec | undefined {
   const available = useAvailableDocks(side);
   const activeId = useStore((s) => {
+    if (side === "left") return s.leftTab ?? undefined;
+    // The right side is per-chat (preview ⇄ canvas ⇄ editor follow the session);
+    // the left is app-wide (the file tree follows the workspace, not the chat).
     const session = s.session?.session_id;
-    // Only the right side is per-chat today (preview ⇄ canvas). A left-side
-    // tab would key off the same map when one exists.
-    return session && side === "right" ? s.rightTab[session] : undefined;
+    return session ? s.rightTab[session] : undefined;
   });
   return available.find((d) => d.id === activeId) ?? available[0];
 }
 
-export function DockColumn({ side }: { side: DockSide }) {
+export function DockColumn({
+  side,
+  forceRail = false,
+}: {
+  side: DockSide;
+  /** The layout solver squeezed this column to its rail (window too small). */
+  forceRail?: boolean;
+}) {
   const available = useAvailableDocks(side);
+  const otherSide: DockSide = side === "left" ? "right" : "left";
+  const otherAvailable = useAvailableDocks(otherSide);
   const active = useActiveDock(side);
-  const collapsed = useStore((s) => !!s.dockCollapsed[side]);
+  const collapsed = useStore((s) => !!s.dockCollapsed[side]) || forceRail;
   const setDockWidth = useStore((s) => s.setDockWidth);
   const setDockCollapsed = useStore((s) => s.setDockCollapsed);
   const setRightTab = useStore((s) => s.setRightTab);
+  const setLeftTab = useStore((s) => s.setLeftTab);
+  const pickTab = (id: string) =>
+    side === "right" ? setRightTab(id as RightTabId) : setLeftTab(id);
+
+  // Expand this column out of its rail. If the window is too small to fit it
+  // at its wanted width, a bare un-collapse would be a dead click (the layout
+  // solver would fold it right back) — so make room honestly: take only the
+  // active dock's minimum and fold the other side to a rail.
+  const expand = () => {
+    const s = useStore.getState();
+    const want = s.dockWidths[side] ?? active?.defaultWidth ?? minWidth;
+    const otherWidth = !otherAvailable.length
+      ? 0
+      : s.dockCollapsed[otherSide]
+        ? RAIL_W
+        : (s.dockWidths[otherSide] ?? 0);
+    if (window.innerWidth - otherWidth - want < CHAT_MIN_FIT) {
+      if (active) setDockWidth(side, active.minWidth);
+      if (otherAvailable.length) setDockCollapsed(otherSide, true);
+    }
+    setDockCollapsed(side, false);
+  };
 
   const minWidth = active?.minWidth ?? 240;
 
@@ -79,12 +112,10 @@ export function DockColumn({ side }: { side: DockSide }) {
   if (collapsed) {
     return (
       <nav className={`dock-rail ${side}`} aria-label={`Collapsed ${side} panel`}>
-        {/* Keep the window draggable by its title bar even when collapsed. */}
-        <div className="dock-rail-titlebar" data-tauri-drag-region />
         {railHeader && <div className="dock-rail-brand">{railHeader()}</div>}
         <button
           className="dock-rail-btn"
-          onClick={() => setDockCollapsed(side, false)}
+          onClick={expand}
           title={`Expand (${side === "left" ? "⌘B" : "⌘⌥B"})`}
           aria-label={`Expand ${side} panel`}
         >
@@ -98,8 +129,8 @@ export function DockColumn({ side }: { side: DockSide }) {
             title={dock.title}
             aria-label={`Open ${dock.title}`}
             onClick={() => {
-              setDockCollapsed(side, false);
-              if (side === "right") setRightTab(dock.id as "preview" | "canvas");
+              expand();
+              pickTab(dock.id);
             }}
           >
             {dock.icon}
@@ -119,7 +150,7 @@ export function DockColumn({ side }: { side: DockSide }) {
               role="tab"
               aria-selected={dock.id === active?.id}
               className={`dock-tab${dock.id === active?.id ? " active" : ""}`}
-              onClick={() => side === "right" && setRightTab(dock.id as "preview" | "canvas")}
+              onClick={() => pickTab(dock.id)}
             >
               {dock.icon}
               <span>{dock.title}</span>

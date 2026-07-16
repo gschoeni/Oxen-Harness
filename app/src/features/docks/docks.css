@@ -28,37 +28,43 @@
 .dock-tabs {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: var(--space-2) var(--space-2) 0;
-  padding-top: var(--titlebar-h);
+  gap: var(--space-1);
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
   flex-shrink: 0;
   overflow-x: auto;
+  background: var(--surface);
+  border-bottom: 1px solid var(--separator);
 }
 .dock-tab {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   flex-shrink: 0;
+  min-height: 28px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--frame-radius);
-  color: var(--text-secondary);
-  padding: 4px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  padding: 4px var(--space-3);
   font-size: var(--text-sm);
+  font-weight: 500;
   cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
 }
 .dock-tab:hover {
   color: var(--text);
+  background: var(--surface-hover);
 }
 .dock-tab.active {
   color: var(--text);
   border-color: var(--separator);
-  background: var(--surface, transparent);
-}
-/* With the strip present, the dock's own header shouldn't also clear the
-   traffic lights — the strip already did. */
-.dock-tabs ~ .dock-body .canvas-head {
-  padding-top: 10px;
+  background: var(--bg);
+  box-shadow: var(--shadow-1);
 }
 
 /* The collapse control lives in the column's HEADER band, always visible, in
@@ -101,7 +107,7 @@
    one, mirrored. */
 .dock-toggle.right {
   position: absolute;
-  top: calc(var(--titlebar-h) + 6px);
+  top: var(--space-2);
   left: var(--space-2);
   z-index: var(--z-sticky);
 }
@@ -114,21 +120,16 @@
   padding-left: 40px;
 }
 
-/* A collapsed column: a rail of icons. Clicking one brings its dock back.
-   The rail is narrower than the macOS traffic lights, so its separator — like
-   the sidebar's — starts BELOW the title bar (see the shared rule at the
-   bottom of this file). Otherwise the border would cut straight through the
-   window buttons. */
+/* A collapsed column: a rail of icons. Clicking one brings its dock back. */
 .dock-rail {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding: var(--space-2) 0;
   /* Same top inset as the expanded sidebar, so the logo below sits on exactly
      the same line in both states — collapsing must not make the app lurch. */
-  padding-top: var(--titlebar-h);
+  padding: var(--space-3) 0 var(--space-2);
   background: var(--surface);
   min-height: 0;
   overflow: hidden;
@@ -169,25 +170,13 @@
   margin: 2px 0 4px;
 }
 
-/* The window's drag strip: without it, a collapsed rail leaves the top of the
-   window undraggable. */
-.dock-rail-titlebar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: var(--titlebar-h);
-  z-index: var(--z-titlebar);
-}
-
-/* The left column's separator, drawn only below the title bar so it never
-   crosses the traffic lights — the top strip reads as one continuous title
-   bar across the whole window. */
+/* The left column's separator. The app title bar above owns the traffic-light
+   strip, so this can run the column's full height. */
 .dock-rail.left::after,
 .dock-column.left::after {
   content: "";
   position: absolute;
-  top: var(--titlebar-h);
+  top: 0;
   bottom: 0;
   right: 0;
   width: var(--frame-border-w);

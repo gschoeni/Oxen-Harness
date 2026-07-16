@@ -21,6 +21,13 @@ pub struct RetryPolicy {
     pub base_delay: Duration,
 }
 
+/// The longest a single retry wait may be, whatever the configured base and
+/// attempt count multiply out to. Unbounded exponential backoff has a history
+/// of surprising people (a doubling schedule a few misconfigured attempts deep
+/// sleeps for hours); past a minute, waiting longer doesn't make a provider
+/// recover sooner.
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
+
 impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
@@ -32,9 +39,11 @@ impl Default for RetryPolicy {
 
 impl RetryPolicy {
     /// How long to wait after the `attempt`-th try failed (1-based), doubling
-    /// each time: base, 2×base, 4×base, …
+    /// each time — base, 2×base, 4×base, … — clamped to [`MAX_RETRY_DELAY`].
     pub(crate) fn delay_after(&self, attempt: u32) -> Duration {
-        self.base_delay * 2u32.saturating_pow(attempt.saturating_sub(1))
+        self.base_delay
+            .saturating_mul(2u32.saturating_pow(attempt.saturating_sub(1)))
+            .min(MAX_RETRY_DELAY)
     }
 }
 
@@ -98,5 +107,22 @@ impl Default for AgentConfig {
             error_log: None,
             permissions: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_delay_doubles_then_clamps() {
+        let policy = RetryPolicy::default(); // 1s base
+        assert_eq!(policy.delay_after(1), Duration::from_secs(1));
+        assert_eq!(policy.delay_after(2), Duration::from_secs(2));
+        assert_eq!(policy.delay_after(3), Duration::from_secs(4));
+        // A deep (or misconfigured) attempt count must never produce an
+        // hours-long sleep — the clamp holds even where 2^n overflows.
+        assert_eq!(policy.delay_after(10), Duration::from_secs(60));
+        assert_eq!(policy.delay_after(u32::MAX), Duration::from_secs(60));
     }
 }

@@ -107,6 +107,14 @@ pub fn errors_log() -> Result<PathBuf, ConfigError> {
     under("errors.jsonl")
 }
 
+/// `~/.oxen-harness/last-crash` — the marker a fatal-signal handler leaves
+/// behind when a run dies on SIGSEGV/SIGBUS/etc., read (and consumed) by the
+/// next launch so the crash gets reported instead of vanishing (see the
+/// `harness-crash` crate). Absent after every clean exit.
+pub fn last_crash_file() -> Result<PathBuf, ConfigError> {
+    under("last-crash")
+}
+
 /// `~/.oxen-harness/themes/` — custom + exported themes.
 pub fn themes_dir() -> Result<PathBuf, ConfigError> {
     let dir = under("themes")?;

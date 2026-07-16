@@ -23,10 +23,9 @@
 
 use std::path::PathBuf;
 
-use tauri::{Manager, RunEvent};
-use tokio::sync::Mutex;
+use tauri::{Emitter, Manager, RunEvent};
 
-mod bridges;
+mod browser;
 mod commands;
 mod events;
 mod preview;
@@ -45,6 +44,18 @@ pub fn run() {
     // of connection.json into the .env.
     harness_config::secrets::load();
     let _ = harness_runtime::connection::load();
+    // Report a crash from the previous run to the developer error log, then
+    // arm the fatal-signal handler for this one (see harness-crash).
+    if let Ok(marker) = harness_config::paths::last_crash_file() {
+        if let Some(signal) = harness_crash::arm(&marker) {
+            let log = harness_config::paths::errors_log().ok();
+            harness_agent::errlog::record(
+                log.as_deref(),
+                "crashed",
+                serde_json::json!({ "signal": signal }),
+            );
+        }
+    }
     // Start in the last active project (or the launch directory on first run).
     let initial_project = read_projects_config()
         .active
@@ -57,11 +68,49 @@ pub fn run() {
     let initial_local = harness_runtime::models::active_local();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState {
-            active_project: Mutex::new(initial_project),
-            cloud_model: Mutex::new(initial_model),
-            local_model: Mutex::new(initial_local),
-            ..AppState::default()
+        // The main webview IS the app: navigating it to a clicked link would
+        // replace the entire UI with that page, with no way back. The frontend
+        // intercepts link clicks (see app/src/lib/links.ts); this guard
+        // backstops anything that slips through by cancelling the navigation
+        // and handing the URL to the link-browser side panel instead. Child
+        // webviews (preview-*, the browser pane) enforce their own policies in
+        // their per-webview handlers and pass through here.
+        .plugin(
+            tauri::plugin::Builder::<tauri::Wry>::new("nav-guard")
+                .on_navigation(|webview, url| {
+                    if webview.label() != "main" {
+                        return true;
+                    }
+                    // The app's own origins: the bundled tauri:// origin in
+                    // production, the Vite dev server (loopback) in dev.
+                    let own = url.scheme() == "tauri"
+                        || matches!(
+                            url.host_str(),
+                            Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+                        );
+                    if !own {
+                        let _ = webview.app_handle().emit(
+                            "browser://open",
+                            events::BrowserOpenPayload {
+                                url: url.to_string(),
+                            },
+                        );
+                    }
+                    own
+                })
+                .build(),
+        )
+        // The shared session service needs the app handle (its event sink and
+        // native-preview hooks emit into this window), so state is wired in
+        // setup — after the handle exists, before any command can run.
+        .setup(move |app| {
+            app.manage(AppState::new(
+                app.handle().clone(),
+                initial_project,
+                initial_model,
+                initial_local,
+            ));
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::turn::run_turn,
@@ -106,6 +155,11 @@ pub fn run() {
             commands::session::daily_usage,
             commands::session::new_session,
             commands::session::resume_session,
+            commands::browser::browser_attach,
+            commands::browser::browser_detach,
+            commands::browser::browser_close,
+            commands::browser::browser_reload,
+            commands::browser::open_external,
             commands::preview::preview_attach,
             commands::preview::preview_detach,
             commands::preview::preview_reload,
@@ -116,6 +170,10 @@ pub fn run() {
             commands::preview::preview_restart,
             commands::preview::get_preview_prefs,
             commands::preview::set_preview_auto_verify,
+            commands::files::fs_list_dir,
+            commands::files::fs_read_file,
+            commands::files::fs_write_file,
+            commands::files::fs_create_entry,
             commands::project::list_projects,
             commands::project::open_project,
             commands::project::start_project,

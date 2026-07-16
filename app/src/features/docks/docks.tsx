@@ -24,12 +24,15 @@
 // for every dock).
 
 import type { ReactNode } from "react";
-import { Globe, MessagesSquare, NotebookPen } from "lucide-react";
+import { Compass, FileCode2, FolderTree, Globe, MessagesSquare, NotebookPen } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { BrandMark } from "../history/BrandMark";
 import { Sidebar } from "../history/Sidebar";
 import { Canvas } from "../canvas/Canvas";
 import { Preview } from "../preview/Preview";
+import { Browser } from "../browser/Browser";
+import { FilesPanel } from "../files/FilesPanel";
+import { EditorPane } from "../files/EditorPane";
 
 export type DockSide = "left" | "right";
 
@@ -78,6 +81,14 @@ function usePreviewAvailable(): boolean {
   });
 }
 
+/** Does the current chat have files open in the Editor/viewer pane? */
+function useEditorAvailable(): boolean {
+  return useStore((s) => {
+    const id = s.session?.session_id;
+    return !!id && (s.editorFiles[id]?.length ?? 0) > 0;
+  });
+}
+
 export const DOCKS: DockSpec[] = [
   {
     id: "history",
@@ -89,6 +100,16 @@ export const DOCKS: DockSpec[] = [
     useAvailable: () => true,
     render: ({ onResizeStart }) => <Sidebar onResizeStart={onResizeStart} />,
     railHeader: () => <BrandMark />,
+  },
+  {
+    id: "files",
+    side: "left",
+    title: "Files",
+    icon: <FolderTree size={16} />,
+    defaultWidth: 280,
+    minWidth: 216,
+    useAvailable: () => useStore((s) => !!s.session?.workspace),
+    render: ({ onResizeStart }) => <FilesPanel onResizeStart={onResizeStart} />,
   },
   {
     id: "preview",
@@ -109,6 +130,29 @@ export const DOCKS: DockSpec[] = [
     minWidth: 320,
     useAvailable: useCanvasAvailable,
     render: ({ onResizeStart }) => <Canvas onResizeStart={onResizeStart} />,
+  },
+  {
+    id: "editor",
+    side: "right",
+    title: "Editor",
+    icon: <FileCode2 size={16} />,
+    defaultWidth: 560,
+    /* Low enough that rail + editor + the solver's chat minimum fit in the
+       window's own minimum width — expanding from a rail must never be a
+       dead click (see DockColumn's `expand`). */
+    minWidth: 340,
+    useAvailable: useEditorAvailable,
+    render: ({ onResizeStart }) => <EditorPane onResizeStart={onResizeStart} />,
+  },
+  {
+    id: "browser",
+    side: "right",
+    title: "Browser",
+    icon: <Compass size={16} />,
+    defaultWidth: 480,
+    minWidth: 320,
+    useAvailable: () => useStore((s) => !!s.browserUrl),
+    render: ({ onResizeStart }) => <Browser onResizeStart={onResizeStart} />,
   },
 ];
 

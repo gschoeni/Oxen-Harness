@@ -35,10 +35,7 @@ impl CliApprover {
 
 #[async_trait]
 impl CommandApprover for CliApprover {
-    async fn approve(
-        &self,
-        request: &ApprovalRequest,
-    ) -> Result<Option<ApprovalDecision>, String> {
+    async fn approve(&self, request: &ApprovalRequest) -> Result<Option<ApprovalDecision>, String> {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             return Ok(None);
         }
@@ -109,6 +106,7 @@ fn question_text(request: &ApprovalRequest) -> String {
         ApprovalKind::Shell => "The agent wants to run:",
         ApprovalKind::FileEdit => "The agent wants to write:",
         ApprovalKind::GitCommit => "The agent wants to commit:",
+        ApprovalKind::TaskKill => "The agent wants to kill a background task:",
     };
     let mut text = format!("{action}\n\n    {}\n", request.command);
     if !request.reasons.is_empty() {

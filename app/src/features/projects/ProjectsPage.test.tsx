@@ -25,8 +25,9 @@ const projects: Project[] = [
     context: [{ path: ".oxen-harness/context/brief.md", name: "brief.md", kind: "text", size_bytes: 42 }],
     session_count: 0,
     active: true,
+    last_used_at: null,
   },
-  { path: "/elsewhere", name: "Elsewhere", description: "", instructions: "", context: [], session_count: 1, active: false },
+  { path: "/elsewhere", name: "Elsewhere", description: "", instructions: "", context: [], session_count: 1, active: false, last_used_at: null },
 ];
 
 beforeEach(() => {
@@ -326,6 +327,39 @@ describe("ProjectsPage", () => {
     await userEvent.keyboard("{Escape}");
     expect(useStore.getState().projectsOpen).toBe(true);
     expect(screen.queryByRole("button", { name: /back to chat/i })).toBeNull();
+  });
+
+  it("orders projects by recent activity and can switch to alphabetical", async () => {
+    localStorage.clear();
+    useStore.setState({
+      projects: [
+        { ...projects[1], last_used_at: null },
+        { ...projects[0], last_used_at: 1_800_000_000 },
+        { ...projects[1], path: "/archive", name: "Archive", last_used_at: 1_700_000_000 },
+      ],
+    });
+    render(<ProjectsPage />);
+    const cardNames = () =>
+      Array.from(document.querySelectorAll(".project-card-name")).map(
+        (el) => el.textContent?.replace("current", "").trim(),
+      );
+
+    // Recent is the default: newest activity first, never-used projects last.
+    expect(cardNames()).toEqual(["Writer", "Archive", "Elsewhere"]);
+
+    await userEvent.click(screen.getByRole("button", { name: /name/i }));
+    expect(cardNames()).toEqual(["Archive", "Elsewhere", "Writer"]);
+
+    // The choice survives leaving and reopening the page.
+    expect(localStorage.getItem("oxen-harness.projects-sort")).toBe("name");
+  });
+
+  it("shows when each project was last used", () => {
+    useStore.setState({
+      projects: [{ ...projects[0], last_used_at: Math.floor(Date.now() / 1000) - 120 }, projects[1]],
+    });
+    render(<ProjectsPage />);
+    expect(screen.getByText("2m ago")).toBeInTheDocument();
   });
 
   it("shows a running indicator on projects with mid-run chats", () => {

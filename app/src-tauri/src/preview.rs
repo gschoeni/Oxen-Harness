@@ -73,13 +73,6 @@ impl PreviewSink for TauriPreviewSink {
     }
 }
 
-/// Inert sink for the settings registry (listing only).
-pub(crate) struct NullPreviewSink;
-
-impl PreviewSink for NullPreviewSink {
-    fn status(&self, _status: &PreviewStatus) {}
-}
-
 /// How the agent sees the preview: native WKWebView snapshots for
 /// `preview_screenshot` and the console bridge's buffer for `preview_console`.
 pub(crate) struct TauriPreviewLens {
@@ -129,19 +122,6 @@ impl PreviewLens for TauriPreviewLens {
             .get()
             .map(|bridge| bridge.tail(&self.session, n))
             .unwrap_or_default()
-    }
-}
-
-/// Inert lens for the settings registry (listing only).
-pub(crate) struct NullPreviewLens;
-
-#[async_trait]
-impl PreviewLens for NullPreviewLens {
-    async fn screenshot(&self) -> Result<Vec<u8>, String> {
-        Err("not available".into())
-    }
-    fn console_tail(&self, _n: usize) -> Vec<ConsoleLine> {
-        Vec::new()
     }
 }
 
@@ -361,38 +341,6 @@ pub(crate) fn close(app: &AppHandle, session: &str) {
     if let Some(webview) = app.webviews().get(&label_for(session)) {
         let _ = webview.close();
     }
-}
-
-/// Sessions already told (once) that their dev server died — so the note
-/// rides along with a single turn, not every turn until they restart it.
-static CRASH_ANNOUNCED: StdMutex<Option<HashMap<String, String>>> = StdMutex::new(None);
-
-/// A one-time note for the model when `session`'s dev server has died since it
-/// was last told. Returned to be appended to the user's next message: without
-/// it the model, having been told the server "keeps running across turns",
-/// would cheerfully point the user at a preview that is showing a crash.
-pub(crate) fn crash_note(app: &AppHandle, session: &str) -> Option<String> {
-    let status = app.state::<AppState>().dev_servers.get(session)?.status();
-    if status.phase != harness_preview::PreviewPhase::Error {
-        // Healthy again — a later crash is worth announcing afresh.
-        if let Some(map) = CRASH_ANNOUNCED.lock().unwrap().as_mut() {
-            map.remove(session);
-        }
-        return None;
-    }
-    let message = status.message.unwrap_or_else(|| "it stopped".into());
-    let mut announced = CRASH_ANNOUNCED.lock().unwrap();
-    let map = announced.get_or_insert_with(HashMap::new);
-    if map.get(session) == Some(&message) {
-        return None; // already told them about this one
-    }
-    map.insert(session.to_string(), message.clone());
-    Some(format!(
-        "[system] The dev server for this project is no longer running — {message}. \
-         The live preview is showing an error, not the app. If the user's request \
-         involves the running app, diagnose why it stopped (dev_server_logs) and \
-         restart it with start_dev_server."
-    ))
 }
 
 /// Open `url` in the user's default browser (the pop-out button).

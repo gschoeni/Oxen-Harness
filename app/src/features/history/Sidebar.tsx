@@ -82,7 +82,6 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
       )}
       {/* Transparent strip over the traffic-light row so the empty space above
           the brand drags the window (overlay title bar). */}
-      <div className="sidebar-titlebar" data-tauri-drag-region />
       <div className="brand" data-tauri-drag-region>
         <BrandMark />
         <span>oxen-harness</span>

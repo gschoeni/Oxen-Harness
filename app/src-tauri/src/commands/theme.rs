@@ -4,10 +4,10 @@
 //! (or waits on) a chat's agent.
 
 use harness_llm::{ChatMessage, ChatRequest};
-use tauri::{AppHandle, State};
+use tauri::State;
 use tokio_util::sync::CancellationToken;
 
-use crate::state::{client_for, AppState};
+use crate::state::AppState;
 
 #[tauri::command]
 pub(crate) fn theme_location() -> Result<Option<String>, String> {
@@ -32,12 +32,11 @@ fn theme_store() -> Result<harness_theme::Store, String> {
 /// Used for side tasks (theme generation) so they never block — or wait on — a
 /// chat's agent, which may be mid-turn.
 async fn complete_oneshot(
-    app: &AppHandle,
     state: &AppState,
     system: &str,
     user: &str,
 ) -> Result<String, String> {
-    let (client, model, _) = client_for(app, state).await?;
+    let (client, model, _) = state.client_for().await?;
     let request = ChatRequest::new(
         &model,
         vec![
@@ -100,12 +99,10 @@ pub(crate) async fn remove_theme(name: String) -> Result<(), String> {
 /// and activate it. Reuses the session's model + endpoint.
 #[tauri::command]
 pub(crate) async fn new_theme(
-    app: AppHandle,
     state: State<'_, AppState>,
     brief: String,
 ) -> Result<harness_theme::Theme, String> {
     let raw = complete_oneshot(
-        &app,
         &state,
         &harness_theme::Theme::generation_system_prompt(),
         &brief,

@@ -217,8 +217,23 @@ pub struct HistoryStore {
 
 impl HistoryStore {
     /// Open (creating if needed) a store at `path`, running migrations.
+    ///
+    /// On a local filesystem the connection uses WAL journaling, so a reader
+    /// (another front end, an exporter) never blocks the agent's writes. On a
+    /// network mount (NFS/SMB) it keeps SQLite's default rollback journal —
+    /// WAL's memory-mapped `-shm` file and POSIX locks are unreliable there
+    /// and can SIGBUS the process when the server drops a mapped page.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, HistoryError> {
+        let path = path.as_ref();
         let conn = Connection::open(path)?;
+        // Wait out a concurrent writer instead of failing fast with SQLITE_BUSY
+        // (two front ends sharing one history database is a supported setup).
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        if !crate::netfs::is_network_filesystem(path) {
+            // Best-effort: `journal_mode` returns the mode actually in effect;
+            // a refusal (e.g. an exotic filesystem) just keeps the default.
+            let _ = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0));
+        }
         Self::from_connection(conn)
     }
 
@@ -374,6 +389,29 @@ impl HistoryStore {
             if summary.title.is_some() {
                 out.push(summary);
             }
+        }
+        Ok(out)
+    }
+
+    /// When each workspace was last used: the newest message timestamp across
+    /// its sessions, falling back to session creation for message-less chats.
+    pub fn workspace_last_used(
+        &self,
+    ) -> Result<std::collections::HashMap<String, i64>, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT s.workspace,
+                    MAX(COALESCE((SELECT MAX(m.created_at) FROM messages m
+                                    WHERE m.session_id = s.id),
+                                 s.created_at))
+             FROM sessions s
+             GROUP BY s.workspace",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (workspace, last_used): (String, i64) = row?;
+            out.insert(workspace, last_used);
         }
         Ok(out)
     }
@@ -771,6 +809,17 @@ mod tests {
     }
 
     #[test]
+    fn open_on_a_local_filesystem_uses_wal_journaling() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = HistoryStore::open(dir.path().join("history.sqlite")).unwrap();
+        let mode: String = store
+            .lock()
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+    }
+
+    #[test]
     fn append_and_read_back_in_order() {
         let store = store();
         let session = store.create_session(&meta()).unwrap();
@@ -1022,6 +1071,39 @@ mod tests {
         assert_eq!(sessions[0].id, used);
         assert_eq!(sessions[0].title.as_deref(), Some("build a parser"));
         assert_eq!(sessions[0].message_count, 3);
+    }
+
+    #[test]
+    fn workspace_last_used_tracks_newest_message_per_workspace() {
+        let store = store();
+
+        // A message-less session falls back to its creation time.
+        let idle = store.create_session(&meta()).unwrap();
+        let mut other = meta();
+        other.workspace = "/tmp/other".into();
+        let busy = store.create_session(&other).unwrap();
+        store
+            .append_message(&busy, &Message::user("hello"))
+            .unwrap();
+
+        // Pin timestamps directly so the assertion doesn't depend on the wall clock.
+        {
+            let conn = store.lock();
+            conn.execute(
+                "UPDATE sessions SET created_at = 100 WHERE id = ?1",
+                rusqlite::params![idle],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE messages SET created_at = 200 WHERE session_id = ?1",
+                rusqlite::params![busy],
+            )
+            .unwrap();
+        }
+
+        let used = store.workspace_last_used().unwrap();
+        assert_eq!(used.get("/tmp/proj").copied(), Some(100));
+        assert_eq!(used.get("/tmp/other").copied(), Some(200));
     }
 
     #[test]

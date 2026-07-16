@@ -189,7 +189,9 @@ impl TurnRenderer {
             AgentEvent::ApprovalPending { .. } => {
                 self.stop_spinner();
             }
-            AgentEvent::ApprovalResolved { command, decision, .. } => {
+            AgentEvent::ApprovalResolved {
+                command, decision, ..
+            } => {
                 println!(
                     "  {} {}",
                     self.ui.brown("🛡"),

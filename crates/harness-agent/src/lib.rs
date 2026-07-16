@@ -30,9 +30,10 @@
 
 mod agent;
 mod config;
-mod errlog;
+pub mod errlog;
 mod error;
 mod event;
+mod interject;
 mod prompt;
 
 pub mod budget;
@@ -48,6 +49,8 @@ pub use config::{AgentConfig, RetryPolicy};
 pub use error::AgentError;
 pub use event::AgentEvent;
 pub use fleet_tool::{FleetSpawner, FleetTool, FLEET_TOOL};
+pub use interject::Interjections;
 pub use prompt::{
     default_system_prompt, environment_section, system_prompt_with, system_prompt_with_env,
+    OptionalTools,
 };

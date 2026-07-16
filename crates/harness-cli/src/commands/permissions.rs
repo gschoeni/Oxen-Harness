@@ -97,7 +97,11 @@ pub(crate) fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> R
 }
 
 /// Print the mode and every allow/deny rule in force, with its scope.
-fn print_summary(gate: Option<&harness_permissions::PermissionGate>, current: PermissionMode, ui: &Ui) {
+fn print_summary(
+    gate: Option<&harness_permissions::PermissionGate>,
+    current: PermissionMode,
+    ui: &Ui,
+) {
     println!(
         "  {} {}",
         ui.brown("🛡 permissions:"),

@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::almanac::{seed, xorshift};
+use harness_theme::spinner::{Rhythm, FRAME_MS};
+
+use crate::almanac::seed;
 
 use super::{paint, Rgb, Ui};
 
@@ -98,13 +100,13 @@ fn spinner_frame(
     verbs: &[String],
     target: Option<&str>,
     start: Instant,
-    frame: usize,
-    verb_idx: usize,
+    rhythm: &Rhythm,
 ) -> String {
-    let glyph = &style.glyphs[frame % style.glyphs.len()];
+    let glyph = &style.glyphs[rhythm.glyph_index(style.glyphs.len())];
+    let verb = &verbs[rhythm.phrase_index()];
     let verb = match target {
-        Some(t) if !t.is_empty() => format!("{}… {}", verbs[verb_idx], t),
-        _ => format!("{}…", verbs[verb_idx]),
+        Some(t) if !t.is_empty() => format!("{verb}… {t}"),
+        _ => format!("{verb}…"),
     };
     format!(
         "{}  {}  {}",
@@ -117,22 +119,17 @@ fn spinner_frame(
 fn run_spinner(stop: &AtomicBool, verbs: &[String], target: Option<&str>, style: &SpinnerStyle) {
     let mut out = io::stdout();
     let start = Instant::now();
-    let mut s = seed();
-    let mut verb_idx = (xorshift(&mut s) as usize) % verbs.len();
-    let mut frame = 0usize;
+    let mut rhythm = Rhythm::new(verbs.len(), seed());
 
     let _ = write!(out, "\x1b[?25l"); // hide cursor
     let _ = out.flush();
 
     while !stop.load(Ordering::Relaxed) {
-        if frame > 0 && frame % 16 == 0 {
-            verb_idx = (verb_idx + 1) % verbs.len();
-        }
-        let line = spinner_frame(style, verbs, target, start, frame, verb_idx);
+        let line = spinner_frame(style, verbs, target, start, &rhythm);
         let _ = write!(out, "\r{line}\x1b[K");
         let _ = out.flush();
-        frame += 1;
-        thread::sleep(Duration::from_millis(110));
+        rhythm.tick();
+        thread::sleep(Duration::from_millis(FRAME_MS));
     }
 
     let _ = write!(out, "\r\x1b[K\x1b[?25h"); // clear line, show cursor
@@ -150,8 +147,7 @@ pub(crate) struct LiveSpinner {
     /// the indicator reads e.g. `Reading the trail guide… src/lib.rs (3s)`.
     target: Option<String>,
     start: Instant,
-    frame: usize,
-    verb_idx: usize,
+    rhythm: Rhythm,
 }
 
 impl LiveSpinner {
@@ -167,15 +163,13 @@ impl LiveSpinner {
             return None;
         }
         let style = SpinnerStyle::for_ui(ui)?;
-        let mut s = seed();
-        let verb_idx = (xorshift(&mut s) as usize) % verbs.len();
+        let rhythm = Rhythm::new(verbs.len(), seed());
         Some(LiveSpinner {
             style,
             verbs,
             target,
             start: Instant::now(),
-            frame: 0,
-            verb_idx,
+            rhythm,
         })
     }
 
@@ -186,17 +180,13 @@ impl LiveSpinner {
             &self.verbs,
             self.target.as_deref(),
             self.start,
-            self.frame,
-            self.verb_idx,
+            &self.rhythm,
         )
     }
 
     /// Advance one frame, rotating the verb on the same cadence as the thread.
     pub(crate) fn tick(&mut self) {
-        self.frame += 1;
-        if self.frame % 16 == 0 {
-            self.verb_idx = (self.verb_idx + 1) % self.verbs.len();
-        }
+        self.rhythm.tick();
     }
 }
 

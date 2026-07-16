@@ -19,6 +19,7 @@ const ACTION_LABEL: Record<ApprovalRequestEvent["kind"], string> = {
   shell: "wants to run",
   file_edit: "wants to write",
   git_commit: "wants to commit",
+  task_kill: "wants to kill a background task",
 };
 
 function ApprovalCard({ request }: { request: ApprovalRequestEvent }) {

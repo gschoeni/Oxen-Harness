@@ -44,7 +44,7 @@ beforeEach(() => {
   // An active project so scope labels can name it.
   useStore.setState({
     session: { ...ipc.sampleSession, workspace: "/repo" },
-    projects: [{ path: "/repo", name: "OxenHarness", description: "", instructions: "", context: [], session_count: 1, active: true }],
+    projects: [{ path: "/repo", name: "OxenHarness", description: "", instructions: "", context: [], session_count: 1, active: true, last_used_at: null }],
   });
   ipc.listSkills.mockResolvedValue([releaseNotes, reviewChecklist]);
   ipc.listTools.mockResolvedValue([

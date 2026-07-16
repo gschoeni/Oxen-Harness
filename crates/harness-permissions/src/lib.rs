@@ -52,6 +52,8 @@ struct SessionGrants {
     edits: bool,
     /// Cautious mode: git commits approved for the session.
     commits: bool,
+    /// Cautious mode: background-task kills approved for the session.
+    kills: bool,
 }
 
 /// The gate's verdict before any user interaction.
@@ -76,7 +78,9 @@ pub enum GateOutcome {
         args: serde_json::Value,
         note: String,
     },
-    Deny { message: String },
+    Deny {
+        message: String,
+    },
 }
 
 /// Shell rc files a tool must never write: they execute on the user's next
@@ -186,6 +190,7 @@ impl PermissionGate {
             "run_shell" => self.review_shell(args),
             "write_file" | "edit_file" => self.review_file_edit(tool, args),
             "git" => self.review_git(args),
+            "kill_task" => self.review_kill_task(args),
             _ => GateReview::Allow,
         }
     }
@@ -211,7 +216,13 @@ impl PermissionGate {
         }
         // Deny rules from config (global + project).
         if let Some(rule) = policy.denies(command, &analysis.commands) {
-            self.audit("run_shell", command, "deny", &format!("deny_rule:{rule}"), &policy);
+            self.audit(
+                "run_shell",
+                command,
+                "deny",
+                &format!("deny_rule:{rule}"),
+                &policy,
+            );
             return GateReview::Deny {
                 message: format!(
                     "tool error: command refused by the user's deny rule `{rule}`. Choose a \
@@ -342,6 +353,35 @@ impl PermissionGate {
         }))
     }
 
+    /// Terminating a background task kills a whole process group the model
+    /// itself started (a dev server, a build). That's self-management, not an
+    /// arbitrary `kill -9` — so it's gated like file writes and git commits:
+    /// ask in cautious mode (with an "all task kills" session grant), allow
+    /// in relaxed/bypass. Without this arm the tool name would slip past the
+    /// classifier entirely while the equivalent `run_shell kill` asks.
+    fn review_kill_task(&self, args: &serde_json::Value) -> GateReview {
+        let policy = self.policy.read().expect("policy poisoned").clone();
+        let approved = self.grants.read().expect("grants poisoned").kills;
+        if policy.mode != PermissionMode::Cautious || approved {
+            return GateReview::Allow;
+        }
+        let task = args
+            .get("task_id")
+            .and_then(|t| t.as_u64())
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "?".to_string());
+        GateReview::Ask(Box::new(ApprovalRequest {
+            kind: ApprovalKind::TaskKill,
+            tool: "kill_task".to_string(),
+            command: format!("terminate background task {task}"),
+            risk: Risk::Unknown,
+            reasons: Vec::new(),
+            grant_label: "all background-task kills".to_string(),
+            offer_project_grant: false,
+            offer_trash: false,
+        }))
+    }
+
     /// Second stage: put an [`ApprovalRequest`] in front of the approver and
     /// act on the decision (record grants, persist project rules, snapshot
     /// before approved-dangerous, rewrite to trash).
@@ -350,11 +390,23 @@ impl PermissionGate {
         let decision = match self.approver.approve(&request).await {
             Err(e) => {
                 let message = format!("tool error: the approval prompt failed ({e}); not running.");
-                self.audit(&request.tool, &request.command, "deny", "approver_error", &policy);
+                self.audit(
+                    &request.tool,
+                    &request.command,
+                    "deny",
+                    "approver_error",
+                    &policy,
+                );
                 return (GateOutcome::Deny { message }, ApprovalDecision::Deny);
             }
             Ok(None) => {
-                self.audit(&request.tool, &request.command, "deny", "no_interactive_user", &policy);
+                self.audit(
+                    &request.tool,
+                    &request.command,
+                    "deny",
+                    "no_interactive_user",
+                    &policy,
+                );
                 return (
                     GateOutcome::Deny {
                         message: "tool error: this action requires the user's approval, but no \
@@ -371,26 +423,48 @@ impl PermissionGate {
 
         let outcome = match &decision {
             ApprovalDecision::Deny | ApprovalDecision::DenyWithMessage(_) => {
-                let source = if self.subagent { "subagent_auto_deny" } else { "user_denied" };
+                let source = if self.subagent {
+                    "subagent_auto_deny"
+                } else {
+                    "user_denied"
+                };
                 self.audit(&request.tool, &request.command, "deny", source, &policy);
                 GateOutcome::Deny {
                     message: self.denial_message(&decision),
                 }
             }
             ApprovalDecision::AllowOnce => {
-                self.audit(&request.tool, &request.command, "allow", "user_once", &policy);
+                self.audit(
+                    &request.tool,
+                    &request.command,
+                    "allow",
+                    "user_once",
+                    &policy,
+                );
                 self.snapshot_if_dangerous(&request).await;
                 GateOutcome::Allow
             }
             ApprovalDecision::AllowSession => {
                 self.record_session_grant(&request);
-                self.audit(&request.tool, &request.command, "allow", "user_session", &policy);
+                self.audit(
+                    &request.tool,
+                    &request.command,
+                    "allow",
+                    "user_session",
+                    &policy,
+                );
                 self.snapshot_if_dangerous(&request).await;
                 GateOutcome::Allow
             }
             ApprovalDecision::AllowProject => {
                 self.persist_project_grant(&request);
-                self.audit(&request.tool, &request.command, "allow", "user_project", &policy);
+                self.audit(
+                    &request.tool,
+                    &request.command,
+                    "allow",
+                    "user_project",
+                    &policy,
+                );
                 self.snapshot_if_dangerous(&request).await;
                 GateOutcome::Allow
             }
@@ -400,7 +474,13 @@ impl PermissionGate {
                 // back at the configured default, and circuit breakers keep
                 // refusing regardless.
                 self.policy.write().expect("policy poisoned").mode = PermissionMode::Bypass;
-                self.audit(&request.tool, &request.command, "allow", "user_bypass_session", &policy);
+                self.audit(
+                    &request.tool,
+                    &request.command,
+                    "allow",
+                    "user_bypass_session",
+                    &policy,
+                );
                 self.snapshot_if_dangerous(&request).await;
                 GateOutcome::Allow
             }
@@ -410,14 +490,26 @@ impl PermissionGate {
                 let plan = classify(&request.command, dirs::home_dir().as_deref()).trash_plan;
                 match plan.as_ref().and_then(trash::rewrite) {
                     Some((command, note)) => {
-                        self.audit(&request.tool, &request.command, "allow", "user_trash", &policy);
+                        self.audit(
+                            &request.tool,
+                            &request.command,
+                            "allow",
+                            "user_trash",
+                            &policy,
+                        );
                         GateOutcome::AllowRewritten {
                             args: serde_json::json!({ "command": command }),
                             note,
                         }
                     }
                     None => {
-                        self.audit(&request.tool, &request.command, "deny", "trash_unavailable", &policy);
+                        self.audit(
+                            &request.tool,
+                            &request.command,
+                            "deny",
+                            "trash_unavailable",
+                            &policy,
+                        );
                         GateOutcome::Deny {
                             message: "tool error: could not build the move-to-trash command; \
                                       the deletion was not run."
@@ -465,6 +557,7 @@ impl PermissionGate {
             }
             ApprovalKind::FileEdit => grants.edits = true,
             ApprovalKind::GitCommit => grants.commits = true,
+            ApprovalKind::TaskKill => grants.kills = true,
         }
     }
 
@@ -823,6 +916,26 @@ mod tests {
                 &serde_json::json!({"operation": "commit", "message": "wip"})
             ),
             GateReview::Ask(_)
+        ));
+        // Killing a background task is process termination: it must not slip
+        // past the gate on tool name while `run_shell kill` would ask.
+        assert!(matches!(
+            gate.review("kill_task", &serde_json::json!({"task_id": 3})),
+            GateReview::Ask(_)
+        ));
+        std::env::remove_var("OXEN_HARNESS_DIR");
+    }
+
+    #[test]
+    fn relaxed_mode_allows_task_kills_without_asking() {
+        let _env = testutil::env_guard();
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("OXEN_HARNESS_DIR", home.path());
+        let ws = tempfile::tempdir().unwrap();
+        let gate = PermissionGate::new(ws.path(), Arc::new(Scripted(None)));
+        assert!(matches!(
+            gate.review("kill_task", &serde_json::json!({"task_id": 1})),
+            GateReview::Allow
         ));
         std::env::remove_var("OXEN_HARNESS_DIR");
     }

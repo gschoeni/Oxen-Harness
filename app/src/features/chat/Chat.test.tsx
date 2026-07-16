@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { Chat } from "./Chat";
+import { TitleBar } from "../../TitleBar";
 import { useStore } from "../../lib/store";
 import { transcriptToItems } from "./thread";
 import * as ipc from "../../test/ipcMock";
@@ -38,9 +39,16 @@ describe("Chat", () => {
         context: [],
         session_count: 1,
         active: true,
+        last_used_at: null,
       }],
     });
-    render(<Chat />);
+    // The project-home button lives in the app title bar, beside the chat.
+    render(
+      <>
+        <TitleBar />
+        <Chat />
+      </>,
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "Project files and settings" }));
 
@@ -114,10 +122,15 @@ describe("Chat", () => {
 
   it("opens the arcade dock during a run so you can play while streaming", async () => {
     ipc.runTurn.mockImplementationOnce(() => new Promise(() => {})); // stays in flight
-    render(<Chat />);
+    render(
+      <>
+        <TitleBar />
+        <Chat />
+      </>,
+    );
     await userEvent.type(screen.getByPlaceholderText(/ask the agent/i), "go");
     await userEvent.keyboard("{Enter}");
-    // With a turn in flight the titlebar offers the arcade toggle.
+    // With a turn in flight the title bar offers the arcade toggle.
     await userEvent.click(screen.getByLabelText(/Toggle the arcade/i));
     expect(screen.getByRole("dialog", { name: /arcade/i })).toBeInTheDocument();
     // The dock hosts the same cabinet, playable without leaving the chat.

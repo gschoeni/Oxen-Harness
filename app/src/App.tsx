@@ -1,7 +1,10 @@
-import { useEffect, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { Bot } from "lucide-react";
+import { TitleBar } from "./TitleBar";
 import { Chat } from "./features/chat/Chat";
-import { DockColumn, RAIL_W, useDockShortcuts } from "./features/docks/DockColumn";
+import { DockColumn, useActiveDock, useDockShortcuts } from "./features/docks/DockColumn";
 import { docksOnSide, useAvailableDocks } from "./features/docks/docks";
+import { planColumns, type ColumnPlan, type LayoutPlan } from "./features/docks/layout";
 import { Settings } from "./features/settings/Settings";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
 import { InspectorDrawer } from "./features/inspector/Inspector";
@@ -23,8 +26,8 @@ export default function App() {
   // The layout is whatever the dock registry says: each side is a column of
   // however many docks currently have content (tabbed), independently sized
   // and collapsible. Adding a panel is a registry entry — see docks.tsx.
-  const leftWidth = useDockWidth("left");
-  const rightWidth = useDockWidth("right");
+  // The solver keeps every column on screen when the window shrinks.
+  const layout = useLayoutPlan();
   useDockShortcuts();
 
   // A freshly opened/resumed chat may already have a running server (they
@@ -51,14 +54,17 @@ export default function App() {
       className="app"
       style={
         {
-          "--dock-left-w": leftWidth == null ? "0px" : `${leftWidth}px`,
-          "--dock-right-w": rightWidth == null ? "0px" : `${rightWidth}px`,
+          "--dock-left-w": columnPx(layout.left),
+          "--dock-right-w": columnPx(layout.right),
         } as CSSProperties
       }
     >
-      <DockColumn side="left" />
-      <Chat />
-      <DockColumn side="right" />
+      <TitleBar />
+      <div className="app-columns">
+        <DockColumn side="left" forceRail={!!layout.left?.railed} />
+        {layout.chatRailed ? <ChatRail /> : <Chat />}
+        <DockColumn side="right" forceRail={!!layout.right?.railed} />
+      </div>
       {settingsOpen && <Settings />}
       {projectsOpen && <ProjectsPage />}
       <InspectorDrawer />
@@ -66,16 +72,64 @@ export default function App() {
   );
 }
 
-/** The grid width for a side: `null` when nothing is docked there (no column),
- *  the rail width when collapsed, else the (persisted, drag-set) width. */
-function useDockWidth(side: "left" | "right"): number | null {
-  const available = useAvailableDocks(side);
+const columnPx = (column: ColumnPlan | null) => (column ? `${column.width}px` : "0px");
+
+/** The fitted layout for the current window: each side's effective width and
+ *  whether it (or, in the terminal squeeze, the chat itself) renders as a
+ *  rail. Derived, never persisted — widening the window restores what the
+ *  user had. */
+function useLayoutPlan(): LayoutPlan {
+  const windowWidth = useWindowWidth();
+  const state = {
+    left: useSideInput("left"),
+    right: useSideInput("right"),
+  };
+  return planColumns(windowWidth, state.left, state.right);
+}
+
+function useSideInput(side: "left" | "right") {
+  const available = useAvailableDocks(side).length > 0;
+  const active = useActiveDock(side);
   const collapsed = useStore((s) => !!s.dockCollapsed[side]);
   const width = useStore((s) => s.dockWidths[side]);
-  if (!available.length) return null;
-  if (collapsed) return RAIL_W;
   // Fall back to the widest default among this side's docks, so a new dock
   // gets a sensible size before the user ever drags it.
   const fallback = Math.max(...docksOnSide(side).map((d) => d.defaultWidth));
-  return width ?? fallback;
+  return {
+    available,
+    collapsed,
+    desired: width ?? fallback,
+    min: active?.minWidth ?? 240,
+  };
+}
+
+function useWindowWidth(): number {
+  const [width, setWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const measure = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+  return width;
+}
+
+/** The chat squeezed to its bar: one button that reclaims the space by
+ *  folding both dock columns to their rails. The agent is never lost. */
+function ChatRail() {
+  const setDockCollapsed = useStore((s) => s.setDockCollapsed);
+  return (
+    <main className="chat chat-collapsed">
+      <button
+        className="dock-rail-btn"
+        title="Show the agent"
+        aria-label="Show the agent"
+        onClick={() => {
+          setDockCollapsed("left", true);
+          setDockCollapsed("right", true);
+        }}
+      >
+        <Bot size={18} />
+      </button>
+    </main>
+  );
 }

@@ -140,6 +140,10 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui) -> ToolRegistr
     tools.register_typed(harness_tools::CanvasTool::new(Arc::new(
         canvas::CliCanvasSink,
     )));
+    // `open_file` (the desktop's file-viewer panel) is deliberately NOT
+    // registered: the terminal has no viewer surface, and a host-surface tool
+    // that can't surface anything would just mislead the model (the prompt
+    // gates on registration, so the CLI's model never hears about it).
     // Dev servers for live preview: the terminal can't embed a browser, so the
     // trio registers with a status-remembering sink and `/preview` opens the
     // app in the user's browser. (No screenshot/console sight tools here.)
@@ -232,8 +236,7 @@ pub(crate) fn agent_config(
     let system_prompt = format!(
         "{}{}",
         harness_agent::system_prompt_with_env(
-            tools.get(harness_tools::WEB_SEARCH_TOOL).is_some(),
-            tools.get(harness_tools::CANVAS_TOOL).is_some(),
+            harness_agent::OptionalTools::from_registry(tools),
             workspace.root(),
         ),
         harness_runtime::project::prompt_section(workspace.root())

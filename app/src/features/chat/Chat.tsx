@@ -1,8 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, Code2, Files, FileText, Gamepad2, SearchCode } from "lucide-react";
-import { onFileDrop, pickAttachments } from "../../lib/ipc";
+import { useEffect, useLayoutEffect, useRef, useState, type DragEvent } from "react";
+import { ArrowDown, FileCode2, FileText, SearchCode } from "lucide-react";
+import { fsReadFile, onFileDrop, pickAttachments } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
+import { snippetLabel } from "../../lib/snippets";
+import { getDragPaths, hasDragPaths } from "../files/dnd";
+import type { CodeSnippet } from "../../lib/types";
 import { ThreadItem } from "./ThreadItem";
 import { FleetPanel } from "./FleetPanel";
 import { Plan } from "./Plan";
@@ -13,7 +16,7 @@ import { GameDock } from "./GameDock";
 import { TokenMeter } from "./TokenMeter";
 import { StreamingWrite } from "./StreamingWrite";
 import { AttachmentImage } from "./AttachmentImage";
-import { isImagePath } from "../../lib/attachments";
+import { isImagePath, isVideoPath } from "../../lib/attachments";
 import { QuestionPrompt } from "../questions/QuestionPrompt";
 import { ApprovalPrompt } from "../approvals/ApprovalPrompt";
 import { type Item } from "./thread";
@@ -31,6 +34,11 @@ const EXAMPLES = [
 // render (which would thrash zustand's equality check).
 const NO_ITEMS: Item[] = [];
 const NO_QUEUE: string[] = [];
+const NO_SNIPPETS: CodeSnippet[] = [];
+
+/** Cap on a whole file staged as context via drag-and-drop, so a dropped
+ *  lockfile can't quietly eat the context window. */
+const SNIPPET_FILE_CAP = 30_000;
 
 export function Chat() {
   const sessionId = useStore((s) => s.session?.session_id);
@@ -45,16 +53,17 @@ export function Chat() {
   const send = useStore((s) => s.send);
   const stop = useStore((s) => s.stop);
   const setQueue = useStore((s) => s.setQueue);
-  const openInspector = useStore((s) => s.openInspector);
-  const projectPath = useStore((s) => {
-    const path = s.session?.workspace;
-    return path && s.projects.some((project) => project.path === path) ? path : null;
-  });
-  const openProjectHome = useStore((s) => s.openProjectHome);
+  // Code selections staged from the editor (or files dropped from the tree),
+  // shown as chips and baked into the next prompt as context.
+  const snippets =
+    useStore((s) => (s.session ? s.snippets[s.session.session_id] : undefined)) ?? NO_SNIPPETS;
+  const addSnippet = useStore((s) => s.addSnippet);
+  const removeSnippet = useStore((s) => s.removeSnippet);
+  const workspace = useStore((s) => s.session?.workspace);
+  const addNotice = useStore((s) => s.addNotice);
   // The floating game dock lets you play a round while a turn streams, so a long
-  // run doesn't send you off to another app.
+  // run doesn't send you off to another app. Its toggle lives in the title bar.
   const gameDockOpen = useStore((s) => s.gameDockOpen);
-  const setGameDockOpen = useStore((s) => s.setGameDockOpen);
   // The most recent canvas in this chat, and whether the panel is currently
   // showing it — used to offer a one-click "reopen canvas" when it's closed.
   const sessionCanvases = useStore((s) => (s.session ? s.canvases[s.session.session_id] : undefined));
@@ -141,6 +150,34 @@ export function Chat() {
     }
   }
 
+  // A text file dragged in from the Files tree becomes a staged snippet (its
+  // whole content, capped) rather than a binary attachment.
+  async function stageFileSnippet(absPath: string) {
+    if (!workspace || !absPath.startsWith(`${workspace}/`)) return;
+    const rel = absPath.slice(workspace.length + 1);
+    try {
+      const body = await fsReadFile(workspace, rel);
+      const code = body.content.slice(0, SNIPPET_FILE_CAP);
+      addSnippet({ path: rel, start: 1, end: code.split("\n").length, code });
+    } catch {
+      /* binary or unreadable — nothing to stage */
+    }
+  }
+
+  // Workspace files dragged from the Files tree / gallery tiles (in-app HTML5
+  // drag; OS drops arrive separately through onFileDrop above).
+  function onInternalDrop(e: DragEvent) {
+    const paths = getDragPaths(e.dataTransfer);
+    if (!paths.length) return;
+    e.preventDefault();
+    const images = paths.filter(isImagePath);
+    const videos = paths.filter(isVideoPath);
+    const texts = paths.filter((p) => !isImagePath(p) && !isVideoPath(p));
+    if (images.length) addAttachments(images);
+    for (const p of texts) void stageFileSnippet(p);
+    if (videos.length) addNotice("Videos can't be sent to the model yet — view them in the Editor pane.");
+  }
+
   // Send now (with any staged attachments) or, if this chat is mid-turn, queue
   // the prompt and the same attachment set so the eventual turn is identical.
   async function submit(text: string) {
@@ -153,39 +190,13 @@ export function Chat() {
   }
 
   return (
-    <main className="chat">
-      <div className="chat-titlebar" data-tauri-drag-region>
-        {projectPath && (
-          <button
-            className="dev-view-btn"
-            onClick={() => openProjectHome(projectPath)}
-            title="Open this project's getting started, instructions, and files"
-            aria-label="Project files and settings"
-          >
-            <Files size={15} />
-          </button>
-        )}
-        {items.length > 0 && (
-          <button
-            className="dev-view-btn"
-            onClick={() => setGameDockOpen(!gameDockOpen)}
-            aria-pressed={gameDockOpen}
-            title="Play a game while your agent works"
-            aria-label="Toggle the arcade"
-          >
-            <Gamepad2 size={15} />
-          </button>
-        )}
-        <button
-          className="dev-view-btn"
-          onClick={() => sessionId && openInspector(sessionId)}
-          disabled={!sessionId}
-          title="Inspect this chat — the raw LLM inputs and outputs for this session"
-          aria-label="Inspect this chat's transcript"
-        >
-          <Code2 size={15} />
-        </button>
-      </div>
+    <main
+      className="chat"
+      onDragOver={(e) => {
+        if (hasDragPaths(e.dataTransfer)) e.preventDefault();
+      }}
+      onDrop={onInternalDrop}
+    >
       <div className="messages-wrap">
         <Plan />
         {showReopenCanvas && lastCanvas && (
@@ -238,6 +249,26 @@ export function Chat() {
       )}
       <FleetPanel />
       <Queue items={queue} onChange={setQueue} />
+      {snippets.length > 0 && (
+        <div className="attachments">
+          {snippets.map((sn, i) => (
+            <span
+              className="attachment-chip snippet-chip"
+              key={`${sn.path}-${sn.start}-${i}`}
+              title={sn.code.length > 400 ? `${sn.code.slice(0, 400)}…` : sn.code}
+            >
+              <FileCode2 size={12} aria-hidden="true" /> {snippetLabel(sn)}
+              <button
+                className="attachment-x"
+                aria-label={`Remove snippet ${snippetLabel(sn)}`}
+                onClick={() => removeSnippet(i)}
+              >
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       {attachments.length > 0 && (
         <div className="attachments">
           {attachments.map((a, i) => {

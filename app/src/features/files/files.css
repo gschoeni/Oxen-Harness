@@ -1,0 +1,347 @@
+/* Files tree (left dock) + Editor/viewer pane (right dock). The editor's
+   syntax colors live in the --cm-* variables below so CodeMirror follows the
+   app's light/dark mode; everything else leans on the shared theme tokens. */
+
+/* One Dark / One Light token colors — familiar, minimal, and quiet. */
+:root,
+:root[data-theme="dark"] {
+  --cm-keyword: #c678dd;
+  --cm-string: #98c379;
+  --cm-number: #d19a66;
+  --cm-comment: #7f848e;
+  --cm-function: #61afef;
+  --cm-type: #e5c07b;
+  --cm-property: #56b6c2;
+  --cm-selection: color-mix(in srgb, var(--accent) 24%, transparent);
+  --cm-activeline: color-mix(in srgb, var(--text) 4%, transparent);
+}
+:root[data-theme="light"] {
+  --cm-keyword: #a626a4;
+  --cm-string: #50a14f;
+  --cm-number: #986801;
+  --cm-comment: #a0a1a7;
+  --cm-function: #4078f2;
+  --cm-type: #c18401;
+  --cm-property: #0184bc;
+  --cm-selection: color-mix(in srgb, var(--accent) 18%, transparent);
+  --cm-activeline: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+/* ---- the Files tree ------------------------------------------------------- */
+
+.files-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--surface);
+}
+
+/* The drag edge between the tree and the chat. */
+.files-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: var(--z-sticky);
+}
+
+.ft-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+  flex-shrink: 0;
+  min-height: 40px;
+}
+.ft-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.ft-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.ft-tree {
+  flex: 1;
+  overflow: auto;
+  padding: var(--space-2) 0 var(--space-4);
+}
+
+.ft-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.ft-row:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.ft-row.selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+}
+.ft-chev {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.ft-chev.open {
+  transform: rotate(90deg);
+}
+.ft-chev-slot {
+  width: 13px;
+  flex-shrink: 0;
+}
+.ft-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.ft-row.selected .ft-icon {
+  color: var(--accent);
+}
+.ft-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ft-newrow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px;
+}
+.ft-newrow input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--text-sm);
+  outline: none;
+}
+
+.ft-error {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--danger, #ff5d57);
+  font-size: 11.5px;
+  border-bottom: 1px solid var(--separator);
+  overflow-wrap: anywhere;
+}
+.ft-empty {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+.ft-hint {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--separator);
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+
+/* ---- the Editor/viewer pane ------------------------------------------------ */
+
+.editor-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.editor-head {
+  gap: var(--space-2);
+}
+.editor-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  color: var(--text-tertiary);
+}
+.editor-fname {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.editor-dirty {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.editor-note {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* "Add to chat" — the selection→context affordance. */
+.editor-tochat {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease);
+}
+.editor-tochat:hover {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.editor-error {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--danger, #ff5d57);
+  font-size: 11.5px;
+  border-bottom: 1px solid var(--separator);
+  overflow-wrap: anywhere;
+}
+
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+.code-editor {
+  flex: 1;
+  min-height: 0;
+}
+.code-editor .cm-editor {
+  height: 100%;
+}
+
+/* One image or video, centered. */
+.media-view {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: var(--space-3);
+  background: var(--bg);
+}
+.media-view img,
+.media-view video {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+}
+.media-view img {
+  cursor: grab;
+}
+
+/* Several images: the gallery grid. */
+.media-grid {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-2);
+  align-content: start;
+  padding: var(--space-3);
+  background: var(--bg);
+}
+.media-tile {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  cursor: grab;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.media-tile:hover {
+  border-color: var(--accent);
+}
+.media-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.media-tile-name {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 2px 6px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  color: var(--text);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.editor-hint {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--separator);
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+
+/* Snippet chips in the chat (staged editor selections). */
+.snippet-chip {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}

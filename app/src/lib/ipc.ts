@@ -29,6 +29,7 @@ import type {
   SessionInfo,
   SessionSummary,
   CanvasEvent,
+  OpenFileEvent,
   Project,
   StartProjectInput,
   SessionView,
@@ -45,6 +46,8 @@ import type {
   CompressionMode,
   RetryEvent,
   ChatMessage,
+  FileBody,
+  FileEntry,
   ToolDefinition,
   ToolInfo,
   CustomToolSpec,
@@ -185,6 +188,24 @@ export const addProjectContext = (path: string, contextPaths: string[]) =>
 export const removeProjectContext = (path: string, contextPath: string) =>
   invoke<Project>("remove_project_context", { path, contextPath });
 
+// ---- workspace files (the Files tree + Editor dock) --------------------------
+
+/** List one directory of a workspace ("" = the root). The tree loads lazily. */
+export const fsListDir = (root: string, path: string) =>
+  invoke<FileEntry[]>("fs_list_dir", { root, path });
+
+/** Read a text file for the editor (errors on binary; truncates huge files). */
+export const fsReadFile = (root: string, path: string) =>
+  invoke<FileBody>("fs_read_file", { root, path });
+
+/** Save the editor's buffer back to disk. */
+export const fsWriteFile = (root: string, path: string, content: string) =>
+  invoke<void>("fs_write_file", { root, path, content });
+
+/** Create an empty file or a folder (fails if the path already exists). */
+export const fsCreateEntry = (root: string, path: string, isDir: boolean) =>
+  invoke<void>("fs_create_entry", { root, path, isDir });
+
 /** Open a native folder picker, returning the chosen directory (or null). */
 export async function pickFolder(): Promise<string | null> {
   const selected = await open({ directory: true, multiple: false, title: "Open a project folder" });
@@ -312,6 +333,11 @@ export const onQuestion = (handler: (q: QuestionPayload) => void) =>
 
 export const onCanvas = (handler: (e: CanvasEvent) => void) =>
   listen<CanvasEvent>("agent://canvas", (e) => handler(e.payload));
+
+/** Fires when the model's `open_file` tool shows project files in the
+ *  Editor/viewer dock. */
+export const onOpenFile = (handler: (e: OpenFileEvent) => void) =>
+  listen<OpenFileEvent>("agent://open-file", (e) => handler(e.payload));
 
 /** Fires when the model starts writing a canvas, before its content arrives —
  *  so the panel can open in a "writing…" state. */
@@ -462,6 +488,32 @@ export const getPreviewPrefs = () => invoke<PreviewPrefs>("get_preview_prefs");
 /** Persist auto-verify; applies to newly built (or resumed) agents. */
 export const setPreviewAutoVerify = (autoVerify: boolean) =>
   invoke<void>("set_preview_auto_verify", { autoVerify });
+
+// ---- link browser (chat links open in the side panel) -----------------------
+
+/** Fires when the backend's navigation guard cancelled a main-webview
+ *  navigation — show `url` in the link-browser side panel instead. */
+export const onBrowserOpen = (handler: (url: string) => void) =>
+  listen<{ url: string }>("browser://open", (e) => handler(e.payload.url));
+
+/** Show the link-browser webview over the placeholder rect (CSS pixels),
+ *  pointed at `url`. Shares the preview's ordering queue: both are native
+ *  webviews whose attach/detach must not reorder around overlays. */
+export const browserAttach = (url: string, bounds: PreviewBounds) =>
+  queuePreview(() => invoke<void>("browser_attach", { url, bounds }));
+
+/** Hide the link-browser webview (pane unmounted, overlay opened). */
+export const browserDetach = () => queuePreview(() => invoke<void>("browser_detach"));
+
+/** Destroy the link-browser webview (the user closed the pane). */
+export const browserClose = () => queuePreview(() => invoke<void>("browser_close"));
+
+/** Reload the link-browser's current page. */
+export const browserReload = () => invoke<void>("browser_reload");
+
+/** Open a URL in the system browser; omit it to pop out the page the
+ *  link-browser pane is currently showing. */
+export const openExternal = (url?: string) => invoke<void>("open_external", { url });
 
 // ---- connection settings ---------------------------------------------------
 

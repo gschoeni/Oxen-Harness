@@ -11,7 +11,7 @@ use harness_runtime::project::{self, ProjectConfig, ProjectContext};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::state::{active_root, open_history_store, AppState};
+use crate::state::{open_history_store, AppState};
 
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ProjectsConfig {
@@ -24,7 +24,7 @@ pub(crate) struct ProjectsConfig {
 }
 
 /// A project shown in the UI: its directory, display name, chat count, whether
-/// it's the active one.
+/// it's the active one, and when it last saw activity.
 #[derive(Clone, Serialize)]
 pub(crate) struct ProjectView {
     path: String,
@@ -34,6 +34,9 @@ pub(crate) struct ProjectView {
     context: Vec<ProjectContext>,
     session_count: usize,
     active: bool,
+    /// Unix seconds of the newest message in any of this project's chats;
+    /// `None` for projects with no history yet.
+    last_used_at: Option<i64>,
 }
 
 /// Schema version for `projects.json` (bump when the shape changes).
@@ -102,6 +105,7 @@ fn project_view(
     path: String,
     session_count: usize,
     active: bool,
+    last_used_at: Option<i64>,
 ) -> ProjectView {
     let metadata = project::load(Path::new(&path));
     ProjectView {
@@ -112,6 +116,7 @@ fn project_view(
         context: metadata.context,
         session_count,
         active,
+        last_used_at,
     }
 }
 
@@ -119,15 +124,19 @@ fn project_view(
 /// already has chats — with chat counts and the active one flagged.
 #[tauri::command]
 pub(crate) async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectView>, String> {
-    let active = active_root(&state).await.display().to_string();
+    let active = state.active_root().await.display().to_string();
 
     // Chats per workspace, so each directory with history shows up as a project.
     let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut last_used: HashMap<String, i64> = HashMap::new();
     if let Ok(store) = open_history_store() {
         if let Ok(sessions) = store.list_sessions() {
             for s in sessions {
                 *counts.entry(s.workspace).or_default() += 1;
             }
+        }
+        if let Ok(activity) = store.workspace_last_used() {
+            last_used = activity;
         }
     }
 
@@ -146,14 +155,15 @@ pub(crate) async fn list_projects(state: State<'_, AppState>) -> Result<Vec<Proj
         .map(|p| {
             let count = counts.get(&p).copied().unwrap_or(0);
             let is_active = p == active;
-            project_view(p, count, is_active)
+            let used = last_used.get(&p).copied();
+            project_view(p, count, is_active, used)
         })
         .collect();
-    // Active first, then busiest, then alphabetical.
+    // Most recently used first (projects without history last), then
+    // alphabetical. The frontend offers its own sort control on top of this.
     projects.sort_by(|a, b| {
-        b.active
-            .cmp(&a.active)
-            .then(b.session_count.cmp(&a.session_count))
+        b.last_used_at
+            .cmp(&a.last_used_at)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok(projects)
@@ -175,7 +185,7 @@ pub(crate) async fn open_project(
         .unwrap_or(path);
     remember_project(&canonical)?;
     *state.active_project.lock().await = PathBuf::from(&canonical);
-    Ok(project_view(canonical, 0, true))
+    Ok(project_view(canonical, 0, true, None))
 }
 
 /// Create a project folder or adopt an existing one, persist its repo-local
@@ -244,7 +254,7 @@ pub(crate) async fn start_project(
     let canonical = canonical.display().to_string();
     remember_project(&canonical)?;
     *state.active_project.lock().await = PathBuf::from(&canonical);
-    Ok(project_view(canonical, 0, true))
+    Ok(project_view(canonical, 0, true, None))
 }
 
 /// Edit durable project metadata. The frontend starts a fresh chat afterward
@@ -265,7 +275,7 @@ pub(crate) async fn update_project(
         context: existing.context,
     };
     project::save(&root, &config).map_err(|error| error.to_string())?;
-    Ok(project_view(path, 0, false))
+    Ok(project_view(path, 0, false, None))
 }
 
 /// Copy files into the project's durable context directory and return the
@@ -278,7 +288,7 @@ pub(crate) async fn add_project_context(
     let root = PathBuf::from(&path);
     let sources = context_paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
     project::add_context(&root, &sources).map_err(|error| error.to_string())?;
-    Ok(project_view(path, 0, false))
+    Ok(project_view(path, 0, false, None))
 }
 
 /// Remove one manifest entry and its repository-local context copy.
@@ -289,7 +299,7 @@ pub(crate) async fn remove_project_context(
 ) -> Result<ProjectView, String> {
     let root = PathBuf::from(&path);
     project::remove_context(&root, &context_path).map_err(|error| error.to_string())?;
-    Ok(project_view(path, 0, false))
+    Ok(project_view(path, 0, false, None))
 }
 
 fn valid_folder_name(name: &str) -> bool {

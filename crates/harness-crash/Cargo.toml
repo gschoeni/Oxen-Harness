@@ -1,0 +1,20 @@
+[package]
+name = "harness-crash"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Crash marker for oxen-harness: detect that the previous run died on a fatal signal"
+
+[dependencies]
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

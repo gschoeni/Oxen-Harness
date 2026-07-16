@@ -2,7 +2,8 @@
    home, and chat begins only after the user has seen its goal/context. */
 .projects-overlay {
   position: fixed;
-  inset: 0;
+  /* Below the app title bar, which must stay draggable everywhere. */
+  inset: var(--titlebar-h) 0 0;
   z-index: var(--z-overlay);
   background:
     radial-gradient(circle at 78% 8%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 30%),
@@ -13,19 +14,10 @@
 @keyframes projects-in {
   from { opacity: 0; transform: translateY(8px); }
 }
-.projects-titlebar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: var(--titlebar-h);
-  z-index: var(--z-titlebar);
-}
-
 .projects-page {
   width: min(920px, calc(100% - 48px));
   margin: 0 auto;
-  padding: calc(var(--titlebar-h) + var(--space-6)) 0 var(--space-8);
+  padding: var(--space-6) 0 var(--space-8);
 }
 .projects-header {
   display: flex;
@@ -60,6 +52,41 @@
   margin: 0;
 }
 .start-project-button { flex-shrink: 0; }
+
+/* Sort control between the header and the grid. */
+.projects-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: calc(var(--space-5) * -1) 0 var(--space-4);
+}
+.projects-sort {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill);
+}
+.projects-sort-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.projects-sort-option:hover { color: var(--text); }
+.projects-sort-option.selected {
+  color: var(--accent);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
 
 .projects-grid {
   display: grid;
@@ -160,6 +187,7 @@
   z-index: 1;
 }
 .project-card-running { display: grid; place-items: center; width: 12px; height: 12px; }
+.project-card-used { margin-left: auto; }
 
 .projects-empty {
   grid-column: 1 / -1;
@@ -259,7 +287,7 @@
 .project-home {
   width: min(1180px, calc(100% - 48px));
   margin: 0 auto;
-  padding: calc(var(--titlebar-h) + var(--space-4)) 0 var(--space-8);
+  padding: var(--space-4) 0 var(--space-8);
 }
 .project-home-header { margin-bottom: var(--space-7); }
 .project-breadcrumb {

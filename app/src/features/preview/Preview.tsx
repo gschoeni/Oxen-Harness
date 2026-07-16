@@ -9,7 +9,16 @@
 // coexist on screen).
 
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { ExternalLink, Monitor, RotateCw, Smartphone, Square, Tablet, X } from "lucide-react";
+import {
+  ExternalLink,
+  Globe2,
+  Monitor,
+  RotateCw,
+  Smartphone,
+  Square,
+  Tablet,
+  X,
+} from "lucide-react";
 import { useStore } from "../../lib/store";
 import {
   previewAttach,
@@ -126,28 +135,31 @@ export function Preview({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
           aria-label="Resize preview"
         />
       )}
-      <header className="canvas-head">
-        <div className="canvas-tabs">
-          <span className="preview-url" title={status.command}>
-            {status.url ?? status.name}
-          </span>
+      <header className="canvas-head preview-head">
+        <div className="preview-location" title={status.command}>
+          <span className={`preview-status${ready ? " ready" : ""}`} aria-hidden="true" />
+          <Globe2 className="preview-location-icon" size={14} aria-hidden="true" />
+          <span className="preview-url">{status.url ?? status.name}</span>
           {status.phase === "starting" && <span className="canvas-writing">starting…</span>}
         </div>
         <div className="preview-actions">
-          {VIEWPORTS.map(({ key, icon: Icon, label }) => (
-            <button
-              key={key}
-              className={`icon-btn${viewport === key ? " preview-vp-active" : ""}`}
-              aria-label={label}
-              title={label}
-              onClick={() => setViewport(key)}
-            >
-              <Icon size={14} />
-            </button>
-          ))}
-          <span className="preview-sep" />
+          <div className="preview-viewport-group" role="group" aria-label="Preview size">
+            {VIEWPORTS.map(({ key, icon: Icon, label }) => (
+              <button
+                key={key}
+                className={`icon-btn sm preview-vp-btn${viewport === key ? " preview-vp-active" : ""}`}
+                aria-label={label}
+                aria-pressed={viewport === key}
+                title={label}
+                onClick={() => setViewport(key)}
+              >
+                <Icon size={14} />
+              </button>
+            ))}
+          </div>
+          <span className="preview-sep" aria-hidden="true" />
           <button
-            className="icon-btn"
+            className="icon-btn sm"
             aria-label="Reload preview"
             title="Reload"
             onClick={() => previewReload(session).catch(() => {})}
@@ -155,7 +167,7 @@ export function Preview({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
             <RotateCw size={14} />
           </button>
           <button
-            className="icon-btn"
+            className="icon-btn sm"
             aria-label="Open in browser"
             title="Open in browser"
             onClick={() => previewOpenExternal(session).catch(() => {})}
@@ -163,15 +175,15 @@ export function Preview({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
             <ExternalLink size={14} />
           </button>
           <button
-            className="icon-btn"
+            className="icon-btn sm preview-stop-btn"
             aria-label="Stop server"
             title="Stop server"
             onClick={() => previewStop(session).catch(() => {})}
           >
-            <Square size={14} />
+            <Square size={12} />
           </button>
           <button
-            className="icon-btn"
+            className="icon-btn sm"
             aria-label="Close preview"
             title="Close (server keeps running)"
             onClick={() => {

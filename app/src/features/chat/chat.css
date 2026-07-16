@@ -9,42 +9,8 @@
   position: relative;
 }
 
-/* Transparent strip across the top that drags the window (overlay title bar).
-   The dev-view button sits at the right; the rest stays a drag handle. */
-.chat-titlebar {
-  height: var(--titlebar-h);
-  flex-shrink: 0;
-  z-index: var(--z-titlebar);
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-1);
-  padding: 0 var(--space-3);
-}
-/* Developer-view toggle, pinned to the upper-right of the chat window. */
-.dev-view-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  background: transparent;
-  color: var(--text-tertiary);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease);
-}
-.dev-view-btn:hover:not(:disabled) {
-  background: var(--surface-2);
-  color: var(--text);
-  border-color: var(--separator);
-}
-.dev-view-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
+/* The chat's utility buttons (project home / arcade / inspector) live in the
+   app title bar now — see app.css `.dev-view-btn`. */
 
 /* Positioning context for the floating jump-to-bottom button so it sits just
    above the composer (not over it) and tracks the messages region's height. */
@@ -547,11 +513,17 @@
 }
 
 /* Thinking dots */
+/* The themed thinking line — the desktop twin of the CLI spinner:
+   `✶ Fording the river… (7s)`. */
 .thinking {
   display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 1.2em;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-height: 1.2em;
+  font-family: var(--font-readout);
+  /* Same size as the message text it sits among (body text is --text-md). */
+  font-size: inherit;
+  color: var(--text-secondary);
 }
 /* When it trails streamed text (e.g. a preamble before a tool call), sit it on
    its own line just below the text. */
@@ -559,27 +531,33 @@
   display: flex;
   margin-top: var(--space-2);
 }
-.thinking > span {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--accent) 60%, var(--text-tertiary));
-  animation: bounce 1.2s var(--ease) infinite;
+.thinking-glyph {
+  color: var(--accent);
+  animation: glyph-pulse 0.9s var(--ease) infinite;
 }
-.thinking > span:nth-child(2) {
-  animation-delay: 0.18s;
+.thinking-phrase {
+  animation: phrase-in 0.28s var(--ease);
 }
-.thinking > span:nth-child(3) {
-  animation-delay: 0.36s;
+.thinking-elapsed {
+  color: var(--text-tertiary);
 }
-@keyframes bounce {
-  0%, 80%, 100% {
-    opacity: 0.3;
-    transform: translateY(0);
-  }
-  40% {
+@keyframes glyph-pulse {
+  0%, 100% {
     opacity: 1;
-    transform: translateY(-3px);
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+/* Each fresh phrase steps up into place. */
+@keyframes phrase-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 

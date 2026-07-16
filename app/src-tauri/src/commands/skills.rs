@@ -5,7 +5,7 @@
 
 use tauri::State;
 
-use crate::state::{active_root, AppState};
+use crate::state::AppState;
 
 /// Every skill visible from the active project (global + project scope, with
 /// project shadowing), for the Skills settings page.
@@ -13,7 +13,7 @@ use crate::state::{active_root, AppState};
 pub(crate) async fn list_skills(
     state: State<'_, AppState>,
 ) -> Result<Vec<harness_runtime::skills::SkillInfo>, String> {
-    let root = active_root(&state).await;
+    let root = state.active_root().await;
     let prefs = harness_runtime::skills::load();
     Ok(harness_runtime::skills::list(&root, &prefs))
 }
@@ -27,7 +27,7 @@ pub(crate) async fn save_skill(
     description: String,
     instructions: String,
 ) -> Result<(), String> {
-    let root = active_root(&state).await;
+    let root = state.active_root().await;
     harness_runtime::skills::save_skill(&root, scope, &name, &description, &instructions)
         .map_err(|e| e.to_string())
 }
@@ -39,7 +39,7 @@ pub(crate) async fn delete_skill(
     scope: harness_tools::SkillScope,
     name: String,
 ) -> Result<(), String> {
-    let root = active_root(&state).await;
+    let root = state.active_root().await;
     harness_runtime::skills::delete_skill(&root, scope, &name).map_err(|e| e.to_string())
 }
 

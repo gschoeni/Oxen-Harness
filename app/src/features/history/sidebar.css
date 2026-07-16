@@ -1,7 +1,7 @@
 .sidebar {
   background: var(--surface);
-  /* Top padding clears the macOS traffic-light buttons (overlay title bar). */
-  padding: var(--titlebar-h) var(--space-4) var(--space-4);
+  /* The app title bar above owns the traffic-light strip; this is content. */
+  padding: var(--space-3) var(--space-4) var(--space-4);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -10,17 +10,6 @@
   /* Grid items default to min-height: auto; reset so the history list can
      scroll internally and the footer stays pinned at any window height. */
   min-height: 0;
-}
-
-/* Drag strip filling the top padding (over the traffic lights). The native
-   buttons sit above the webview so they stay clickable through it. */
-.sidebar-titlebar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: var(--titlebar-h);
-  z-index: var(--z-titlebar);
 }
 
 .brand {

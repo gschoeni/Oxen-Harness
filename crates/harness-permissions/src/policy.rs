@@ -85,11 +85,10 @@ impl PolicySet {
         let global: PermissionsConfig = harness_config::paths::permissions_file()
             .map(|p| harness_config::io::read_versioned::<PermissionsConfig>(&p).1)
             .unwrap_or_default();
-        let project =
-            harness_config::io::read_versioned::<PermissionsConfig>(&project_permissions_file(
-                workspace,
-            ))
-            .1;
+        let project = harness_config::io::read_versioned::<PermissionsConfig>(
+            &project_permissions_file(workspace),
+        )
+        .1;
         Self::merge(global, project)
     }
 
@@ -113,7 +112,9 @@ impl PolicySet {
             .iter()
             .find(|rule| {
                 prefix_matches(rule, command)
-                    || subcommand_renderings.iter().any(|s| prefix_matches(rule, s))
+                    || subcommand_renderings
+                        .iter()
+                        .any(|s| prefix_matches(rule, s))
             })
             .map(String::as_str)
     }
@@ -129,7 +130,10 @@ impl PolicySet {
     pub fn allows_by_prefix(&self, subcommand_renderings: &[String], extra: &[String]) -> bool {
         !subcommand_renderings.is_empty()
             && subcommand_renderings.iter().all(|s| {
-                self.allow.iter().chain(extra.iter()).any(|rule| prefix_matches(rule, s))
+                self.allow
+                    .iter()
+                    .chain(extra.iter())
+                    .any(|rule| prefix_matches(rule, s))
             })
     }
 }
@@ -262,8 +266,7 @@ mod tests {
     #[test]
     fn project_grants_round_trip() {
         let dir = tempfile::tempdir().unwrap();
-        persist_project_grant(dir.path(), Some("rm -rf ./build"), &["cargo test".into()])
-            .unwrap();
+        persist_project_grant(dir.path(), Some("rm -rf ./build"), &["cargo test".into()]).unwrap();
         persist_project_grant(dir.path(), Some("rm -rf ./build"), &[]).unwrap(); // dedupe
         let config = harness_config::io::read_versioned::<PermissionsConfig>(
             &project_permissions_file(dir.path()),

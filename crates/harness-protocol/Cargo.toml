@@ -1,0 +1,21 @@
+[package]
+name = "harness-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The transport-neutral wire protocol every oxen-harness UI speaks: session-tagged events plus command DTOs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+
+[dev-dependencies]
+harness-tools = { workspace = true }
+schemars = { workspace = true }
+
+[lints]
+workspace = true

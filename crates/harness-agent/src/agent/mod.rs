@@ -96,6 +96,29 @@ pub struct Agent {
     /// Cumulative estimated tokens saved (`On`) or would-be saved (`Audit`)
     /// by compression this run.
     tokens_saved: usize,
+    /// A compaction summary being prepared speculatively in the background
+    /// (spawned when the transcript nears the budget, consumed when
+    /// compaction actually triggers — see `Agent::maybe_prefire`). `None`
+    /// when nothing is in flight.
+    prefire: Option<PrefireSummary>,
+    /// Messages the user sent mid-turn, drained by the turn loop at safe
+    /// points (see [`crate::interject`]). Hosts push through a handle cloned
+    /// via [`Agent::interjections`] before the turn takes the agent.
+    interjections: crate::Interjections,
+}
+
+/// A speculative compaction summary in flight (see [`Agent`]'s `prefire`).
+pub(crate) struct PrefireSummary {
+    /// Exclusive end of the message prefix the summary covers (a user-turn
+    /// boundary at spawn time).
+    pub(crate) cut: usize,
+    /// Estimated input tokens of the summarization call, so its spend is
+    /// accounted even when the provider reports no usage or the summary is
+    /// discarded (the request hit the provider either way).
+    pub(crate) prompt_estimate: usize,
+    /// The background summarization task.
+    pub(crate) handle:
+        tokio::task::JoinHandle<Result<harness_llm::stream::AssembledMessage, harness_llm::LlmError>>,
 }
 
 impl Agent {
@@ -137,6 +160,8 @@ impl Agent {
             compress_cfg: CompressConfig::default(),
             compression_cache: HashMap::new(),
             tokens_saved: 0,
+            prefire: None,
+            interjections: crate::Interjections::default(),
         })
     }
 
@@ -187,7 +212,20 @@ impl Agent {
             compress_cfg: CompressConfig::default(),
             compression_cache: HashMap::new(),
             tokens_saved: 0,
+            prefire: None,
+            interjections: crate::Interjections::default(),
         })
+    }
+
+    /// Drop (and stop) any in-flight speculative compaction summary — it was
+    /// computed against a transcript that is no longer current. Its request
+    /// already hit the provider, so the estimated input spend is recorded
+    /// (over-counting an early abort beats silently under-counting).
+    pub(crate) fn invalidate_prefire(&mut self) {
+        if let Some(pre) = self.prefire.take() {
+            pre.handle.abort();
+            self.record_usage(pre.prompt_estimate, 0);
+        }
     }
 
     pub fn session_id(&self) -> &str {
@@ -212,6 +250,7 @@ impl Agent {
         self.prompt_tokens_used = 0;
         self.completion_tokens_used = 0;
         self.tokens_saved = 0;
+        self.invalidate_prefire();
         Ok(())
     }
 
@@ -233,6 +272,7 @@ impl Agent {
         // Seed the cumulative count from the loaded transcript so a resumed
         // session's dashboard reflects prior usage instead of starting at 0.
         self.tokens_used = self.context_tokens();
+        self.invalidate_prefire();
         Ok(())
     }
 
@@ -267,6 +307,16 @@ impl Agent {
     /// carry over.
     pub fn set_cancel_token(&mut self, token: CancellationToken) {
         self.cancel = token;
+    }
+
+    /// A handle for delivering user messages into a *running* turn (mid-turn
+    /// steering). Clone it before the turn takes the agent — like the cancel
+    /// token — then [`push`](crate::Interjections::push) from anywhere; the
+    /// turn loop drains at its safe points. Whatever is still pending when
+    /// the turn ends is the host's to recover (usually into its prompt
+    /// queue), via [`take_all`](crate::Interjections::take_all).
+    pub fn interjections(&self) -> crate::Interjections {
+        self.interjections.clone()
     }
 
     /// The effective context window (tokens): the configured override, else a
@@ -350,16 +400,7 @@ impl Agent {
             .stream_chat(&request, &CancellationToken::new(), |_| {})
             .await?;
         let raw_prompt = budget::estimate_prompt_tokens(&request.messages, &[]);
-        let (prompt, completion) = match assembled.usage {
-            Some(usage) if usage.prompt_tokens + usage.completion_tokens > 0 => (
-                usage.prompt_tokens as usize,
-                usage.completion_tokens as usize,
-            ),
-            _ => (
-                raw_prompt,
-                budget::estimate_completion_tokens(&assembled.content, &assembled.tool_calls),
-            ),
-        };
+        let (prompt, completion) = budget::split_oneshot_usage(&assembled, raw_prompt);
         self.record_usage(prompt, completion);
         Ok(assembled.content)
     }
@@ -379,9 +420,7 @@ impl Agent {
         config.initial_attachments.clear();
         // A side agent can't drive the host's approval prompt any more than it
         // can drive the question picker: demote its gate to auto-deny.
-        config.permissions = config
-            .permissions
-            .map(|gate| Arc::new(gate.for_subagent()));
+        config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
         let mut side = Agent::new(
             self.client.clone(),
             subagent_tools(self.tools.clone()),

@@ -4,19 +4,12 @@
 //! runs on. A local switch starts a fresh server + session; a cloud switch
 //! swaps the live conversation in place (continuing the chat).
 
-use harness_llm::OxenClient;
-use harness_local::{
-    fit, install_hint, install_llama_server, llama_server_path, LocalServer, ModelRef, ModelStore,
-};
+use harness_local::{fit, install_llama_server, ModelRef, ModelStore};
+use harness_protocol::{ProtocolEvent, SessionInfo};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::commands::session::SessionInfo;
-use crate::events::{local_status_emitter, DownloadEvent};
-use crate::state::{
-    active_root, build_client, current_agent, fleet_spawner_for, info_for, install_agent,
-    new_agent, AppState,
-};
+use crate::state::AppState;
 
 /// The installed local models plus disk + runtime context (for the manage view).
 #[derive(Clone, Serialize)]
@@ -344,21 +337,22 @@ pub(crate) async fn install_runtime(app: AppHandle) -> Result<(), String> {
 /// it streams. The `model` is a concrete [`ModelRef`] the UI chose (a specific
 /// quant); the token for its origin is resolved server-side.
 #[tauri::command]
-pub(crate) async fn download_model(app: AppHandle, model: ModelRef) -> Result<(), String> {
+pub(crate) async fn download_model(
+    state: State<'_, AppState>,
+    model: ModelRef,
+) -> Result<(), String> {
     let store = ModelStore::open().map_err(|e| e.to_string())?;
     let token = token_for(&model);
     let id = model.id.clone();
+    let sink = state.sink.clone();
     store
         .download(&model, token.as_deref(), |p| {
-            let _ = app.emit(
-                "models://progress",
-                DownloadEvent {
-                    id: id.clone(),
-                    downloaded: p.downloaded,
-                    total: p.total,
-                    fraction: p.fraction(),
-                },
-            );
+            sink.emit(ProtocolEvent::DownloadProgress {
+                id: id.clone(),
+                downloaded: p.downloaded,
+                total: p.total,
+                fraction: p.fraction(),
+            });
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -378,54 +372,10 @@ pub(crate) async fn remove_model(id: String) -> Result<(), String> {
 /// model must already be downloaded.
 #[tauri::command]
 pub(crate) async fn use_local_model(
-    app: AppHandle,
     state: State<'_, AppState>,
     id: String,
 ) -> Result<SessionInfo, String> {
-    if llama_server_path().is_none() {
-        return Err(format!(
-            "the local runtime isn't installed. {}",
-            install_hint()
-        ));
-    }
-    let store = ModelStore::open().map_err(|e| e.to_string())?;
-    if !store.is_installed(&id) {
-        return Err(format!("{id} isn't downloaded yet"));
-    }
-
-    // Size the served context to the machine: weights + KV cache must fit budget.
-    let profile = harness_local::detect_hardware();
-    let weight_bytes = store.installed_size(&id).unwrap_or(0);
-    let native = store.native_context(&id);
-    let context = fit::plan_context(profile.usable_budget, weight_bytes, native);
-
-    // Stream load phases to the UI so the switch shows what it's doing (runtime
-    // init vs. loading the weights) instead of an opaque "Switching…".
-    let server = LocalServer::start_with_context(
-        &store.path_for(&id),
-        &id,
-        context,
-        local_status_emitter(&app, &id),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    let context_window = Some(server.context_size() as usize);
-    let root = active_root(&state).await;
-    let agent = new_agent(
-        &app,
-        state.pending.clone(),
-        OxenClient::new(server.base_url(), "local", &id),
-        &id,
-        context_window,
-        &root,
-    )?;
-
-    // Remember the local server + model so new sessions reuse it, persist the
-    // choice so it survives a restart, then install the agent as the current chat.
-    *state.local_server.lock().await = Some(server);
-    *state.local_model.lock().await = Some(id.clone());
-    let _ = harness_runtime::models::set_active_local(&id);
-    Ok(install_agent(&state, agent).await)
+    state.use_local_model(&id).await
 }
 
 // ===========================================================================
@@ -464,37 +414,10 @@ pub(crate) async fn remove_cloud_model(
 /// choice so it survives a restart.
 #[tauri::command]
 pub(crate) async fn set_model(
-    app: AppHandle,
     state: State<'_, AppState>,
     model: String,
 ) -> Result<SessionInfo, String> {
-    let model = model.trim().to_string();
-    if model.is_empty() {
-        return Err("model id cannot be empty".into());
-    }
-    harness_runtime::models::set_selected(&model).map_err(|e| e.to_string())?;
-    *state.cloud_model.lock().await = model.clone();
-    // We're going cloud — drop any active local model/server.
-    *state.local_server.lock().await = None;
-    *state.local_model.lock().await = None;
-
-    // Swap the live conversation onto the cloud client + model in place. (If the
-    // chat was on a local model, replacing the client moves it to the cloud
-    // endpoint; the small local context window is cleared so it re-derives.)
-    let arc = current_agent(&app, &state).await?;
-    let client = build_client(&model)?;
-    let mut agent = arc.lock().await;
-    agent.set_client(client.clone());
-    agent.set_model(&model);
-    agent.set_context_window(None);
-    // Follow the swap through to the fleet spawner so a later spawn_agents
-    // fleet runs on the new model/endpoint, not the one captured at build.
-    let session = agent.session_id().to_string();
-    if let Some(spawner) = fleet_spawner_for(&state, &session) {
-        spawner.set_client(client);
-        spawner.set_model(&model);
-    }
-    Ok(info_for(&agent))
+    state.set_model(&model).await
 }
 
 /// Select the cloud model used by future chats without changing any live chat.

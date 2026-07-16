@@ -1,69 +1,33 @@
 //! Session lifecycle and history: starting/resuming/deleting chats, reading
 //! persisted transcripts (the developer inspector), the training-data review
 //! flags and fine-tuning export, and the all-time token counters the hero and
-//! Compression page read. Everything here goes through the shared history
-//! store — the same DB the agents persist to as they run.
+//! Compression page read. Lifecycle goes through the shared
+//! `harness_host::SessionService`; the read-only stats go straight to the
+//! history store — the same DB the agents persist to as they run.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use harness_llm::{Attachment, ChatMessage};
+use harness_protocol::{SessionInfo, SessionView};
 use harness_store::{DailyUsage, HistoryStore, ModelUsage, SessionSummary};
 use serde::Serialize;
-use tauri::{AppHandle, State};
-use tokio::sync::Mutex;
+use tauri::State;
 
 use crate::commands::project::remember_project;
-use crate::state::{
-    active_root, agent_for, build_fresh_agent, build_resumed_agent, current_agent, evict_idle,
-    info_for, install_agent, open_history_store, session_workspace, AppState,
-};
-
-#[derive(Clone, Serialize)]
-pub(crate) struct SessionInfo {
-    pub(crate) model: String,
-    pub(crate) workspace: String,
-    pub(crate) session_id: String,
-    /// Cumulative tokens used in this session, so the UI dashboard reflects real
-    /// consumption rather than static flavor text.
-    pub(crate) tokens_used: usize,
-    /// Tokens the current transcript occupies (how full the context window is).
-    pub(crate) context_tokens: usize,
-    /// The model's effective context window, for a "% of context" readout.
-    pub(crate) context_window: usize,
-    /// The context-compression mode this session's agent was built with
-    /// ("off"/"audit"/"on") — drives the TokenMeter's armed indicator.
-    pub(crate) compression_mode: String,
-}
-
-/// A resumed session: its info plus the verbatim transcript for the UI to
-/// re-render (user/assistant bubbles and tool activity). When `running` is true
-/// the chat is mid-turn and couldn't be read; `messages` is empty and the UI
-/// keeps the live thread it already streamed.
-#[derive(Serialize)]
-pub(crate) struct SessionView {
-    info: SessionInfo,
-    messages: Vec<serde_json::Value>,
-    running: bool,
-}
+use crate::state::{open_history_store, AppState};
 
 /// Report the current session info, initializing the agent if needed.
 #[tauri::command]
-pub(crate) async fn session_info(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<SessionInfo, String> {
-    let arc = current_agent(&app, &state).await?;
-    let agent = arc.lock().await;
-    Ok(info_for(&agent))
+pub(crate) async fn session_info(state: State<'_, AppState>) -> Result<SessionInfo, String> {
+    state.session_info().await
 }
 
 /// List past chat sessions (those with at least one user message), newest first.
 #[tauri::command]
-pub(crate) async fn list_sessions() -> Result<Vec<SessionSummary>, String> {
-    open_history_store()?
-        .list_sessions()
-        .map_err(|e| e.to_string())
+pub(crate) async fn list_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<SessionSummary>, String> {
+    state.list_sessions()
 }
 
 /// Read a session's raw, persisted transcript (every message, verbatim — system
@@ -71,10 +35,11 @@ pub(crate) async fn list_sessions() -> Result<Vec<SessionSummary>, String> {
 /// store, for the developer inspector. Read-only and never touches the live
 /// agent, so it works even while a turn is mid-flight.
 #[tauri::command]
-pub(crate) async fn session_messages(id: String) -> Result<Vec<serde_json::Value>, String> {
-    open_history_store()?
-        .messages(&id)
-        .map_err(|e| e.to_string())
+pub(crate) async fn session_messages(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    state.session_messages(&id)
 }
 
 /// Set a chat's training-data review status: `""` (unreviewed), `"kept"`, or
@@ -98,38 +63,12 @@ pub(crate) async fn set_review_status_many(
         .map_err(|e| e.to_string())
 }
 
-/// Permanently delete a chat session: remove it (and its messages) from history,
-/// drop any cached live agent, stop its dev server, and clear it as the current
-/// chat if it was active.
+/// Permanently delete a chat session: remove it (and its messages) from
+/// history, drop any cached live agent, stop its dev server (the service),
+/// and close its preview webview (the deletion hook).
 #[tauri::command]
-pub(crate) async fn delete_session(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
-    open_history_store()?
-        .delete_session(&id)
-        .map_err(|e| e.to_string())?;
-    state.agents.lock().await.remove(&id);
-    // A deleted chat's dev server has no owner left — stop it and drop its
-    // preview webview. Close unconditionally: the server may already have been
-    // stopped (by the agent, or the toolbar), which only *hides* the webview —
-    // a hidden view for a deleted chat would live until app exit.
-    state.dev_servers.stop(&id).await;
-    crate::preview::close(&app, &id);
-    // Drop the session's fleet spawner in lockstep with its agent, so a
-    // deleted chat doesn't leave its spawner (a client + tool-registry +
-    // config clone) stranded in the map until the next eviction sweep.
-    state
-        .fleet_spawners
-        .lock()
-        .expect("fleet spawners poisoned")
-        .remove(&id);
-    let mut current = state.current.lock().await;
-    if current.as_deref() == Some(id.as_str()) {
-        *current = None;
-    }
-    Ok(())
+pub(crate) async fn delete_session(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.delete_session(&id).await
 }
 
 /// Load an attachment as a `data:` URI for display in the UI (composer preview
@@ -139,6 +78,7 @@ pub(crate) async fn delete_session(
 /// rendering CSP-safe — no asset-protocol or file:// access needed.
 #[tauri::command]
 pub(crate) async fn attachment_data_uri(
+    state: State<'_, AppState>,
     path: String,
     session: Option<String>,
 ) -> Result<String, String> {
@@ -146,7 +86,7 @@ pub(crate) async fn attachment_data_uri(
     let abs = if p.is_absolute() {
         p.to_path_buf()
     } else if let Some(s) = session {
-        session_workspace(&s).join(p)
+        state.session_workspace(&s).join(p)
     } else {
         p.to_path_buf()
     };
@@ -183,15 +123,24 @@ pub(crate) async fn total_tokens_used() -> Result<usize, String> {
     Ok(ensure_total_tokens(&store)?.max(0) as usize)
 }
 
+/// The all-time tokens compression saved (mode `on`) or would have saved
+/// (mode `audit`) across every session — the Compression settings page's stat.
+#[tauri::command]
+pub(crate) async fn total_tokens_saved(state: State<'_, AppState>) -> Result<usize, String> {
+    state.total_tokens_saved()
+}
+
 /// Estimated all-time Oxen cloud spend for the hero, using observed per-model
 /// input/output tokens and current catalog rates. `None` when catalog pricing
 /// is unavailable; local/custom endpoint usage is kept unpriced.
 #[tauri::command]
 pub(crate) async fn total_cost_usd() -> Result<Option<f64>, String> {
     let store = open_history_store()?;
-    Ok(price_usage(store.model_usage_breakdown().map_err(|e| e.to_string())?)
-        .await
-        .total_cost_usd)
+    Ok(
+        price_usage(store.model_usage_breakdown().map_err(|e| e.to_string())?)
+            .await
+            .total_cost_usd,
+    )
 }
 
 /// One model's accumulated usage, for the Usage settings breakdown: the model
@@ -286,8 +235,8 @@ async fn price_usage(usage: Vec<ModelUsage>) -> UsageBreakdown {
         &base_url,
         (!token.trim().is_empty()).then_some(token.as_str()),
     )
-        .await
-        .ok();
+    .await
+    .ok();
     price_usage_with_catalog(usage, pricing.as_ref())
 }
 
@@ -385,8 +334,8 @@ mod usage_tests {
 
 /// Ensure the running token counter exists, seeding it once from existing
 /// history if it was never set, and return the current total. The expensive
-/// transcript scan runs at most once (the first time); afterwards each turn just
-/// increments the counter, so reads and updates stay O(1).
+/// transcript scan runs at most once (the first time); afterwards each turn
+/// just increments the counter, so reads and updates stay O(1).
 fn ensure_total_tokens(store: &HistoryStore) -> Result<i64, String> {
     if let Some(v) = store
         .meta_get_i64(TOTAL_TOKENS_KEY)
@@ -422,122 +371,26 @@ fn estimate_all_tokens(store: &HistoryStore) -> usize {
     total
 }
 
-/// Add a turn's token throughput to the all-time counter (backfilling once if
-/// needed) and return the new grand total. Best-effort: never fails a turn.
-/// The `app_meta` key holding the all-time tokens saved by context compression.
-const TOTAL_TOKENS_SAVED_KEY: &str = "total_tokens_saved";
-
-/// The all-time tokens compression saved (mode `on`) or would have saved
-/// (mode `audit`) across every session — the Compression settings page's stat.
-/// No backfill: savings only exist from the moment the feature ships, so the
-/// counter simply starts at 0.
+/// Start a fresh chat session as its own agent. Any in-flight chats keep
+/// running in the background — this never disturbs them. Returns the new
+/// session's info.
 #[tauri::command]
-pub(crate) async fn total_tokens_saved() -> Result<usize, String> {
-    let store = open_history_store()?;
-    Ok(store
-        .meta_get_i64(TOTAL_TOKENS_SAVED_KEY)
-        .map_err(|e| e.to_string())?
-        .unwrap_or(0)
-        .max(0) as usize)
+pub(crate) async fn new_session(state: State<'_, AppState>) -> Result<SessionInfo, String> {
+    state.new_session().await
 }
 
-/// Add a turn's compression savings to the all-time counter and return the new
-/// grand total. Best-effort: never fails a turn.
-pub(crate) fn bump_total_tokens_saved(delta: usize) -> usize {
-    if delta == 0 {
-        return 0; // the common case (compression off) — skip the DB round-trip
-    }
-    let Ok(store) = open_history_store() else {
-        return 0;
-    };
-    store
-        .meta_add_i64(TOTAL_TOKENS_SAVED_KEY, delta as i64)
-        .map(|v| v.max(0) as usize)
-        .unwrap_or(0)
-}
-
-/// Start a fresh chat session as its own agent. Any in-flight chats keep running
-/// in the background — this never disturbs them. Returns the new session's info.
-#[tauri::command]
-pub(crate) async fn new_session(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<SessionInfo, String> {
-    let root = active_root(&state).await;
-    let agent = build_fresh_agent(&app, &state, &root).await?;
-    Ok(install_agent(&state, agent).await)
-}
-
-/// Switch to an existing session, returning its info and full transcript so the
-/// UI can re-render the conversation. Reuses the session's live agent if one
-/// exists (e.g. a chat that finished in the background); otherwise loads it cold
-/// from history. A chat still mid-turn can't be locked, so its transcript comes
-/// back empty — the UI keeps the live thread it already streamed.
+/// Switch to an existing session, returning its info and full transcript so
+/// the UI can re-render the conversation. Reuses the session's live agent if
+/// one exists; otherwise loads it cold from history. A chat still mid-turn
+/// can't be locked, so its transcript comes back empty with `running: true`.
 #[tauri::command]
 pub(crate) async fn resume_session(
-    app: AppHandle,
     state: State<'_, AppState>,
     id: String,
 ) -> Result<SessionView, String> {
-    // The session belongs to its own project; opening it enters that project so
-    // new chats land in the same directory.
-    let workspace = session_workspace(&id);
-    *state.active_project.lock().await = workspace.clone();
-    let _ = remember_project(&workspace.display().to_string());
-
-    let arc = match agent_for(&state, &id).await {
-        Some(a) => a,
-        None => {
-            // Cold resume: build an agent bound to the existing session (no
-            // throwaway row), rooted at the session's own workspace, then insert
-            // via the map entry so a concurrent resume can't leave two behind.
-            let agent = build_resumed_agent(&app, &state, id.clone(), &workspace).await?;
-            let arc = Arc::new(Mutex::new(agent));
-            let winner = state
-                .agents
-                .lock()
-                .await
-                .entry(id.clone())
-                .or_insert(arc)
-                .clone();
-            winner
-        }
-    };
-    *state.current.lock().await = Some(id.clone());
-    evict_idle(&state).await;
-
-    // Bind to a local so the try_lock guard drops before `arc` at block end.
-    let view = match arc.try_lock() {
-        Ok(agent) => {
-            let messages = agent
-                .messages()
-                .iter()
-                .map(serde_json::to_value)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?;
-            SessionView {
-                info: info_for(&agent),
-                messages,
-                running: false,
-            }
-        }
-        // Mid-turn: can't read it. The UI keeps its live in-memory thread; the
-        // explicit `running` flag tells it not to touch the transcript.
-        Err(_) => SessionView {
-            info: SessionInfo {
-                model: String::new(),
-                workspace: workspace.display().to_string(),
-                session_id: id,
-                tokens_used: 0,
-                context_tokens: 0,
-                context_window: 0,
-                // Mid-turn placeholder: the live agent is locked, so report the
-                // saved preference (what any rebuilt agent would get).
-                compression_mode: harness_runtime::compression::mode().as_str().to_string(),
-            },
-            messages: vec![],
-            running: true,
-        },
-    };
+    let view = state.resume_session(&id).await?;
+    // Opening a chat enters its project; remember it as the active one so new
+    // chats land in the same directory across restarts.
+    let _ = remember_project(&view.info.workspace);
     Ok(view)
 }

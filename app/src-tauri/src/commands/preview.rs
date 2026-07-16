@@ -119,7 +119,7 @@ pub(crate) async fn preview_restart(
     state: State<'_, AppState>,
     session: String,
 ) -> Result<(), String> {
-    let root = crate::state::session_workspace(&session);
+    let root = state.session_workspace(&session);
     let spec = state
         .dev_servers
         .get(&session)

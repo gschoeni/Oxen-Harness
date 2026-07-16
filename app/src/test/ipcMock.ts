@@ -258,6 +258,7 @@ export const openProject = vi.fn(async (path: string) => ({
   context: [],
   session_count: 0,
   active: true,
+  last_used_at: null,
 }));
 export const startProject = vi.fn(async (input: StartProjectInput): Promise<Project> => ({
   path: input.createDirectory ? `${input.directory}/${input.name}` : input.directory,
@@ -267,16 +268,17 @@ export const startProject = vi.fn(async (input: StartProjectInput): Promise<Proj
   context: [],
   session_count: 0,
   active: true,
+  last_used_at: null,
 }));
 export const updateProject = vi.fn(async (path: string, name: string, description: string, instructions: string): Promise<Project> => ({
-  path, name, description, instructions, context: [], session_count: 0, active: true,
+  path, name, description, instructions, context: [], session_count: 0, active: true, last_used_at: null,
 }));
 export const addProjectContext = vi.fn(async (path: string, contextPaths: string[]): Promise<Project> => ({
-  path, name: "Demo", description: "", instructions: "", session_count: 0, active: true,
+  path, name: "Demo", description: "", instructions: "", session_count: 0, active: true, last_used_at: null,
   context: contextPaths.map((source) => ({ path: source, name: source.split("/").pop() ?? source, kind: "text" as const, size_bytes: 42 })),
 }));
 export const removeProjectContext = vi.fn(async (path: string): Promise<Project> => ({
-  path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true,
+  path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true, last_used_at: null,
 }));
 export const setActiveProject = vi.fn(async () => {});
 export const selectCloudModelForNewChats = vi.fn(async () => {});
@@ -338,6 +340,26 @@ export const previewStatuses = vi.fn(async () => [] as unknown[]);
 export const previewRestart = vi.fn(async () => {});
 export const getPreviewPrefs = vi.fn(async () => ({ auto_verify: true }));
 export const setPreviewAutoVerify = vi.fn(async () => {});
+
+// ---- workspace files (Files tree + Editor dock) -------------------------------
+export const fsListDir = vi.fn(
+  async (_root: string, _path: string) => [] as { name: string; path: string; is_dir: boolean }[],
+);
+export const fsReadFile = vi.fn(async (_root: string, _path: string) => ({
+  content: "",
+  truncated: false,
+  size: 0,
+}));
+export const fsWriteFile = vi.fn(async (_root: string, _path: string, _content: string) => {});
+export const fsCreateEntry = vi.fn(async (_root: string, _path: string, _isDir: boolean) => {});
+
+// ---- link browser ------------------------------------------------------------
+export const onBrowserOpen = listener("browserOpen");
+export const browserAttach = vi.fn(async () => {});
+export const browserDetach = vi.fn(async () => {});
+export const browserClose = vi.fn(async () => {});
+export const browserReload = vi.fn(async () => {});
+export const openExternal = vi.fn(async () => {});
 
 export const getConnection = vi.fn(async () => sampleConnection);
 export const setConnection = vi.fn(async () => ({ ...sampleSession, session_id: "reconnected" }));
@@ -403,6 +425,7 @@ export function resetIpc() {
     context: [],
     session_count: 0,
     active: true,
+    last_used_at: null,
   }));
   startProject.mockReset().mockImplementation(async (input: StartProjectInput): Promise<Project> => ({
     path: input.createDirectory ? `${input.directory}/${input.name}` : input.directory,
@@ -412,16 +435,17 @@ export function resetIpc() {
     context: [],
     session_count: 0,
     active: true,
+    last_used_at: null,
   }));
   updateProject.mockReset().mockImplementation(async (path: string, name: string, description: string, instructions: string): Promise<Project> => ({
-    path, name, description, instructions, context: [], session_count: 0, active: true,
+    path, name, description, instructions, context: [], session_count: 0, active: true, last_used_at: null,
   }));
   addProjectContext.mockReset().mockImplementation(async (path: string, contextPaths: string[]): Promise<Project> => ({
-    path, name: "Demo", description: "", instructions: "", session_count: 0, active: true,
+    path, name: "Demo", description: "", instructions: "", session_count: 0, active: true, last_used_at: null,
     context: contextPaths.map((source) => ({ path: source, name: source.split("/").pop() ?? source, kind: "text" as const, size_bytes: 42 })),
   }));
   removeProjectContext.mockReset().mockImplementation(async (path: string): Promise<Project> => ({
-    path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true,
+    path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true, last_used_at: null,
   }));
   setActiveProject.mockReset().mockResolvedValue(undefined);
   selectCloudModelForNewChats.mockReset().mockResolvedValue(undefined);
@@ -466,6 +490,15 @@ export function resetIpc() {
   previewRestart.mockReset().mockResolvedValue(undefined);
   getPreviewPrefs.mockReset().mockResolvedValue({ auto_verify: true });
   setPreviewAutoVerify.mockReset().mockResolvedValue(undefined);
+  fsListDir.mockReset().mockResolvedValue([]);
+  fsReadFile.mockReset().mockResolvedValue({ content: "", truncated: false, size: 0 });
+  fsWriteFile.mockReset().mockResolvedValue(undefined);
+  fsCreateEntry.mockReset().mockResolvedValue(undefined);
+  browserAttach.mockReset().mockResolvedValue(undefined);
+  browserDetach.mockReset().mockResolvedValue(undefined);
+  browserClose.mockReset().mockResolvedValue(undefined);
+  browserReload.mockReset().mockResolvedValue(undefined);
+  openExternal.mockReset().mockResolvedValue(undefined);
   getConnection.mockReset().mockResolvedValue(sampleConnection);
   setConnection.mockReset().mockResolvedValue({ ...sampleSession, session_id: "reconnected" });
   configureBraveKey.mockReset().mockResolvedValue(undefined);
@@ -538,5 +571,6 @@ export function resetIpc() {
     onLlamaInstall,
     onPreviewStatus,
     onPreviewConsole,
+    onBrowserOpen,
   ].forEach((fn) => fn.mockClear());
 }

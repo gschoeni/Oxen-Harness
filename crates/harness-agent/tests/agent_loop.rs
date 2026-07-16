@@ -384,8 +384,7 @@ async fn permission_gate_intercepts_dangerous_shell_calls_in_the_loop() {
         let workspace_dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(workspace_dir.path().join("marker")).unwrap();
         let workspace = harness_tools::Workspace::new(workspace_dir.path()).unwrap();
-        let tools = ToolRegistry::new()
-            .with_typed(harness_tools::shell::ShellTool::new(workspace));
+        let tools = ToolRegistry::new().with_typed(harness_tools::shell::ShellTool::new(workspace));
 
         let approver = Arc::new(ScriptedApprover {
             decision: decision.clone(),

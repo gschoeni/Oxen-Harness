@@ -1,14 +1,95 @@
-/* Three tracks: left docks | chat | right docks. Each dock column's width is
-   set by the dock system (collapsed → a thin rail, absent → 0), so the chat
-   simply takes what's left. Adding a panel changes no CSS — see
-   `features/docks/docks.tsx`. */
+/* The window: one persistent title bar on top, then three tracks —
+   left docks | chat | right docks. Each dock column's width is set by the
+   dock system (collapsed → a thin rail, absent → 0), so the chat simply takes
+   what's left. Adding a panel changes no CSS — see `features/docks/docks.tsx`. */
 .app {
-  display: grid;
-  grid-template-columns: var(--dock-left-w, 0px) minmax(0, 1fr) var(--dock-right-w, 0px);
-  /* Cap the single row at the viewport height (minmax floor of 0) so a long
-     history list scrolls inside the sidebar instead of stretching the row past
-     the viewport and clipping the footer/composer under `overflow: hidden`. */
-  grid-template-rows: minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
+}
+
+/* The one true title bar: the whole strip is a native drag region (drag to
+   move, double-click to zoom). Every full-window overlay opens BELOW it
+   (top: var(--titlebar-h)), so the window is always draggable, everywhere.
+   The left padding clears the macOS traffic lights. */
+.app-titlebar {
+  position: relative;
+  height: var(--titlebar-h);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  padding: 0 var(--space-2) 0 84px;
+  background: var(--surface);
+  border-bottom: var(--frame-border-w) solid var(--separator-strong);
+}
+/* The window's title (the active project). pointer-events: none keeps the
+   strip under it draggable. */
+.app-titlebar-name {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+.app-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Utility buttons in the title bar (project home, arcade, inspector). */
+.dev-view-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  color: var(--text-tertiary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.dev-view-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--separator);
+}
+.dev-view-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* The chat's terminal squeeze: a bar with one button that brings the agent
+   back (see App.tsx `ChatRail`). */
+.chat-collapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: var(--space-2);
+  background: var(--bg);
+  min-width: 0;
+}
+
+.app-columns {
+  flex: 1;
+  /* Cap the row at the remaining viewport height (minmax floor of 0) so long
+     content scrolls inside its column instead of stretching the row past the
+     viewport and clipping footers/composers under `overflow: hidden`. */
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--dock-left-w, 0px) minmax(0, 1fr) var(--dock-right-w, 0px);
+  grid-template-rows: minmax(0, 1fr);
 }

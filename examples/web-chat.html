@@ -1,0 +1,205 @@
+<!doctype html>
+<!--
+  Minimal third-party UI for the oxen-harness HTTP protocol — one file, no
+  build step, no dependencies. Start the backend:
+
+      cargo run -p harness-server -- --token dev-token
+
+  then open this file in a browser, paste the token, and chat. It exercises
+  the whole core protocol: session create/list, turns over REST, streaming
+  over SSE (with Last-Event-ID reconnect handled by EventSource), the
+  ask-user-question round-trip, and permission approvals.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>oxen-harness · example web client</title>
+<style>
+  :root { color-scheme: light dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  body { margin: 0; display: flex; flex-direction: column; height: 100vh; }
+  header { padding: 10px 14px; border-bottom: 1px solid #8884; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  header input { font: inherit; padding: 4px 8px; }
+  #base { width: 200px; } #token { width: 220px; }
+  button { font: inherit; padding: 4px 10px; cursor: pointer; }
+  #status { margin-left: auto; opacity: 0.7; font-size: 12px; }
+  #thread { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 60rem; white-space: pre-wrap; word-break: break-word; padding: 8px 12px; border-radius: 8px; }
+  .user { align-self: flex-end; background: #4a72d422; border: 1px solid #4a72d466; }
+  .assistant { align-self: flex-start; background: #8882 ; }
+  .tool { align-self: flex-start; font-size: 12px; opacity: 0.75; }
+  .notice { align-self: center; font-size: 12px; opacity: 0.6; }
+  .card { align-self: flex-start; border: 1px solid #d4a94a88; background: #d4a94a11; padding: 10px 12px; border-radius: 8px; }
+  .card h4 { margin: 0 0 6px; font-size: 13px; }
+  .card button { margin: 4px 6px 0 0; }
+  form#composer { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid #8884; }
+  form#composer input { flex: 1; font: inherit; padding: 8px 10px; }
+</style>
+</head>
+<body>
+<header>
+  <input id="base" value="http://127.0.0.1:4770" title="server base URL" />
+  <input id="token" placeholder="bearer token" />
+  <button id="connect">connect</button>
+  <button id="newSession" disabled>new chat</button>
+  <button id="cancel" disabled>stop</button>
+  <span id="status">disconnected</span>
+</header>
+<div id="thread"></div>
+<form id="composer">
+  <input id="prompt" placeholder="ask the agent…" autocomplete="off" disabled />
+  <button disabled id="send">send</button>
+</form>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let base = "", token = "", session = null, events = null;
+let assistantBubble = null;
+
+const api = (path, options = {}) =>
+  fetch(base + path, {
+    ...options,
+    headers: {
+      Authorization: "Bearer " + token,
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+    },
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    return r.status === 204 ? null : r.json();
+  });
+
+function add(kind, text) {
+  const div = document.createElement("div");
+  div.className = "msg " + kind;
+  div.textContent = text;
+  $("thread").appendChild(div);
+  $("thread").scrollTop = $("thread").scrollHeight;
+  return div;
+}
+
+function streamToken(text) {
+  if (!assistantBubble) assistantBubble = add("assistant", "");
+  assistantBubble.textContent += text;
+  $("thread").scrollTop = $("thread").scrollHeight;
+}
+
+// --- Cards for the two host round-trips -------------------------------------
+
+function questionCard(event) {
+  const card = document.createElement("div");
+  card.className = "msg card";
+  for (const q of event.questions) {
+    const h = document.createElement("h4");
+    h.textContent = (q.header ? "[" + q.header + "] " : "") + q.question;
+    card.appendChild(h);
+    for (const option of q.options) {
+      const b = document.createElement("button");
+      b.textContent = option.label;
+      b.title = option.description;
+      b.onclick = () => {
+        api(`/v1/questions/${event.id}/answer`, {
+          method: "POST",
+          body: JSON.stringify({ answers: [{ header: q.header, question: q.question, selected: [option.label] }] }),
+        });
+        card.replaceWith(Object.assign(add("notice", `answered: ${option.label}`)));
+      };
+      card.appendChild(b);
+    }
+  }
+  $("thread").appendChild(card);
+}
+
+function approvalCard(event) {
+  const card = document.createElement("div");
+  card.className = "msg card";
+  const h = document.createElement("h4");
+  h.textContent = `approval needed (${event.risk}): ${event.command}`;
+  card.appendChild(h);
+  if (event.reasons.length) card.appendChild(Object.assign(document.createElement("div"), { textContent: event.reasons.join("; ") }));
+  for (const [label, decision] of [["allow once", "once"], ["allow this session", "session"], ["deny", "deny"]]) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.onclick = () => {
+      api(`/v1/approvals/${event.id}/answer`, { method: "POST", body: JSON.stringify({ decision }) });
+      card.replaceWith(add("notice", `${label}: ${event.command}`));
+    };
+    card.appendChild(b);
+  }
+  $("thread").appendChild(card);
+}
+
+// --- The event stream ---------------------------------------------------------
+
+function handleEvent(event) {
+  if (event.session && session && event.session !== session) return; // another chat
+  switch (event.type) {
+    case "agent.token": streamToken(event.token); break;
+    case "agent.tool":
+      if (event.phase === "start") add("tool", "⚙ " + event.name + " " + event.detail.slice(0, 120));
+      assistantBubble = null;
+      break;
+    case "agent.question": questionCard(event); break;
+    case "agent.approval_request": approvalCard(event); break;
+    case "agent.compacted": add("notice", "context compacted: " + event.detail); break;
+    case "agent.retry": add("notice", `retrying (${event.attempt}/${event.max_attempts}): ${event.error}`); break;
+    case "turn.started": $("status").textContent = "thinking…"; break;
+    case "turn.completed": assistantBubble = null; $("status").textContent = "ready"; $("cancel").disabled = true; break;
+    case "turn.failed": add("notice", "turn failed: " + event.error); $("status").textContent = "ready"; $("cancel").disabled = true; break;
+    case "agent.canvas": add("assistant", `[canvas: ${event.title}]\n` + event.content); break;
+  }
+}
+
+function openStream() {
+  if (events) events.close();
+  // EventSource can't set headers, so the token rides as a query parameter;
+  // reconnects automatically send Last-Event-ID so nothing is missed.
+  events = new EventSource(`${base}/v1/events?token=${encodeURIComponent(token)}`);
+  events.onmessage = (m) => handleEvent(JSON.parse(m.data));
+  events.onopen = () => ($("status").textContent = "ready");
+  events.onerror = () => ($("status").textContent = "reconnecting…");
+}
+
+// --- Wiring ---------------------------------------------------------------------
+
+$("connect").onclick = async () => {
+  base = $("base").value.replace(/\/$/, "");
+  token = $("token").value.trim();
+  try {
+    await api("/v1/health");
+  } catch (e) {
+    $("status").textContent = "connect failed: " + e.message;
+    return;
+  }
+  openStream();
+  const info = await api("/v1/sessions", { method: "POST" });
+  session = info.session_id;
+  add("notice", `session ${session.slice(0, 8)} · ${info.model} · ${info.workspace}`);
+  for (const el of ["newSession", "prompt", "send"]) $(el).disabled = false;
+};
+
+$("newSession").onclick = async () => {
+  const info = await api("/v1/sessions", { method: "POST" });
+  session = info.session_id;
+  $("thread").innerHTML = "";
+  add("notice", `session ${session.slice(0, 8)} · ${info.model}`);
+};
+
+$("cancel").onclick = () => api(`/v1/sessions/${session}/cancel`, { method: "POST" });
+
+$("composer").onsubmit = (e) => {
+  e.preventDefault();
+  const prompt = $("prompt").value.trim();
+  if (!prompt || !session) return;
+  $("prompt").value = "";
+  add("user", prompt);
+  assistantBubble = null;
+  $("cancel").disabled = false;
+  // Fire-and-forget: the reply streams over SSE; the response resolves with
+  // the final text when the turn settles.
+  api(`/v1/sessions/${session}/turns`, {
+    method: "POST",
+    body: JSON.stringify({ prompt }),
+  }).catch((err) => add("notice", "error: " + err.message));
+};
+</script>
+</body>
+</html>

@@ -113,10 +113,29 @@ pub fn render_for_summary(messages: &[ChatMessage]) -> String {
 pub const SUMMARY_MARKER: &str = "[Earlier conversation summarized to free context]";
 
 /// The instruction handed to the model when summarizing the elided span.
+///
+/// The structure matters: successive compactions feed each summary back
+/// through this prompt (the previous summary message sits inside the span
+/// being summarized), so the carry-forward instruction is what keeps early
+/// history from eroding one compaction at a time. The verbatim-quote "current
+/// work" section is what lets the model resume mid-task instead of
+/// re-orienting from scratch.
 pub const SUMMARY_PROMPT: &str = "Summarize the following earlier portion of a coding \
-    conversation so the work can continue without it. Preserve concrete facts the assistant \
-    will still need: decisions made, files and symbols touched, what was tried, what worked or \
-    failed, and any open threads. Be concise and factual — no preamble.";
+conversation so the work can continue seamlessly without it. If the portion itself contains a \
+summary of even earlier conversation, carry its still-relevant facts forward — they must not \
+be lost. Structure the summary as:\n\
+1. Request and intent: what the user asked for, in detail, including later refinements.\n\
+2. Key technical context: technologies, architecture, and decisions in play, with the why.\n\
+3. Files and code: full paths of files read or changed, what changed and why; include short \
+snippets only where essential to continue the work.\n\
+4. Errors and fixes: each error hit, how it was resolved, and any user feedback on the fix.\n\
+5. User messages: every user message in order, verbatim where short, tightly condensed where \
+long — these carry intent and feedback and outrank everything else here.\n\
+6. Pending tasks: work explicitly requested but not yet done.\n\
+7. Current work: precisely what was in progress at the cut, with file paths and a short \
+verbatim quote of the last relevant exchange, so work resumes at the exact spot.\n\
+8. Next step: the immediate next action, only if one follows directly from the work above.\n\
+Be factual and specific — no preamble, no commentary.";
 
 #[cfg(test)]
 mod tests {

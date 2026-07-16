@@ -17,6 +17,7 @@
 
 pub mod builtins;
 mod color;
+pub mod spinner;
 pub mod store;
 mod style;
 mod theme;

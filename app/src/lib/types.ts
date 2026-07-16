@@ -86,6 +86,8 @@ export interface Project {
   context: ProjectContext[];
   session_count: number;
   active: boolean;
+  /** Unix seconds of the newest message in any of this project's chats; null when it has no history. */
+  last_used_at: number | null;
 }
 
 export interface StartProjectInput {
@@ -358,7 +360,7 @@ export interface QuestionAnswer {
 export interface ApprovalRequestEvent {
   session: string;
   id: string;
-  kind: "shell" | "file_edit" | "git_commit";
+  kind: "shell" | "file_edit" | "git_commit" | "task_kill";
   tool: string;
   command: string;
   risk: string;
@@ -694,6 +696,13 @@ export interface CanvasEvent extends CanvasDoc {
   session: string;
 }
 
+/** The `agent://open-file` payload: the model's `open_file` tool putting
+ *  workspace-relative project files into the Editor/viewer dock. */
+export interface OpenFileEvent {
+  session: string;
+  paths: string[];
+}
+
 // ---- live preview (dev servers) ---------------------------------------------
 
 export type PreviewPhase = "starting" | "ready" | "error" | "stopped";
@@ -772,4 +781,33 @@ export interface LoopRunResult {
   succeeded: boolean;
   iterations: number;
   summary: string;
+}
+
+// ---- workspace files (the Files tree + Editor/viewer dock) ------------------
+
+/** One row in the Files tree. */
+export interface FileEntry {
+  name: string;
+  /** Workspace-relative path (`/`-joined) — the tree's stable key. */
+  path: string;
+  is_dir: boolean;
+}
+
+/** A text file's content for the editor. */
+export interface FileBody {
+  content: string;
+  /** True when the file was longer than the backend's read cap — the editor
+   *  opens read-only so a save can't destroy the unread tail. */
+  truncated: boolean;
+  size: number;
+}
+
+/** A highlighted code selection staged as context for the next prompt. */
+export interface CodeSnippet {
+  /** Workspace-relative path of the file the selection came from. */
+  path: string;
+  /** 1-based first and last line of the selection. */
+  start: number;
+  end: number;
+  code: string;
 }
