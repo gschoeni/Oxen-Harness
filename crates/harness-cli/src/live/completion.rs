@@ -561,6 +561,13 @@ mod tests {
     #[test]
     fn model_completion_keeps_the_typed_id_reachable_beside_matches() {
         let mut l = live(80, 24);
+        // Seed the catalog: it's user-curated (nothing ships built in), so
+        // without this the test would depend on the machine's real config.
+        l.model_items = Some(vec![CompletionItem::new(
+            "claude-sonnet-4-6",
+            "claude-sonnet-4-6",
+            "Claude Sonnet 4.6 · cloud",
+        )]);
         type_line(&mut l, "/model sonnet");
         // Fuzzy matches exist, and the literally-typed id is still offered as
         // an explicit last row — so a new id that happens to be a substring of
@@ -630,6 +637,13 @@ mod tests {
     #[test]
     fn enter_runs_the_highlighted_model_row() {
         let mut l = live(80, 24);
+        // Seed the catalog: it's user-curated (nothing ships built in), so
+        // without this the test would depend on the machine's real config.
+        l.model_items = Some(vec![CompletionItem::new(
+            "claude-sonnet-4-6",
+            "claude-sonnet-4-6",
+            "Claude Sonnet 4.6 · cloud",
+        )]);
         type_line(&mut l, "/model sonnet");
         // The picker hint says "enter run": Enter submits the highlighted
         // row's full id, not the typed fragment.
