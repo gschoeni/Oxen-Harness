@@ -223,7 +223,9 @@ mod tests {
         assert!(out.contains("exit_code: 3"));
     }
 
-    fn task_shell(dir: &std::path::Path) -> (ShellTool, std::sync::Arc<crate::tasks::BackgroundTasks>) {
+    fn task_shell(
+        dir: &std::path::Path,
+    ) -> (ShellTool, std::sync::Arc<crate::tasks::BackgroundTasks>) {
         let ws = Workspace::new(dir).unwrap();
         let tasks = crate::tasks::BackgroundTasks::new(dir.join(".task-logs"));
         (ShellTool::with_tasks(ws, tasks.clone()), tasks)

@@ -96,6 +96,21 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
     wasRunning.current = running;
   }, [running, refresh]);
 
+  // Files changed on disk (any process — the watcher batches them): re-list
+  // just the loaded directories that contain a changed path. An empty batch
+  // means "too much to enumerate" — refresh everything on screen.
+  const fsChange = useStore((s) => s.fsChange);
+  useEffect(() => {
+    if (!fsChange || !workspace || fsChange.root !== workspace) return;
+    if (!fsChange.paths.length) {
+      refresh();
+      return;
+    }
+    const dirs = new Set(fsChange.paths.map(parentOf));
+    for (const dir of dirs) if (dir === "" || entries[dir]) void loadDir(dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fsChange]);
+
   function toggleDir(path: string) {
     setSelected(new Set([path]));
     setTargetDir(path);

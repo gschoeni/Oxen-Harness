@@ -117,8 +117,9 @@ pub(crate) struct PrefireSummary {
     /// discarded (the request hit the provider either way).
     pub(crate) prompt_estimate: usize,
     /// The background summarization task.
-    pub(crate) handle:
-        tokio::task::JoinHandle<Result<harness_llm::stream::AssembledMessage, harness_llm::LlmError>>,
+    pub(crate) handle: tokio::task::JoinHandle<
+        Result<harness_llm::stream::AssembledMessage, harness_llm::LlmError>,
+    >,
 }
 
 impl Agent {

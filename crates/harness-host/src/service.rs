@@ -176,9 +176,10 @@ impl SessionServiceBuilder {
     pub fn build(self) -> SessionService {
         SessionService {
             sink: self.sink,
-            store: self.store.map(Ok).unwrap_or_else(|| {
-                open_history_store().map(Arc::new)
-            }),
+            store: self
+                .store
+                .map(Ok)
+                .unwrap_or_else(|| open_history_store().map(Arc::new)),
             cloud_model: Mutex::new(
                 self.cloud_model
                     .unwrap_or_else(harness_runtime::models::selected),
@@ -359,19 +360,15 @@ impl SessionService {
         let context = fit::plan_context(profile.usable_budget, weight_bytes, native);
         let sink = self.sink.clone();
         let model = id.to_string();
-        let server = LocalServer::start_with_context(
-            &store.path_for(id),
-            id,
-            context,
-            move |phase| {
+        let server =
+            LocalServer::start_with_context(&store.path_for(id), id, context, move |phase| {
                 sink.emit(ProtocolEvent::LocalStatus {
                     model: model.clone(),
                     phase: translate::local_phase(phase),
                 });
-            },
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+            })
+            .await
+            .map_err(|e| e.to_string())?;
         let result = (
             server.base_url().to_string(),
             server.context_size() as usize,
@@ -803,9 +800,7 @@ impl SessionService {
                 // Cold resume: build an agent bound to the existing session
                 // (no throwaway row), then insert via the map entry so a
                 // concurrent resume can't leave two behind.
-                let agent = self
-                    .build_resumed_agent(id.to_string(), &workspace)
-                    .await?;
+                let agent = self.build_resumed_agent(id.to_string(), &workspace).await?;
                 let arc = Arc::new(Mutex::new(agent));
                 self.agents
                     .lock()
@@ -867,7 +862,9 @@ impl SessionService {
     /// history, drop any cached live agent, stop its dev server, and clear it
     /// as the current chat if it was active.
     pub async fn delete_session(&self, id: &str) -> Result<(), String> {
-        self.store()?.delete_session(id).map_err(|e| e.to_string())?;
+        self.store()?
+            .delete_session(id)
+            .map_err(|e| e.to_string())?;
         self.agents.lock().await.remove(id);
         // A deleted chat's dev server has no owner left.
         self.dev_servers.stop(id).await;
@@ -999,8 +996,9 @@ impl SessionService {
             let mut agent = arc.lock().await;
             agent.set_cancel_token(cancel.clone());
             let saved_before = agent.tokens_saved();
-            self.sink
-                .emit(ProtocolEvent::TurnStarted { session: sid.clone() });
+            self.sink.emit(ProtocolEvent::TurnStarted {
+                session: sid.clone(),
+            });
             let sink = self.sink.clone();
             let event_tokens = token_batch.clone();
             let event_session = sid.clone();
@@ -1012,9 +1010,7 @@ impl SessionService {
                     return;
                 }
                 event_tokens.flush();
-                if let Some(event) =
-                    translate::agent_event(&event_session, context_window, event)
-                {
+                if let Some(event) = translate::agent_event(&event_session, context_window, event) {
                     sink.emit(event);
                 }
             };
@@ -1106,7 +1102,10 @@ impl SessionService {
     pub fn answer_question(&self, id: &str, answers: Vec<harness_protocol::QuestionAnswer>) {
         self.pending_questions.deliver(
             id,
-            answers.into_iter().map(translate::question_answer).collect(),
+            answers
+                .into_iter()
+                .map(translate::question_answer)
+                .collect(),
         );
     }
 
@@ -1345,19 +1344,15 @@ impl SessionService {
         // init vs. loading weights) instead of an opaque "Switching…".
         let sink = self.sink.clone();
         let model = id.to_string();
-        let server = LocalServer::start_with_context(
-            &store.path_for(id),
-            id,
-            context,
-            move |phase| {
+        let server =
+            LocalServer::start_with_context(&store.path_for(id), id, context, move |phase| {
                 sink.emit(ProtocolEvent::LocalStatus {
                     model: model.clone(),
                     phase: translate::local_phase(phase),
                 });
-            },
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+            })
+            .await
+            .map_err(|e| e.to_string())?;
         let context_window = Some(server.context_size() as usize);
         let root = self.active_root().await;
         let agent = self.new_agent(

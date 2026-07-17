@@ -62,6 +62,7 @@ import type {
   FleetActivityEvent,
   FleetAgentEvent,
   FleetStartedEvent,
+  FsChangedEvent,
   LocalStatus,
   Mode,
   OpenFileEvent,
@@ -193,6 +194,19 @@ function capCanvases(list: CanvasDoc[]): CanvasDoc[] {
   return list.length > MAX_CANVASES ? list.slice(list.length - MAX_CANVASES) : list;
 }
 
+/** Merge a path group into a session's editor tabs: front the tab if that
+ *  exact group is already open, otherwise append it and make it active. */
+function addEditorTab(
+  pane: { tabs: string[][]; active: number } | undefined,
+  paths: string[],
+): { tabs: string[][]; active: number } {
+  const tabs = pane?.tabs ?? [];
+  const key = paths.join("\n");
+  const i = tabs.findIndex((t) => t.join("\n") === key);
+  if (i >= 0) return { tabs, active: i };
+  return { tabs: [...tabs, paths], active: tabs.length };
+}
+
 export interface QueuedPrompt {
   text: string;
   attachments: string[];
@@ -316,10 +330,15 @@ interface AppState {
   /** Which left-dock is active when more than one has content (a dock id from
    *  the registry). App-wide: the file tree follows the workspace, not the chat. */
   leftTab: string | null;
-  /** The workspace-relative paths open in the Editor/viewer dock per session:
-   *  one text file for the code editor, one media file for the media view, or
-   *  several images for the gallery grid. Absent/empty = pane closed. */
-  editorFiles: Record<string, string[] | undefined>;
+  /** The Editor/viewer dock's open tabs per session. Each tab is a group of
+   *  workspace-relative paths: one text file for the code editor, one media
+   *  file for the media view, or several images for the gallery grid.
+   *  `active` indexes into `tabs`. Absent = pane closed. */
+  editorTabs: Record<string, { tabs: string[][]; active: number } | undefined>;
+  /** The latest on-disk change batch from the workspace watcher, stamped with
+   *  a monotonic tick so equal-looking batches still notify subscribers (the
+   *  Files tree and open editor views react to this). */
+  fsChange: (FsChangedEvent & { tick: number }) | null;
   /** Code selections staged as context for the next prompt, per session —
    *  shown as chips by the composer, baked into the prompt at send time. */
   snippets: Record<string, CodeSnippet[]>;
@@ -437,6 +456,8 @@ interface AppState {
    *  Editor/viewer dock (session-tagged, so a background chat's file doesn't
    *  pop into the foreground). */
   ingestOpenFile: (e: OpenFileEvent) => void;
+  /** An `fs://changed` batch arrived — files changed on disk (any process). */
+  ingestFsChange: (e: FsChangedEvent) => void;
   /** Show a specific canvas doc (or close the panel with null) for the current chat. */
   setActiveCanvas: (id: string | null) => void;
   /** Open (or reopen) a canvas document in the current chat — used to revisit a
@@ -463,10 +484,15 @@ interface AppState {
   setRightTab: (tab: RightTabId) => void;
   /** Switch the left column's active tab (chats / files). */
   setLeftTab: (id: string) => void;
-  /** Open workspace files in the Editor/viewer dock: one text file for the
-   *  editor, one media file for the media view, or several images as a grid. */
+  /** Open workspace files in the Editor/viewer dock as a tab: one text file
+   *  for the editor, one media file for the media view, or several images as
+   *  a grid. An already-open tab is fronted instead of duplicated. */
   openInViewer: (paths: string[]) => void;
-  /** Close the current chat's Editor/viewer pane. */
+  /** Bring an already-open editor tab to the front by index. */
+  activateEditorTab: (index: number) => void;
+  /** Close one editor tab; closing the last one closes the pane. */
+  closeEditorTab: (index: number) => void;
+  /** Close the current chat's Editor/viewer pane (all tabs). */
   closeViewer: () => void;
   /** Stage a code selection as context for the current chat's next prompt. */
   addSnippet: (snippet: CodeSnippet) => void;
@@ -628,7 +654,8 @@ export const useStore = create<AppState>((set, get) => {
     rightTab: {},
     browserUrl: null,
     leftTab: null,
-    editorFiles: {},
+    editorTabs: {},
+    fsChange: null,
     snippets: {},
     dockWidths: loadDockLayout().widths,
     dockCollapsed: loadDockLayout().collapsed,
@@ -792,7 +819,7 @@ export const useStore = create<AppState>((set, get) => {
           previewClosed: drop(s.previewClosed),
           previewErrors: drop(s.previewErrors),
           rightTab: drop(s.rightTab),
-          editorFiles: drop(s.editorFiles),
+          editorTabs: drop(s.editorTabs),
           snippets: drop(s.snippets),
         };
       });
@@ -1342,11 +1369,14 @@ export const useStore = create<AppState>((set, get) => {
         };
       }),
 
+    ingestFsChange: (e) =>
+      set((s) => ({ fsChange: { ...e, tick: (s.fsChange?.tick ?? 0) + 1 } })),
+
     ingestOpenFile: (e) =>
       set((s) => {
         if (!e.paths.length) return {};
         return {
-          editorFiles: { ...s.editorFiles, [e.session]: e.paths },
+          editorTabs: { ...s.editorTabs, [e.session]: addEditorTab(s.editorTabs[e.session], e.paths) },
           // Front the editor tab for that session (mirrors ingestCanvas: no
           // global side effects, so a background chat can't grab the UI).
           rightTab: { ...s.rightTab, [e.session]: "editor" as const },
@@ -1500,18 +1530,44 @@ export const useStore = create<AppState>((set, get) => {
     openInViewer: (paths) => {
       const id = get().session?.session_id;
       if (!id || paths.length === 0) return;
-      set((s) => ({ editorFiles: { ...s.editorFiles, [id]: paths } }));
+      set((s) => ({ editorTabs: { ...s.editorTabs, [id]: addEditorTab(s.editorTabs[id], paths) } }));
       // Opening a file means "show me this" — bring the pane to the front.
       get().setRightTab("editor");
     },
+
+    activateEditorTab: (index) =>
+      set((s) => {
+        const id = s.session?.session_id;
+        const pane = id ? s.editorTabs[id] : undefined;
+        if (!id || !pane || index < 0 || index >= pane.tabs.length) return {};
+        return { editorTabs: { ...s.editorTabs, [id]: { ...pane, active: index } } };
+      }),
+
+    closeEditorTab: (index) =>
+      set((s) => {
+        const id = s.session?.session_id;
+        const pane = id ? s.editorTabs[id] : undefined;
+        if (!id || !pane || index < 0 || index >= pane.tabs.length) return {};
+        const tabs = pane.tabs.filter((_, i) => i !== index);
+        const editorTabs = { ...s.editorTabs };
+        if (!tabs.length) {
+          delete editorTabs[id];
+        } else {
+          // Closing left of the active tab shifts it; closing the active tab
+          // falls through to its right neighbor (clamped at the end).
+          const active = Math.min(index < pane.active ? pane.active - 1 : pane.active, tabs.length - 1);
+          editorTabs[id] = { tabs, active };
+        }
+        return { editorTabs };
+      }),
 
     closeViewer: () =>
       set((s) => {
         const id = s.session?.session_id;
         if (!id) return {};
-        const editorFiles = { ...s.editorFiles };
-        delete editorFiles[id];
-        return { editorFiles };
+        const editorTabs = { ...s.editorTabs };
+        delete editorTabs[id];
+        return { editorTabs };
       }),
 
     addSnippet: (snippet) =>

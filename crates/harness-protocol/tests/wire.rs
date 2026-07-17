@@ -199,10 +199,9 @@ fn approval_answer_decision_keywords() {
     assert_eq!(answer.decision, "once");
     assert_eq!(answer.message, None);
 
-    let deny: ApprovalAnswer = serde_json::from_value(
-        serde_json::json!({"decision": "deny", "message": "not on main"}),
-    )
-    .unwrap();
+    let deny: ApprovalAnswer =
+        serde_json::from_value(serde_json::json!({"decision": "deny", "message": "not on main"}))
+            .unwrap();
     assert_eq!(deny.message.as_deref(), Some("not on main"));
 }
 
@@ -418,7 +417,9 @@ fn legacy_channel_names() {
             "agent://canvas",
         ),
         (
-            ProtocolEvent::CanvasWriting { session: "s".into() },
+            ProtocolEvent::CanvasWriting {
+                session: "s".into(),
+            },
             "agent://canvas-writing",
         ),
         (
@@ -454,7 +455,9 @@ fn legacy_channel_names() {
             "agent://approval",
         ),
         (
-            ProtocolEvent::TurnStarted { session: "s".into() },
+            ProtocolEvent::TurnStarted {
+                session: "s".into(),
+            },
             "turn://started",
         ),
         (
@@ -501,7 +504,9 @@ fn legacy_channel_names() {
             "fleet://agent-activity",
         ),
         (
-            ProtocolEvent::FleetCompleted { session: "s".into() },
+            ProtocolEvent::FleetCompleted {
+                session: "s".into(),
+            },
             "fleet://completed",
         ),
         (

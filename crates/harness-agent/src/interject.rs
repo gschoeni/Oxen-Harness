@@ -27,12 +27,19 @@ impl Interjections {
     /// Queue a message for delivery at the turn's next safe point. Callable
     /// from any thread while the turn runs.
     pub fn push(&self, text: impl Into<String>) {
-        self.inner.lock().expect("interjection lock").push_back(text.into());
+        self.inner
+            .lock()
+            .expect("interjection lock")
+            .push_back(text.into());
     }
 
     /// Drain everything queued, in arrival order.
     pub fn take_all(&self) -> Vec<String> {
-        self.inner.lock().expect("interjection lock").drain(..).collect()
+        self.inner
+            .lock()
+            .expect("interjection lock")
+            .drain(..)
+            .collect()
     }
 
     /// How many messages are waiting.

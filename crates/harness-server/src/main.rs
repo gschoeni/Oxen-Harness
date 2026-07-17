@@ -32,13 +32,18 @@ fn parse_args() -> Result<Args, String> {
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
-        let mut value = |name: &str| {
-            it.next()
-                .ok_or_else(|| format!("{name} requires a value"))
-        };
+        let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} requires a value"));
         match flag.as_str() {
-            "--port" => args.port = value("--port")?.parse().map_err(|e| format!("bad --port: {e}"))?,
-            "--host" => args.host = value("--host")?.parse().map_err(|e| format!("bad --host: {e}"))?,
+            "--port" => {
+                args.port = value("--port")?
+                    .parse()
+                    .map_err(|e| format!("bad --port: {e}"))?
+            }
+            "--host" => {
+                args.host = value("--host")?
+                    .parse()
+                    .map_err(|e| format!("bad --host: {e}"))?
+            }
             "--token" => args.token = Some(value("--token")?),
             "--project" => args.project = Some(PathBuf::from(value("--project")?)),
             "--help" | "-h" => {
@@ -113,7 +118,10 @@ async fn main() {
     };
 
     println!("oxen-harness server listening on {}", handle.base_url());
-    println!("  events : GET  {}/v1/events?token={token}", handle.base_url());
+    println!(
+        "  events : GET  {}/v1/events?token={token}",
+        handle.base_url()
+    );
     println!("  api    : Authorization: Bearer {token}");
     if args.token.is_none() {
         println!("  (token generated for this run; pass --token to pin one)");

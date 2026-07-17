@@ -112,12 +112,24 @@
   z-index: var(--z-sticky);
 }
 /* Reserve the toggle's slot in whichever element is the column's first row:
-   the tab strip when several docks share the side, else the panel's header. */
+   the dock tab strip when several docks share the side, else the editor's
+   file-tab strip when it has one, else the panel's header. */
 .dock-column.right .dock-tabs {
   padding-left: 36px;
 }
 .dock-column.right:not(:has(.dock-tabs)) .canvas-head {
   padding-left: 40px;
+}
+.dock-column.right:not(:has(.dock-tabs)) .editor-pane .editor-tabs {
+  padding-left: 40px;
+}
+/* With the file tabs owning the slot, the header below gets its edge back,
+   and the toggle re-centers against the slimmer tab strip. */
+.dock-column.right:not(:has(.dock-tabs)) .editor-pane:has(.editor-tabs) .canvas-head {
+  padding-left: var(--space-4);
+}
+.dock-column.right:not(:has(.dock-tabs)):has(.editor-tabs) .dock-toggle.right {
+  top: 4px;
 }
 
 /* A collapsed column: a rail of icons. Clicking one brings its dock back. */

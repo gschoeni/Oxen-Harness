@@ -67,10 +67,7 @@ fn sse_mock(server: &mut mockito::ServerGuard, body: &'static str) -> mockito::M
 
 /// Read SSE `data:` payloads from a live response stream until `pred` matches
 /// (returning the matching event) or the timeout lapses.
-async fn next_matching(
-    response: &mut reqwest::Response,
-    pred: impl Fn(&Value) -> bool,
-) -> Value {
+async fn next_matching(response: &mut reqwest::Response, pred: impl Fn(&Value) -> bool) -> Value {
     let mut buffer = String::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -458,5 +455,8 @@ async fn filters_events_by_session() {
     })
     .await
     .unwrap_or(false);
-    assert!(!leaked, "session A's events leaked into B's filtered stream");
+    assert!(
+        !leaked,
+        "session A's events leaked into B's filtered stream"
+    );
 }

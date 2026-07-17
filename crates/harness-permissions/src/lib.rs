@@ -2,7 +2,7 @@
 //!
 //! Layered defense for destructive actions, designed to stay out of the way:
 //!
-//! 1. **Classification** ([`classify`]) — shell commands are parsed with
+//! 1. **Classification** ([`classify()`]) — shell commands are parsed with
 //!    tree-sitter-bash and classified per simple command; anything the parser
 //!    can't see through requires approval. Never a regex over the raw string.
 //! 2. **Policy** ([`policy`]) — three modes (relaxed/cautious/bypass) plus
@@ -649,6 +649,10 @@ pub(crate) mod testutil {
 }
 
 #[cfg(test)]
+// `testutil::env_guard()` exists to be held for a whole test — it serializes
+// env-var-mutating tests — so holding it across the awaits inside a test is
+// the point, not a hazard (the tests it guards never contend on it mid-await).
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
     use async_trait::async_trait;

@@ -29,6 +29,7 @@ import type {
   SessionInfo,
   SessionSummary,
   CanvasEvent,
+  FsChangedEvent,
   OpenFileEvent,
   Project,
   StartProjectInput,
@@ -205,6 +206,17 @@ export const fsWriteFile = (root: string, path: string, content: string) =>
 /** Create an empty file or a folder (fails if the path already exists). */
 export const fsCreateEntry = (root: string, path: string, isDir: boolean) =>
   invoke<void>("fs_create_entry", { root, path, isDir });
+
+/** Start native FS watching of a workspace root (idempotent). Changes arrive
+ *  as debounced `fs://changed` batches — see {@link onFsChanged}. */
+export const fsWatch = (root: string) => invoke<void>("fs_watch", { root });
+
+/** Stop watching a workspace root. */
+export const fsUnwatch = (root: string) => invoke<void>("fs_unwatch", { root });
+
+/** Fires when files under a watched workspace change on disk (any process). */
+export const onFsChanged = (handler: (e: FsChangedEvent) => void) =>
+  listen<FsChangedEvent>("fs://changed", (e) => handler(e.payload));
 
 /** Open a native folder picker, returning the chosen directory (or null). */
 export async function pickFolder(): Promise<string | null> {

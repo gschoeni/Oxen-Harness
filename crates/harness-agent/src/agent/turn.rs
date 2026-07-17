@@ -1464,7 +1464,9 @@ mod tests {
         // One call total: both the prompt and the interjection are in it.
         let only = server
             .mock("POST", "/chat/completions")
-            .match_body(mockito::Matcher::Regex("left over from the last turn".into()))
+            .match_body(mockito::Matcher::Regex(
+                "left over from the last turn".into(),
+            ))
             .with_status(200)
             .with_header("content-type", "text/event-stream")
             .with_body(sse_prose("done"))

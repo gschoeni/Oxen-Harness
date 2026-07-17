@@ -110,6 +110,7 @@ pub fn run() {
                 initial_model,
                 initial_local,
             ));
+            app.manage(commands::watch::FsWatchState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -174,6 +175,8 @@ pub fn run() {
             commands::files::fs_read_file,
             commands::files::fs_write_file,
             commands::files::fs_create_entry,
+            commands::watch::fs_watch,
+            commands::watch::fs_unwatch,
             commands::project::list_projects,
             commands::project::open_project,
             commands::project::start_project,

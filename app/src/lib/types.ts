@@ -703,6 +703,14 @@ export interface OpenFileEvent {
   paths: string[];
 }
 
+/** The `fs://changed` payload: one debounced batch of on-disk changes under a
+ *  watched workspace root (workspace-relative paths). Empty `paths` means
+ *  "too much changed to enumerate — refresh everything you have loaded". */
+export interface FsChangedEvent {
+  root: string;
+  paths: string[];
+}
+
 // ---- live preview (dev servers) ---------------------------------------------
 
 export type PreviewPhase = "starting" | "ready" | "error" | "stopped";

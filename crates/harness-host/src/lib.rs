@@ -23,7 +23,7 @@ pub mod translate;
 use harness_protocol::ProtocolEvent;
 
 pub use bridges::{
-    HostAsker, HostApprover, HostCanvasSink, HostFleetSink, HostViewerSink, NoScreenshotLens,
+    HostApprover, HostAsker, HostCanvasSink, HostFleetSink, HostViewerSink, NoScreenshotLens,
     NullAsker, NullCanvasSink, NullFleetSink, NullPreviewLens, NullPreviewSink, NullViewerSink,
     ProtocolPreviewSink,
 };

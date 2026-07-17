@@ -181,6 +181,122 @@
   min-height: 0;
 }
 
+/* The tab strip — only rendered once a second file opens. Each tab shows its
+   file, a dirty dot when it has unsaved edits, and an × on hover/active (the
+   dot yields to the × when you aim at it). */
+.editor-tabs {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  /* Tall enough to center the right column's 28px collapse toggle when this
+     strip is the column's first row (see docks.css slot reservation). */
+  height: 36px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--surface);
+  border-bottom: 1px solid var(--separator);
+}
+.editor-tabs::-webkit-scrollbar {
+  display: none;
+}
+.editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 10px;
+  max-width: 180px;
+  border-right: 1px solid var(--separator);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  position: relative;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.editor-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+.editor-tab.active {
+  background: var(--bg);
+  color: var(--text);
+}
+/* The active tab underlines itself with the accent, like a proper editor. */
+.editor-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+}
+.editor-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.editor-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.editor-tab-close:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+/* Clean tab: × appears on hover or when active; nothing otherwise. */
+.editor-tab-close svg {
+  display: none;
+}
+.editor-tab:hover .editor-tab-close svg,
+.editor-tab.active .editor-tab-close svg {
+  display: block;
+}
+/* Dirty tab: the dot owns the slot until the pointer aims at the close
+   button, then the × takes over so closing stays one click. */
+.editor-tab-dot {
+  display: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+.editor-tab.dirty .editor-tab-dot {
+  display: block;
+}
+.editor-tab.dirty .editor-tab-close svg {
+  display: none;
+}
+.editor-tab.dirty .editor-tab-close:hover .editor-tab-dot {
+  display: none;
+}
+.editor-tab.dirty .editor-tab-close:hover svg {
+  display: block;
+}
+
+/* Each tab's content stays mounted (unsaved buffers survive switching);
+   only the active one is shown. */
+.editor-tab-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.editor-tab-body[hidden] {
+  display: none;
+}
+
 .editor-head {
   gap: var(--space-2);
 }
@@ -200,12 +316,43 @@
   font-weight: 600;
   color: var(--text);
 }
-.editor-dirty {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
+/* Save state — a quiet pill next to the filename: amber "Edited" while there
+   are unsaved changes, a green "Saved ✓" that fades out once a save lands. */
+.editor-savestate {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-3xs);
+  font-weight: 600;
+  line-height: 15px;
+  letter-spacing: 0.02em;
   flex-shrink: 0;
+}
+.editor-savestate.is-edited {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+.editor-savestate-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.editor-savestate.is-saved {
+  color: var(--green);
+  background: var(--green-soft);
+  animation: editor-saved-fade 2s var(--ease) forwards;
+}
+@keyframes editor-saved-fade {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 .editor-note {
   font-size: 10.5px;
@@ -256,12 +403,78 @@
   overflow: hidden;
   background: var(--bg);
 }
+/* The raw editor stays mounted (buffer + undo survive) while a rich preview
+   is showing — it just hides. */
+.editor-raw {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.editor-raw[hidden] {
+  display: none;
+}
 .code-editor {
   flex: 1;
   min-height: 0;
 }
 .code-editor .cm-editor {
   height: 100%;
+}
+
+/* Preview/Raw — the segmented toggle for files with a rich renderer. */
+.editor-mode {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+.editor-mode button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.editor-mode button:hover {
+  color: var(--text);
+}
+.editor-mode button.active {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+/* Rich renderer surfaces. */
+.editor-preview {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5) var(--space-6);
+}
+/* Markdown reads best at prose width, centered in the pane. */
+.editor-preview-md .prose {
+  max-width: 76ch;
+  margin: 0 auto;
+}
+/* Rendered HTML: a document expects a white canvas, whatever the app theme. */
+.editor-preview-frame {
+  flex: 1;
+  min-height: 0;
+  border: 0;
+  background: #fff;
 }
 
 /* One image or video, centered. */

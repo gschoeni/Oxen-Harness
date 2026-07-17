@@ -235,10 +235,7 @@ pub fn preview_phase(phase: harness_preview::PreviewPhase) -> harness_protocol::
 }
 
 /// A dev-server status snapshot as its protocol event.
-pub fn preview_status(
-    session: &str,
-    status: &harness_preview::PreviewStatus,
-) -> ProtocolEvent {
+pub fn preview_status(session: &str, status: &harness_preview::PreviewStatus) -> ProtocolEvent {
     ProtocolEvent::PreviewStatus {
         session: session.to_string(),
         phase: preview_phase(status.phase),

@@ -32,3 +32,4 @@ pub(crate) mod skills;
 pub(crate) mod theme;
 pub(crate) mod tools;
 pub(crate) mod turn;
+pub(crate) mod watch;

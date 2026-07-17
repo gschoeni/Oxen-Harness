@@ -115,7 +115,12 @@ impl BackgroundTasks {
     /// Spawn `command` (via the platform shell, cwd `root`) as a background
     /// task, returning its id. Output streams to the task's log file and into
     /// bounded in-memory tails; the child gets no stdin.
-    pub async fn spawn(&self, command: &str, root: &Path, max_tail: usize) -> Result<u64, ToolError> {
+    pub async fn spawn(
+        &self,
+        command: &str,
+        root: &Path,
+        max_tail: usize,
+    ) -> Result<u64, ToolError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         tokio::fs::create_dir_all(&self.log_dir)
             .await
@@ -262,7 +267,7 @@ impl BackgroundTasks {
     }
 
     /// Status plus the output appended since the last check (or the last
-    /// [`TASK_OUTPUT_TAIL_CHARS`] of it, when more arrived than fits). Once
+    /// `TASK_OUTPUT_TAIL_CHARS` of it, when more arrived than fits). Once
     /// an exited task's output has been fully delivered, the entry and its
     /// log file are retired — a long session doesn't accumulate them.
     pub async fn output(&self, id: u64) -> Result<String, ToolError> {
@@ -557,7 +562,10 @@ mod tests {
         assert!(report.contains("hello-bg"), "{report}");
         // Everything was delivered, so the entry (and its log) were retired.
         assert!(report.contains("task entry retired"), "{report}");
-        assert!(tasks.output(id).await.is_err(), "retired task should be gone");
+        assert!(
+            tasks.output(id).await.is_err(),
+            "retired task should be gone"
+        );
     }
 
     #[tokio::test]

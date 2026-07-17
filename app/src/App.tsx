@@ -8,7 +8,7 @@ import { planColumns, type ColumnPlan, type LayoutPlan } from "./features/docks/
 import { Settings } from "./features/settings/Settings";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
 import { InspectorDrawer } from "./features/inspector/Inspector";
-import { activeTheme } from "./lib/ipc";
+import { activeTheme, fsUnwatch, fsWatch } from "./lib/ipc";
 import { useStore } from "./lib/store";
 import "./app.css";
 
@@ -21,6 +21,7 @@ export default function App() {
   const settingsOpen = useStore((s) => s.settingsOpen);
   const projectsOpen = useStore((s) => s.projectsOpen);
   const sessionId = useStore((s) => s.session?.session_id);
+  const workspace = useStore((s) => s.session?.workspace ?? null);
   const syncPreview = useStore((s) => s.syncPreview);
 
   // The layout is whatever the dock registry says: each side is a column of
@@ -35,6 +36,15 @@ export default function App() {
   useEffect(() => {
     if (sessionId) syncPreview(sessionId).catch(() => {});
   }, [sessionId, syncPreview]);
+
+  // Watch the current workspace natively so the Files tree and open editor
+  // views refresh when any process touches files on disk (batches arrive as
+  // fs://changed → store.fsChange).
+  useEffect(() => {
+    if (!workspace) return;
+    fsWatch(workspace).catch(() => {});
+    return () => void fsUnwatch(workspace).catch(() => {});
+  }, [workspace]);
 
   // Load the active theme, current session, and history once at startup.
   useEffect(() => {

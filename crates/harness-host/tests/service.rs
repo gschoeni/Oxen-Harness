@@ -92,7 +92,10 @@ async fn wait_for<T>(sink: &CollectingSink, mut f: impl FnMut() -> Option<T>) ->
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    panic!("condition not met within timeout; events seen: {:#?}", sink.events());
+    panic!(
+        "condition not met within timeout; events seen: {:#?}",
+        sink.events()
+    );
 }
 
 #[tokio::test]

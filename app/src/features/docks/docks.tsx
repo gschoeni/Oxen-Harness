@@ -85,7 +85,7 @@ function usePreviewAvailable(): boolean {
 function useEditorAvailable(): boolean {
   return useStore((s) => {
     const id = s.session?.session_id;
-    return !!id && (s.editorFiles[id]?.length ?? 0) > 0;
+    return !!id && (s.editorTabs[id]?.tabs.length ?? 0) > 0;
   });
 }
 

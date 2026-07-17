@@ -59,6 +59,7 @@ fn probe_network_fs(path: &Path) -> bool {
 
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)] // statfs(2) has no safe wrapper worth a dependency
+#[allow(clippy::unnecessary_cast)] // f_type's width varies by libc target; the cast keeps it portable
 fn probe_network_fs(path: &Path) -> bool {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;

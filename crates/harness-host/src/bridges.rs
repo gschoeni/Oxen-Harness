@@ -176,9 +176,11 @@ pub struct NoScreenshotLens;
 #[async_trait]
 impl PreviewLens for NoScreenshotLens {
     async fn screenshot(&self) -> Result<Vec<u8>, String> {
-        Err("preview screenshots aren't supported on this host — verify with \
+        Err(
+            "preview screenshots aren't supported on this host — verify with \
              dev_server_logs and preview_console instead"
-            .to_string())
+                .to_string(),
+        )
     }
     fn console_tail(&self, _n: usize) -> Vec<ConsoleLine> {
         Vec::new()

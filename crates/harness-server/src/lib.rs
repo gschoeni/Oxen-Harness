@@ -206,7 +206,11 @@ struct AuthQuery {
 }
 
 /// Check the bearer token (header, or `?token=` for EventSource).
-fn authorize(state: &AppState, headers: &HeaderMap, query_token: Option<&str>) -> Result<(), ApiError> {
+fn authorize(
+    state: &AppState,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+) -> Result<(), ApiError> {
     let header_token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -437,7 +441,10 @@ async fn run_review(
 ) -> ApiResult<Json<harness_protocol::ReviewResult>> {
     authorize(&state, &headers, None)?;
     Ok(Json(
-        state.service.run_code_review(&id, request.base_branch).await?,
+        state
+            .service
+            .run_code_review(&id, request.base_branch)
+            .await?,
     ))
 }
 

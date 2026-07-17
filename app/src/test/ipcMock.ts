@@ -352,6 +352,9 @@ export const fsReadFile = vi.fn(async (_root: string, _path: string) => ({
 }));
 export const fsWriteFile = vi.fn(async (_root: string, _path: string, _content: string) => {});
 export const fsCreateEntry = vi.fn(async (_root: string, _path: string, _isDir: boolean) => {});
+export const fsWatch = vi.fn(async (_root: string) => {});
+export const fsUnwatch = vi.fn(async (_root: string) => {});
+export const onFsChanged = listener("fsChanged");
 
 // ---- link browser ------------------------------------------------------------
 export const onBrowserOpen = listener("browserOpen");

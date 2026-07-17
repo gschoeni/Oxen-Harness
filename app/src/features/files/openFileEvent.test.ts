@@ -14,20 +14,28 @@ beforeEach(resetAll);
 describe("ingestOpenFile", () => {
   it("opens the paths in that session's editor and fronts its tab", () => {
     useStore.getState().ingestOpenFile({ session: "s1", paths: ["src/main.rs"] });
-    expect(useStore.getState().editorFiles.s1).toEqual(["src/main.rs"]);
+    expect(useStore.getState().editorTabs.s1).toEqual({ tabs: [["src/main.rs"]], active: 0 });
     expect(useStore.getState().rightTab.s1).toBe("editor");
   });
 
   it("keys strictly by session — a background chat can't touch another's pane", () => {
     useStore.getState().ingestOpenFile({ session: "s1", paths: ["a.md"] });
     useStore.getState().ingestOpenFile({ session: "s2", paths: ["b.md"] });
-    expect(useStore.getState().editorFiles.s1).toEqual(["a.md"]);
-    expect(useStore.getState().editorFiles.s2).toEqual(["b.md"]);
+    expect(useStore.getState().editorTabs.s1).toEqual({ tabs: [["a.md"]], active: 0 });
+    expect(useStore.getState().editorTabs.s2).toEqual({ tabs: [["b.md"]], active: 0 });
+  });
+
+  it("accumulates tabs and fronts an already-open one instead of duplicating", () => {
+    useStore.getState().ingestOpenFile({ session: "s1", paths: ["a.md"] });
+    useStore.getState().ingestOpenFile({ session: "s1", paths: ["b.md"] });
+    expect(useStore.getState().editorTabs.s1).toEqual({ tabs: [["a.md"], ["b.md"]], active: 1 });
+    useStore.getState().ingestOpenFile({ session: "s1", paths: ["a.md"] });
+    expect(useStore.getState().editorTabs.s1).toEqual({ tabs: [["a.md"], ["b.md"]], active: 0 });
   });
 
   it("ignores an empty path list", () => {
     useStore.getState().ingestOpenFile({ session: "s1", paths: [] });
-    expect(useStore.getState().editorFiles.s1).toBeUndefined();
+    expect(useStore.getState().editorTabs.s1).toBeUndefined();
     expect(useStore.getState().rightTab.s1).toBeUndefined();
   });
 });
