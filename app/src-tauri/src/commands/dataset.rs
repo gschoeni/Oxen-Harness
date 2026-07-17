@@ -35,6 +35,10 @@ const MAX_PAGE_ROWS: u64 = 1_000;
 /// grid shows knows which record in the file it is (edits address that).
 const ROW_ID: &str = "__oxh_row_id__";
 
+/// `Number.MAX_SAFE_INTEGER` (2^53 − 1): the largest integer JSON can hand a
+/// JS grid without rounding.
+const MAX_JS_SAFE_INT: u64 = 9_007_199_254_740_991;
+
 // ---- request / response shapes ------------------------------------------------
 
 /// One page request from the grid.
@@ -80,6 +84,18 @@ pub(crate) struct DatasetPage {
     pub format: &'static str,
     pub elapsed_ms: u64,
     pub editable: bool,
+    /// File mtime when this page was read; echoed back on writes so an edit
+    /// against a file that changed underneath is refused, not misapplied.
+    pub mtime_ms: u64,
+}
+
+/// The file's mtime in ms since the epoch — the edit-staleness token.
+fn file_mtime_ms(meta: &fs::Metadata) -> Result<u64, String> {
+    let modified = meta.modified().map_err(|e| e.to_string())?;
+    Ok(modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0))
 }
 
 // ---- formats -------------------------------------------------------------------
@@ -149,12 +165,21 @@ struct CacheEntry {
     last_used: Instant,
 }
 
+/// One counted view: this file, at this mtime, filtered by this search.
+type ViewKey = (PathBuf, SystemTime, String);
+
 /// Parsed small files, keyed by absolute path and invalidated by mtime+size.
-/// Cheap to clone (the map is shared), so commands can move a handle into a
+/// Cheap to clone (the maps are shared), so commands can move a handle into a
 /// blocking task.
 #[derive(Default, Clone)]
 pub(crate) struct DatasetCache {
     entries: Arc<Mutex<HashMap<PathBuf, CacheEntry>>>,
+    /// View row counts — counting a >128 MB file is a full scan, and every
+    /// page of the same view would repay it.
+    counts: Arc<Mutex<HashMap<ViewKey, u64>>>,
+    /// Serializes cell edits: two concurrent splices would compute byte
+    /// offsets against different generations of the file and corrupt it.
+    edit_lock: Arc<Mutex<()>>,
 }
 
 impl DatasetCache {
@@ -203,6 +228,38 @@ impl DatasetCache {
 
     fn invalidate(&self, file: &Path) {
         self.entries.lock().unwrap().remove(file);
+        self.counts.lock().unwrap().retain(|(p, _, _), _| p != file);
+    }
+
+    /// Rows in the view, computing (and remembering) it on first sight of
+    /// this (file, mtime, search) combination.
+    fn total_rows(
+        &self,
+        file: &Path,
+        mtime: SystemTime,
+        search: &str,
+        view: &LazyFrame,
+        path: &str,
+    ) -> Result<u64, String> {
+        let key = (file.to_path_buf(), mtime, search.to_string());
+        if let Some(n) = self.counts.lock().unwrap().get(&key) {
+            return Ok(*n);
+        }
+        let n = view
+            .clone()
+            .select([len().alias("len")])
+            .collect()
+            .map_err(|e| format!("could not count rows of {path}: {e}"))?
+            .column("len")
+            .and_then(|c| c.get(0))
+            .map(|av| av.extract::<u64>().unwrap_or(0))
+            .map_err(|e| e.to_string())?;
+        let mut counts = self.counts.lock().unwrap();
+        if counts.len() >= 64 {
+            counts.clear();
+        }
+        counts.insert(key, n);
+        Ok(n)
     }
 }
 
@@ -233,11 +290,15 @@ fn json_value(av: AnyValue) -> Json {
         AnyValue::Int8(v) => Json::from(v),
         AnyValue::Int16(v) => Json::from(v),
         AnyValue::Int32(v) => Json::from(v),
-        AnyValue::Int64(v) => Json::from(v),
+        // Past 2^53 a JS number silently rounds (snowflake ids are the classic
+        // case), so wide integers ship as strings and stay exact in the grid.
+        AnyValue::Int64(v) if v.unsigned_abs() <= MAX_JS_SAFE_INT => Json::from(v),
+        AnyValue::Int64(v) => Json::String(v.to_string()),
         AnyValue::UInt8(v) => Json::from(v),
         AnyValue::UInt16(v) => Json::from(v),
         AnyValue::UInt32(v) => Json::from(v),
-        AnyValue::UInt64(v) => Json::from(v),
+        AnyValue::UInt64(v) if v <= MAX_JS_SAFE_INT => Json::from(v),
+        AnyValue::UInt64(v) => Json::String(v.to_string()),
         AnyValue::Float32(v) => serde_json::Number::from_f64(f64::from(v))
             .map(Json::Number)
             .unwrap_or(Json::Null),
@@ -251,16 +312,18 @@ fn json_value(av: AnyValue) -> Json {
 }
 
 /// Case-insensitive "any column contains" filter. Columns that can't cast to
-/// a string (nested types) just don't participate.
+/// a string (nested types) don't participate — and neither does the injected
+/// row index, which isn't data.
 fn search_expr(schema: &Schema, needle: &str) -> Option<Expr> {
     let needle = needle.to_lowercase();
     schema
         .iter()
-        .filter(|(_, dt)| {
-            !matches!(
-                dt,
-                DataType::List(_) | DataType::Array(_, _) | DataType::Struct(_)
-            )
+        .filter(|(name, dt)| {
+            name.as_str() != ROW_ID
+                && !matches!(
+                    dt,
+                    DataType::List(_) | DataType::Array(_, _) | DataType::Struct(_)
+                )
         })
         .map(|(name, _)| {
             col(name.clone())
@@ -309,21 +372,19 @@ pub(crate) fn query(
         .collect();
 
     let mut view = with_ids;
-    if let Some(needle) = req.search.as_deref().filter(|s| !s.trim().is_empty()) {
+    let needle = req
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
+    if !needle.is_empty() {
         if let Some(expr) = search_expr(&schema, needle) {
             view = view.filter(expr);
         }
     }
 
-    let total_rows = view
-        .clone()
-        .select([len().alias("len")])
-        .collect()
-        .map_err(|e| format!("could not count rows of {path}: {e}"))?
-        .column("len")
-        .and_then(|c| c.get(0))
-        .map(|av| av.extract::<u64>().unwrap_or(0))
-        .map_err(|e| e.to_string())?;
+    let total_rows = cache.total_rows(&file, mtime, needle, &view, path)?;
 
     if let Some(sort_col) = req.sort_by.as_deref() {
         if !schema.contains(sort_col) {
@@ -374,6 +435,7 @@ pub(crate) fn query(
         format: format.name(),
         elapsed_ms: started.elapsed().as_millis() as u64,
         editable,
+        mtime_ms: file_mtime_ms(&meta)?,
     })
 }
 
@@ -388,22 +450,29 @@ fn csv_text(value: &Json) -> String {
     }
 }
 
+/// The scratch sibling an edit writes before atomically renaming into place.
+fn edit_tmp_path(file: &Path) -> PathBuf {
+    file.with_file_name(format!(
+        ".{}.{}.oxh-edit",
+        file.file_name().unwrap_or_default().to_string_lossy(),
+        std::process::id()
+    ))
+}
+
 /// Replace [start, end) of `file` with `patch`, streaming everything else
-/// byte-for-byte through a temp file that atomically renames into place.
+/// byte-for-byte through a temp file that fsyncs and atomically renames into
+/// place — a crash mid-edit leaves the original untouched.
 fn splice_file(file: &Path, start: u64, end: u64, patch: &[u8]) -> Result<(), String> {
     let err = |e: io::Error| format!("could not rewrite {}: {e}", file.display());
     let mut src = fs::File::open(file).map_err(err)?;
     let perms = src.metadata().map_err(err)?.permissions();
-    let tmp_path = file.with_file_name(format!(
-        ".{}.oxh-edit",
-        file.file_name().unwrap_or_default().to_string_lossy()
-    ));
+    let tmp_path = edit_tmp_path(file);
     let mut tmp = fs::File::create(&tmp_path).map_err(err)?;
     io::copy(&mut (&mut src).take(start), &mut tmp).map_err(err)?;
     tmp.write_all(patch).map_err(err)?;
     src.seek(SeekFrom::Start(end)).map_err(err)?;
     io::copy(&mut src, &mut tmp).map_err(err)?;
-    tmp.flush().map_err(err)?;
+    tmp.sync_all().map_err(err)?;
     drop(tmp);
     fs::set_permissions(&tmp_path, perms).map_err(err)?;
     fs::rename(&tmp_path, file).map_err(err)
@@ -484,11 +553,14 @@ fn edit_delimited(
     // With CRLF endings the csv reader's positions can sit between the `\r`
     // and the `\n`: the previous record's residual `\n` lands at our start,
     // and our own trailing `\n` lands past our end. Normalize both so the
-    // spliced region is exactly this record plus its full terminator.
-    if byte_at(file, start)? == Some(b'\n') {
+    // spliced region is exactly this record plus its full terminator — but
+    // only when the `\n` really is the second half of a `\r\n`, so a blank
+    // line next to the record is never swallowed.
+    if start > 0 && byte_at(file, start)? == Some(b'\n') && byte_at(file, start - 1)? == Some(b'\r')
+    {
         start += 1;
     }
-    if byte_at(file, end)? == Some(b'\n') {
+    if end > 0 && byte_at(file, end)? == Some(b'\n') && byte_at(file, end - 1)? == Some(b'\r') {
         end += 1;
     }
 
@@ -603,18 +675,25 @@ fn edit_parquet(file: &Path, row: u64, column: &str, value: &Json) -> Result<(),
         .map_err(|e| format!("could not apply the edit: {e}"))?;
     let _ = df.drop_in_place(ROW_ID).map_err(|e| e.to_string())?;
 
-    let tmp_path = file.with_file_name(format!(
-        ".{}.oxh-edit",
-        file.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    let tmp = fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+    let err = |e: io::Error| format!("could not rewrite {}: {e}", file.display());
+    let perms = fs::metadata(file).map_err(err)?.permissions();
+    let tmp_path = edit_tmp_path(file);
+    let tmp = fs::File::create(&tmp_path).map_err(err)?;
     ParquetWriter::new(tmp)
         .finish(&mut df)
         .map_err(|e| format!("could not write {}: {e}", file.display()))?;
-    fs::rename(&tmp_path, file).map_err(|e| e.to_string())
+    fs::File::open(&tmp_path)
+        .map_err(err)?
+        .sync_all()
+        .map_err(err)?;
+    fs::set_permissions(&tmp_path, perms).map_err(err)?;
+    fs::rename(&tmp_path, file).map_err(err)
 }
 
-/// Set one cell, addressed by physical record index + column name.
+/// Set one cell, addressed by physical record index + column name. When the
+/// caller supplies the mtime its page was read at, an edit against a file
+/// that changed underneath is refused instead of landing on the wrong record.
+/// Returns the file's new mtime so the caller can keep editing.
 pub(crate) fn write_cell(
     cache: &DatasetCache,
     root: &str,
@@ -622,17 +701,29 @@ pub(crate) fn write_cell(
     row: u64,
     column: &str,
     value: &Json,
-) -> Result<(), String> {
+    expected_mtime_ms: Option<u64>,
+) -> Result<u64, String> {
     let file = resolve(root, path)?;
     let format = Format::from_path(&file)
         .ok_or_else(|| format!("{path} is not a supported dataset (csv, tsv, jsonl, parquet)"))?;
+    let _serialized = cache.edit_lock.lock().unwrap();
+    if let Some(expected) = expected_mtime_ms {
+        let meta = fs::metadata(&file).map_err(|e| format!("could not open {path}: {e}"))?;
+        if file_mtime_ms(&meta)? != expected {
+            return Err(format!(
+                "{path} changed on disk since it was loaded — refresh and retry"
+            ));
+        }
+    }
     let result = match format {
         Format::Csv | Format::Tsv => edit_delimited(&file, format.delimiter(), row, column, value),
         Format::Jsonl => edit_jsonl(&file, row, column, value),
         Format::Parquet => edit_parquet(&file, row, column, value),
     };
     cache.invalidate(&file);
-    result
+    result?;
+    let meta = fs::metadata(&file).map_err(|e| format!("could not open {path}: {e}"))?;
+    file_mtime_ms(&meta)
 }
 
 // ---- the Tauri commands ----------------------------------------------------------
@@ -652,7 +743,8 @@ pub(crate) async fn dataset_query(
         .map_err(|e| e.to_string())?
 }
 
-/// Write one edited cell back to the file on disk.
+/// Write one edited cell back to the file on disk. Returns the file's new
+/// mtime (ms) — the staleness token for the next edit.
 #[tauri::command]
 pub(crate) async fn dataset_write_cell(
     state: tauri::State<'_, DatasetCache>,
@@ -661,10 +753,19 @@ pub(crate) async fn dataset_write_cell(
     row: u64,
     column: String,
     value: Json,
-) -> Result<(), String> {
+    expected_mtime_ms: Option<u64>,
+) -> Result<u64, String> {
     let cache = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        write_cell(&cache, &root, &path, row, &column, &value)
+        write_cell(
+            &cache,
+            &root,
+            &path,
+            row,
+            &column,
+            &value,
+            expected_mtime_ms,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -785,7 +886,16 @@ mod tests {
         fs::write(dir.join("notes.csv"), body).unwrap();
         let cache = DatasetCache::default();
 
-        write_cell(&cache, &root, "notes.csv", 1, "note", &json!("edited")).unwrap();
+        write_cell(
+            &cache,
+            &root,
+            "notes.csv",
+            1,
+            "note",
+            &json!("edited"),
+            None,
+        )
+        .unwrap();
         let after = fs::read_to_string(dir.join("notes.csv")).unwrap();
         assert_eq!(
             after,
@@ -797,8 +907,8 @@ mod tests {
         assert_eq!(cell(&page, 1, "note"), json!("edited"));
 
         // Unknown columns and rows fail loudly instead of corrupting the file.
-        assert!(write_cell(&cache, &root, "notes.csv", 0, "missing", &json!("x")).is_err());
-        assert!(write_cell(&cache, &root, "notes.csv", 99, "note", &json!("x")).is_err());
+        assert!(write_cell(&cache, &root, "notes.csv", 0, "missing", &json!("x"), None).is_err());
+        assert!(write_cell(&cache, &root, "notes.csv", 99, "note", &json!("x"), None).is_err());
         assert!(query(&cache, &root, "../notes.csv", &req(0, 1)).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
@@ -819,7 +929,16 @@ mod tests {
         assert_eq!(cell(&page, 2, "tag"), Json::Null);
         assert_eq!(page.format, "jsonl");
 
-        write_cell(&cache, &root, "events.jsonl", 1, "tag", &json!("edited")).unwrap();
+        write_cell(
+            &cache,
+            &root,
+            "events.jsonl",
+            1,
+            "tag",
+            &json!("edited"),
+            None,
+        )
+        .unwrap();
         let after = fs::read_to_string(dir.join("events.jsonl")).unwrap();
         let lines: Vec<&str> = after.lines().collect();
         assert_eq!(lines[0], r#"{"id": 1, "tag": "a", "extra": true}"#); // untouched, byte-identical
@@ -827,7 +946,7 @@ mod tests {
         assert_eq!(lines[2], r#"{"id": 3}"#);
 
         // Numbers stay numbers through an edit.
-        write_cell(&cache, &root, "events.jsonl", 2, "id", &json!(42)).unwrap();
+        write_cell(&cache, &root, "events.jsonl", 2, "id", &json!(42), None).unwrap();
         let page = query(&cache, &root, "events.jsonl", &req(0, 10)).unwrap();
         assert_eq!(cell(&page, 2, "id"), json!(42));
         fs::remove_dir_all(dir).unwrap();
@@ -871,10 +990,106 @@ mod tests {
         assert_eq!(sorted.row_ids[1], 2);
 
         // An edit casts to the column dtype (JSON 1 -> i64) and persists.
-        write_cell(&cache, &root, "people.parquet", 2, "score", &json!(1)).unwrap();
+        write_cell(&cache, &root, "people.parquet", 2, "score", &json!(1), None).unwrap();
         let page = query(&cache, &root, "people.parquet", &req(0, 10)).unwrap();
         assert_eq!(cell(&page, 2, "score"), json!(1.0));
         assert_eq!(cell(&page, 2, "name"), json!("alan"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn search_never_matches_the_hidden_row_index() {
+        let dir = workspace("search-rowid");
+        let root = dir.display().to_string();
+        // 100 alphabetic-only rows: a digit search can only match the injected
+        // row-id column, and that column must not count as data.
+        let mut body = String::from("word\n");
+        for _ in 0..100 {
+            body.push_str("alpha\n");
+        }
+        fs::write(dir.join("words.csv"), body).unwrap();
+        let cache = DatasetCache::default();
+        let found = query(
+            &cache,
+            &root,
+            "words.csv",
+            &DatasetQueryReq {
+                offset: 0,
+                limit: 10,
+                sort_by: None,
+                descending: false,
+                search: Some("5".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(found.total_rows, 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn csv_edit_keeps_blank_lines_next_to_the_record() {
+        let dir = workspace("csv-blank");
+        let root = dir.display().to_string();
+        fs::write(dir.join("gaps.csv"), "a,b\n1,x\n\n2,y\n").unwrap();
+        let cache = DatasetCache::default();
+        write_cell(&cache, &root, "gaps.csv", 0, "b", &json!("edited"), None).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("gaps.csv")).unwrap(),
+            "a,b\n1,edited\n\n2,y\n"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn jsonl_edit_preserves_non_alphabetical_key_order() {
+        let dir = workspace("jsonl-order");
+        let root = dir.display().to_string();
+        fs::write(dir.join("o.jsonl"), "{\"tag\":\"a\",\"id\":1}\n").unwrap();
+        let cache = DatasetCache::default();
+        write_cell(&cache, &root, "o.jsonl", 0, "id", &json!(2), None).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("o.jsonl")).unwrap(),
+            "{\"tag\":\"a\",\"id\":2}\n"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_edits_are_refused_and_fresh_ones_return_the_new_token() {
+        let dir = workspace("mtime-guard");
+        let root = dir.display().to_string();
+        fs::write(dir.join("g.csv"), "a,b\n1,x\n").unwrap();
+        let cache = DatasetCache::default();
+        let page = query(&cache, &root, "g.csv", &req(0, 10)).unwrap();
+
+        // A stale token (the file "changed" since that fetch) is refused…
+        let err = write_cell(
+            &cache,
+            &root,
+            "g.csv",
+            0,
+            "b",
+            &json!("y"),
+            Some(page.mtime_ms - 1),
+        )
+        .unwrap_err();
+        assert!(err.contains("changed on disk"), "{err}");
+        assert_eq!(fs::read_to_string(dir.join("g.csv")).unwrap(), "a,b\n1,x\n");
+
+        // …the current token lands, and returns the next token for chaining.
+        let next = write_cell(
+            &cache,
+            &root,
+            "g.csv",
+            0,
+            "b",
+            &json!("y"),
+            Some(page.mtime_ms),
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(dir.join("g.csv")).unwrap(), "a,b\n1,y\n");
+        write_cell(&cache, &root, "g.csv", 0, "a", &json!(9), Some(next)).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("g.csv")).unwrap(), "a,b\n9,y\n");
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -888,4 +1103,3 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 }
-

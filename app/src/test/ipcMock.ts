@@ -361,12 +361,20 @@ export const emptyDatasetPage = {
   format: "csv",
   elapsedMs: 0,
   editable: true,
+  mtimeMs: 0,
 };
 export const datasetQuery = vi.fn(async (_root: string, _path: string, _req: unknown) => ({
   ...emptyDatasetPage,
 }));
 export const datasetWriteCell = vi.fn(
-  async (_root: string, _path: string, _row: number, _column: string, _value: unknown) => {},
+  async (
+    _root: string,
+    _path: string,
+    _row: number,
+    _column: string,
+    _value: unknown,
+    _expectedMtimeMs?: number,
+  ) => 0,
 );
 export const fsWatch = vi.fn(async (_root: string) => {});
 export const fsUnwatch = vi.fn(async (_root: string) => {});
@@ -514,7 +522,7 @@ export function resetIpc() {
   fsWriteFile.mockReset().mockResolvedValue(undefined);
   fsCreateEntry.mockReset().mockResolvedValue(undefined);
   datasetQuery.mockReset().mockResolvedValue({ ...emptyDatasetPage });
-  datasetWriteCell.mockReset().mockResolvedValue(undefined);
+  datasetWriteCell.mockReset().mockResolvedValue(0);
   browserAttach.mockReset().mockResolvedValue(undefined);
   browserDetach.mockReset().mockResolvedValue(undefined);
   browserClose.mockReset().mockResolvedValue(undefined);

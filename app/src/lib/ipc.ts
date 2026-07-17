@@ -214,14 +214,17 @@ export const fsCreateEntry = (root: string, path: string, isDir: boolean) =>
 export const datasetQuery = (root: string, path: string, req: DatasetQueryReq) =>
   invoke<DatasetPage>("dataset_query", { root, path, req });
 
-/** Write one edited cell back to a data file, addressed by physical row. */
+/** Write one edited cell back to a data file, addressed by physical row.
+ *  `expectedMtimeMs` is the page's staleness token; the returned mtime is the
+ *  token for the next edit. */
 export const datasetWriteCell = (
   root: string,
   path: string,
   row: number,
   column: string,
   value: string | number | boolean | null,
-) => invoke<void>("dataset_write_cell", { root, path, row, column, value });
+  expectedMtimeMs?: number,
+) => invoke<number>("dataset_write_cell", { root, path, row, column, value, expectedMtimeMs });
 
 /** Start native FS watching of a workspace root (idempotent). Changes arrive
  *  as debounced `fs://changed` batches — see {@link onFsChanged}. */

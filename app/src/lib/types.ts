@@ -854,6 +854,9 @@ export interface DatasetPage {
   format: string;
   elapsedMs: number;
   editable: boolean;
+  /** File mtime when this page was read — echoed back on writes so a stale
+   *  edit (the file changed underneath) is refused, not misapplied. */
+  mtimeMs: number;
 }
 
 /** A highlighted code selection staged as context for the next prompt. */

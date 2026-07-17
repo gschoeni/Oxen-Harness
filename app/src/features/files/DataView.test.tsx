@@ -27,6 +27,7 @@ const samplePage = {
   format: "csv",
   elapsedMs: 2,
   editable: true,
+  mtimeMs: 111,
 };
 
 beforeEach(() => {
@@ -102,7 +103,7 @@ describe("DataView", () => {
     await userEvent.clear(input);
     await userEvent.type(input, "hopper{Enter}");
     await waitFor(() =>
-      expect(datasetWriteCell).toHaveBeenCalledWith(ROOT, "data.csv", 1, "name", "hopper"),
+      expect(datasetWriteCell).toHaveBeenCalledWith(ROOT, "data.csv", 1, "name", "hopper", 111),
     );
     expect(screen.getByText("hopper")).toBeInTheDocument(); // optimistic
   });

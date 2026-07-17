@@ -59,6 +59,8 @@ import {
 
 const ROW_H = 28;
 const HEADER_H = 30;
+/** Page-cache ceiling (~12k rows) — far pages re-fetch rather than pile up. */
+const MAX_CACHED_PAGES = 60;
 
 const KIND_ICONS: Partial<Record<DatasetKind, typeof Hash>> = {
   int: Hash,
@@ -132,6 +134,9 @@ export function DataView({
   // Our own cell writes echo back as watcher events; skip the reload we'd
   // otherwise do (the page cache is already patched).
   const selfEditAt = useRef(0);
+  // The file mtime our pages were read at — sent with every write so an edit
+  // against a file that changed underneath is refused by the backend.
+  const mtimeRef = useRef<number | null>(null);
 
   // ---- fetching -----------------------------------------------------------
 
@@ -150,6 +155,17 @@ export function DataView({
         });
         if (gen !== genRef.current) return; // view changed while in flight
         pagesRef.current.set(page, { rows: result.rows, rowIds: result.rowIds });
+        // Keep only the pages nearest the one just fetched — a scrollbar drag
+        // through a huge file must not accumulate every window it passed.
+        if (pagesRef.current.size > MAX_CACHED_PAGES) {
+          const keys = [...pagesRef.current.keys()].sort(
+            (a, b) => Math.abs(b - page) - Math.abs(a - page),
+          );
+          for (const k of keys.slice(0, pagesRef.current.size - MAX_CACHED_PAGES)) {
+            pagesRef.current.delete(k);
+          }
+        }
+        mtimeRef.current = result.mtimeMs;
         setMeta({
           columns: result.columns,
           totalRows: result.totalRows,
@@ -239,6 +255,9 @@ export function DataView({
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_H,
     overscan: 12,
+    // The sticky header lives inside the scroller; padding the rows down by
+    // its height keeps scrollToIndex from tucking rows underneath it.
+    paddingStart: HEADER_H,
   });
   const items = virtualizer.getVirtualItems();
   const firstIndex = items[0]?.index ?? 0;
@@ -250,8 +269,21 @@ export function DataView({
 
   // ---- editing ---------------------------------------------------------------
 
-  const canEditColumn = (col: DatasetColumn) =>
-    !!meta?.editable && col.kind !== "list" && col.kind !== "struct";
+  // Nested values never edit; parquet temporals don't either (the backend's
+  // string→date cast would fail — better to not offer than to error).
+  const canEditColumn = (col: DatasetColumn) => {
+    if (!meta?.editable) return false;
+    if (col.kind === "list" || col.kind === "struct") return false;
+    if (meta.format === "parquet" && ["date", "datetime", "time", "duration"].includes(col.kind))
+      return false;
+    return true;
+  };
+
+  /** Editing steals focus into the cell input; hand it back so arrow-key
+   *  navigation keeps working after a commit or cancel. */
+  function focusGrid() {
+    scrollRef.current?.focus({ preventScroll: true });
+  }
 
   function startEdit(addr: CellAddr) {
     const col = columns[addr.col];
@@ -273,6 +305,7 @@ export function DataView({
     }
     setEditing(null);
     setEditError(null);
+    focusGrid();
     if (move) moveSelection(move === "down" ? 1 : 0, move === "right" ? 1 : 0, editing);
     if (parsed === row.cells[editing.col]) return;
     // Optimistic: the grid shows the new value while the write lands.
@@ -283,7 +316,14 @@ export function DataView({
     }
     selfEditAt.current = Date.now();
     try {
-      await datasetWriteCell(workspace, path, row.id, col.name, parsed);
+      mtimeRef.current = await datasetWriteCell(
+        workspace,
+        path,
+        row.id,
+        col.name,
+        parsed,
+        mtimeRef.current ?? undefined,
+      );
     } catch (e) {
       setError(String(e));
       setVersion((v) => v + 1); // reload the truth from disk
@@ -399,7 +439,7 @@ export function DataView({
           <div className="dataview-status">{search ? `No rows match “${search}”` : "No rows"}</div>
         )}
         {meta && columns.length > 0 && (
-          <div className="dataview-inner" style={{ width: gridWidth, height: HEADER_H + virtualizer.getTotalSize() }}>
+          <div className="dataview-inner" style={{ width: gridWidth, height: virtualizer.getTotalSize() }}>
             <div className="dataview-hrow" style={{ width: gridWidth, height: HEADER_H }} role="row">
               <div className="dataview-hcell dataview-gutter" style={{ width: gutter }} aria-hidden="true" />
               {headers.map((header, ci) => {
@@ -443,7 +483,7 @@ export function DataView({
                 <div
                   key={vi.key}
                   className="dataview-row"
-                  style={{ transform: `translateY(${HEADER_H + vi.start}px)`, width: gridWidth, height: ROW_H }}
+                  style={{ transform: `translateY(${vi.start}px)`, width: gridWidth, height: ROW_H }}
                   role="row"
                   aria-rowindex={vi.index + 1}
                 >
@@ -490,7 +530,10 @@ export function DataView({
                               else if (e.key === "Tab") {
                                 e.preventDefault();
                                 void commitEdit("right");
-                              } else if (e.key === "Escape") setEditing(null);
+                              } else if (e.key === "Escape") {
+                                setEditing(null);
+                                focusGrid();
+                              }
                               e.stopPropagation();
                             }}
                             onBlur={() => void commitEdit(null)}

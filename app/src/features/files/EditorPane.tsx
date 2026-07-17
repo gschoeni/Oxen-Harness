@@ -216,7 +216,10 @@ function CloseButton({ onClose }: { onClose: () => void }) {
 // ---- data files: the grid, with a Raw escape hatch ---------------------------
 
 /** CSV/TSV/JSONL open as the data grid with a Table/Raw toggle; the Raw side
- *  is the ordinary code editor. Parquet is binary, so it's grid-only. */
+ *  is the ordinary code editor. Parquet is binary, so it's grid-only. Once
+ *  Raw has been opened it stays mounted (hidden) behind the grid, so unsaved
+ *  raw edits and undo history survive flipping views — the same contract as
+ *  the markdown Preview/Raw toggle. */
 function DataFileView({
   workspace,
   path,
@@ -229,6 +232,11 @@ function DataFileView({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [mode, setMode] = useState<"table" | "raw">("table");
+  const [rawMounted, setRawMounted] = useState(false);
+  function showRaw() {
+    setRawMounted(true);
+    setMode("raw");
+  }
   const toggle = path.toLowerCase().endsWith(".parquet") ? null : (
     <div className="editor-mode" role="tablist" aria-label="View mode">
       <button
@@ -244,23 +252,30 @@ function DataFileView({
         role="tab"
         aria-selected={mode === "raw"}
         className={mode === "raw" ? "active" : ""}
-        onClick={() => setMode("raw")}
+        onClick={showRaw}
       >
         <Code2 size={12} aria-hidden="true" />
         Raw
       </button>
     </div>
   );
-  return mode === "table" ? (
-    <DataView workspace={workspace} path={path} onClose={onClose} actions={toggle} />
-  ) : (
-    <CodeView
-      workspace={workspace}
-      path={path}
-      onClose={onClose}
-      onDirtyChange={onDirtyChange}
-      viewToggle={toggle}
-    />
+  return (
+    <>
+      <div className="editor-datafile-pane" hidden={mode !== "table"}>
+        <DataView workspace={workspace} path={path} onClose={onClose} actions={toggle} />
+      </div>
+      {rawMounted && (
+        <div className="editor-datafile-pane" hidden={mode !== "raw"}>
+          <CodeView
+            workspace={workspace}
+            path={path}
+            onClose={onClose}
+            onDirtyChange={onDirtyChange}
+            viewToggle={toggle}
+          />
+        </div>
+      )}
+    </>
   );
 }
 
