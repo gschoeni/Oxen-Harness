@@ -37,38 +37,6 @@
   flex-shrink: 0;
 }
 
-/* Back-link to the Projects page — the sidebar shows one project at a time. */
-.projects-link {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  align-self: flex-start;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
-  margin: calc(-1 * var(--space-2)) 0 calc(-1 * var(--space-2)) calc(-1 * var(--space-2));
-  font-family: var(--font-display);
-  font-size: var(--label-size);
-  text-transform: var(--label-transform);
-  letter-spacing: var(--label-spacing);
-  color: var(--text-tertiary);
-  flex-shrink: 0;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-.projects-link:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
-/* Activity-elsewhere dot: a chat is running/unread in another project. */
-.projects-link-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--radius-pill);
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
 /* The project the sidebar is scoped to. */
 .current-project {
   display: flex;

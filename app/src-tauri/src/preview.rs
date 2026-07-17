@@ -181,7 +181,10 @@ static DETACH_EPOCH: AtomicU64 = AtomicU64::new(0);
 /// than photographing a frame that may predate the change it's verifying.
 static SHOWN: StdMutex<Option<String>> = StdMutex::new(None);
 
-/// Whether `session`'s preview is the one on screen right now.
+/// Whether `session`'s preview is the one on screen right now. Only the
+/// macOS screenshot path consults this (WebKit throttles hidden webviews);
+/// the cfg keeps it from being dead code on other targets.
+#[cfg(target_os = "macos")]
 pub(crate) fn is_shown(session: &str) -> bool {
     SHOWN.lock().unwrap().as_deref() == Some(session)
 }

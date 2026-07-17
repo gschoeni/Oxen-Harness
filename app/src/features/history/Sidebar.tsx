@@ -1,5 +1,5 @@
 import { useMemo, useState, type PointerEvent } from "react";
-import { ArrowLeft, FolderOpen, Plus, Settings as SettingsIcon, Trash2 } from "lucide-react";
+import { FolderOpen, Plus, Settings as SettingsIcon, Trash2 } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { relativeTime } from "../../lib/format";
 import { Button, Modal } from "../../components/ui";
@@ -16,7 +16,6 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
   const startNewSession = useStore((s) => s.startNewSession);
   const resume = useStore((s) => s.resume);
   const removeSession = useStore((s) => s.removeSession);
-  const setProjectsOpen = useStore((s) => s.setProjectsOpen);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
 
   // The chat queued for deletion (drives the confirm modal), and whether the
@@ -59,16 +58,6 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
     return list;
   }, [sessions, session, currentId, activePath]);
 
-  // Chats running in *other* projects still deserve a signal — a small dot on
-  // the Projects link says "something is happening elsewhere".
-  const elsewhereBusy = useMemo(
-    () =>
-      sessions.some(
-        (s) => s.workspace !== activePath && (runStatus[s.id] === "running" || runStatus[s.id] === "unread"),
-      ),
-    [sessions, runStatus, activePath],
-  );
-
   return (
     <aside className="sidebar">
       {onResizeStart && (
@@ -86,17 +75,6 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
         <BrandMark />
         <span>oxen-harness</span>
       </div>
-
-      <button
-        className="projects-link"
-        onClick={() => setProjectsOpen(true)}
-        title="All projects"
-        aria-label="All projects"
-      >
-        <ArrowLeft size={15} />
-        <span>Projects</span>
-        {elsewhereBusy && <span className="projects-link-dot" title="Activity in another project" />}
-      </button>
 
       {activePath ? (
         <>

@@ -33,8 +33,16 @@ import { Preview } from "../preview/Preview";
 import { Browser } from "../browser/Browser";
 import { FilesPanel } from "../files/FilesPanel";
 import { EditorPane } from "../files/EditorPane";
+import { ProjectsNav } from "../projects/ProjectsNav";
 
 export type DockSide = "left" | "right";
+
+/** Column chrome rendered above the tab strip, per side. The left column
+ *  carries the Projects back-link — top-level navigation that outlives
+ *  whichever dock (Chats / Files) is active below it. */
+export function ColumnNav({ side }: { side: DockSide }) {
+  return side === "left" ? <ProjectsNav /> : null;
+}
 
 export interface DockSpec {
   /** Stable id: persists the width/collapse state and names the active tab. */

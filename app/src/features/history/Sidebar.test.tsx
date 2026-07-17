@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { Sidebar } from "./Sidebar";
+import { ProjectsNav } from "../projects/ProjectsNav";
 import { useStore } from "../../lib/store";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
@@ -59,22 +60,24 @@ describe("Sidebar", () => {
     expect(ipc.resumeSession).toHaveBeenCalledWith("s2");
   });
 
-  it("opens the projects page from the Projects link", async () => {
-    render(<Sidebar />);
+  // The Projects back-link is column chrome now (above the Chats/Files tabs),
+  // not part of the Sidebar — see ProjectsNav.
+  it("opens the projects page from the Projects nav", async () => {
+    render(<ProjectsNav />);
     await userEvent.click(screen.getByRole("button", { name: /all projects/i }));
     expect(useStore.getState().projectsOpen).toBe(true);
   });
 
-  it("signals activity in other projects on the Projects link", () => {
+  it("signals activity in other projects on the Projects nav", () => {
     useStore.setState({ runStatus: { other: "running" } });
-    render(<Sidebar />);
-    expect(document.querySelector(".projects-link-dot")).not.toBeNull();
+    render(<ProjectsNav />);
+    expect(document.querySelector(".projects-nav-dot")).not.toBeNull();
   });
 
   it("shows no activity dot when only the current project is busy", () => {
     useStore.setState({ runStatus: { s2: "running" } });
-    render(<Sidebar />);
-    expect(document.querySelector(".projects-link-dot")).toBeNull();
+    render(<ProjectsNav />);
+    expect(document.querySelector(".projects-nav-dot")).toBeNull();
   });
 
   it("opens Settings from the footer button", async () => {

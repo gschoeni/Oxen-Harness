@@ -10,7 +10,7 @@ import { useCallback, useEffect, type PointerEvent } from "react";
 import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import { useStore, type RightTabId } from "../../lib/store";
 import { DockToggle } from "./DockToggle";
-import { useAvailableDocks, type DockSide, type DockSpec } from "./docks";
+import { ColumnNav, useAvailableDocks, type DockSide, type DockSpec } from "./docks";
 import { CHAT_MIN_FIT, RAIL_W } from "./layout";
 import "./docks.css";
 
@@ -142,6 +142,7 @@ export function DockColumn({
 
   return (
     <div className={`dock-column ${side}`}>
+      <ColumnNav side={side} />
       {available.length > 1 && (
         <div className="dock-tabs" role="tablist" aria-label={`${side} panels`}>
           {available.map((dock) => (

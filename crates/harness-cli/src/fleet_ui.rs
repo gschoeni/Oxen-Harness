@@ -184,7 +184,7 @@ impl FleetState {
     /// Cycle focus: overview → lane 0 → 1 → … → overview.
     pub(crate) fn focus_next(&mut self) {
         self.focused = match self.focused {
-            None => Some(0).filter(|_| !self.lanes.is_empty()),
+            None => (!self.lanes.is_empty()).then_some(0),
             Some(i) if i + 1 < self.lanes.len() => Some(i + 1),
             Some(_) => None,
         };

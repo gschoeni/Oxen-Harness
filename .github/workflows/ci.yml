@@ -57,9 +57,11 @@ jobs:
       - uses: actions/checkout@v7
 
       # The app is a pnpm project (app/pnpm-lock.yaml is the tracked lockfile).
+      # pnpm 11 to match the local toolchain: pnpm-workspace.yaml uses config
+      # keys (allowBuilds) that pnpm 9 misreads as a broken workspace manifest.
       - uses: pnpm/action-setup@v6
         with:
-          version: 9
+          version: 11
 
       - uses: actions/setup-node@v6
         with:
