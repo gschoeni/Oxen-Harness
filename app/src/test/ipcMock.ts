@@ -352,6 +352,22 @@ export const fsReadFile = vi.fn(async (_root: string, _path: string) => ({
 }));
 export const fsWriteFile = vi.fn(async (_root: string, _path: string, _content: string) => {});
 export const fsCreateEntry = vi.fn(async (_root: string, _path: string, _isDir: boolean) => {});
+export const emptyDatasetPage = {
+  columns: [] as { name: string; dtype: string; kind: string }[],
+  rows: [] as (string | number | boolean | null)[][],
+  rowIds: [] as number[],
+  totalRows: 0,
+  fileSize: 0,
+  format: "csv",
+  elapsedMs: 0,
+  editable: true,
+};
+export const datasetQuery = vi.fn(async (_root: string, _path: string, _req: unknown) => ({
+  ...emptyDatasetPage,
+}));
+export const datasetWriteCell = vi.fn(
+  async (_root: string, _path: string, _row: number, _column: string, _value: unknown) => {},
+);
 export const fsWatch = vi.fn(async (_root: string) => {});
 export const fsUnwatch = vi.fn(async (_root: string) => {});
 export const onFsChanged = listener("fsChanged");
@@ -497,6 +513,8 @@ export function resetIpc() {
   fsReadFile.mockReset().mockResolvedValue({ content: "", truncated: false, size: 0 });
   fsWriteFile.mockReset().mockResolvedValue(undefined);
   fsCreateEntry.mockReset().mockResolvedValue(undefined);
+  datasetQuery.mockReset().mockResolvedValue({ ...emptyDatasetPage });
+  datasetWriteCell.mockReset().mockResolvedValue(undefined);
   browserAttach.mockReset().mockResolvedValue(undefined);
   browserDetach.mockReset().mockResolvedValue(undefined);
   browserClose.mockReset().mockResolvedValue(undefined);

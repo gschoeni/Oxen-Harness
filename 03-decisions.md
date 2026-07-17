@@ -632,3 +632,16 @@ only a useful head and tail; process readers drain concurrently to avoid pipe
 deadlocks. Durable history remains the source of truth, while transient UI
 events carry capped display copies. Compression originals use workspace disk
 storage with only a bounded CCR index in memory.
+
+**The data grid pages datasets server-side; the webview never holds the file** (2026-07-16)
+`dataset_query` windows CSV/TSV/JSONL/Parquet through Polars' lazy engine
+(slice/sort/filter pushdown, ≤128 MB files cached as DataFrames keyed by
+mtime, bigger ones re-scanned per request), so grid latency is independent of
+file size. Polars lives only in the app's Cargo project, keeping the core
+workspace's verification loop fast. Cell edits are format-aware: CSV/JSONL
+splice exactly one record (every other byte preserved, so diffs stay
+reviewable — the csv crate's CRLF positions needed one-byte normalization);
+Parquet has no record to splice, so it rewrites the file behind a size cap and
+turns read-only past it. Rows are addressed by a physical row-index column
+injected before filter/sort, so edits land on the right record whatever the
+view order.

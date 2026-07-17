@@ -20,6 +20,7 @@
 
 pub(crate) mod browser;
 pub(crate) mod connection;
+pub(crate) mod dataset;
 pub(crate) mod files;
 pub(crate) mod loops;
 pub(crate) mod models;

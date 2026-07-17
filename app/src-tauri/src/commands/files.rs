@@ -33,8 +33,9 @@ pub(crate) struct FileBody {
 const MAX_READ_BYTES: usize = 2_000_000;
 
 /// Join `rel` onto `root`, refusing absolute paths and any `..` step so the
-/// result provably stays inside the workspace.
-fn resolve(root: &str, rel: &str) -> Result<PathBuf, String> {
+/// result provably stays inside the workspace. Shared with the dataset
+/// commands, which take the same root + relative-path pair.
+pub(super) fn resolve(root: &str, rel: &str) -> Result<PathBuf, String> {
     let root_path = Path::new(root);
     if !root_path.is_absolute() || !root_path.is_dir() {
         return Err(format!("not a workspace directory: {root}"));

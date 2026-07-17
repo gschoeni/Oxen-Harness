@@ -810,6 +810,52 @@ export interface FileBody {
   size: number;
 }
 
+/** Simplified dtype family the data grid keys icons and alignment off. */
+export type DatasetKind =
+  | "int"
+  | "float"
+  | "bool"
+  | "str"
+  | "date"
+  | "datetime"
+  | "time"
+  | "duration"
+  | "list"
+  | "struct"
+  | "other";
+
+/** One column of a tabular data file. */
+export interface DatasetColumn {
+  name: string;
+  /** The backend dtype, verbatim (shown in the header tooltip). */
+  dtype: string;
+  kind: DatasetKind;
+}
+
+/** One page request for a dataset window. */
+export interface DatasetQueryReq {
+  offset: number;
+  limit: number;
+  sortBy?: string;
+  descending?: boolean;
+  search?: string;
+}
+
+/** One window of a CSV/JSONL/Parquet file, plus grid chrome. */
+export interface DatasetPage {
+  columns: DatasetColumn[];
+  /** Cell values row-major; temporal/nested values arrive as display strings. */
+  rows: (string | number | boolean | null)[][];
+  /** Physical file record index of each row (addresses edits). */
+  rowIds: number[];
+  /** Rows in the current view (after search), not just this window. */
+  totalRows: number;
+  fileSize: number;
+  format: string;
+  elapsedMs: number;
+  editable: boolean;
+}
+
 /** A highlighted code selection staged as context for the next prompt. */
 export interface CodeSnippet {
   /** Workspace-relative path of the file the selection came from. */

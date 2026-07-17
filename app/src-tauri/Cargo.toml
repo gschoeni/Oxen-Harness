@@ -46,6 +46,8 @@ harness-permissions = { path = "../../crates/harness-permissions" }
 harness-review = { path = "../../crates/harness-review" }
 harness-preview = { path = "../../crates/harness-preview" }
 harness-loop = { path = "../../crates/harness-loop" }
+polars = { version = "0.54.4", default-features = false, features = ["lazy", "csv", "json", "parquet", "dtype-full", "strings", "regex", "temporal", "streaming"] }
+csv = "1.4.0"
 
 # Native WKWebView snapshot for the preview_screenshot tool (versions match
 # the objc2 stack wry already pulls in).

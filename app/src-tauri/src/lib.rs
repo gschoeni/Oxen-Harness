@@ -111,6 +111,7 @@ pub fn run() {
                 initial_local,
             ));
             app.manage(commands::watch::FsWatchState::default());
+            app.manage(commands::dataset::DatasetCache::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -175,6 +176,8 @@ pub fn run() {
             commands::files::fs_read_file,
             commands::files::fs_write_file,
             commands::files::fs_create_entry,
+            commands::dataset::dataset_query,
+            commands::dataset::dataset_write_cell,
             commands::watch::fs_watch,
             commands::watch::fs_unwatch,
             commands::project::list_projects,

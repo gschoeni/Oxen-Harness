@@ -47,6 +47,8 @@ import type {
   CompressionMode,
   RetryEvent,
   ChatMessage,
+  DatasetPage,
+  DatasetQueryReq,
   FileBody,
   FileEntry,
   ToolDefinition,
@@ -206,6 +208,20 @@ export const fsWriteFile = (root: string, path: string, content: string) =>
 /** Create an empty file or a folder (fails if the path already exists). */
 export const fsCreateEntry = (root: string, path: string, isDir: boolean) =>
   invoke<void>("fs_create_entry", { root, path, isDir });
+
+/** Read one window of a CSV/TSV/JSONL/Parquet file (paged, sorted, searched
+ *  server-side — the webview only ever holds the visible rows). */
+export const datasetQuery = (root: string, path: string, req: DatasetQueryReq) =>
+  invoke<DatasetPage>("dataset_query", { root, path, req });
+
+/** Write one edited cell back to a data file, addressed by physical row. */
+export const datasetWriteCell = (
+  root: string,
+  path: string,
+  row: number,
+  column: string,
+  value: string | number | boolean | null,
+) => invoke<void>("dataset_write_cell", { root, path, row, column, value });
 
 /** Start native FS watching of a workspace root (idempotent). Changes arrive
  *  as debounced `fs://changed` batches — see {@link onFsChanged}. */

@@ -370,6 +370,18 @@ Context growth, flaky endpoints, and recovering dead turns:
   endpoint's model catalog and are labeled estimates. Models without published
   rates remain explicitly unpriced rather than `$0.00`.
 
+## Recent — data grid in the Editor pane (2026-07-16)
+
+- CSV/TSV/JSONL/Parquet files open as an Airtable-style virtualized grid in the
+  desktop Editor dock (`app/src/features/files/DataView.tsx`), with server-side
+  paging/sorting/searching in a Polars-backed Tauri command module
+  (`app/src-tauri/src/commands/dataset.rs`) — the webview only ever holds the
+  visible ~200-row pages, so million-row files on disk scroll interactively.
+- Cells edit in place (dtype-validated) and write back surgically: CSV/JSONL
+  rewrite only the touched record byte-for-byte; Parquet rewrites the file
+  under a 256 MB cap and is read-only beyond it. CSV/TSV/JSONL keep a Raw
+  toggle into the ordinary code editor.
+
 ## What's left / next
 
 - [ ] Run-time GUI smoke test of the desktop app (`cargo tauri dev`), incl. live
