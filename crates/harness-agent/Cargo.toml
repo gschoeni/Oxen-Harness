@@ -27,6 +27,10 @@ tracing = { workspace = true }
 [dev-dependencies]
 mockito = "1"
 tempfile = "3"
+# The live cache/limits probe resolves catalog-reported model limits the same
+# way the hosts do (dev-only; the library never depends on these).
+harness-local = { workspace = true }
+harness-config = { workspace = true }
 
 [lints]
 workspace = true

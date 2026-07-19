@@ -130,6 +130,31 @@ fn migrations() -> Migrations<'static> {
                  raw_json    TEXT NOT NULL
              );",
         ),
+        // M8 — per-call attribution and cache economics on the usage ledger:
+        // which session and call kind spent the tokens, how many prompt tokens
+        // were cache reads vs cache writes, wall-clock latency, and how many
+        // transient retries preceded the successful call. Existing rows keep
+        // empty/zero defaults (their detail was never captured).
+        M::up(
+            "ALTER TABLE usage_events ADD COLUMN session_id TEXT NOT NULL DEFAULT '';
+             ALTER TABLE usage_events ADD COLUMN kind TEXT NOT NULL DEFAULT '';
+             ALTER TABLE usage_events ADD COLUMN cached_prompt_tokens INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE usage_events ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE usage_events ADD COLUMN latency_ms INTEGER;
+             ALTER TABLE usage_events ADD COLUMN retries INTEGER NOT NULL DEFAULT 0;
+             CREATE INDEX IF NOT EXISTS idx_usage_events_session
+                 ON usage_events(session_id);",
+        ),
+        // M9 — provenance for conversations imported from other tools' local
+        // logs (Claude Code, Cursor). `source` names the tool ('' = native
+        // chat); `source_ref` is the tool's own conversation id, unique per
+        // source so a rescan can dedup instead of re-importing.
+        M::up(
+            "ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT '';
+             ALTER TABLE sessions ADD COLUMN source_ref TEXT NOT NULL DEFAULT '';
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_source_ref
+                 ON sessions(source, source_ref) WHERE source_ref != '';",
+        ),
     ])
 }
 
@@ -183,6 +208,9 @@ pub struct SessionSummary {
     pub message_count: i64,
     /// Training-data review status: `""` (unreviewed), `"kept"`, or `"rejected"`.
     pub review_status: String,
+    /// Where the conversation came from: `""` for native chats, else the
+    /// import source (`"claude-code"`, `"cursor"`).
+    pub source: String,
 }
 
 /// Accumulated usage for a single model, summed across every session and
@@ -195,6 +223,35 @@ pub struct ModelUsage {
     pub source: String,
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
+}
+
+/// Per-call attribution recorded alongside one usage event. Everything is
+/// optional-by-default so callers that only know token counts (or older
+/// paths) record empty/zero detail rather than fabricating values.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UsageDetail<'a> {
+    /// The session that spent these tokens; empty for detached side agents
+    /// whose transcript never persists.
+    pub session_id: &'a str,
+    /// What kind of call this was: `"turn"` (a turn-loop round), `"summary"`
+    /// (compaction), `"oneshot"` (side completions), or empty when unknown.
+    pub kind: &'a str,
+    /// Prompt tokens the provider served from its prompt cache.
+    pub cached_prompt_tokens: usize,
+    /// Prompt tokens the provider wrote into its cache (billed at a premium).
+    pub cache_write_tokens: usize,
+    /// Wall-clock request latency, when measured.
+    pub latency_ms: Option<u64>,
+    /// Transient-failure retries burned before this call landed.
+    pub retries: u32,
+}
+
+/// Ledger-wide cache economics (see `HistoryStore::cache_usage_totals`).
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct CacheUsageTotals {
+    pub prompt_tokens: i64,
+    pub cached_prompt_tokens: i64,
+    pub cache_write_tokens: i64,
 }
 
 /// Token throughput for one local-calendar day, used by the yearly activity
@@ -367,7 +424,7 @@ impl HistoryStore {
                          AND m.content IS NOT NULL
                        ORDER BY m.seq ASC LIMIT 1) AS title,
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count,
-                    s.review_status
+                    s.review_status, s.source
              FROM sessions s
              ORDER BY s.created_at DESC",
         )?;
@@ -380,6 +437,7 @@ impl HistoryStore {
                 title: row.get(4)?,
                 message_count: row.get(5)?,
                 review_status: row.get(6)?,
+                source: row.get(7)?,
             })
         })?;
         let mut out = Vec::new();
@@ -395,6 +453,8 @@ impl HistoryStore {
 
     /// When each workspace was last used: the newest message timestamp across
     /// its sessions, falling back to session creation for message-less chats.
+    /// Native chats only — imported transcripts keep their source tool's cwd
+    /// as workspace and must not move project ordering.
     pub fn workspace_last_used(
         &self,
     ) -> Result<std::collections::HashMap<String, i64>, HistoryError> {
@@ -405,6 +465,7 @@ impl HistoryStore {
                                     WHERE m.session_id = s.id),
                                  s.created_at))
              FROM sessions s
+             WHERE s.source = ''
              GROUP BY s.workspace",
         )?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
@@ -603,12 +664,32 @@ impl HistoryStore {
         prompt_delta: usize,
         completion_delta: usize,
     ) -> Result<(), HistoryError> {
+        self.record_model_usage_detailed(
+            model,
+            source,
+            prompt_delta,
+            completion_delta,
+            &UsageDetail::default(),
+        )
+    }
+
+    /// Record one model call with full attribution: session, call kind, the
+    /// cache-read/cache-write split of the prompt, latency, and retry count.
+    /// A zero-token call is a no-op.
+    pub fn record_model_usage_detailed(
+        &self,
+        model: &str,
+        source: &str,
+        prompt_delta: usize,
+        completion_delta: usize,
+        detail: &UsageDetail<'_>,
+    ) -> Result<(), HistoryError> {
         let prompt = prompt_delta as i64;
         let completion = completion_delta as i64;
         if prompt == 0 && completion == 0 {
             return Ok(());
         }
-        self.record_model_usage_at(model, source, prompt, completion, now())?;
+        self.record_model_usage_at(model, source, prompt, completion, detail, now())?;
         Ok(())
     }
 
@@ -618,16 +699,53 @@ impl HistoryStore {
         source: &str,
         prompt_tokens: i64,
         completion_tokens: i64,
+        detail: &UsageDetail<'_>,
         created_at: i64,
     ) -> Result<(), HistoryError> {
         let conn = self.lock();
         conn.execute(
             "INSERT INTO usage_events
-                 (model, source, prompt_tokens, completion_tokens, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![model, source, prompt_tokens, completion_tokens, created_at],
+                 (model, source, prompt_tokens, completion_tokens, created_at,
+                  session_id, kind, cached_prompt_tokens, cache_write_tokens,
+                  latency_ms, retries)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                model,
+                source,
+                prompt_tokens,
+                completion_tokens,
+                created_at,
+                detail.session_id,
+                detail.kind,
+                detail.cached_prompt_tokens as i64,
+                detail.cache_write_tokens as i64,
+                detail.latency_ms.map(|ms| ms as i64),
+                detail.retries as i64,
+            ],
         )?;
         Ok(())
+    }
+
+    /// Aggregate cache economics across the ledger: total prompt tokens vs the
+    /// portion served from a provider prompt cache and the portion written into
+    /// it. All zeros until an endpoint starts reporting cache activity.
+    pub fn cache_usage_totals(&self) -> Result<CacheUsageTotals, HistoryError> {
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT COALESCE(SUM(prompt_tokens), 0),
+                    COALESCE(SUM(cached_prompt_tokens), 0),
+                    COALESCE(SUM(cache_write_tokens), 0)
+             FROM usage_events",
+            [],
+            |row| {
+                Ok(CacheUsageTotals {
+                    prompt_tokens: row.get(0)?,
+                    cached_prompt_tokens: row.get(1)?,
+                    cache_write_tokens: row.get(2)?,
+                })
+            },
+        )
+        .map_err(HistoryError::from)
     }
 
     /// The per-model usage breakdown, busiest first — every model that has
@@ -754,6 +872,97 @@ impl HistoryStore {
         }
         Ok(out)
     }
+
+    /// How many sessions were imported from `source` (for the import panel's
+    /// "already imported" count).
+    pub fn imported_count(&self, source: &str) -> Result<i64, HistoryError> {
+        let conn = self.lock();
+        Ok(conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE source = ?1",
+            [source],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Import conversations from another tool's local logs, deduping against
+    /// prior imports by `(source, source_ref)` in one transaction.
+    ///
+    /// A conversation whose ref was never seen becomes a new session; one that
+    /// grew since the last import (the source tool kept chatting) has its
+    /// messages replaced in full, keeping the session id and any review status
+    /// already assigned; an unchanged one is skipped.
+    pub fn import_conversations(
+        &self,
+        source: &str,
+        conversations: &[crate::import::ImportedConversation],
+    ) -> Result<crate::import::ImportReport, HistoryError> {
+        use rusqlite::OptionalExtension;
+        let mut report = crate::import::ImportReport::default();
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        for conv in conversations {
+            let existing: Option<(String, i64)> = tx
+                .query_row(
+                    "SELECT s.id,
+                            (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id)
+                     FROM sessions s WHERE s.source = ?1 AND s.source_ref = ?2",
+                    rusqlite::params![source, conv.source_ref],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let session_id = match existing {
+                Some((_, count)) if conv.messages.len() as i64 <= count => {
+                    report.skipped += 1;
+                    continue;
+                }
+                Some((id, _)) => {
+                    tx.execute("DELETE FROM messages WHERE session_id = ?1", [&id])?;
+                    tx.execute(
+                        "UPDATE sessions SET workspace = ?2, model = ?3 WHERE id = ?1",
+                        rusqlite::params![id, conv.workspace, conv.model],
+                    )?;
+                    report.updated += 1;
+                    id
+                }
+                None => {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    tx.execute(
+                        "INSERT INTO sessions
+                             (id, workspace, model, created_at, source, source_ref)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![
+                            id,
+                            conv.workspace,
+                            conv.model,
+                            conv.created_at,
+                            source,
+                            conv.source_ref
+                        ],
+                    )?;
+                    report.imported += 1;
+                    id
+                }
+            };
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO messages (session_id, seq, role, content, raw_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for (seq, msg) in conv.messages.iter().enumerate() {
+                let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                let content = crate::content::derive_content_text(msg.get("content"));
+                stmt.execute(rusqlite::params![
+                    session_id,
+                    seq as i64,
+                    role,
+                    content,
+                    serde_json::to_string(msg)?,
+                    conv.created_at
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(report)
+    }
 }
 
 fn append_message_row(
@@ -817,6 +1026,98 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
+    }
+
+    #[test]
+    fn import_dedups_by_source_ref_and_reimports_grown_conversations() {
+        use crate::import::{ImportReport, ImportedConversation};
+        let store = store();
+        let mut conv = ImportedConversation {
+            source_ref: "ext-1".into(),
+            workspace: "/Users/me/proj".into(),
+            model: "claude-fable-5".into(),
+            created_at: 1_784_570_751,
+            messages: vec![
+                serde_json::json!({"role": "user", "content": "hi"}),
+                serde_json::json!({"role": "assistant", "content": "hello"}),
+            ],
+        };
+
+        let first = store
+            .import_conversations("claude-code", std::slice::from_ref(&conv))
+            .unwrap();
+        assert_eq!(
+            first,
+            ImportReport {
+                imported: 1,
+                updated: 0,
+                skipped: 0
+            }
+        );
+        assert_eq!(store.imported_count("claude-code").unwrap(), 1);
+
+        let sessions = store.list_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].source, "claude-code");
+        assert_eq!(sessions[0].title.as_deref(), Some("hi"));
+        let session_id = sessions[0].id.clone();
+        store.set_review_status(&session_id, "kept").unwrap();
+
+        // Unchanged conversation on rescan: skipped, nothing duplicated.
+        let again = store
+            .import_conversations("claude-code", std::slice::from_ref(&conv))
+            .unwrap();
+        assert_eq!(
+            again,
+            ImportReport {
+                imported: 0,
+                updated: 0,
+                skipped: 1
+            }
+        );
+
+        // The source kept chatting: messages replaced in full, same session id
+        // and review status.
+        conv.messages
+            .push(serde_json::json!({"role": "user", "content": "more"}));
+        conv.messages
+            .push(serde_json::json!({"role": "assistant", "content": "sure"}));
+        let grown = store
+            .import_conversations("claude-code", std::slice::from_ref(&conv))
+            .unwrap();
+        assert_eq!(
+            grown,
+            ImportReport {
+                imported: 0,
+                updated: 1,
+                skipped: 0
+            }
+        );
+        let sessions = store.list_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, session_id);
+        assert_eq!(sessions[0].message_count, 4);
+        assert_eq!(sessions[0].review_status, "kept");
+    }
+
+    #[test]
+    fn export_carries_imported_reasoning_through() {
+        let store = store();
+        let conv = crate::import::ImportedConversation {
+            source_ref: "ext-2".into(),
+            workspace: String::new(),
+            model: "cursor".into(),
+            created_at: 0,
+            messages: vec![
+                serde_json::json!({"role": "user", "content": "why?"}),
+                serde_json::json!({"role": "assistant", "content": "because", "reasoning": "thinking it over"}),
+            ],
+        };
+        store.import_conversations("cursor", &[conv]).unwrap();
+        let id = store.list_sessions().unwrap()[0].id.clone();
+        let jsonl = store.export_chat_completions(&[id], true).unwrap();
+        let line: serde_json::Value = serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
+        assert_eq!(line["messages"][1]["reasoning"], "thinking it over");
     }
 
     #[test]
@@ -1200,6 +1501,81 @@ mod tests {
     }
 
     #[test]
+    fn detailed_usage_records_attribution_and_cache_split() {
+        let store = store();
+        store
+            .record_model_usage_detailed(
+                "claude-opus-4-8",
+                "oxen_cloud",
+                10_000,
+                300,
+                &UsageDetail {
+                    session_id: "sess-1",
+                    kind: "turn",
+                    cached_prompt_tokens: 9_000,
+                    cache_write_tokens: 800,
+                    latency_ms: Some(2_450),
+                    retries: 1,
+                },
+            )
+            .unwrap();
+        // A second call with no cache activity still sums into the totals.
+        store
+            .record_model_usage_detailed(
+                "claude-opus-4-8",
+                "oxen_cloud",
+                500,
+                50,
+                &UsageDetail {
+                    session_id: "sess-1",
+                    kind: "summary",
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let totals = store.cache_usage_totals().unwrap();
+        assert_eq!(totals.prompt_tokens, 10_500);
+        assert_eq!(totals.cached_prompt_tokens, 9_000);
+        assert_eq!(totals.cache_write_tokens, 800);
+
+        // The raw row carries the attribution columns.
+        let (session, kind, latency, retries): (String, String, i64, i64) = {
+            let conn = store.lock();
+            conn.query_row(
+                "SELECT session_id, kind, latency_ms, retries
+                 FROM usage_events WHERE kind = 'turn'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(session, "sess-1");
+        assert_eq!(kind, "turn");
+        assert_eq!(latency, 2_450);
+        assert_eq!(retries, 1);
+    }
+
+    #[test]
+    fn m8_migrates_a_pre_detail_ledger_in_place() {
+        // A database created before M8 (rows without attribution columns) must
+        // open cleanly and report zero cache activity for its legacy rows.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage.sqlite");
+        {
+            let store = HistoryStore::open(&path).unwrap();
+            store
+                .record_model_usage("legacy-model", "oxen_cloud", 100, 10)
+                .unwrap();
+        }
+        let reopened = HistoryStore::open(&path).unwrap();
+        let totals = reopened.cache_usage_totals().unwrap();
+        assert_eq!(totals.prompt_tokens, 100);
+        assert_eq!(totals.cached_prompt_tokens, 0);
+        assert_eq!(totals.cache_write_tokens, 0);
+    }
+
+    #[test]
     fn model_usage_persists_across_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("usage.sqlite");
@@ -1221,10 +1597,24 @@ mod tests {
         // conversion used by production queries.
         let timestamp = 1_750_003_200_i64;
         store
-            .record_model_usage_at("model-a", "oxen_cloud", 100, 25, timestamp)
+            .record_model_usage_at(
+                "model-a",
+                "oxen_cloud",
+                100,
+                25,
+                &UsageDetail::default(),
+                timestamp,
+            )
             .unwrap();
         store
-            .record_model_usage_at("model-b", "unpriced", 50, 10, timestamp)
+            .record_model_usage_at(
+                "model-b",
+                "unpriced",
+                50,
+                10,
+                &UsageDetail::default(),
+                timestamp,
+            )
             .unwrap();
         let (date, year): (String, i32) = {
             let conn = store.lock();
@@ -1259,7 +1649,7 @@ mod tests {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(user_version, 7);
+        assert_eq!(user_version, 9);
     }
 
     #[test]
@@ -1273,7 +1663,21 @@ mod tests {
         {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(
-                "CREATE TABLE model_usage (
+                "CREATE TABLE sessions (
+                     id          TEXT PRIMARY KEY,
+                     workspace   TEXT NOT NULL,
+                     model       TEXT NOT NULL,
+                     created_at  INTEGER NOT NULL,
+                     provider TEXT NOT NULL DEFAULT '',
+                     base_url TEXT NOT NULL DEFAULT '',
+                     mode TEXT NOT NULL DEFAULT '',
+                     context_window INTEGER,
+                     system_prompt_version TEXT NOT NULL DEFAULT '',
+                     theme TEXT NOT NULL DEFAULT '',
+                     transcript_version INTEGER NOT NULL DEFAULT 1,
+                     review_status TEXT NOT NULL DEFAULT ''
+                 );
+                 CREATE TABLE model_usage (
                      model             TEXT PRIMARY KEY,
                      prompt_tokens     INTEGER NOT NULL DEFAULT 0,
                      completion_tokens INTEGER NOT NULL DEFAULT 0,

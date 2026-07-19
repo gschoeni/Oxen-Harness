@@ -39,8 +39,11 @@ pub enum Command {
     Location(Option<String>),
     /// List the skills discovered for this workspace (global + project).
     Skills,
-    /// Set the Oxen API key: `/auth` opens a masked entry box; `/auth <key>`
-    /// sets it directly.
+    /// Set the API key and provider endpoint: `/auth` walks a base-URL card
+    /// pre-filled with the current endpoint (Enter accepts it; edit it to move
+    /// to another Oxen server or any OpenAI-compatible provider) then a masked
+    /// key box; `/auth <key>`, `/auth host <host-or-url>`, and
+    /// `/auth <host-or-url> <key>` set them directly.
     Auth(Option<String>),
     /// Show or switch context compression: `/compression` opens a picker;
     /// `/compression off|audit|on` switches directly.
@@ -61,6 +64,175 @@ pub enum Command {
     Prompt(String),
 }
 
+/// How a command's *argument* completes in the composer.
+pub(crate) enum ArgCompleter {
+    /// No argument completion.
+    None,
+    /// A fixed set of `(choice, description)` values, offered as a picker.
+    Static(&'static [(&'static str, &'static str)]),
+    /// The model catalog (cloud + installed local), offered as a picker.
+    Models,
+}
+
+/// One slash command: its canonical name, aliases, the description shown by
+/// completion, how to build its [`Command`], and how its argument completes.
+///
+/// This registry is the single source of truth — [`parse_command`] and the
+/// composer's completion list both derive from it, so a new command is one row
+/// here (plus its `Command` variant and `handle_line` dispatch arm).
+pub(crate) struct SlashSpec {
+    pub(crate) name: &'static str,
+    pub(crate) aliases: &'static [&'static str],
+    pub(crate) description: &'static str,
+    pub(crate) build: fn(Option<String>) -> Command,
+    pub(crate) completer: ArgCompleter,
+}
+
+impl SlashSpec {
+    pub(crate) fn matches(&self, cmd: &str) -> bool {
+        self.name == cmd || self.aliases.contains(&cmd)
+    }
+}
+
+/// Split whitespace-separated theme args (`/theme use Midnight`).
+fn theme_args(rest: Option<String>) -> Command {
+    Command::Theme(
+        rest.map(|r| r.split_whitespace().map(str::to_string).collect())
+            .unwrap_or_default(),
+    )
+}
+
+/// Every slash command, in the order the completion list shows them.
+pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
+    SlashSpec {
+        name: "/model",
+        aliases: &[],
+        description: "pick, switch, or add a model",
+        build: Command::Model,
+        completer: ArgCompleter::Models,
+    },
+    SlashSpec {
+        name: "/theme",
+        aliases: &["/themes"],
+        description: "change the theme",
+        build: theme_args,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/queue",
+        aliases: &[],
+        description: "manage the message queue",
+        build: Command::Queue,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/loop",
+        aliases: &["/loops"],
+        description: "run or list loops",
+        build: Command::Loop,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/code-review",
+        aliases: &["/review"],
+        description: "review your changes (find → verify → report)",
+        build: Command::CodeReview,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/export",
+        aliases: &[],
+        description: "export the transcript",
+        build: Command::Export,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/skills",
+        aliases: &["/skill"],
+        description: "list the skills on hand",
+        build: |_| Command::Skills,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/retry",
+        aliases: &["/continue"],
+        description: "re-drive a turn that died mid-stream",
+        build: |_| Command::Retry,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/location",
+        aliases: &[],
+        description: "set your location (banner + hero screen)",
+        build: Command::Location,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/departing",
+        aliases: &[],
+        description: "set your location (themed alias)",
+        build: Command::Departing,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/auth",
+        aliases: &["/login"],
+        description: "set your API key and provider host",
+        build: Command::Auth,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/compression",
+        aliases: &["/compress"],
+        description: "switch context compression (off/audit/on)",
+        build: Command::Compression,
+        completer: ArgCompleter::Static(&[
+            ("off", "send every tool result untouched"),
+            ("audit", "measure savings, change nothing"),
+            ("on", "compress stale tool output"),
+        ]),
+    },
+    SlashSpec {
+        name: "/permissions",
+        aliases: &["/permission", "/perms"],
+        description: "when the agent asks first (relaxed/cautious/bypass)",
+        build: Command::Permissions,
+        completer: ArgCompleter::Static(&[
+            ("relaxed", "only dangerous commands ask first"),
+            ("cautious", "only read-only commands run unprompted"),
+            ("bypass", "never ask (circuit breakers still refuse)"),
+        ]),
+    },
+    SlashSpec {
+        name: "/usage",
+        aliases: &[],
+        description: "show tokens and estimated spend by model",
+        build: |_| Command::Usage,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/preview",
+        aliases: &["/browser"],
+        description: "open the running app in your browser",
+        build: |_| Command::Preview,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/help",
+        aliases: &["/?"],
+        description: "show help",
+        build: |_| Command::Help,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/exit",
+        aliases: &["/quit", "/q"],
+        description: "quit",
+        build: |_| Command::Exit,
+        completer: ArgCompleter::None,
+    },
+];
+
 /// Parse a line of REPL input into a [`Command`].
 pub fn parse_command(line: &str) -> Command {
     let trimmed = line.trim();
@@ -78,30 +250,11 @@ pub fn parse_command(line: &str) -> Command {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    match cmd {
-        "/exit" | "/quit" | "/q" => Command::Exit,
-        "/help" | "/?" => Command::Help,
-        "/model" => Command::Model(rest),
-        "/export" => Command::Export(rest),
-        "/theme" | "/themes" => Command::Theme(
-            rest.map(|r| r.split_whitespace().map(str::to_string).collect())
-                .unwrap_or_default(),
-        ),
-        "/queue" => Command::Queue(rest),
-        "/loop" | "/loops" => Command::Loop(rest),
-        "/code-review" | "/review" => Command::CodeReview(rest),
-        "/departing" => Command::Departing(rest),
-        "/location" => Command::Location(rest),
-        "/skills" | "/skill" => Command::Skills,
-        "/auth" | "/login" => Command::Auth(rest),
-        "/compression" | "/compress" => Command::Compression(rest),
-        "/permissions" | "/permission" | "/perms" => Command::Permissions(rest),
-        "/usage" => Command::Usage,
-        "/preview" | "/browser" => Command::Preview,
-        "/retry" | "/continue" => Command::Retry,
+    match SLASH_COMMANDS.iter().find(|spec| spec.matches(cmd)) {
+        Some(spec) => (spec.build)(rest),
         // Unknown slash command: treat the whole line as a prompt so users can
         // still send text that happens to start with a slash.
-        _ => Command::Prompt(trimmed.to_string()),
+        None => Command::Prompt(trimmed.to_string()),
     }
 }
 
@@ -264,5 +417,28 @@ mod tests {
             parse_command("/frobnicate now"),
             Command::Prompt("/frobnicate now".into())
         );
+    }
+
+    #[test]
+    fn registry_rows_are_well_formed_and_unambiguous() {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        for spec in SLASH_COMMANDS {
+            // Every name/alias is slash-prefixed, unique, and actually parses
+            // to its own command (never falls through to Prompt).
+            for cmd in std::iter::once(&spec.name).chain(spec.aliases) {
+                assert!(cmd.starts_with('/'), "`{cmd}` must start with /");
+                assert!(seen.insert(*cmd), "`{cmd}` is claimed twice");
+                assert!(
+                    !matches!(parse_command(cmd), Command::Prompt(_)),
+                    "`{cmd}` must parse as a command"
+                );
+            }
+            assert!(
+                !spec.description.is_empty(),
+                "{} needs a description for the completion list",
+                spec.name
+            );
+        }
     }
 }

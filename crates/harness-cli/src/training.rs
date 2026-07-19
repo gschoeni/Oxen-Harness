@@ -43,9 +43,66 @@ fn worth_asking(agent: &Agent, current_status: &str) -> bool {
     current_status.is_empty() && agent.messages().iter().any(|m| m.role == "user")
 }
 
-/// Offer to label the finished session as training data. Runs after the death
-/// screen, in cooked mode; skips silently when the session is empty, already
-/// labeled, the terminal isn't interactive, or the user cancels/esc-es out.
+/// A snapshot of the training-data curation queue. Each kept session becomes
+/// one fine-tuning example when the dataset is exported.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TrainingStats {
+    kept: usize,
+    rejected: usize,
+    unreviewed: usize,
+}
+
+impl TrainingStats {
+    fn collect(store: &HistoryStore) -> Self {
+        let mut stats = Self::default();
+        if let Ok(sessions) = store.list_sessions() {
+            for session in sessions {
+                match session.review_status.as_str() {
+                    "kept" => stats.kept += 1,
+                    "rejected" => stats.rejected += 1,
+                    _ => stats.unreviewed += 1,
+                }
+            }
+        }
+        stats
+    }
+}
+
+/// Print an upbeat end-of-session data-labeling report. The totals are
+/// best-effort: a reporting failure must never make a clean CLI exit fail.
+fn print_report(ui: &Ui, outcome: &str, stats: TrainingStats) {
+    let feedback = match outcome {
+        "kept" => ui.green("🎉 New gold-star example saved!"),
+        "rejected" => ui.brown("🧹 Good call — the training herd stays picky."),
+        _ => ui.dim("🗺️ Marked for later — your trail journal is still waiting."),
+    };
+    println!("\n  {feedback}");
+    println!(
+        "  {} {}",
+        ui.accent("Training-data roundup:"),
+        ui.cream(&format!(
+            "{} ready to train • {} set aside • {} awaiting review",
+            stats.kept, stats.rejected, stats.unreviewed
+        )),
+    );
+    if outcome == "kept" {
+        println!(
+            "  {}",
+            ui.dim("Every good label makes the next export a little wiser. Nice work, trail boss!")
+        );
+    } else if outcome == "rejected" {
+        println!(
+            "  {}",
+            ui.dim("Honest no's are valuable labels too — thanks for keeping the dataset sharp.")
+        );
+    } else {
+        println!(
+            "  {}",
+            ui.dim("A quick label next time helps turn strong runs into better training data.")
+        );
+    }
+}
+
 pub(crate) fn prompt_session_review(store: &HistoryStore, session: &str, agent: &Agent, ui: &Ui) {
     let current = store.review_status(session).unwrap_or_default();
     if !worth_asking(agent, &current) {
@@ -71,21 +128,11 @@ pub(crate) fn prompt_session_review(store: &HistoryStore, session: &str, agent: 
     };
 
     let Some(status) = status_for(&picked) else {
-        println!(
-            "  {}",
-            ui.dim("left unreviewed — label it any time from the desktop app's Training data page")
-        );
+        print_report(ui, "later", TrainingStats::collect(store));
         return;
     };
     match store.set_review_status(session, status) {
-        Ok(()) => {
-            let line = if status == "kept" {
-                "kept — this run will feed the herd on the next training export"
-            } else {
-                "rejected — this run stays out of the training export"
-            };
-            println!("  {} {}", ui.green("✓"), ui.dim(line));
-        }
+        Ok(()) => print_report(ui, status, TrainingStats::collect(store)),
         Err(e) => println!("  {} {e}", ui.dim("couldn't save the label:")),
     }
 }
@@ -93,6 +140,35 @@ pub(crate) fn prompt_session_review(store: &HistoryStore, session: &str, agent: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stats_count_each_review_outcome() {
+        let store = HistoryStore::open_in_memory().unwrap();
+        let kept = store.create_session(&Default::default()).unwrap();
+        let rejected = store.create_session(&Default::default()).unwrap();
+        let later = store.create_session(&Default::default()).unwrap();
+        for session in [&kept, &rejected, &later] {
+            store
+                .append_raw_message(
+                    session,
+                    "user",
+                    Some("label this run"),
+                    r#"{"role":"user","content":"label this run"}"#,
+                )
+                .unwrap();
+        }
+        store.set_review_status(&kept, "kept").unwrap();
+        store.set_review_status(&rejected, "rejected").unwrap();
+
+        assert_eq!(
+            TrainingStats::collect(&store),
+            TrainingStats {
+                kept: 1,
+                rejected: 1,
+                unreviewed: 1,
+            }
+        );
+    }
 
     #[test]
     fn labels_map_to_review_statuses() {

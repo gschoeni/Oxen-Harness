@@ -149,6 +149,8 @@ export const sampleOxenHits: OxenModelHit[] = [
     pricing: { input_cost_per_token: 3e-6, output_cost_per_token: 1.5e-5 },
     inputs: ["text", "image"],
     outputs: ["text"],
+    context_length: 1_000_000,
+    max_output_tokens: 64_000,
   },
   {
     id: "muse-spark-1-1",
@@ -160,6 +162,8 @@ export const sampleOxenHits: OxenModelHit[] = [
     pricing: { input_cost_per_token: 2.5e-7, output_cost_per_token: 1e-6 },
     inputs: ["text"],
     outputs: ["text"],
+    context_length: null,
+    max_output_tokens: null,
   },
   {
     id: "pix-gen",
@@ -171,6 +175,8 @@ export const sampleOxenHits: OxenModelHit[] = [
     pricing: null,
     inputs: ["text"],
     outputs: ["image"],
+    context_length: null,
+    max_output_tokens: null,
   },
 ];
 
@@ -245,6 +251,10 @@ export const deleteSkill = vi.fn(async () => {});
 export const setSkillEnabled = vi.fn(async () => {});
 export const exportFinetuning = vi.fn(async () => 0);
 export const pickExportPath = vi.fn(async () => null as string | null);
+export const importSourcesScan = vi.fn(
+  async () => [] as { source: string; available: number; imported: number }[],
+);
+export const importExternal = vi.fn(async () => ({ imported: 0, updated: 0, skipped: 0 }));
 export const attachmentDataUri = vi.fn(async () => "data:image/png;base64,AAAA");
 export const newSession = vi.fn(async () => ({ ...sampleSession, session_id: "new-session-id" }));
 export const resumeSession = vi.fn(async () => emptyView);
@@ -273,6 +283,7 @@ export const startProject = vi.fn(async (input: StartProjectInput): Promise<Proj
 export const updateProject = vi.fn(async (path: string, name: string, description: string, instructions: string): Promise<Project> => ({
   path, name, description, instructions, context: [], session_count: 0, active: true, last_used_at: null,
 }));
+export const deleteProject = vi.fn(async () => {});
 export const addProjectContext = vi.fn(async (path: string, contextPaths: string[]): Promise<Project> => ({
   path, name: "Demo", description: "", instructions: "", session_count: 0, active: true, last_used_at: null,
   context: contextPaths.map((source) => ({ path: source, name: source.split("/").pop() ?? source, kind: "text" as const, size_bytes: 42 })),
@@ -467,6 +478,7 @@ export function resetIpc() {
   updateProject.mockReset().mockImplementation(async (path: string, name: string, description: string, instructions: string): Promise<Project> => ({
     path, name, description, instructions, context: [], session_count: 0, active: true, last_used_at: null,
   }));
+  deleteProject.mockReset().mockResolvedValue(undefined);
   addProjectContext.mockReset().mockImplementation(async (path: string, contextPaths: string[]): Promise<Project> => ({
     path, name: "Demo", description: "", instructions: "", session_count: 0, active: true, last_used_at: null,
     context: contextPaths.map((source) => ({ path: source, name: source.split("/").pop() ?? source, kind: "text" as const, size_bytes: 42 })),

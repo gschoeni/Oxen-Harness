@@ -8,13 +8,19 @@
 // can e.g. "keep every chat from model X with 6+ messages" in two clicks. Quick
 // per-row toggles and a click-to-review drawer handle the fine-grained pass.
 
-import { useEffect, useMemo, useState } from "react";
-import { Ban, Check, Download, FileText, RotateCcw, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Ban, Check, Download, FileText, Import, RotateCcw, Search } from "lucide-react";
 import { Button } from "../../components/ui";
-import { exportFinetuning, pickExportPath } from "../../lib/ipc";
+import { exportFinetuning, importExternal, importSourcesScan, pickExportPath } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
-import type { ReviewStatus, SessionSummary } from "../../lib/types";
+import type { ImportSourceStatus, ReviewStatus, SessionSummary } from "../../lib/types";
 import "./logs.css";
+
+/** Display names for the importable sources (`SessionSummary.source` values). */
+const SOURCE_LABELS: Record<string, string> = {
+  "claude-code": "Claude Code",
+  cursor: "Cursor",
+};
 
 type Filter = "all" | "unreviewed" | "kept" | "rejected";
 
@@ -56,14 +62,48 @@ export function LogsPage() {
   const [search, setSearch] = useState("");
   const [model, setModel] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [source, setSource] = useState("");
   const [minMessages, setMinMessages] = useState(0);
   const [includeTools, setIncludeTools] = useState(true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  // What Claude Code / Cursor have on this machine, for the import panel.
+  const [importSources, setImportSources] = useState<ImportSourceStatus[]>([]);
+  const [importing, setImporting] = useState<string | null>(null);
+
+  const rescanSources = useCallback(() => {
+    importSourcesScan()
+      .then(setImportSources)
+      .catch(() => setImportSources([]));
+  }, []);
+
   useEffect(() => {
     refreshHistory();
-  }, [refreshHistory]);
+    rescanSources();
+  }, [refreshHistory, rescanSources]);
+
+  async function doImport(src: string) {
+    setNotice(null);
+    setImporting(src);
+    try {
+      const report = await importExternal(src);
+      const label = SOURCE_LABELS[src] ?? src;
+      setNotice({
+        ok: true,
+        msg:
+          report.imported === 0 && report.updated === 0
+            ? `${label}: nothing new — ${report.skipped} conversation${report.skipped === 1 ? "" : "s"} already imported.`
+            : `${label}: imported ${report.imported} new, refreshed ${report.updated}, ${report.skipped} unchanged.`,
+      });
+      await refreshHistory();
+      rescanSources();
+    } catch (e) {
+      setNotice({ ok: false, msg: String(e) });
+    } finally {
+      setImporting(null);
+    }
+  }
 
   // Distinct models / workspaces present, for the dropdowns.
   const models = useMemo(
@@ -94,17 +134,21 @@ export function LogsPage() {
         matchesStatus(status, s.review_status) &&
         (model === "" || s.model === model) &&
         (workspace === "" || s.workspace === workspace) &&
+        (source === "" || (source === "native" ? s.source === "" : s.source === source)) &&
         s.message_count >= minMessages &&
         (q === "" || (s.title ?? "").toLowerCase().includes(q)),
     );
-  }, [sessions, status, model, workspace, minMessages, search]);
+  }, [sessions, status, model, workspace, source, minMessages, search]);
 
-  const activeFilters = model !== "" || workspace !== "" || minMessages > 0 || search.trim() !== "";
+  const activeFilters =
+    model !== "" || workspace !== "" || source !== "" || minMessages > 0 || search.trim() !== "";
+  const hasImported = useMemo(() => sessions.some((s) => s.source !== ""), [sessions]);
 
   function resetFilters() {
     setSearch("");
     setModel("");
     setWorkspace("");
+    setSource("");
     setMinMessages(0);
     setStatus("all");
   }
@@ -182,6 +226,36 @@ export function LogsPage() {
         {notice && <span className={`save-status ${notice.ok ? "ok" : "err"}`}>{notice.msg}</span>}
       </section>
 
+      {importSources.some((s) => s.available > 0 || s.imported > 0) && (
+        <section className="settings-section log-import">
+          <div className="settings-label">Import from other tools</div>
+          <p className="hint">
+            Pull conversations from coding tools on this machine into the dataset builder. Rescans
+            only add what&apos;s new; imported chats are review-only and keep their tool calls and
+            thinking.
+          </p>
+          {importSources
+            .filter((s) => s.available > 0 || s.imported > 0)
+            .map((s) => (
+              <div key={s.source} className="log-import-row">
+                <span className="log-import-name">{SOURCE_LABELS[s.source] ?? s.source}</span>
+                <span className="log-import-meta">
+                  {s.available} conversation{s.available === 1 ? "" : "s"} found
+                  {s.imported > 0 && <> · {s.imported} imported</>}
+                </span>
+                <Button
+                  size="sm"
+                  onClick={() => doImport(s.source)}
+                  disabled={importing !== null || s.available === 0}
+                >
+                  <Import size={15} />
+                  {importing === s.source ? "Importing…" : s.imported > 0 ? "Rescan" : "Import all"}
+                </Button>
+              </div>
+            ))}
+        </section>
+      )}
+
       <section className="settings-section">
         {/* Filters */}
         <div className="log-filterbar">
@@ -202,6 +276,17 @@ export function LogsPage() {
               </option>
             ))}
           </select>
+          {hasImported && (
+            <select className="log-select" value={source} onChange={(e) => setSource(e.target.value)}>
+              <option value="">All sources</option>
+              <option value="native">This app</option>
+              {Object.entries(SOURCE_LABELS).map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          )}
           {workspaces.length > 1 && (
             <select
               className="log-select"
@@ -306,6 +391,9 @@ function TraceRow({
         <span className="log-trace-text">
           <span className="log-trace-title">{trace.title ?? "(untitled chat)"}</span>
           <span className="log-trace-meta">
+            {trace.source && (
+              <span className="log-source-badge">{SOURCE_LABELS[trace.source] ?? trace.source}</span>
+            )}
             {trace.model} · {trace.message_count} msg
           </span>
         </span>

@@ -21,6 +21,11 @@ pub(crate) struct ProjectsConfig {
     pub(crate) active: Option<String>,
     #[serde(default)]
     pub(crate) default_location: Option<String>,
+    /// Workspaces the user explicitly removed. Their chat history stays in the
+    /// store, but they are kept out of the project list until re-added — without
+    /// this, the history-derived union would resurrect them on the next load.
+    #[serde(default)]
+    pub(crate) removed: Vec<String>,
 }
 
 /// A project shown in the UI: its directory, display name, chat count, whether
@@ -40,7 +45,7 @@ pub(crate) struct ProjectView {
 }
 
 /// Schema version for `projects.json` (bump when the shape changes).
-const PROJECTS_SCHEMA_VERSION: u32 = 2;
+const PROJECTS_SCHEMA_VERSION: u32 = 3;
 
 fn projects_config_path() -> Result<PathBuf, String> {
     harness_config::paths::projects_file().map_err(|e| e.to_string())
@@ -61,13 +66,31 @@ fn write_projects_config(cfg: &ProjectsConfig) -> Result<(), String> {
     Ok(())
 }
 
-/// Record `path` as a known project and make it active (persisted).
+/// Record `path` as a known project and make it active (persisted). Re-adding a
+/// previously removed path un-hides it.
 pub(crate) fn remember_project(path: &str) -> Result<(), String> {
     let mut cfg = read_projects_config();
     if !cfg.paths.iter().any(|p| p == path) {
         cfg.paths.push(path.to_string());
     }
+    cfg.removed.retain(|p| p != path);
     cfg.active = Some(path.to_string());
+    write_projects_config(&cfg)
+}
+
+/// Forget `path` as a known project (persisted). Chat history is untouched —
+/// the directory stays on disk, it just no longer surfaces as a project. The
+/// path is recorded in `removed` so the history-derived union does not bring it
+/// back on the next load.
+pub(crate) fn forget_project(path: &str) -> Result<(), String> {
+    let mut cfg = read_projects_config();
+    cfg.paths.retain(|p| p != path);
+    if !cfg.removed.iter().any(|p| p == path) {
+        cfg.removed.push(path.to_string());
+    }
+    if cfg.active.as_deref() == Some(path) {
+        cfg.active = None;
+    }
     write_projects_config(&cfg)
 }
 
@@ -126,12 +149,15 @@ fn project_view(
 pub(crate) async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectView>, String> {
     let active = state.active_root().await.display().to_string();
 
-    // Chats per workspace, so each directory with history shows up as a project.
+    // Chats per workspace, so each directory with history shows up as a
+    // project. Native chats only: imported transcripts (Claude Code / Cursor)
+    // carry their original cwd as workspace and would mint phantom projects —
+    // the sidebar and chat lists hide them too (`source === ""`).
     let mut counts: HashMap<String, usize> = HashMap::new();
     let mut last_used: HashMap<String, i64> = HashMap::new();
     if let Ok(store) = open_history_store() {
         if let Ok(sessions) = store.list_sessions() {
-            for s in sessions {
+            for s in sessions.into_iter().filter(|s| s.source.is_empty()) {
                 *counts.entry(s.workspace).or_default() += 1;
             }
         }
@@ -140,15 +166,8 @@ pub(crate) async fn list_projects(state: State<'_, AppState>) -> Result<Vec<Proj
         }
     }
 
-    let mut paths = read_projects_config().paths;
-    for k in counts.keys() {
-        if !paths.contains(k) {
-            paths.push(k.clone());
-        }
-    }
-    if !paths.contains(&active) {
-        paths.push(active.clone());
-    }
+    let cfg = read_projects_config();
+    let paths = union_project_paths(&cfg, &active, counts.keys());
 
     let mut projects: Vec<ProjectView> = paths
         .into_iter()
@@ -218,7 +237,10 @@ pub(crate) async fn start_project(
             ));
         }
         std::fs::create_dir(&root).map_err(|error| {
-            format!("could not create project folder {}: {error}", root.display())
+            format!(
+                "could not create project folder {}: {error}",
+                root.display()
+            )
         })?;
         root
     } else {
@@ -278,6 +300,21 @@ pub(crate) async fn update_project(
     Ok(project_view(path, 0, false, None))
 }
 
+/// Remove a project from the known set without touching its files on disk.
+/// Chat history in the store is left intact; the directory simply stops being
+/// listed as a project. If it was active, the active project is cleared.
+#[tauri::command]
+pub(crate) async fn delete_project(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<(), String> {
+    forget_project(&path)?;
+    if state.active_root().await == PathBuf::from(&path) {
+        *state.active_project.lock().await = PathBuf::new();
+    }
+    Ok(())
+}
+
 /// Copy files into the project's durable context directory and return the
 /// refreshed project metadata.
 #[tauri::command]
@@ -286,7 +323,10 @@ pub(crate) async fn add_project_context(
     context_paths: Vec<String>,
 ) -> Result<ProjectView, String> {
     let root = PathBuf::from(&path);
-    let sources = context_paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    let sources = context_paths
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
     project::add_context(&root, &sources).map_err(|error| error.to_string())?;
     Ok(project_view(path, 0, false, None))
 }
@@ -300,6 +340,27 @@ pub(crate) async fn remove_project_context(
     let root = PathBuf::from(&path);
     project::remove_context(&root, &context_path).map_err(|error| error.to_string())?;
     Ok(project_view(path, 0, false, None))
+}
+
+/// The project list: persisted paths unioned with directories that have chat
+/// history and the active one — minus any path the user explicitly removed.
+fn union_project_paths<'a>(
+    cfg: &ProjectsConfig,
+    active: &str,
+    history: impl Iterator<Item = &'a String>,
+) -> Vec<String> {
+    let mut paths = cfg.paths.clone();
+    let keep = |p: &str| !cfg.removed.iter().any(|r| r == p);
+    for k in history {
+        if !paths.contains(k) && keep(k) {
+            paths.push(k.clone());
+        }
+    }
+    let active = active.to_string();
+    if !paths.contains(&active) && keep(&active) {
+        paths.push(active);
+    }
+    paths
 }
 
 fn valid_folder_name(name: &str) -> bool {
@@ -320,6 +381,36 @@ pub(crate) async fn set_active_project(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn history_workspaces_union_in_unless_removed() {
+        let cfg = ProjectsConfig {
+            paths: strings(&["/a"]),
+            removed: strings(&["/b"]),
+            ..Default::default()
+        };
+        let history = strings(&["/b", "/c"]);
+        // /b has history but was removed → hidden; /c has history → surfaces.
+        let paths = union_project_paths(&cfg, "/active", history.iter());
+        assert_eq!(paths, strings(&["/a", "/c", "/active"]));
+    }
+
+    #[test]
+    fn a_removed_active_project_is_not_resurrected() {
+        let cfg = ProjectsConfig {
+            paths: strings(&[]),
+            active: None,
+            removed: strings(&["/gone"]),
+            ..Default::default()
+        };
+        let history = strings(&["/gone"]);
+        let paths = union_project_paths(&cfg, "/gone", history.iter());
+        assert!(paths.is_empty());
+    }
 
     #[test]
     fn new_project_names_are_single_safe_path_components() {

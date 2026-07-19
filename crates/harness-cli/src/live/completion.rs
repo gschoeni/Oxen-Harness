@@ -8,10 +8,10 @@
 //!
 //! [`Live::accept_completion_on_submit`]: Live#method.accept_completion_on_submit
 
-use crate::repl::{parse_command, Command};
+use crate::repl::{parse_command, ArgCompleter, Command, SLASH_COMMANDS};
 
 use super::layout::Focus;
-use super::{Live, SLASH_COMMANDS};
+use super::Live;
 
 /// One slash-command or argument completion row. `replacement` is the whole line
 /// inserted by Tab; `label` is the compact selectable text; `detail` explains why
@@ -37,6 +37,57 @@ impl CompletionItem {
     }
 }
 
+/// The composer's completion state — `Some` only while there is something to
+/// suggest, so the correlated flags it bundles can never drift apart (they
+/// used to be four separate fields on [`Live`], reset by hand in three
+/// places).
+pub(super) struct CompletionState {
+    /// Candidate full-line replacements (never empty — empty means `None`).
+    items: Vec<CompletionItem>,
+    /// Whether the candidates form an argument *picker* (highlighted row, ↑/↓
+    /// navigation, Enter runs the selection) rather than plain command-word
+    /// completion.
+    picker: bool,
+    /// The highlighted row: pre-highlighted at 0 for pickers, otherwise set by
+    /// the first Tab / ↑ / ↓.
+    index: Option<usize>,
+    /// Whether the composer text was set by the last Tab (menu-complete), so
+    /// the next Tab advances the cycle. Cleared by edits and arrow selection.
+    applied: bool,
+    /// Whether the user explicitly walked the list (↑/↓/Tab) since the last
+    /// edit. A navigated row is accepted by Enter unconditionally; an
+    /// auto-highlighted one only under the rules in
+    /// [`Live::accept_completion_on_submit`].
+    navigated: bool,
+}
+
+impl CompletionState {
+    fn new(items: Vec<CompletionItem>, picker: bool) -> Self {
+        Self {
+            items,
+            picker,
+            index: picker.then_some(0),
+            applied: false,
+            navigated: false,
+        }
+    }
+
+    /// The rows currently visible: a centered window (shared with the card
+    /// picker's math) capped at 8 picker / 4 command-word rows.
+    fn window(&self) -> std::ops::Range<usize> {
+        let total = self.items.len();
+        let max = if self.picker { 8 } else { 4 };
+        crate::picker::centered_window(self.highlight(), total, max)
+    }
+
+    /// The highlighted row (0 until navigation touches it), clamped in-range.
+    fn highlight(&self) -> usize {
+        self.index
+            .unwrap_or(0)
+            .min(self.items.len().saturating_sub(1))
+    }
+}
+
 struct FittedText {
     text: String,
     width: usize,
@@ -50,19 +101,9 @@ impl FittedText {
 }
 
 fn fit_text(s: &str, max: usize) -> FittedText {
-    let count = s.chars().count();
-    if count <= max {
-        FittedText {
-            text: s.to_string(),
-            width: count,
-        }
-    } else {
-        let kept: String = s.chars().take(max.saturating_sub(1)).collect();
-        FittedText {
-            text: format!("{kept}…"),
-            width: max,
-        }
-    }
+    let text = crate::width::fit(s, max);
+    let width = crate::width::str_width(&text);
+    FittedText { text, width }
 }
 
 impl Live {
@@ -74,18 +115,21 @@ impl Live {
         self.spinner.is_none()
             && matches!(self.focus, Focus::Composer)
             && self.edit.is_none()
-            && !self.completion.is_empty()
+            && self.completion.is_some()
     }
 
     /// Completion picker shown above the box. Model names are long and similar,
     /// so render a small vertical list with provider/details instead of squeezing
     /// unlabeled chips into one hard-to-scan line.
     pub(super) fn completion_hint(&self, box_w: usize) -> Vec<String> {
-        let visible = self.visible_completion_rows();
-        let total = self.completion.len();
-        let current = self.comp_index.unwrap_or(0).min(total.saturating_sub(1));
+        let Some(st) = self.completion.as_ref() else {
+            return Vec::new();
+        };
+        let visible = st.window();
+        let total = st.items.len();
+        let current = st.highlight();
         let mut lines = Vec::new();
-        let (title, hint) = if self.comp_picker {
+        let (title, hint) = if st.picker {
             let text = self.composer.text();
             let cmd = text
                 .split_whitespace()
@@ -114,7 +158,7 @@ impl Live {
             ));
         }
         for i in visible.start..visible.end {
-            let item = &self.completion[i];
+            let item = &st.items[i];
             let selected = i == current;
             let pointer = if selected {
                 self.ui.accent("❯")
@@ -126,8 +170,15 @@ impl Live {
             let detail = fit_text(&item.detail, detail_budget);
             if selected {
                 let plain = format!("❯ {} — {}", item.label, item.detail);
-                let plain = fit_text(&plain, box_w.saturating_sub(2)).text;
-                lines.push(format!("  \x1b[7m{plain:<width$}\x1b[0m", width = box_w));
+                let fitted = fit_text(&plain, box_w.saturating_sub(2));
+                // Pad by cells, not chars, so the reverse-video band spans the
+                // same columns whatever glyphs the model name carries.
+                let pad = box_w.saturating_sub(fitted.width);
+                lines.push(format!(
+                    "  \x1b[7m{}{}\x1b[0m",
+                    fitted.text,
+                    " ".repeat(pad)
+                ));
             } else {
                 lines.push(format!(
                     "  {} {} {}",
@@ -148,16 +199,6 @@ impl Live {
         lines
     }
 
-    fn visible_completion_rows(&self) -> std::ops::Range<usize> {
-        let total = self.completion.len();
-        let max = (if self.comp_picker { 8 } else { 4 }).min(total);
-        let selected = self.comp_index.unwrap_or(0).min(total.saturating_sub(1));
-        let start = selected
-            .saturating_sub(max / 2)
-            .min(total.saturating_sub(max));
-        start..start + max
-    }
-
     /// Candidate full-line replacements for the current composer text, plus
     /// whether they form an argument **picker** (highlighted row, ↑/↓
     /// navigation, Enter runs the selection) as opposed to plain command-word
@@ -169,20 +210,26 @@ impl Live {
         }
         let mut parts = text.splitn(2, char::is_whitespace);
         let cmd = parts.next().unwrap_or("");
+        // The argument completer comes from the command registry, so a new
+        // command's picker is one `ArgCompleter` entry there — not an arm here.
+        let completer = SLASH_COMMANDS
+            .iter()
+            .find(|spec| spec.matches(cmd))
+            .map(|spec| &spec.completer);
         match parts.next() {
             // Still typing the command word — match against the command list.
             None => (
                 SLASH_COMMANDS
                     .iter()
-                    .filter(|(c, _)| c.starts_with(cmd))
-                    .map(|(c, desc)| CompletionItem::new(*c, *c, *desc))
+                    .filter(|spec| spec.name.starts_with(cmd))
+                    .map(|spec| CompletionItem::new(spec.name, spec.name, spec.description))
                     .collect(),
                 false,
             ),
             // `/model <partial>` — complete model names (cloud + local). Match on
             // both the API id and the friendly display name so typing "sonnet" or
             // "qwen" narrows to what a human remembers.
-            Some(arg) if cmd == "/model" => {
+            Some(arg) if matches!(completer, Some(ArgCompleter::Models)) => {
                 let typed = arg.trim();
                 // Model ids never contain whitespace: a multi-word argument (or
                 // a multi-line draft) isn't completable — it submits as typed.
@@ -245,35 +292,21 @@ impl Live {
                 }
                 (items, true)
             }
-            // `/compression <partial>` — pick one of the three modes.
-            Some(arg) if cmd == "/compression" || cmd == "/compress" => {
+            // A fixed-choice argument (`/compression <partial>`, `/permissions
+            // <partial>`) — pick one of the registry's declared modes. The
+            // replacement keeps the alias as typed (`/compress audit`).
+            Some(arg) => {
+                let Some(ArgCompleter::Static(choices)) = completer else {
+                    return (Vec::new(), false);
+                };
                 let needle = arg.trim().to_lowercase();
-                let items = [
-                    ("off", "send every tool result untouched"),
-                    ("audit", "measure savings, change nothing"),
-                    ("on", "compress stale tool output"),
-                ]
-                .iter()
-                .filter(|(m, _)| m.starts_with(&needle))
-                .map(|(m, desc)| CompletionItem::new(format!("{cmd} {m}"), *m, *desc))
-                .collect();
+                let items = choices
+                    .iter()
+                    .filter(|(m, _)| m.starts_with(&needle))
+                    .map(|(m, desc)| CompletionItem::new(format!("{cmd} {m}"), *m, *desc))
+                    .collect();
                 (items, true)
             }
-            // `/permissions <partial>` — pick one of the three modes.
-            Some(arg) if cmd == "/permissions" || cmd == "/permission" || cmd == "/perms" => {
-                let needle = arg.trim().to_lowercase();
-                let items = [
-                    ("relaxed", "only dangerous commands ask first"),
-                    ("cautious", "only read-only commands run unprompted"),
-                    ("bypass", "never ask (circuit breakers still refuse)"),
-                ]
-                .iter()
-                .filter(|(m, _)| m.starts_with(&needle))
-                .map(|(m, desc)| CompletionItem::new(format!("{cmd} {m}"), *m, *desc))
-                .collect();
-                (items, true)
-            }
-            Some(_) => (Vec::new(), false),
         }
     }
 
@@ -331,15 +364,16 @@ impl Live {
         let has_arg = text
             .split_once(char::is_whitespace)
             .is_some_and(|(_, arg)| !arg.trim().is_empty());
-        let replacement = if self.comp_navigated {
-            self.comp_index.and_then(|i| self.completion.get(i))
-        } else if self.comp_picker && has_arg {
-            self.comp_index.and_then(|i| self.completion.get(i))
-        } else if !self.comp_picker
-            && self.completion.len() == 1
+        let Some(st) = self.completion.as_ref() else {
+            return;
+        };
+        let replacement = if st.navigated || (st.picker && has_arg) {
+            st.index.and_then(|i| st.items.get(i))
+        } else if !st.picker
+            && st.items.len() == 1
             && matches!(parse_command(&text), Command::Prompt(_))
         {
-            self.completion.first()
+            st.items.first()
         } else {
             None
         };
@@ -349,59 +383,82 @@ impl Live {
         }
     }
 
-    /// Recompute the completion hint after a compose-buffer change, and drop any
-    /// in-progress Tab cycle or ↑/↓ selection (the candidates may have changed).
+    /// Recompute the completion hint after a compose-buffer change, dropping
+    /// any in-progress Tab cycle or ↑/↓ selection (the candidates may have
+    /// changed) — a fresh [`CompletionState`], or `None` when there is nothing
+    /// to suggest.
     pub(super) fn refresh_completion(&mut self) {
         let (items, picker) = self.compute_candidates();
-        self.completion = items;
-        self.comp_picker = picker && !self.completion.is_empty();
-        self.comp_index = self.comp_picker.then_some(0);
-        self.comp_applied = false;
-        self.comp_navigated = false;
+        self.completion = (!items.is_empty()).then(|| CompletionState::new(items, picker));
     }
 
     /// Move the highlighted completion row without changing the typed prefix.
     /// Only active for argument pickers; a plain Up/Down with no visible picker
     /// keeps its normal history/queue behavior.
     pub(super) fn move_completion(&mut self, delta: isize) -> bool {
-        if !self.comp_picker {
+        let Some(st) = self.completion.as_mut() else {
+            return false;
+        };
+        if !st.picker {
             return false;
         }
-        let len = self.completion.len() as isize;
-        let current = self.comp_index.unwrap_or(0) as isize;
-        let next = (current + delta).rem_euclid(len) as usize;
-        self.comp_index = Some(next);
-        self.comp_applied = false;
-        self.comp_navigated = true;
+        st.index = Some(crate::picker::wrap_step(
+            st.index.unwrap_or(0),
+            delta,
+            st.items.len(),
+        ));
+        st.applied = false;
+        st.navigated = true;
         true
     }
 
     /// Handle Tab: menu-complete the composer to the highlighted matching
     /// candidate, cycling on repeated presses. Returns whether anything changed.
     pub(super) fn complete(&mut self) -> bool {
-        if self.completion.is_empty() {
-            let (items, picker) = self.compute_candidates();
-            self.completion = items;
-            self.comp_picker = picker && !self.completion.is_empty();
+        if self.completion.is_none() {
+            self.refresh_completion();
         }
-        if self.completion.is_empty() {
+        let current_text = self.composer.text();
+        let Some(st) = self.completion.as_mut() else {
             return false;
-        }
-        let next = match self.comp_index {
+        };
+        let next = match st.index {
             // Still on the last Tab's pick (no edits or arrowing since) →
             // advance to cycle.
-            Some(i)
-                if self.comp_applied && self.composer.text() == self.completion[i].replacement =>
-            {
-                (i + 1) % self.completion.len()
+            Some(i) if st.applied && current_text == st.items[i].replacement => {
+                (i + 1) % st.items.len()
             }
-            _ => self.comp_index.unwrap_or(0).min(self.completion.len() - 1),
+            _ => st.highlight(),
         };
-        self.composer.set_text(&self.completion[next].replacement);
-        self.comp_index = Some(next);
-        self.comp_applied = true;
-        self.comp_navigated = true;
+        let replacement = st.items[next].replacement.clone();
+        st.index = Some(next);
+        st.applied = true;
+        st.navigated = true;
+        self.composer.set_text(&replacement);
         true
+    }
+}
+
+/// State accessors for tests (production code goes through the methods above).
+#[cfg(test)]
+impl Live {
+    pub(super) fn completion_items(&self) -> &[CompletionItem] {
+        self.completion
+            .as_ref()
+            .map(|st| st.items.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub(super) fn comp_index(&self) -> Option<usize> {
+        self.completion.as_ref().and_then(|st| st.index)
+    }
+
+    pub(super) fn comp_picker(&self) -> bool {
+        self.completion.as_ref().is_some_and(|st| st.picker)
+    }
+
+    pub(super) fn comp_navigated(&self) -> bool {
+        self.completion.as_ref().is_some_and(|st| st.navigated)
     }
 }
 
@@ -425,12 +482,12 @@ mod tests {
         let mut l = live(80, 24);
         l.handle_key(key(KeyCode::Char('/')), 0);
         // Every slash command is suggested right after `/`.
-        assert!(l.completion.iter().any(|c| c.label == "/model"));
-        assert!(l.completion.iter().any(|c| c.label == "/theme"));
+        assert!(l.completion_items().iter().any(|c| c.label == "/model"));
+        assert!(l.completion_items().iter().any(|c| c.label == "/theme"));
         // Narrowing filters the list.
         l.handle_key(key(KeyCode::Char('m')), 0);
         assert_eq!(
-            l.completion
+            l.completion_items()
                 .iter()
                 .map(|c| c.label.as_str())
                 .collect::<Vec<_>>(),
@@ -459,8 +516,8 @@ mod tests {
         assert_eq!(l.composer.text(), "/help");
         // A normal edit clears the in-progress cycle selection.
         l.handle_key(key(KeyCode::Char('x')), 0);
-        assert_eq!(l.comp_index, None);
-        assert!(!l.comp_navigated);
+        assert_eq!(l.comp_index(), None);
+        assert!(!l.comp_navigated());
     }
 
     #[test]
@@ -481,14 +538,17 @@ mod tests {
             ),
         ]);
         type_line(&mut l, "/model sonnet");
-        assert!(l.completion.iter().any(|c| c.label == "claude-sonnet-4-6"));
-        assert_eq!(l.comp_index, Some(0));
+        assert!(l
+            .completion_items()
+            .iter()
+            .any(|c| c.label == "claude-sonnet-4-6"));
+        assert_eq!(l.comp_index(), Some(0));
         // Down walks the rows and wraps past the trailing typed-id row back to
         // the first match.
-        for _ in 0..l.completion.len() {
+        for _ in 0..l.completion_items().len() {
             l.handle_key(key(KeyCode::Down), 0);
         }
-        assert_eq!(l.comp_index, Some(0));
+        assert_eq!(l.comp_index(), Some(0));
         l.handle_key(key(KeyCode::Tab), 0);
         assert!(l.composer.text().starts_with("/model "));
         assert!(l.composer.text().contains("claude-sonnet"));
@@ -514,7 +574,7 @@ mod tests {
         ]);
         type_line(&mut l, "/model model");
         let priced = l
-            .completion
+            .completion_items()
             .iter()
             .find(|c| c.label == "priced-picker-model")
             .expect("priced row listed");
@@ -524,7 +584,7 @@ mod tests {
             "Priced · cloud · $3/M in · $15/M out ← current"
         );
         let unpriced = l
-            .completion
+            .completion_items()
             .iter()
             .find(|c| c.label == "unpriced-model")
             .expect("unpriced row listed");
@@ -535,13 +595,13 @@ mod tests {
     fn model_completion_ends_with_an_add_row_that_clears_the_argument() {
         let mut l = live(80, 24);
         type_line(&mut l, "/model ");
-        let last = l.completion.last().unwrap();
+        let last = l.completion_items().last().unwrap();
         assert_eq!(last.label, "+ add a new model");
         assert_eq!(last.replacement, "/model ");
         // Arrow up from the top wraps to the add row; Tab picks it, leaving
         // `/model ` ready for a fresh id to be typed.
         l.handle_key(key(KeyCode::Up), 0);
-        assert_eq!(l.comp_index, Some(l.completion.len() - 1));
+        assert_eq!(l.comp_index(), Some(l.completion_items().len() - 1));
         l.handle_key(key(KeyCode::Tab), 0);
         assert_eq!(l.composer.text(), "/model ");
     }
@@ -551,9 +611,9 @@ mod tests {
         let mut l = live(80, 24);
         type_line(&mut l, "/model some-brand-new-model");
         // Nothing in the catalog matches, so the typed id itself is offered.
-        assert_eq!(l.completion.len(), 1);
-        assert_eq!(l.completion[0].label, "some-brand-new-model");
-        assert!(l.completion[0].detail.contains("new model id"));
+        assert_eq!(l.completion_items().len(), 1);
+        assert_eq!(l.completion_items()[0].label, "some-brand-new-model");
+        assert!(l.completion_items()[0].detail.contains("new model id"));
         l.handle_key(key(KeyCode::Tab), 0);
         assert_eq!(l.composer.text(), "/model some-brand-new-model");
     }
@@ -572,11 +632,11 @@ mod tests {
         // Fuzzy matches exist, and the literally-typed id is still offered as
         // an explicit last row — so a new id that happens to be a substring of
         // a catalog entry can always be run as typed.
-        let last = l.completion.last().unwrap();
+        let last = l.completion_items().last().unwrap();
         assert_eq!(last.label, "sonnet");
         assert!(last.detail.contains("new model id"));
         assert!(
-            l.completion.len() > 1,
+            l.completion_items().len() > 1,
             "fuzzy matches should also be listed"
         );
     }
@@ -587,8 +647,8 @@ mod tests {
         type_line(&mut l, "/model claude-sonnet-4-6");
         // The exact id holds the highlighted row even if longer ids also
         // contain it, so Enter runs precisely what was typed.
-        assert_eq!(l.completion[0].label, "claude-sonnet-4-6");
-        assert_eq!(l.comp_index, Some(0));
+        assert_eq!(l.completion_items()[0].label, "claude-sonnet-4-6");
+        assert_eq!(l.comp_index(), Some(0));
         assert_eq!(submit(&mut l), "/model claude-sonnet-4-6");
     }
 
@@ -598,7 +658,7 @@ mod tests {
         type_line(&mut l, "/model llama 3 8b");
         // Ids never contain whitespace — nothing to complete, and Enter must
         // submit the text exactly as typed (never swallow it into a picker row).
-        assert!(l.completion.is_empty());
+        assert!(l.completion_items().is_empty());
         assert_eq!(submit(&mut l), "/model llama 3 8b");
     }
 
@@ -671,7 +731,9 @@ mod tests {
         // The hint says "↑↓ choose · enter run" — walking to a row and hitting
         // Enter must run that row, not fall back to the interactive picker.
         l.handle_key(key(KeyCode::Down), 0);
-        let expected = l.completion[l.comp_index.unwrap()].replacement.clone();
+        let expected = l.completion_items()[l.comp_index().unwrap()]
+            .replacement
+            .clone();
         assert_eq!(submit(&mut l), expected);
     }
 
@@ -679,12 +741,12 @@ mod tests {
     fn compression_argument_gets_the_same_picker_navigation() {
         let mut l = live(80, 24);
         type_line(&mut l, "/compression ");
-        assert!(l.comp_picker, "argument completion should be a picker");
-        assert_eq!(l.comp_index, Some(0));
+        assert!(l.comp_picker(), "argument completion should be a picker");
+        assert_eq!(l.comp_index(), Some(0));
         // ↑/↓ move the highlight exactly like the model picker.
         l.handle_key(key(KeyCode::Down), 0);
-        assert_eq!(l.comp_index, Some(1));
-        let expected = l.completion[1].replacement.clone();
+        assert_eq!(l.comp_index(), Some(1));
+        let expected = l.completion_items()[1].replacement.clone();
         assert_eq!(submit(&mut l), expected);
     }
 }

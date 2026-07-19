@@ -12,9 +12,9 @@ import { resetAll } from "../../test/utils";
 import type { Project, SessionSummary } from "../../lib/types";
 
 const sessions: SessionSummary[] = [
-  { id: "s1", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "" },
-  { id: "s2", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "Second chat", message_count: 2, review_status: "" },
-  { id: "other", workspace: "/elsewhere", model: "m", created_at: 1_700_000_000, title: "Other project chat", message_count: 1, review_status: "" },
+  { id: "s1", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "", source: "" },
+  { id: "s2", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "Second chat", message_count: 2, review_status: "", source: "" },
+  { id: "other", workspace: "/elsewhere", model: "m", created_at: 1_700_000_000, title: "Other project chat", message_count: 1, review_status: "", source: "" },
 ];
 const projects: Project[] = [
   { path: "/w", name: "w", description: "", instructions: "", context: [], session_count: 2, active: true, last_used_at: null },
@@ -98,7 +98,7 @@ describe("Sidebar", () => {
   it("shows the model and date for each chat", () => {
     useStore.setState({
       sessions: [
-        { id: "s1", workspace: "/w", model: "anthropic/claude-sonnet-4-5-20250929", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "" },
+        { id: "s1", workspace: "/w", model: "anthropic/claude-sonnet-4-5-20250929", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "", source: "" },
       ],
     });
     render(<Sidebar />);

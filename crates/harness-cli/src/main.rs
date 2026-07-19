@@ -7,6 +7,7 @@
 //! in its [`commands`] module, and the live bottom-pinned composer in [`live`].
 
 mod almanac;
+mod ansi;
 mod approve;
 mod ask;
 mod attach;
@@ -15,12 +16,15 @@ mod canvas;
 mod commands;
 mod diff;
 mod endpoint;
+mod event_lines;
 mod fleet_sink;
 mod fleet_ui;
-mod images;
+mod highlight;
+mod interrupt;
 mod live;
 mod local;
 mod markdown;
+mod media;
 mod picker;
 mod plan;
 mod preview;
@@ -32,6 +36,7 @@ mod repl_loop;
 mod theme;
 mod training;
 mod turn;
+mod width;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -178,10 +183,16 @@ async fn main() -> Result<()> {
 
     let store = Arc::new(open_store()?);
 
-    // `--continue` is `--resume` pointed at the newest session on record.
+    // `--continue` is `--resume` pointed at the newest *native* session on
+    // record. Imported transcripts (Claude Code / Cursor) share the store but
+    // are review-only — they must never resume as a live agent.
     if args.continue_last {
-        match store.list_sessions()?.first() {
-            Some(latest) => args.resume = Some(latest.id.clone()),
+        match store
+            .list_sessions()?
+            .into_iter()
+            .find(|s| s.source.is_empty())
+        {
+            Some(latest) => args.resume = Some(latest.id),
             None => {
                 eprintln!(
                     "\n{}",
@@ -189,6 +200,21 @@ async fn main() -> Result<()> {
                 );
                 std::process::exit(1);
             }
+        }
+    } else if let Some(id) = &args.resume {
+        // An explicitly named imported session gets a clear refusal instead of
+        // silently replaying a foreign transcript with its workspace and model.
+        let imported = store
+            .list_sessions()?
+            .into_iter()
+            .find(|s| &s.id == id)
+            .is_some_and(|s| !s.source.is_empty());
+        if imported {
+            eprintln!(
+                "\n{}",
+                ui.red("That session was imported for training-data review and can't be resumed.")
+            );
+            std::process::exit(1);
         }
     }
 
@@ -305,7 +331,6 @@ async fn main() -> Result<()> {
         store: &store,
         session: &session,
         workspace_root: workspace.root(),
-        base_url: &base_url,
     };
 
     // `oxen-harness loop run ...`: run the loop once, then exit (no REPL).

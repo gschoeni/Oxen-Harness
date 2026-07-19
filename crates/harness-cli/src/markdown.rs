@@ -40,6 +40,10 @@ pub struct MarkdownStream<W: Write> {
     out: W,
     line: String,
     in_code: bool,
+    /// The active code block's syntax highlighter — `Some` only inside a fence
+    /// whose language we recognize (and color is on); lines fall back to the
+    /// theme's flat code color otherwise.
+    hl: Option<crate::highlight::Highlighter>,
     /// A line containing `|` held back until we see whether the next line is a
     /// table delimiter row (e.g. `|---|---|`). GFM tables are only confirmed by
     /// that delimiter, so we need one line of lookahead.
@@ -55,6 +59,7 @@ impl<W: Write> MarkdownStream<W> {
             out,
             line: String::new(),
             in_code: false,
+            hl: None,
             pending_row: None,
             table: None,
         }
@@ -87,6 +92,7 @@ impl<W: Write> MarkdownStream<W> {
         if self.in_code {
             let _ = writeln!(self.out, "{}", code_close_rule(&self.ui));
             self.in_code = false;
+            self.hl = None;
         }
         let _ = self.out.flush();
     }
@@ -101,11 +107,17 @@ impl<W: Write> MarkdownStream<W> {
             if self.in_code {
                 let _ = writeln!(self.out, "{}", code_close_rule(&self.ui));
                 self.in_code = false;
+                self.hl = None;
             } else {
                 let lang = after_fence.trim();
                 let label = if lang.is_empty() { "code" } else { lang };
                 let _ = writeln!(self.out, "{}", code_open_rule(&self.ui, label));
                 self.in_code = true;
+                self.hl = self
+                    .ui
+                    .colored()
+                    .then(|| crate::highlight::Highlighter::for_lang(lang))
+                    .flatten();
             }
             return;
         }
@@ -113,7 +125,14 @@ impl<W: Write> MarkdownStream<W> {
         if self.in_code {
             // Code is shown verbatim (no inline parsing) and flush-left, with no
             // gutter or indent, so a terminal selection pastes back cleanly.
-            let _ = writeln!(self.out, "{}", self.ui.code(line));
+            // Syntax-highlighted when the fence named a known language,
+            // flat code color otherwise.
+            let rendered = self
+                .hl
+                .as_mut()
+                .and_then(|h| h.line(line))
+                .unwrap_or_else(|| self.ui.code(line));
+            let _ = writeln!(self.out, "{rendered}");
             return;
         }
 
@@ -407,23 +426,9 @@ fn render_table(ui: &Ui, table: &Table) -> String {
 }
 
 /// Count visible columns in a string, skipping ANSI CSI escape sequences so
-/// styled cells pad to the correct width.
+/// styled cells pad to the correct width. Cell-based (CJK/emoji span two).
 fn display_width(s: &str) -> usize {
-    let mut width = 0;
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // Skip the escape sequence up to and including its final letter.
-            for n in chars.by_ref() {
-                if n.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            width += 1;
-        }
-    }
-    width
+    crate::width::display_width(s)
 }
 
 /// Render inline Markdown spans within a line.
@@ -607,6 +612,60 @@ mod tests {
         assert!(out.lines().any(|l| l == "fn main() {}"), "got:\n{out}");
         assert!(!out.contains('│'), "no side bars expected:\n{out}");
         assert!(!out.contains('┌') && !out.contains('└'));
+    }
+
+    #[test]
+    fn fenced_code_is_syntax_highlighted_when_color_is_on() {
+        let ui = Ui::with(true, std::sync::Arc::new(harness_theme::Theme::default()));
+        let mut buf: Vec<u8> = Vec::new();
+        let mut md = MarkdownStream::new(ui, &mut buf);
+        md.push("```rust\nfn main() {}\n```\n");
+        md.finish();
+        let out = String::from_utf8(buf).unwrap();
+        let code_line = out
+            .lines()
+            .find(|l| l.contains("fn"))
+            .expect("code line rendered");
+        // Token-level coloring: the line carries multiple truecolor spans, not
+        // the single flat ui.code() wrap.
+        assert!(
+            code_line.matches("\x1b[38;2;").count() >= 2,
+            "expected multiple token spans: {code_line:?}"
+        );
+        // The visible text survives untouched (flush-left, copy-clean).
+        let stripped: String = {
+            let mut s = String::new();
+            let mut chars = code_line.chars();
+            while let Some(c) = chars.next() {
+                if c == '\x1b' {
+                    for n in chars.by_ref() {
+                        if n.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                } else {
+                    s.push(c);
+                }
+            }
+            s
+        };
+        assert_eq!(stripped, "fn main() {}");
+    }
+
+    #[test]
+    fn unknown_fence_language_falls_back_to_flat_code_color() {
+        let ui = Ui::with(true, std::sync::Arc::new(harness_theme::Theme::default()));
+        let mut buf: Vec<u8> = Vec::new();
+        let mut md = MarkdownStream::new(ui, &mut buf);
+        md.push("```made-up-lang\nsome text here\n```\n");
+        md.finish();
+        let out = String::from_utf8(buf).unwrap();
+        let code_line = out
+            .lines()
+            .find(|l| l.contains("some text"))
+            .expect("code line rendered");
+        // Exactly one span: the theme's flat code color.
+        assert_eq!(code_line.matches("\x1b[38;2;").count(), 1);
     }
 
     #[test]

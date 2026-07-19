@@ -22,7 +22,10 @@ use crate::queue::MessageQueue;
 use crate::render::truncate;
 use crate::theme::Ui;
 
+use crate::interrupt::{arm_notice, interrupted_lines, CtrlC, ExitGuard};
+
 use super::composer::{Composer, History};
+use super::dispatch::{apply_action, Residual};
 use super::keys::KeyAction;
 use super::terminal::{spawn_input, LiveTerminal};
 use super::text::composer_prompt;
@@ -81,19 +84,9 @@ pub(crate) async fn run_prompt(
                 // back up, and fall through to the idle prompt.
                 let mut s = state.borrow_mut();
                 let ui = s.ui.clone();
-                s.print_line(&format!(
-                    "  {} {}",
-                    ui.red("⚠ interrupted"),
-                    ui.dim("— the oxen pull up short"),
-                ));
-                s.print_line(&format!(
-                    "  {}",
-                    ui.dim(if crate::turn::ends_mid_turn(agent.messages()) {
-                        "every step so far is saved · /retry continues this turn, or just give new directions"
-                    } else {
-                        "every step so far is saved · give new directions whenever you're ready"
-                    }),
-                ));
+                for line in interrupted_lines(&ui, crate::turn::ends_mid_turn(agent.messages())) {
+                    s.print_line(&line);
+                }
                 s.render();
                 break;
             }
@@ -157,8 +150,12 @@ pub(crate) async fn run_prompt(
     } else {
         state.borrow().composer_draft()
     };
+    // Erase the session's chrome (meters, divider, composer) on the way out —
+    // only conversation belongs in the scrollback. The next cooked-mode print
+    // continues right below the last output line.
+    let region_bottom = state.borrow().region_bottom;
     drop(state);
-    drop(term);
+    term.restore(region_bottom);
     drop(_live); // clear the live flag before any cooked-mode prompt below
 
     // Now that the alt-screen/raw mode is torn down, offer to set up web search
@@ -175,29 +172,6 @@ pub(crate) enum Idle {
     Submit(String),
     /// Ctrl-D on an empty box, or a confirmed double Ctrl-C — end the session.
     Exit,
-}
-
-/// What one idle-prompt Ctrl-C should do, staged Claude-Code-style: first
-/// clear whatever is being typed, then ask for confirmation, and only a
-/// confirmed second press actually leaves.
-#[derive(Debug, PartialEq, Eq)]
-enum InterruptStage {
-    /// There's a draft (or an in-progress queue edit) — wipe it, stay.
-    ClearDraft,
-    /// Nothing to clear and not yet armed — warn that another Ctrl-C exits.
-    Arm,
-    /// Already armed — leave the session.
-    Exit,
-}
-
-fn interrupt_stage(has_draft: bool, armed: bool) -> InterruptStage {
-    if has_draft {
-        InterruptStage::ClearDraft
-    } else if armed {
-        InterruptStage::Exit
-    } else {
-        InterruptStage::Arm
-    }
 }
 
 /// Read one submission at the idle prompt using the pinned composer, then
@@ -235,93 +209,74 @@ pub(crate) async fn read_idle(
         s.render();
     }
 
-    // Whether the next Ctrl-C exits (armed by a Ctrl-C on an empty composer;
-    // any other key disarms it).
-    let mut exit_armed = false;
+    // Staged Ctrl-C (armed by a Ctrl-C on an empty composer; any other key
+    // disarms it) — the same guard the classic REPL uses.
+    let mut guard = ExitGuard::default();
     let result = loop {
-        match rx.recv().await {
+        // The idle loop has no ticker; when a key-event-burst media check is
+        // pending, wake at its settle deadline so a dropped path with no
+        // trailing delimiter still collapses to a chip. (Bound first: a
+        // scrutinee temporary would hold the borrow across the whole match.)
+        let media_due = state.borrow().media_check_due();
+        let event = match media_due {
+            Some(due) => tokio::select! {
+                ev = rx.recv() => ev,
+                _ = tokio::time::sleep_until(due.into()) => {
+                    let mut s = state.borrow_mut();
+                    if s.tick_media_check() {
+                        s.request_paint();
+                    }
+                    s.flush_paint();
+                    continue;
+                }
+            },
+            None => rx.recv().await,
+        };
+        match event {
             Some(Event::Key(key)) => {
                 let action = state.borrow_mut().handle_key(key, queue.len());
                 if !matches!(action, KeyAction::Interrupt) {
-                    exit_armed = false;
+                    guard.disarm();
                 }
-                match action {
-                    KeyAction::None => {}
-                    KeyAction::Redraw => state.borrow_mut().render(),
-                    KeyAction::Submit(line) => {
+                let residual = apply_action(&mut state.borrow_mut(), queue, action);
+                match residual {
+                    None => {}
+                    Some(Residual::Submit(line)) => {
                         // At idle, Enter sends (vs. queueing during a turn).
                         let trimmed = line.trim().to_string();
                         if trimmed.is_empty() {
-                            state.borrow_mut().render();
+                            state.borrow_mut().request_paint();
                         } else {
                             break Idle::Submit(trimmed);
                         }
                     }
-                    KeyAction::BeginEdit => {
-                        let mut s = state.borrow_mut();
-                        if let Some(i) = s.focused_item() {
-                            if let Some(text) = queue.items().get(i) {
-                                s.begin_edit(text);
-                            }
-                        }
-                        s.render();
-                    }
-                    KeyAction::SaveEdit => {
-                        let mut s = state.borrow_mut();
-                        if let Some((idx, text)) = s.take_edit() {
-                            let _ = queue.edit(idx + 1, text);
-                            s.sync_queue(queue.items());
-                        }
-                        s.render();
-                    }
-                    KeyAction::CancelEdit => {
-                        let mut s = state.borrow_mut();
-                        s.cancel_edit();
-                        s.render();
-                    }
-                    KeyAction::DeleteFocused => {
-                        let mut s = state.borrow_mut();
-                        if let Some(i) = s.focused_item() {
-                            let _ = queue.remove(i + 1);
-                        }
-                        s.sync_queue(queue.items());
-                        s.render();
-                    }
-                    KeyAction::Exit => break Idle::Exit,
-                    KeyAction::Interrupt => {
+                    Some(Residual::Exit) => break Idle::Exit,
+                    Some(Residual::Interrupt) => {
                         // Staged Ctrl-C: clear the draft first, then confirm,
                         // then exit — never a surprise quit mid-thought.
                         let mut s = state.borrow_mut();
                         let has_draft = !s.composer_draft().is_empty();
-                        match interrupt_stage(has_draft, exit_armed) {
-                            InterruptStage::ClearDraft => {
+                        match guard.on_ctrl_c(has_draft) {
+                            CtrlC::ClearDraft => {
                                 s.cancel_edit();
                                 s.composer.set_text("");
-                                s.render();
+                                s.request_paint();
                             }
-                            InterruptStage::Arm => {
-                                exit_armed = true;
+                            CtrlC::Arm => {
                                 let ui = s.ui.clone();
-                                s.print_line(&format!(
-                                    "  {} {}",
-                                    ui.red("⚠"),
-                                    ui.dim(
-                                        "press ctrl-c again to leave the trail — \
-                                         any other key keeps riding"
-                                    ),
-                                ));
-                                s.render();
+                                s.print_line(&arm_notice(&ui));
                             }
-                            InterruptStage::Exit => break Idle::Exit,
+                            CtrlC::Exit => break Idle::Exit,
                         }
                     }
                 }
+                state.borrow_mut().flush_paint();
             }
             Some(Event::Resize(c, r)) => {
                 state.borrow_mut().handle_resize(c, r, queue.items());
             }
             Some(Event::Paste(text)) => {
-                exit_armed = false;
+                guard.disarm();
                 let mut s = state.borrow_mut();
                 s.insert_paste(&text);
                 s.render();
@@ -334,8 +289,12 @@ pub(crate) async fn read_idle(
     *history = state.borrow().history.entries().to_vec();
     stop.store(true, Ordering::Relaxed);
     let _ = input.join();
+    // Erase the idle chrome (meters, divider, completion hint, composer) on
+    // the way out — only conversation belongs in the scrollback, and the
+    // echoed submission below prints right where the conversation left off.
+    let region_bottom = state.borrow().region_bottom;
     drop(state);
-    drop(term);
+    term.restore(region_bottom);
 
     // Echo the submission into the scrollback (cooked mode) so it stays above
     // whatever output the turn/command prints next — mirroring how a typed
@@ -468,10 +427,10 @@ async fn run_one_turn(
                 match maybe_event {
                     Some(Event::Key(key)) => {
                         let action = state.borrow_mut().handle_key(key, queue.len());
-                        match action {
-                            KeyAction::None => {}
-                            KeyAction::Redraw => state.borrow_mut().render(),
-                            KeyAction::Submit(line) => {
+                        let residual = apply_action(&mut state.borrow_mut(), queue, action);
+                        match residual {
+                            None => {}
+                            Some(Residual::Submit(line)) => {
                                 let trimmed = line.trim();
                                 let mut s = state.borrow_mut();
                                 if trimmed.is_empty() {
@@ -505,48 +464,22 @@ async fn run_one_turn(
                                     s.composer.set_text(trimmed);
                                 }
                                 s.sync_queue(queue.items());
-                                s.render();
+                                s.request_paint();
                             }
-                            KeyAction::BeginEdit => {
-                                let mut s = state.borrow_mut();
-                                if let Some(i) = s.focused_item() {
-                                    if let Some(text) = queue.items().get(i) {
-                                        s.begin_edit(text);
-                                    }
-                                }
-                                s.render();
-                            }
-                            KeyAction::SaveEdit => {
-                                let mut s = state.borrow_mut();
-                                if let Some((idx, text)) = s.take_edit() {
-                                    let _ = queue.edit(idx + 1, text);
-                                    s.sync_queue(queue.items());
-                                }
-                                s.render();
-                            }
-                            KeyAction::CancelEdit => {
-                                let mut s = state.borrow_mut();
-                                s.cancel_edit();
-                                s.render();
-                            }
-                            KeyAction::DeleteFocused => {
-                                let mut s = state.borrow_mut();
-                                if let Some(i) = s.focused_item() {
-                                    let _ = queue.remove(i + 1);
-                                }
-                                s.sync_queue(queue.items());
-                                s.render();
-                            }
-                            KeyAction::Interrupt => {
+                            Some(Residual::Interrupt) => {
+                                // Mid-turn, Ctrl-C cancels the running turn —
+                                // that *is* its clear-first stage; the idle
+                                // prompt then owns the staged exit.
                                 state.borrow_mut().finish();
                                 recover_interjections(&interject, queue);
                                 return TurnOutcome::Interrupted;
                             }
-                            KeyAction::Exit => {
+                            Some(Residual::Exit) => {
                                 state.borrow_mut().finish();
                                 return TurnOutcome::Exit;
                             }
                         }
+                        state.borrow_mut().flush_paint();
                     }
                     Some(Event::Resize(cols, rows)) => {
                         state.borrow_mut().handle_resize(cols, rows, queue.items());
@@ -565,8 +498,13 @@ async fn run_one_turn(
                 s.tick_spinner();
                 // A running fleet animates in the pinned area on the same tick.
                 if s.tick_fleet() {
-                    s.render();
+                    s.request_paint();
                 }
+                // A settled key-event-burst drop collapses to a media chip here.
+                if s.tick_media_check() {
+                    s.request_paint();
+                }
+                s.flush_paint();
             }
         }
     }
@@ -575,17 +513,6 @@ async fn run_one_turn(
 #[cfg(test)]
 mod tests {
     use super::stackable;
-
-    #[test]
-    fn interrupt_stages_clear_then_arm_then_exit() {
-        use super::{interrupt_stage, InterruptStage};
-        // Something typed: the first Ctrl-C only clears it (armed or not).
-        assert_eq!(interrupt_stage(true, false), InterruptStage::ClearDraft);
-        assert_eq!(interrupt_stage(true, true), InterruptStage::ClearDraft);
-        // Nothing typed: warn first, exit only on the confirmed second press.
-        assert_eq!(interrupt_stage(false, false), InterruptStage::Arm);
-        assert_eq!(interrupt_stage(false, true), InterruptStage::Exit);
-    }
 
     #[test]
     fn only_plain_prompts_stack_onto_the_queue() {

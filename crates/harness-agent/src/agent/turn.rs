@@ -14,9 +14,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::AgentError;
 use crate::event::AgentEvent;
-use crate::{budget, compact, prompt};
+use crate::{budget, cache, compact, prompt};
 
-use super::{build_user_message, Agent, PrefireSummary};
+use super::{build_user_message, Agent, CallOutcome, PrefireSummary};
 
 const TOOL_ARGUMENT_EVENT_CHARS: usize = 16_000;
 const TOOL_RESULT_EVENT_CHARS: usize = 4_000;
@@ -115,8 +115,18 @@ impl Agent {
     {
         // Tool definitions are fixed for the turn; compute once.
         let tool_defs = self.tools.definitions();
+        // Request fingerprinting feeds only the request log's cache
+        // diagnostics; when no log is configured (fleet/review subagents, the
+        // default config) skip the per-round transcript serialization entirely
+        // — an image-bearing transcript is megabytes of JSON per hash pass.
+        // Tool defs are fixed for the turn, so their hash is too.
+        let tools_hash = self
+            .config
+            .request_log
+            .is_some()
+            .then(|| cache::hash_tools(&tool_defs));
         let window = self.context_window();
-        let budget = budget::prompt_budget(window, self.config.response_reserve);
+        let budget = budget::prompt_budget(window, self.config.effective_response_reserve());
 
         // A one-shot corrective for the "announce a plan, then stop" failure: if
         // the model returns a text-only reply that reads as intent-to-act, we
@@ -147,6 +157,12 @@ impl Agent {
         const MAX_EMPTY_RESAMPLES: u32 = 2;
         let mut empty_rounds: u32 = 0;
 
+        // Unproductive-loop tracking: identical (tool, arguments, result)
+        // repeats get one nudge, then end the turn (see [`crate::loopguard`]).
+        let mut loop_guard = crate::loopguard::LoopGuard::default();
+        // The soft budget warning is logged once per turn, not per round.
+        let mut budget_warned = false;
+
         // No fixed iteration cap: the loop runs until the model returns a final
         // answer, bounded only by how much fits in the context window.
         loop {
@@ -166,6 +182,45 @@ impl Agent {
                 .fit_context(budget, window, &tool_defs, &mut on_event)
                 .await?;
             let prompt_tokens = self.calibrated(raw_prompt_tokens);
+
+            // Session budget: refuse a call whose prompt alone would push the
+            // session past its ceiling — stop gracefully with state preserved
+            // rather than silently running past the cap.
+            if let Some(session_budget) = self.config.budget {
+                if self.tokens_used + prompt_tokens > session_budget.max_session_tokens {
+                    let message = format!(
+                        "Session token budget reached (~{} used of {} allowed; the next \
+                         call needs ~{prompt_tokens} more). Stopping here so spending \
+                         stays inside the cap. All work so far is saved — raise the \
+                         budget or start a new session to continue.",
+                        self.tokens_used, session_budget.max_session_tokens
+                    );
+                    crate::errlog::record(
+                        self.config.error_log.as_deref(),
+                        "budget_exhausted",
+                        serde_json::json!({
+                            "session": self.session_id(),
+                            "model": self.config.model,
+                            "tokens_used": self.tokens_used,
+                            "max_session_tokens": session_budget.max_session_tokens,
+                        }),
+                    );
+                    self.push(ChatMessage::assistant(message.clone()))?;
+                    return Ok(message);
+                }
+                if !budget_warned && self.tokens_used >= session_budget.warn_threshold() {
+                    budget_warned = true;
+                    crate::errlog::record(
+                        self.config.error_log.as_deref(),
+                        "budget_warning",
+                        serde_json::json!({
+                            "session": self.session_id(),
+                            "tokens_used": self.tokens_used,
+                            "max_session_tokens": session_budget.max_session_tokens,
+                        }),
+                    );
+                }
+            }
 
             // Reflect this call's prompt cost the moment it's sent (the transcript
             // is `prompt_tokens` of context), so a live meter accounts for it now
@@ -194,7 +249,25 @@ impl Agent {
                 });
             }
 
-            let assembled = self
+            // Fingerprint what's about to be sent and classify it against the
+            // previous request, so a cache miss is attributable (append-only
+            // requests are the shape a provider prefix cache rewards). Only
+            // when the request log will actually record it.
+            let (prefix_diff, tools_changed) = match tools_hash {
+                Some(tools_hash) => {
+                    let request_hashes = cache::fingerprints(&outbound);
+                    let prefix_diff =
+                        cache::diff_prefix(&self.prev_request_hashes, &request_hashes);
+                    let tools_changed = self.prev_tools_hash.is_some_and(|prev| prev != tools_hash);
+                    self.prev_request_hashes = request_hashes;
+                    self.prev_tools_hash = Some(tools_hash);
+                    (prefix_diff, tools_changed)
+                }
+                None => (cache::PrefixDiff::First, false),
+            };
+            let outbound_len = outbound.len();
+
+            let (assembled, mut outcome) = self
                 .stream_reply(outbound, &tool_defs, nudge.as_ref(), &cancel, &mut on_event)
                 .await?;
 
@@ -213,12 +286,20 @@ impl Agent {
                     || !assembled.content.is_empty()
                     || !assembled.tool_calls.is_empty()
                 {
-                    self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens);
+                    self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens, outcome);
                 }
                 return Ok(assembled.content);
             }
 
-            self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens);
+            outcome = self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens, outcome);
+            self.log_request(
+                prompt_tokens,
+                outbound_len,
+                &assembled,
+                &outcome,
+                prefix_diff,
+                tools_changed,
+            );
 
             // A round that produced neither prose nor a tool call is
             // re-sampled (nothing is persisted, so re-asking is safe); past
@@ -286,8 +367,28 @@ impl Agent {
             // A tool call landed; the corrective (if any) served its purpose.
             nudge = None;
 
+            // Set when identical repeats hit the stop line — the turn ends
+            // after this round's results are recorded.
+            let mut loop_stop: Option<(String, u32)> = None;
+
+            // A reply cut off at the response token limit leaves its trailing
+            // tool call's JSON unfinished (e.g. a large `write_file`).
+            let reply_truncated = matches!(
+                assembled.finish_reason.as_deref(),
+                Some("length" | "max_tokens")
+            );
+
             for call in &assembled.tool_calls {
-                let result = self.run_tool(call, &mut on_event).await;
+                let result = self.run_tool(call, reply_truncated, &mut on_event).await;
+                match loop_guard.observe(&call.function.name, &call.function.arguments, &result) {
+                    crate::loopguard::LoopVerdict::Fine => {}
+                    crate::loopguard::LoopVerdict::Nudge => {
+                        nudge = Some(ChatMessage::user(prompt::LOOP_NUDGE.to_string()));
+                    }
+                    crate::loopguard::LoopVerdict::Stop { name, repeats } => {
+                        loop_stop = Some((name, repeats));
+                    }
+                }
                 // Track the latest plan state from successful `update_plan` calls
                 // (invalid arguments were rejected, so they changed nothing).
                 if call.function.name == harness_tools::PLAN_TOOL {
@@ -308,6 +409,31 @@ impl Agent {
                     }
                     None => self.push(ChatMessage::tool_result(call.id.clone(), result))?,
                 }
+            }
+
+            // An unproductive loop hit the stop line: every round was
+            // re-billing the whole context for an identical result, and the
+            // nudge didn't break the cycle. End the turn with the state
+            // preserved rather than letting it spin.
+            if let Some((name, repeats)) = loop_stop {
+                let message = format!(
+                    "Stopping this turn: the `{name}` tool was called with identical \
+                     arguments and returned an identical result {repeats} times in a row, \
+                     so continuing would spend tokens without making progress. Tell me how \
+                     you'd like to proceed, or rephrase the request."
+                );
+                crate::errlog::record(
+                    self.config.error_log.as_deref(),
+                    "loop_detected",
+                    serde_json::json!({
+                        "session": self.session_id(),
+                        "model": self.config.model,
+                        "tool": name,
+                        "repeats": repeats,
+                    }),
+                );
+                self.push(ChatMessage::assistant(message.clone()))?;
+                return Ok(message);
             }
         }
     }
@@ -384,17 +510,25 @@ impl Agent {
         nudge: Option<&ChatMessage>,
         cancel: &CancellationToken,
         on_event: &mut F,
-    ) -> Result<AssembledMessage, AgentError>
+    ) -> Result<(AssembledMessage, CallOutcome), AgentError>
     where
         F: FnMut(&AgentEvent),
     {
         outbound.extend(nudge.cloned());
+        // Prompt-cache breakpoints on the growing tip (see [`crate::cache`]).
+        // Empty (a plain request) when the mode/model opts out.
+        let anchors = self
+            .config
+            .prompt_cache
+            .anchors_for(&self.config.model, &outbound);
         let request = ChatRequest::new(&self.config.model, outbound)
             .with_tools(tool_defs.to_vec())
-            .max_tokens(self.config.response_reserve)
-            .streaming(true);
+            .max_tokens(self.config.effective_response_reserve())
+            .streaming(true)
+            .with_cache_anchors(anchors);
 
         let retry = self.config.retry.clone();
+        let started = std::time::Instant::now();
         let mut attempt: u32 = 1;
         loop {
             let result = self
@@ -415,7 +549,14 @@ impl Agent {
                 .await;
 
             match result {
-                Ok(assembled) => return Ok(assembled),
+                Ok(assembled) => {
+                    let outcome = CallOutcome {
+                        latency_ms: Some(started.elapsed().as_millis() as u64),
+                        retries: attempt - 1,
+                        ..CallOutcome::default()
+                    };
+                    return Ok((assembled, outcome));
+                }
                 Err(e) if e.is_transient() && attempt < retry.max_attempts => {
                     let delay = retry.delay_after(attempt);
                     crate::errlog::record(
@@ -441,7 +582,9 @@ impl Agent {
                     // other cancellation: quietly, with nothing assembled.
                     tokio::select! {
                         biased;
-                        _ = cancel.cancelled() => return Ok(AssembledMessage::default()),
+                        _ = cancel.cancelled() => {
+                            return Ok((AssembledMessage::default(), CallOutcome::default()))
+                        }
                         _ = tokio::time::sleep(delay) => {}
                     }
                     attempt += 1;
@@ -466,17 +609,32 @@ impl Agent {
     /// client-side estimate against the endpoint's real prompt size (so the next
     /// budget check tracks reality), then add this round's prompt + generated
     /// tokens — preferring the endpoint's reported counts, falling back to the
-    /// calibrated estimate when it doesn't report any.
+    /// calibrated estimate when it doesn't report any. Returns the outcome
+    /// enriched with the call's cache-read/write split for the request log.
     fn account_for_usage(
         &mut self,
         assembled: &AssembledMessage,
         raw_prompt_tokens: usize,
         prompt_tokens: usize,
-    ) {
+        mut outcome: CallOutcome,
+    ) -> CallOutcome {
         if let Some(usage) = &assembled.usage {
-            if usage.prompt_tokens > 0 && raw_prompt_tokens > 0 {
-                self.token_ratio = usage.prompt_tokens as f64 / raw_prompt_tokens as f64;
+            // Calibrate against the full prompt the provider processed (see
+            // [`budget::reported_full_prompt`] for the two counting styles).
+            // Some endpoints additionally *hide* cached tokens entirely
+            // (hub.oxen.ai returns prompt_tokens: 3 for a fully-cached
+            // 4K-token prompt, with the cache fields stripped) — calibrating
+            // on such a report would collapse the estimate and disable
+            // compaction, so a report far below the estimate is ignored.
+            let reported_full = budget::reported_full_prompt(usage);
+            if reported_full > 0 && raw_prompt_tokens > 0 {
+                let ratio = reported_full as f64 / raw_prompt_tokens as f64;
+                if ratio >= 0.5 {
+                    self.token_ratio = ratio;
+                }
             }
+            outcome.cached_prompt_tokens = usage.cached_prompt_tokens() as usize;
+            outcome.cache_write_tokens = usage.cache_write_tokens() as usize;
         }
         let (prompt_delta, completion_delta) = match &assembled.usage {
             Some(u) if u.prompt_tokens + u.completion_tokens > 0 => {
@@ -491,7 +649,74 @@ impl Agent {
         self.prompt_tokens_used += prompt_delta;
         self.completion_tokens_used += completion_delta;
         self.tokens_used += prompt_delta + completion_delta;
-        self.record_usage(prompt_delta, completion_delta);
+        self.cached_prompt_tokens_used += outcome.cached_prompt_tokens;
+        self.cache_write_tokens_used += outcome.cache_write_tokens;
+        self.record_usage_event(
+            &self.config.model,
+            prompt_delta,
+            completion_delta,
+            "turn",
+            &outcome,
+        );
+        outcome
+    }
+
+    /// Append one entry to the developer request log (when configured): the
+    /// call's size, how its prefix relates to the previous request (the cache
+    /// diagnostic), and what the provider actually reported. Best-effort.
+    fn log_request(
+        &self,
+        est_prompt_tokens: usize,
+        message_count: usize,
+        assembled: &AssembledMessage,
+        outcome: &CallOutcome,
+        prefix_diff: cache::PrefixDiff,
+        tools_changed: bool,
+    ) {
+        let Some(path) = self.config.request_log.as_deref() else {
+            return;
+        };
+        let (prefix, detail) = match prefix_diff {
+            cache::PrefixDiff::First => ("first", serde_json::Value::Null),
+            cache::PrefixDiff::AppendOnly { shared } => (
+                "append_only",
+                serde_json::json!({ "shared_messages": shared }),
+            ),
+            cache::PrefixDiff::Diverged { at } => (
+                "diverged",
+                serde_json::json!({ "first_changed_message": at }),
+            ),
+        };
+        let usage = assembled.usage.as_ref();
+        let prompt = usage.map(|u| u.prompt_tokens).unwrap_or(0) as usize;
+        let cache_hit_ratio = if prompt > 0 {
+            outcome.cached_prompt_tokens as f64 / prompt as f64
+        } else {
+            0.0
+        };
+        crate::errlog::record(
+            Some(path),
+            "model_request",
+            serde_json::json!({
+                "session": self.session_id(),
+                "model": self.config.model,
+                "kind": "turn",
+                "messages": message_count,
+                "est_prompt_tokens": est_prompt_tokens,
+                "prefix": prefix,
+                "prefix_detail": detail,
+                "tools_changed": tools_changed,
+                "latency_ms": outcome.latency_ms,
+                "retries": outcome.retries,
+                "usage": usage.map(|u| serde_json::json!({
+                    "prompt_tokens": u.prompt_tokens,
+                    "completion_tokens": u.completion_tokens,
+                    "cached_prompt_tokens": u.cached_prompt_tokens(),
+                    "cache_write_tokens": u.cache_write_tokens(),
+                })),
+                "cache_hit_ratio": (cache_hit_ratio * 1000.0).round() / 1000.0,
+            }),
+        );
     }
 
     /// Free context so the next request fits `budget`, in two stages (see
@@ -540,9 +765,43 @@ impl Agent {
         };
         let start = self.transcript_start();
         let rendered = compact::render_for_summary(&self.messages[start..cut]);
-        let summary = self.complete(compact::SUMMARY_PROMPT, &rendered).await?;
-        self.apply_summary(cut, &summary, "summarized earlier conversation", on_event);
+        // Summarization runs on the (possibly cheaper) summary model: it
+        // re-reads the whole elided span, which at frontier rates would make
+        // every compaction cost a frontier-sized prompt.
+        let prompt_estimate =
+            budget::estimate_tokens_for_chars(compact::SUMMARY_PROMPT.len() + rendered.len());
+        let started = std::time::Instant::now();
+        let assembled = summarize(&self.client, self.summary_model(), rendered).await?;
+        let (prompt, completion) = budget::split_oneshot_usage(&assembled, prompt_estimate);
+        self.record_usage_event(
+            self.summary_model(),
+            prompt,
+            completion,
+            "summary",
+            &CallOutcome {
+                latency_ms: Some(started.elapsed().as_millis() as u64),
+                ..CallOutcome::default()
+            },
+        );
+        self.apply_summary(
+            cut,
+            &assembled.content,
+            "summarized earlier conversation",
+            on_event,
+        );
         Ok(self.fits_budget(budget, tool_defs))
+    }
+
+    /// Record a summarization call's spend against the summary model under the
+    /// `"summary"` kind — the one policy for every prefire accounting path.
+    fn record_summary_usage(&self, prompt: usize, completion: usize) {
+        self.record_usage_event(
+            self.summary_model(),
+            prompt,
+            completion,
+            "summary",
+            &CallOutcome::default(),
+        );
     }
 
     /// Move everything the user sent mid-turn into the transcript, each as
@@ -606,7 +865,7 @@ impl Agent {
         let prompt_estimate =
             budget::estimate_tokens_for_chars(compact::SUMMARY_PROMPT.len() + rendered.len());
         let client = self.client.clone();
-        let model = self.config.model.clone();
+        let model = self.summary_model().to_string();
         let handle = tokio::spawn(async move { summarize(&client, &model, rendered).await });
         self.prefire = Some(PrefireSummary {
             cut,
@@ -632,7 +891,7 @@ impl Agent {
         let start = self.transcript_start();
         if pre.cut <= start || pre.cut > self.messages.len() {
             // Defensive: shouldn't happen while every splice invalidates.
-            self.record_usage(pre.prompt_estimate, 0);
+            self.record_summary_usage(pre.prompt_estimate, 0);
             pre.handle.abort();
             return false;
         }
@@ -640,13 +899,13 @@ impl Agent {
         // Usually already finished; if the hard threshold arrived first, this
         // waits out the remainder — no worse than the synchronous call.
         let Ok(Ok(assembled)) = pre.handle.await else {
-            self.record_usage(prompt_estimate, 0);
+            self.record_summary_usage(prompt_estimate, 0);
             return false;
         };
         // Account the speculative call's spend (provider-reported when
         // available, estimated otherwise) — same policy as [`Agent::complete`].
         let (prompt, completion) = budget::split_oneshot_usage(&assembled, prompt_estimate);
-        self.record_usage(prompt, completion);
+        self.record_summary_usage(prompt, completion);
         if assembled.content.is_empty() {
             return false;
         }
@@ -663,11 +922,16 @@ impl Agent {
     /// [`AgentEvent::ToolEnd`]. Failures come back as ordinary `tool error: …`
     /// results, so the model can read the error and self-correct in the turn.
     ///
+    /// `reply_truncated` is whether the reply carrying this call was cut off at
+    /// the response token limit — unparseable arguments then get a targeted
+    /// error (split the content up) instead of a bare JSON parse failure the
+    /// model tends to misdiagnose.
+    ///
     /// When a permission gate is configured, it is consulted *before* the tool
     /// executes (and before `ToolStart`, so an approval prompt isn't rendered
     /// under a spinner line): a refusal becomes the tool result, and an
     /// approved move-to-trash rewrites the call's arguments.
-    async fn run_tool<F>(&self, call: &ToolCall, on_event: &mut F) -> String
+    async fn run_tool<F>(&self, call: &ToolCall, reply_truncated: bool, on_event: &mut F) -> String
     where
         F: FnMut(&AgentEvent),
     {
@@ -726,6 +990,12 @@ impl Agent {
                     None => output,
                 }
             }
+            Err(e) if reply_truncated => format!(
+                "tool error: the arguments were cut off — the reply hit its output-token \
+                 limit before this call's JSON finished streaming ({e}). Don't retry the \
+                 same call; produce less output per call, e.g. write the file in parts \
+                 (a `write_file` with the first portion, then `edit_file` to extend it)."
+            ),
             Err(e) => format!("tool error: invalid arguments JSON: {e}"),
         };
 
@@ -945,6 +1215,65 @@ mod tests {
             "the retry must not append a second copy of the user prompt"
         );
         assert_eq!(agent.messages().last().unwrap().role, "assistant");
+    }
+
+    /// SSE for a reply whose `write_file` call was cut off at the response
+    /// token limit: unterminated arguments JSON, `finish_reason: "length"`.
+    fn sse_truncated_tool_call() -> String {
+        let chunk = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_1",
+                        "function": {
+                            "name": "write_file",
+                            "arguments": "{\"path\":\"index.html\",\"contents\":\"<!doctype h"
+                        }
+                    }]
+                },
+                "finish_reason": "length"
+            }]
+        });
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
+
+    #[tokio::test]
+    async fn a_tool_call_truncated_at_the_output_limit_gets_a_targeted_error() {
+        let mut server = mockito::Server::new_async().await;
+        // Bottom-up: the base reply is the truncated call; the follow-up
+        // carrying its tool result must see the split-the-work error, not a
+        // bare JSON parse failure.
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_truncated_tool_call())
+            .create_async()
+            .await;
+        let recovery = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("output-token limit".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("The write was too large and needs splitting."))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        let out = agent.run_turn("build the page", |_| {}).await.unwrap();
+        assert_eq!(out, "The write was too large and needs splitting.");
+        recovery.assert_async().await;
     }
 
     /// SSE for a reply that calls `update_plan` with a single item in `status`,
@@ -1727,5 +2056,290 @@ mod tests {
             .and_then(ChatMessage::content_text)
             .unwrap();
         assert!(first_tool.contains("elided"));
+    }
+
+    /// SSE for a prose reply whose final chunk reports usage with cached and
+    /// cache-write prompt tokens (the OpenAI + Anthropic shapes combined).
+    fn sse_prose_with_cached_usage(text: &str) -> String {
+        let content = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": { "content": text },
+                "finish_reason": "stop"
+            }]
+        });
+        let usage = serde_json::json!({
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 20,
+                "total_tokens": 1020,
+                "prompt_tokens_details": { "cached_tokens": 900 },
+                "cache_creation_input_tokens": 80
+            }
+        });
+        format!("data: {content}\n\ndata: {usage}\n\ndata: [DONE]\n\n")
+    }
+
+    #[tokio::test]
+    async fn claude_requests_carry_cache_anchors_and_cached_usage_is_tallied() {
+        let mut server = mockito::Server::new_async().await;
+        // The mock only matches a request whose body carries a cache_control
+        // marker — a request without anchors gets no response and errors.
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("cache_control".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose_with_cached_usage("done"))
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store.clone(),
+            session,
+            AgentConfig::default(),
+        )
+        .unwrap();
+
+        let out = agent.run_turn("hello", |_| {}).await.unwrap();
+        assert_eq!(out, "done");
+        // The provider's cache split is tallied on the agent…
+        assert_eq!(agent.cached_prompt_tokens_used(), 900);
+        assert_eq!(agent.cache_write_tokens_used(), 80);
+        // …and persisted on the usage ledger.
+        let totals = store.cache_usage_totals().unwrap();
+        assert_eq!(totals.cached_prompt_tokens, 900);
+        assert_eq!(totals.cache_write_tokens, 80);
+    }
+
+    #[tokio::test]
+    async fn non_anthropic_models_send_plain_requests_in_auto_mode() {
+        let mut server = mockito::Server::new_async().await;
+        // Match only a request with no cache_control anywhere in the body.
+        server
+            .mock("POST", "/chat/completions")
+            .match_request(|req| {
+                !String::from_utf8_lossy(req.body().unwrap()).contains("cache_control")
+            })
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("plain"))
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "qwen3-8b");
+        let client = OxenClient::new(server.url(), "key", "qwen3-8b");
+        let config = AgentConfig {
+            model: "qwen3-8b".into(),
+            system_prompt: None,
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        let out = agent.run_turn("hello", |_| {}).await.unwrap();
+        assert_eq!(out, "plain");
+    }
+
+    #[tokio::test]
+    async fn requested_max_tokens_is_clamped_to_the_model_output_ceiling() {
+        let mut server = mockito::Server::new_async().await;
+        // Only a request asking for the *clamped* reply size matches — the
+        // model's reported 2000-token ceiling, not the 4096 default reserve.
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "max_tokens": 2000
+            })))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("capped"))
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            max_output_tokens: Some(2000),
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        let out = agent.run_turn("hello", |_| {}).await.unwrap();
+        assert_eq!(out, "capped");
+    }
+
+    #[tokio::test]
+    async fn session_budget_stops_the_turn_before_the_model_is_called() {
+        // An unroutable endpoint proves the stop happens before any network
+        // call — the budget check refuses the request outright.
+        let client = OxenClient::new("http://127.0.0.1:1/api/ai", "key", "claude-opus-4-8");
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            budget: Some(crate::SessionBudget::new(1)),
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        let out = agent.run_turn("do something big", |_| {}).await.unwrap();
+        assert!(out.contains("budget"), "should explain the stop: {out}");
+        // The explanation is a normal assistant message, so the transcript
+        // (and any resumed session) records why the turn ended.
+        assert_eq!(agent.messages().last().unwrap().role, "assistant");
+    }
+
+    /// SSE for a reply that always makes the same `echo` tool call.
+    fn sse_echo_call() -> String {
+        let chunk = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": "",
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_echo",
+                        "function": { "name": "echo", "arguments": "{}" }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
+
+    #[tokio::test]
+    async fn an_identical_tool_loop_is_nudged_then_stopped() {
+        struct EchoTool;
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        struct EchoArgs {}
+        #[async_trait::async_trait]
+        impl harness_tools::TypedTool for EchoTool {
+            const NAME: &'static str = "echo";
+            type Args = EchoArgs;
+            fn description(&self) -> &str {
+                "always returns the same thing"
+            }
+            async fn run(&self, _: EchoArgs) -> Result<String, harness_tools::ToolError> {
+                Ok("the same output".into())
+            }
+        }
+
+        let mut server = mockito::Server::new_async().await;
+        // The model is stuck: every request gets the identical tool call back.
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_echo_call())
+            .create_async()
+            .await;
+        // The corrective nudge must appear in at least one request.
+        let nudged = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("identical arguments".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_echo_call())
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut tools = ToolRegistry::new();
+        tools.register_typed(EchoTool);
+        let config = AgentConfig {
+            system_prompt: None,
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, tools, store, session, config).unwrap();
+
+        let out = agent.run_turn("loop forever", |_| {}).await.unwrap();
+        assert!(
+            out.contains("identical") && out.contains("echo"),
+            "should stop with an explanation naming the tool: {out}"
+        );
+        nudged.assert_async().await;
+        // Exactly STOP_AFTER identical executions happened — not an unbounded spin.
+        let tool_results = agent.messages().iter().filter(|m| m.role == "tool").count();
+        assert_eq!(tool_results as u32, crate::loopguard::STOP_AFTER);
+    }
+
+    #[tokio::test]
+    async fn the_request_log_classifies_prefixes_across_rounds() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_snap_call())
+            .expect(1)
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("image attached below|snap".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("finished"))
+            .create_async()
+            .await;
+
+        struct NoopSnap;
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        struct NoopArgs {}
+        #[async_trait::async_trait]
+        impl harness_tools::TypedTool for NoopSnap {
+            const NAME: &'static str = "snap";
+            type Args = NoopArgs;
+            fn description(&self) -> &str {
+                "noop"
+            }
+            async fn run(&self, _: NoopArgs) -> Result<String, harness_tools::ToolError> {
+                Ok("ok".into())
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("requests.jsonl");
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut tools = ToolRegistry::new();
+        tools.register_typed(NoopSnap);
+        let config = AgentConfig {
+            system_prompt: None,
+            request_log: Some(log.clone()),
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, tools, store, session, config).unwrap();
+
+        let out = agent.run_turn("snap it", |_| {}).await.unwrap();
+        assert_eq!(out, "finished");
+
+        let body = std::fs::read_to_string(&log).unwrap();
+        let entries: Vec<serde_json::Value> = body
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(entries.len(), 2, "one entry per model call: {body}");
+        // First call has no predecessor; the tool round only appends to it —
+        // the cache-friendly shape the diagnostics are there to confirm.
+        assert_eq!(entries[0]["event"], "model_request");
+        assert_eq!(entries[0]["prefix"], "first");
+        assert_eq!(entries[1]["prefix"], "append_only");
+        assert_eq!(entries[1]["tools_changed"], false);
+        assert!(entries[1]["latency_ms"].as_u64().is_some());
     }
 }

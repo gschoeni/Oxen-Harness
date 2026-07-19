@@ -50,7 +50,10 @@ fn is_mutation(kind: &EventKind) -> bool {
 /// Tries the canonical root too: macOS FSEvents reports `/private/tmp/...`
 /// for a workspace opened as `/tmp/...`.
 fn workspace_rel(root: &Path, canonical: &Path, abs: &Path) -> Option<String> {
-    let rel = abs.strip_prefix(root).or_else(|_| abs.strip_prefix(canonical)).ok()?;
+    let rel = abs
+        .strip_prefix(root)
+        .or_else(|_| abs.strip_prefix(canonical))
+        .ok()?;
     let mut parts = Vec::new();
     for part in rel.components() {
         let seg = part.as_os_str().to_string_lossy();
@@ -130,10 +133,17 @@ pub(crate) fn fs_watch(
                     Err(mpsc::RecvTimeoutError::Disconnected) => return,
                 }
             }
-            let list = if paths.len() > MAX_PATHS { Vec::new() } else { paths.into_iter().collect() };
+            let list = if paths.len() > MAX_PATHS {
+                Vec::new()
+            } else {
+                paths.into_iter().collect()
+            };
             let _ = app.emit(
                 "fs://changed",
-                FsChangedPayload { root: emit_root.clone(), paths: list },
+                FsChangedPayload {
+                    root: emit_root.clone(),
+                    paths: list,
+                },
             );
         }
     });
@@ -166,16 +176,26 @@ mod tests {
             workspace_rel(root, canonical, Path::new("/private/ws/a.md")),
             Some("a.md".into())
         );
-        assert_eq!(workspace_rel(root, canonical, Path::new("/ws/.git/index.lock")), None);
-        assert_eq!(workspace_rel(root, canonical, Path::new("/elsewhere/x")), None);
+        assert_eq!(
+            workspace_rel(root, canonical, Path::new("/ws/.git/index.lock")),
+            None
+        );
+        assert_eq!(
+            workspace_rel(root, canonical, Path::new("/elsewhere/x")),
+            None
+        );
         // An event on the root itself carries no path to refresh.
         assert_eq!(workspace_rel(root, canonical, Path::new("/ws")), None);
     }
 
     #[test]
     fn only_mutations_count() {
-        assert!(is_mutation(&EventKind::Create(notify::event::CreateKind::File)));
+        assert!(is_mutation(&EventKind::Create(
+            notify::event::CreateKind::File
+        )));
         assert!(is_mutation(&EventKind::Any));
-        assert!(!is_mutation(&EventKind::Access(notify::event::AccessKind::Read)));
+        assert!(!is_mutation(&EventKind::Access(
+            notify::event::AccessKind::Read
+        )));
     }
 }

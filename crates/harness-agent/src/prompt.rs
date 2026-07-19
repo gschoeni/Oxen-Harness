@@ -199,6 +199,16 @@ pub(crate) const PLAN_STALL_NUDGE: &str =
      answer explaining what's blocked and what you completed instead. Do not leave \
      the checklist stale.";
 
+/// The one-shot corrective appended when the same tool call has repeated with
+/// identical arguments *and* an identical result several times in a row (see
+/// [`crate::loopguard`]). Each repeat re-bills the whole context for zero new
+/// information. Sent only on the next request and never persisted.
+pub(crate) const LOOP_NUDGE: &str =
+    "You have made the same tool call with identical arguments several times in a row, \
+     and it returned the identical result each time — repeating it again will not produce \
+     new information. Change your approach: use different arguments, a different tool, or \
+     explain to the user what you're blocked on.";
+
 /// The most of an interjection that reaches the transcript — a paste-bomb
 /// mid-turn must not blow the context budget the turn was working within.
 const INTERJECTION_MAX_CHARS: usize = 25_000;

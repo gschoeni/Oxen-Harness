@@ -10,6 +10,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::Result;
+
+use super::sink::Sink;
 use crossterm::event::{
     self, Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
     PushKeyboardEnhancementFlags,
@@ -18,13 +20,20 @@ use crossterm::{execute, terminal};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 /// Owns the terminal for the lifetime of a live session: raw mode, a hidden
-/// cursor, and a scroll region over every row but the last. Drop restores
-/// everything, no matter how the turn ended.
+/// cursor, and a scroll region over every row but the last.
+///
+/// End a session with [`LiveTerminal::restore`], which erases the whole
+/// pinned area so none of the session's chrome (meters, divider, completion
+/// hint, composer) leaks into the scrollback. Drop is only the safety net for
+/// panic/early-return paths — it restores the modes but can't erase the
+/// chrome (it doesn't know the layout's extent).
 pub(super) struct LiveTerminal {
     pub(super) cols: u16,
     pub(super) rows: u16,
-    /// Whether we pushed keyboard-enhancement flags (so Drop pops them).
+    /// Whether we pushed keyboard-enhancement flags (so teardown pops them).
     kbd_enhanced: bool,
+    /// Set by [`LiveTerminal::restore`] so Drop doesn't tear down twice.
+    restored: bool,
 }
 
 impl LiveTerminal {
@@ -53,19 +62,41 @@ impl LiveTerminal {
             cols,
             rows,
             kbd_enhanced,
+            restored: false,
         })
+    }
+
+    /// Hand the screen back to cooked mode cleanly: pop the keyboard flags,
+    /// emit [`teardown_sequence`] (erase the whole pinned area, park the
+    /// cursor just below the conversation), and leave raw mode. `region_bottom`
+    /// is the live state's tracked layout extent — chrome painted below it is
+    /// ephemeral UI and must never survive into the scrollback (the next
+    /// cooked print, e.g. the echoed submission, continues right where the
+    /// conversation left off).
+    pub(super) fn restore(mut self, region_bottom: u16) {
+        self.restored = true;
+        if self.kbd_enhanced {
+            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+        }
+        let mut out = io::stdout();
+        let _ = write!(out, "{}", teardown_sequence(region_bottom, self.rows));
+        let _ = out.flush();
+        let _ = terminal::disable_raw_mode();
     }
 }
 
 impl Drop for LiveTerminal {
     fn drop(&mut self) {
+        // Safety net only — the owning loops end with `restore`, which erases
+        // the chrome too. This path (panic, early error) restores the modes,
+        // clears the composer row, and drops to a fresh bottom line.
+        if self.restored {
+            return;
+        }
         if self.kbd_enhanced {
             let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
         }
         let mut out = io::stdout();
-        // Disable bracketed paste, reset the scroll region, clear the composer
-        // row, show the cursor, and drop to a fresh line for the next cooked-mode
-        // prompt.
         let _ = write!(
             out,
             "\x1b[?2004l\x1b[r\x1b[{};1H\x1b[2K\x1b[?25h\r\n",
@@ -76,6 +107,15 @@ impl Drop for LiveTerminal {
     }
 }
 
+/// Escape sequence for the live→cooked hand-off: disable bracketed paste,
+/// then hand the screen back exactly the way the picker hand-off does —
+/// reset the scroll region, **erase every reserved row** (so the meters,
+/// divider, completion hint, and composer never enter the scrollback), and
+/// park the shown cursor just below the conversation.
+pub(super) fn teardown_sequence(region_bottom: u16, rows: u16) -> String {
+    format!("\x1b[?2004l{}", suspend_sequence(region_bottom, rows))
+}
+
 /// The last row usable for scrolling output (the composer sits below it).
 pub(super) fn region_bottom(rows: u16) -> u16 {
     rows.saturating_sub(1).max(1)
@@ -84,27 +124,27 @@ pub(super) fn region_bottom(rows: u16) -> u16 {
 /// A `Write` adapter that rewrites bare `\n` as `\r\n`, which raw mode requires
 /// to avoid stair-stepped output. `MarkdownStream` writes through this.
 pub(super) struct CrlfWriter {
-    out: io::Stdout,
+    out: Sink,
 }
 
 impl CrlfWriter {
-    pub(super) fn new() -> Self {
-        Self { out: io::stdout() }
+    pub(super) fn over(out: Sink) -> Self {
+        Self { out }
     }
 }
 
 impl Write for CrlfWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut handle = self.out.lock();
-        let mut last = 0;
+        // Translate into one buffer and emit it with a single write, so the
+        // rewritten chunk can't interleave with another writer's output.
+        let mut translated = Vec::with_capacity(buf.len() + 8);
         for (i, &b) in buf.iter().enumerate() {
             if b == b'\n' && (i == 0 || buf[i - 1] != b'\r') {
-                handle.write_all(&buf[last..i])?;
-                handle.write_all(b"\r\n")?;
-                last = i + 1;
+                translated.push(b'\r');
             }
+            translated.push(b);
         }
-        handle.write_all(&buf[last..])?;
+        self.out.write_all(&translated)?;
         Ok(buf.len())
     }
 

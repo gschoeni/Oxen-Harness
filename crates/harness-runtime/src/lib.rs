@@ -22,6 +22,7 @@ pub mod compression;
 mod config;
 pub mod config_repo;
 pub mod connection;
+pub mod limits;
 pub mod models;
 pub mod preview;
 pub mod project;

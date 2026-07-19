@@ -47,6 +47,33 @@ impl RetryPolicy {
     }
 }
 
+/// A hard ceiling on what one session may spend, in tokens (prompt +
+/// completion, provider-reported where available). Token-denominated rather
+/// than dollars so it works for unpriced endpoints too; hosts with a pricing
+/// catalog can convert a dollar cap into tokens at the session's rates.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionBudget {
+    /// Cumulative tokens after which the session refuses further model calls.
+    pub max_session_tokens: usize,
+    /// Percentage of the ceiling at which a warning is logged (soft line).
+    pub warn_at_percent: u8,
+}
+
+impl SessionBudget {
+    /// A budget with the default 80% warning line.
+    pub fn new(max_session_tokens: usize) -> Self {
+        Self {
+            max_session_tokens,
+            warn_at_percent: 80,
+        }
+    }
+
+    /// The token count at which the soft warning fires.
+    pub(crate) fn warn_threshold(&self) -> usize {
+        self.max_session_tokens / 100 * usize::from(self.warn_at_percent.min(100))
+    }
+}
+
 /// Configuration for an [`Agent`](crate::Agent).
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -58,6 +85,11 @@ pub struct AgentConfig {
     pub context_window: Option<usize>,
     /// Tokens to keep free for the model's reply when budgeting the prompt.
     pub response_reserve: usize,
+    /// The model's maximum reply size in tokens, when known (reported by the
+    /// endpoint's model catalog). Caps the per-request `max_tokens` so the
+    /// harness never asks a model for more output than it can produce.
+    /// `None` leaves `response_reserve` as the cap.
+    pub max_output_tokens: Option<usize>,
     /// Maximum approximate text retained in the active model context. Verbatim
     /// history remains on disk; older turns are compacted before this grows
     /// without bound even when the provider advertises a very large window.
@@ -75,6 +107,24 @@ pub struct AgentConfig {
     /// without changing anything, `On` compresses stale tool output and
     /// registers the `retrieve_original` tool so nothing is unrecoverable.
     pub compression: CompressionMode,
+    /// Prompt-cache breakpoint shaping for outbound requests (see
+    /// [`crate::cache`]). Defaults to `Auto`: marked only for model families
+    /// known to honor `cache_control`, ignored harmlessly elsewhere.
+    pub prompt_cache: crate::cache::PromptCacheMode,
+    /// The model used for compaction summaries (the synchronous splice and the
+    /// speculative prefire). `None` uses the session model — correct but
+    /// expensive: summarization re-reads the whole elided span, so routing it
+    /// to a cheaper model cuts compaction cost without touching turn quality.
+    pub summary_model: Option<String>,
+    /// Where to append the developer request log (JSONL, one entry per model
+    /// call — prompt size, cache-prefix diff, latency, retries, and the
+    /// provider's reported usage including cached tokens). `None` disables it.
+    /// Best-effort like the error log; never affects the turn.
+    pub request_log: Option<PathBuf>,
+    /// Hard session spend ceiling (see [`SessionBudget`]). `None` (the
+    /// default) enforces nothing. When set, a turn that would exceed it stops
+    /// gracefully with an explanation instead of silently running on.
+    pub budget: Option<SessionBudget>,
     /// How transient model-call failures are retried before the turn errors.
     pub retry: RetryPolicy,
     /// Where to append the developer error log (JSONL, one entry per retry
@@ -90,6 +140,19 @@ pub struct AgentConfig {
     pub permissions: Option<Arc<PermissionGate>>,
 }
 
+impl AgentConfig {
+    /// The reply-size cap actually used for requests and prompt budgeting:
+    /// the configured reserve, clamped down to the model's reported maximum
+    /// output when the catalog knows it (a cap above what the model can
+    /// produce would either error or silently mislead the budget).
+    pub fn effective_response_reserve(&self) -> usize {
+        match self.max_output_tokens {
+            Some(max) if max > 0 => self.response_reserve.min(max),
+            _ => self.response_reserve,
+        }
+    }
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -99,10 +162,15 @@ impl Default for AgentConfig {
             system_prompt: Some(default_system_prompt(false)),
             context_window: None,
             response_reserve: 4096,
+            max_output_tokens: None,
             max_resident_context_chars: 1_000_000,
             attachment_root: None,
             initial_attachments: Vec::new(),
             compression: CompressionMode::Off,
+            prompt_cache: crate::cache::PromptCacheMode::default(),
+            summary_model: None,
+            request_log: None,
+            budget: None,
             retry: RetryPolicy::default(),
             error_log: None,
             permissions: None,

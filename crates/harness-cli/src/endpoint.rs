@@ -48,13 +48,20 @@ pub(crate) async fn resolve_endpoint(
             .or_else(|| resume_meta.map(|m| m.model.clone()))
             .unwrap_or_else(harness_runtime::models::selected);
 
-        // Precedence for the base URL: --base-url > --host > env (OXEN_BASE_URL
-        // / OXEN_HOST) > default Oxen.ai endpoint.
-        let base_url = args
-            .base_url
-            .clone()
-            .or_else(|| args.host.as_deref().map(harness_llm::base_url_from_host))
-            .unwrap_or_else(harness_llm::resolve_base_url);
+        // Precedence for the base URL: --base-url > --host > the saved host
+        // override (connection.json, set via `/auth host` or the desktop
+        // Settings) > env (OXEN_BASE_URL / OXEN_HOST) > default Oxen.ai
+        // endpoint. The last three are `effective_base_url`'s resolution — the
+        // same one the desktop uses, so both hosts reach the same place.
+        let base_url =
+            args.base_url
+                .clone()
+                .or_else(|| args.host.as_deref().map(harness_llm::base_url_from_host))
+                .unwrap_or_else(|| {
+                    harness_runtime::connection::effective_base_url(
+                        &harness_runtime::connection::load(),
+                    )
+                });
         let client = match OxenClient::connect(base_url.clone(), &model) {
             Ok(c) => c,
             // No key resolves anywhere — offer the masked `/auth` entry card
@@ -74,10 +81,13 @@ pub(crate) async fn resolve_endpoint(
                 }
             }
         };
+        // The catalog-reported context window when a prior fetch has cached
+        // it; `None` falls back to the name-derived table in `harness-agent`.
+        let context_window = harness_local::limits::context_window(&model);
         Endpoint {
             client,
             model,
-            context_window: None,
+            context_window,
             local_server: None,
         }
     };
@@ -241,9 +251,13 @@ pub(crate) fn agent_config(
         ),
         harness_runtime::project::prompt_section(workspace.root())
     );
+    let limits = harness_runtime::limits::load();
     AgentConfig {
         model: model.to_string(),
         context_window,
+        // The catalog-reported reply ceiling, when a fetch has cached it
+        // (misses for local aliases — they fall back to the reserve).
+        max_output_tokens: harness_local::limits::max_output_tokens(model),
         system_prompt: Some(system_prompt),
         attachment_root: Some(workspace.root().to_path_buf()),
         initial_attachments: harness_runtime::project::binary_context_paths(workspace.root()),
@@ -252,6 +266,14 @@ pub(crate) fn agent_config(
         // Retry attempts and failed turns append to ~/.oxen-harness/errors.jsonl
         // so a developer can dig into what the endpoint said later.
         error_log: harness_config::paths::errors_log().ok(),
+        // Every model call appends its size, cache-prefix classification,
+        // latency, and reported usage to ~/.oxen-harness/requests.jsonl.
+        request_log: harness_config::paths::requests_log().ok(),
+        // Spend limits + summary routing from ~/.oxen-harness/limits.json.
+        budget: limits
+            .max_session_tokens
+            .map(harness_agent::SessionBudget::new),
+        summary_model: limits.summary_model,
         // Gate tool calls behind the permission layer, with approval prompts
         // rendered through the terminal picker. Fleet/review subagents get the
         // gate's auto-deny form automatically (see AgentConfig::permissions).

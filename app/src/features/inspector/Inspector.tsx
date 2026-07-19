@@ -292,10 +292,6 @@ export function Inspector({ sessionId }: { sessionId: string }) {
       ? Math.min(100, (info.context_tokens / info.context_window) * 100)
       : 0;
 
-  // A fixed "now" for relative timestamps in the chat view — this is a static
-  // historical transcript, so it needn't tick.
-  const now = Date.now();
-
   return (
     <div className="dev">
           {/* Toolbar — view toggle + transcript actions */}
@@ -388,7 +384,7 @@ export function Inspector({ sessionId }: { sessionId: string }) {
             <div className="dev-chatview">
               <div className="thread">
                 {chatItems.map((it) => (
-                  <ThreadItem key={it.id} item={it} now={now} />
+                  <ThreadItem key={it.id} item={it} />
                 ))}
               </div>
             </div>

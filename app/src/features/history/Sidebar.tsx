@@ -40,10 +40,13 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
   const projectName = activeProject?.name ?? (activePath ? activePath.split("/").pop() || activePath : null);
 
   // The sidebar shows only the current project's chats; everything else lives
-  // on the Projects page. A brand-new untitled chat is pinned to the top.
+  // on the Projects page. Imported transcripts (Claude Code / Cursor) are
+  // review-only — they live in Settings → Training data, not here, so they
+  // can't be resumed as live agents. A brand-new untitled chat is pinned to
+  // the top.
   const rows = useMemo<SessionSummary[]>(() => {
     if (!activePath) return [];
-    const list = sessions.filter((s) => s.workspace === activePath);
+    const list = sessions.filter((s) => s.workspace === activePath && s.source === "");
     if (currentId && session && session.workspace === activePath && !list.some((s) => s.id === currentId)) {
       list.unshift({
         id: currentId,
@@ -53,6 +56,7 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
         title: null,
         message_count: 0,
         review_status: "",
+        source: "",
       });
     }
     return list;

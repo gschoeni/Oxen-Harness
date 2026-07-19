@@ -35,7 +35,11 @@ static DETACH_EPOCH: AtomicU64 = AtomicU64::new(0);
 /// Show the browser webview at `bounds` (CSS pixels), creating it on first
 /// use, navigating it when the frontend asks for a different URL, and
 /// repositioning it otherwise.
-pub(crate) fn attach(app: &AppHandle, url: &str, bounds: &crate::preview::Bounds) -> Result<(), String> {
+pub(crate) fn attach(
+    app: &AppHandle,
+    url: &str,
+    bounds: &crate::preview::Bounds,
+) -> Result<(), String> {
     let target: Url = url.parse().map_err(|e| format!("bad url: {e}"))?;
     if !matches!(target.scheme(), "http" | "https") {
         return Err(format!("refusing to open non-web URL: {url}"));
@@ -73,8 +77,8 @@ pub(crate) fn attach(app: &AppHandle, url: &str, bounds: &crate::preview::Bounds
     // The pane is a small browser: following links within it is fine, but
     // anything that isn't a web page (mailto:, custom app schemes) goes to the
     // system handler instead of dead-ending a WKWebView.
-    let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(target))
-        .on_navigation(move |url: &Url| {
+    let builder =
+        WebviewBuilder::new(LABEL, WebviewUrl::External(target)).on_navigation(move |url: &Url| {
             let allowed = matches!(url.scheme(), "http" | "https" | "about");
             if !allowed {
                 let _ = open_external(url.as_str());

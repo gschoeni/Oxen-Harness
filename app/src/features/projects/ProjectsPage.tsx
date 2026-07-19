@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { ArrowDownAZ, Clock, FolderOpen, FolderPlus, Sparkles } from "lucide-react";
-import { Button } from "../../components/ui";
+import { ArrowDownAZ, Clock, FolderOpen, FolderPlus, Sparkles, Trash2 } from "lucide-react";
+import { Button, Modal } from "../../components/ui";
 import { relativeTime } from "../../lib/format";
 import { useStore } from "../../lib/store";
 import type { Project } from "../../lib/types";
@@ -33,15 +33,32 @@ export function ProjectsPage() {
   const runStatus = useStore((state) => state.runStatus);
   const activePath = useStore((state) => state.session?.workspace ?? null);
   const selectProject = useStore((state) => state.selectProject);
+  const enterProject = useStore((state) => state.enterProject);
   const resume = useStore((state) => state.resume);
   const setProjectsOpen = useStore((state) => state.setProjectsOpen);
   const projectHomePath = useStore((state) => state.projectHomePath);
   const refreshHistory = useStore((state) => state.refreshHistory);
+  const removeProject = useStore((state) => state.removeProject);
   const [selected, setSelected] = useState<Project | null>(() =>
     projectHomePath ? projects.find((project) => project.path === projectHomePath) ?? null : null,
   );
   const [starting, setStarting] = useState(false);
   const [sort, setSort] = useState<ProjectSort>(savedSort);
+  // The project queued for removal (drives the confirm modal), and whether the
+  // request is in flight.
+  const [pendingDelete, setPendingDelete] = useState<Project | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await removeProject(pendingDelete.path);
+      setPendingDelete(null);
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   function changeSort(next: ProjectSort) {
     setSort(next);
@@ -63,7 +80,10 @@ export function ProjectsPage() {
   async function openProject(project: Project) {
     // History is returned newest-first by the durable session store. Use it
     // directly so navigation cannot drift from a separately derived count.
-    const latest = sessions.find((session) => session.workspace === project.path);
+    // Imported transcripts are review-only and must never resume as an agent.
+    const latest = sessions.find(
+      (session) => session.workspace === project.path && session.source === "",
+    );
     if (latest) {
       await resume(latest.id);
       setProjectsOpen(false);
@@ -130,37 +150,46 @@ export function ProjectsPage() {
             {sorted.map((project) => {
               const running = runningByPath.get(project.path) ?? 0;
               return (
-                <button
+                <div
                   key={project.path}
                   className={`project-card ${project.path === activePath ? "active" : ""}`}
-                  onClick={() => void openProject(project)}
                 >
-                  <span className="project-card-icon"><FolderOpen size={20} /></span>
-                  <span className="project-card-main">
-                    <span className="project-card-name">
-                      {project.name}
-                      {project.path === activePath && <span className="project-card-badge">current</span>}
-                    </span>
-                    <span className="project-card-description">
-                      {project.description || "Add a goal and instructions for this project"}
-                    </span>
-                    <span className="project-card-path" title={project.path}>{project.path}</span>
-                  </span>
-                  <span className="project-card-meta">
-                    {running > 0 && (
-                      <span className="project-card-running" title={`${running} chat${running === 1 ? "" : "s"} running`}>
-                        <span className="run-dot" />
+                  <button className="project-card-open" onClick={() => void openProject(project)}>
+                    <span className="project-card-icon"><FolderOpen size={20} /></span>
+                    <span className="project-card-main">
+                      <span className="project-card-name">
+                        {project.name}
+                        {project.path === activePath && <span className="project-card-badge">current</span>}
                       </span>
-                    )}
-                    {project.context.length > 0 && (
-                      <span>{project.context.length} ref{project.context.length === 1 ? "" : "s"}</span>
-                    )}
-                    <span>{project.session_count} chat{project.session_count === 1 ? "" : "s"}</span>
-                    {project.last_used_at != null && (
-                      <span className="project-card-used">{relativeTime(project.last_used_at)}</span>
-                    )}
-                  </span>
-                </button>
+                      <span className="project-card-description">
+                        {project.description || "Add a goal and instructions for this project"}
+                      </span>
+                      <span className="project-card-path" title={project.path}>{project.path}</span>
+                    </span>
+                    <span className="project-card-meta">
+                      {running > 0 && (
+                        <span className="project-card-running" title={`${running} chat${running === 1 ? "" : "s"} running`}>
+                          <span className="run-dot" />
+                        </span>
+                      )}
+                      {project.context.length > 0 && (
+                        <span>{project.context.length} ref{project.context.length === 1 ? "" : "s"}</span>
+                      )}
+                      <span>{project.session_count} chat{project.session_count === 1 ? "" : "s"}</span>
+                      {project.last_used_at != null && (
+                        <span className="project-card-used">{relativeTime(project.last_used_at)}</span>
+                      )}
+                    </span>
+                  </button>
+                  <button
+                    className="project-card-delete"
+                    title="Remove project"
+                    aria-label={`Remove project: ${project.name}`}
+                    onClick={() => setPendingDelete(project)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
               );
             })}
             {projects.length === 0 && (
@@ -179,10 +208,28 @@ export function ProjectsPage() {
           onClose={() => setStarting(false)}
           onCreated={async (project) => {
             setStarting(false);
-            setSelected(project);
-            await selectProject(project.path);
+            // A brand-new project drops straight into a fresh chat; its home
+            // page (goal, instructions, context) stays reachable from the grid.
+            await enterProject(project.path);
           }}
         />
+      )}
+
+      {pendingDelete && (
+        <Modal title="Remove project?" onClose={() => !deleting && setPendingDelete(null)}>
+          <p className="delete-confirm-text">
+            Remove <strong>{pendingDelete.name}</strong> from your projects? Its folder and chat
+            history stay on disk — it just won’t be listed here anymore.
+          </p>
+          <div className="delete-confirm-actions">
+            <Button variant="ghost" onClick={() => setPendingDelete(null)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={confirmDelete} disabled={deleting}>
+              {deleting ? "Removing…" : "Remove"}
+            </Button>
+          </div>
+        </Modal>
       )}
     </div>
   );

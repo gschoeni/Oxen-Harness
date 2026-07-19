@@ -290,3 +290,40 @@
   color: var(--danger);
   background: var(--danger-soft);
 }
+
+/* ---- import panel: pull conversations from other tools' local logs ------ */
+.log-import {
+  gap: var(--space-3);
+}
+.log-import .hint {
+  margin: 0;
+  max-width: 60ch;
+}
+.log-import-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+}
+.log-import-name {
+  font-weight: 600;
+  min-width: 8.5rem;
+}
+.log-import-meta {
+  flex: 1;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  font-family: var(--font-readout);
+}
+/* Provenance chip on imported rows, inline with the model/length readout. */
+.log-source-badge {
+  display: inline-block;
+  margin-right: var(--space-2);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-strong, var(--border));
+  font-size: var(--text-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}

@@ -298,6 +298,13 @@ pub struct ChatRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<StreamOptions>,
+    /// Message indices to mark with an Anthropic-style
+    /// `cache_control: {"type": "ephemeral"}` breakpoint when the body is
+    /// built (see [`ChatRequest::to_body`]). Not part of the wire struct
+    /// itself — the marker is applied to the serialized JSON so the typed
+    /// message structs stay provider-neutral. Empty means no markers.
+    #[serde(skip)]
+    pub cache_anchors: Vec<usize>,
 }
 
 impl ChatRequest {
@@ -312,6 +319,7 @@ impl ChatRequest {
             max_tokens: None,
             stream: false,
             stream_options: None,
+            cache_anchors: Vec::new(),
         }
     }
 
@@ -331,6 +339,73 @@ impl ChatRequest {
     pub fn max_tokens(mut self, max_tokens: usize) -> Self {
         self.max_tokens = Some(max_tokens.min(u32::MAX as usize) as u32);
         self
+    }
+
+    /// Mark `anchors` (message indices) as prompt-cache breakpoints.
+    /// Out-of-range indices are ignored at build time.
+    pub fn with_cache_anchors(mut self, anchors: Vec<usize>) -> Self {
+        self.cache_anchors = anchors;
+        self
+    }
+
+    /// The JSON body actually sent on the wire: the serialized request, plus
+    /// `cache_control` markers applied to each anchored message.
+    ///
+    /// The transformation is deterministic — identical requests produce
+    /// byte-identical bodies — and shape-preserving for providers that ignore
+    /// unknown fields: a text-only anchored message becomes a one-element
+    /// content-part array carrying the marker (the form OpenAI-compatible
+    /// proxies accept `cache_control` in); an already-multipart message gets
+    /// the marker on its last part.
+    pub fn to_body(&self) -> serde_json::Value {
+        let mut body = serde_json::to_value(self).expect("ChatRequest always serializes");
+        if self.cache_anchors.is_empty() {
+            return body;
+        }
+        if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+            for &i in &self.cache_anchors {
+                if let Some(message) = messages.get_mut(i) {
+                    apply_cache_control(message);
+                }
+            }
+        }
+        body
+    }
+}
+
+/// Attach `cache_control: {"type":"ephemeral"}` to a serialized message's
+/// content. String content is wrapped into a single text part (the marker
+/// rides on parts, not bare strings); multipart content marks its last part.
+/// Messages with no content (e.g. a tool-call-only assistant turn) are left
+/// untouched — the caller should anchor a content-bearing message instead.
+///
+/// `system` messages are never touched: proxies that translate to the
+/// Anthropic Messages API reject a parts-form system message ("use the
+/// top-level 'system' parameter"), and a breakpoint on a *later* message
+/// caches the whole prefix — system prompt and tools included — anyway.
+fn apply_cache_control(message: &mut serde_json::Value) {
+    if message.get("role").and_then(|r| r.as_str()) == Some("system") {
+        return;
+    }
+    let marker = serde_json::json!({ "type": "ephemeral" });
+    let Some(content) = message.get_mut("content") else {
+        return;
+    };
+    match content {
+        serde_json::Value::String(text) => {
+            let part = serde_json::json!({
+                "type": "text",
+                "text": std::mem::take(text),
+                "cache_control": marker,
+            });
+            *content = serde_json::Value::Array(vec![part]);
+        }
+        serde_json::Value::Array(parts) => {
+            if let Some(last) = parts.last_mut().and_then(|p| p.as_object_mut()) {
+                last.insert("cache_control".into(), marker);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -386,6 +461,41 @@ pub struct Usage {
     pub completion_tokens: u32,
     #[serde(default)]
     pub total_tokens: u32,
+    /// OpenAI-style cache detail (`prompt_tokens_details.cached_tokens`),
+    /// reported by endpoints with automatic prompt caching. `None` when the
+    /// endpoint doesn't report cache activity — distinct from a reported 0.
+    #[serde(default)]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+    /// Anthropic-style flat cache fields, passed through verbatim by some
+    /// OpenAI-compatible proxies fronting Anthropic models.
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u32>,
+}
+
+/// The `prompt_tokens_details` object of an OpenAI-style usage block.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub struct PromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: u32,
+}
+
+impl Usage {
+    /// Prompt tokens served from the provider's prompt cache this call (billed
+    /// at the discounted cache-read rate), whichever wire shape reported them.
+    /// 0 when the endpoint reports no cache activity.
+    pub fn cached_prompt_tokens(&self) -> u32 {
+        self.cache_read_input_tokens
+            .or(self.prompt_tokens_details.map(|d| d.cached_tokens))
+            .unwrap_or(0)
+    }
+
+    /// Tokens written into the provider's prompt cache this call (billed at
+    /// the cache-write premium). Only Anthropic-style endpoints report this.
+    pub fn cache_write_tokens(&self) -> u32 {
+        self.cache_creation_input_tokens.unwrap_or(0)
+    }
 }
 
 /// A single streaming chunk (`chat.completion.chunk`).
@@ -496,6 +606,84 @@ mod tests {
         assert_eq!(json["stream"], false);
         assert!(json.get("tools").is_none());
         assert!(json.get("temperature").is_none());
+    }
+
+    #[test]
+    fn usage_parses_cached_tokens_in_both_wire_shapes() {
+        // OpenAI-style nested detail.
+        let openai: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":1000,"completion_tokens":50,"total_tokens":1050,
+                "prompt_tokens_details":{"cached_tokens":900}}"#,
+        )
+        .unwrap();
+        assert_eq!(openai.cached_prompt_tokens(), 900);
+        assert_eq!(openai.cache_write_tokens(), 0);
+
+        // Anthropic-style flat fields (passed through by some proxies).
+        let anthropic: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":100,"completion_tokens":50,
+                "cache_read_input_tokens":800,"cache_creation_input_tokens":200}"#,
+        )
+        .unwrap();
+        assert_eq!(anthropic.cached_prompt_tokens(), 800);
+        assert_eq!(anthropic.cache_write_tokens(), 200);
+
+        // Neither shape → 0s, and the legacy three-field body still parses.
+        let plain: Usage =
+            serde_json::from_str(r#"{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}"#)
+                .unwrap();
+        assert_eq!(plain.cached_prompt_tokens(), 0);
+        assert_eq!(plain.cache_write_tokens(), 0);
+    }
+
+    #[test]
+    fn cache_anchors_mark_string_and_multipart_content() {
+        let req = ChatRequest::new(
+            "claude-opus-4-8",
+            vec![
+                ChatMessage::system("be helpful"),
+                ChatMessage::user("plain question"),
+                ChatMessage::user_parts(vec![
+                    ContentPart::text("look"),
+                    ContentPart::image("data:image/png;base64,AAAA"),
+                ]),
+            ],
+        )
+        .with_cache_anchors(vec![0, 1, 2, 99]); // out-of-range index is ignored
+
+        let body = req.to_body();
+        // A system message is never converted to parts, even when anchored —
+        // proxies translating to the Anthropic API reject that form.
+        assert_eq!(body["messages"][0]["content"], "be helpful");
+        // String content wraps into a single marked text part…
+        assert_eq!(
+            body["messages"][1]["content"],
+            serde_json::json!([{
+                "type": "text",
+                "text": "plain question",
+                "cache_control": { "type": "ephemeral" }
+            }])
+        );
+        // …and multipart content marks its last part only.
+        let parts = body["messages"][2]["content"].as_array().unwrap();
+        assert!(parts[0].get("cache_control").is_none());
+        assert_eq!(
+            parts[1]["cache_control"],
+            serde_json::json!({"type": "ephemeral"})
+        );
+    }
+
+    #[test]
+    fn to_body_without_anchors_matches_plain_serialization() {
+        // No anchors → the wire body is byte-identical to the serde form, and
+        // the anchor field itself never serializes.
+        let req = ChatRequest::new("m", vec![ChatMessage::user("hi")]);
+        assert_eq!(req.to_body(), serde_json::to_value(&req).unwrap());
+        assert!(req.to_body().get("cache_anchors").is_none());
+
+        let anchored =
+            ChatRequest::new("m", vec![ChatMessage::user("hi")]).with_cache_anchors(vec![0]);
+        assert!(anchored.to_body().get("cache_anchors").is_none());
     }
 
     #[test]

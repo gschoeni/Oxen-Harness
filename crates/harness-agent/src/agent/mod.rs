@@ -74,6 +74,18 @@ pub struct Agent {
     prompt_tokens_used: usize,
     /// Cumulative completion (output) tokens this run (see above).
     completion_tokens_used: usize,
+    /// Cumulative prompt tokens the provider reported as served from its
+    /// prompt cache this run (a subset of `prompt_tokens_used`, billed at the
+    /// discounted cache-read rate). 0 until the endpoint reports cache activity.
+    cached_prompt_tokens_used: usize,
+    /// Cumulative prompt tokens the provider reported writing into its cache
+    /// this run (billed at the cache-write premium).
+    cache_write_tokens_used: usize,
+    /// Fingerprints of the previous request's outbound messages plus its
+    /// tool-definition hash, for cache-prefix diffing (see [`crate::cache`]).
+    /// In-memory only — diagnostics, not state.
+    prev_request_hashes: Vec<u64>,
+    prev_tools_hash: Option<u64>,
     /// Cooperative stop signal for the in-flight turn. Replaced per turn (see
     /// [`Agent::set_cancel_token`]) so the host can cancel a streaming response
     /// without holding the agent's lock; a fresh token each turn keeps a prior
@@ -105,6 +117,17 @@ pub struct Agent {
     /// points (see [`crate::interject`]). Hosts push through a handle cloned
     /// via [`Agent::interjections`] before the turn takes the agent.
     interjections: crate::Interjections,
+}
+
+/// What one model call cost beyond its token counts: the cache-read/write
+/// split the provider reported, wall-clock latency, and retries burned before
+/// it landed. Defaults to "nothing observed" for estimate-only paths.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct CallOutcome {
+    pub(crate) cached_prompt_tokens: usize,
+    pub(crate) cache_write_tokens: usize,
+    pub(crate) latency_ms: Option<u64>,
+    pub(crate) retries: u32,
 }
 
 /// A speculative compaction summary in flight (see [`Agent`]'s `prefire`).
@@ -155,6 +178,10 @@ impl Agent {
             tokens_used: 0,
             prompt_tokens_used: 0,
             completion_tokens_used: 0,
+            cached_prompt_tokens_used: 0,
+            cache_write_tokens_used: 0,
+            prev_request_hashes: Vec::new(),
+            prev_tools_hash: None,
             cancel: CancellationToken::new(),
             token_ratio: 1.0,
             ccr,
@@ -207,6 +234,10 @@ impl Agent {
             // estimate into prompt vs completion, so they start at 0 on resume.
             prompt_tokens_used: 0,
             completion_tokens_used: 0,
+            cached_prompt_tokens_used: 0,
+            cache_write_tokens_used: 0,
+            prev_request_hashes: Vec::new(),
+            prev_tools_hash: None,
             cancel: CancellationToken::new(),
             token_ratio: 1.0,
             ccr,
@@ -225,7 +256,13 @@ impl Agent {
     pub(crate) fn invalidate_prefire(&mut self) {
         if let Some(pre) = self.prefire.take() {
             pre.handle.abort();
-            self.record_usage(pre.prompt_estimate, 0);
+            self.record_usage_event(
+                self.summary_model(),
+                pre.prompt_estimate,
+                0,
+                "summary",
+                &CallOutcome::default(),
+            );
         }
     }
 
@@ -250,6 +287,10 @@ impl Agent {
         self.tokens_used = 0;
         self.prompt_tokens_used = 0;
         self.completion_tokens_used = 0;
+        self.cached_prompt_tokens_used = 0;
+        self.cache_write_tokens_used = 0;
+        self.prev_request_hashes = Vec::new();
+        self.prev_tools_hash = None;
         self.tokens_saved = 0;
         self.invalidate_prefire();
         Ok(())
@@ -282,6 +323,12 @@ impl Agent {
         &self.config.model
     }
 
+    /// The API base URL of the client currently in use — tracks
+    /// [`Self::set_client`] swaps, so hosts can show where requests actually go.
+    pub fn base_url(&self) -> &str {
+        self.client.base_url()
+    }
+
     /// Switch the model used for subsequent turns.
     pub fn set_model(&mut self, model: impl Into<String>) {
         self.config.model = model.into();
@@ -300,6 +347,14 @@ impl Agent {
     /// where `None` lets it derive from the model name again.
     pub fn set_context_window(&mut self, window: Option<usize>) {
         self.config.context_window = window;
+    }
+
+    /// Set (or clear) the model's reported maximum reply size, after a live
+    /// model swap — pairs with [`Agent::set_model`] the way
+    /// [`Agent::set_context_window`] does. `None` means unknown: requests fall
+    /// back to the configured response reserve.
+    pub fn set_max_output_tokens(&mut self, max: Option<usize>) {
+        self.config.max_output_tokens = max;
     }
 
     /// Install the stop signal for the next turn. The host keeps a clone so it
@@ -363,6 +418,19 @@ impl Agent {
         self.completion_tokens_used
     }
 
+    /// Cumulative prompt tokens the provider served from its prompt cache this
+    /// run — the discounted subset of [`Agent::prompt_tokens_used`]. Stays 0
+    /// when the endpoint reports no cache activity.
+    pub fn cached_prompt_tokens_used(&self) -> usize {
+        self.cached_prompt_tokens_used
+    }
+
+    /// Cumulative prompt tokens written into the provider's cache this run
+    /// (billed at the cache-write premium), when reported.
+    pub fn cache_write_tokens_used(&self) -> usize {
+        self.cache_write_tokens_used
+    }
+
     /// Route aggregate usage to `store` without changing where this agent's
     /// transcript lives. Used by detached review/fleet agents.
     pub(crate) fn set_usage_store(&mut self, store: Arc<HistoryStore>) {
@@ -396,13 +464,31 @@ impl Agent {
         ];
         let request = ChatRequest::new(&self.config.model, messages).streaming(true);
         // A one-shot side task, not the cancellable turn loop: run it to completion.
+        let started = std::time::Instant::now();
         let assembled = self
             .client
             .stream_chat(&request, &CancellationToken::new(), |_| {})
             .await?;
         let raw_prompt = budget::estimate_prompt_tokens(&request.messages, &[]);
         let (prompt, completion) = budget::split_oneshot_usage(&assembled, raw_prompt);
-        self.record_usage(prompt, completion);
+        self.record_usage_event(
+            &self.config.model,
+            prompt,
+            completion,
+            "oneshot",
+            &CallOutcome {
+                cached_prompt_tokens: assembled
+                    .usage
+                    .map(|u| u.cached_prompt_tokens() as usize)
+                    .unwrap_or(0),
+                cache_write_tokens: assembled
+                    .usage
+                    .map(|u| u.cache_write_tokens() as usize)
+                    .unwrap_or(0),
+                latency_ms: Some(started.elapsed().as_millis() as u64),
+                retries: 0,
+            },
+        );
         Ok(assembled.content)
     }
 
@@ -434,14 +520,37 @@ impl Agent {
         Ok(side)
     }
 
-    /// Persist one model call in the shared per-model ledger. Accounting is
-    /// best-effort and must never turn a successful inference into a failed turn.
-    fn record_usage(&self, prompt_tokens: usize, completion_tokens: usize) {
-        let _ = self.usage_store.record_model_usage(
-            &self.config.model,
+    /// Persist one model call with full attribution: which model actually ran
+    /// (compaction may route to a cheaper summarizer), what kind of call it
+    /// was, the cache-read/cache-write split, latency, and retries burned.
+    fn record_usage_event(
+        &self,
+        model: &str,
+        prompt_tokens: usize,
+        completion_tokens: usize,
+        kind: &str,
+        outcome: &CallOutcome,
+    ) {
+        // Detached side agents keep their transcript out of the store; their
+        // spend is recorded, but not attributed to a phantom session.
+        let session_id = if self.persist_transcript {
+            self.session_id.as_str()
+        } else {
+            ""
+        };
+        let _ = self.usage_store.record_model_usage_detailed(
+            model,
             self.usage_source(),
             prompt_tokens,
             completion_tokens,
+            &harness_store::UsageDetail {
+                session_id,
+                kind,
+                cached_prompt_tokens: outcome.cached_prompt_tokens,
+                cache_write_tokens: outcome.cache_write_tokens,
+                latency_ms: outcome.latency_ms,
+                retries: outcome.retries,
+            },
         );
         let total = prompt_tokens.saturating_add(completion_tokens);
         if total > 0 {
@@ -449,6 +558,15 @@ impl Agent {
                 .usage_store
                 .meta_add_i64("total_tokens_used", total as i64);
         }
+    }
+
+    /// The model compaction summaries run on: the configured cheap summarizer
+    /// when set, else the session model.
+    pub(crate) fn summary_model(&self) -> &str {
+        self.config
+            .summary_model
+            .as_deref()
+            .unwrap_or(&self.config.model)
     }
 
     /// Only the public Oxen hub catalog has rates this harness can apply. Local

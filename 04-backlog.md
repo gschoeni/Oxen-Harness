@@ -12,7 +12,7 @@
 - **Permission modes** — optional "ask before edit/shell/commit" mode for cautious use, even though edits are allowed by default.
 - **Checkpoints / undo** — snapshot the working dir per turn so a bad edit can be rolled back.
 - **Session replay** — re-run a recorded JSONL transcript against a different model to compare behavior.
-- **Prompt caching** — provider-side caching of the stable prompt prefix to cut cost/latency. (Context *compaction* and reversible *compression* shipped — see `03-decisions.md`.)
+- ~~**Prompt caching**~~ — ✅ shipped (2026-07-17): `cache_control` anchors on the last two content-bearing user/assistant messages (`PromptCacheMode::Auto`, Anthropic-family models), verified ~99% billed-input reduction through hub.oxen.ai; cached-usage parsing, per-call attribution on `usage_events` (M8), `requests.jsonl` cache diagnostics, loop guard, session token budgets, summary-model routing — see `03-decisions.md`. Remaining ideas: surface cache stats in TokenMeter//usage, cache-rate-aware pricing for OpenAI-style endpoints, Settings page for `limits.json`.
 - **Switch local models mid-session** — today `--local <id>` is chosen at startup; allow `/model <local-id>` to stop the current `llama-server` and start another without restarting the session. Could also auto-detect GGUFs already in `~/.cache/huggingface`, `~/.lmstudio/models`, or `~/.ollama/models`.
 - **Per-model llama-server tuning** — expose context size / GPU layers / quant choice per catalog entry, and a way to add custom (non-catalog) GGUFs.
 - **Theme gallery + sharing** — a curated, importable set of community themes (e.g. a small index the CLI/app can browse and pull), beyond the five built-ins.

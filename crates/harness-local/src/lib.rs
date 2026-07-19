@@ -25,6 +25,7 @@ mod download;
 pub mod fit;
 pub mod gguf;
 pub mod hardware;
+pub mod limits;
 pub mod resolve;
 pub mod runtime;
 pub mod server;
@@ -67,20 +68,45 @@ pub enum LocalError {
 /// this crate and the CLI share one implementation.
 pub use harness_core::fmt::format_bytes;
 
-/// Run `f` with `OXEN_HARNESS_DIR` pointed at a fresh temp directory, restoring
-/// the previous value after. Env vars are process-wide, so callers serialize on
-/// an internal lock — tests that touch the user catalog or store paths use this
-/// to stay hermetic.
+/// Point `OXEN_HARNESS_DIR` at a fresh temp directory until the returned guard
+/// drops, restoring the previous value after. Env vars are process-wide, so
+/// every test in this crate that touches harness paths serializes on the one
+/// internal lock here — hold the guard for the whole test (it works across
+/// `.await`s, which a closure helper can't).
 #[cfg(test)]
-pub(crate) fn with_temp_harness_dir(f: impl FnOnce()) {
+pub(crate) fn temp_harness_dir() -> TempHarnessDir {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let prev = std::env::var_os(harness_config::paths::BASE_DIR_ENV);
     std::env::set_var(harness_config::paths::BASE_DIR_ENV, tmp.path());
-    f();
-    match prev {
-        Some(v) => std::env::set_var(harness_config::paths::BASE_DIR_ENV, v),
-        None => std::env::remove_var(harness_config::paths::BASE_DIR_ENV),
+    TempHarnessDir {
+        _tmp: tmp,
+        prev,
+        _lock: lock,
     }
+}
+
+#[cfg(test)]
+pub(crate) struct TempHarnessDir {
+    _tmp: tempfile::TempDir,
+    prev: Option<std::ffi::OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for TempHarnessDir {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(v) => std::env::set_var(harness_config::paths::BASE_DIR_ENV, v),
+            None => std::env::remove_var(harness_config::paths::BASE_DIR_ENV),
+        }
+    }
+}
+
+/// Run `f` under [`temp_harness_dir`] — the closure form for sync tests.
+#[cfg(test)]
+pub(crate) fn with_temp_harness_dir(f: impl FnOnce()) {
+    let _guard = temp_harness_dir();
+    f();
 }

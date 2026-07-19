@@ -95,20 +95,27 @@
 }
 .project-card {
   position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--space-4);
   min-height: 154px;
-  text-align: left;
   color: var(--text);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   border: var(--frame-border-w) solid var(--separator);
   border-radius: max(var(--frame-radius), var(--radius-lg));
   box-shadow: var(--shadow-1);
-  padding: var(--space-5);
-  cursor: pointer;
   overflow: hidden;
   transition: transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.project-card-open {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-4);
+  width: 100%;
+  min-height: 154px;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: var(--space-5);
+  cursor: pointer;
 }
 .project-card::after {
   content: "";
@@ -188,6 +195,34 @@
 }
 .project-card-running { display: grid; place-items: center; width: 12px; height: 12px; }
 .project-card-used { margin-left: auto; }
+
+/* Hover-revealed remove button in the card's top-right corner. */
+.project-card-delete {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--text-tertiary);
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.project-card:hover .project-card-delete,
+.project-card-delete:focus-visible {
+  opacity: 1;
+}
+.project-card-delete:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
 
 .projects-empty {
   grid-column: 1 / -1;

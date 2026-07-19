@@ -76,7 +76,7 @@ impl OxenClient {
             .http
             .post(self.endpoint())
             .bearer_auth(&self.api_key)
-            .json(request)
+            .json(&request.to_body())
             .send()
             .await?;
 
@@ -119,7 +119,7 @@ impl OxenClient {
                 .http
                 .post(self.endpoint())
                 .bearer_auth(&self.api_key)
-                .json(request)
+                .json(&request.to_body())
                 .send() => resp?,
         };
 

@@ -19,12 +19,16 @@ const PER_MESSAGE_OVERHEAD: usize = 4;
 /// Context window assumed for an unrecognized model.
 const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
 
-/// Best-effort context window (in tokens) for a model, by name.
+/// Best-effort context window (in tokens) for a model, by name — the
+/// **fallback** when no authoritative size is configured.
 ///
-/// These are conservative, well-known sizes; unknown models fall back to a
-/// reasonable default. Locally-served models should override this with the
-/// actual `llama-server` context size (usually far smaller than the model's
-/// theoretical maximum).
+/// Hosts prefer accurate sources and pass them via `AgentConfig::context_window`:
+/// the endpoint catalog's reported `context_length` (cached per model id in
+/// `~/.oxen-harness/model-limits.json`) for cloud models, and the actual
+/// `llama-server` context size for local ones (usually far smaller than the
+/// model's theoretical maximum). This table only decides when neither is
+/// known — conservative, well-known sizes, with unknown models falling back
+/// to a reasonable default.
 pub fn context_window_for(model: &str) -> usize {
     let m = model.to_ascii_lowercase();
     if m.contains("claude") || m.contains("fable") || m.contains("mythos") {
@@ -84,6 +88,30 @@ pub fn estimate_prompt_tokens(messages: &[ChatMessage], tools: &[serde_json::Val
 /// above (used to express compression savings in the meter's units).
 pub fn estimate_tokens_for_chars(chars: usize) -> usize {
     chars / CHARS_PER_TOKEN
+}
+
+/// The full prompt size one call's reported usage describes, reconciling the
+/// two counting styles seen in the wild (both verified against real
+/// endpoints):
+///
+/// - **Inclusive** (OpenAI-style): `prompt_tokens` covers the whole prompt
+///   and `cached_tokens` is the subset served from cache — the cache detail
+///   fits inside the count, so the count *is* the full size.
+/// - **Exclusive** (Anthropic-style pass-through): `prompt_tokens` covers
+///   only the uncached remainder (a fully cached 4K prompt reports ~3), so
+///   the full size is the sum of the parts.
+///
+/// Used to calibrate the client-side estimate; summing blindly would double
+/// the inclusive style, and taking `prompt_tokens` alone would collapse the
+/// exclusive one.
+pub fn reported_full_prompt(usage: &harness_llm::types::Usage) -> usize {
+    let prompt = usage.prompt_tokens as usize;
+    let cache_detail = usage.cached_prompt_tokens() as usize + usage.cache_write_tokens() as usize;
+    if cache_detail <= prompt {
+        prompt
+    } else {
+        prompt + cache_detail
+    }
 }
 
 /// Estimate the tokens generated in an assembled reply (text + tool calls).
@@ -163,6 +191,39 @@ mod tests {
         let without = estimate_prompt_tokens(&[ChatMessage::user("hi")], &[]);
         let with = estimate_prompt_tokens(&[ChatMessage::user("hi")], &tools);
         assert!(with > without);
+    }
+
+    #[test]
+    fn reported_full_prompt_handles_both_counting_styles() {
+        use harness_llm::types::{PromptTokensDetails, Usage};
+
+        // Inclusive (OpenAI-style): cached is a subset of prompt_tokens — the
+        // count already is the full size; summing would double it.
+        let inclusive = Usage {
+            prompt_tokens: 4346,
+            prompt_tokens_details: Some(PromptTokensDetails {
+                cached_tokens: 4343,
+            }),
+            ..Usage::default()
+        };
+        assert_eq!(reported_full_prompt(&inclusive), 4346);
+
+        // Exclusive (Anthropic-style pass-through): prompt_tokens is only the
+        // uncached remainder — the full size is the sum of the parts.
+        let exclusive = Usage {
+            prompt_tokens: 3,
+            cache_read_input_tokens: Some(900),
+            cache_creation_input_tokens: Some(80),
+            ..Usage::default()
+        };
+        assert_eq!(reported_full_prompt(&exclusive), 983);
+
+        // No cache detail at all: the plain count stands.
+        let plain = Usage {
+            prompt_tokens: 1200,
+            ..Usage::default()
+        };
+        assert_eq!(reported_full_prompt(&plain), 1200);
     }
 
     #[test]

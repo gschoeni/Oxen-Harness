@@ -9,6 +9,17 @@
 //! when stdout is not a TTY, when `NO_COLOR` is set, or for `TERM=dumb`, so
 //! piped output stays clean.
 //!
+//! ## Light themes on dark terminals
+//!
+//! The CLI cannot repaint the terminal's background, so a light-on-paper theme
+//! (New York Times, Cupertino) declares its intended paper via the palette's
+//! app-only `background` slot, and the [`Ui`] uses that to tell "the canvas is
+//! the light paper" (desktop app) from "the canvas is the terminal's own
+//! background" — in which case near-black ink colors would be invisible. When
+//! the background isn't the declared paper, every emitted foreground is lifted
+//! just enough (keeping its hue) to stay legible on a dark terminal; on the
+//! declared paper, colors pass through untouched.
+//!
 //! This module owns the [`Ui`] color/theme handle and the small always-present
 //! input chrome ([`prompt`], [`divider`]); the larger themed compositions live
 //! in focused submodules — [`screens`] (banner, help, exit), [`models`] (the
@@ -40,13 +51,90 @@ pub(crate) type Rgb = (u8, u8, u8);
 pub struct Ui {
     color: bool,
     theme: Arc<Theme>,
+    /// `false` when the theme paints its own background (the desktop app), so
+    /// palette colors render as authored. `true` when the terminal's own
+    /// background shows through — the CLI can't repaint it — so colors designed
+    /// for light paper are lifted just enough to stay legible on dark glass.
+    cli_background: bool,
+}
+
+/// sRGB channel → linear-light intensity.
+fn linearize(c: u8) -> f32 {
+    let c = c as f32 / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Linear-light intensity → sRGB channel.
+fn unlinearize(c: f32) -> u8 {
+    let c = if c <= 0.0031308 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (c * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+/// WCAG relative luminance of an sRGB color, in `0.0..=1.0`.
+fn relative_luminance(Color { r, g, b }: Color) -> f32 {
+    0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b)
+}
+
+/// Adjust `c` for display on a background the theme doesn't control. Themes
+/// declaring light paper get their below-bar colors lifted toward the paper
+/// tone — in linear light, so the mix lands on a known luminance — and their
+/// saturation pushed back up so hues survive the lift (black ink becomes warm
+/// gray, navy stays blue, press red stays red); colors already legible pass
+/// through unchanged. Dark themes are tuned for dark terminals and left alone.
+fn adapt_for_cli(c: Color, paper: Color) -> Color {
+    const TEXT_MIN: f32 = 0.30; // near-black ink on the dark glass (~5:1)
+    const ACCENT_MIN: f32 = 0.14; // accent lift floor (~1.8:1)…
+    const ACCENT_SAT: f32 = 1.7; // …with saturation pushed back so hues read
+    let lum = relative_luminance(c);
+    let paper_lum = relative_luminance(paper);
+    // Only a light paper can serve as a lift target. On a dark paper the mix
+    // below can never reach the floor, so `t` clamps to 1.0 and the color
+    // becomes the background itself — invisible. Dark themes are authored for
+    // dark terminals; keep them as-is.
+    if paper_lum <= TEXT_MIN || lum >= paper_lum {
+        return c;
+    }
+    if lum >= TEXT_MIN {
+        return c; // already legible on dark glass
+    }
+    // True ink (near-black) lifts straight to a paper-gray; accents lift
+    // partway and get their saturation pushed back so the hue still reads.
+    let ink = lum < 0.03;
+    let (floor, sat) = if ink {
+        (TEXT_MIN, 1.0)
+    } else {
+        (ACCENT_MIN, ACCENT_SAT)
+    };
+    if lum >= floor {
+        return c; // already legible; nothing to lift
+    }
+    let cl = (linearize(c.r), linearize(c.g), linearize(c.b));
+    let pl = (linearize(paper.r), linearize(paper.g), linearize(paper.b));
+    let t = ((floor - lum) / (paper_lum - lum)).clamp(0.0, 1.0);
+    let mix = |c: f32, p: f32| c + (p - c) * t;
+    let base = (mix(cl.0, pl.0), mix(cl.1, pl.1), mix(cl.2, pl.2));
+    let luma = 0.2126 * base.0 + 0.7152 * base.1 + 0.0722 * base.2;
+    let channel = |v: f32| unlinearize(luma + (v - luma) * sat);
+    Color::new(channel(base.0), channel(base.1), channel(base.2))
 }
 
 impl Ui {
     /// Build a UI with an explicit color setting and theme (used in tests).
     #[cfg(test)]
     pub fn with(color: bool, theme: Arc<Theme>) -> Self {
-        Ui { color, theme }
+        Ui {
+            color,
+            theme,
+            cli_background: true,
+        }
     }
 
     /// Detect terminal capabilities for stdout, using `theme` for styling.
@@ -56,6 +144,7 @@ impl Ui {
         Ui {
             color: io::stdout().is_terminal() && !no_color && !dumb,
             theme,
+            cli_background: true,
         }
     }
 
@@ -65,6 +154,7 @@ impl Ui {
         Ui {
             color: false,
             theme: Arc::new(Theme::default()),
+            cli_background: true,
         }
     }
 
@@ -78,6 +168,7 @@ impl Ui {
         Ui {
             color: self.color,
             theme,
+            cli_background: self.cli_background,
         }
     }
 
@@ -117,9 +208,27 @@ impl Ui {
         self.color
     }
 
+    /// Whether ANSI color is being emitted at all (TTY, no `NO_COLOR`, not
+    /// `TERM=dumb`) — gates styling that goes beyond this palette's slots,
+    /// like syntax highlighting.
+    pub fn colored(&self) -> bool {
+        self.color
+    }
+
+    /// Resolve a palette color for the actual canvas: as-authored when the
+    /// theme paints its own background, lifted for legibility when the dark
+    /// terminal background shows through (see the module docs).
+    fn fg(&self, color: Color) -> Color {
+        if self.cli_background {
+            adapt_for_cli(color, self.theme.palette.background)
+        } else {
+            color
+        }
+    }
+
     fn paint(&self, text: &str, color: Color) -> String {
         if self.color {
-            paint(text, color.rgb())
+            paint(text, self.fg(color).rgb())
         } else {
             text.to_string()
         }
@@ -127,7 +236,7 @@ impl Ui {
 
     fn bold(&self, text: &str, color: Color) -> String {
         if self.color {
-            let (r, g, b) = color.rgb();
+            let (r, g, b) = self.fg(color).rgb();
             format!("\x1b[1;38;2;{r};{g};{b}m{text}\x1b[0m")
         } else {
             text.to_string()
@@ -163,7 +272,7 @@ impl Ui {
     }
     pub fn em(&self, s: &str) -> String {
         if self.color {
-            let (r, g, b) = self.theme.palette.text.rgb();
+            let (r, g, b) = self.fg(self.theme.palette.text).rgb();
             format!("\x1b[3;38;2;{r};{g};{b}m{s}\x1b[0m")
         } else {
             s.to_string()
@@ -174,7 +283,7 @@ impl Ui {
     }
     pub fn link(&self, s: &str) -> String {
         if self.color {
-            let (r, g, b) = self.theme.palette.link.rgb();
+            let (r, g, b) = self.fg(self.theme.palette.link).rgb();
             format!("\x1b[4;38;2;{r};{g};{b}m{s}\x1b[0m")
         } else {
             s.to_string()
@@ -300,5 +409,101 @@ mod tests {
             .deaths
             .iter()
             .any(|d| d.contains("GAME OVER")));
+    }
+
+    /// The painted RGB of a semantic slot under `ui`, parsed back out of the
+    /// ANSI escape so adaptation can be asserted on numerically.
+    fn painted_rgb(ui: &Ui, slot: fn(&Ui, &str) -> String) -> Color {
+        let s = slot(ui, "x");
+        let inner = s
+            .trim_start_matches("\x1b[1;38;2;")
+            .trim_start_matches("\x1b[38;2;")
+            .trim_start_matches("\x1b[3;38;2;")
+            .trim_start_matches("\x1b[4;38;2;");
+        let nums: Vec<u8> = inner
+            .split([';', 'm'])
+            .take(3)
+            .filter_map(|n| n.parse().ok())
+            .collect();
+        assert_eq!(nums.len(), 3, "could not parse rgb out of {s:?}");
+        Color::new(nums[0], nums[1], nums[2])
+    }
+
+    #[test]
+    fn light_theme_ink_is_lifted_on_the_cli_background() {
+        let nyt = Arc::new(harness_theme::builtins::by_name("new york times").unwrap());
+        let ui = Ui::with(true, nyt.clone());
+        let p = &nyt.palette;
+
+        // The near-black masthead/body ink becomes legible on dark glass…
+        for slot in [Ui::title as fn(&Ui, &str) -> String, Ui::cream, Ui::strong] {
+            assert!(
+                relative_luminance(painted_rgb(&ui, slot)) >= 0.28,
+                "lifted ink should clear ~5:1 on a dark terminal"
+            );
+        }
+        // …and the warm-gray byline/muted tones lift well off the background.
+        for slot in [Ui::dim as fn(&Ui, &str) -> String, Ui::brown] {
+            assert!(
+                relative_luminance(painted_rgb(&ui, slot)) >= 0.13,
+                "lifted grays should stand off dark glass"
+            );
+        }
+        // …while hues survive: press red stays red, navy link stays blue.
+        let dominant = |c: Color, lo: u8| (c.r as u16) > (c.g as u16) * 3 / 2 && c.r > lo;
+        let accent = painted_rgb(&ui, Ui::accent);
+        assert!(dominant(accent, 140), "press red stays red: {accent:?}");
+        let red = painted_rgb(&ui, Ui::red);
+        assert!(dominant(red, 140), "danger stays red: {red:?}");
+        let link = painted_rgb(&ui, Ui::link);
+        assert!(link.b > link.r && link.b > 100, "navy stays blue: {link:?}");
+
+        // A UI painting its own background (the app) keeps the authored ink.
+        let on_paper = Ui {
+            cli_background: false,
+            ..ui.clone()
+        };
+        assert_eq!(painted_rgb(&on_paper, Ui::cream), p.text);
+        assert_eq!(painted_rgb(&on_paper, Ui::title), p.title);
+    }
+
+    #[test]
+    fn dark_themes_pass_through_unchanged() {
+        for name in ["oregon trail", "midnight", "synthwave"] {
+            let theme = Arc::new(harness_theme::builtins::by_name(name).unwrap());
+            let ui = Ui::with(true, theme.clone());
+            assert_eq!(painted_rgb(&ui, Ui::cream), theme.palette.text, "{name}");
+            assert_eq!(painted_rgb(&ui, Ui::title), theme.palette.title, "{name}");
+            assert_eq!(painted_rgb(&ui, Ui::link), theme.palette.link, "{name}");
+        }
+    }
+
+    #[test]
+    fn adapt_keeps_accent_hues_and_lifts_ink() {
+        let paper = Color::new(247, 245, 238); // NYT newsprint
+                                               // Press red is nudged just enough to read on dark glass, staying red.
+        let red = adapt_for_cli(Color::new(150, 42, 36), paper);
+        assert!(
+            (red.r as u16) > (red.g as u16) * 3 / 2 && relative_luminance(red) >= 0.12,
+            "red stays red but brighter: {red:?}"
+        );
+        // Near-black ink gets a warm-gray lift, not a different hue family.
+        let lifted = adapt_for_cli(Color::new(26, 24, 22), paper);
+        assert!(relative_luminance(lifted) >= 0.28);
+        assert!(lifted.r >= lifted.g && lifted.g >= lifted.b);
+        // Colors already past the bar pass through untouched.
+        let ok = Color::new(140, 140, 140); // lum ≈ 0.27
+        assert_eq!(adapt_for_cli(ok, paper), ok);
+    }
+
+    #[test]
+    fn adapt_leaves_dark_paper_themes_alone() {
+        // A dark paper can't serve as a lift target: mixing toward it would
+        // paint the color as the background itself (t clamps to 1.0).
+        let paper = Color::new(48, 48, 48); // lum ≈ 0.03, below the lift floor
+        let ink = Color::new(16, 16, 16);
+        assert_eq!(adapt_for_cli(ink, paper), ink);
+        let accent = Color::new(40, 20, 20);
+        assert_eq!(adapt_for_cli(accent, paper), accent);
     }
 }

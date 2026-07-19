@@ -190,6 +190,10 @@ pub(crate) async fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui
     }
 
     agent.set_model(id);
+    // The new model's catalog-reported limits, when cached; `None` falls back
+    // to the name-derived window and the configured reply reserve.
+    agent.set_context_window(harness_local::limits::context_window(id));
+    agent.set_max_output_tokens(harness_local::limits::max_output_tokens(id));
     // Follow the swap through to the fleet spawner so a later spawn_agents
     // fleet runs on the new model, not the one captured at startup.
     crate::endpoint::update_fleet_endpoint(None, Some(id));

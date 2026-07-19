@@ -14,6 +14,38 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# Optimize the Polars crates even in dev builds: debug-mode Polars is far too
+# slow for interactive data-grid queries, and the inlining also shrinks the
+# unwind tables back toward the macOS linker's 16MB compact-unwind limit.
+# Pinned to the polars-* family (its full dependency tree) so the harness
+# crates and everything else keep opt-level 0 for fast iteration.
+[profile.dev.package]
+polars = { opt-level = 1 }
+polars-arrow = { opt-level = 1 }
+polars-arrow-format = { opt-level = 1 }
+polars-async = { opt-level = 1 }
+polars-buffer = { opt-level = 1 }
+polars-compute = { opt-level = 1 }
+polars-config = { opt-level = 1 }
+polars-core = { opt-level = 1 }
+polars-dtype = { opt-level = 1 }
+polars-error = { opt-level = 1 }
+polars-expr = { opt-level = 1 }
+polars-io = { opt-level = 1 }
+polars-json = { opt-level = 1 }
+polars-lazy = { opt-level = 1 }
+polars-mem-engine = { opt-level = 1 }
+polars-ooc = { opt-level = 1 }
+polars-ops = { opt-level = 1 }
+polars-parquet = { opt-level = 1 }
+polars-parquet-format = { opt-level = 1 }
+polars-plan = { opt-level = 1 }
+polars-row = { opt-level = 1 }
+polars-schema = { opt-level = 1 }
+polars-stream = { opt-level = 1 }
+polars-time = { opt-level = 1 }
+polars-utils = { opt-level = 1 }
+
 [dependencies]
 # `unstable` for multi-webview: the live-preview pane is a native child
 # webview positioned over the React layout (see src/preview.rs).
@@ -24,12 +56,14 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # Native FS events (FSEvents/inotify/ReadDirectoryChangesW) so the Files tree
 # and Editor pane refresh when other processes touch the workspace.
 notify = "8"
+# Locating other tools' log directories (~/.claude, Cursor's app-support dir)
+# for the training-data importers.
+dirs = "5"
 tokio = { version = "1", features = ["sync"] }
 tokio-util = "0.7"
 async-trait = "0.1"
 
 # Reuse the core harness crates from the parent repo.
-harness-core = { path = "../../crates/harness-core" }
 harness-protocol = { path = "../../crates/harness-protocol" }
 harness-host = { path = "../../crates/harness-host" }
 harness-compress = { path = "../../crates/harness-compress" }

@@ -9,6 +9,7 @@ import { create } from "zustand";
 import { tailChars } from "./format";
 import { applyThemePalette, applyThemeStyle } from "./theme";
 import {
+  deleteProject,
   deleteSession,
   listCloudModels,
   listProjects,
@@ -380,6 +381,8 @@ interface AppState {
   prepareProject: (path: string, model?: StartupModelChoice) => Promise<void>;
   /** Switch to a known project and enter its fresh chat. */
   enterProject: (path: string) => Promise<void>;
+  /** Forget a project without deleting its files or chat history. */
+  removeProject: (path: string) => Promise<void>;
   /** Adopt a fresh session created by a model/connection switch as the current
    *  chat (it starts empty on a new endpoint). */
   adoptSession: (info: SessionInfo) => void;
@@ -849,7 +852,12 @@ export const useStore = create<AppState>((set, get) => {
 
     enterProject: async (path) => {
       await get().prepareProject(path);
-      set({ projectsOpen: false });
+      set({ projectsOpen: false, projectHomePath: null });
+    },
+
+    removeProject: async (path) => {
+      await deleteProject(path);
+      await get().refreshHistory();
     },
 
     adoptSession: (info) =>

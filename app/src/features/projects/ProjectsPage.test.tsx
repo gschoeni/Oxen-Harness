@@ -11,10 +11,10 @@ import { resetAll } from "../../test/utils";
 import type { Project, SessionSummary } from "../../lib/types";
 
 const writerSession: SessionSummary = {
-  id: "s1", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "",
+  id: "s1", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "", source: "",
 };
 const sessions: SessionSummary[] = [
-  { id: "e1", workspace: "/elsewhere", model: "m", created_at: 1_700_000_000, title: "Elsewhere chat", message_count: 1, review_status: "" },
+  { id: "e1", workspace: "/elsewhere", model: "m", created_at: 1_700_000_000, title: "Elsewhere chat", message_count: 1, review_status: "", source: "" },
 ];
 const projects: Project[] = [
   {
@@ -97,7 +97,7 @@ describe("ProjectsPage", () => {
     expect(ipc.resumeSession).not.toHaveBeenCalled();
   });
 
-  it("creates an existing-folder project with a name and goal", async () => {
+  it("creates an existing-folder project and drops straight into a fresh chat", async () => {
     ipc.pickFolder.mockResolvedValueOnce("/work/demo");
     render(<ProjectsPage />);
 
@@ -116,7 +116,12 @@ describe("ProjectsPage", () => {
       directory: "/work/demo",
       createDirectory: false,
     });
-    expect(await screen.findByRole("heading", { name: "Demo App" })).toBeInTheDocument();
+    // No settings/home detour: the project is activated, a fresh chat starts,
+    // and the projects overlay closes.
+    await waitFor(() => expect(useStore.getState().projectsOpen).toBe(false));
+    expect(ipc.setActiveProject).toHaveBeenCalledWith("/work/demo");
+    expect(ipc.newSession).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("heading", { name: "Demo App" })).toBeNull();
   });
 
   it("prefills the saved default parent when creating a project", async () => {
@@ -367,5 +372,27 @@ describe("ProjectsPage", () => {
     render(<ProjectsPage />);
     expect(screen.getByText("Elsewhere").closest(".project-card")?.querySelector(".project-card-running")).not.toBeNull();
     expect(screen.getByText("Writer").closest(".project-card")?.querySelector(".project-card-running")).toBeNull();
+  });
+
+  it("removes a project only after confirmation, keeping files and history", async () => {
+    render(<ProjectsPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Remove project: Elsewhere" }));
+
+    // A confirmation modal explains that nothing on disk is deleted; until
+    // confirmed, no removal happens.
+    expect(await screen.findByText("Remove project?")).toBeInTheDocument();
+    expect(ipc.deleteProject).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(ipc.deleteProject).toHaveBeenCalledWith("/elsewhere");
+  });
+
+  it("does not remove a project when the confirmation is cancelled", async () => {
+    render(<ProjectsPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Remove project: Elsewhere" }));
+    await screen.findByText("Remove project?");
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(ipc.deleteProject).not.toHaveBeenCalled();
   });
 });

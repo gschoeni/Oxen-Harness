@@ -2,6 +2,7 @@ import { Check, ChevronDown, ChevronUp, Cloud, Plus, RefreshCw, Search, Star, Tr
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Button, Modal, Spinner } from "../../components/ui";
 import { Markdown } from "../../components/ui/Markdown";
+import { compactTokens } from "../../lib/format";
 import { addCloudModel, getConnection, removeCloudModel, searchOxenModels } from "../../lib/ipc";
 import { formatRate, ratesById } from "../../lib/rates";
 import { useStore } from "../../lib/store";
@@ -230,6 +231,17 @@ export function CloudModelsPage() {
                     {h.summary && <span className="catalog-item-summary">{h.summary}</span>}
                   </div>
                   <div className="catalog-item-side">
+                    {h.context_length != null && (
+                      <span
+                        className="model-item-rate"
+                        title="Context window · max reply size, as reported by the model"
+                      >
+                        {compactTokens(h.context_length)} ctx
+                        {h.max_output_tokens != null
+                          ? ` · ${compactTokens(h.max_output_tokens)} out`
+                          : ""}
+                      </span>
+                    )}
                     {rate && <span className="model-item-rate">{rate}</span>}
                     {added ? (
                       <span className="catalog-item-added">

@@ -194,6 +194,26 @@ describe("Preview pane — hiding rules (the native view paints over all DOM)", 
     await vi.waitFor(() => expect(ipc.previewAttach).toHaveBeenCalled());
   });
 
+  it("detaches while a popover menu is open (composer pickers)", async () => {
+    ready();
+    render(<Preview />);
+    await vi.waitFor(() => expect(ipc.previewAttach).toHaveBeenCalled());
+    ipc.previewDetach.mockClear();
+
+    // The composer's dropdowns (model, compression, review) sit next to the
+    // right dock, so their popovers would otherwise paint behind the webview.
+    const menu = document.createElement("div");
+    menu.className = "menu picker-menu";
+    act(() => {
+      document.body.appendChild(menu);
+    });
+    await vi.waitFor(() => expect(ipc.previewDetach).toHaveBeenCalled());
+
+    ipc.previewAttach.mockClear();
+    act(() => menu.remove());
+    await vi.waitFor(() => expect(ipc.previewAttach).toHaveBeenCalled());
+  });
+
   it("switching chats detaches, then attaches the newly viewed chat's server", async () => {
     ready("s1");
     const { rerender } = render(<Preview />);

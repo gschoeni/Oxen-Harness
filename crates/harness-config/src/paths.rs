@@ -107,6 +107,30 @@ pub fn errors_log() -> Result<PathBuf, ConfigError> {
     under("errors.jsonl")
 }
 
+/// `~/.oxen-harness/requests.jsonl` — the developer request log: one JSON
+/// entry per model call (prompt size, cache-prefix classification, latency,
+/// retries, and the provider's reported usage including cached tokens),
+/// appended by every host so cost and cache behavior stay diagnosable.
+pub fn requests_log() -> Result<PathBuf, ConfigError> {
+    under("requests.jsonl")
+}
+
+/// `~/.oxen-harness/limits.json` — spend limits and cost-routing preferences:
+/// the per-session token budget and the cheaper model compaction summaries
+/// run on.
+pub fn limits_file() -> Result<PathBuf, ConfigError> {
+    under("limits.json")
+}
+
+/// `~/.oxen-harness/model-limits.json` — a cache of API-reported per-model
+/// capabilities (`context_length`, `max_output_tokens`), refreshed on every
+/// hosted-catalog fetch and read when an agent is built so context budgeting
+/// uses the model's real window rather than a name-derived guess. A cache,
+/// not a user setting — distinct from `limits.json` (spend limits).
+pub fn model_limits_file() -> Result<PathBuf, ConfigError> {
+    under("model-limits.json")
+}
+
 /// `~/.oxen-harness/last-crash` — the marker a fatal-signal handler leaves
 /// behind when a run dies on SIGSEGV/SIGBUS/etc., read (and consumed) by the
 /// next launch so the crash gets reported instead of vanishing (see the

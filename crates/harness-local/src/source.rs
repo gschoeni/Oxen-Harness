@@ -429,6 +429,10 @@ pub struct OxenModelHit {
     /// The model's input/output modalities, e.g. `["text"]` / `["text","image"]`.
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
+    /// The model's context window in tokens, when the catalog reports it.
+    pub context_length: Option<u64>,
+    /// The model's maximum reply size in tokens, when the catalog reports it.
+    pub max_output_tokens: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -454,6 +458,10 @@ struct OxenModelEntry {
     capabilities: Option<OxenCapabilities>,
     #[serde(default)]
     pricing: Option<OxenPricing>,
+    #[serde(default)]
+    context_length: Option<u64>,
+    #[serde(default)]
+    max_output_tokens: Option<u64>,
 }
 
 /// Per-token pricing for a token-billed model, as reported by the Oxen models
@@ -522,6 +530,19 @@ async fn fetch_oxen_models(
         .json()
         .await
         .map_err(|e| LocalError::Download(format!("could not read Oxen models response: {e}")))?;
+    // Every catalog fetch refreshes the per-model limits cache as a side
+    // effect, so context windows and reply caps stay current wherever the
+    // catalog is consulted (search, pricing warm-ups, usage reports) without
+    // each caller having to remember to do it.
+    crate::limits::record(body.data.iter().map(|e| {
+        (
+            e.id.clone(),
+            crate::limits::ModelLimits {
+                context_length: e.context_length,
+                max_output_tokens: e.max_output_tokens,
+            },
+        )
+    }));
     Ok(body.data)
 }
 
@@ -558,6 +579,8 @@ pub async fn oxen_search_models(
                 pricing: e.pricing.and_then(OxenPricing::rates),
                 inputs,
                 outputs,
+                context_length: e.context_length,
+                max_output_tokens: e.max_output_tokens,
             }
         })
         .filter(|h| {
@@ -753,6 +776,50 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "muse-spark-1-1");
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn catalog_fetch_carries_and_caches_model_limits() {
+        let _home = crate::temp_harness_dir();
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/api/ai/models")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"data":[
+                    {"id":"muse-spark-1-1","endpoint":"/chat/completions",
+                     "capabilities":{"input":["text"],"output":["text"]},
+                     "context_length":1000000,"max_output_tokens":64000},
+                    {"id":"older-model","endpoint":"/chat/completions",
+                     "context_length":null,"max_output_tokens":null}
+                ]}"#,
+            )
+            .create_async()
+            .await;
+
+        let hits = oxen_search_models(&format!("{}/api/ai", server.url()), "", None)
+            .await
+            .unwrap();
+
+        // The hits surface the reported limits (nulls stay None)…
+        let muse = hits.iter().find(|h| h.id == "muse-spark-1-1").unwrap();
+        assert_eq!(muse.context_length, Some(1_000_000));
+        assert_eq!(muse.max_output_tokens, Some(64_000));
+        let older = hits.iter().find(|h| h.id == "older-model").unwrap();
+        assert_eq!(older.context_length, None);
+
+        // …and the fetch refreshed the on-disk cache as a side effect, with
+        // the null-reporting model left out rather than stored as empty.
+        assert_eq!(
+            crate::limits::context_window("muse-spark-1-1"),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            crate::limits::max_output_tokens("muse-spark-1-1"),
+            Some(64_000)
+        );
+        assert_eq!(crate::limits::get("older-model"), None);
     }
 
     #[test]

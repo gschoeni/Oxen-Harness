@@ -343,7 +343,7 @@ pub(crate) fn block_lines(
     style: &FleetStyle,
     width: usize,
     frame: usize,
-    hint_keys: HintKeys,
+    hint_keys: FleetKeys,
 ) -> Vec<String> {
     let width = width.max(40);
     let label_width = state
@@ -378,25 +378,68 @@ pub(crate) fn block_lines(
     out
 }
 
-/// Which key vocabulary the hint advertises: plain digits (the cooked-mode
-/// painter owns the keyboard) or alt-digits (the live composer shares it with
-/// typing).
+/// Who the keyboard belongs to while a fleet display is up. One enum drives
+/// both the key handling ([`apply_fleet_key`]) and the hint line, so what the
+/// hint advertises is always what the keys actually do.
 #[derive(Clone, Copy)]
-pub(crate) enum HintKeys {
-    Plain,
-    Alt,
+pub(crate) enum FleetKeys {
+    /// The cooked-mode painter owns the keyboard exclusively: bare digits
+    /// focus lanes (and alt+digits too, so live-mode muscle memory carries),
+    /// esc/0 return to the overview, tab cycles, ctrl-c stops the fleet.
+    Owned,
+    /// The live composer shares the keyboard with typing: only alt+digits act
+    /// on the fleet (bare digits must keep typing into the composer).
+    Shared,
 }
 
-fn hint_line(state: &FleetState, keys: HintKeys) -> String {
+/// Apply one keystroke to the fleet state under the given key vocabulary.
+/// Returns whether the key was consumed (a `Shared` caller passes unconsumed
+/// keys on to the composer).
+pub(crate) fn apply_fleet_key(
+    state: &mut FleetState,
+    code: crossterm::event::KeyCode,
+    mods: crossterm::event::KeyModifiers,
+    keys: FleetKeys,
+) -> bool {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let digits_ok = matches!(keys, FleetKeys::Owned) || mods.contains(KeyModifiers::ALT);
+    match code {
+        KeyCode::Char(c @ '1'..='9') if digits_ok => {
+            state.focus(Some(c as usize - '1' as usize));
+            true
+        }
+        KeyCode::Char('0') if digits_ok => {
+            state.focus(None);
+            true
+        }
+        KeyCode::Esc if matches!(keys, FleetKeys::Owned) => {
+            state.focus(None);
+            true
+        }
+        KeyCode::Tab if matches!(keys, FleetKeys::Owned) => {
+            state.focus_next();
+            true
+        }
+        KeyCode::Char('c')
+            if matches!(keys, FleetKeys::Owned) && mods.contains(KeyModifiers::CONTROL) =>
+        {
+            state.stop();
+            true
+        }
+        _ => false,
+    }
+}
+
+fn hint_line(state: &FleetState, keys: FleetKeys) -> String {
     let n = state.lanes.len().min(9);
     let (digits, esc) = match keys {
-        HintKeys::Plain => (format!("1-{n}"), "esc".to_string()),
-        HintKeys::Alt => (format!("alt+1-{n}"), "alt+0".to_string()),
+        FleetKeys::Owned => (format!("1-{n}"), "esc".to_string()),
+        FleetKeys::Shared => (format!("alt+1-{n}"), "alt+0".to_string()),
     };
     match (state.focused, keys) {
         (Some(_), _) => format!("{digits} switch lanes · {esc} overview · ctrl-c stop"),
-        (None, HintKeys::Plain) => format!("{digits} watch a lane · ctrl-c stop"),
-        (None, HintKeys::Alt) => format!("{digits} watch a lane"),
+        (None, FleetKeys::Owned) => format!("{digits} watch a lane · ctrl-c stop"),
+        (None, FleetKeys::Shared) => format!("{digits} watch a lane"),
     }
 }
 
@@ -636,7 +679,7 @@ fn run_painter(stop: &AtomicBool, hub: &FleetHub, style: &FleetStyle) {
             let state = hub.lock();
             state
                 .as_ref()
-                .map(|s| block_lines(s, style, width, frame, HintKeys::Plain))
+                .map(|s| block_lines(s, style, width, frame, FleetKeys::Owned))
         };
         if let Some(lines) = lines {
             if lines != last {
@@ -655,10 +698,11 @@ fn run_painter(stop: &AtomicBool, hub: &FleetHub, style: &FleetStyle) {
     let _ = out.flush();
 }
 
-/// Drain pending keys: digits focus lanes, tab cycles, esc/0 the overview,
-/// ctrl-c stops the fleet.
+/// Drain pending keys through the shared reducer ([`apply_fleet_key`], with
+/// the `Owned` vocabulary): digits (bare or alt) focus lanes, tab cycles,
+/// esc/0 the overview, ctrl-c stops the fleet.
 fn poll_keys(hub: &FleetHub) {
-    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+    use crossterm::event::{Event, KeyEventKind};
     while crossterm::event::poll(Duration::ZERO).unwrap_or(false) {
         let Ok(Event::Key(key)) = crossterm::event::read() else {
             continue;
@@ -670,15 +714,7 @@ fn poll_keys(hub: &FleetHub) {
         let Some(state) = state.as_mut() else {
             continue;
         };
-        match key.code {
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.stop(),
-            KeyCode::Char(c @ '1'..='9') => {
-                state.focus(Some(c as usize - '1' as usize));
-            }
-            KeyCode::Char('0') | KeyCode::Esc => state.focus(None),
-            KeyCode::Tab => state.focus_next(),
-            _ => {}
-        }
+        apply_fleet_key(state, key.code, key.modifiers, FleetKeys::Owned);
     }
 }
 
@@ -686,6 +722,9 @@ fn poll_keys(hub: &FleetHub) {
 /// end-of-line), blank any rows the block shrank away from, and leave the
 /// cursor just under the block.
 fn repaint(out: &mut impl Write, lines: &[String], drawn: &mut usize) {
+    // One synchronized frame (mode 2026): the move-up + clear + rewrite of
+    // every lane row presents at once instead of flickering at 10 fps.
+    let _ = write!(out, "{}", crate::ansi::SYNC_BEGIN);
     if *drawn > 0 {
         let _ = write!(out, "\x1b[{}A\r", *drawn);
     }
@@ -700,6 +739,7 @@ fn repaint(out: &mut impl Write, lines: &[String], drawn: &mut usize) {
         let _ = write!(out, "\x1b[{extra}A\r");
     }
     *drawn = lines.len();
+    let _ = write!(out, "{}", crate::ansi::SYNC_END);
     let _ = out.flush();
 }
 
@@ -737,13 +777,73 @@ pub(crate) fn print_lane_completed(ui: &Ui, label: &str, ok: bool, tokens: usize
 /// and drives keys itself — alt+digits — so this is just the lines).
 pub(crate) fn pinned_lines(ui: &Ui, state: &FleetState, width: usize, frame: usize) -> Vec<String> {
     match FleetStyle::for_ui(ui) {
-        Some(style) => block_lines(state, &style, width, frame, HintKeys::Alt),
+        Some(style) => block_lines(state, &style, width, frame, FleetKeys::Shared),
         None => Vec::new(),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    #[test]
+    fn fleet_key_vocabularies_share_one_reducer() {
+        use super::{apply_fleet_key, FleetKeys, FleetState};
+        let mut s = FleetState::new(&["a".into(), "b".into()], None);
+        // Owned (cooked painter): bare digits focus, esc → overview, tab
+        // cycles — and alt+digits work too, so live muscle memory carries.
+        assert!(apply_fleet_key(
+            &mut s,
+            KeyCode::Char('2'),
+            KeyModifiers::NONE,
+            FleetKeys::Owned
+        ));
+        assert_eq!(s.focused, Some(1));
+        assert!(apply_fleet_key(
+            &mut s,
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            FleetKeys::Owned
+        ));
+        assert_eq!(s.focused, None);
+        assert!(apply_fleet_key(
+            &mut s,
+            KeyCode::Char('1'),
+            KeyModifiers::ALT,
+            FleetKeys::Owned
+        ));
+        assert_eq!(s.focused, Some(0));
+        assert!(apply_fleet_key(
+            &mut s,
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+            FleetKeys::Owned
+        ));
+        assert_eq!(s.focused, Some(1));
+        // Shared (live composer): bare digits/esc pass through to the
+        // composer; only alt+digits act on the fleet.
+        assert!(!apply_fleet_key(
+            &mut s,
+            KeyCode::Char('1'),
+            KeyModifiers::NONE,
+            FleetKeys::Shared
+        ));
+        assert!(!apply_fleet_key(
+            &mut s,
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            FleetKeys::Shared
+        ));
+        assert_eq!(s.focused, Some(1), "pass-through keys must not refocus");
+        assert!(apply_fleet_key(
+            &mut s,
+            KeyCode::Char('0'),
+            KeyModifiers::ALT,
+            FleetKeys::Shared
+        ));
+        assert_eq!(s.focused, None);
+    }
+
     use super::*;
 
     fn state(labels: &[&str]) -> FleetState {
@@ -832,14 +932,14 @@ mod tests {
         s.lane_event(0, &AgentEvent::Token("digging into the parser".into()), &ui);
 
         // Overview: one line per lane + the hint.
-        let lines = block_lines(&s, &style(), 80, 0, HintKeys::Plain);
+        let lines = block_lines(&s, &style(), 80, 0, FleetKeys::Owned);
         assert_eq!(lines.len(), 3);
         assert!(plain(&lines[0]).contains("scan"));
         assert!(plain(&lines[2]).contains("1-2 watch a lane"));
 
         // Focused: lanes + rule + tail rows + hint, alt vocabulary for live.
         s.focus(Some(0));
-        let lines = block_lines(&s, &style(), 80, 0, HintKeys::Alt);
+        let lines = block_lines(&s, &style(), 80, 0, FleetKeys::Shared);
         let text = lines
             .iter()
             .map(|l| plain(l))

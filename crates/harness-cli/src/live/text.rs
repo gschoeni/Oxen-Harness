@@ -1,9 +1,41 @@
 //! Pure text-rendering helpers for the input box: windowing a line editor to the
 //! visible columns, word-wrapping a logical line into visual rows, and building
 //! the themed composer prompt. All terminal-free and unit-testable.
+//!
+//! All column math here is in terminal *cells* (via [`crate::width`]), not
+//! chars — a CJK glyph or emoji spans two cells, and windowing by chars would
+//! let such lines spill past the composer's right edge.
 
 use super::composer::Composer;
 use crate::theme::Ui;
+use crate::width::char_width;
+
+/// The window of `chars` visible in `avail` cells around the caret: walk left
+/// from the caret filling the budget (so the caret hugs the right edge of a
+/// long line), then extend right with whatever budget remains.
+fn window(chars: &[char], cursor: usize, avail: usize) -> (usize, usize) {
+    let cursor = cursor.min(chars.len());
+    let mut budget = avail;
+    let mut start = cursor;
+    while start > 0 {
+        let w = char_width(chars[start - 1]);
+        if w > budget {
+            break;
+        }
+        budget -= w;
+        start -= 1;
+    }
+    let mut end = cursor;
+    while end < chars.len() {
+        let w = char_width(chars[end]);
+        if w > budget {
+            break;
+        }
+        budget -= w;
+        end += 1;
+    }
+    (start, end)
+}
 
 /// Render a line editor's text windowed to `avail` columns, optionally drawing a
 /// reverse-video caret at the insertion point. Returns the painted body together
@@ -13,8 +45,7 @@ pub(super) fn render_buffer(c: &Composer, avail: usize, caret: bool) -> (String,
     let chars = c.chars();
     let cursor = c.cursor();
     // Window the buffer so the caret stays visible on long lines.
-    let start = cursor.saturating_sub(avail);
-    let end = (start + avail).min(chars.len());
+    let (start, end) = window(chars, cursor, avail);
     let mut body = String::new();
     let mut width = 0;
     for (i, ch) in chars.iter().enumerate().take(end).skip(start) {
@@ -25,7 +56,7 @@ pub(super) fn render_buffer(c: &Composer, avail: usize, caret: bool) -> (String,
         } else {
             body.push(*ch);
         }
-        width += 1;
+        width += char_width(*ch);
     }
     if caret && cursor >= chars.len() {
         body.push_str("\x1b[7m \x1b[0m");
@@ -34,11 +65,11 @@ pub(super) fn render_buffer(c: &Composer, avail: usize, caret: bool) -> (String,
     (body, width)
 }
 
-/// Word-wrap one logical line's chars into rows no wider than `width`, breaking
-/// after the last space where one fits (hard-splitting an over-long word).
-/// Returns each row's chars and the column (within the logical line) where it
-/// starts, so the caret can be mapped onto a wrapped row. An empty line yields a
-/// single empty row.
+/// Word-wrap one logical line's chars into rows no wider than `width` cells,
+/// breaking after the last space where one fits (hard-splitting an over-long
+/// word). Returns each row's chars and the char offset (within the logical
+/// line) where it starts, so the caret can be mapped onto a wrapped row. An
+/// empty line yields a single empty row.
 pub(super) fn wrap_line(chars: &[char], width: usize) -> Vec<(usize, Vec<char>)> {
     let width = width.max(1);
     if chars.is_empty() {
@@ -47,11 +78,21 @@ pub(super) fn wrap_line(chars: &[char], width: usize) -> Vec<(usize, Vec<char>)>
     let mut rows = Vec::new();
     let mut i = 0;
     while i < chars.len() {
-        if chars.len() - i <= width {
+        // The furthest hard break within the row's cell budget.
+        let mut cells = 0;
+        let mut hard = i;
+        while hard < chars.len() {
+            let w = char_width(chars[hard]);
+            if cells + w > width {
+                break;
+            }
+            cells += w;
+            hard += 1;
+        }
+        if hard >= chars.len() {
             rows.push((i, chars[i..].to_vec()));
             break;
         }
-        let hard = i + width;
         // Prefer breaking just after the last space within the row's width.
         let mut brk = hard;
         let mut j = hard;
@@ -65,6 +106,9 @@ pub(super) fn wrap_line(chars: &[char], width: usize) -> Vec<(usize, Vec<char>)>
         if brk == i {
             brk = hard; // a single word longer than the row — hard split
         }
+        if brk == i {
+            brk = i + 1; // one glyph wider than the row — still make progress
+        }
         rows.push((i, chars[i..brk].to_vec()));
         i = brk;
     }
@@ -72,17 +116,17 @@ pub(super) fn wrap_line(chars: &[char], width: usize) -> Vec<(usize, Vec<char>)>
 }
 
 /// Render one line of text windowed to `avail` columns, optionally drawing a
-/// reverse-video caret at `caret` (a column within the line, or one past its
-/// end). Returns the painted body and its *visible* width (ANSI excluded) so the
-/// box can pad to a fixed cell. Like [`render_buffer`] but for a single line.
+/// reverse-video caret at `caret` (a char offset within the line, or one past
+/// its end). Returns the painted body and its *visible* width (ANSI excluded)
+/// so the box can pad to a fixed cell. Like [`render_buffer`] but for a single
+/// line.
 pub(super) fn render_text_line(
     chars: &[char],
     caret: Option<usize>,
     avail: usize,
 ) -> (String, usize) {
     let cur = caret.unwrap_or(0);
-    let start = cur.saturating_sub(avail);
-    let end = (start + avail).min(chars.len());
+    let (start, end) = window(chars, cur, avail);
     let mut body = String::new();
     let mut width = 0;
     for (i, ch) in chars.iter().enumerate().take(end).skip(start) {
@@ -93,7 +137,7 @@ pub(super) fn render_text_line(
         } else {
             body.push(*ch);
         }
-        width += 1;
+        width += char_width(*ch);
     }
     if let Some(c) = caret {
         if c >= chars.len() {
@@ -155,5 +199,29 @@ mod tests {
 
         // An empty line is one empty row (so the caret still has a row).
         assert_eq!(wrap_line(&[], 10).len(), 1);
+    }
+
+    #[test]
+    fn wrap_line_budgets_wide_chars_by_cells() {
+        // Four CJK glyphs are 8 cells: a 6-cell row fits three, not four —
+        // wrapping by chars would overflow the composer's right edge.
+        let chars: Vec<char> = "日本語字".chars().collect();
+        let rows = wrap_line(&chars, 6);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1.iter().collect::<String>(), "日本語");
+        assert_eq!(rows[1].1.iter().collect::<String>(), "字");
+        // Row starts are char offsets, so the caret maps onto wrapped rows.
+        assert_eq!(rows[1].0, 3);
+    }
+
+    #[test]
+    fn render_text_line_windows_wide_chars_by_cells() {
+        let chars: Vec<char> = "日本語字".chars().collect();
+        // Caret past the end with a 4-cell window: only the last two glyphs
+        // (4 cells) fit, and the trailing caret cell paints beyond them.
+        let (body, width) = render_text_line(&chars, Some(4), 4);
+        assert!(body.contains("語字"), "tail visible: {body:?}");
+        assert!(!body.contains('本'), "head windowed out: {body:?}");
+        assert_eq!(width, 5, "two wide glyphs + caret cell");
     }
 }

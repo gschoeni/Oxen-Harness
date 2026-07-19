@@ -68,7 +68,9 @@ fn png_from(image: *mut NSImage, error: *mut NSError) -> Result<Vec<u8>, String>
     }
     // SAFETY: non-null NSImage from the callback, used within its lifetime.
     let image = unsafe { &*image };
-    let tiff = image.TIFFRepresentation().ok_or("snapshot has no bitmap data")?;
+    let tiff = image
+        .TIFFRepresentation()
+        .ok_or("snapshot has no bitmap data")?;
     let rep = NSBitmapImageRep::imageRepWithData(&tiff).ok_or("could not decode snapshot")?;
     let png: Retained<_> = unsafe {
         rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())

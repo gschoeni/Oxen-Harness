@@ -58,6 +58,14 @@ fn sanitize_for_finetuning(message: &Value, include_tools: bool) -> Option<Value
     let mut obj = Map::new();
     obj.insert("role".into(), Value::String(role.to_string()));
     obj.insert("content".into(), Value::String(content));
+    // Imported transcripts carry extended thinking on `reasoning`; keep it so
+    // the training data preserves the chain of thought.
+    if let Some(reasoning) = message
+        .get("reasoning")
+        .filter(|r| r.as_str().is_some_and(|s| !s.is_empty()))
+    {
+        obj.insert("reasoning".into(), reasoning.clone());
+    }
     if keeps_tool_calls {
         if let Some(tc) = tool_calls {
             obj.insert("tool_calls".into(), tc.clone());

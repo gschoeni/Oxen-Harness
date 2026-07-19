@@ -110,9 +110,11 @@ impl PreviewLens for TauriPreviewLens {
             crate::snapshot::take_png(webview).await
         }
         #[cfg(not(target_os = "macos"))]
-        Err("preview screenshots aren't supported on this platform yet — verify with \
+        Err(
+            "preview screenshots aren't supported on this platform yet — verify with \
              dev_server_logs and preview_console instead"
-            .to_string())
+                .to_string(),
+        )
     }
 
     fn console_tail(&self, n: usize) -> Vec<ConsoleLine> {

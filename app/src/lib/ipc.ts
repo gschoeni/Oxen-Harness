@@ -28,6 +28,8 @@ import type {
   QuestionPayload,
   SessionInfo,
   SessionSummary,
+  ImportSourceStatus,
+  ImportReport,
   CanvasEvent,
   FsChangedEvent,
   OpenFileEvent,
@@ -153,6 +155,15 @@ export async function pickExportPath(defaultName = "finetuning.jsonl"): Promise<
   });
   return chosen ?? null;
 }
+/** Per importable source (Claude Code, Cursor), how many conversations its
+ *  local logs hold and how many were already imported. */
+export const importSourcesScan = () => invoke<ImportSourceStatus[]>("import_sources_scan");
+
+/** Import every conversation from one source's local logs; rescans dedup by the
+ *  source's own conversation id. Resolves with what the pass did. */
+export const importExternal = (source: string) =>
+  invoke<ImportReport>("import_external", { source });
+
 /** Load an attachment (absolute path, or relative to a session's workspace) as a
  *  data: URI for display — used by the composer preview and chat history. */
 export const attachmentDataUri = (path: string, session?: string) =>
@@ -190,6 +201,8 @@ export const addProjectContext = (path: string, contextPaths: string[]) =>
   invoke<Project>("add_project_context", { path, contextPaths });
 export const removeProjectContext = (path: string, contextPath: string) =>
   invoke<Project>("remove_project_context", { path, contextPath });
+/** Forget a project without deleting its files or chat history. */
+export const deleteProject = (path: string) => invoke<void>("delete_project", { path });
 
 // ---- workspace files (the Files tree + Editor dock) --------------------------
 

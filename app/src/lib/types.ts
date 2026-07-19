@@ -52,6 +52,26 @@ export interface SessionSummary {
   message_count: number;
   /** Whether this chat is kept/rejected for the fine-tuning dataset (else ""). */
   review_status: ReviewStatus;
+  /** Where the chat came from: "" for native chats, else the import source
+   *  ("claude-code" | "cursor"). Imported chats are review-only — they never
+   *  resume as live agents. */
+  source: string;
+}
+
+/** One importable source of external conversations (Training Data page). */
+export interface ImportSourceStatus {
+  source: string;
+  /** Conversations found in the tool's local logs (drafts included). */
+  available: number;
+  /** Sessions already imported from this source. */
+  imported: number;
+}
+
+/** What one import pass did: new, refreshed (grown at the source), unchanged. */
+export interface ImportReport {
+  imported: number;
+  updated: number;
+  skipped: number;
 }
 
 export interface SessionView {
@@ -152,6 +172,10 @@ export interface OxenModelHit {
   pricing: ModelPricing | null;
   inputs: string[];
   outputs: string[];
+  /** The model's context window in tokens, when the catalog reports it. */
+  context_length: number | null;
+  /** The model's maximum reply size in tokens, when the catalog reports it. */
+  max_output_tokens: number | null;
 }
 
 // ---- local models ----------------------------------------------------------

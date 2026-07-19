@@ -6,16 +6,17 @@
 //
 // Two sources, deliberately:
 //  - the store's full-window surfaces (settings, projects, inspector, question);
-//  - any modal scrim in the DOM, watched live. Modals are rendered ad hoc by
-//    features (the sidebar's delete-chat confirm, editors), and enumerating
-//    them here would rot the moment someone adds another — so we watch for the
-//    shared `.modal-scrim` class instead, and every modal is safe by default.
+//  - any modal scrim or popover menu in the DOM, watched live. Modals and
+//    dropdown menus are rendered ad hoc by features (the sidebar's delete-chat
+//    confirm, the composer pickers), and enumerating them here would rot the
+//    moment someone adds another — so we watch for the shared `.modal-scrim`
+//    and `.menu` classes instead, and every one is safe by default.
 
 import { useEffect, useState } from "react";
 import { useStore } from "../../lib/store";
 
 /** CSS selectors that mean "a surface is covering the app". */
-const SCRIM_SELECTOR = ".modal-scrim, .settings-overlay";
+const SCRIM_SELECTOR = ".modal-scrim, .settings-overlay, .menu";
 
 export function useOverlayOpen(): boolean {
   const storeOverlay = useStore(

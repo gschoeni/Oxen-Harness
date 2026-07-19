@@ -111,6 +111,89 @@ pub(crate) async fn export_finetuning(
     Ok(count)
 }
 
+/// One importable source of external conversations, with how many the tool's
+/// local logs hold and how many were already imported — the Training Data
+/// page's import panel.
+#[derive(Serialize)]
+pub(crate) struct ImportSourceStatus {
+    /// Source id as stored on sessions: `"claude-code"` or `"cursor"`.
+    pub(crate) source: String,
+    /// Conversations found in the tool's local logs (drafts included — the
+    /// import itself drops conversations without a real exchange).
+    pub(crate) available: usize,
+    /// Sessions already imported from this source.
+    pub(crate) imported: i64,
+}
+
+/// Where Claude Code keeps its per-project session transcripts.
+fn claude_code_root() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join(".claude").join("projects"))
+}
+
+/// Cursor's user-data directory (`.../Cursor/User`); `config_dir` resolves the
+/// platform's app-support location (e.g. `~/Library/Application Support`).
+fn cursor_user_dir() -> Option<std::path::PathBuf> {
+    dirs::config_dir().map(|c| c.join("Cursor").join("User"))
+}
+
+/// What the local machine has to import: per source, how many conversations
+/// its logs hold and how many are already in the store.
+#[tauri::command]
+pub(crate) async fn import_sources_scan() -> Result<Vec<ImportSourceStatus>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        use harness_store::import::{claude_code, cursor, SOURCE_CLAUDE_CODE, SOURCE_CURSOR};
+        let store = open_history_store()?;
+        let mut out = Vec::new();
+        for (source, available) in [
+            (
+                SOURCE_CLAUDE_CODE,
+                claude_code_root()
+                    .map(|r| claude_code::scan(&r))
+                    .unwrap_or(0),
+            ),
+            (
+                SOURCE_CURSOR,
+                cursor_user_dir().map(|d| cursor::scan(&d)).unwrap_or(0),
+            ),
+        ] {
+            out.push(ImportSourceStatus {
+                source: source.to_string(),
+                available,
+                imported: store.imported_count(source).map_err(|e| e.to_string())?,
+            });
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Import every conversation from one source's local logs. Rescans dedup by
+/// the source's own conversation id: new conversations are added, ones that
+/// grew since the last import are refreshed (keeping their review status), and
+/// unchanged ones are skipped. Runs on a blocking thread — parsing a large
+/// history can take a while.
+#[tauri::command]
+pub(crate) async fn import_external(source: String) -> Result<harness_store::ImportReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use harness_store::import::{claude_code, cursor, SOURCE_CLAUDE_CODE, SOURCE_CURSOR};
+        let conversations = match source.as_str() {
+            SOURCE_CLAUDE_CODE => claude_code_root()
+                .map(|r| claude_code::load(&r))
+                .unwrap_or_default(),
+            SOURCE_CURSOR => cursor_user_dir()
+                .map(|d| cursor::load(&d))
+                .unwrap_or_default(),
+            other => return Err(format!("unknown import source: {other}")),
+        };
+        open_history_store()?
+            .import_conversations(&source, &conversations)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The `app_meta` key holding the all-time running total of tokens used.
 const TOTAL_TOKENS_KEY: &str = "total_tokens_used";
 
@@ -169,9 +252,7 @@ pub(crate) struct UsageBreakdown {
 /// The per-model usage breakdown behind the Usage settings page: every model
 /// with recorded usage, its tokens and dollars, and the grand total.
 #[tauri::command]
-pub(crate) async fn model_usage_breakdown(
-    date: Option<String>,
-) -> Result<UsageBreakdown, String> {
+pub(crate) async fn model_usage_breakdown(date: Option<String>) -> Result<UsageBreakdown, String> {
     let store = open_history_store()?;
     let usage = match date {
         Some(date) => store.model_usage_for_day(&date),

@@ -55,7 +55,6 @@ pub(crate) fn preview_reload(app: AppHandle, session: String) {
     preview::reload(&app, &session);
 }
 
-
 /// Stop the session's dev server (toolbar stop button) and drop its webview.
 #[tauri::command]
 pub(crate) async fn preview_stop(
@@ -85,10 +84,7 @@ pub(crate) fn preview_open_external(
 /// The session's dev-server status, if one was started — lets a freshly
 /// mounted UI (or a resumed chat) sync without waiting for the next event.
 #[tauri::command]
-pub(crate) fn preview_status(
-    state: State<'_, AppState>,
-    session: String,
-) -> Option<PreviewStatus> {
+pub(crate) fn preview_status(state: State<'_, AppState>, session: String) -> Option<PreviewStatus> {
     state.dev_servers.get(&session).map(|s| s.status())
 }
 

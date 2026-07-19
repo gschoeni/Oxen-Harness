@@ -10,10 +10,15 @@
 
 mod content;
 mod export;
+pub mod import;
 mod netfs;
 pub mod store;
 
-pub use store::{DailyUsage, HistoryError, HistoryStore, ModelUsage, SessionMeta, SessionSummary};
+pub use import::{ImportReport, ImportedConversation};
+pub use store::{
+    CacheUsageTotals, DailyUsage, HistoryError, HistoryStore, ModelUsage, SessionMeta,
+    SessionSummary, UsageDetail,
+};
 
 use serde::Serialize;
 

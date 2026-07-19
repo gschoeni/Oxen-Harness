@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Markdown } from "../../components/ui/Markdown";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { ToolCall } from "./ToolCall";
@@ -7,9 +8,12 @@ import { AttachmentImage } from "./AttachmentImage";
 import type { Item } from "./thread";
 
 /** Render one thread item: a user bubble, an assistant message (Markdown, or a
- *  "thinking" indicator while empty), or a tool-call card. `now` is passed in so
- *  running cards re-time as the parent ticks. */
-export function ThreadItem({ item, now }: { item: Item; now: number }) {
+ *  "thinking" indicator while empty), or a tool-call card. Memoized — items are
+ *  immutable snapshots, so during streaming only the item actually receiving
+ *  content re-renders (a long thread re-parsing every Markdown bubble per
+ *  update is real jank). Anything time-driven (spinners, elapsed labels) ticks
+ *  inside the leaf components. */
+export const ThreadItem = memo(function ThreadItem({ item }: { item: Item }) {
   if (item.kind === "user") {
     return (
       <div className="msg user">
@@ -55,5 +59,5 @@ export function ThreadItem({ item, now }: { item: Item; now: number }) {
     );
   }
 
-  return <ToolCall item={item} now={now} />;
-}
+  return <ToolCall item={item} />;
+});

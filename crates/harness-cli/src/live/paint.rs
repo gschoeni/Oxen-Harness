@@ -8,138 +8,193 @@
 
 use std::io::Write;
 
+use crate::ansi::{SYNC_BEGIN, SYNC_END};
 use crate::render::truncate;
+use crate::width::str_width;
 
 use super::keys::Mode;
 use super::layout::{queue_rows, Focus, QueueRow, MAX_QUEUE_ROWS, QUEUE_FRAME_ROWS};
+use super::pinned::{PinnedPlan, Section, SectionKind};
 use super::text::{composer_prompt, render_buffer, render_text_line, wrap_line};
 use super::{Live, DIVIDER_ROWS, MAX_INPUT_ROWS, SPACER_ROWS};
 
-impl Live {
-    /// Repaint the input area (used during streaming and after each keystroke).
-    /// The box can change height as lines are added/removed, which re-carves the
-    /// scroll region, so this defers to the full [`Live::paint`] — bracketed by
-    /// save/restore-cursor, it leaves the streaming output position untouched.
-    pub(super) fn render_composer(&mut self) {
-        self.paint(false);
+/// The escape sequence to move the DECSTBM scroll region from `old_bottom` to
+/// `new_bottom` (rows `1..=bottom`), preserving already-printed output.
+///
+/// On the *first* paint the rows the pinned area is about to claim may still
+/// hold real conversation output — most visibly the tail of the opening banner,
+/// before anything has scrolled. When the region shrinks then, scroll it up by
+/// the rows it's losing so that content is pushed up into the rows we keep,
+/// instead of being painted over. A line feed at the region's bottom scrolls
+/// only *within* the region, so this stays bounded to the output area. Only on
+/// the first paint: later shrinks are the blank composer/queue area growing,
+/// where scrolling would wrongly nudge the conversation up.
+///
+/// On an incremental change (not a forced re-carve) the rows that move between
+/// the output region and the reserved area are cleared so no stale text lingers.
+fn region_transition(
+    first_paint: bool,
+    force_region: bool,
+    old_bottom: u16,
+    new_bottom: u16,
+    rows: u16,
+) -> String {
+    let mut buf = String::new();
+    if first_paint && new_bottom < old_bottom {
+        let lift = old_bottom - new_bottom;
+        buf.push_str(&format!("\x1b[{old_bottom};1H"));
+        buf.push_str(&"\n".repeat(lift as usize));
     }
-
-    /// Repaint the whole bottom area — the stacked queue list plus the composer
-    /// — re-carving the scroll region only when the reserved height changed.
-    pub(super) fn render(&mut self) {
-        self.paint(false);
-    }
-
-    /// Like [`Live::render`] but unconditionally re-issues the scroll region —
-    /// used after a resize or after reclaiming the screen from the picker, where
-    /// the terminal's region no longer matches our state.
-    pub(super) fn render_forcing_region(&mut self) {
-        self.paint(true);
-    }
-
-    fn paint(&mut self, force_region: bool) {
-        if self.suspended {
-            return;
+    if !force_region {
+        let lo = old_bottom.min(new_bottom) + 1;
+        for r in lo..=rows {
+            buf.push_str(&format!("\x1b[{r};1H\x1b[2K"));
         }
+    }
+    // Re-carve the region and park the output cursor at its new bottom.
+    buf.push_str(&format!("\x1b[1;{new_bottom}r\x1b[{new_bottom};1H"));
+    buf
+}
+
+/// The pending repaint level for the pinned area. Handlers *request*; the
+/// event/key loops *flush* — one paint per handled event instead of a paint
+/// buried in every handler. `ForceRegion` dominates `Paint`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub(super) enum Repaint {
+    #[default]
+    None,
+    Paint,
+    ForceRegion,
+}
+
+impl Live {
+    /// Mark the pinned area dirty; the next [`Live::flush_paint`] repaints it.
+    pub(super) fn request_paint(&mut self) {
+        self.repaint = self.repaint.max(Repaint::Paint);
+    }
+
+    /// Like [`Live::request_paint`] but the flush will unconditionally re-issue
+    /// the scroll region — for after a resize or a reclaimed screen, where the
+    /// terminal's region no longer matches our state.
+    pub(super) fn request_paint_forced(&mut self) {
+        self.repaint = Repaint::ForceRegion;
+    }
+
+    /// Repaint the pinned area if anything requested it since the last flush.
+    /// Called at the loops' choke points (after each handled event/key batch).
+    pub(super) fn flush_paint(&mut self) {
+        match std::mem::take(&mut self.repaint) {
+            Repaint::None => {}
+            Repaint::Paint => self.paint(false),
+            Repaint::ForceRegion => self.paint(true),
+        }
+    }
+
+    /// Repaint the whole bottom area immediately (request + flush) — for
+    /// one-off call sites outside the event loops (initial paint, cooked-mode
+    /// transitions). Inside handlers, prefer [`Live::request_paint`].
+    pub(super) fn render(&mut self) {
+        self.request_paint();
+        self.flush_paint();
+    }
+
+    /// Immediate forced repaint — see [`Live::request_paint_forced`].
+    pub(super) fn render_forcing_region(&mut self) {
+        self.request_paint_forced();
+        self.flush_paint();
+    }
+
+    /// Build the pinned area's layout for this paint: every section with its
+    /// exact lines, in top-to-bottom order (blank spacer · fleet lanes ·
+    /// compression savings · context meters · divider rule · queue table ·
+    /// composer box). The reserved height and the paint walk both derive from
+    /// the returned plan, so they cannot disagree.
+    fn pinned_plan(&self) -> PinnedPlan {
         let len = self.previews.len();
         // Reserve frame rows up front so the header/footer borders never push the
         // last line of streamed output off-screen.
         let frame = if len == 0 { 0 } else { QUEUE_FRAME_ROWS };
         let plan = queue_rows(len, self.focus, self.rows, MAX_QUEUE_ROWS, frame);
-        let chrome = if plan.is_empty() { 0 } else { QUEUE_FRAME_ROWS };
-        // The input area's height grows with the lines typed.
-        let box_lines = self.composer_box_lines();
-        let box_h = box_lines.len() as u16;
-        // Between the agent's output and the pinned input area: a blank spacer,
-        // the compression savings (when active), the context-usage status, then
-        // a faint divider rule (output · blank · compression · status · rule ·
-        // input), so the prompt always has breathing room and a clear edge, and
-        // the meters sit right above the input instead of trailing the last
-        // message.
-        let status_rows: u16 =
-            self.compression_line.is_some() as u16 + self.status_lines.len() as u16;
-        // A running `spawn_agents` fleet pins its lanes block (lanes + optional
-        // focused tail + key hint) directly under the spacer, above the meters.
-        // Everything else in the pinned area is bounded already (the queue plan
-        // caps against `rows`, the composer windows to MAX_INPUT_ROWS), but the
-        // fleet block can be tall (up to 6 lanes + an 8-row focused tail), so on
-        // a short terminal it's the one section that could push the reserved
-        // area past the screen and smear addressed rows over the composer. Cap
-        // it to whatever height is left after the fixed sections, keeping at
-        // least one output row; the block trims from the end (hint, then tail
-        // rows) so the lane lines themselves survive.
-        let fixed = (plan.len() + chrome) as u16
-            + SPACER_ROWS as u16
-            + status_rows
-            + DIVIDER_ROWS as u16
-            + box_h;
+        let mut queue_lines = Vec::new();
+        if !plan.is_empty() {
+            let box_w = self.queue_box_w();
+            queue_lines.push(self.queue_header(box_w));
+            for row in &plan {
+                queue_lines.push(self.queue_row_line(*row, box_w));
+            }
+            queue_lines.push(self.queue_footer(box_w));
+        }
+        let mut meter_lines: Vec<String> = Vec::new();
+        let compression_lines: Vec<String> = self.compression_line.iter().cloned().collect();
+        meter_lines.extend(self.status_lines.iter().cloned());
+        let divider = vec![self.ui.dim(&"─".repeat(self.cols as usize)); DIVIDER_ROWS];
+
+        // Every section above is bounded (the queue plan caps against `rows`,
+        // the composer windows to MAX_INPUT_ROWS), but a running fleet's lanes
+        // block can be tall (up to 6 lanes + an 8-row focused tail). On a short
+        // terminal it's the one section that could push the reserved area past
+        // the screen and smear addressed rows over the composer, so cap it to
+        // whatever height is left after the fixed sections, keeping at least
+        // one output row; the block trims from the end (hint, then tail rows)
+        // so the lane lines themselves survive.
+        let mut sections = vec![Section::blank(SectionKind::Spacer, SPACER_ROWS)];
+        let composer = Section::new(SectionKind::Composer, self.composer_box_lines());
+        let fixed = (SPACER_ROWS
+            + compression_lines.len()
+            + meter_lines.len()
+            + divider.len()
+            + queue_lines.len()
+            + composer.lines.len()) as u16;
         let fleet_budget = self.rows.saturating_sub(fixed + 1) as usize;
         let mut fleet_lines = self.fleet_lines();
         fleet_lines.truncate(fleet_budget);
-        let reserved = fixed + fleet_lines.len() as u16;
-        let new_bottom = self.rows.saturating_sub(reserved).max(1);
+
+        sections.push(Section::new(SectionKind::Fleet, fleet_lines));
+        sections.push(Section::new(SectionKind::Compression, compression_lines));
+        sections.push(Section::new(SectionKind::Status, meter_lines));
+        sections.push(Section::new(SectionKind::Divider, divider));
+        sections.push(Section::new(SectionKind::Queue, queue_lines));
+        sections.push(composer);
+        PinnedPlan { sections }
+    }
+
+    fn paint(&mut self, force_region: bool) {
+        if self.suspended() {
+            return;
+        }
+        let plan = self.pinned_plan();
+        let new_bottom = plan.region_bottom(self.rows);
 
         let mut buf = String::new();
         if force_region || new_bottom != self.region_bottom {
-            // On an incremental change, clear the rows that move between the
-            // output region and the reserved area so no stale text lingers.
-            if !force_region {
-                let lo = self.region_bottom.min(new_bottom) + 1;
-                for r in lo..=self.rows {
-                    buf.push_str(&format!("\x1b[{r};1H\x1b[2K"));
-                }
-            }
-            // Re-carve the region and park the output cursor at its new bottom.
-            buf.push_str(&format!("\x1b[1;{new_bottom}r\x1b[{new_bottom};1H"));
+            buf.push_str(&region_transition(
+                self.first_paint,
+                force_region,
+                self.region_bottom,
+                new_bottom,
+                self.rows,
+            ));
             self.region_bottom = new_bottom;
         }
+        self.first_paint = false;
 
-        // Paint the framed queue table + composer below the region, bracketed by
-        // save/restore so the output cursor inside the region is left undisturbed.
+        // Paint every pinned row below the region, bracketed by save/restore so
+        // the output cursor inside the region is left undisturbed. The walk is
+        // a flat pass over the plan: each line lands one row further down, and
+        // the composer (the last section) ends exactly on the bottom row.
         buf.push_str("\x1b7");
-        // Keep the spacer row(s) directly below the output region blank.
-        for s in 0..SPACER_ROWS as u16 {
-            buf.push_str(&format!("\x1b[{};1H\x1b[2K", new_bottom + 1 + s));
-        }
-        // The fleet lanes (when a fleet runs), then the compression savings and
-        // context-usage meters, sit under the spacer just above the divider.
-        let mut next_row = new_bottom + 1 + SPACER_ROWS as u16;
-        for line in &fleet_lines {
-            buf.push_str(&format!("\x1b[{next_row};1H\x1b[2K{line}"));
-            next_row += 1;
-        }
-        for line in self.compression_line.iter().chain(self.status_lines.iter()) {
-            buf.push_str(&format!("\x1b[{next_row};1H\x1b[2K{line}"));
-            next_row += 1;
-        }
-        // Then a faint full-width divider rule, just above the input area.
-        let divider_row = next_row;
-        buf.push_str(&format!(
-            "\x1b[{divider_row};1H\x1b[2K{}",
-            self.ui.dim(&"─".repeat(self.cols as usize))
-        ));
-        if !plan.is_empty() {
-            let box_w = self.queue_box_w();
-            let mut r = divider_row + DIVIDER_ROWS as u16;
-            buf.push_str(&format!("\x1b[{r};1H\x1b[2K{}", self.queue_header(box_w)));
-            for row in &plan {
-                r += 1;
-                buf.push_str(&format!(
-                    "\x1b[{r};1H\x1b[2K{}",
-                    self.queue_row_line(*row, box_w)
-                ));
+        let mut row = new_bottom + 1;
+        for section in &plan.sections {
+            for line in &section.lines {
+                buf.push_str(&format!("\x1b[{row};1H\x1b[2K{line}"));
+                row += 1;
             }
-            r += 1;
-            buf.push_str(&format!("\x1b[{r};1H\x1b[2K{}", self.queue_footer(box_w)));
-        }
-        // The input box occupies the bottom `box_h` rows, pinned to row H.
-        let box_start = self.rows.saturating_sub(box_h).saturating_add(1);
-        for (i, line) in box_lines.iter().enumerate() {
-            let row = box_start + i as u16;
-            buf.push_str(&format!("\x1b[{row};1H\x1b[2K{line}"));
         }
         buf.push_str("\x1b8");
-        let _ = write!(self.out, "{buf}");
+        // Synchronized output (mode 2026): the terminal holds the whole frame
+        // and presents it at once, so the clear-then-rewrite of every pinned
+        // row can never be seen half-painted.
+        let _ = write!(self.out, "{SYNC_BEGIN}{buf}{SYNC_END}");
         let _ = self.out.flush();
     }
 
@@ -156,7 +211,7 @@ impl Live {
         let label = "Queued";
         // `┌─ ` (3) + label + ` ` (1) + fill + `┐` (1) must span `box_w + 4`
         // columns to align with the framed rows below, so fill = box_w - 1 - len.
-        let fill = box_w.saturating_sub(1 + label.chars().count());
+        let fill = box_w.saturating_sub(1 + str_width(label));
         format!(
             "  {}{}{}",
             self.ui.brown("┌─ "),
@@ -178,8 +233,8 @@ impl Live {
             Mode::Browse => "enter edit · d delete",
             Mode::Compose => "↑ edit queued",
         };
-        if hint.chars().count() < box_w {
-            let fill = box_w.saturating_sub(1 + hint.chars().count());
+        if str_width(hint) < box_w {
+            let fill = box_w.saturating_sub(1 + str_width(hint));
             format!(
                 "  {}{}{}",
                 self.ui.brown("└─ "),
@@ -202,7 +257,7 @@ impl Live {
         match row {
             QueueRow::More(k) => {
                 let text = format!("…(+{k} more)");
-                let pad = box_w.saturating_sub(text.chars().count());
+                let pad = box_w.saturating_sub(str_width(&text));
                 format!("  {bar} {}{} {bar}", self.ui.dim(&text), " ".repeat(pad))
             }
             QueueRow::Item(idx) => {
@@ -211,7 +266,7 @@ impl Live {
                 if focused {
                     if let Some(edit) = self.edit.as_ref() {
                         let prefix = format!("✎ {num}. ");
-                        let prefix_w = prefix.chars().count();
+                        let prefix_w = str_width(&prefix);
                         // Leave a column for the caret so the editor never spills
                         // past the right border.
                         let avail = box_w.saturating_sub(prefix_w + 1);
@@ -225,15 +280,13 @@ impl Live {
                         );
                     }
                     let plain = self.item_text(idx, num, box_w);
-                    let pad = box_w.saturating_sub(plain.chars().count());
+                    let pad = box_w.saturating_sub(str_width(&plain));
                     // Plain text under reverse video (no nested color codes).
                     format!("  {bar} \x1b[7m{plain}{}\x1b[0m {bar}", " ".repeat(pad))
                 } else {
                     let prefix = format!("{num}. ");
-                    let preview =
-                        self.item_preview(idx, box_w.saturating_sub(prefix.chars().count()));
-                    let pad =
-                        box_w.saturating_sub(prefix.chars().count() + preview.chars().count());
+                    let preview = self.item_preview(idx, box_w.saturating_sub(str_width(&prefix)));
+                    let pad = box_w.saturating_sub(str_width(&prefix) + str_width(&preview));
                     format!(
                         "  {bar} {}{}{} {bar}",
                         self.ui.accent(&prefix),
@@ -251,7 +304,7 @@ impl Live {
         let prefix = format!("{num}. ");
         format!(
             "{prefix}{}",
-            self.item_preview(idx, box_w.saturating_sub(prefix.chars().count()))
+            self.item_preview(idx, box_w.saturating_sub(str_width(&prefix)))
         )
     }
 
@@ -273,7 +326,7 @@ impl Live {
     fn composer_box_lines(&self) -> Vec<String> {
         let depth = self.previews.len();
         let (plain_prompt, styled_prompt) = composer_prompt(&self.ui, depth);
-        let prompt_w = plain_prompt.chars().count();
+        let prompt_w = str_width(&plain_prompt);
         let box_w = self.queue_box_w();
         // Wrap width leaves a column for the caret so it never spills past the
         // right edge; every row is indented under the prompt for alignment.
@@ -343,8 +396,126 @@ impl Live {
 
 #[cfg(test)]
 mod tests {
+    use super::super::pinned::SectionKind;
     use super::super::test_support::plain_live;
     use super::*;
+
+    #[test]
+    fn first_paint_scrolls_output_up_to_preserve_the_banner() {
+        // On the first paint the region shrinks from the terminal's initial
+        // rows-1 (23) down to the real output bottom (say 18, reserving a
+        // 6-row pinned area on a 24-row screen). The banner tail sits in the
+        // rows being claimed, so the region must scroll up by the lost rows
+        // (23 - 18 = 5) before re-carving — otherwise the pinned area paints
+        // over it.
+        let seq = region_transition(true, false, 23, 18, 24);
+        // Cursor to the old region bottom, then 5 line feeds to scroll.
+        assert!(
+            seq.contains("\x1b[23;1H"),
+            "must park at old bottom: {seq:?}"
+        );
+        assert!(
+            seq.contains(&"\n".repeat(5)),
+            "must scroll up by the lost rows: {seq:?}"
+        );
+        // The scroll must precede the re-carve so it happens under the old region.
+        let scroll_at = seq.find('\n').unwrap();
+        let recarve_at = seq.find("\x1b[1;18r").unwrap();
+        assert!(scroll_at < recarve_at, "scroll before re-carve: {seq:?}");
+        // And the region is re-carved to the new bottom, cursor parked there.
+        assert!(seq.contains("\x1b[1;18r\x1b[18;1H"), "re-carve: {seq:?}");
+    }
+
+    #[test]
+    fn later_shrinks_do_not_scroll_the_conversation() {
+        // A later shrink (composer grew a line: 18 -> 17) must NOT scroll the
+        // output — those claimed rows are the blank spacer/composer area, and
+        // scrolling would nudge the conversation up on every keystroke.
+        let seq = region_transition(false, false, 18, 17, 24);
+        assert!(
+            !seq.contains('\n'),
+            "must not scroll on a later shrink: {seq:?}"
+        );
+        // It still clears the row that moved out of the region and re-carves.
+        assert!(
+            seq.contains("\x1b[18;1H\x1b[2K"),
+            "clears moved row: {seq:?}"
+        );
+        assert!(seq.contains("\x1b[1;17r\x1b[17;1H"), "re-carve: {seq:?}");
+    }
+
+    #[test]
+    fn a_growing_region_never_scrolls() {
+        // When the reserved area shrinks (region grows back, 17 -> 18), there is
+        // nothing to preserve by scrolling — just clear and re-carve.
+        let seq = region_transition(true, false, 17, 18, 24);
+        assert!(!seq.contains('\n'), "no scroll when growing: {seq:?}");
+        assert!(seq.contains("\x1b[1;18r"), "re-carve: {seq:?}");
+    }
+
+    #[test]
+    fn forced_region_only_recarves() {
+        // A forced re-issue (after resize/picker) clears nothing and doesn't
+        // scroll — it just re-establishes the region.
+        let seq = region_transition(false, true, 18, 18, 24);
+        assert!(!seq.contains("\x1b[2K"), "no clears when forced: {seq:?}");
+        assert!(!seq.contains('\n'), "no scroll when forced: {seq:?}");
+        assert!(seq.contains("\x1b[1;18r\x1b[18;1H"), "re-carve: {seq:?}");
+    }
+
+    #[test]
+    fn pinned_plan_orders_sections_and_reserves_exactly_what_it_paints() {
+        let mut l = plain_live(60, 24);
+        l.sync_queue(&["a".into(), "b".into(), "c".into()]);
+        l.status_lines = vec!["ctx".into(), "used".into()];
+        l.compression_line = Some("comp".into());
+
+        let plan = l.pinned_plan();
+        // spacer(1) + fleet(0) + compression(1) + status(2) + divider(1) +
+        // queue(3 items + 2 frame) + composer(1) = 11 reserved rows.
+        assert_eq!(plan.rows(), 11);
+        assert_eq!(plan.region_bottom(24), 13);
+
+        // The layout order is fixed; every section is present (possibly empty).
+        let kinds: Vec<_> = plan.sections.iter().map(|s| s.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SectionKind::Spacer,
+                SectionKind::Fleet,
+                SectionKind::Compression,
+                SectionKind::Status,
+                SectionKind::Divider,
+                SectionKind::Queue,
+                SectionKind::Composer,
+            ]
+        );
+    }
+
+    #[test]
+    fn fleet_block_is_truncated_to_keep_an_output_row_on_a_short_terminal() {
+        use crate::fleet_ui::{FleetHub, FleetState};
+
+        let mut l = plain_live(40, 10);
+        // A private hub so this test can't race others over the global one.
+        let hub = std::sync::Arc::new(FleetHub::default());
+        let labels: Vec<String> = (0..6).map(|i| format!("lane {i}")).collect();
+        hub.install(FleetState::new(&labels, None));
+        l.fleet = hub;
+
+        let plan = l.pinned_plan();
+        let fleet = plan.section(SectionKind::Fleet).unwrap();
+        // fixed = spacer(1) + divider(1) + composer(1) = 3, so the fleet gets at
+        // most rows - fixed - 1 = 6 lines — the block was trimmed, and at least
+        // one row of output survives above the pinned area.
+        assert!(
+            fleet.lines.len() <= 6,
+            "fleet must be truncated: {} lines",
+            fleet.lines.len()
+        );
+        assert!(plan.rows() < 10, "reserved must leave an output row");
+        assert_eq!(plan.region_bottom(10), 10 - plan.rows());
+    }
 
     #[test]
     fn queue_table_header_shows_title_and_aligns_with_rows() {

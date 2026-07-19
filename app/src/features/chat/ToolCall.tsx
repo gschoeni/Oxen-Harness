@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Check,
   ChevronRight,
@@ -35,16 +35,30 @@ const MAX_BODY_CHARS = 4000;
  *  tool returns when no Brave key is set, so we can offer an inline key prompt. */
 const WEB_SEARCH_NO_KEY = "Web search needs a Brave Search API key.";
 
+/** Ticks once a second while `active`, driving a running call's elapsed label.
+ *  Local to each card so a live timer never re-renders the rest of the thread. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+  return now;
+}
+
 /** A polished, tool-aware card for one tool call: an icon + human summary in the
  *  header, with the arguments/output revealed on click. Each tool gets a tailored
  *  body (a diff for edits, a terminal for shell, result cards for web search). */
-export function ToolCall({ item, now }: { item: ToolItem; now: number }) {
+export function ToolCall({ item }: { item: ToolItem }) {
   const [open, setOpen] = useState(false);
   const root = useStore((s) => s.session?.workspace ?? null);
+  const now = useNow(item.running);
   const a = parseArgs(item.args);
   // A canvas call is a clickable card that (re)opens the document in the panel —
   // including past versions in a resumed chat, rebuilt from the call's args.
-  if (item.name === "canvas") return <CanvasToolCall item={item} now={now} a={a} />;
+  if (item.name === "canvas") return <CanvasToolCall item={item} a={a} />;
   // A plan update renders as a checklist snapshot (the live, pinned plan lives
   // above the thread; this card is the in-thread record of each update).
   if (item.name === "update_plan") return <PlanToolCard item={item} a={a} />;
@@ -107,8 +121,9 @@ export function ToolCall({ item, now }: { item: ToolItem; now: number }) {
  *  the side panel. Each call in the thread is a snapshot, so older cards reopen
  *  earlier versions — and they work in a resumed chat since the content is in
  *  the call's arguments. */
-function CanvasToolCall({ item, now, a }: { item: ToolItem; now: number; a: Record<string, unknown> }) {
+function CanvasToolCall({ item, a }: { item: ToolItem; a: Record<string, unknown> }) {
   const openCanvasDoc = useStore((s) => s.openCanvasDoc);
+  const now = useNow(item.running);
   const doc = canvasDocFromArgs(a);
   const title = typeof a.title === "string" && a.title.trim() ? (a.title as string) : "Document";
   const format = typeof a.format === "string" ? (a.format as string) : "markdown";

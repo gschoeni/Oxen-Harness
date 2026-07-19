@@ -106,14 +106,9 @@ fn noun(n: usize) -> &'static str {
     }
 }
 
-/// Clip a single line to [`MAX_COLS`] characters (diff lines shouldn't wrap).
+/// Clip a single line to [`MAX_COLS`] terminal cells (diff lines shouldn't wrap).
 fn clip(s: &str) -> String {
-    if s.chars().count() <= MAX_COLS {
-        s.to_string()
-    } else {
-        let kept: String = s.chars().take(MAX_COLS - 1).collect();
-        format!("{kept}…")
-    }
+    crate::width::fit(s, MAX_COLS)
 }
 
 #[cfg(test)]

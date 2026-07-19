@@ -28,10 +28,11 @@ enum Candidate {
 /// Returns the cleaned prompt (file paths removed), the loaded attachments, and
 /// human-readable warnings for files that looked attachable but couldn't be read.
 pub fn extract_attachments(input: &str) -> (String, Vec<Attachment>, Vec<String>) {
-    // `[Image N]` chips (pasted images) resolve from the session registry. The
-    // label text stays in the prompt so the model can tie "[Image 2]" to its
-    // image part; only real file-path tokens are stripped below.
-    let (mut attachments, mut warnings) = crate::images::resolve_labels(input);
+    // `[Image #N]` / `[PDF #N]` / `[Video #N]` chips (dropped or pasted media)
+    // resolve from the session registry. The chip text stays in the prompt so
+    // the model can tie "[Image #2]" to its image part; only real file-path
+    // tokens are stripped below.
+    let (mut attachments, mut warnings) = crate::media::resolve_labels(input);
     let (label_atts, label_warns) = (attachments.len(), warnings.len());
 
     let mut text_tokens = Vec::new();
@@ -81,8 +82,12 @@ fn classify(tok: &str) -> Candidate {
     }
 }
 
-/// Shell-style tokenizer: splits on whitespace, but honors single/double quotes
-/// and backslash escapes so drag-dropped paths with spaces stay one token.
+/// Shell-style tokenizer: splits on ASCII whitespace, but honors single/double
+/// quotes and backslash escapes so drag-dropped paths with spaces stay one
+/// token. Only *ASCII* whitespace splits (like a shell's `$IFS`): macOS
+/// screenshot names contain a U+202F narrow no-break space before "AM"/"PM",
+/// which terminals leave unescaped in a drop — splitting there would shatter
+/// the path into tokens that name no file.
 pub(crate) fn tokenize(input: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut cur = String::new();
@@ -114,7 +119,7 @@ pub(crate) fn tokenize(input: &str) -> Vec<String> {
                         has = true;
                     }
                 }
-                c if c.is_whitespace() => {
+                c if c.is_ascii_whitespace() => {
                     if has {
                         tokens.push(std::mem::take(&mut cur));
                         has = false;
@@ -152,6 +157,16 @@ mod tests {
     }
 
     #[test]
+    fn tokenize_does_not_split_on_unicode_whitespace() {
+        // macOS screenshot names hold a U+202F narrow no-break space before
+        // "PM"; terminals don't escape it in a drop, so it must not split.
+        assert_eq!(
+            tokenize("see /tmp/Screenshot\\ at\\ 9.55.10\u{202f}PM.png"),
+            ["see", "/tmp/Screenshot at 9.55.10\u{202f}PM.png"]
+        );
+    }
+
+    #[test]
     fn extracts_existing_image_and_keeps_text() {
         let dir = tempfile::tempdir().unwrap();
         let img = dir.path().join("shot.png");
@@ -173,7 +188,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let img = dir.path().join("chip.png");
         std::fs::write(&img, [9, 9, 9]).unwrap();
-        let label = crate::images::stage_path(&img);
+        let label = crate::media::stage_path(&img);
 
         let line = format!("what's wrong in {label}?");
         let (text, attachments, warnings) = extract_attachments(&line);

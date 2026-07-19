@@ -12,26 +12,41 @@ export function loadHljs() {
 /** Syntax-highlighted code via highlight.js. Renders the raw text immediately
  *  (so it's never blank) and re-highlights as `code` changes — keeping the prior
  *  highlighted markup until the new pass resolves, so streaming content updates
- *  without flicker. Wrap in your own <pre> for layout. */
+ *  without flicker. Wrap in your own <pre> for layout.
+ *
+ *  `autoDetect: false` renders plain text when `language` is missing or unknown
+ *  instead of falling back to `highlightAuto` — detection tries every
+ *  registered grammar, far too expensive to run repeatedly on streaming
+ *  content. */
 export function HighlightedCode({
   code,
   language,
+  autoDetect = true,
 }: {
   code: string;
   language?: string | null;
+  autoDetect?: boolean;
 }) {
   const [html, setHtml] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
+    if (!language && !autoDetect) {
+      setHtml(null);
+      return;
+    }
     loadHljs()
       .then((hljs) => {
         if (!alive) return;
         try {
-          const result =
-            language && hljs.getLanguage(language)
-              ? hljs.highlight(code, { language })
-              : hljs.highlightAuto(code);
+          const named = language && hljs.getLanguage(language) ? language : null;
+          if (!named && !autoDetect) {
+            setHtml(null);
+            return;
+          }
+          const result = named
+            ? hljs.highlight(code, { language: named })
+            : hljs.highlightAuto(code);
           setHtml(result.value);
         } catch {
           setHtml(null);
@@ -41,7 +56,7 @@ export function HighlightedCode({
     return () => {
       alive = false;
     };
-  }, [code, language]);
+  }, [code, language, autoDetect]);
 
   return html != null ? (
     <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />

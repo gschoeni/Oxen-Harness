@@ -33,7 +33,13 @@ use crate::{translate, EventSink, PendingApprovals, PendingQuestions};
 /// The `app_meta` key holding the all-time tokens saved by context compression.
 const TOTAL_TOKENS_SAVED_KEY: &str = "total_tokens_saved";
 
-const TOKEN_BATCH_BYTES: usize = 512;
+pub(crate) const STREAM_BATCH_BYTES: usize = 512;
+
+/// A pending run older than this flushes on the next push even below the byte
+/// threshold, so a slow stream (a local model, a fleet lane trickling tokens)
+/// still updates at a human cadence instead of stalling until a full batch
+/// accrues.
+pub(crate) const STREAM_BATCH_MAX_AGE: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Builds a client for a model id. Defaults to the shared runtime resolution
 /// (saved connection settings / env / CLI login); tests and special hosts
@@ -61,48 +67,134 @@ pub struct HostHooks {
     pub on_session_deleted: Option<SessionNotify>,
 }
 
-/// Batches streamed tokens so the transport isn't flooded with one event per
-/// SSE delta: flushed at [`TOKEN_BATCH_BYTES`], before any non-token event
-/// (ordering stays exact), and at turn end.
+/// Batches streamed text tokens *and* tool-call argument deltas so the
+/// transport isn't flooded with one event per SSE delta — a single large
+/// `write_file` call streams thousands of argument fragments, and emitting
+/// each one is enough to freeze a webview client. A run of same-kind events
+/// coalesces until [`STREAM_BATCH_BYTES`] or [`STREAM_BATCH_MAX_AGE`]; a kind
+/// switch (or any other event, via [`StreamBatch::flush`]) flushes first so
+/// ordering on the wire stays exact; turn end flushes the tail.
 #[derive(Clone)]
-struct TokenBatch {
+struct StreamBatch {
     sink: Arc<dyn EventSink>,
     session: String,
-    buffer: Arc<StdMutex<String>>,
+    pending: Arc<StdMutex<Pending>>,
 }
 
-impl TokenBatch {
+/// The current same-kind run of stream content awaiting a flush, stamped with
+/// when the run started so slow streams flush by age.
+enum Pending {
+    None,
+    Text {
+        buf: String,
+        since: std::time::Instant,
+    },
+    ToolArgs {
+        name: String,
+        args: String,
+        since: std::time::Instant,
+    },
+}
+
+impl Pending {
+    fn text(t: &str) -> Self {
+        Pending::Text {
+            buf: t.to_string(),
+            since: std::time::Instant::now(),
+        }
+    }
+
+    fn tool_args(name: &str, delta: &str) -> Self {
+        Pending::ToolArgs {
+            name: name.to_string(),
+            args: delta.to_string(),
+            since: std::time::Instant::now(),
+        }
+    }
+
+    /// Whether the run is full or has been building long enough to ship.
+    fn ripe(&self) -> bool {
+        let (len, since) = match self {
+            Pending::None => return false,
+            Pending::Text { buf, since } => (buf.len(), since),
+            Pending::ToolArgs { args, since, .. } => (args.len(), since),
+        };
+        len >= STREAM_BATCH_BYTES || since.elapsed() >= STREAM_BATCH_MAX_AGE
+    }
+}
+
+impl StreamBatch {
     fn new(sink: Arc<dyn EventSink>, session: String) -> Self {
         Self {
             sink,
             session,
-            buffer: Arc::new(StdMutex::new(String::with_capacity(TOKEN_BATCH_BYTES))),
+            pending: Arc::new(StdMutex::new(Pending::None)),
         }
     }
 
-    fn push(&self, token: &str) {
-        let ready = {
-            let mut buffer = self.buffer.lock().expect("token batch poisoned");
-            buffer.push_str(token);
-            (buffer.len() >= TOKEN_BATCH_BYTES).then(|| std::mem::take(&mut *buffer))
+    /// Absorb a batchable event (a token or tool-arg delta), coalescing it into
+    /// the pending run. Returns `false` for any other event — the caller must
+    /// [`flush`](Self::flush) and forward it itself.
+    fn absorb(&self, event: &AgentEvent) -> bool {
+        let (displaced, ready) = {
+            let mut pending = self.pending.lock().expect("stream batch poisoned");
+            // Extend a same-kind run in place; a kind (or tool) switch displaces
+            // the prior run, which must be emitted before the new content.
+            let displaced = match (event, &mut *pending) {
+                (AgentEvent::Token(t), Pending::Text { buf, .. }) => {
+                    buf.push_str(t);
+                    None
+                }
+                (AgentEvent::Token(t), prior) => Some(std::mem::replace(prior, Pending::text(t))),
+                (
+                    AgentEvent::ToolDelta { name, delta },
+                    Pending::ToolArgs {
+                        name: pending_name,
+                        args,
+                        ..
+                    },
+                ) if name == pending_name => {
+                    args.push_str(delta);
+                    None
+                }
+                (AgentEvent::ToolDelta { name, delta }, prior) => {
+                    Some(std::mem::replace(prior, Pending::tool_args(name, delta)))
+                }
+                _ => return false,
+            };
+            let ready = pending
+                .ripe()
+                .then(|| std::mem::replace(&mut *pending, Pending::None));
+            (displaced, ready)
         };
-        if let Some(text) = ready {
-            self.emit(text);
+        for run in [displaced, ready].into_iter().flatten() {
+            self.emit(run);
         }
+        true
     }
 
     fn flush(&self) {
-        let text = std::mem::take(&mut *self.buffer.lock().expect("token batch poisoned"));
-        if !text.is_empty() {
-            self.emit(text);
-        }
+        let pending = std::mem::replace(
+            &mut *self.pending.lock().expect("stream batch poisoned"),
+            Pending::None,
+        );
+        self.emit(pending);
     }
 
-    fn emit(&self, token: String) {
-        self.sink.emit(ProtocolEvent::Token {
-            session: self.session.clone(),
-            token,
-        });
+    fn emit(&self, run: Pending) {
+        let event = match run {
+            Pending::None => return,
+            Pending::Text { buf, .. } => ProtocolEvent::Token {
+                session: self.session.clone(),
+                token: buf,
+            },
+            Pending::ToolArgs { name, args, .. } => ProtocolEvent::ToolDelta {
+                session: self.session.clone(),
+                name,
+                delta: args,
+            },
+        };
+        self.sink.emit(event);
     }
 }
 
@@ -335,7 +427,10 @@ impl SessionService {
             }
         }
         let model = self.cloud_model.lock().await.clone();
-        Ok(((self.client_factory)(&model)?, model, None))
+        // The catalog-reported context window when a fetch has cached it;
+        // `None` falls back to the name-derived table in `harness-agent`.
+        let context_window = harness_local::limits::context_window(&model);
+        Ok(((self.client_factory)(&model)?, model, context_window))
     }
 
     /// Ensure a `llama-server` is running for local model `id`, returning its
@@ -398,7 +493,10 @@ impl SessionService {
         let mut agent = arc.lock().await;
         agent.set_client(client.clone());
         agent.set_model(&model);
-        agent.set_context_window(None);
+        // The new model's catalog-reported limits, when cached; `None` falls
+        // back to the name-derived window and the configured reply reserve.
+        agent.set_context_window(harness_local::limits::context_window(&model));
+        agent.set_max_output_tokens(harness_local::limits::max_output_tokens(&model));
         // Follow the swap through to the fleet spawner so a later
         // spawn_agents fleet runs on the new model/endpoint.
         let session = agent.session_id().to_string();
@@ -514,16 +612,30 @@ impl SessionService {
             ),
             harness_runtime::project::prompt_section(workspace_root)
         );
+        let limits = harness_runtime::limits::load();
         AgentConfig {
             model: model_label.to_string(),
             system_prompt: Some(system_prompt),
             context_window,
+            // The catalog-reported reply ceiling, when a fetch has cached it
+            // (misses for local aliases — they fall back to the reserve).
+            max_output_tokens: harness_local::limits::max_output_tokens(model_label),
             attachment_root: Some(workspace_root.to_path_buf()),
             initial_attachments: harness_runtime::project::binary_context_paths(workspace_root),
             compression: harness_runtime::compression::mode(),
             // Retry attempts and failed turns append to
             // ~/.oxen-harness/errors.jsonl so a developer can dig in later.
             error_log: harness_config::paths::errors_log().ok(),
+            // Every model call appends its size, cache-prefix classification,
+            // latency, and reported usage to ~/.oxen-harness/requests.jsonl,
+            // so cost and cache behavior stay diagnosable per request.
+            request_log: harness_config::paths::requests_log().ok(),
+            // Spend limits and summary routing from ~/.oxen-harness/limits.json
+            // (both off by default).
+            budget: limits
+                .max_session_tokens
+                .map(harness_agent::SessionBudget::new),
+            summary_model: limits.summary_model,
             // Gate tool calls behind the permission layer, with approval
             // prompts carried over the protocol (agent.approval_request ↔
             // answer_approval). Fleet/review subagents get the gate's
@@ -562,11 +674,11 @@ impl SessionService {
         );
         tools.register_typed(harness_agent::FleetTool::new(
             spawner.clone(),
-            Arc::new(HostFleetSink {
-                sink: self.sink.clone(),
-                session: session.to_string(),
-                source: harness_protocol::FleetSource::Turn,
-            }),
+            Arc::new(HostFleetSink::new(
+                self.sink.clone(),
+                session.to_string(),
+                harness_protocol::FleetSource::Turn,
+            )),
         ));
         self.fleet_spawners
             .lock()
@@ -988,7 +1100,7 @@ impl SessionService {
             spawner.set_cancel(cancel.clone());
         }
         let saved_delta;
-        let token_batch = TokenBatch::new(self.sink.clone(), sid.clone());
+        let stream_batch = StreamBatch::new(self.sink.clone(), sid.clone());
         // A dev server that died between turns is otherwise invisible to the
         // model — ride a one-time note along with the next fresh prompt.
         let crash_note = self.crash_note(&sid);
@@ -1000,16 +1112,15 @@ impl SessionService {
                 session: sid.clone(),
             });
             let sink = self.sink.clone();
-            let event_tokens = token_batch.clone();
+            let event_batch = stream_batch.clone();
             let event_session = sid.clone();
             let on_event = move |event: &AgentEvent| {
-                // Tokens batch; everything else flushes first so ordering on
-                // the wire matches ordering in the turn exactly.
-                if let AgentEvent::Token(t) = event {
-                    event_tokens.push(t);
+                // Tokens and tool-arg deltas batch; everything else flushes
+                // first so ordering on the wire matches the turn exactly.
+                if event_batch.absorb(event) {
                     return;
                 }
-                event_tokens.flush();
+                event_batch.flush();
                 if let Some(event) = translate::agent_event(&event_session, context_window, event) {
                     sink.emit(event);
                 }
@@ -1032,7 +1143,7 @@ impl SessionService {
             saved_delta = agent.tokens_saved().saturating_sub(saved_before);
             r
         };
-        token_batch.flush();
+        stream_batch.flush();
         // The turn is over (finished, stopped, or errored): drop its stop
         // signal so a later cancel can't fire against a stale token, and its
         // steering channel so a later interject falls back to a normal prompt.
@@ -1161,6 +1272,10 @@ impl SessionService {
             .with_cancel(cancel);
             let sid = session.to_string();
             let sink = self.sink.clone();
+            // Fan-out lanes stream N agents at once; coalesce their tokens
+            // like a spawn_agents fleet does.
+            let fleet_batch =
+                crate::bridges::FleetActivityBatch::new(self.sink.clone(), sid.clone());
             let mut pipeline_tokens = 0usize;
             let run = runner
                 .run(&agent, |event| match event {
@@ -1201,12 +1316,9 @@ impl SessionService {
                     // A fan-out step's lanes ARE a fleet; the review forwards
                     // the FleetEvent verbatim, so it rides the exact same
                     // translation (and wire format) as a spawn_agents fleet.
-                    ReviewEvent::Fleet(event) => {
-                        if let Some(event) = translate::fleet_event(&sid, event) {
-                            sink.emit(event);
-                        }
-                    }
+                    ReviewEvent::Fleet(event) => fleet_batch.forward(event),
                     ReviewEvent::StepCompleted { .. } => {
+                        fleet_batch.flush_all();
                         sink.emit(ProtocolEvent::FleetCompleted {
                             session: sid.clone(),
                         });
@@ -1215,6 +1327,9 @@ impl SessionService {
                     _ => {}
                 })
                 .await;
+            // A cancelled or failed pipeline never reaches StepCompleted —
+            // flush here too so no lane's buffered tail is dropped with it.
+            fleet_batch.flush_all();
             match run {
                 Ok(report) => {
                     let (user, assistant) = harness_review::session_exchange(&target, &report);
@@ -1289,17 +1404,24 @@ impl SessionService {
             LoopRunner::new(spec.clone(), root).persisting_to(store.journal_path_for(&spec.name));
         let sid = session.to_string();
         let sink = self.sink.clone();
+        let stream_batch = StreamBatch::new(self.sink.clone(), sid.clone());
         let result = {
             let mut agent = arc.lock().await;
             agent.set_cancel_token(cancel);
             runner
                 .run(&mut agent, |event| {
-                    // Only the thread-visible slice rides the wire: streamed
-                    // text and tool starts/ends.
+                    // Tokens batch; every other loop event — tool brackets,
+                    // iteration and verify transitions — is a boundary that
+                    // flushes the tail first, so a turn's closing text can't
+                    // sit buffered while gates run. Only the thread-visible
+                    // slice (batched text, tool starts/ends) rides the wire.
+                    if let LoopEvent::Agent(event @ AgentEvent::Token(_)) = event {
+                        stream_batch.absorb(event);
+                        return;
+                    }
+                    stream_batch.flush();
                     if let LoopEvent::Agent(
-                        event @ (AgentEvent::Token(_)
-                        | AgentEvent::ToolStart { .. }
-                        | AgentEvent::ToolEnd { .. }),
+                        event @ (AgentEvent::ToolStart { .. } | AgentEvent::ToolEnd { .. }),
                     ) = event
                     {
                         if let Some(event) = translate::agent_event(&sid, 0, event) {
@@ -1311,6 +1433,7 @@ impl SessionService {
                 .map(|journal| loop_result(&journal))
                 .map_err(|e| e.to_string())
         };
+        stream_batch.flush();
         self.cancels.lock().await.remove(session);
         self.evict_idle().await;
         result
@@ -1510,9 +1633,119 @@ impl SessionService {
 
 #[cfg(test)]
 mod tests {
-    use harness_loop::{LoopJournal, StopReason};
+    use std::sync::{Arc, Mutex as StdMutex};
 
-    use super::loop_result;
+    use harness_agent::AgentEvent;
+    use harness_loop::{LoopJournal, StopReason};
+    use harness_protocol::ProtocolEvent;
+
+    use super::{loop_result, EventSink, StreamBatch};
+
+    #[derive(Default)]
+    struct RecordingSink(StdMutex<Vec<ProtocolEvent>>);
+
+    impl EventSink for RecordingSink {
+        fn emit(&self, event: ProtocolEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    fn token(t: &str) -> AgentEvent {
+        AgentEvent::Token(t.to_string())
+    }
+
+    fn delta(name: &str, d: &str) -> AgentEvent {
+        AgentEvent::ToolDelta {
+            name: name.to_string(),
+            delta: d.to_string(),
+        }
+    }
+
+    #[test]
+    fn stream_batch_coalesces_runs_and_preserves_order() {
+        let sink = Arc::new(RecordingSink::default());
+        let batch = StreamBatch::new(sink.clone(), "s1".into());
+
+        assert!(batch.absorb(&token("Hello ")));
+        assert!(batch.absorb(&token("world")));
+        // Kind switch: the text run must hit the wire before the args do.
+        assert!(batch.absorb(&delta("write_file", "{\"path\"")));
+        assert!(batch.absorb(&delta("write_file", ":\"a.txt\"}")));
+        // A non-batchable event is the caller's to flush and forward.
+        assert!(!batch.absorb(&AgentEvent::ToolPending {
+            name: "write_file".into()
+        }));
+        batch.flush();
+
+        let events = sink.0.lock().unwrap();
+        match &events[..] {
+            [ProtocolEvent::Token { session, token }, ProtocolEvent::ToolDelta { name, delta, .. }] =>
+            {
+                assert_eq!(session, "s1");
+                assert_eq!(token, "Hello world");
+                assert_eq!(name, "write_file");
+                assert_eq!(delta, "{\"path\":\"a.txt\"}");
+            }
+            other => panic!("expected one coalesced token + one coalesced delta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_batch_flushes_when_a_run_reaches_the_size_threshold() {
+        let sink = Arc::new(RecordingSink::default());
+        let batch = StreamBatch::new(sink.clone(), "s1".into());
+
+        let big = "x".repeat(super::STREAM_BATCH_BYTES);
+        assert!(batch.absorb(&delta("write_file", &big)));
+        // The oversized run was emitted immediately, without waiting for a flush.
+        assert_eq!(sink.0.lock().unwrap().len(), 1);
+
+        assert!(batch.absorb(&delta("write_file", "tail")));
+        batch.flush();
+        let events = sink.0.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        match &events[1] {
+            ProtocolEvent::ToolDelta { delta, .. } => assert_eq!(delta, "tail"),
+            other => panic!("expected the tail delta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_batch_flushes_an_aged_run_so_slow_streams_stay_live() {
+        let sink = Arc::new(RecordingSink::default());
+        let batch = StreamBatch::new(sink.clone(), "s1".into());
+
+        assert!(batch.absorb(&token("slow ")));
+        std::thread::sleep(super::STREAM_BATCH_MAX_AGE + std::time::Duration::from_millis(10));
+        // Well under the byte threshold, but the run is old — the next push
+        // ships it instead of letting a trickling stream look stalled.
+        assert!(batch.absorb(&token("drip")));
+        let events = sink.0.lock().unwrap();
+        match &events[..] {
+            [ProtocolEvent::Token { token, .. }] => assert_eq!(token, "slow drip"),
+            other => panic!("expected the aged run to flush, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_batch_splits_deltas_for_different_tools() {
+        let sink = Arc::new(RecordingSink::default());
+        let batch = StreamBatch::new(sink.clone(), "s1".into());
+
+        assert!(batch.absorb(&delta("write_file", "{}")));
+        assert!(batch.absorb(&delta("edit_file", "{}")));
+        batch.flush();
+
+        let events = sink.0.lock().unwrap();
+        let names: Vec<_> = events
+            .iter()
+            .map(|e| match e {
+                ProtocolEvent::ToolDelta { name, .. } => name.as_str(),
+                other => panic!("expected only tool deltas, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(names, ["write_file", "edit_file"]);
+    }
 
     #[test]
     fn loop_result_distinguishes_success_from_a_stopped_run() {

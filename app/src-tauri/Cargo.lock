@@ -1738,7 +1738,6 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1820,7 +1819,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml 0.8.23",
- "tracing",
 ]
 
 [[package]]
@@ -1839,7 +1837,6 @@ dependencies = [
  "harness-config",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tree-sitter",
@@ -1884,7 +1881,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio-util",
- "tracing",
 ]
 
 [[package]]
@@ -1921,7 +1917,6 @@ dependencies = [
 name = "harness-theme"
 version = "0.1.0"
 dependencies = [
- "dirs 5.0.1",
  "harness-config",
  "harness-core",
  "serde",
@@ -3218,10 +3213,10 @@ dependencies = [
  "async-trait",
  "block2",
  "csv",
+ "dirs 5.0.1",
  "harness-agent",
  "harness-compress",
  "harness-config",
- "harness-core",
  "harness-crash",
  "harness-host",
  "harness-llm",

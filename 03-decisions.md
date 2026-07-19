@@ -645,3 +645,85 @@ Parquet has no record to splice, so it rewrites the file behind a size cap and
 turns read-only past it. Rows are addressed by a physical row-index column
 injected before filter/sort, so edits land on the right record whatever the
 view order.
+
+**Prompt caching anchors the transcript tip, never the system message** (2026-07-17)
+Outbound requests to Anthropic-family models (`PromptCacheMode::Auto`, the
+default) carry `cache_control: {type: ephemeral}` breakpoints on the last two
+content-bearing user/assistant messages. Placement was verified empirically
+against hub.oxen.ai: a breakpoint caches the whole prefix — system prompt and
+tool definitions included — so markers belong at the tip; a parts-form
+`system` message is rejected by the proxy ("use the top-level 'system'
+parameter"); a marker on a `tool` message is accepted but produces no caching;
+and a content-less assistant tool-call message has nowhere to carry one. The
+measured effect: a ~4.3K-token prompt bills 4,346 input tokens unanchored vs
+3 anchored (~99.5% cheaper), and the harness's own two-turn probe
+(`cargo test -p harness-agent --test live_cache_probe -- --ignored`) bills 3
+prompt tokens per call on a ~1.1K-token context. Markers are applied to the
+serialized JSON body (`ChatRequest::to_body`), keeping the typed message
+structs provider-neutral, and non-Anthropic models send byte-identical plain
+requests.
+
+**Calibration ignores usage reports that exclude cached tokens** (2026-07-17)
+The Oxen proxy reports Anthropic-style `prompt_tokens` that *exclude* cached
+tokens and strips the cache-detail fields (a fully-cached 4K prompt reports
+`prompt_tokens: 3`). Calibrating the client-side estimate on such a report
+would collapse the budget estimate and disable compaction, so
+`account_for_usage` recalibrates only when the reported full prompt
+(prompt + cached + cache-write) is at least half the estimate. A side effect
+worth knowing: `tokens_used` and the `usage_events` ledger now track *billed*
+tokens on cache-hitting sessions, which keeps catalog-rate cost estimates
+truthful on this endpoint.
+
+**Cost observability is per-call attribution plus a request log** (2026-07-17)
+`usage_events` (M8) gained session, call kind (turn/summary/oneshot),
+cached/cache-write token splits, latency, and retry count — every model call
+is attributable without new tables. A best-effort `~/.oxen-harness/requests.jsonl`
+(same shape as `errors.jsonl`) records each call's estimated prompt size,
+prefix classification against the previous request (`first`/`append_only`/
+`diverged` + first changed index, via per-message fingerprints), tool-hash
+changes, latency, retries, and reported usage — so a cache miss is diagnosable
+to the message that invalidated it. Compaction summaries route to
+`limits.json`'s `summary_model` (default: session model) and are accounted
+under their own kind.
+
+**Runaway spend is stopped by a loop guard and a session token budget** (2026-07-17)
+Consecutive identical (tool, arguments, result) triples — zero new information
+per full-context round — get one corrective nudge at 3 and end the turn with an
+explanation at 6; polling with changing output never trips it. A session-level
+token ceiling (`limits.json` → `max_session_tokens`, off by default) refuses a
+model call whose prompt would cross the cap, logs a warning at 80%, and ends
+with a normal assistant message explaining the stop — state preserved, no new
+event variants (the CLI's exhaustive `AgentEvent` matches stay untouched).
+
+**Context windows come from the catalog; the name table is a fallback** (2026-07-18)
+The Oxen models API now describes each model's `context_length` and
+`max_output_tokens` (fields present but still null for most entries as the
+rollout lands). `harness_local::limits` caches them per model id in
+`~/.oxen-harness/model-limits.json`, refreshed as a side effect of *every*
+hosted-catalog fetch (`fetch_oxen_models`: model search, pricing warm-ups,
+usage reports, the TokenMeter's cost lookup) so no session-start network
+round-trip is needed — and null-reporting rows are skipped, never erased, so
+a partial rollout can't wipe known-good values. Both hosts resolve the window
+as: explicit override (a local `llama-server`'s real size) → cached catalog
+value → the name-derived table in `harness_agent::budget` (now documented as
+the fallback of last resort). Live model switches (`set_model`,
+`use_local_model`, the CLI `/model` picker) re-resolve both values.
+`max_output_tokens` clamps the per-request `max_tokens`
+(`AgentConfig::effective_response_reserve`) so the harness never asks a model
+for more output than it can produce; the Cloud Models settings page shows a
+`1.0M ctx · 64.0k out` badge per catalog hit.
+
+**The new backend reports inclusive prompt counts; calibration handles both styles** (2026-07-18)
+Verified against the localhost:3001 deployment (the upcoming backend): the
+catalog populates `context_length`/`max_output_tokens` for 108 of 257 models
+(e.g. claude-opus-4-8 → 1M ctx / 128K out), and chat usage switches to
+OpenAI-style reporting — `prompt_tokens` is the *full* prompt with
+`prompt_tokens_details.cached_tokens` as the cached subset — where the current
+hub reports the Anthropic-style *uncached remainder* with cache fields
+stripped. `budget::reported_full_prompt` reconciles the two (cache detail that
+fits inside the count means inclusive; larger means exclusive-sum), so the
+token-ratio calibration neither doubles on the new backend nor collapses on
+the old one. Both live probes (`live_limits_probe`, `live_cache_probe`) take
+`OXEN_BASE_URL` so future deployments are verifiable the same way. Observed
+and worth tracking upstream: the new backend's usage `cost` field bills cached
+prompt tokens at the full input rate (identical cost with 0 vs 4,343 cached).

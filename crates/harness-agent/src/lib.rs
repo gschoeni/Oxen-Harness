@@ -37,15 +37,18 @@ mod interject;
 mod prompt;
 
 pub mod budget;
+pub mod cache;
 pub mod compact;
 pub mod fleet;
 pub mod fleet_tool;
+pub mod loopguard;
 
 #[cfg(test)]
 mod test_support;
 
 pub use agent::Agent;
-pub use config::{AgentConfig, RetryPolicy};
+pub use cache::PromptCacheMode;
+pub use config::{AgentConfig, RetryPolicy, SessionBudget};
 pub use error::AgentError;
 pub use event::AgentEvent;
 pub use fleet_tool::{FleetSpawner, FleetTool, FLEET_TOOL};

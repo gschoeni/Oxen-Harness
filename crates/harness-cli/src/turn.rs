@@ -234,19 +234,9 @@ async fn run_prompt(
         _ = tokio::signal::ctrl_c() => {
             renderer.borrow_mut().finish();
             println!();
-            println!(
-                "  {} {}",
-                ui.red("⚠ interrupted"),
-                ui.dim("— the oxen pull up short"),
-            );
-            println!(
-                "  {}",
-                ui.dim(if ends_mid_turn(agent.messages()) {
-                    "every step so far is saved · /retry continues this turn, or just give new directions"
-                } else {
-                    "every step so far is saved · give new directions whenever you're ready"
-                }),
-            );
+            for line in crate::interrupt::interrupted_lines(ui, ends_mid_turn(agent.messages())) {
+                println!("{line}");
+            }
             return Ok(PromptOutcome::Interrupted);
         }
         result = async {

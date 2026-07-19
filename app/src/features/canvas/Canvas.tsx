@@ -3,26 +3,25 @@
 // Formats: markdown (rich), code (mono), and html/web & svg (sandboxed iframe —
 // the content is model-authored, so it never gets same-origin access).
 
-import { useEffect, useState, type PointerEvent } from "react";
+import { type PointerEvent } from "react";
 import { X } from "lucide-react";
 import { useStore } from "../../lib/store";
+import { useThrottled } from "../../lib/useThrottled";
 import { Markdown } from "../../components/ui/Markdown";
 import { HighlightedCode } from "../../components/ui/HighlightedCode";
 import type { CanvasDoc } from "../../lib/types";
 import "./canvas.css";
 
-// highlight.js is loaded on demand, only when a code document renders.
-let hljsReady: Promise<typeof import("highlight.js").default> | null = null;
-function loadHljs() {
-  if (!hljsReady) hljsReady = import("highlight.js").then((m) => m.default);
-  return hljsReady;
-}
-
 export function Canvas({ onResizeStart }: { onResizeStart?: (e: PointerEvent) => void }) {
   const docs = useStore((s) => (s.session ? s.canvases[s.session.session_id] : undefined));
   const activeId = useStore((s) => (s.session ? s.activeCanvas[s.session.session_id] : undefined));
   const writing = useStore((s) => (s.session ? !!s.canvasWriting[s.session.session_id] : false));
-  const streaming = useStore((s) => (s.session ? s.streamingCanvas[s.session.session_id] : undefined));
+  // The provisional doc updates on every streamed batch; rendering it (markdown
+  // parse, highlighting) is expensive, so repaint at a human cadence instead.
+  const streaming = useThrottled(
+    useStore((s) => (s.session ? s.streamingCanvas[s.session.session_id] : undefined)),
+    150,
+  );
   const setActiveCanvas = useStore((s) => s.setActiveCanvas);
 
   const committed = docs?.find((d) => d.id === activeId) ?? null;
@@ -101,7 +100,13 @@ function CanvasView({ doc }: { doc: CanvasDoc }) {
     case "svg":
       return <Sandboxed content={doc.content} />;
     case "code":
-      return <CodeView content={doc.content} language={doc.language} />;
+      // Committed docs are one-shot renders (keyed on id+content above), so
+      // auto-detection for a missing language is a single affordable pass.
+      return (
+        <pre className="canvas-code hljs-theme">
+          <HighlightedCode code={doc.content} language={doc.language} />
+        </pre>
+      );
     default:
       return (
         <pre className="canvas-code">
@@ -126,47 +131,14 @@ function CanvasStreamingView({ doc }: { doc: CanvasDoc }) {
   if (doc.format === "code") {
     return (
       <pre className="canvas-code hljs-theme">
-        <HighlightedCode code={doc.content} language={doc.language} />
+        {/* No auto-detection mid-stream — it re-tries every grammar per repaint. */}
+        <HighlightedCode code={doc.content} language={doc.language} autoDetect={false} />
       </pre>
     );
   }
   return (
     <pre className="canvas-code">
       <code>{doc.content}</code>
-    </pre>
-  );
-}
-
-/** Syntax-highlighted code (highlighting is theme-styled via canvas.css). Shows
- *  the raw text until the highlighter finishes loading, so it's never blank. */
-function CodeView({ content, language }: { content: string; language?: string | null }) {
-  const [html, setHtml] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    setHtml(null);
-    loadHljs()
-      .then((hljs) => {
-        if (!alive) return;
-        const result =
-          language && hljs.getLanguage(language)
-            ? hljs.highlight(content, { language })
-            : hljs.highlightAuto(content);
-        setHtml(result.value);
-      })
-      .catch(() => alive && setHtml(null));
-    return () => {
-      alive = false;
-    };
-  }, [content, language]);
-
-  return (
-    <pre className="canvas-code hljs-theme">
-      {html != null ? (
-        <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
-      ) : (
-        <code className="hljs">{content}</code>
-      )}
     </pre>
   );
 }

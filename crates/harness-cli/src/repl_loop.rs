@@ -26,7 +26,6 @@ pub(crate) struct ReplContext<'a> {
     pub(crate) store: &'a Arc<HistoryStore>,
     pub(crate) session: &'a str,
     pub(crate) workspace_root: &'a Path,
-    pub(crate) base_url: &'a str,
 }
 
 /// The classic readline REPL for pipes, dumb terminals, and
@@ -61,9 +60,9 @@ pub(crate) async fn run_classic_repl(
     } else {
         String::new()
     };
-    // Whether the next Ctrl-C at the prompt exits (armed by the previous one;
-    // rustyline already cleared that press's half-typed line).
-    let mut exit_armed = false;
+    // Staged Ctrl-C, shared with the live composer (rustyline already cleared
+    // the press's half-typed line, so there is never a draft to clear here).
+    let mut exit_guard = crate::interrupt::ExitGuard::default();
     loop {
         // Remind the user about stacked messages waiting to be sent.
         if !queue.is_empty() {
@@ -90,7 +89,7 @@ pub(crate) async fn run_classic_repl(
         };
         match read {
             Ok(line) => {
-                exit_armed = false;
+                exit_guard.disarm();
                 let mut new_history = editor.add_history_entry(line.as_str()).unwrap_or(false);
                 let exit = handle_line(&line, agent, ui, &mut queue, &mut carryover, ctx).await?;
                 // Fold any prompts queued during the turn — typed into the live
@@ -115,16 +114,14 @@ pub(crate) async fn run_classic_repl(
             // Staged Ctrl-C: the press already cleared the half-typed line
             // (rustyline discards it); confirm before actually leaving.
             Err(rustyline::error::ReadlineError::Interrupted) => {
-                if exit_armed {
-                    print!("{}", theme::death_screen(ui, ctx.session));
-                    break;
+                match exit_guard.on_ctrl_c(false) {
+                    crate::interrupt::CtrlC::Exit => {
+                        print!("{}", theme::death_screen(ui, ctx.session));
+                        break;
+                    }
+                    // No draft exists here, so the first press always arms.
+                    _ => println!("{}", crate::interrupt::arm_notice(ui)),
                 }
-                exit_armed = true;
-                println!(
-                    "  {} {}",
-                    ui.red("⚠"),
-                    ui.dim("press ctrl-c again to leave the trail — or keep typing"),
-                );
             }
             // Ctrl-D: leave cleanly.
             Err(rustyline::error::ReadlineError::Eof) => {
@@ -239,7 +236,7 @@ async fn handle_line(
             commands::location::handle_repl(rest, agent, ui, ctx).await?
         }
         Command::Skills => print_skills(ui, ctx.workspace_root),
-        Command::Auth(rest) => commands::auth::handle_repl(rest, agent, ui, ctx.base_url)?,
+        Command::Auth(rest) => commands::auth::handle_repl(rest, agent, ui)?,
         Command::Compression(rest) => commands::compression::handle_repl(rest, agent, ui)?,
         Command::Permissions(rest) => commands::permissions::handle_repl(rest, agent, ui)?,
         Command::Usage => commands::usage::handle_repl(ctx.store, ui).await,

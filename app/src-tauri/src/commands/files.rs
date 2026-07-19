@@ -66,8 +66,16 @@ pub(crate) fn fs_list_dir(root: String, path: String) -> Result<Vec<FileEntry>, 
                 return None;
             }
             let is_dir = entry.file_type().ok()?.is_dir();
-            let rel = if path.is_empty() { name.clone() } else { format!("{path}/{name}") };
-            Some(FileEntry { name, path: rel, is_dir })
+            let rel = if path.is_empty() {
+                name.clone()
+            } else {
+                format!("{path}/{name}")
+            };
+            Some(FileEntry {
+                name,
+                path: rel,
+                is_dir,
+            })
         })
         .collect();
     entries.sort_by(|a, b| {
@@ -89,7 +97,11 @@ pub(crate) fn fs_read_file(root: String, path: String) -> Result<FileBody, Strin
     }
     let bytes = fs::read(&file).map_err(|e| format!("could not read {path}: {e}"))?;
     let truncated = bytes.len() > MAX_READ_BYTES;
-    let slice = if truncated { &bytes[..MAX_READ_BYTES] } else { &bytes[..] };
+    let slice = if truncated {
+        &bytes[..MAX_READ_BYTES]
+    } else {
+        &bytes[..]
+    };
     // A truncated read may split a UTF-8 sequence at the cut; trim to the last
     // complete character rather than calling the whole file binary.
     let content = match std::str::from_utf8(slice) {
@@ -101,7 +113,11 @@ pub(crate) fn fs_read_file(root: String, path: String) -> Result<FileBody, Strin
         }
         Err(_) => return Err(format!("{path} is a binary file")),
     };
-    Ok(FileBody { content, truncated, size: meta.len() })
+    Ok(FileBody {
+        content,
+        truncated,
+        size: meta.len(),
+    })
 }
 
 /// Save the editor's buffer back to disk.

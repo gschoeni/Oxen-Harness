@@ -107,6 +107,16 @@ pub fn set_oxen_key(key: &str) -> Result<(), RuntimeError> {
     Ok(())
 }
 
+/// Persist just the provider host override to `connection.json`, leaving the
+/// keys in `.env` untouched. An empty host clears the override (back to env /
+/// CLI login / the default endpoint). Used by the CLI's `/auth host` and read
+/// by both hosts through [`effective_base_url`].
+pub fn set_oxen_host(host: &str) -> Result<(), RuntimeError> {
+    let mut cfg = load();
+    cfg.host = host.trim().to_string();
+    write(&cfg)
+}
+
 /// The effective base URL: the saved host override, else env / CLI / default.
 pub fn effective_base_url(cfg: &ConnectionConfig) -> String {
     match cfg.host.trim() {
@@ -208,6 +218,26 @@ mod tests {
             let json = std::fs::read_to_string(paths::connection_file().unwrap()).unwrap();
             assert!(json.contains("myhost:9000"));
             assert!(!json.contains("sk-inline"), "key leaked into json: {json}");
+        });
+    }
+
+    #[test]
+    fn set_oxen_host_updates_only_the_host_leaving_keys_untouched() {
+        with_temp_home(|| {
+            set_oxen_key("sk-keep").unwrap();
+
+            set_oxen_host("localhost:3001").unwrap();
+
+            let cfg = load();
+            assert_eq!(cfg.host, "localhost:3001");
+            let base_url = effective_base_url(&cfg);
+            assert_eq!(base_url, "http://localhost:3001/api/ai");
+            // The key survives the host change.
+            assert_eq!(effective_api_key(&base_url), "sk-keep");
+
+            // An empty host clears the override.
+            set_oxen_host("").unwrap();
+            assert!(load().host.is_empty());
         });
     }
 

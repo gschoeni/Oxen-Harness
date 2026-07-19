@@ -39,12 +39,15 @@ crossterm = "0.28"
 arboard = "3"
 png = "0.17"
 unicode-width = "0.1"
-dirs = "5"
+# Pure-Rust regex backend (fancy-regex) — no oniguruma C dependency.
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+two-face = { version = "0.4", default-features = false, features = ["syntect-fancy"] }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+vt100 = "0.15"
 
 [lints]
 workspace = true

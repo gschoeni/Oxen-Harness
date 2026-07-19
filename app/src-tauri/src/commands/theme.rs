@@ -31,11 +31,7 @@ fn theme_store() -> Result<harness_theme::Store, String> {
 /// A one-shot, agent-free model completion using the active model + endpoint.
 /// Used for side tasks (theme generation) so they never block — or wait on — a
 /// chat's agent, which may be mid-turn.
-async fn complete_oneshot(
-    state: &AppState,
-    system: &str,
-    user: &str,
-) -> Result<String, String> {
+async fn complete_oneshot(state: &AppState, system: &str, user: &str) -> Result<String, String> {
     let (client, model, _) = state.client_for().await?;
     let request = ChatRequest::new(
         &model,

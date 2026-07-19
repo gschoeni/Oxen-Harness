@@ -43,24 +43,30 @@
 
 mod completion;
 mod composer;
+mod dispatch;
 mod events;
 mod keys;
 mod layout;
+mod lease;
 mod paint;
+mod pinned;
+mod region;
+mod sink;
 mod terminal;
 mod text;
 mod turn;
 
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod vt_tests;
 
 pub(crate) use turn::{read_idle, run_prompt, tool_target, Idle};
 
-use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyEvent, KeyEventKind};
 
 use crate::fleet_ui::FleetHub;
 use crate::markdown::MarkdownStream;
@@ -71,7 +77,10 @@ use completion::CompletionItem;
 use composer::{Composer, History};
 use keys::{apply_buf, classify_key, KeyAction, KeyIntent, Mode};
 use layout::Focus;
-use terminal::{region_bottom, resume_sequence, suspend_sequence, CrlfWriter};
+use lease::ScreenSuspension;
+use region::RegionWriter;
+use sink::Sink;
+use terminal::{region_bottom, CrlfWriter};
 
 /// Blank rows kept between the agent's scrolling output and the pinned input
 /// area, so the prompt always has at least one full line of breathing room.
@@ -89,34 +98,11 @@ const MAX_INPUT_ROWS: usize = 8;
 /// queue, then windowed to the terminal width at paint time.
 const PREVIEW_CAP: usize = 256;
 
-/// The slash commands offered by Tab completion + the inline hint, with a short
-/// description. Kept in sync with [`crate::repl::parse_command`] — a test below
-/// fails if an entry here stops being a recognized command.
-const SLASH_COMMANDS: &[(&str, &str)] = &[
-    ("/model", "pick, switch, or add a model"),
-    ("/theme", "change the theme"),
-    ("/queue", "manage the message queue"),
-    ("/loop", "run or list loops"),
-    (
-        "/code-review",
-        "review your changes (find → verify → report)",
-    ),
-    ("/export", "export the transcript"),
-    ("/skills", "list the skills on hand"),
-    ("/retry", "re-drive a turn that died mid-stream"),
-    ("/location", "set your location (banner + hero screen)"),
-    ("/departing", "set your location (themed alias)"),
-    ("/auth", "set your Oxen API key"),
-    ("/compression", "switch context compression (off/audit/on)"),
-    (
-        "/permissions",
-        "when the agent asks first (relaxed/cautious/bypass)",
-    ),
-    ("/usage", "show tokens and estimated spend by model"),
-    ("/preview", "open the running app in your browser"),
-    ("/help", "show help"),
-    ("/exit", "quit"),
-];
+/// How long after the last inserted character a key-event-burst file drop is
+/// considered settled — the deferred media-path check runs then. Burst chars
+/// arrive back-to-back (they're already buffered), so anything past this gap
+/// is the user typing, not a drop mid-delivery.
+const MEDIA_SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// All mutable state shared between the turn callback and the event loop: the
 /// streamed-output renderer, the spinner, the composer, and the navigable queue
@@ -132,11 +118,18 @@ struct Live {
     ui: Ui,
     cols: u16,
     rows: u16,
-    out: io::Stdout,
+    out: Sink,
+    /// Region writes with the tracked tail line (the spinner) — see [`region`].
+    region: RegionWriter,
     md: Option<MarkdownStream<CrlfWriter>>,
+    /// The spinner's animation state; its on-screen line is the region tail,
+    /// pushed via [`Live::sync_tail`].
     spinner: Option<LiveSpinner>,
-    /// While an interactive tool (the picker) owns the screen, we stop drawing.
-    suspended: bool,
+    /// `Some` while an interactive tool (the picker) owns the screen: input
+    /// forwarding is paused and drawing stops. One owned value — the flags it
+    /// bundles can't desync, and its Drop restores the terminal if the turn
+    /// dies mid-hand-off. See [`lease`].
+    suspension: Option<ScreenSuspension>,
     /// The bottom composer's edit buffer.
     composer: Composer,
     /// Recallable input history (Up/Down at a line edge walk it).
@@ -150,6 +143,15 @@ struct Live {
     /// The last row carved for scrolling output; tracked so we only re-issue the
     /// DECSTBM region when the reserved bottom height actually changes.
     region_bottom: u16,
+    /// The pending repaint level — handlers request, the loops flush (see
+    /// [`paint::Repaint`]).
+    repaint: paint::Repaint,
+    /// Set until the first paint carves the real region. On that first paint the
+    /// rows the pinned area claims may still hold conversation output (most
+    /// visibly the tail of the opening banner), so we scroll it up to preserve
+    /// it — but only once, since later shrinks are just the blank composer area
+    /// growing and must not nudge the conversation.
+    first_paint: bool,
     /// Set when a `web_search` call failed for a missing Brave API key, so the
     /// caller can prompt for one once the composer hands back to cooked mode.
     needs_brave_key: bool,
@@ -171,27 +173,12 @@ struct Live {
     /// [`Live::status_lines`]. Updated in place on every `Compression` event
     /// instead of scrolling a new line into the conversation.
     compression_line: Option<String>,
-    /// Slash-command / argument completion candidates for the current composer
-    /// text (full-line replacements), shown as a picker above the box. Refreshed
-    /// on every compose edit; empty when there's nothing to suggest.
-    completion: Vec<CompletionItem>,
-    /// The candidate currently selected by Tab cycling (highlights the picker and
-    /// drives menu-complete). `None` until the first Tab.
-    comp_index: Option<usize>,
-    /// Whether the candidates form an argument *picker* (highlighted row, ↑/↓
-    /// navigation, Enter runs the selection) rather than plain command-word
-    /// completion. Set alongside the candidates in `refresh_completion`.
-    comp_picker: bool,
-    /// Whether the composer text was set by the last Tab (menu-complete), so the
-    /// next Tab advances the cycle. Cleared by edits and arrow selection — a Tab
-    /// after arrowing applies the highlighted row even when its replacement
-    /// happens to equal the current text (e.g. the `/model ` "add" row).
-    comp_applied: bool,
-    /// Whether the user explicitly walked the completion list (↑/↓/Tab) since
-    /// the last edit. A navigated row is accepted by Enter unconditionally; an
-    /// auto-highlighted one only under the rules in
-    /// `accept_completion_on_submit`.
-    comp_navigated: bool,
+    /// Slash-command / argument completion for the current composer text,
+    /// shown as a picker above the box. Refreshed on every compose edit;
+    /// `None` when there's nothing to suggest. One value bundles the
+    /// candidates with the highlight/cycle flags so they can't drift apart
+    /// (see [`completion::CompletionState`]).
+    completion: Option<completion::CompletionState>,
     /// Lazily-loaded model candidates (cloud catalog + installed local) for
     /// `/model` argument completion, cached so we don't rescan on every keystroke.
     model_items: Option<Vec<CompletionItem>>,
@@ -201,37 +188,48 @@ struct Live {
     fleet: Arc<FleetHub>,
     /// Advances the fleet block's spinner glyphs on the turn ticker.
     fleet_frame: usize,
+    /// When a deferred media-path check is due (see
+    /// [`Live::tick_media_check`]): set on every non-delimiter insert so a
+    /// key-event-burst drop only collapses to a chip once input settles —
+    /// collapsing per keystroke would chip a strict prefix of the dropped path
+    /// (e.g. `photo.png` inside `photo.png\ copy.png`) and attach the wrong
+    /// file.
+    media_check: Option<std::time::Instant>,
 }
 
 impl Live {
     fn new(ui: Ui, cols: u16, rows: u16) -> Self {
+        Self::with_sink(ui, cols, rows, Sink::stdout())
+    }
+
+    fn with_sink(ui: Ui, cols: u16, rows: u16, out: Sink) -> Self {
         Self {
             ui,
             cols,
             rows,
-            out: io::stdout(),
+            region: RegionWriter::new(out.clone()),
+            out,
             md: None,
             spinner: None,
-            suspended: false,
+            suspension: None,
             composer: Composer::new(),
             history: History::default(),
             focus: Focus::Composer,
             edit: None,
             previews: Vec::new(),
             region_bottom: region_bottom(rows),
+            repaint: paint::Repaint::default(),
+            first_paint: true,
             needs_brave_key: false,
             status_lines: Vec::new(),
             model: String::new(),
             context_window: 0,
             compression_line: None,
-            completion: Vec::new(),
-            comp_index: None,
-            comp_picker: false,
-            comp_applied: false,
-            comp_navigated: false,
+            completion: None,
             model_items: None,
             fleet: FleetHub::global(),
             fleet_frame: 0,
+            media_check: None,
         }
     }
 
@@ -263,24 +261,21 @@ impl Live {
         animating
     }
 
-    /// Alt+digit switches which fleet lane is being watched (alt+0 → overview).
+    /// Fleet lane switching through the shared reducer ([`crate::fleet_ui::
+    /// apply_fleet_key`], with the `Shared` vocabulary): alt+digits watch a
+    /// lane, alt+0 the overview — bare digits keep typing into the composer.
     /// Only consumes the key while a fleet is actually running.
     fn handle_fleet_key(&mut self, key: &KeyEvent) -> bool {
-        if !key.modifiers.contains(KeyModifiers::ALT) {
-            return false;
-        }
-        let KeyCode::Char(c @ '0'..='9') = key.code else {
-            return false;
-        };
         let mut guard = self.fleet.lock();
         let Some(state) = guard.as_mut() else {
             return false;
         };
-        match c {
-            '0' => state.focus(None),
-            _ => state.focus(Some(c as usize - '1' as usize)),
-        }
-        true
+        crate::fleet_ui::apply_fleet_key(
+            state,
+            key.code,
+            key.modifiers,
+            crate::fleet_ui::FleetKeys::Shared,
+        )
     }
 
     // --- queue snapshot + focus -------------------------------------------
@@ -358,7 +353,27 @@ impl Live {
             KeyIntent::Interrupt => KeyAction::Interrupt,
             KeyIntent::Exit => KeyAction::Exit,
             KeyIntent::Compose(op) => {
+                let inserted = match op {
+                    keys::BufOp::Insert(c) => Some(c),
+                    _ => None,
+                };
                 apply_buf(&mut self.composer, op);
+                // Some terminals deliver drag-and-drop as a burst of ordinary
+                // key events instead of one bracketed-paste event. A delimiter
+                // proves the path before it is complete — collapse it to a chip
+                // now. A non-delimiter char may still be mid-path (`photo.png`
+                // is a strict prefix of `photo.png\ copy.png`), so defer that
+                // check until the burst settles (see [`Live::tick_media_check`]).
+                match inserted {
+                    Some(c) if c.is_whitespace() => {
+                        self.media_check = None;
+                        self.rewrite_composer_media();
+                    }
+                    Some(_) => {
+                        self.media_check = Some(std::time::Instant::now() + MEDIA_SETTLE);
+                    }
+                    None => {}
+                }
                 // Editing leaves history recall — keep the buffer as the draft.
                 self.history.reset();
                 self.refresh_completion();
@@ -382,10 +397,7 @@ impl Live {
                 self.accept_completion_on_submit();
                 let text = self.composer.take();
                 self.history.push(&text);
-                self.completion.clear();
-                self.comp_index = None;
-                self.comp_picker = false;
-                self.comp_navigated = false;
+                self.completion = None;
                 KeyAction::Submit(text)
             }
             KeyIntent::ComposeUp => {
@@ -424,10 +436,7 @@ impl Live {
             KeyIntent::FocusUp => {
                 self.focus = self.focus.up(queue_len);
                 // Leaving the composer for the queue drops the suggestion hint.
-                self.completion.clear();
-                self.comp_index = None;
-                self.comp_picker = false;
-                self.comp_navigated = false;
+                self.completion = None;
                 KeyAction::Redraw
             }
             KeyIntent::FocusDown => {
@@ -447,13 +456,58 @@ impl Live {
         }
     }
 
+    /// Replace any complete media path (image/PDF/video) currently in the
+    /// composer with a staged chip. This is the fallback for terminals that
+    /// type a drop as ordinary key events instead of reporting one
+    /// bracketed-paste event. Returns whether the composer was rewritten.
+    fn rewrite_composer_media(&mut self) -> bool {
+        let current = self.composer.text();
+        if let Some(rewritten) = crate::media::rewrite_paste(&current) {
+            // The delimiter that proved the path was complete is useful while
+            // the user keeps typing, so retain one trailing space.
+            let trailing_space = current.chars().last().is_some_and(char::is_whitespace);
+            self.composer.set_text(&rewritten);
+            if trailing_space {
+                self.composer.insert_char(' ');
+            }
+            return true;
+        }
+        false
+    }
+
+    /// When the deferred media-path check should run, if one is pending — the
+    /// event loops use this to wake up once burst input has settled.
+    fn media_check_due(&self) -> Option<std::time::Instant> {
+        self.media_check
+    }
+
+    /// Run the deferred media check once its settle window has elapsed: a
+    /// key-event-burst drop with no trailing delimiter collapses to a chip
+    /// here, ~[`MEDIA_SETTLE`] after its last character. Returns whether the
+    /// composer changed (the caller repaints).
+    fn tick_media_check(&mut self) -> bool {
+        match self.media_check {
+            Some(due) if std::time::Instant::now() >= due => {
+                self.media_check = None;
+                if self.rewrite_composer_media() {
+                    self.refresh_completion();
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Insert pasted / drag-dropped text into whichever single-line editor has
     /// focus (the inline item editor while editing, otherwise the composer),
     /// flattening newlines to spaces. Bracketed paste delivers a drop as one
-    /// block, so a path with escaped spaces lands intact. A pasted image path
-    /// stages the image and shows up as its `[Image N]` chip instead.
+    /// block, so a path with escaped spaces lands intact. A pasted media path
+    /// (image/PDF/video) stages the file and shows up as its `[Image #N]` /
+    /// `[PDF #N]` / `[Video #N]` chip instead.
     fn insert_paste(&mut self, text: &str) {
-        let rewritten = crate::images::rewrite_paste(text);
+        let rewritten = crate::media::rewrite_paste(text);
         let text = rewritten.as_deref().unwrap_or(text);
         let target = self.edit.as_mut().unwrap_or(&mut self.composer);
         for ch in text.chars() {
@@ -467,19 +521,19 @@ impl Live {
 
     /// Ctrl+V: read the system clipboard ourselves. A copied image (e.g. a
     /// screenshot) can't arrive through bracketed paste, so it's staged to a
-    /// temp PNG and inserted as an `[Image N]` chip; clipboard text falls back
+    /// temp PNG and inserted as an `[Image #N]` chip; clipboard text falls back
     /// to an ordinary paste for terminals that pass Ctrl+V through.
     fn paste_clipboard(&mut self) -> KeyAction {
-        match crate::images::paste_from_clipboard() {
-            crate::images::ClipboardPaste::Image(label) => {
+        match crate::media::paste_from_clipboard() {
+            crate::media::ClipboardPaste::Image(label) => {
                 self.insert_paste(&format!("{label} "));
                 KeyAction::Redraw
             }
-            crate::images::ClipboardPaste::Text(text) => {
+            crate::media::ClipboardPaste::Text(text) => {
                 self.insert_paste(&text);
                 KeyAction::Redraw
             }
-            crate::images::ClipboardPaste::None => KeyAction::None,
+            crate::media::ClipboardPaste::None => KeyAction::None,
         }
     }
 
@@ -490,39 +544,54 @@ impl Live {
         self.rows = rows;
         self.sync_queue(items);
         self.render_forcing_region();
-        self.draw_spinner();
+        self.sync_tail();
+        self.flush_paint(); // the tail redraw marked the composer dirty
     }
 
-    /// Hand the terminal to an interactive tool (the picker): drop the scroll
-    /// region, show the cursor, leave raw mode, and pause input forwarding.
+    /// Whether an interactive tool currently owns the screen.
+    fn suspended(&self) -> bool {
+        self.suspension.is_some()
+    }
+
+    /// Hand the terminal to an interactive tool (the picker): end any open
+    /// stream state, then let the [`ScreenSuspension`] drop the scroll region,
+    /// show the cursor, leave raw mode, and pause input forwarding — one call,
+    /// no flags to keep in sync.
     ///
-    /// Crucially we leave the cursor on a *fresh bottom line* before handing off.
-    /// Resetting the scroll region (`\x1b[r`) homes the cursor to the top of the
-    /// screen, so without repositioning the picker would draw its first frame at
-    /// the top — out of view from where the user is looking — and only become
-    /// visible once a keypress forced a redraw.
-    fn suspend(&mut self, paused: &Arc<AtomicBool>) {
-        self.suspended = true;
-        paused.store(true, Ordering::Relaxed);
-        let _ = write!(
-            self.out,
-            "{}",
-            suspend_sequence(self.region_bottom, self.rows)
-        );
-        let _ = self.out.flush();
-        let _ = crossterm::terminal::disable_raw_mode();
+    /// Crucially the cursor is left on a *fresh bottom line* before handing
+    /// off. Resetting the scroll region (`\x1b[r`) homes the cursor to the top
+    /// of the screen, so without repositioning the picker would draw its first
+    /// frame at the top — out of view from where the user is looking — and
+    /// only become visible once a keypress forced a redraw.
+    pub(super) fn hand_off_screen(&mut self, paused: &Arc<AtomicBool>) {
+        if self.suspension.is_some() {
+            return;
+        }
+        self.finish(); // stop the spinner, flush any open Markdown
+        self.region.set_muted(true);
+        self.suspension = Some(ScreenSuspension::begin(
+            self.out.clone(),
+            paused,
+            self.region_bottom,
+            self.rows,
+        ));
     }
 
-    /// Reclaim the terminal after the interactive tool finishes.
-    fn resume(&mut self, paused: &Arc<AtomicBool>) {
-        let _ = crossterm::terminal::enable_raw_mode();
-        self.suspended = false;
-        paused.store(false, Ordering::Relaxed);
-        let _ = write!(self.out, "{}", resume_sequence(self.rows));
-        let _ = self.out.flush();
-        // `resume_sequence` carved a composer-only region; record it so the
-        // follow-up full repaint re-carves to fit the queue list.
+    /// Reclaim the terminal after the interactive tool finishes: restore raw
+    /// mode + input forwarding, restart the thinking spinner, and force a full
+    /// repaint (the picker drew over the screen, and the reclaim carved only a
+    /// composer-only region until this repaint re-fits the real layout).
+    pub(super) fn reclaim_screen(&mut self) {
+        let Some(lease) = self.suspension.take() else {
+            return;
+        };
+        lease.reclaim();
+        self.region.set_muted(false);
+        // The reclaim carved a composer-only region; record it so the forced
+        // repaint below re-carves to fit the queue list.
         self.region_bottom = region_bottom(self.rows);
+        self.begin_thinking();
+        self.render_forcing_region();
     }
 }
 
@@ -532,17 +601,6 @@ mod tests {
 
     use super::test_support::{alt, ctrl, key, live};
     use super::*;
-
-    #[test]
-    fn every_completion_entry_is_a_recognized_command() {
-        use crate::repl::{parse_command, Command};
-        for (cmd, _) in SLASH_COMMANDS {
-            assert!(
-                !matches!(parse_command(cmd), Command::Prompt(_)),
-                "`{cmd}` is offered by completion but parse_command doesn't recognize it"
-            );
-        }
-    }
 
     // --- Fleet lane switching (alt+digits act only while a fleet runs) -----
 
@@ -686,13 +744,99 @@ mod tests {
         let mut l = live(80, 24);
         l.insert_paste(&format!("look at {}\n", img.display()));
         let text = l.composer.take();
-        // The raw path is hidden behind an `[Image N]` chip…
+        // The raw path is hidden behind an `[Image #N]` chip…
         assert!(!text.contains("screen.png"), "path leaked: {text}");
-        assert!(text.starts_with("look at [Image "), "no chip: {text}");
+        assert!(text.starts_with("look at [Image #"), "no chip: {text}");
         // …and the chip resolves back to the file at submit time.
-        let (attachments, _) = crate::images::resolve_labels(&text);
+        let (attachments, _) = crate::media::resolve_labels(&text);
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0].filename, "screen.png");
+    }
+
+    #[test]
+    fn media_drop_delivered_as_key_events_becomes_a_chip_once_settled() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, chip) in [
+            ("screen shot.png", "[Image #"),
+            ("the paper.pdf", "[PDF #"),
+            ("demo clip.mov", "[Video #"),
+            // macOS screenshot naming: U+202F before "PM", which the terminal
+            // leaves unescaped in the drop.
+            ("Screenshot 2026-07-17 at 9.55.10\u{202f}PM.png", "[Image #"),
+        ] {
+            let file = dir.path().join(name);
+            std::fs::write(&file, [7, 7, 7]).unwrap();
+            let dropped = file.display().to_string().replace(' ', "\\ ");
+
+            let mut l = live(80, 24);
+            for ch in dropped.chars() {
+                l.handle_key(key(KeyCode::Char(ch)), 0);
+            }
+            // Mid-burst nothing collapses (a prefix of the path may itself
+            // name a file); the deferred check runs once input settles.
+            assert!(l.media_check_due().is_some(), "no deferred check pending");
+            l.media_check = Some(std::time::Instant::now()); // settle now
+            assert!(l.tick_media_check(), "settled check should rewrite");
+            let text = l.composer.take();
+
+            assert!(!text.contains("shot"), "path leaked: {text}");
+            assert!(text.starts_with(chip), "no {chip} chip: {text}");
+            let (attachments, _) = crate::media::resolve_labels(&text);
+            assert_eq!(attachments.len(), 1);
+            assert_eq!(attachments[0].filename, name);
+        }
+    }
+
+    #[test]
+    fn burst_drop_never_chips_a_strict_prefix_of_the_dropped_path() {
+        // `photo.png` exists AND is a strict prefix of the dropped
+        // `photo.png\ copy.png` — collapsing per keystroke would chip the
+        // prefix mid-burst and attach the wrong file.
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("photo.png");
+        std::fs::write(&prefix, [7]).unwrap();
+        let full = dir.path().join("photo.png copy.png");
+        std::fs::write(&full, [7, 7]).unwrap();
+        let dropped = full.display().to_string().replace(' ', "\\ ");
+
+        let mut l = live(80, 24);
+        for ch in dropped.chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+            assert!(
+                !l.composer.text().contains("[Image #"),
+                "chipped mid-burst at {:?}",
+                l.composer.text()
+            );
+        }
+        l.media_check = Some(std::time::Instant::now()); // settle now
+        assert!(l.tick_media_check());
+        let text = l.composer.take();
+        let (attachments, _) = crate::media::resolve_labels(&text);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(
+            attachments[0].filename, "photo.png copy.png",
+            "must attach the full dropped file, not its prefix: {text}"
+        );
+    }
+
+    #[test]
+    fn typing_a_space_after_a_media_path_chips_it_immediately() {
+        // A delimiter proves the path is complete — no settle wait needed.
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("shot.png");
+        std::fs::write(&img, [7]).unwrap();
+
+        let mut l = live(80, 24);
+        for ch in img.display().to_string().chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        l.handle_key(key(KeyCode::Char(' ')), 0);
+        let text = l.composer.take();
+        assert!(text.starts_with("[Image #"), "no immediate chip: {text}");
+        assert!(
+            l.media_check_due().is_none(),
+            "delimiter should clear the deferral"
+        );
     }
 
     #[test]

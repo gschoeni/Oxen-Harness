@@ -202,7 +202,7 @@ async fn reprint_banner(agent: &Agent, ui: &Ui, ctx: &ReplContext<'_>) {
         "{}",
         theme::banner(
             ui,
-            ctx.base_url,
+            agent.base_url(),
             agent.model(),
             &ctx.workspace_root.display().to_string(),
             ctx.session,

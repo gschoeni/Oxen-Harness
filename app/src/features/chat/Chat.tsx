@@ -76,7 +76,6 @@ export function Chat() {
   const showReopenCanvas = !!lastCanvas && !canvasShowing;
 
   const [attachments, setAttachments] = useState<{ path: string; name: string }[]>([]);
-  const [now, setNow] = useState(() => Date.now()); // drives running tool timers
   const [atBottom, setAtBottom] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Mirrors `atBottom` so the auto-scroll effect can read the latest value
@@ -116,13 +115,6 @@ export function Chat() {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [items]);
-
-  // Advance running tool timers once a second while this chat is in flight.
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [running]);
 
   // Add files (from an OS drop or the picker) to the pending attachments,
   // skipping any path already staged so re-picking is idempotent.
@@ -217,7 +209,7 @@ export function Chat() {
           ) : (
             <div className="thread">
               {items.map((it) => (
-                <ThreadItem key={it.id} item={it} now={now} />
+                <ThreadItem key={it.id} item={it} />
               ))}
               <StreamingWrite />
             </div>
