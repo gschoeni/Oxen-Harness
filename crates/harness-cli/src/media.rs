@@ -9,7 +9,7 @@
 //!
 //! At submit time [`resolve_labels`] turns the chips back into [`Attachment`]s
 //! that ride the normal attachment pipeline. The chip text itself stays in the
-//! prompt, so "what's in [Image #2]?" reaches the model next to the matching
+//! prompt, so "what's in `[Image #2]`?" reaches the model next to the matching
 //! image part. Chips number up per kind across the whole session — recalling an
 //! old prompt from history re-attaches its files.
 

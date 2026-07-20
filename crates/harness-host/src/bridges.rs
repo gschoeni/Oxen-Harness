@@ -229,7 +229,7 @@ impl FleetActivityBatch {
 
 /// Bridges a `spawn_agents` fleet (run by the model from inside a turn) to the
 /// client's lanes panel, emitting the same `fleet.*` events review fan-out
-/// steps use. Lane tokens coalesce through a [`FleetActivityBatch`].
+/// steps use. Lane tokens coalesce through a `FleetActivityBatch`.
 pub struct HostFleetSink {
     sink: Arc<dyn EventSink>,
     session: String,
