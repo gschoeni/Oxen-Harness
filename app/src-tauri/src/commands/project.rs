@@ -304,12 +304,9 @@ pub(crate) async fn update_project(
 /// Chat history in the store is left intact; the directory simply stops being
 /// listed as a project. If it was active, the active project is cleared.
 #[tauri::command]
-pub(crate) async fn delete_project(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<(), String> {
+pub(crate) async fn delete_project(state: State<'_, AppState>, path: String) -> Result<(), String> {
     forget_project(&path)?;
-    if state.active_root().await == PathBuf::from(&path) {
+    if state.active_root().await == Path::new(&path) {
         *state.active_project.lock().await = PathBuf::new();
     }
     Ok(())

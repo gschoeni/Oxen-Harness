@@ -120,6 +120,36 @@ impl DevServer {
         sink: Arc<dyn PreviewSink>,
         ready_timeout: Duration,
     ) -> Result<Arc<Self>, PreviewError> {
+        // An auto-assigned port is picked by binding-then-releasing
+        // (`find_free_port`), which can race another process claiming it
+        // before the child binds. The pick is cheap to redo, so an
+        // address-in-use death retries with a fresh port. A *declared* port
+        // never retries — a squatter there is the caller's problem to see.
+        const AUTO_PORT_ATTEMPTS: usize = 3;
+        let auto_port = spec.port.is_none() && spec.auto_port;
+        let mut attempt = 1;
+        loop {
+            let result = Self::start_once(spec.clone(), root, sink.clone(), ready_timeout).await;
+            match &result {
+                Err(PreviewError::Server(msg))
+                    if auto_port
+                        && attempt < AUTO_PORT_ATTEMPTS
+                        && (msg.contains("Address already in use")
+                            || msg.contains("EADDRINUSE")) =>
+                {
+                    attempt += 1;
+                }
+                _ => return result,
+            }
+        }
+    }
+
+    async fn start_once(
+        spec: ServerSpec,
+        root: &Path,
+        sink: Arc<dyn PreviewSink>,
+        ready_timeout: Duration,
+    ) -> Result<Arc<Self>, PreviewError> {
         // A declared port that's already serving belongs to someone else; the
         // child would die with EADDRINUSE while the readiness probe happily
         // connected to the squatter and attested a foreign app as "Ready".
