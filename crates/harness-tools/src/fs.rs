@@ -17,6 +17,7 @@ use crate::sandbox::Workspace;
 use crate::{ToolError, TypedTool};
 
 mod edit_diagnostics;
+pub mod outline;
 pub mod state;
 
 pub use state::{FileState, Freshness, PathRule};
@@ -79,16 +80,36 @@ impl TypedTool for ReadFileTool {
     type Args = ReadFileArgs;
 
     fn description(&self) -> &str {
-        "Read a UTF-8 text file relative to the workspace root. Output is line-numbered \
-         in `cat -n` format (right-aligned number, a tab, then the line content); reads up \
-         to 2000 lines from the start by default. Use `offset` (1-based start line) and \
-         `limit` for large files. NOTE: when editing, never include the line-number/tab \
-         prefix in `edit_file` arguments — match only the content after the tab."
+        "Read a UTF-8 text file relative to the workspace root, line-numbered `cat -n` \
+         style (number, tab, content); up to 2000 lines from the start by default. \
+         `offset` (1-based) and `limit` return that window verbatim; a whole-file read of \
+         a large source file returns an outline with function bodies elided, each marker \
+         naming the offset to re-read — and you cannot edit inside an elided range without \
+         reading it. NOTE: never include the line-number/tab prefix in `edit_file` \
+         arguments — match only the content after the tab."
     }
 
     async fn run(&self, args: ReadFileArgs) -> Result<String, ToolError> {
         let path = self.workspace.resolve(&args.path)?;
-        let (rendered, fingerprint) = read_numbered(
+        let rules = self.state.take_rules_for(Path::new(&args.path));
+
+        // A whole-file read of a big source file gets its shape rather than
+        // every line. An explicit window is never outlined: the model asked
+        // for those lines, so it gets exactly those lines.
+        if args.offset.is_none() && args.limit.is_none() {
+            if let Some((outline, hash)) = try_outline(&path).await {
+                self.state
+                    .record_parts(&path, hash, outline.total_lines, outline.seen.clone());
+                return Ok(format!(
+                    "{}… [{} of {} lines shown; bodies elided as marked]\n{rules}",
+                    outline.text,
+                    outline.total_lines - outline.elided_lines(),
+                    outline.total_lines,
+                ));
+            }
+        }
+
+        let (rendered, stats) = read_numbered(
             &path,
             args.offset.unwrap_or(1).max(1),
             args.limit
@@ -100,22 +121,38 @@ impl TypedTool for ReadFileTool {
         // that the file moved under the model before it edits, whichever part
         // of it was displayed.
         self.state
-            .record_parts(&path, fingerprint.hash, fingerprint.lines);
-        Ok(rendered + &self.state.take_rules_for(Path::new(&args.path)))
+            .record_parts(&path, stats.hash, stats.lines, vec![stats.shown]);
+        Ok(rendered + &rules)
     }
 }
 
-/// The whole-file identity computed while streaming a read.
-struct FileFingerprint {
+/// Parse `path` into an outline, when it's a language we ship a grammar for
+/// and small enough to hold in memory. Returns the outline and the file's
+/// fingerprint (computed from the same read, so no second pass).
+async fn try_outline(path: &Path) -> Option<(outline::Outline, u64)> {
+    let size = tokio::fs::metadata(path).await.ok()?.len();
+    if size > outline::MAX_OUTLINE_BYTES {
+        return None;
+    }
+    let source = tokio::fs::read_to_string(path).await.ok()?;
+    let hash = state::fingerprint(source.as_bytes());
+    outline::summarize(path, &source).map(|o| (o, hash))
+}
+
+/// What one read learned about the file: its whole-file identity, its length,
+/// and which lines actually reached the model.
+struct ReadStats {
     hash: u64,
     lines: usize,
+    /// 1-based inclusive range displayed.
+    shown: (usize, usize),
 }
 
 async fn read_numbered(
     path: &Path,
     offset: usize,
     limit: usize,
-) -> Result<(String, FileFingerprint), ToolError> {
+) -> Result<(String, ReadStats), ToolError> {
     use tokio::io::AsyncReadExt;
 
     let mut file = tokio::fs::File::open(path)
@@ -177,12 +214,14 @@ async fn read_numbered(
         );
         total += 1;
     }
-    let fingerprint = FileFingerprint {
+    let shown_end = (offset.saturating_sub(1) + limit).min(total);
+    let stats = ReadStats {
         hash: hasher.finish(),
         lines: total,
+        shown: (offset.min(total.max(1)), shown_end.max(offset)),
     };
     if !saw_bytes {
-        return Ok(("(file is empty)".to_string(), fingerprint));
+        return Ok(("(file is empty)".to_string(), stats));
     }
     if offset > total {
         return Ok((
@@ -190,10 +229,9 @@ async fn read_numbered(
                 "(offset {offset} is past the end of the file, which has {total} line{})",
                 if total == 1 { "" } else { "s" }
             ),
-            fingerprint,
+            stats,
         ));
     }
-    let shown_end = (offset.saturating_sub(1) + limit).min(total);
     if shown_end < total || output_truncated {
         out.push_str(&format!(
             "… [showing lines {offset}-{shown_end} of {total}{}]\n",
@@ -204,7 +242,7 @@ async fn read_numbered(
             }
         ));
     }
-    Ok((out, fingerprint))
+    Ok((out, stats))
 }
 
 fn append_numbered_line(
@@ -401,6 +439,18 @@ impl TypedTool for EditFileTool {
         // matches in a CRLF file; the file's own endings are restored on write.
         let (body, endings) = LineEndings::split(&raw);
         let outcome = apply_edits(&body, &edits)?;
+        // An outlined read hides function bodies. Editing into one is editing
+        // code nobody looked at — the exact mistake the outline saves tokens
+        // by risking, so it's caught here rather than written.
+        for &(first, last) in &outcome.touched_lines {
+            if let Some((from, to)) = self.state.unseen_around(&path, first, last) {
+                return Err(ToolError::InvalidArguments(format!(
+                    "lines {from}-{to} of {display} were elided in your read, so you \
+                     haven't seen what you're replacing. Read that range first \
+                     (`read_file` with offset={from}), then edit."
+                )));
+            }
+        }
         let updated = endings.restore(&outcome.text);
 
         tokio::fs::write(&path, &updated)
@@ -456,6 +506,15 @@ impl LineEndings {
 struct EditOutcome {
     text: String,
     summary: String,
+    /// 1-based inclusive line ranges of the original that each hunk covered,
+    /// for checking them against what the model was actually shown.
+    touched_lines: Vec<(usize, usize)>,
+}
+
+/// The 1-based line range a byte span covers in `text`.
+fn line_span(text: &str, start: usize, end: usize) -> (usize, usize) {
+    let line_of = |offset: usize| text[..offset.min(text.len())].matches('\n').count() + 1;
+    (line_of(start), line_of(end.saturating_sub(1).max(start)))
 }
 
 /// Apply every replacement against the *original* text, atomically: each match
@@ -527,6 +586,11 @@ fn apply_edits(original: &str, edits: &[Replacement]) -> Result<EditOutcome, Too
         }
     }
 
+    let touched_lines = spans
+        .iter()
+        .map(|&(start, end, ..)| line_span(original, start, end))
+        .collect();
+
     // Back to front, so earlier offsets stay valid as later ones are spliced.
     let mut text = original.to_string();
     for &(start, end, replacement, _) in spans.iter().rev() {
@@ -543,7 +607,11 @@ fn apply_edits(original: &str, edits: &[Replacement]) -> Result<EditOutcome, Too
     } else {
         "1 replacement".to_string()
     };
-    Ok(EditOutcome { text, summary })
+    Ok(EditOutcome {
+        text,
+        summary,
+        touched_lines,
+    })
 }
 
 /// Find files by glob pattern (the agent's `Glob`), respecting `.gitignore`.
@@ -977,6 +1045,108 @@ mod tests {
             ToolError::InvalidArguments(m) => assert_eq!(m, "`old_string` not found in file"),
             other => panic!("expected InvalidArguments, got {other:?}"),
         }
+    }
+
+    /// A Rust file long enough to outline: a visible signature, a long body.
+    fn long_source() -> String {
+        let mut src = String::from("pub struct Config {\n    pub name: String,\n}\n\nimpl Config {\n    pub fn load() -> Self {\n");
+        for i in 0..250 {
+            src.push_str(&format!("        let step_{i} = {i};\n"));
+        }
+        src.push_str("        Self { name: String::new() }\n    }\n}\n");
+        src
+    }
+
+    #[tokio::test]
+    async fn a_big_source_file_reads_as_an_outline() {
+        let (_dir, ws) = workspace();
+        write(&ws, "config.rs", &long_source()).await;
+
+        let out = ReadFileTool::new(ws)
+            .invoke(serde_json::json!({"path": "config.rs"}))
+            .await
+            .unwrap();
+
+        assert!(out.contains("pub struct Config"));
+        assert!(out.contains("pub fn load() -> Self {"));
+        assert!(!out.contains("let step_100 = 100;"));
+        assert!(out.contains("lines elided"));
+    }
+
+    #[tokio::test]
+    async fn an_explicit_window_is_never_outlined() {
+        let (_dir, ws) = workspace();
+        write(&ws, "config.rs", &long_source()).await;
+
+        let out = ReadFileTool::new(ws)
+            .invoke(serde_json::json!({"path": "config.rs", "offset": 100, "limit": 20}))
+            .await
+            .unwrap();
+
+        // Asking for lines means getting lines.
+        assert!(out.contains("let step_94 = 94;"), "{out}");
+        assert!(!out.contains("lines elided"));
+    }
+
+    #[tokio::test]
+    async fn editing_into_an_elided_body_is_refused_with_the_range_to_read() {
+        let (_dir, ws) = workspace();
+        write(&ws, "config.rs", &long_source()).await;
+        let (read, _write, edit, _state) = gated_tools(&ws);
+        read.invoke(serde_json::json!({"path": "config.rs"}))
+            .await
+            .unwrap();
+
+        // A line the outline hid: the model is guessing, not editing.
+        let err = edit
+            .invoke(serde_json::json!({
+                "path": "config.rs",
+                "old_string": "let step_100 = 100;",
+                "new_string": "let step_100 = 999;"
+            }))
+            .await
+            .unwrap_err();
+
+        match err {
+            ToolError::InvalidArguments(m) => {
+                assert!(m.contains("elided in your read"), "got: {m}");
+                assert!(m.contains("offset="), "got: {m}");
+            }
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+
+        // Reading the range makes the same edit legal.
+        read.invoke(serde_json::json!({"path": "config.rs", "offset": 1, "limit": 300}))
+            .await
+            .unwrap();
+        edit.invoke(serde_json::json!({
+            "path": "config.rs",
+            "old_string": "let step_100 = 100;",
+            "new_string": "let step_100 = 999;"
+        }))
+        .await
+        .unwrap();
+        assert!(read_raw(&ws, "config.rs").await.contains("step_100 = 999"));
+    }
+
+    #[tokio::test]
+    async fn editing_a_line_the_outline_showed_is_allowed() {
+        let (_dir, ws) = workspace();
+        write(&ws, "config.rs", &long_source()).await;
+        let (read, _write, edit, _state) = gated_tools(&ws);
+        read.invoke(serde_json::json!({"path": "config.rs"}))
+            .await
+            .unwrap();
+
+        edit.invoke(serde_json::json!({
+            "path": "config.rs",
+            "old_string": "pub name: String,",
+            "new_string": "pub name: Box<str>,"
+        }))
+        .await
+        .unwrap();
+
+        assert!(read_raw(&ws, "config.rs").await.contains("Box<str>"));
     }
 
     #[tokio::test]

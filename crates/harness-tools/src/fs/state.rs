@@ -36,10 +36,14 @@ const MAX_TRACKED_PATHS: usize = 64;
 const MAX_RULE_CHARS: usize = 4_000;
 
 /// What the model was last shown of a file.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Snapshot {
     fingerprint: u64,
     lines: usize,
+    /// 1-based inclusive line ranges actually displayed. A whole-file read is
+    /// one range; a windowed or outlined read leaves gaps, and an edit aimed
+    /// into a gap is an edit written blind.
+    seen: Vec<(usize, usize)>,
 }
 
 /// The result of checking a file against what the model last read.
@@ -161,18 +165,31 @@ impl FileState {
     /// and after a write/edit so the next edit in the same turn doesn't read
     /// as stale against content the model itself just produced.
     pub fn record(&self, path: &Path, contents: &str) {
+        let lines = contents.lines().count();
         self.record_parts(
             path,
             fingerprint(contents.as_bytes()),
-            contents.lines().count(),
+            lines,
+            vec![(1, lines.max(1))],
         );
     }
 
     /// Record a fingerprint computed elsewhere — `read_file` streams the file
     /// to count its lines anyway, so it hashes as it goes rather than reading
-    /// the whole thing a second time.
-    pub fn record_parts(&self, path: &Path, fingerprint: u64, lines: usize) {
-        let snapshot = Snapshot { fingerprint, lines };
+    /// the whole thing a second time. `seen` is the part of the file that
+    /// actually reached the model.
+    pub fn record_parts(
+        &self,
+        path: &Path,
+        fingerprint: u64,
+        lines: usize,
+        seen: Vec<(usize, usize)>,
+    ) {
+        let snapshot = Snapshot {
+            fingerprint,
+            lines,
+            seen,
+        };
         let key = canonical(path);
         let mut snapshots = self.snapshots.lock().expect("snapshot lock");
         snapshots.retain(|(p, _)| p != &key);
@@ -197,6 +214,26 @@ impl FileState {
                 now_lines: current.lines().count(),
             }
         }
+    }
+
+    /// Was every line in `first..=last` actually displayed to the model? An
+    /// outlined read hides function bodies; an edit aimed inside one is
+    /// written against code nobody looked at, so it's refused with the range
+    /// to re-read. Returns the covering ranges when unseen, for the message.
+    pub fn unseen_around(&self, path: &Path, first: usize, last: usize) -> Option<(usize, usize)> {
+        let key = canonical(path);
+        let snapshots = self.snapshots.lock().expect("snapshot lock");
+        let (_, snapshot) = snapshots.iter().find(|(p, _)| p == &key)?;
+        // A file with no recorded window (an ungated tool, or a write) is
+        // fully seen by construction.
+        if snapshot.seen.is_empty() {
+            return None;
+        }
+        // Shown ranges are disjoint and never adjacent (a gap between two of
+        // them is exactly what was elided), so a span is fully seen only if
+        // one single range contains all of it.
+        let contained = snapshot.seen.iter().any(|&(a, b)| first >= a && last <= b);
+        (!contained).then_some((first, last))
     }
 
     /// Decide whether a mutation of `path` may proceed, given what's on disk
