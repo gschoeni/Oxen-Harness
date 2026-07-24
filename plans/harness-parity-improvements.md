@@ -1,5 +1,11 @@
 # Harness improvements — lessons from oh-my-pi and pi
 
+> **Status (branch `harness-parity-improvements`, paused 2026-07-24).**
+> Phase 1 complete and Phase 2.1 landed — five commits, all green
+> (`cargo fmt`, `cargo clippy --workspace --all-targets`, `cargo test
+> --workspace`). See [Progress log](#progress-log) at the bottom for what
+> shipped, what changed versus this plan, and exactly where to pick up.
+
 Concrete, prioritized changes to oxen-harness derived from reading two other
 coding-agent harnesses:
 
@@ -752,3 +758,77 @@ are plainly missing rather than merely different.
    a `.gitignore` hint and an explicit "commit this?" prompt.
 4. **Do we want rule inheritance from Cursor/Cline/Copilot?** ~50 lines, pure
    migration upside, small ongoing format-drift cost.
+
+---
+
+## Progress log
+
+Branch: `harness-parity-improvements` (off `main`). Paused 2026-07-24 mid-2.2.
+Working tree clean; every check green at the last commit.
+
+### Landed
+
+| Item | Commit | Notes |
+| --- | --- | --- |
+| 1.1 Project context files | `fa6e0c4` | `harness-runtime/src/context_files.rs`; both hosts wired; `/context` in the CLI |
+| 1.2 Read-before-edit + stale guard + per-path lock | `2640bd9` | `harness-tools/src/fs/state.rs`; also carries path-scoped rule injection |
+| 1.3 Multi-edit | `b2d99cb` | `edits[]` in `EditFileArgs`; CRLF/BOM preservation fell out of it |
+| 1.4 Retrievable truncation | `255afc4` | Spills the complete task log to the CCR store; `retrieve_original` now always registered |
+| 2.1 Structural reads | `3c337e8` | `harness-tools/src/fs/outline.rs` + seen-range tracking + elided-edit refusal |
+
+### Where the implementation differs from the plan above
+
+- **1.1** — the plan proposed `harness-agent`; it landed in `harness-runtime`
+  instead, next to the existing `project::prompt_section` both hosts already
+  call, so no new dependency edges. It also discovers Copilot's
+  `.github/copilot-instructions.md`, which the plan didn't list.
+- **1.1/1.2 split** — glob-scoped rules were going to need turn-loop surgery.
+  They didn't: `FileState` (1.2) already hooks every read/write, so a rule
+  rides along on the first touch of a file it governs and never repeats.
+- **1.4** — `read_file` deliberately does *not* spill to the store. Its
+  overflow is the file itself, still on disk, and `offset` is the better
+  affordance. The real data loss was `run_shell`, whose complete log existed
+  on disk right up until `take_streams` deleted it. Also: the tool-schema
+  budget was raised twice (11.5K → 12K); the test comment records why, and the
+  next tool should replace one rather than raise it again.
+- **2.1** — hides *function bodies* rather than keeping a per-language list of
+  declarations worth showing. Simpler, less fragile, and it leaves types,
+  constants, and imports (the interface) visible. No `full: bool` argument was
+  added — an explicit `offset`/`limit` already forces a verbatim read and the
+  schema budget is tight.
+
+### Next up: 2.2 model roles + fallback chains
+
+Nothing is written yet. The intended shape, from reading the call sites:
+
+- `harness-runtime/src/limits.rs` gains `roles: ModelRoles` and
+  `fallback_models: Vec<String>`. `Limits.summary_model` (already there)
+  becomes the `summary` role — five call sites, listed below.
+- `ModelRoles { smol, plan, review, summary }` is defined in
+  `harness-agent/src/config.rs` (harness-agent can't depend on
+  harness-runtime), with `resolve(role, session_model) -> String`.
+- Call sites to route: `fleet_tool.rs` (lane model → `smol`),
+  `harness-review` step agents (→ `review`), `agent/mod.rs:565`
+  `summary_model()` (→ `summary`).
+- Fallback chain hooks into `agent/turn.rs:560` — when `attempt >=
+  max_attempts` and a fallback remains, switch `request.model`, recompute the
+  cache anchors for the new model family, reset `attempt`, and continue
+  without a backoff sleep.
+- **Open decision:** a model switch wants its own `AgentEvent`, but that
+  ripples through `event.rs` → `harness-host/src/translate.rs` →
+  `harness-protocol` → the CLI renderer → the desktop TS types. The cheap
+  alternative is reusing `AgentEvent::Retrying` with the switch named in its
+  `error` string — no protocol churn, visible to the user, slightly impure.
+  Decide before writing the code.
+
+Then: 2.3 persistent shell, 3.3a post-edit diagnostics, 3.4 worktree fleet
+isolation, 3.1 stream rules, 3.2 memory. Phase 4 items are unstarted.
+
+### Known unrelated flake
+
+`harness-preview` `watch::tests::one_edit_batch_becomes_one_reload` fails on
+the first cold run and passes on every run after. Verified pre-existing by
+stashing this branch's changes and reproducing on a clean tree — it is not
+caused by this work, and it was left alone deliberately rather than fixed
+inside an unrelated feature branch. Worth its own commit: the debounce test
+appears to race the file watcher's initial registration.
