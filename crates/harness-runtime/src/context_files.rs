@@ -129,6 +129,15 @@ impl ContextFiles {
         self.scoped().filter(|f| f.matches(rel)).collect()
     }
 
+    /// The scoped files in the form the fs tools take, for
+    /// [`harness_tools::FileState::set_rules`]. Matching happens down there so
+    /// a rule fires on the path the model actually touched.
+    pub fn path_rules(&self) -> Vec<harness_tools::PathRule> {
+        self.scoped()
+            .map(|f| harness_tools::PathRule::new(&f.display, &f.body, &f.globs))
+            .collect()
+    }
+
     /// The prompt section: always-apply bodies (budgeted) plus a one-line
     /// mention of every scoped file. Empty when nothing was discovered, so the
     /// prompt is unchanged for a repository that carries no conventions.
@@ -140,7 +149,7 @@ impl ContextFiles {
         // Budget by significance (nearest scope first), render by generality
         // (global first) so the most specific instructions are read last.
         let mut budgeted: Vec<&ContextFile> = self.always_apply().collect();
-        budgeted.sort_by(|a, b| b.scope.cmp(&a.scope));
+        budgeted.sort_by_key(|f| std::cmp::Reverse(f.scope));
         let mut spent = 0usize;
         let mut included: Vec<&ContextFile> = Vec::new();
         let mut mentioned: Vec<&ContextFile> = Vec::new();

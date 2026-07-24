@@ -49,7 +49,10 @@ pub mod web_fetch;
 
 pub use ask::{AskUserTool, Choice, Question, QuestionAnswer, QuestionAsker, ASK_USER_TOOL};
 pub use canvas::{CanvasDoc, CanvasSink, CanvasTool, CANVAS_FORMATS, CANVAS_TOOL};
-pub use fs::{EDIT_FILE_TOOL, FIND_FILES_TOOL, READ_FILE_TOOL, SEARCH_FILES_TOOL, WRITE_FILE_TOOL};
+pub use fs::{
+    FileState, Freshness, PathRule, EDIT_FILE_TOOL, FIND_FILES_TOOL, READ_FILE_TOOL,
+    SEARCH_FILES_TOOL, WRITE_FILE_TOOL,
+};
 pub use git::GIT_TOOL;
 pub use plan::{parse_plan_arguments, plan_is_open, PlanItem, PlanStatus, PlanTool, PLAN_TOOL};
 pub use retrieve::{RetrieveOriginalTool, RETRIEVE_ORIGINAL_TOOL};
@@ -404,11 +407,20 @@ impl Tool for CustomTool {
 pub struct ToolRegistry {
     tools: BTreeMap<String, Arc<dyn Tool>>,
     description_overrides: BTreeMap<String, String>,
+    /// The file state the fs tools share, kept so a host can reach it after
+    /// the fact — path-scoped project conventions are discovered a layer up
+    /// (in `harness-runtime`, which depends on this crate) and installed here.
+    files: Option<Arc<fs::FileState>>,
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The shared fs session state, when this registry was built with one.
+    pub fn files(&self) -> Option<&Arc<fs::FileState>> {
+        self.files.as_ref()
     }
 
     /// Register a tool, returning the registry for chaining.
@@ -527,10 +539,24 @@ impl ToolRegistry {
         workspace: Workspace,
         brave_key: Option<String>,
     ) -> Self {
+        // One file state behind all three fs tools: reads record what the
+        // model has seen, writes check it, and both take the same per-path
+        // lock. Subagents share their parent's registry, so this is also what
+        // keeps two fleet lanes off the same file at once.
+        let files = fs::FileState::gated();
         let mut registry = Self::new()
-            .with_typed(fs::ReadFileTool::new(workspace.clone()))
-            .with_typed(fs::WriteFileTool::new(workspace.clone()))
-            .with_typed(fs::EditFileTool::new(workspace.clone()))
+            .with_typed(fs::ReadFileTool::with_state(
+                workspace.clone(),
+                files.clone(),
+            ))
+            .with_typed(fs::WriteFileTool::with_state(
+                workspace.clone(),
+                files.clone(),
+            ))
+            .with_typed(fs::EditFileTool::with_state(
+                workspace.clone(),
+                files.clone(),
+            ))
             .with_typed(fs::FindFilesTool::new(workspace.clone()))
             .with_typed(fs::SearchTool::new(workspace.clone()))
             .with_typed(git::GitTool::new(workspace.clone()))
@@ -551,6 +577,7 @@ impl ToolRegistry {
         // is configured the call fails with a recognizable error that the UIs
         // turn into an inline "add your API key" prompt.
         registry.register_typed(web::WebSearchTool::with_key(brave_key));
+        registry.files = Some(files);
         registry
     }
 }

@@ -123,9 +123,12 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
            `edit_file`/`write_file` not `sed`/redirects.\n\
          - Read before you write. Read the files you're about to touch — fully, not \
            skimmed — and copy the patterns already there (naming, error handling, the \
-           libraries the project actually uses). Always `read_file` before editing it; \
-           `edit_file` needs `old_string` to match the real content exactly. Never \
-           include `read_file`'s line-number and tab prefix in edit arguments.{web_guideline}\n\
+           libraries the project actually uses). `edit_file` and overwriting with \
+           `write_file` refuse a file you haven't read this session, and refuse again \
+           if it changed after you read it — when that happens, re-read and re-apply \
+           your change on top of what's there now rather than forcing the old one. \
+           Never include `read_file`'s line-number and tab prefix in edit \
+           arguments.{web_guideline}\n\
          - Think before you code. When a request is ambiguous, name the assumption \
            you're acting on and the trade-off you're making rather than filling the gap \
            with plausible-looking code. For anything multi-step, state the plan and a \

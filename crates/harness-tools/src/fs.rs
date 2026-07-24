@@ -6,6 +6,7 @@
 //! [`Workspace`] sandbox.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use globset::GlobBuilder;
@@ -16,6 +17,9 @@ use crate::sandbox::Workspace;
 use crate::{ToolError, TypedTool};
 
 mod edit_diagnostics;
+pub mod state;
+
+pub use state::{FileState, Freshness, PathRule};
 
 /// Tool name for [`ReadFileTool`].
 pub const READ_FILE_TOOL: &str = "read_file";
@@ -42,11 +46,19 @@ const DEFAULT_MAX_RESULTS: usize = 200;
 /// Read a UTF-8 text file with `cat -n`-style line numbers.
 pub struct ReadFileTool {
     workspace: Workspace,
+    state: Arc<FileState>,
 }
 
 impl ReadFileTool {
+    /// A standalone read tool with its own (ungated) session state.
     pub fn new(workspace: Workspace) -> Self {
-        Self { workspace }
+        Self::with_state(workspace, FileState::ungated())
+    }
+
+    /// A read tool sharing session state with the write/edit tools, so what it
+    /// shows the model is what their staleness checks compare against.
+    pub fn with_state(workspace: Workspace, state: Arc<FileState>) -> Self {
+        Self { workspace, state }
     }
 }
 
@@ -76,18 +88,34 @@ impl TypedTool for ReadFileTool {
 
     async fn run(&self, args: ReadFileArgs) -> Result<String, ToolError> {
         let path = self.workspace.resolve(&args.path)?;
-        read_numbered(
+        let (rendered, fingerprint) = read_numbered(
             &path,
             args.offset.unwrap_or(1).max(1),
             args.limit
                 .unwrap_or(DEFAULT_READ_LIMIT)
                 .min(DEFAULT_READ_LIMIT),
         )
-        .await
+        .await?;
+        // Fingerprint the whole file, not the window: the point is to notice
+        // that the file moved under the model before it edits, whichever part
+        // of it was displayed.
+        self.state
+            .record_parts(&path, fingerprint.hash, fingerprint.lines);
+        Ok(rendered + &self.state.take_rules_for(Path::new(&args.path)))
     }
 }
 
-async fn read_numbered(path: &Path, offset: usize, limit: usize) -> Result<String, ToolError> {
+/// The whole-file identity computed while streaming a read.
+struct FileFingerprint {
+    hash: u64,
+    lines: usize,
+}
+
+async fn read_numbered(
+    path: &Path,
+    offset: usize,
+    limit: usize,
+) -> Result<(String, FileFingerprint), ToolError> {
     use tokio::io::AsyncReadExt;
 
     let mut file = tokio::fs::File::open(path)
@@ -102,6 +130,7 @@ async fn read_numbered(path: &Path, offset: usize, limit: usize) -> Result<Strin
     let mut truncated_line = false;
     let mut output_truncated = false;
     let mut last_was_newline = false;
+    let mut hasher = state::StreamingFingerprint::default();
 
     loop {
         let n = file
@@ -112,6 +141,7 @@ async fn read_numbered(path: &Path, offset: usize, limit: usize) -> Result<Strin
             break;
         }
         saw_bytes = true;
+        hasher.update(&chunk[..n]);
         for &byte in &chunk[..n] {
             last_was_newline = byte == b'\n';
             if byte == b'\n' {
@@ -147,13 +177,20 @@ async fn read_numbered(path: &Path, offset: usize, limit: usize) -> Result<Strin
         );
         total += 1;
     }
+    let fingerprint = FileFingerprint {
+        hash: hasher.finish(),
+        lines: total,
+    };
     if !saw_bytes {
-        return Ok("(file is empty)".to_string());
+        return Ok(("(file is empty)".to_string(), fingerprint));
     }
     if offset > total {
-        return Ok(format!(
-            "(offset {offset} is past the end of the file, which has {total} line{})",
-            if total == 1 { "" } else { "s" }
+        return Ok((
+            format!(
+                "(offset {offset} is past the end of the file, which has {total} line{})",
+                if total == 1 { "" } else { "s" }
+            ),
+            fingerprint,
         ));
     }
     let shown_end = (offset.saturating_sub(1) + limit).min(total);
@@ -167,7 +204,7 @@ async fn read_numbered(path: &Path, offset: usize, limit: usize) -> Result<Strin
             }
         ));
     }
-    Ok(out)
+    Ok((out, fingerprint))
 }
 
 fn append_numbered_line(
@@ -198,11 +235,19 @@ fn append_numbered_line(
 /// Create or overwrite a text file, creating parent directories as needed.
 pub struct WriteFileTool {
     workspace: Workspace,
+    state: Arc<FileState>,
 }
 
 impl WriteFileTool {
+    /// A standalone write tool with its own (ungated) session state.
     pub fn new(workspace: Workspace) -> Self {
-        Self { workspace }
+        Self::with_state(workspace, FileState::ungated())
+    }
+
+    /// A write tool sharing session state, so overwriting an existing file is
+    /// held to the same freshness contract as editing one.
+    pub fn with_state(workspace: Workspace, state: Arc<FileState>) -> Self {
+        Self { workspace, state }
     }
 }
 
@@ -221,21 +266,35 @@ impl TypedTool for WriteFileTool {
     type Args = WriteFileArgs;
 
     fn description(&self) -> &str {
-        "Create or overwrite a text file at a path relative to the workspace root."
+        "Create or overwrite a text file at a path relative to the workspace root. \
+         Overwriting an existing file requires having read it first (use `edit_file` \
+         for changes to part of a file)."
     }
 
     async fn run(&self, args: WriteFileArgs) -> Result<String, ToolError> {
         let path = self.workspace.resolve(&args.path)?;
+        // Held across the check and the write so a concurrent lane can't slip
+        // a change in between them.
+        let _guard = self.state.lock(&path).await;
+        // Creating a new file is unrestricted; replacing one wholesale is an
+        // edit by another name and answers to the same contract.
+        if let Ok(current) = tokio::fs::read_to_string(&path).await {
+            self.state.guard(&args.path, &path, &current)?;
+        }
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
         tokio::fs::write(&path, &args.contents)
             .await
             .map_err(|e| ToolError::Execution(format!("write {}: {e}", path.display())))?;
+        // The model has now seen this content — it wrote it — so a follow-up
+        // edit in the same turn doesn't have to re-read first.
+        self.state.record(&path, &args.contents);
         Ok(format!(
-            "wrote {} bytes to {}",
+            "wrote {} bytes to {}{}",
             args.contents.len(),
-            path.display()
+            path.display(),
+            self.state.take_rules_for(Path::new(&args.path))
         ))
     }
 }
@@ -243,11 +302,19 @@ impl TypedTool for WriteFileTool {
 /// Replace an exact, unique string in a file (like a precise patch).
 pub struct EditFileTool {
     workspace: Workspace,
+    state: Arc<FileState>,
 }
 
 impl EditFileTool {
+    /// A standalone edit tool with its own (ungated) session state.
     pub fn new(workspace: Workspace) -> Self {
-        Self { workspace }
+        Self::with_state(workspace, FileState::ungated())
+    }
+
+    /// An edit tool sharing session state with `read_file`, so it can tell a
+    /// file the model has seen from one that moved underneath it.
+    pub fn with_state(workspace: Workspace, state: Arc<FileState>) -> Self {
+        Self { workspace, state }
     }
 }
 
@@ -287,9 +354,13 @@ impl TypedTool for EditFileTool {
             ));
         }
 
+        // Held for the whole read-modify-write: two fleet lanes editing one
+        // file queue up instead of both writing over the same original.
+        let _guard = self.state.lock(&path).await;
         let original = tokio::fs::read_to_string(&path)
             .await
             .map_err(|e| ToolError::Execution(format!("read {}: {e}", path.display())))?;
+        self.state.guard(&args.path, &path, &original)?;
 
         let count = original.matches(old).count();
         if count == 0 {
@@ -311,9 +382,13 @@ impl TypedTool for EditFileTool {
         tokio::fs::write(&path, &updated)
             .await
             .map_err(|e| ToolError::Execution(format!("write {}: {e}", path.display())))?;
+        // Re-anchor on what's now on disk, so a follow-up edit this turn is
+        // measured against the model's own change rather than the stale read.
+        self.state.record(&path, &updated);
         Ok(format!(
-            "edited {} ({count} replacement(s))",
-            path.display()
+            "edited {} ({count} replacement(s)){}",
+            path.display(),
+            self.state.take_rules_for(Path::new(&args.path))
         ))
     }
 }
@@ -749,6 +824,173 @@ mod tests {
             ToolError::InvalidArguments(m) => assert_eq!(m, "`old_string` not found in file"),
             other => panic!("expected InvalidArguments, got {other:?}"),
         }
+    }
+
+    /// The shipped registry's shape: read/write/edit behind one gated state.
+    fn gated_tools(ws: &Workspace) -> (ReadFileTool, WriteFileTool, EditFileTool, Arc<FileState>) {
+        let state = FileState::gated();
+        (
+            ReadFileTool::with_state(ws.clone(), state.clone()),
+            WriteFileTool::with_state(ws.clone(), state.clone()),
+            EditFileTool::with_state(ws.clone(), state.clone()),
+            state,
+        )
+    }
+
+    #[tokio::test]
+    async fn editing_a_file_the_model_never_read_is_refused() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.rs", "let x = 1;\n").await;
+        let (_read, _write, edit, _state) = gated_tools(&ws);
+
+        let err = edit
+            .invoke(serde_json::json!({
+                "path": "f.rs", "old_string": "let x = 1;", "new_string": "let x = 2;"
+            }))
+            .await
+            .unwrap_err();
+
+        match err {
+            ToolError::InvalidArguments(m) => assert!(m.contains("read_file"), "got: {m}"),
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+        // And nothing was written.
+        assert_eq!(read_raw(&ws, "f.rs").await, "let x = 1;\n");
+    }
+
+    #[tokio::test]
+    async fn editing_after_reading_is_allowed_and_re_anchors_for_the_next_edit() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.rs", "let x = 1;\nlet y = 2;\n").await;
+        let (read, _write, edit, _state) = gated_tools(&ws);
+
+        read.invoke(serde_json::json!({"path": "f.rs"}))
+            .await
+            .unwrap();
+        edit.invoke(serde_json::json!({
+            "path": "f.rs", "old_string": "let x = 1;", "new_string": "let x = 9;"
+        }))
+        .await
+        .unwrap();
+        // The model's own edit doesn't make the file "stale" for the next one.
+        edit.invoke(serde_json::json!({
+            "path": "f.rs", "old_string": "let y = 2;", "new_string": "let y = 8;"
+        }))
+        .await
+        .unwrap();
+
+        assert_eq!(read_raw(&ws, "f.rs").await, "let x = 9;\nlet y = 8;\n");
+    }
+
+    #[tokio::test]
+    async fn an_edit_onto_content_that_moved_underneath_is_refused() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.rs", "let x = 1;\n").await;
+        let (read, _write, edit, _state) = gated_tools(&ws);
+        read.invoke(serde_json::json!({"path": "f.rs"}))
+            .await
+            .unwrap();
+        // The user (or a formatter, or another lane) rewrites the file.
+        tokio::fs::write(ws.resolve("f.rs").unwrap(), "let x = 1;\nlet extra = 0;\n")
+            .await
+            .unwrap();
+
+        let err = edit
+            .invoke(serde_json::json!({
+                "path": "f.rs", "old_string": "let x = 1;", "new_string": "let x = 2;"
+            }))
+            .await
+            .unwrap_err();
+
+        match err {
+            ToolError::InvalidArguments(m) => {
+                assert!(m.contains("changed on disk"), "got: {m}");
+                assert!(m.contains("1 lines then, 2 now"), "got: {m}");
+            }
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+        // The other party's line survives.
+        assert!(read_raw(&ws, "f.rs").await.contains("let extra = 0;"));
+    }
+
+    #[tokio::test]
+    async fn creating_a_file_is_free_but_overwriting_an_unread_one_is_not() {
+        let (_dir, ws) = workspace();
+        let (_read, write_tool, _edit, _state) = gated_tools(&ws);
+
+        // A brand new file: nothing to revert, nothing to check.
+        write_tool
+            .invoke(serde_json::json!({"path": "new.rs", "contents": "fn main() {}"}))
+            .await
+            .unwrap();
+
+        // An existing file the model hasn't seen: same contract as an edit.
+        write(&ws, "old.rs", "important\n").await;
+        let err = write_tool
+            .invoke(serde_json::json!({"path": "old.rs", "contents": "clobbered"}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        assert_eq!(read_raw(&ws, "old.rs").await, "important\n");
+    }
+
+    #[tokio::test]
+    async fn concurrent_edits_to_one_file_both_land() {
+        let (_dir, ws) = workspace();
+        write(&ws, "shared.rs", "alpha\nbeta\n").await;
+        let (read, _write, edit, state) = gated_tools(&ws);
+        read.invoke(serde_json::json!({"path": "shared.rs"}))
+            .await
+            .unwrap();
+
+        // Two lanes, one file. Without the per-path lock these interleave and
+        // the second write reverts the first.
+        let one = EditFileTool::with_state(ws.clone(), state.clone());
+        let two = EditFileTool::with_state(ws.clone(), state.clone());
+        let (a, b) = tokio::join!(
+            one.invoke(
+                serde_json::json!({"path": "shared.rs", "old_string": "alpha", "new_string": "ALPHA"})
+            ),
+            two.invoke(
+                serde_json::json!({"path": "shared.rs", "old_string": "beta", "new_string": "BETA"})
+            ),
+        );
+        a.unwrap();
+        b.unwrap();
+        drop(edit);
+
+        assert_eq!(read_raw(&ws, "shared.rs").await, "ALPHA\nBETA\n");
+    }
+
+    #[tokio::test]
+    async fn a_path_scoped_convention_rides_along_on_the_first_touch() {
+        let (_dir, ws) = workspace();
+        write(&ws, "app/main.tsx", "export const App = () => null;\n").await;
+        write(&ws, "lib.rs", "fn main() {}\n").await;
+        let (read, _write, _edit, state) = gated_tools(&ws);
+        state.set_rules(vec![PathRule::new(
+            "app/AGENTS.md",
+            "Frontend: no default exports.",
+            &["app/**".to_string()],
+        )]);
+
+        let first = read
+            .invoke(serde_json::json!({"path": "app/main.tsx"}))
+            .await
+            .unwrap();
+        assert!(first.contains("no default exports"), "got: {first}");
+
+        // Once only, and never on a path the rule doesn't govern.
+        let again = read
+            .invoke(serde_json::json!({"path": "app/main.tsx"}))
+            .await
+            .unwrap();
+        assert!(!again.contains("no default exports"));
+        let elsewhere = read
+            .invoke(serde_json::json!({"path": "lib.rs"}))
+            .await
+            .unwrap();
+        assert!(!elsewhere.contains("no default exports"));
     }
 
     #[tokio::test]

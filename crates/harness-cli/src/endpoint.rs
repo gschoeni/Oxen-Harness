@@ -243,6 +243,12 @@ pub(crate) fn agent_config(
     workspace: &Workspace,
     ui: &Ui,
 ) -> AgentConfig {
+    let conventions = harness_runtime::context_files::discover(workspace.root());
+    // Path-scoped conventions stay out of the prompt; the fs tools surface
+    // them the first time the model touches a file they govern.
+    if let Some(files) = tools.files() {
+        files.set_rules(conventions.path_rules());
+    }
     let system_prompt = format!(
         "{}{}{}",
         harness_agent::system_prompt_with_env(
@@ -251,7 +257,7 @@ pub(crate) fn agent_config(
         ),
         // The repository's own conventions (AGENTS.md and friends) before the
         // user's project metadata: general to specific, most authoritative last.
-        harness_runtime::context_files::discover(workspace.root()).prompt_section(),
+        conventions.prompt_section(),
         harness_runtime::project::prompt_section(workspace.root())
     );
     let limits = harness_runtime::limits::load();
