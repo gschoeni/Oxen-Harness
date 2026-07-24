@@ -318,11 +318,9 @@ impl EditFileTool {
     }
 }
 
-/// Arguments to `edit_file`.
+/// One replacement within an `edit_file` call.
 #[derive(Deserialize, schemars::JsonSchema)]
-pub struct EditFileArgs {
-    /// Path relative to the workspace root.
-    pub path: String,
+pub struct Replacement {
     /// Exact text to find (the real file content — no line-number prefix).
     pub old_string: String,
     /// The replacement text.
@@ -332,53 +330,79 @@ pub struct EditFileArgs {
     pub replace_all: bool,
 }
 
+/// Arguments to `edit_file`: either one `old_string`/`new_string` pair, or a
+/// batch of them in `edits`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct EditFileArgs {
+    /// Path relative to the workspace root.
+    pub path: String,
+    /// Exact text to find, for a single replacement.
+    pub old_string: Option<String>,
+    /// The replacement text, for a single replacement.
+    pub new_string: Option<String>,
+    /// Several replacements applied together, each matched against the
+    /// original file. They must not overlap.
+    pub edits: Option<Vec<Replacement>>,
+    /// Replace every occurrence instead of requiring a unique match.
+    #[serde(default)]
+    pub replace_all: bool,
+}
+
+impl EditFileArgs {
+    /// Collapse the two accepted shapes into one list. Accepting both keeps
+    /// the common one-line fix a one-liner while letting a rename land its six
+    /// call sites in a single call instead of six round-trips.
+    fn replacements(self) -> Result<Vec<Replacement>, ToolError> {
+        match (self.edits, self.old_string, self.new_string) {
+            (Some(edits), None, None) if !edits.is_empty() => Ok(edits),
+            (None, Some(old_string), Some(new_string)) => Ok(vec![Replacement {
+                old_string,
+                new_string,
+                replace_all: self.replace_all,
+            }]),
+            (Some(_), _, _) => Err(ToolError::InvalidArguments(
+                "pass either `edits` or a single `old_string`/`new_string` pair, not both".into(),
+            )),
+            _ => Err(ToolError::InvalidArguments(
+                "`edit_file` needs either `edits` or both `old_string` and `new_string`".into(),
+            )),
+        }
+    }
+}
+
 #[async_trait]
 impl TypedTool for EditFileTool {
     const NAME: &'static str = EDIT_FILE_TOOL;
     type Args = EditFileArgs;
 
     fn description(&self) -> &str {
-        "Replace an exact occurrence of `old_string` with `new_string` in a file. \
-         `old_string` must match exactly once unless `replace_all` is true. Match only \
-         the real file content — do NOT include the line-number/tab prefix that \
-         `read_file` adds to its output."
+        "Replace exact text in a file you have already read. One change: pass \
+         `old_string` + `new_string`. Several changes to the same file: pass `edits` \
+         (each matched against the original, non-overlapping, applied together or not \
+         at all) — one call beats one call per change. Each `old_string` must match \
+         exactly once unless `replace_all` is set, and must be the real file content: \
+         do NOT include the line-number/tab prefix `read_file` adds."
     }
 
     async fn run(&self, args: EditFileArgs) -> Result<String, ToolError> {
         let path = self.workspace.resolve(&args.path)?;
-        let (old, new, replace_all) = (&args.old_string, &args.new_string, args.replace_all);
-
-        if old == new {
-            return Err(ToolError::InvalidArguments(
-                "`old_string` and `new_string` are identical; the edit would do nothing".into(),
-            ));
-        }
+        let display = args.path.clone();
+        let edits = args.replacements()?;
 
         // Held for the whole read-modify-write: two fleet lanes editing one
         // file queue up instead of both writing over the same original.
         let _guard = self.state.lock(&path).await;
-        let original = tokio::fs::read_to_string(&path)
+        let raw = tokio::fs::read_to_string(&path)
             .await
             .map_err(|e| ToolError::Execution(format!("read {}: {e}", path.display())))?;
-        self.state.guard(&args.path, &path, &original)?;
+        self.state.guard(&display, &path, &raw)?;
 
-        let count = original.matches(old).count();
-        if count == 0 {
-            return Err(ToolError::InvalidArguments(
-                edit_diagnostics::diagnose_no_match(&original, old),
-            ));
-        }
-        if count > 1 && !replace_all {
-            return Err(ToolError::InvalidArguments(format!(
-                "`old_string` matches {count} times; pass replace_all=true or add more context"
-            )));
-        }
+        // Match against LF text so an `old_string` copied out of a read still
+        // matches in a CRLF file; the file's own endings are restored on write.
+        let (body, endings) = LineEndings::split(&raw);
+        let outcome = apply_edits(&body, &edits)?;
+        let updated = endings.restore(&outcome.text);
 
-        let updated = if replace_all {
-            original.replace(old, new)
-        } else {
-            original.replacen(old, new, 1)
-        };
         tokio::fs::write(&path, &updated)
             .await
             .map_err(|e| ToolError::Execution(format!("write {}: {e}", path.display())))?;
@@ -386,11 +410,140 @@ impl TypedTool for EditFileTool {
         // measured against the model's own change rather than the stale read.
         self.state.record(&path, &updated);
         Ok(format!(
-            "edited {} ({count} replacement(s)){}",
+            "edited {} ({}){}",
             path.display(),
-            self.state.take_rules_for(Path::new(&args.path))
+            outcome.summary,
+            self.state.take_rules_for(Path::new(&display))
         ))
     }
+}
+
+/// The line endings and BOM a file arrived with, so an edit doesn't silently
+/// rewrite every line of a CRLF file (and blow up the diff its author reads).
+struct LineEndings {
+    crlf: bool,
+    bom: bool,
+}
+
+impl LineEndings {
+    fn split(raw: &str) -> (String, Self) {
+        let bom = raw.starts_with('\u{feff}');
+        let body = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+        let crlf = body.contains("\r\n");
+        let normalized = if crlf {
+            body.replace("\r\n", "\n")
+        } else {
+            body.to_string()
+        };
+        (normalized, Self { crlf, bom })
+    }
+
+    fn restore(&self, text: &str) -> String {
+        let body = if self.crlf {
+            text.replace('\n', "\r\n")
+        } else {
+            text.to_string()
+        };
+        if self.bom {
+            format!("\u{feff}{body}")
+        } else {
+            body
+        }
+    }
+}
+
+/// What an applied batch produced.
+struct EditOutcome {
+    text: String,
+    summary: String,
+}
+
+/// Apply every replacement against the *original* text, atomically: each match
+/// is resolved before anything is written, so a batch with one bad hunk leaves
+/// the file untouched rather than half-edited.
+fn apply_edits(original: &str, edits: &[Replacement]) -> Result<EditOutcome, ToolError> {
+    let many = edits.len() > 1;
+    // (start, end, replacement, edit index) over the original text.
+    let mut spans: Vec<(usize, usize, &str, usize)> = Vec::new();
+    let mut replaced_lines = 0usize;
+    let mut inserted_lines = 0usize;
+
+    for (i, edit) in edits.iter().enumerate() {
+        let label = |msg: String| {
+            if many {
+                ToolError::InvalidArguments(format!("edit {}: {msg}", i + 1))
+            } else {
+                ToolError::InvalidArguments(msg)
+            }
+        };
+        if edit.old_string == edit.new_string {
+            return Err(label(
+                "`old_string` and `new_string` are identical; the edit would do nothing".into(),
+            ));
+        }
+        if edit.old_string.is_empty() {
+            return Err(label("`old_string` is empty; nothing to match".into()));
+        }
+        let hits: Vec<usize> = original
+            .match_indices(&edit.old_string)
+            .map(|(at, _)| at)
+            .collect();
+        match hits.len() {
+            0 => {
+                return Err(label(edit_diagnostics::diagnose_no_match(
+                    original,
+                    &edit.old_string,
+                )))
+            }
+            1 => {}
+            n if edit.replace_all => {
+                let _ = n;
+            }
+            n => {
+                return Err(label(format!(
+                    "`old_string` matches {n} times; pass replace_all=true or add more context"
+                )))
+            }
+        }
+        for at in hits {
+            spans.push((at, at + edit.old_string.len(), &edit.new_string, i));
+            replaced_lines += edit.old_string.lines().count();
+            inserted_lines += edit.new_string.lines().count();
+        }
+    }
+
+    // Overlapping hunks are the classic way a batch corrupts a file: two edits
+    // both "succeed" and the second one's context is already gone.
+    spans.sort_by_key(|(start, ..)| *start);
+    for pair in spans.windows(2) {
+        let (_, first_end, _, first_idx) = pair[0];
+        let (second_start, _, _, second_idx) = pair[1];
+        if second_start < first_end {
+            return Err(ToolError::InvalidArguments(format!(
+                "edits {} and {} overlap in the file; merge them into one edit",
+                first_idx + 1,
+                second_idx + 1
+            )));
+        }
+    }
+
+    // Back to front, so earlier offsets stay valid as later ones are spliced.
+    let mut text = original.to_string();
+    for &(start, end, replacement, _) in spans.iter().rev() {
+        text.replace_range(start..end, replacement);
+    }
+
+    let summary = if many {
+        format!(
+            "{} edits, {replaced_lines} lines replaced by {inserted_lines}",
+            edits.len()
+        )
+    } else if spans.len() > 1 {
+        format!("{} replacements", spans.len())
+    } else {
+        "1 replacement".to_string()
+    };
+    Ok(EditOutcome { text, summary })
 }
 
 /// Find files by glob pattern (the agent's `Glob`), respecting `.gitignore`.
@@ -824,6 +977,147 @@ mod tests {
             ToolError::InvalidArguments(m) => assert_eq!(m, "`old_string` not found in file"),
             other => panic!("expected InvalidArguments, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_batch_of_edits_lands_in_one_call() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.rs", "let a = 1;\nlet b = 2;\nlet c = 3;\n").await;
+
+        let out = EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({
+                "path": "f.rs",
+                "edits": [
+                    {"old_string": "let a = 1;", "new_string": "let a = 10;"},
+                    {"old_string": "let c = 3;", "new_string": "let c = 30;"},
+                ]
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            read_raw(&ws, "f.rs").await,
+            "let a = 10;\nlet b = 2;\nlet c = 30;\n"
+        );
+        assert!(out.contains("2 edits"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn a_batch_is_all_or_nothing() {
+        let (_dir, ws) = workspace();
+        let before = "let a = 1;\nlet b = 2;\n";
+        write(&ws, "f.rs", before).await;
+
+        let err = EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({
+                "path": "f.rs",
+                "edits": [
+                    {"old_string": "let a = 1;", "new_string": "let a = 10;"},
+                    {"old_string": "let nope = 0;", "new_string": "let nope = 1;"},
+                ]
+            }))
+            .await
+            .unwrap_err();
+
+        match err {
+            // The failing edit is named, so the model knows which one to fix.
+            ToolError::InvalidArguments(m) => assert!(m.starts_with("edit 2:"), "got: {m}"),
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+        // The good edit did not land — a half-applied batch is worse than none.
+        assert_eq!(read_raw(&ws, "f.rs").await, before);
+    }
+
+    #[tokio::test]
+    async fn overlapping_edits_are_refused() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.rs", "let total = compute(a, b);\n").await;
+
+        let err = EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({
+                "path": "f.rs",
+                "edits": [
+                    {"old_string": "let total = compute(a, b);", "new_string": "let total = 0;"},
+                    {"old_string": "compute(a, b)", "new_string": "compute(b, a)"},
+                ]
+            }))
+            .await
+            .unwrap_err();
+
+        match err {
+            ToolError::InvalidArguments(m) => assert!(m.contains("overlap"), "got: {m}"),
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn edits_are_matched_against_the_original_not_each_other() {
+        let (_dir, ws) = workspace();
+        // A swap: applied incrementally these would chase each other's output.
+        write(&ws, "f.rs", "alpha\nbeta\n").await;
+
+        EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({
+                "path": "f.rs",
+                "edits": [
+                    {"old_string": "alpha", "new_string": "beta"},
+                    {"old_string": "beta", "new_string": "alpha"},
+                ]
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(read_raw(&ws, "f.rs").await, "beta\nalpha\n");
+    }
+
+    #[tokio::test]
+    async fn a_crlf_file_keeps_its_line_endings() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.rs", "let a = 1;\r\nlet b = 2;\r\n").await;
+
+        // The model's `old_string` comes from a read, which shows LF.
+        EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({
+                "path": "f.rs", "old_string": "let a = 1;\nlet b = 2;",
+                "new_string": "let a = 9;\nlet b = 8;"
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(read_raw(&ws, "f.rs").await, "let a = 9;\r\nlet b = 8;\r\n");
+    }
+
+    #[tokio::test]
+    async fn a_byte_order_mark_survives_an_edit() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.txt", "\u{feff}hello world").await;
+
+        EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({
+                "path": "f.txt", "old_string": "world", "new_string": "there"
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(read_raw(&ws, "f.txt").await, "\u{feff}hello there");
+    }
+
+    #[tokio::test]
+    async fn mixing_the_single_and_batch_forms_is_rejected() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.rs", "x").await;
+
+        let err = EditFileTool::new(ws)
+            .invoke(serde_json::json!({
+                "path": "f.rs",
+                "old_string": "x",
+                "new_string": "y",
+                "edits": [{"old_string": "x", "new_string": "z"}]
+            }))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ToolError::InvalidArguments(_)));
     }
 
     /// The shipped registry's shape: read/write/edit behind one gated state.

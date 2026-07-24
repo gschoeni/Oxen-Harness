@@ -691,11 +691,13 @@ mod tests {
         // The tool-schema block is fixed overhead resent on every model call, so
         // it directly shrinks the usable context window. Pin its size so a new
         // tool or a verbose schema can't silently balloon the prefix. Current
-        // size is ~10.3K chars (~2.6K tokens) after the background-task trio
-        // (`is_background` + `task_output` + `kill_task`) — derived schemas
-        // document every field and enum variant, which is deliberate spend;
-        // `schema_for` strips what carries no meaning. The ceiling leaves
-        // headroom for a tool or two without inviting unchecked growth.
+        // size is ~11.2K chars (~2.8K tokens): the background-task trio
+        // (`is_background` + `task_output` + `kill_task`) plus `edit_file`'s
+        // batch form, which costs ~900 chars of schema and pays for itself the
+        // first time a rename lands six call sites in one call instead of six.
+        // Derived schemas document every field and enum variant — deliberate
+        // spend; `schema_for` strips what carries no meaning. Headroom is thin
+        // now: a new tool likely means retiring one, or a deliberate raise.
         let workspace = Workspace::new(".").unwrap();
         let registry = ToolRegistry::default_for_workspace(workspace);
         let chars: usize = registry
