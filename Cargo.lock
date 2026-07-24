@@ -1077,6 +1077,7 @@ dependencies = [
 name = "harness-runtime"
 version = "0.1.0"
 dependencies = [
+ "globset",
  "harness-compress",
  "harness-config",
  "harness-core",

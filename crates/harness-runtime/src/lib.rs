@@ -17,11 +17,15 @@
 //!   preferences, and authoring.
 //! - [`compression`] — the context-compression mode (off/audit/on) applied
 //!   when building an agent.
+//! - [`context_files`] — the conventions a repository already carries
+//!   (`AGENTS.md`, `CLAUDE.md`, Cursor/Cline rules), discovered and rendered
+//!   into the system prompt.
 
 pub mod compression;
 mod config;
 pub mod config_repo;
 pub mod connection;
+pub mod context_files;
 pub mod limits;
 pub mod models;
 pub mod preview;

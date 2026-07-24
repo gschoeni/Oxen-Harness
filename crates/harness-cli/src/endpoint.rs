@@ -244,11 +244,14 @@ pub(crate) fn agent_config(
     ui: &Ui,
 ) -> AgentConfig {
     let system_prompt = format!(
-        "{}{}",
+        "{}{}{}",
         harness_agent::system_prompt_with_env(
             harness_agent::OptionalTools::from_registry(tools),
             workspace.root(),
         ),
+        // The repository's own conventions (AGENTS.md and friends) before the
+        // user's project metadata: general to specific, most authoritative last.
+        harness_runtime::context_files::discover(workspace.root()).prompt_section(),
         harness_runtime::project::prompt_section(workspace.root())
     );
     let limits = harness_runtime::limits::load();

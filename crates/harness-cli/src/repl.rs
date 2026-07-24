@@ -39,6 +39,9 @@ pub enum Command {
     Location(Option<String>),
     /// List the skills discovered for this workspace (global + project).
     Skills,
+    /// List the convention files (AGENTS.md and friends) folded into the
+    /// system prompt for this workspace, and what they cost.
+    Context,
     /// Set the API key and provider endpoint: `/auth` walks a base-URL card
     /// pre-filled with the current endpoint (Enter accepts it; edit it to move
     /// to another Oxen server or any OpenAI-compatible provider) then a masked
@@ -151,6 +154,13 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
         aliases: &["/skill"],
         description: "list the skills on hand",
         build: |_| Command::Skills,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/context",
+        aliases: &["/conventions"],
+        description: "show the project conventions in the prompt",
+        build: |_| Command::Context,
         completer: ArgCompleter::None,
     },
     SlashSpec {

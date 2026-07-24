@@ -236,6 +236,7 @@ async fn handle_line(
             commands::location::handle_repl(rest, agent, ui, ctx).await?
         }
         Command::Skills => print_skills(ui, ctx.workspace_root),
+        Command::Context => print_context(ui, ctx.workspace_root),
         Command::Auth(rest) => commands::auth::handle_repl(rest, agent, ui)?,
         Command::Compression(rest) => commands::compression::handle_repl(rest, agent, ui)?,
         Command::Permissions(rest) => commands::permissions::handle_repl(rest, agent, ui)?,
@@ -310,6 +311,58 @@ fn print_skills(ui: &Ui, workspace_root: &Path) {
     println!(
         "  {}",
         ui.dim("the model loads a skill's instructions on demand; new skills apply to new runs")
+    );
+}
+
+/// `/context` — the convention files folded into this session's system prompt.
+/// A silent prompt change is a bad prompt change: this is where a user checks
+/// what the model was told about their project, and what it costs every turn.
+fn print_context(ui: &Ui, workspace_root: &Path) {
+    let found = harness_runtime::context_files::discover(workspace_root);
+    if found.files.is_empty() {
+        println!(
+            "  {}",
+            ui.dim("no project conventions found — the model has only its own guidelines")
+        );
+        println!(
+            "  {}",
+            ui.dim("drop an AGENTS.md in this repo and it rides in every prompt here")
+        );
+        return;
+    }
+
+    println!("  {}", ui.brown("project conventions in the prompt:"));
+    for file in found.always_apply() {
+        println!(
+            "    {} {}{}",
+            ui.accent(&format!("{:<32}", file.display)),
+            ui.dim(&format!("[{}]", file.scope.label())),
+            ui.red(if file.truncated { "  (clipped)" } else { "" }),
+        );
+    }
+    let scoped: Vec<_> = found.scoped().collect();
+    if !scoped.is_empty() {
+        println!(
+            "  {}",
+            ui.brown("path-scoped (surfaced when you touch a match):")
+        );
+        for file in scoped {
+            println!(
+                "    {} {}",
+                ui.accent(&format!("{:<32}", file.display)),
+                ui.dim(&file.globs.join(", ")),
+            );
+        }
+    }
+    // The section sits in the cached prefix, so this is a once-per-session
+    // cost rather than a per-turn one — worth saying, since the number looks
+    // alarming next to a short prompt.
+    let chars = found.prompt_section().chars().count();
+    println!(
+        "  {}",
+        ui.dim(&format!(
+            "~{chars} characters of prompt (cached prefix — billed once per session)"
+        ))
     );
 }
 
