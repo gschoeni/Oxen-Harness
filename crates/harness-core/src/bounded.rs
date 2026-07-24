@@ -2,6 +2,16 @@
 
 use std::collections::VecDeque;
 
+/// The phrase [`BoundedText`] leaves where it dropped the middle of a stream.
+/// Callers match on it to decide whether the full output is worth preserving
+/// somewhere the model can still reach it.
+pub const OMITTED_MARKER: &str = "characters omitted";
+
+/// Did this rendered stream lose anything on the way to the model?
+pub fn was_truncated(rendered: &str) -> bool {
+    rendered.contains(OMITTED_MARKER)
+}
+
 /// Retain the beginning and end of a stream while counting everything between.
 #[derive(Debug)]
 pub struct BoundedText {
@@ -52,7 +62,7 @@ impl BoundedText {
         }
         let dropped = self.total_chars - kept;
         format!(
-            "{}\n… [{dropped} characters omitted] …\n{}",
+            "{}\n… [{dropped} {OMITTED_MARKER}] …\n{}",
             self.head,
             self.tail.into_iter().collect::<String>()
         )

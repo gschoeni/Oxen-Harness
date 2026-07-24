@@ -83,7 +83,15 @@ pub struct BackgroundTasks {
     log_dir: PathBuf,
     next_id: AtomicU64,
     tasks: Mutex<HashMap<u64, TaskEntry>>,
+    /// Where the middle of a truncated command's output goes so the model can
+    /// still ask for it. Without this, everything past the cap is destroyed
+    /// with the log file and the only recourse is re-running the command.
+    overflow: Option<Arc<harness_compress::CcrStore>>,
 }
+
+/// The most of one command's full output kept for retrieval. Past this the
+/// spill itself would be the memory problem the cap exists to prevent.
+const MAX_SPILL_BYTES: u64 = 2 * 1024 * 1024;
 
 impl BackgroundTasks {
     /// A registry writing task logs under `log_dir` (created on first spawn).
@@ -92,6 +100,18 @@ impl BackgroundTasks {
             log_dir,
             next_id: AtomicU64::new(0),
             tasks: Mutex::new(HashMap::new()),
+            overflow: None,
+        })
+    }
+
+    /// The same registry, preserving truncated output in `store` so
+    /// `retrieve_original` can serve it back.
+    pub fn with_overflow(log_dir: PathBuf, store: Arc<harness_compress::CcrStore>) -> Arc<Self> {
+        Arc::new(Self {
+            log_dir,
+            next_id: AtomicU64::new(0),
+            tasks: Mutex::new(HashMap::new()),
+            overflow: Some(store),
         })
     }
 
@@ -103,13 +123,20 @@ impl BackgroundTasks {
     /// both create `task-1.log` and truncate each other's logs. Pid plus a
     /// process-wide counter make the path unique without a uuid dependency.
     pub fn in_temp() -> Arc<Self> {
+        Self::in_temp_with_overflow(None)
+    }
+
+    /// [`Self::in_temp`], optionally preserving truncated output for retrieval.
+    pub fn in_temp_with_overflow(store: Option<Arc<harness_compress::CcrStore>>) -> Arc<Self> {
         static INSTANCE: AtomicU64 = AtomicU64::new(0);
         let instance = INSTANCE.fetch_add(1, Ordering::Relaxed);
-        Self::new(
-            std::env::temp_dir()
-                .join("oxen-harness-tasks")
-                .join(format!("{}-{instance}", std::process::id())),
-        )
+        let dir = std::env::temp_dir()
+            .join("oxen-harness-tasks")
+            .join(format!("{}-{instance}", std::process::id()));
+        match store {
+            Some(store) => Self::with_overflow(dir, store),
+            None => Self::new(dir),
+        }
     }
 
     /// Spawn `command` (via the platform shell, cwd `root`) as a background
@@ -250,8 +277,16 @@ impl BackgroundTasks {
 
     /// Remove a finished task and hand back its bounded stdout/stderr tails —
     /// the foreground-completion path, matching `run_shell`'s classic output.
-    /// The log file goes with the entry; the streams are its full story.
-    pub async fn take_streams(&self, id: u64) -> Option<(TaskExit, String, String)> {
+    ///
+    /// When the tails dropped part of the output, the complete log (which is
+    /// on disk right up until this call deletes it) is preserved in the
+    /// overflow store first, and its `<<ccr:HASH>>` marker returned. That
+    /// turns "the middle of your build log is gone forever" into one
+    /// `retrieve_original` call.
+    pub async fn take_streams(
+        &self,
+        id: u64,
+    ) -> Option<(TaskExit, String, String, Option<String>)> {
         let entry = self.tasks.lock().await.remove(&id)?;
         let exit = (*entry.done.borrow())?;
         let take = |tail: &Arc<StdMutex<Option<BoundedText>>>| {
@@ -261,9 +296,31 @@ impl BackgroundTasks {
                 .map(BoundedText::into_string)
                 .unwrap_or_default()
         };
-        let streams = (exit, take(&entry.stdout_tail), take(&entry.stderr_tail));
+        let (stdout, stderr) = (take(&entry.stdout_tail), take(&entry.stderr_tail));
+
+        let lost = harness_core::bounded::was_truncated(&stdout)
+            || harness_core::bounded::was_truncated(&stderr);
+        let marker = match (&self.overflow, lost) {
+            (Some(store), true) => {
+                // The whole log, not `read_since`'s tail window: the point is
+                // to keep the middle that the bounded tails threw away.
+                let full = tokio::fs::read_to_string(&entry.log_path)
+                    .await
+                    .unwrap_or_default();
+                let clipped = harness_core::text::truncate_with_marker(
+                    &full,
+                    MAX_SPILL_BYTES as usize,
+                    "\n… [output past 2MB not kept]",
+                );
+                (!clipped.is_empty()).then(|| {
+                    harness_compress::ccr::marker(&store.put(&clipped), Some("full_output"))
+                })
+            }
+            _ => None,
+        };
+
         let _ = tokio::fs::remove_file(&entry.log_path).await;
-        Some(streams)
+        Some((exit, stdout, stderr, marker))
     }
 
     /// Status plus the output appended since the last check (or the last

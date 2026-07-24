@@ -150,11 +150,20 @@ pub(super) fn setup_compression(
 ) -> Option<Arc<CcrStore>> {
     match config.compression {
         CompressionMode::On => {
-            let store = Arc::new(match &config.attachment_root {
-                Some(root) => CcrStore::disk_backed(root.join(".oxen-harness/ccr")),
-                None => CcrStore::default(),
-            });
-            tools.register_typed(harness_tools::RetrieveOriginalTool::new(store.clone()));
+            // Prefer the registry's own store, which already holds whatever
+            // tool output caps dropped: one store means one kind of marker,
+            // and `retrieve_original` is already registered alongside it.
+            let store = match tools.overflow_store() {
+                Some(store) => store.clone(),
+                None => {
+                    let store = Arc::new(match &config.attachment_root {
+                        Some(root) => CcrStore::disk_backed(root.join(".oxen-harness/ccr")),
+                        None => CcrStore::default(),
+                    });
+                    tools.register_typed(harness_tools::RetrieveOriginalTool::new(store.clone()));
+                    store
+                }
+            };
             Some(store)
         }
         CompressionMode::Audit | CompressionMode::Off => None,

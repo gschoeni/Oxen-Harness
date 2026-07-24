@@ -43,11 +43,10 @@ impl TypedTool for RetrieveOriginalTool {
     type Args = RetrieveArgs;
 
     fn description(&self) -> &str {
-        "Recover the full original content behind a <<ccr:HASH>> marker. Earlier tool output \
-         in this conversation may have been compressed to save context: dropped rows or elided \
-         lines are replaced by a marker like <<ccr:a1b2c3d4e5f6 42_rows_offloaded>>. Call this \
-         with the marker's hash when the compressed view is missing something you need. Prefer \
-         working with the compressed view when it already answers the question."
+        "Recover output that was dropped to fit the context, given the hash from a \
+         <<ccr:HASH>> marker in an earlier tool result — the omitted middle of a long \
+         command's output, or rows a compression pass removed. Call it when the shortened \
+         view is missing something you need; otherwise work with what you already have."
     }
 
     async fn run(&self, args: RetrieveArgs) -> Result<String, ToolError> {

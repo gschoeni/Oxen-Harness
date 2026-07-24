@@ -100,11 +100,18 @@ impl TypedTool for ShellTool {
             }
             return match tasks.wait(id, Duration::from_millis(timeout_ms)).await {
                 Some(_) => {
-                    let (exit, stdout, stderr) = tasks
+                    let (exit, stdout, stderr, overflow) = tasks
                         .take_streams(id)
                         .await
                         .ok_or_else(|| ToolError::Execution("task vanished".into()))?;
-                    Ok(format_streams(exit.code, &stdout, &stderr))
+                    let mut out = format_streams(exit.code, &stdout, &stderr);
+                    // Output past the cap isn't gone, just parked.
+                    if let Some(marker) = overflow {
+                        out.push_str(&format!(
+                            "\n[the omitted middle is kept: call retrieve_original with {marker}]"
+                        ));
+                    }
+                    Ok(out)
                 }
                 // The timeout is a patience limit, not a kill switch: the
                 // command keeps running as a background task, so slow builds
@@ -278,6 +285,40 @@ mod tests {
         assert!(out.contains("classic"), "{out}");
         assert!(out.contains("--- stderr ---"), "{out}");
         assert!(out.contains("err"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn truncated_output_is_recoverable_instead_of_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let store = std::sync::Arc::new(harness_compress::CcrStore::default());
+        let tasks = crate::tasks::BackgroundTasks::with_overflow(
+            dir.path().join(".task-logs"),
+            store.clone(),
+        );
+        let tool = ShellTool::with_tasks(ws, tasks);
+
+        #[cfg(not(windows))]
+        let command = "for i in $(seq 1 4000); do echo \"line $i of the build log\"; done";
+        #[cfg(windows)]
+        let command = "powershell -NoProfile -Command \"1..4000 | % { 'line ' + $_ }\"";
+        let out = tool
+            .invoke(serde_json::json!({"command": command, "timeout_ms": 60000}))
+            .await
+            .unwrap();
+
+        // The model sees head and tail, and is told the middle is retrievable.
+        assert!(out.contains("characters omitted"), "{out}");
+        assert!(out.contains("retrieve_original"), "{out}");
+        let hash = out
+            .split("<<ccr:")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .expect("marker in output")
+            .to_string();
+        let full = store.get(&hash).expect("full output kept");
+        // The middle — the part the model could never otherwise see again.
+        assert!(full.contains("line 2000 of the build log"), "middle lost");
     }
 
     #[tokio::test]

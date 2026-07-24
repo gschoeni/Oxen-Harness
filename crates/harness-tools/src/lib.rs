@@ -411,6 +411,10 @@ pub struct ToolRegistry {
     /// the fact — path-scoped project conventions are discovered a layer up
     /// (in `harness-runtime`, which depends on this crate) and installed here.
     files: Option<Arc<fs::FileState>>,
+    /// Where output dropped by a tool's size cap is kept for
+    /// `retrieve_original`. The agent reuses it for compression, so both kinds
+    /// of `<<ccr:HASH>>` marker resolve through one store.
+    overflow: Option<Arc<harness_compress::CcrStore>>,
 }
 
 impl ToolRegistry {
@@ -421,6 +425,12 @@ impl ToolRegistry {
     /// The shared fs session state, when this registry was built with one.
     pub fn files(&self) -> Option<&Arc<fs::FileState>> {
         self.files.as_ref()
+    }
+
+    /// The store holding output that tool size caps dropped, when this
+    /// registry was built with one.
+    pub fn overflow_store(&self) -> Option<&Arc<harness_compress::CcrStore>> {
+        self.overflow.as_ref()
     }
 
     /// Register a tool, returning the registry for chaining.
@@ -568,7 +578,10 @@ impl ToolRegistry {
 
         // The shell + background-task trio share one registry, so the task
         // ids `run_shell` hands out resolve in `task_output`/`kill_task`.
-        let tasks = tasks::BackgroundTasks::in_temp();
+        // The overflow store keeps what output caps drop, so a truncated build
+        // log is one `retrieve_original` away instead of gone.
+        let overflow = Arc::new(harness_compress::CcrStore::default());
+        let tasks = tasks::BackgroundTasks::in_temp_with_overflow(Some(overflow.clone()));
         registry.register_typed(shell::ShellTool::with_tasks(workspace, tasks.clone()));
         registry.register_typed(tasks::TaskOutputTool::new(tasks.clone()));
         registry.register_typed(tasks::KillTaskTool::new(tasks));
@@ -577,7 +590,11 @@ impl ToolRegistry {
         // is configured the call fails with a recognizable error that the UIs
         // turn into an inline "add your API key" prompt.
         registry.register_typed(web::WebSearchTool::with_key(brave_key));
+        // `retrieve_original` serves both truncation overflow (always) and
+        // context compression (when it's on) out of the same store.
+        registry.register_typed(retrieve::RetrieveOriginalTool::new(overflow.clone()));
         registry.files = Some(files);
+        registry.overflow = Some(overflow);
         registry
     }
 }
@@ -674,6 +691,7 @@ mod tests {
                 git::GIT_TOOL,
                 tasks::KILL_TASK_TOOL,
                 fs::READ_FILE_TOOL,
+                retrieve::RETRIEVE_ORIGINAL_TOOL,
                 shell::RUN_SHELL_TOOL,
                 fs::SEARCH_FILES_TOOL,
                 tasks::TASK_OUTPUT_TOOL,
@@ -691,13 +709,15 @@ mod tests {
         // The tool-schema block is fixed overhead resent on every model call, so
         // it directly shrinks the usable context window. Pin its size so a new
         // tool or a verbose schema can't silently balloon the prefix. Current
-        // size is ~11.2K chars (~2.8K tokens): the background-task trio
-        // (`is_background` + `task_output` + `kill_task`) plus `edit_file`'s
-        // batch form, which costs ~900 chars of schema and pays for itself the
-        // first time a rename lands six call sites in one call instead of six.
+        // size is ~11.6K chars (~2.9K tokens): the background-task trio
+        // (`is_background` + `task_output` + `kill_task`), `edit_file`'s batch
+        // form (~900 chars, repaid the first time a rename lands six call
+        // sites in one call), and `retrieve_original` (~400, now always
+        // present because output caps drop content nothing else can recover).
         // Derived schemas document every field and enum variant — deliberate
-        // spend; `schema_for` strips what carries no meaning. Headroom is thin
-        // now: a new tool likely means retiring one, or a deliberate raise.
+        // spend; `schema_for` strips what carries no meaning. Two raises in one
+        // feature is the limit: the next tool either replaces one, or argues
+        // for its permanent prefix cost in the commit that adds it.
         let workspace = Workspace::new(".").unwrap();
         let registry = ToolRegistry::default_for_workspace(workspace);
         let chars: usize = registry
@@ -706,8 +726,8 @@ mod tests {
             .map(|d| d.to_string().len())
             .sum();
         assert!(
-            chars < 11_500,
-            "default tool definitions grew to {chars} chars (budget 11500)"
+            chars < 12_000,
+            "default tool definitions grew to {chars} chars (budget 12000)"
         );
     }
 }
