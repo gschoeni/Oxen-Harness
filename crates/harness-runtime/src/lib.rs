@@ -17,6 +17,8 @@
 //!   preferences, and authoring.
 //! - [`compression`] — the context-compression mode (off/audit/on) applied
 //!   when building an agent.
+//! - [`rules`] — stream rules: user/project corrections that watch the
+//!   model's output and fire only when they match.
 //! - [`context_files`] — the conventions a repository already carries
 //!   (`AGENTS.md`, `CLAUDE.md`, Cursor/Cline rules), discovered and rendered
 //!   into the system prompt.
@@ -30,6 +32,7 @@ pub mod limits;
 pub mod models;
 pub mod preview;
 pub mod project;
+pub mod rules;
 pub mod skills;
 pub mod tools;
 

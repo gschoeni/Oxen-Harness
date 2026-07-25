@@ -125,6 +125,13 @@ pub struct Agent {
     /// points (see [`crate::interject`]). Hosts push through a handle cloned
     /// via [`Agent::interjections`] before the turn takes the agent.
     interjections: crate::Interjections,
+    /// Corrections that watch the model's stream (see [`crate::rules`]). Empty
+    /// unless a host installed some, in which case they cost nothing until one
+    /// matches.
+    rules: crate::rules::RuleSet,
+    /// How often each rule has fired, so a reminder the model has already seen
+    /// isn't repeated every round.
+    rule_history: crate::rules::RuleHistory,
 }
 
 /// What one model call cost beyond its token counts: the cache-read/write
@@ -198,6 +205,8 @@ impl Agent {
             tokens_saved: 0,
             prefire: None,
             interjections: crate::Interjections::default(),
+            rules: crate::rules::RuleSet::default(),
+            rule_history: crate::rules::RuleHistory::default(),
         })
     }
 
@@ -254,6 +263,8 @@ impl Agent {
             tokens_saved: 0,
             prefire: None,
             interjections: crate::Interjections::default(),
+            rules: crate::rules::RuleSet::default(),
+            rule_history: crate::rules::RuleHistory::default(),
         })
     }
 
@@ -381,6 +392,19 @@ impl Agent {
     /// queue), via [`take_all`](crate::Interjections::take_all).
     pub fn interjections(&self) -> crate::Interjections {
         self.interjections.clone()
+    }
+
+    /// Install the stream rules for this session. Hosts discover them a layer
+    /// up (in `harness-runtime`, which depends on this crate) and set them
+    /// after construction, the same way path-scoped conventions reach the fs
+    /// tools.
+    pub fn set_rules(&mut self, rules: crate::rules::RuleSet) {
+        self.rules = rules;
+    }
+
+    /// How many stream rules are watching this session.
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
     }
 
     /// The effective context window (tokens): the configured override, else a

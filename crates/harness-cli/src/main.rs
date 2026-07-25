@@ -280,7 +280,10 @@ async fn main() -> Result<()> {
                 context_window: context_window.map(|w| w as i64),
                 ..Default::default()
             })?;
-            let agent = Agent::new(client, tools, store.clone(), session.clone(), config)?;
+            let mut agent = Agent::new(client, tools, store.clone(), session.clone(), config)?;
+            // Corrections that watch the model's stream; they cost nothing
+            // until one matches.
+            agent.set_rules(endpoint::stream_rules(workspace.root()));
             (agent, session, None)
         }
     };

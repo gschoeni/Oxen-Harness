@@ -30,6 +30,27 @@ use crate::bridges::{
 };
 use crate::{translate, EventSink, PendingApprovals, PendingQuestions};
 
+/// Compile the workspace's stream rules, skipping any whose pattern doesn't
+/// compile — one bad regex in a shared repository file must not stop a session
+/// from starting.
+fn stream_rules(workspace_root: &Path) -> harness_agent::rules::RuleSet {
+    let rules = harness_runtime::rules::load(workspace_root)
+        .into_iter()
+        .filter_map(|spec| {
+            harness_agent::rules::Rule::compile(
+                &spec.name,
+                &spec.pattern,
+                &spec.scope,
+                &spec.message,
+                spec.interrupt,
+                spec.repeat.as_deref(),
+            )
+            .ok()
+        })
+        .collect();
+    harness_agent::rules::RuleSet::new(rules)
+}
+
 /// The `app_meta` key holding the all-time tokens saved by context compression.
 const TOTAL_TOKENS_SAVED_KEY: &str = "total_tokens_saved";
 
@@ -738,7 +759,10 @@ impl SessionService {
             workspace_root,
             store.clone(),
         );
-        Agent::new(client, tools, store, session, config).map_err(|e| e.to_string())
+        let mut agent =
+            Agent::new(client, tools, store, session, config).map_err(|e| e.to_string())?;
+        agent.set_rules(stream_rules(workspace_root));
+        Ok(agent)
     }
 
     /// Build an agent bound to an *existing* session, loading its transcript —

@@ -198,7 +198,7 @@ impl Agent {
             let (prefix_diff, tools_changed) = self.classify_prefix(&outbound, tools_hash);
             let outbound_len = outbound.len();
 
-            let (assembled, mut outcome) = self
+            let (assembled, mut outcome, rule_hits) = self
                 .stream_reply(
                     outbound,
                     &tool_defs,
@@ -207,6 +207,7 @@ impl Agent {
                     &mut on_event,
                 )
                 .await?;
+            self.rule_history.next_round();
 
             if cancel.is_cancelled() {
                 return self.finish_cancelled(
@@ -215,6 +216,16 @@ impl Agent {
                     prompt_tokens,
                     outcome,
                 );
+            }
+
+            // A stream rule matched. An interrupting one abandons what was
+            // written — the point is to correct *before* the output lands — so
+            // the partial reply is dropped and the round re-runs carrying the
+            // reminder. The spend is still counted: the provider generated
+            // those tokens whether or not we keep them.
+            if self.apply_rule_hits(rule_hits, &mut turn) {
+                self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens, outcome);
+                continue;
             }
 
             outcome = self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens, outcome);
@@ -279,6 +290,29 @@ impl Agent {
                 return Ok(message);
             }
         }
+    }
+
+    /// Fold matched stream rules into the turn: arm their reminder for the
+    /// next request, and report whether the reply just streamed must be
+    /// discarded and re-run.
+    ///
+    /// Rules the history has already spent are dropped here rather than at
+    /// match time, so the watcher stays free of session state.
+    fn apply_rule_hits(&mut self, hits: Vec<crate::rules::RuleHit>, turn: &mut TurnState) -> bool {
+        if hits.is_empty() {
+            return false;
+        }
+        let admitted = self.rule_history.admit(hits, &self.rules);
+        if admitted.is_empty() {
+            return false;
+        }
+        let reminder = admitted
+            .iter()
+            .map(|hit| hit.reminder())
+            .collect::<Vec<_>>()
+            .join("\n");
+        turn.nudge = Some(ChatMessage::user(reminder));
+        admitted.iter().any(|hit| hit.interrupt)
     }
 
     /// Emit the per-request compression event when a pass actually saved
@@ -543,6 +577,104 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+
+    /// A rule that fires on `.unwrap()` anywhere in the reply.
+    fn no_unwrap_rule(interrupt: bool) -> crate::rules::RuleSet {
+        crate::rules::RuleSet::new(vec![crate::rules::Rule {
+            name: "no-unwrap".into(),
+            pattern: regex::Regex::new(r"\.unwrap\(\)").unwrap(),
+            scopes: vec![crate::rules::Scope::Text],
+            message: "This project forbids `.unwrap()` — return a Result.".into(),
+            interrupt,
+            repeat: crate::rules::Repeat::Once,
+        }])
+    }
+
+    #[tokio::test]
+    async fn an_interrupting_rule_discards_the_reply_and_corrects_the_model() {
+        let mut server = mockito::Server::new_async().await;
+        // First call writes the forbidden thing; the retry (carrying the
+        // reminder) answers properly.
+        let offending = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("here you go: let x = thing.unwrap();"))
+            .expect(1)
+            .create_async()
+            .await;
+        let corrected = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("system-reminder".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("let x = thing?;"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store,
+            session,
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        agent.set_rules(no_unwrap_rule(true));
+
+        let out = agent.run_turn("write it", |_| {}).await.unwrap();
+
+        assert_eq!(out, "let x = thing?;");
+        // The offending reply never reached the transcript — that is the whole
+        // point of interrupting rather than reminding afterwards.
+        let text: String = agent
+            .messages()
+            .iter()
+            .filter_map(|m| m.content_text())
+            .collect();
+        assert!(!text.contains("unwrap()"), "the bad reply was kept: {text}");
+        offending.assert_async().await;
+        corrected.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_rule_that_never_matches_costs_nothing() {
+        let mut server = mockito::Server::new_async().await;
+        let once = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("all good here"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store,
+            session,
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        agent.set_rules(no_unwrap_rule(true));
+
+        assert_eq!(agent.run_turn("hi", |_| {}).await.unwrap(), "all good here");
+        once.assert_async().await;
+    }
 
     #[tokio::test]
     async fn run_turn_stops_immediately_when_cancelled() {

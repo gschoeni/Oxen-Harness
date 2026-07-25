@@ -833,6 +833,7 @@ dependencies = [
  "harness-store",
  "harness-tools",
  "mockito",
+ "regex",
  "schemars",
  "serde",
  "serde_json",

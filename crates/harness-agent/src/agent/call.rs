@@ -39,7 +39,7 @@ impl Agent {
         nudge: Option<&ChatMessage>,
         cancel: &CancellationToken,
         on_event: &mut F,
-    ) -> Result<(AssembledMessage, CallOutcome), AgentError>
+    ) -> Result<(AssembledMessage, CallOutcome, Vec<crate::rules::RuleHit>), AgentError>
     where
         F: FnMut(&AgentEvent),
     {
@@ -62,22 +62,36 @@ impl Agent {
         // How far down `retry.fallback_models` this call has walked.
         let mut fallbacks = retry.fallback_models.iter();
         loop {
+            // A rule that matches abandons the response through this token, a
+            // child of the turn's — so a rule interrupt and a user stop both
+            // end the stream, and the turn's own cancellation still reaches it.
+            let rule_stop = cancel.child_token();
+            let mut watcher = self.rules.watcher();
             let result = self
                 .client
-                .stream_chat(&request, cancel, |event| match event {
-                    StreamEvent::Token(t) => on_event(&AgentEvent::Token(t.clone())),
+                .stream_chat(&request, &rule_stop, |event| match event {
+                    StreamEvent::Token(t) => {
+                        if watcher.observe(crate::rules::Scope::Text, t) {
+                            rule_stop.cancel();
+                        }
+                        on_event(&AgentEvent::Token(t.clone()));
+                    }
                     StreamEvent::ToolCallStart { name } => {
                         on_event(&AgentEvent::ToolPending { name: name.clone() })
                     }
                     StreamEvent::ToolCallDelta { name, arguments } => {
+                        if watcher.observe(crate::rules::Scope::ToolArguments, arguments) {
+                            rule_stop.cancel();
+                        }
                         on_event(&AgentEvent::ToolDelta {
                             name: name.clone(),
                             delta: arguments.clone(),
-                        })
+                        });
                     }
                     StreamEvent::Done { .. } => {}
                 })
                 .await;
+            let hits = watcher.hits();
 
             match result {
                 Ok(assembled) => {
@@ -86,7 +100,7 @@ impl Agent {
                         retries: attempt - 1,
                         ..CallOutcome::default()
                     };
-                    return Ok((assembled, outcome));
+                    return Ok((assembled, outcome, hits));
                 }
                 // Retries on this model are spent but another model is
                 // configured: a provider having a bad minute shouldn't end the
@@ -153,7 +167,11 @@ impl Agent {
                     tokio::select! {
                         biased;
                         _ = cancel.cancelled() => {
-                            return Ok((AssembledMessage::default(), CallOutcome::default()))
+                            return Ok((
+                                AssembledMessage::default(),
+                                CallOutcome::default(),
+                                Vec::new(),
+                            ))
                         }
                         _ = tokio::time::sleep(delay) => {}
                     }

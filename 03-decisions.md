@@ -755,3 +755,15 @@ TS types for what is, in the end, a retry with a different endpoint. The
 payload gained an optional `switching_to` instead: serde-optional keeps the
 wire backwards compatible, and both hosts render "N attempts spent, continuing
 on X" rather than "attempt 5 of 4", which would read as a bug.
+
+**Stream rules reuse the nudge channel rather than inventing one** (2026-07-24)
+The harness already had three hard-coded correctives that arm a one-shot,
+never-persisted message for the next request. User-defined stream rules are the
+same shape with a different trigger, so they go through the same `TurnState`
+slot instead of a parallel mechanism — which means one place decides how a
+correction reaches the model, and the built-in nudges and user rules can't
+drift apart. An interrupting rule additionally cancels the in-flight stream
+through a child of the turn's token, so a rule abort and a user stop end the
+same way, and the turn's own cancellation still reaches the request. The
+partial reply is dropped but its tokens are still counted: the provider
+generated them whether or not we keep them.

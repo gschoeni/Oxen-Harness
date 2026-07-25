@@ -187,6 +187,13 @@ pub fn skills_file() -> Result<PathBuf, ConfigError> {
     under("skills.json")
 }
 
+/// Stream rules that follow the user between projects (see
+/// `harness_runtime::rules`); a repository's own live beside it, in its
+/// `.oxen-harness/` directory.
+pub fn rules_file() -> Result<PathBuf, ConfigError> {
+    under("rules.json")
+}
+
 /// `~/.oxen-harness/skills/` — global skills (one directory per skill, each
 /// holding a `SKILL.md`), available in every project.
 pub fn skills_dir() -> Result<PathBuf, ConfigError> {

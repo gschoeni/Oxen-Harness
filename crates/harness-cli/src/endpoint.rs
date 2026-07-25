@@ -301,6 +301,32 @@ pub(crate) fn agent_config(
     }
 }
 
+/// Compile the workspace's stream rules, skipping (and reporting) any whose
+/// pattern doesn't compile — one bad regex in a shared repository file must
+/// not stop a session from starting.
+pub(crate) fn stream_rules(workspace_root: &std::path::Path) -> harness_agent::rules::RuleSet {
+    let rules = harness_runtime::rules::load(workspace_root)
+        .into_iter()
+        .filter_map(|spec| {
+            match harness_agent::rules::Rule::compile(
+                &spec.name,
+                &spec.pattern,
+                &spec.scope,
+                &spec.message,
+                spec.interrupt,
+                spec.repeat.as_deref(),
+            ) {
+                Ok(rule) => Some(rule),
+                Err(e) => {
+                    eprintln!("  skipping stream rule {:?}: {e}", spec.name);
+                    None
+                }
+            }
+        })
+        .collect();
+    harness_agent::rules::RuleSet::new(rules)
+}
+
 /// Open the SQLite history store at its standard `~/.oxen-harness` location.
 pub(crate) fn open_store() -> Result<HistoryStore> {
     let path = harness_config::paths::history_db()
