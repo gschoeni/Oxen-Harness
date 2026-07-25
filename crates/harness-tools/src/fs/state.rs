@@ -199,6 +199,17 @@ impl FileState {
         }
     }
 
+    /// The line ranges recorded for `path`, if any.
+    pub fn seen_ranges(&self, path: &Path) -> Vec<(usize, usize)> {
+        let key = canonical(path);
+        let snapshots = self.snapshots.lock().expect("snapshot lock");
+        snapshots
+            .iter()
+            .find(|(p, _)| p == &key)
+            .map(|(_, snapshot)| snapshot.seen.clone())
+            .unwrap_or_default()
+    }
+
     /// Is `current` still what the model was shown for `path`?
     pub fn verify(&self, path: &Path, current: &str) -> Freshness {
         let key = canonical(path);
@@ -224,10 +235,10 @@ impl FileState {
         let key = canonical(path);
         let snapshots = self.snapshots.lock().expect("snapshot lock");
         let (_, snapshot) = snapshots.iter().find(|(p, _)| p == &key)?;
-        // A file with no recorded window (an ungated tool, or a write) is
-        // fully seen by construction.
+        // No recorded window means the read displayed nothing (an offset past
+        // the end of the file), so every line is unseen.
         if snapshot.seen.is_empty() {
-            return None;
+            return Some((first, last));
         }
         // Shown ranges are disjoint and never adjacent (a gap between two of
         // them is exactly what was elided), so a span is fully seen only if
@@ -303,6 +314,80 @@ impl FileState {
         }
         out
     }
+}
+
+/// One applied replacement, in the coordinates the edit was matched in:
+/// the original lines it covered, and how many lines replaced them.
+#[derive(Debug, Clone, Copy)]
+pub struct AppliedEdit {
+    pub first_line: usize,
+    pub last_line: usize,
+    pub new_lines: usize,
+}
+
+/// Move recorded seen-ranges from a file's pre-edit coordinates to its
+/// post-edit ones.
+///
+/// Without this, an edit had to either drop what the model had seen (forcing a
+/// re-read before every follow-up edit) or claim the whole file as seen (which
+/// would silently hand back the licence that windowed and outlined reads exist
+/// to withhold). Ranges before an edit keep their numbers, ranges after shift
+/// by the accumulated delta, and a range that spanned an edit stretches to
+/// cover the replacement — the model wrote that text, so it has seen it.
+pub fn remap_seen(seen: &[(usize, usize)], edits: &[AppliedEdit]) -> Vec<(usize, usize)> {
+    let mut sorted: Vec<AppliedEdit> = edits.to_vec();
+    sorted.sort_by_key(|e| e.first_line);
+
+    // Lines added (or removed) by every edit that ends before `line`.
+    let delta_before = |line: usize| -> isize {
+        sorted
+            .iter()
+            .filter(|e| e.last_line < line)
+            .map(|e| e.new_lines as isize - (e.last_line - e.first_line + 1) as isize)
+            .sum()
+    };
+    // …and by every edit that has started by `line`, for the far end of a
+    // range the edit landed inside.
+    let delta_through = |line: usize| -> isize {
+        sorted
+            .iter()
+            .filter(|e| e.first_line <= line)
+            .map(|e| e.new_lines as isize - (e.last_line - e.first_line + 1) as isize)
+            .sum()
+    };
+
+    let shift = |line: usize, delta: isize| -> usize { (line as isize + delta).max(1) as usize };
+
+    let mut out: Vec<(usize, usize)> = seen
+        .iter()
+        .map(|&(start, end)| {
+            (
+                shift(start, delta_before(start)),
+                shift(end, delta_through(end)),
+            )
+        })
+        .filter(|(start, end)| start <= end)
+        .collect();
+
+    // The replacement text is seen too — the model wrote it. Without this, an
+    // edit that spans the gap between two seen ranges leaves its own new lines
+    // marked unseen, and a follow-up edit there is refused.
+    out.extend(sorted.iter().map(|edit| {
+        let start = shift(edit.first_line, delta_before(edit.first_line));
+        (start, start + edit.new_lines.saturating_sub(1))
+    }));
+
+    // Overlaps are possible once ranges stretch; merging keeps the invariant
+    // `unseen_around` relies on (disjoint, sorted, non-adjacent).
+    out.sort();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(out.len());
+    for (start, end) in out {
+        match merged.last_mut() {
+            Some((_, prev_end)) if start <= *prev_end + 1 => *prev_end = (*prev_end).max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
 }
 
 /// Content fingerprint. Change detection only — never persisted, never
@@ -421,6 +506,56 @@ mod tests {
         assert!(!waiter.is_finished());
         drop(held);
         assert_eq!(waiter.await.unwrap(), "second");
+    }
+
+    #[test]
+    fn seen_ranges_move_with_the_edits_applied_to_them() {
+        // The model read lines 1-10 and 30-40 of a 40-line file, then replaced
+        // line 5 (one line) with three.
+        let seen = [(1, 10), (30, 40)];
+        let edits = [AppliedEdit {
+            first_line: 5,
+            last_line: 5,
+            new_lines: 3,
+        }];
+
+        let moved = remap_seen(&seen, &edits);
+
+        // The first range stretches over the replacement the model wrote…
+        assert_eq!(moved[0], (1, 12));
+        // …and the later range shifts by the two lines gained above it.
+        assert_eq!(moved[1], (32, 42));
+    }
+
+    #[test]
+    fn an_edit_below_a_seen_range_leaves_it_alone() {
+        let moved = remap_seen(
+            &[(1, 10)],
+            &[AppliedEdit {
+                first_line: 30,
+                last_line: 32,
+                new_lines: 1,
+            }],
+        );
+        // The earlier range keeps its numbers, and the one line the edit wrote
+        // is seen as well — it came from the model.
+        assert_eq!(moved, vec![(1, 10), (30, 30)]);
+    }
+
+    #[test]
+    fn ranges_that_collide_after_moving_are_merged() {
+        // Deleting the gap between two seen ranges brings them together; they
+        // must come back as one, since `unseen_around` assumes disjoint,
+        // non-adjacent ranges.
+        let moved = remap_seen(
+            &[(1, 10), (20, 30)],
+            &[AppliedEdit {
+                first_line: 11,
+                last_line: 19,
+                new_lines: 1,
+            }],
+        );
+        assert_eq!(moved, vec![(1, 22)]);
     }
 
     #[test]

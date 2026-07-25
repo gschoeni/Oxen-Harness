@@ -121,8 +121,12 @@ impl TypedTool for ReadFileTool {
         // Fingerprint the whole file, not the window: the point is to notice
         // that the file moved under the model before it edits, whichever part
         // of it was displayed.
-        self.state
-            .record_parts(&path, stats.hash, stats.lines, vec![stats.shown]);
+        self.state.record_parts(
+            &path,
+            stats.hash,
+            stats.lines,
+            stats.shown.into_iter().collect(),
+        );
         Ok(rendered + &rules)
     }
 }
@@ -145,8 +149,9 @@ async fn try_outline(path: &Path) -> Option<(outline::Outline, u64)> {
 struct ReadStats {
     hash: u64,
     lines: usize,
-    /// 1-based inclusive range displayed.
-    shown: (usize, usize),
+    /// 1-based inclusive range displayed; `None` when the read rendered no
+    /// lines at all (an offset past the end of the file).
+    shown: Option<(usize, usize)>,
 }
 
 async fn read_numbered(
@@ -169,6 +174,8 @@ async fn read_numbered(
     let mut output_truncated = false;
     let mut last_was_newline = false;
     let mut hasher = state::StreamingFingerprint::default();
+    // The last line actually written into `out`, which is what the model sees.
+    let mut last_shown: Option<usize> = None;
 
     loop {
         let n = file
@@ -191,6 +198,7 @@ async fn read_numbered(
                     &line,
                     truncated_line,
                     &mut output_truncated,
+                    &mut last_shown,
                 );
                 line.clear();
                 truncated_line = false;
@@ -212,6 +220,7 @@ async fn read_numbered(
             &line,
             truncated_line,
             &mut output_truncated,
+            &mut last_shown,
         );
         total += 1;
     }
@@ -219,7 +228,11 @@ async fn read_numbered(
     let stats = ReadStats {
         hash: hasher.finish(),
         lines: total,
-        shown: (offset.min(total.max(1)), shown_end.max(offset)),
+        // What was *rendered*, not what was requested: a read past the end of
+        // the file, or one cut short by the character cap, displays fewer
+        // lines than the window asked for, and claiming otherwise would let an
+        // edit land on content the model never saw.
+        shown: last_shown.map(|last| (offset, last)),
     };
     if !saw_bytes {
         return Ok(("(file is empty)".to_string(), stats));
@@ -246,6 +259,7 @@ async fn read_numbered(
     Ok((out, stats))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_numbered_line(
     out: &mut String,
     line_no: usize,
@@ -254,6 +268,7 @@ fn append_numbered_line(
     bytes: &[u8],
     truncated_line: bool,
     output_truncated: &mut bool,
+    last_shown: &mut Option<usize>,
 ) {
     if line_no < offset || line_no >= offset.saturating_add(limit) || *output_truncated {
         return;
@@ -268,6 +283,7 @@ fn append_numbered_line(
         *output_truncated = true;
     } else {
         out.push_str(&rendered);
+        *last_shown = Some(line_no);
     }
 }
 
@@ -459,8 +475,16 @@ impl TypedTool for EditFileTool {
             .await
             .map_err(|e| ToolError::Execution(format!("write {}: {e}", path.display())))?;
         // Re-anchor on what's now on disk, so a follow-up edit this turn is
-        // measured against the model's own change rather than the stale read.
-        self.state.record(&path, &updated);
+        // measured against the model's own change rather than the stale read —
+        // carrying the seen-ranges across into the new line numbering, rather
+        // than granting sight of the whole file.
+        let seen = state::remap_seen(&self.state.seen_ranges(&path), &outcome.applied);
+        self.state.record_parts(
+            &path,
+            state::fingerprint(updated.as_bytes()),
+            updated.lines().count(),
+            seen,
+        );
         let mut result = format!("edited {} ({})", path.display(), outcome.summary);
         // A patch that drops a brace is the most common way an edit goes
         // wrong, and nothing else notices until a build runs.
@@ -513,6 +537,9 @@ struct EditOutcome {
     /// 1-based inclusive line ranges of the original that each hunk covered,
     /// for checking them against what the model was actually shown.
     touched_lines: Vec<(usize, usize)>,
+    /// The same hunks with their replacement sizes, for moving the recorded
+    /// seen-ranges into the edited file's coordinates.
+    applied: Vec<state::AppliedEdit>,
 }
 
 /// The 1-based line range a byte span covers in `text`.
@@ -590,9 +617,20 @@ fn apply_edits(original: &str, edits: &[Replacement]) -> Result<EditOutcome, Too
         }
     }
 
-    let touched_lines = spans
+    let touched_lines: Vec<(usize, usize)> = spans
         .iter()
         .map(|&(start, end, ..)| line_span(original, start, end))
+        .collect();
+    let applied: Vec<state::AppliedEdit> = spans
+        .iter()
+        .zip(&touched_lines)
+        .map(
+            |(&(.., replacement, _), &(first_line, last_line))| state::AppliedEdit {
+                first_line,
+                last_line,
+                new_lines: replacement.lines().count().max(1),
+            },
+        )
         .collect();
 
     // Back to front, so earlier offsets stay valid as later ones are spliced.
@@ -615,6 +653,7 @@ fn apply_edits(original: &str, edits: &[Replacement]) -> Result<EditOutcome, Too
         text,
         summary,
         touched_lines,
+        applied,
     })
 }
 
@@ -1131,6 +1170,58 @@ mod tests {
         .await
         .unwrap();
         assert!(read_raw(&ws, "config.rs").await.contains("step_100 = 999"));
+    }
+
+    #[tokio::test]
+    async fn a_read_that_displayed_nothing_grants_no_licence_to_edit() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.rs", "let a = 1;\nlet b = 2;\n").await;
+        let (read, _write, edit, _state) = gated_tools(&ws);
+
+        // A read past the end renders no lines — it must not count as having
+        // seen the file, or the window arithmetic would hand the model a
+        // licence to edit content it never received.
+        let out = read
+            .invoke(serde_json::json!({"path": "f.rs", "offset": 50}))
+            .await
+            .unwrap();
+        assert!(out.contains("past the end"), "{out}");
+
+        let err = edit
+            .invoke(serde_json::json!({
+                "path": "f.rs", "old_string": "let a = 1;", "new_string": "let a = 9;"
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        assert_eq!(read_raw(&ws, "f.rs").await, "let a = 1;\nlet b = 2;\n");
+    }
+
+    #[tokio::test]
+    async fn a_windowed_read_licenses_only_the_lines_it_showed() {
+        let (_dir, ws) = workspace();
+        let body: String = (1..=40).map(|i| format!("let v{i} = {i};\n")).collect();
+        write(&ws, "f.rs", &body).await;
+        let (read, _write, edit, _state) = gated_tools(&ws);
+
+        read.invoke(serde_json::json!({"path": "f.rs", "offset": 1, "limit": 10}))
+            .await
+            .unwrap();
+
+        // Inside the window: fine.
+        edit.invoke(serde_json::json!({
+            "path": "f.rs", "old_string": "let v3 = 3;", "new_string": "let v3 = 33;"
+        }))
+        .await
+        .unwrap();
+        // Outside it: the model is guessing.
+        let err = edit
+            .invoke(serde_json::json!({
+                "path": "f.rs", "old_string": "let v30 = 30;", "new_string": "let v30 = 99;"
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments(_)));
     }
 
     #[tokio::test]
