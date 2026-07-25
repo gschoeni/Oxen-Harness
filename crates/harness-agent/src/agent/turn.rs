@@ -7,6 +7,7 @@
 //! (compacting when it would overflow), retries transient model failures with
 //! backoff, and emits [`AgentEvent`]s so a host can render progress live.
 
+use harness_llm::stream::AssembledMessage;
 use harness_llm::types::ChatMessage;
 use harness_llm::Attachment;
 
@@ -16,6 +17,35 @@ use crate::{budget, cache, prompt};
 
 use super::call::error_kind;
 use super::{build_user_message, Agent};
+
+/// Consecutive degenerate rounds tolerated before a turn gives up on getting
+/// a non-empty reply.
+const MAX_EMPTY_RESAMPLES: u32 = 2;
+
+/// The bookkeeping one turn carries across its rounds.
+///
+/// All of it is per-turn by design: a corrective that fired in an earlier turn
+/// must not suppress itself now, and an older incomplete plan must not hijack
+/// an unrelated follow-up question.
+#[derive(Default)]
+struct TurnState {
+    /// A one-shot corrective appended to the *next* request only. Never
+    /// persisted, so it stays out of the stored transcript and the chat.
+    nudge: Option<ChatMessage>,
+    /// Whether the "announced an action but didn't call a tool" corrective has
+    /// already fired this turn.
+    intent_nudged: bool,
+    /// Whether the "your plan still has open items" corrective has fired.
+    plan_nudged: bool,
+    /// Whether a plan updated *this turn* still has unfinished items.
+    plan_open: bool,
+    /// Consecutive rounds that produced neither prose nor a tool call.
+    empty_rounds: u32,
+    /// Identical (tool, arguments, result) repeats — one nudge, then stop.
+    loop_guard: crate::loopguard::LoopGuard,
+    /// The soft spend warning is logged once per turn, not per round.
+    budget_warned: bool,
+}
 
 impl Agent {
     /// Run one user turn to completion, returning the assistant's final text.
@@ -115,40 +145,11 @@ impl Agent {
         let window = self.context_window();
         let budget = budget::prompt_budget(window, self.config.effective_response_reserve());
 
-        // A one-shot corrective for the "announce a plan, then stop" failure: if
-        // the model returns a text-only reply that reads as intent-to-act, we
-        // append this nudge to the *next* request only and let the loop run once
-        // more. It's never persisted, so it stays out of both the stored
-        // transcript and the visible chat. Capped at one nudge per turn.
-        let mut nudge: Option<ChatMessage> = None;
-        let mut nudged = false;
-
-        // A second one-shot corrective, for the "one subtask failed, so the whole
-        // checklist silently stalls" failure: if the model updates its plan this
-        // turn and then ends the turn with items still unfinished (typically after
-        // a tool error), nudge it once to keep working or reconcile the plan.
-        // Tracks only plans updated *this* turn — an older incomplete plan must not
-        // hijack an unrelated follow-up question. Never persisted.
-        let mut plan_nudged = false;
-        let mut plan_open_this_turn = false;
+        let mut turn = TurnState::default();
 
         // The stop signal for this turn (a clone, so cancelling it from the host
         // doesn't require the agent lock the turn is holding).
         let cancel = self.cancel.clone();
-
-        // Consecutive degenerate rounds: a reply with no prose and no tool
-        // calls (a provider anomaly — the stream completed but carried
-        // nothing). Re-sampled a bounded number of times before giving up, so
-        // one bad generation doesn't silently end the turn with an empty
-        // answer, and a provider stuck returning nothing can't loop forever.
-        const MAX_EMPTY_RESAMPLES: u32 = 2;
-        let mut empty_rounds: u32 = 0;
-
-        // Unproductive-loop tracking: identical (tool, arguments, result)
-        // repeats get one nudge, then end the turn (see [`crate::loopguard`]).
-        let mut loop_guard = crate::loopguard::LoopGuard::default();
-        // The soft budget warning is logged once per turn, not per round.
-        let mut budget_warned = false;
 
         // No fixed iteration cap: the loop runs until the model returns a final
         // answer, bounded only by how much fits in the context window.
@@ -170,43 +171,11 @@ impl Agent {
                 .await?;
             let prompt_tokens = self.calibrated(raw_prompt_tokens);
 
-            // Session budget: refuse a call whose prompt alone would push the
-            // session past its ceiling — stop gracefully with state preserved
-            // rather than silently running past the cap.
-            if let Some(session_budget) = self.config.budget {
-                if self.tokens_used + prompt_tokens > session_budget.max_session_tokens {
-                    let message = format!(
-                        "Session token budget reached (~{} used of {} allowed; the next \
-                         call needs ~{prompt_tokens} more). Stopping here so spending \
-                         stays inside the cap. All work so far is saved — raise the \
-                         budget or start a new session to continue.",
-                        self.tokens_used, session_budget.max_session_tokens
-                    );
-                    crate::errlog::record(
-                        self.config.error_log.as_deref(),
-                        "budget_exhausted",
-                        serde_json::json!({
-                            "session": self.session_id(),
-                            "model": self.config.model,
-                            "tokens_used": self.tokens_used,
-                            "max_session_tokens": session_budget.max_session_tokens,
-                        }),
-                    );
-                    self.push(ChatMessage::assistant(message.clone()))?;
-                    return Ok(message);
-                }
-                if !budget_warned && self.tokens_used >= session_budget.warn_threshold() {
-                    budget_warned = true;
-                    crate::errlog::record(
-                        self.config.error_log.as_deref(),
-                        "budget_warning",
-                        serde_json::json!({
-                            "session": self.session_id(),
-                            "tokens_used": self.tokens_used,
-                            "max_session_tokens": session_budget.max_session_tokens,
-                        }),
-                    );
-                }
+            // Stop gracefully at the session's spend ceiling rather than
+            // silently running past it.
+            if let Some(message) = self.session_budget_stop(prompt_tokens, &mut turn) {
+                self.push(ChatMessage::assistant(message.clone()))?;
+                return Ok(message);
             }
 
             // Reflect this call's prompt cost the moment it's sent (the transcript
@@ -224,58 +193,28 @@ impl Agent {
             // mode, just measure what compression would save). The in-memory
             // transcript and the store keep the originals either way.
             let (outbound, report) = self.prepare_outbound();
-            if report.saved_chars > 0 {
-                let saved_tokens =
-                    self.calibrated(budget::estimate_tokens_for_chars(report.saved_chars));
-                self.tokens_saved += saved_tokens;
-                on_event(&AgentEvent::Compression {
-                    mode: self.config.compression.as_str().to_string(),
-                    saved_tokens,
-                    total_saved_tokens: self.tokens_saved,
-                    results_compressed: report.results_compressed,
-                });
-            }
+            self.report_compression(&report, &mut on_event);
 
-            // Fingerprint what's about to be sent and classify it against the
-            // previous request, so a cache miss is attributable (append-only
-            // requests are the shape a provider prefix cache rewards). Only
-            // when the request log will actually record it.
-            let (prefix_diff, tools_changed) = match tools_hash {
-                Some(tools_hash) => {
-                    let request_hashes = cache::fingerprints(&outbound);
-                    let prefix_diff =
-                        cache::diff_prefix(&self.prev_request_hashes, &request_hashes);
-                    let tools_changed = self.prev_tools_hash.is_some_and(|prev| prev != tools_hash);
-                    self.prev_request_hashes = request_hashes;
-                    self.prev_tools_hash = Some(tools_hash);
-                    (prefix_diff, tools_changed)
-                }
-                None => (cache::PrefixDiff::First, false),
-            };
+            let (prefix_diff, tools_changed) = self.classify_prefix(&outbound, tools_hash);
             let outbound_len = outbound.len();
 
             let (assembled, mut outcome) = self
-                .stream_reply(outbound, &tool_defs, nudge.as_ref(), &cancel, &mut on_event)
+                .stream_reply(
+                    outbound,
+                    &tool_defs,
+                    turn.nudge.as_ref(),
+                    &cancel,
+                    &mut on_event,
+                )
                 .await?;
 
-            // A stop mid-stream returns whatever assembled so far. Persist only
-            // the partial prose (a half-formed tool call would be malformed and
-            // must not be replayed), keep it out of the token tally, and end the
-            // turn cleanly so the UI settles to a normal reply rather than error.
             if cancel.is_cancelled() {
-                if !assembled.content.is_empty() {
-                    self.push(ChatMessage::assistant(assembled.content.clone()))?;
-                }
-                // The provider has already processed the prompt and generated
-                // this partial reply. Count that spend even though the user
-                // stopped before a final usage chunk arrived.
-                if assembled.usage.is_some()
-                    || !assembled.content.is_empty()
-                    || !assembled.tool_calls.is_empty()
-                {
-                    self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens, outcome);
-                }
-                return Ok(assembled.content);
+                return self.finish_cancelled(
+                    &assembled,
+                    raw_prompt_tokens,
+                    prompt_tokens,
+                    outcome,
+                );
             }
 
             outcome = self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens, outcome);
@@ -291,23 +230,8 @@ impl Agent {
             // A round that produced neither prose nor a tool call is
             // re-sampled (nothing is persisted, so re-asking is safe); past
             // the bound it falls through and ends the turn empty as before.
-            if assembled.content.is_empty() && assembled.tool_calls.is_empty() {
-                if empty_rounds < MAX_EMPTY_RESAMPLES {
-                    empty_rounds += 1;
-                    crate::errlog::record(
-                        self.config.error_log.as_deref(),
-                        "empty_reply_resampled",
-                        serde_json::json!({
-                            "session": self.session_id(),
-                            "model": self.config.model,
-                            "attempt": empty_rounds,
-                            "max_attempts": MAX_EMPTY_RESAMPLES,
-                        }),
-                    );
-                    continue;
-                }
-            } else {
-                empty_rounds = 0;
+            if self.resample_empty_round(&assembled, &mut turn) {
+                continue;
             }
 
             self.push(ChatMessage::assistant_with_tools(
@@ -332,97 +256,262 @@ impl Agent {
                 if self.drain_interjections()? {
                     continue;
                 }
-                // The model replied with prose and no tool call. If it reads as
-                // an announced-but-unperformed action, nudge it once to actually
-                // emit the call; otherwise this is its final answer.
-                if !nudged && prompt::looks_like_unfulfilled_intent(&assembled.content) {
-                    nudged = true;
-                    nudge = Some(ChatMessage::user(prompt::INTENT_NUDGE.to_string()));
-                    continue;
+                // Otherwise: a corrective, or the final answer.
+                match self.nudge_before_ending(&assembled.content, &mut turn) {
+                    true => continue,
+                    false => return Ok(assembled.content),
                 }
-                // Ending the turn while this turn's own plan has unfinished items
-                // is almost always a stall (a failed step made the model give up);
-                // give it one chance to continue or tidy the checklist.
-                if !plan_nudged && plan_open_this_turn {
-                    plan_nudged = true;
-                    nudge = Some(ChatMessage::user(prompt::PLAN_STALL_NUDGE.to_string()));
-                    continue;
-                }
-                return Ok(assembled.content);
             }
 
             // A tool call landed; the corrective (if any) served its purpose.
-            nudge = None;
-
-            // Set when identical repeats hit the stop line — the turn ends
-            // after this round's results are recorded.
-            let mut loop_stop: Option<(String, u32)> = None;
-
-            // A reply cut off at the response token limit leaves its trailing
-            // tool call's JSON unfinished (e.g. a large `write_file`).
-            let reply_truncated = matches!(
-                assembled.finish_reason.as_deref(),
-                Some("length" | "max_tokens")
-            );
-
-            for call in &assembled.tool_calls {
-                let result = self.run_tool(call, reply_truncated, &mut on_event).await;
-                match loop_guard.observe(&call.function.name, &call.function.arguments, &result) {
-                    crate::loopguard::LoopVerdict::Fine => {}
-                    crate::loopguard::LoopVerdict::Nudge => {
-                        nudge = Some(ChatMessage::user(prompt::LOOP_NUDGE.to_string()));
-                    }
-                    crate::loopguard::LoopVerdict::Stop { name, repeats } => {
-                        loop_stop = Some((name, repeats));
-                    }
-                }
-                // Track the latest plan state from successful `update_plan` calls
-                // (invalid arguments were rejected, so they changed nothing).
-                if call.function.name == harness_tools::PLAN_TOOL {
-                    if let Some(items) =
-                        harness_tools::parse_plan_arguments(&call.function.arguments)
-                    {
-                        plan_open_this_turn = harness_tools::plan_is_open(&items);
-                    }
-                }
-                // A tool that produced an image (e.g. the preview screenshot)
-                // marks it in-band; the `tool` role is text-only, so the image
-                // rides in as a user message right after the result.
-                match harness_core::attach::extract_image_markers(&result, "(image attached below)")
-                {
-                    Some((cleaned, paths)) => {
-                        self.push(ChatMessage::tool_result(call.id.clone(), cleaned))?;
-                        self.push_tool_images(&paths)?;
-                    }
-                    None => self.push(ChatMessage::tool_result(call.id.clone(), result))?,
-                }
-            }
+            turn.nudge = None;
+            let loop_stop = self
+                .run_tool_calls(&assembled, &mut turn, &mut on_event)
+                .await?;
 
             // An unproductive loop hit the stop line: every round was
             // re-billing the whole context for an identical result, and the
-            // nudge didn't break the cycle. End the turn with the state
-            // preserved rather than letting it spin.
+            // nudge didn't break the cycle. End with the state preserved
+            // rather than letting it spin.
             if let Some((name, repeats)) = loop_stop {
-                let message = format!(
-                    "Stopping this turn: the `{name}` tool was called with identical \
-                     arguments and returned an identical result {repeats} times in a row, \
-                     so continuing would spend tokens without making progress. Tell me how \
-                     you'd like to proceed, or rephrase the request."
-                );
-                crate::errlog::record(
-                    self.config.error_log.as_deref(),
-                    "loop_detected",
-                    serde_json::json!({
-                        "session": self.session_id(),
-                        "model": self.config.model,
-                        "tool": name,
-                        "repeats": repeats,
-                    }),
-                );
+                let message = self.loop_stop_message(&name, repeats);
                 self.push(ChatMessage::assistant(message.clone()))?;
                 return Ok(message);
             }
         }
+    }
+
+    /// Emit the per-request compression event when a pass actually saved
+    /// something, folding the saving into the session total.
+    fn report_compression<F>(
+        &mut self,
+        report: &super::compression::CompressionReport,
+        on_event: &mut F,
+    ) where
+        F: FnMut(&AgentEvent),
+    {
+        if report.saved_chars == 0 {
+            return;
+        }
+        let saved_tokens = self.calibrated(budget::estimate_tokens_for_chars(report.saved_chars));
+        self.tokens_saved += saved_tokens;
+        on_event(&AgentEvent::Compression {
+            mode: self.config.compression.as_str().to_string(),
+            saved_tokens,
+            total_saved_tokens: self.tokens_saved,
+            results_compressed: report.results_compressed,
+        });
+    }
+
+    /// End a turn the user stopped mid-stream.
+    ///
+    /// Persists only the partial prose — a half-formed tool call would be
+    /// malformed and must never be replayed — and still counts the spend: the
+    /// provider processed the prompt and generated this much whether or not a
+    /// final usage chunk arrived. Returns the partial text so the UI settles
+    /// to an ordinary reply rather than an error.
+    fn finish_cancelled(
+        &mut self,
+        assembled: &AssembledMessage,
+        raw_prompt_tokens: usize,
+        prompt_tokens: usize,
+        outcome: super::CallOutcome,
+    ) -> Result<String, AgentError> {
+        if !assembled.content.is_empty() {
+            self.push(ChatMessage::assistant(assembled.content.clone()))?;
+        }
+        if assembled.usage.is_some()
+            || !assembled.content.is_empty()
+            || !assembled.tool_calls.is_empty()
+        {
+            self.account_for_usage(assembled, raw_prompt_tokens, prompt_tokens, outcome);
+        }
+        Ok(assembled.content.clone())
+    }
+
+    /// The reply that ends a turn spinning on an identical tool call, and the
+    /// developer-log entry that goes with it.
+    fn loop_stop_message(&self, name: &str, repeats: u32) -> String {
+        crate::errlog::record(
+            self.config.error_log.as_deref(),
+            "loop_detected",
+            serde_json::json!({
+                "session": self.session_id(),
+                "model": self.config.model,
+                "tool": name,
+                "repeats": repeats,
+            }),
+        );
+        format!(
+            "Stopping this turn: the `{name}` tool was called with identical \
+             arguments and returned an identical result {repeats} times in a row, \
+             so continuing would spend tokens without making progress. Tell me how \
+             you'd like to proceed, or rephrase the request."
+        )
+    }
+
+    /// Whether the session's spend ceiling stops the turn here, and the
+    /// message to end on. Also logs the soft warning, once per turn.
+    fn session_budget_stop(&self, prompt_tokens: usize, turn: &mut TurnState) -> Option<String> {
+        let budget = self.config.budget?;
+        if self.tokens_used + prompt_tokens > budget.max_session_tokens {
+            let message = format!(
+                "Session token budget reached (~{} used of {} allowed; the next \
+                 call needs ~{prompt_tokens} more). Stopping here so spending \
+                 stays inside the cap. All work so far is saved — raise the \
+                 budget or start a new session to continue.",
+                self.tokens_used, budget.max_session_tokens
+            );
+            crate::errlog::record(
+                self.config.error_log.as_deref(),
+                "budget_exhausted",
+                serde_json::json!({
+                    "session": self.session_id(),
+                    "model": self.config.model,
+                    "tokens_used": self.tokens_used,
+                    "max_session_tokens": budget.max_session_tokens,
+                }),
+            );
+            return Some(message);
+        }
+        if !turn.budget_warned && self.tokens_used >= budget.warn_threshold() {
+            turn.budget_warned = true;
+            crate::errlog::record(
+                self.config.error_log.as_deref(),
+                "budget_warning",
+                serde_json::json!({
+                    "session": self.session_id(),
+                    "tokens_used": self.tokens_used,
+                    "max_session_tokens": budget.max_session_tokens,
+                }),
+            );
+        }
+        None
+    }
+
+    /// Fingerprint what's about to be sent and classify it against the previous
+    /// request, so a cache miss is attributable (append-only requests are the
+    /// shape a provider prefix cache rewards). Skipped entirely when no request
+    /// log is configured — hashing an image-bearing transcript is megabytes of
+    /// JSON per round, for a diagnostic nobody asked for.
+    fn classify_prefix(
+        &mut self,
+        outbound: &[ChatMessage],
+        tools_hash: Option<u64>,
+    ) -> (cache::PrefixDiff, bool) {
+        let Some(tools_hash) = tools_hash else {
+            return (cache::PrefixDiff::First, false);
+        };
+        let request_hashes = cache::fingerprints(outbound);
+        let prefix_diff = cache::diff_prefix(&self.prev_request_hashes, &request_hashes);
+        let tools_changed = self.prev_tools_hash.is_some_and(|prev| prev != tools_hash);
+        self.prev_request_hashes = request_hashes;
+        self.prev_tools_hash = Some(tools_hash);
+        (prefix_diff, tools_changed)
+    }
+
+    /// Whether to re-sample a round that produced neither prose nor a tool
+    /// call — a provider anomaly, since the stream completed but carried
+    /// nothing. Bounded, so a provider stuck returning nothing can't spin.
+    fn resample_empty_round(&self, assembled: &AssembledMessage, turn: &mut TurnState) -> bool {
+        if !assembled.content.is_empty() || !assembled.tool_calls.is_empty() {
+            turn.empty_rounds = 0;
+            return false;
+        }
+        if turn.empty_rounds >= MAX_EMPTY_RESAMPLES {
+            return false;
+        }
+        turn.empty_rounds += 1;
+        crate::errlog::record(
+            self.config.error_log.as_deref(),
+            "empty_reply_resampled",
+            serde_json::json!({
+                "session": self.session_id(),
+                "model": self.config.model,
+                "attempt": turn.empty_rounds,
+                "max_attempts": MAX_EMPTY_RESAMPLES,
+            }),
+        );
+        true
+    }
+
+    /// The model answered in prose with no tool call. Arm a one-shot corrective
+    /// if this looks like a turn ending prematurely, returning whether to go
+    /// around again; `false` means the reply is the final answer.
+    ///
+    /// Each corrective fires at most once per turn and is never persisted, so
+    /// it stays out of both the stored transcript and the visible chat.
+    fn nudge_before_ending(&self, reply: &str, turn: &mut TurnState) -> bool {
+        // "I'll go and do X" with no call to actually do it.
+        if !turn.intent_nudged && prompt::looks_like_unfulfilled_intent(reply) {
+            turn.intent_nudged = true;
+            turn.nudge = Some(ChatMessage::user(prompt::INTENT_NUDGE.to_string()));
+            return true;
+        }
+        // Ending while this turn's own plan has unfinished items is almost
+        // always a stall (a failed step made the model give up); one chance to
+        // continue or tidy the checklist.
+        if !turn.plan_nudged && turn.plan_open {
+            turn.plan_nudged = true;
+            turn.nudge = Some(ChatMessage::user(prompt::PLAN_STALL_NUDGE.to_string()));
+            return true;
+        }
+        false
+    }
+
+    /// Run every tool call in a reply, recording results (and any images they
+    /// produced) into the transcript. Returns the loop-guard's stop verdict
+    /// when identical calls have repeated past the line.
+    async fn run_tool_calls<F>(
+        &mut self,
+        assembled: &AssembledMessage,
+        turn: &mut TurnState,
+        on_event: &mut F,
+    ) -> Result<Option<(String, u32)>, AgentError>
+    where
+        F: FnMut(&AgentEvent),
+    {
+        // A reply cut off at the response token limit leaves its trailing tool
+        // call's JSON unfinished (e.g. a large `write_file`).
+        let reply_truncated = matches!(
+            assembled.finish_reason.as_deref(),
+            Some("length" | "max_tokens")
+        );
+        let mut loop_stop = None;
+
+        for call in &assembled.tool_calls {
+            let result = self.run_tool(call, reply_truncated, on_event).await;
+            match turn
+                .loop_guard
+                .observe(&call.function.name, &call.function.arguments, &result)
+            {
+                crate::loopguard::LoopVerdict::Fine => {}
+                crate::loopguard::LoopVerdict::Nudge => {
+                    turn.nudge = Some(ChatMessage::user(prompt::LOOP_NUDGE.to_string()));
+                }
+                crate::loopguard::LoopVerdict::Stop { name, repeats } => {
+                    loop_stop = Some((name, repeats));
+                }
+            }
+            // Track the latest plan state from successful `update_plan` calls
+            // (invalid arguments were rejected, so they changed nothing).
+            if call.function.name == harness_tools::PLAN_TOOL {
+                if let Some(items) = harness_tools::parse_plan_arguments(&call.function.arguments) {
+                    turn.plan_open = harness_tools::plan_is_open(&items);
+                }
+            }
+            // A tool that produced an image (e.g. the preview screenshot) marks
+            // it in-band; the `tool` role is text-only, so the image rides in
+            // as a user message right after the result.
+            match harness_core::attach::extract_image_markers(&result, "(image attached below)") {
+                Some((cleaned, paths)) => {
+                    self.push(ChatMessage::tool_result(call.id.clone(), cleaned))?;
+                    self.push_tool_images(&paths)?;
+                }
+                None => self.push(ChatMessage::tool_result(call.id.clone(), result))?,
+            }
+        }
+        Ok(loop_stop)
     }
 
     /// Move everything the user sent mid-turn into the transcript, each as
