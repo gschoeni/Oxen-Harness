@@ -1,10 +1,11 @@
 # Harness improvements — lessons from oh-my-pi and pi
 
-> **Status (branch `harness-parity-improvements`, paused 2026-07-24).**
-> Phase 1 complete and Phase 2.1 landed — five commits, all green
-> (`cargo fmt`, `cargo clippy --workspace --all-targets`, `cargo test
-> --workspace`). See [Progress log](#progress-log) at the bottom for what
-> shipped, what changed versus this plan, and exactly where to pick up.
+> **Status (branch `harness-parity-improvements`, 2026-07-24).** Phases 1 and 2
+> complete, plus 3.3a and 3.4 — nine of the twelve sequenced items. All green
+> (`cargo fmt`, `cargo clippy --workspace --all-targets -D warnings`, `cargo
+> test --workspace`, plus `tsc --noEmit` and `vitest` for the desktop app).
+> See [Progress log](#progress-log) at the bottom for what shipped, what
+> changed versus this plan, and what's left.
 
 Concrete, prioritized changes to oxen-harness derived from reading two other
 coding-agent harnesses:
@@ -775,6 +776,12 @@ Working tree clean; every check green at the last commit.
 | 1.3 Multi-edit | `b2d99cb` | `edits[]` in `EditFileArgs`; CRLF/BOM preservation fell out of it |
 | 1.4 Retrievable truncation | `255afc4` | Spills the complete task log to the CCR store; `retrieve_original` now always registered |
 | 2.1 Structural reads | `3c337e8` | `harness-tools/src/fs/outline.rs` + seen-range tracking + elided-edit refusal |
+| 2.2 Model roles + fallback | `faf1f17` | `ModelRoles` (smol/summary) + `RetryPolicy.fallback_models`; `switching_to` on the retry event |
+| 2.3 Persistent shell | `a4c138a` | `harness-tools/src/shell/session.rs` — cwd + env carried between calls |
+| 3.3a Post-edit diagnostics | `aaf5680` | `harness-tools/src/fs/syntax.rs` — tree-sitter syntax regression check |
+| 3.4 Worktree fleet isolation | `29ef48d` | `harness-agent/src/worktree.rs` + `isolate_edits` on `spawn_agents` |
+| Self-review fixes | `b71e678` | Two real holes in the seen-range bookkeeping (see below) |
+| Knowledge base | `fa6ffb4` | DOCUMENT-MAP / 02-status / 03-decisions brought up to date |
 
 ### Where the implementation differs from the plan above
 
@@ -797,32 +804,43 @@ Working tree clean; every check green at the last commit.
   added — an explicit `offset`/`limit` already forces a verbatim read and the
   schema budget is tight.
 
-### Next up: 2.2 model roles + fallback chains
+### What the self-review caught
 
-Nothing is written yet. The intended shape, from reading the call sites:
+Worth recording, because both were invisible to the tests that existed and both
+widened what the model was allowed to edit:
 
-- `harness-runtime/src/limits.rs` gains `roles: ModelRoles` and
-  `fallback_models: Vec<String>`. `Limits.summary_model` (already there)
-  becomes the `summary` role — five call sites, listed below.
-- `ModelRoles { smol, plan, review, summary }` is defined in
-  `harness-agent/src/config.rs` (harness-agent can't depend on
-  harness-runtime), with `resolve(role, session_model) -> String`.
-- Call sites to route: `fleet_tool.rs` (lane model → `smol`),
-  `harness-review` step agents (→ `review`), `agent/mod.rs:565`
-  `summary_model()` (→ `summary`).
-- Fallback chain hooks into `agent/turn.rs:560` — when `attempt >=
-  max_attempts` and a fallback remains, switch `request.model`, recompute the
-  cache anchors for the new model family, reset `attempt`, and continue
-  without a backoff sleep.
-- **Open decision:** a model switch wants its own `AgentEvent`, but that
-  ripples through `event.rs` → `harness-host/src/translate.rs` →
-  `harness-protocol` → the CLI renderer → the desktop TS types. The cheap
-  alternative is reusing `AgentEvent::Retrying` with the switch named in its
-  `error` string — no protocol churn, visible to the user, slightly impure.
-  Decide before writing the code.
+- A read whose window fell past the end of the file — or which the 100k-char
+  cap cut short — recorded the *requested* window as seen rather than the
+  rendered one. `read_file offset=50` on a two-line file claimed lines 2..50.
+- Every applied edit re-recorded the file as seen **in full**, so one edit
+  inside a ten-line window handed back sight of the whole file, undoing
+  exactly what windowed and outlined reads withhold. Seen ranges now remap
+  into post-edit coordinates (`state::remap_seen`).
 
-Then: 2.3 persistent shell, 3.3a post-edit diagnostics, 3.4 worktree fleet
-isolation, 3.1 stream rules, 3.2 memory. Phase 4 items are unstarted.
+The lesson generalizes: the outline feature's safety rests entirely on this
+bookkeeping, so any future change to how reads report themselves needs a test
+at the `unseen_around` level, not just at the tool level.
+
+### Still to do
+
+| Item | Effort | Note |
+| --- | --- | --- |
+| 3.1 Stream rules (TTSR-lite) | 3d | Biggest remaining differentiator; concentrated risk in `turn.rs` — use the offline canned-SSE harness in the `verify` skill |
+| 3.2 Cross-session memory | 4–5d | Open decision in this plan: where memory lives (workspace vs `~/.oxen-harness`) |
+| 3.3b Full LSP tool | 5d | The syntax check shipped; types/rename need a language server per workspace |
+| Phase 4 | — | Magic keywords, `read_file` polymorphism, git/PR caching, session tree, supply-chain posture, session publishing |
+
+Two follow-ups the shipped work created:
+
+- **`edit.requireRead` has no setting.** The plan promised one; the gate ships
+  on with no way to turn it off. If it proves annoying, the flag already exists
+  on `FileState` (`gated()`/`ungated()`) — it only needs a pref and a host wire.
+- **Roles and fallbacks have no UI.** They live in `limits.json` alongside
+  `max_session_tokens` and `summary_model`, which were already hand-edited
+  only. A Settings → Models section would cover all four at once.
+- **The tool-schema budget is at ~11.9K of 12K.** It was raised twice in this
+  work (batch edits, always-on `retrieve_original`). The next tool should
+  replace one rather than raise it again.
 
 ### Known unrelated flake
 
