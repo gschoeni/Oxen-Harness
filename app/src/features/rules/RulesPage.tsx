@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FolderGit2, Plus, Trash2, Zap } from "lucide-react";
 import { Button } from "../../components/ui";
 import { checkRulePattern, listRules, saveRules } from "../../lib/ipc";
+import { TeachingNav } from "../settings/TeachingNav";
 import type { PatternCheck, RuleSpec } from "../../lib/types";
 import { ToolSwitch } from "../tools/ToolSwitch";
 import "../tools/tools.css";
@@ -121,6 +122,7 @@ export function RulesPage() {
 
   return (
     <div className="settings-page">
+      <TeachingNav current="rules" />
       <section className="settings-section">
         <div className="settings-label">
           Your rules{user && rules.length > 0 && ` · ${firing} of ${rules.length} on`}

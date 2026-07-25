@@ -38,6 +38,17 @@
   border-right: 1px solid var(--separator);
   overflow-y: auto;
 }
+.settings-rail-group {
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  color: var(--text-tertiary);
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+}
+.settings-rail-group:first-of-type {
+  padding-top: var(--space-2);
+}
 .settings-rail-title {
   font-family: var(--font-display);
   font-size: var(--text-lg);
@@ -226,7 +237,18 @@
     /* Pad past the traffic lights, which still sit top-left over the row. */
     padding: var(--space-3) var(--space-3) var(--space-3) 80px;
   }
-  .settings-rail-title {
+  .settings-rail-group {
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  color: var(--text-tertiary);
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+}
+.settings-rail-group:first-of-type {
+  padding-top: var(--space-2);
+}
+.settings-rail-title {
     display: none;
   }
   .settings-rail-nav {

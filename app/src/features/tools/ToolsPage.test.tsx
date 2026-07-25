@@ -40,10 +40,15 @@ beforeEach(() => {
 });
 
 describe("ToolsPage", () => {
-  it("cross-links to the Skills page where workflows live", async () => {
+  it("places itself in the tools/skills/rules trio and navigates between them", async () => {
     render(<ToolsPage />);
     await screen.findByText("read_file");
-    await userEvent.click(screen.getByRole("button", { name: "Skills" }));
+
+    expect(screen.getByRole("button", { name: /Tools what it can do/ })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Skills what it knows how to do/ }));
     expect(useStore.getState().settingsPage).toBe("skills");
   });
 

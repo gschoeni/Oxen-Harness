@@ -60,11 +60,16 @@ async function openSkill(name: string) {
 }
 
 describe("SkillsPage", () => {
-  it("explains the tools vs skills split and cross-links to Tools", async () => {
+  it("places itself in the tools/skills/rules trio and navigates between them", async () => {
     render(<SkillsPage />);
     await screen.findByText("release-notes");
-    expect(screen.getByText(/knows how to do/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Tools" }));
+
+    // All three ways of teaching the agent are named, with this one current.
+    expect(screen.getByRole("button", { name: /Skills what it knows how to do/ })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Tools what it can do/ }));
     expect(useStore.getState().settingsPage).toBe("tools");
   });
 

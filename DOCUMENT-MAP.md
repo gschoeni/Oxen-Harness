@@ -54,6 +54,7 @@ oxen-harness/
                                feature, delegating to the service).
     src/                     — React + TS chat UI (features/, lib/, components/).
                                  features/rules/ — the Rules settings page: edit stream rules with a live tester that runs the agent's own regex engine.
+                                 features/settings/TeachingNav.tsx — the Tools/Skills/Rules trio header shared by all three pages.
   examples/
     web-chat.html            — Dependency-free single-file web client for the HTTP
                                protocol (SSE + REST); the "build your own UI" demo.

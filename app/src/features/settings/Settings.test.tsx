@@ -21,6 +21,24 @@ beforeEach(() => {
 });
 
 describe("Settings", () => {
+  it("groups the rail so tools, skills, and rules read as one set", () => {
+    render(<Settings />);
+    const groups = [...document.querySelectorAll(".settings-rail-group")].map(
+      (g) => g.textContent,
+    );
+    expect(groups).toEqual(["The model", "Teaching the agent", "How it works", "This machine"]);
+
+    // The three ways of teaching are described in parallel, so the difference
+    // between them is the thing that stands out.
+    const blurb = (label: string) =>
+      [...document.querySelectorAll(".settings-rail-item")]
+        .find((i) => i.querySelector(".settings-rail-label")?.textContent === label)
+        ?.querySelector(".settings-rail-blurb")?.textContent;
+    expect(blurb("Tools")).toBe("What it can do");
+    expect(blurb("Skills")).toBe("What it knows how to do");
+    expect(blurb("Rules")).toBe("What it must not do");
+  });
+
   it("shows the active project context in the rail", () => {
     render(<Settings />);
     const chip = document.querySelector(".settings-rail-project-name");

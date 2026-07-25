@@ -20,7 +20,7 @@ import {
   Sun,
   Wrench,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { Button } from "../../components/ui";
 import { getConnection, setConnection } from "../../lib/ipc";
 import { useActiveProject, useStore } from "../../lib/store";
@@ -40,19 +40,28 @@ import { LogsPage } from "../logs/LogsPage";
 import "./settings.css";
 
 /** The settings sidebar entries, in display order. Each maps a page key to its
- *  icon, label, and a one-line description shown under the label in the rail. */
-const NAV: { page: SettingsPage; icon: ReactNode; label: string; blurb: string }[] = [
-  { page: "connection", icon: <Link2 size={18} />, label: "Connection", blurb: "Oxen endpoint & API keys" },
+ *  icon, label, and a one-line description shown under the label in the rail.
+ *  `group` starts a new labelled block — the twelve pages are otherwise a flat
+ *  list in which Tools, Skills, and Rules read as three unrelated settings
+ *  rather than the three ways of teaching the agent something. */
+const NAV: {
+  page: SettingsPage;
+  icon: ReactNode;
+  label: string;
+  blurb: string;
+  group?: string;
+}[] = [
+  { page: "connection", icon: <Link2 size={18} />, label: "Connection", blurb: "Oxen endpoint & API keys", group: "The model" },
   { page: "cloud-models", icon: <Cloud size={18} />, label: "Cloud models", blurb: "Hosted model catalog" },
   { page: "local-models", icon: <Cpu size={18} />, label: "Local models", blurb: "Download & run on-device" },
-  { page: "tools", icon: <Wrench size={18} />, label: "Tools", blurb: "What the agent can do" },
-  { page: "permissions", icon: <ShieldCheck size={18} />, label: "Permissions", blurb: "When the agent asks first" },
-  { page: "skills", icon: <GraduationCap size={18} />, label: "Skills", blurb: "Reusable workflows it can learn" },
-  { page: "rules", icon: <Radar size={18} />, label: "Rules", blurb: "Catch mistakes as they're written" },
+  { page: "tools", icon: <Wrench size={18} />, label: "Tools", blurb: "What it can do", group: "Teaching the agent" },
+  { page: "skills", icon: <GraduationCap size={18} />, label: "Skills", blurb: "What it knows how to do" },
+  { page: "rules", icon: <Radar size={18} />, label: "Rules", blurb: "What it must not do" },
+  { page: "permissions", icon: <ShieldCheck size={18} />, label: "Permissions", blurb: "When it asks you first", group: "How it works" },
   { page: "preview", icon: <Globe size={18} />, label: "Preview", blurb: "Live app preview & dev servers" },
   { page: "code-review", icon: <SearchCode size={18} />, label: "Code review", blurb: "The find → verify → report pipeline" },
   { page: "compression", icon: <Shrink size={18} />, label: "Compression", blurb: "Shrink stale context on the wire" },
-  { page: "usage", icon: <DollarSign size={18} />, label: "Usage", blurb: "Tokens & dollars spent per model" },
+  { page: "usage", icon: <DollarSign size={18} />, label: "Usage", blurb: "Tokens & dollars spent per model", group: "This machine" },
   { page: "appearance", icon: <Palette size={18} />, label: "Appearance", blurb: "Theme & light/dark" },
   { page: "logs", icon: <ScrollText size={18} />, label: "Training data", blurb: "Curate chats & export for fine-tuning" },
 ];
@@ -115,18 +124,20 @@ export function Settings() {
           </div>
           <nav className="settings-rail-nav">
             {NAV.map((item) => (
-              <button
-                key={item.page}
-                className={`settings-rail-item ${page === item.page ? "active" : ""}`}
-                onClick={() => setPage(item.page)}
-                aria-current={page === item.page}
-              >
-                <span className="settings-rail-icon">{item.icon}</span>
-                <span className="settings-rail-text">
-                  <span className="settings-rail-label">{item.label}</span>
-                  <span className="settings-rail-blurb">{item.blurb}</span>
-                </span>
-              </button>
+              <Fragment key={item.page}>
+                {item.group && <div className="settings-rail-group">{item.group}</div>}
+                <button
+                  className={`settings-rail-item ${page === item.page ? "active" : ""}`}
+                  onClick={() => setPage(item.page)}
+                  aria-current={page === item.page}
+                >
+                  <span className="settings-rail-icon">{item.icon}</span>
+                  <span className="settings-rail-text">
+                    <span className="settings-rail-label">{item.label}</span>
+                    <span className="settings-rail-blurb">{item.blurb}</span>
+                  </span>
+                </button>
+              </Fragment>
             ))}
           </nav>
         </aside>

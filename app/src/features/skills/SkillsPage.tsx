@@ -13,10 +13,11 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, ChevronDown, ChevronRight, GraduationCap, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/ui";
 import { deleteSkill, listSkills, listTools, saveSkill, setSkillEnabled } from "../../lib/ipc";
-import { useActiveProject, useStore } from "../../lib/store";
+import { useActiveProject } from "../../lib/store";
 import type { SkillInfo, SkillScope, ToolInfo } from "../../lib/types";
 import { InstructionsEditor, SkillMarkdown } from "./InstructionsEditor";
 import { ToolSwitch } from "../tools/ToolSwitch";
+import { TeachingNav } from "../settings/TeachingNav";
 import "../tools/tools.css";
 import "./skills.css";
 
@@ -122,16 +123,18 @@ export function SkillsPage() {
 
   return (
     <div className="settings-page">
+      <TeachingNav current="skills" />
       <section className="settings-section">
         <div className="settings-label">
           Skills{skills && skills.length > 0 && ` · ${skills.length}`}
         </div>
-        <SkillsExplainer />
         <p className="hint">
           A skill teaches the agent a reusable workflow — release notes in your house style, a
-          review checklist, a deploy procedure. Skills apply to{" "}
-          <strong>new and resumed chats</strong>; project skills live in{" "}
-          <code>.oxen-harness/skills/</code> so they can ship with the repo.
+          review checklist, a deploy procedure. The model sees only each skill's name and
+          description until it pulls the instructions in, so write the description like a
+          trigger: "does X, use when Y". Skills apply to <strong>new and resumed chats</strong>;
+          project skills live in <code>.oxen-harness/skills/</code> so they can ship with the
+          repo.
         </p>
         {error && <span className="save-status err">{error}</span>}
 
@@ -208,35 +211,6 @@ function SkillGroups({
 
 /** The tools ↔ skills mental model, up front for first-time visitors: tools are
  *  abilities, skills are know-how riding on one `skill` tool. */
-function SkillsExplainer() {
-  const setPage = useStore((s) => s.setSettingsPage);
-  return (
-    <div className="skills-explainer">
-      <div className="skills-explainer-col">
-        <span className="skills-explainer-term">
-          <button className="hint-link" onClick={() => setPage("tools")}>
-            Tools
-          </button>{" "}
-          are what the agent can <em>do</em>
-        </span>
-        <span className="skills-explainer-def">
-          Read files, run commands, search the web, call your APIs. Every tool is offered to
-          the model on every request.
-        </span>
-      </div>
-      <div className="skills-explainer-col">
-        <span className="skills-explainer-term">
-          Skills are what it <em>knows how to do</em>
-        </span>
-        <span className="skills-explainer-def">
-          Instructions loaded on demand through one built-in <code>skill</code> tool: the model
-          sees each skill's name + description, and pulls in the full instructions only when a
-          request matches. Write the description like a trigger — "does X, use when Y".
-        </span>
-      </div>
-    </div>
-  );
-}
 
 // ---- list view ----------------------------------------------------------------
 

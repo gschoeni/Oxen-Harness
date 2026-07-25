@@ -394,6 +394,10 @@ Three concepts cover everything the agent can be taught:
   an interrupting rule stops the model mid-sentence so the correction lands
   before the work does.
 
+In the desktop app these are one group in Settings — **Teaching the agent** —
+and each page opens with the trio so it's clear which of the three you're
+looking at.
+
 | You want the agent to… | Add a… | How |
 |---|---|---|
 | Follow your release-notes format, review checklist, deploy runbook | **Skill** (markdown, no code) | Settings → Skills, or drop a `SKILL.md` folder |
