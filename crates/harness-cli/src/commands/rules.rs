@@ -81,13 +81,13 @@ fn list(ui: &Ui, workspace_root: &Path) {
     if !user.is_empty() {
         println!("  {}", ui.brown("your rules:"));
         for rule in &user {
-            print_rule(ui, rule, false);
+            print_rule(ui, rule);
         }
     }
     if !project.is_empty() {
         println!("  {}", ui.brown("this project's rules:"));
         for rule in &project {
-            print_rule(ui, rule, true);
+            print_rule(ui, rule);
         }
         println!(
             "  {}",
@@ -103,7 +103,7 @@ fn list(ui: &Ui, workspace_root: &Path) {
     );
 }
 
-fn print_rule(ui: &Ui, rule: &RuleSpec, from_project: bool) {
+fn print_rule(ui: &Ui, rule: &RuleSpec) {
     let effect = if rule.interrupt {
         ui.red("interrupts")
     } else {
@@ -119,7 +119,6 @@ fn print_rule(ui: &Ui, rule: &RuleSpec, from_project: bool) {
     );
     println!("      {}", ui.cream(&rule.pattern));
     println!("      {}", ui.dim(&clip(&rule.message, 92)));
-    let _ = from_project;
 }
 
 fn scope_label(scope: &[String]) -> String {

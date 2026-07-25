@@ -138,6 +138,35 @@ impl Rule {
     }
 }
 
+/// Compile a batch of rules from their config form, returning the set that
+/// loaded and a note for each that didn't.
+///
+/// One place decides what a broken rule does — it is skipped, and said so —
+/// because a rule that can't compile protects nothing while looking like it
+/// does, and both hosts had been deciding that separately.
+pub fn compile_all<'a>(
+    specs: impl IntoIterator<
+        Item = (
+            &'a str,
+            &'a str,
+            &'a [String],
+            &'a str,
+            bool,
+            Option<&'a str>,
+        ),
+    >,
+) -> (RuleSet, Vec<String>) {
+    let mut rules = Vec::new();
+    let mut skipped = Vec::new();
+    for (name, pattern, scopes, message, interrupt, repeat) in specs {
+        match Rule::compile(name, pattern, scopes, message, interrupt, repeat) {
+            Ok(rule) => rules.push(rule),
+            Err(e) => skipped.push(format!("{name}: {e}")),
+        }
+    }
+    (RuleSet::new(rules), skipped)
+}
+
 /// What a pattern does against a sample, for an editor that wants to show it
 /// before the rule is ever live.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]

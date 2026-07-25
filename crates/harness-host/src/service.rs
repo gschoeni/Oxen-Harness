@@ -30,25 +30,16 @@ use crate::bridges::{
 };
 use crate::{translate, EventSink, PendingApprovals, PendingQuestions};
 
-/// Compile the workspace's stream rules, skipping any whose pattern doesn't
-/// compile — one bad regex in a shared repository file must not stop a session
-/// from starting.
+/// The workspace's stream rules, compiled. A rule whose pattern no longer
+/// compiles is skipped rather than taking the session down — that policy lives
+/// in `harness_agent::rules::compile_all`, shared with the CLI.
 fn stream_rules(workspace_root: &Path) -> harness_agent::rules::RuleSet {
-    let rules = harness_runtime::rules::load(workspace_root)
-        .into_iter()
-        .filter_map(|spec| {
-            harness_agent::rules::Rule::compile(
-                &spec.name,
-                &spec.pattern,
-                &spec.scope,
-                &spec.message,
-                spec.interrupt,
-                spec.repeat.as_deref(),
-            )
-            .ok()
-        })
-        .collect();
-    harness_agent::rules::RuleSet::new(rules)
+    let specs = harness_runtime::rules::load(workspace_root);
+    let (rules, skipped) = harness_agent::rules::compile_all(specs.iter().map(|s| s.parts()));
+    for note in skipped {
+        eprintln!("skipping stream rule {note}");
+    }
+    rules
 }
 
 /// The `app_meta` key holding the all-time tokens saved by context compression.

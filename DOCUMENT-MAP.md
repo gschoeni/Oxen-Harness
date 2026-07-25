@@ -27,8 +27,9 @@ oxen-harness/
     harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth; attachment store (content-addressed on-disk files) + hydration.
     harness-compress/        — Reversible context compression for tool output: JSON-array crushing, log/line collapsing, CCR store (`<<ccr:hash>>` markers resolved by retrieve_original).
     harness-tools/           — TypedTool trait, bounded process/HTTP capture, fs read/write/edit, glob/search, shell, git, web, questions, canvas, plans, skills, and custom HTTP tools.
-                                 fs/state.rs (what the model has read, per-path locks, path-scoped conventions), fs/outline.rs (tree-sitter structural reads),
-                                 fs/syntax.rs (did this edit break the file?), shell/session.rs (cwd + env carried between commands).
+                                 fs/ is one module per tool — read (windows + outlines), write, edit (batch hunks, CRLF/BOM), find (glob + grep) —
+                                 over shared state.rs (what the model has read, per-path locks, path-scoped conventions), outline.rs (tree-sitter
+                                 structural reads), and syntax.rs (did this edit break the file?); shell/session.rs carries cwd + env between commands.
     harness-store/           — SQLite history (verbatim) + JSONL export; rusqlite_migration schema versioning; rich session metadata.
     harness-oxen/            — Version config/data + export/share traces via the `oxen` CLI (testable Runner shell-out; no liboxen).
     harness-local/           — Local models: extensible GGUF catalog (Qwen3 + Bonsai), downloads + disk tracking, llama-server launcher.
@@ -53,7 +54,8 @@ oxen-harness/
                                (the #[tauri::command] handlers, one module per
                                feature, delegating to the service).
     src/                     — React + TS chat UI (features/, lib/, components/).
-                                 features/rules/ — the Rules settings page: edit stream rules with a live tester that runs the agent's own regex engine.
+                                 features/rules/ — the Rules settings page: RulesPage (data flow), RuleRow (a rule at rest), RuleEditor (+ the live
+                                 tester that runs the agent's own regex engine), starters.ts.
                                  features/settings/TeachingNav.tsx — the Tools/Skills/Rules trio header shared by all three pages.
   examples/
     web-chat.html            — Dependency-free single-file web client for the HTTP

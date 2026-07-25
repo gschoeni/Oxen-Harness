@@ -307,30 +307,16 @@ pub(crate) fn agent_config(
     }
 }
 
-/// Compile the workspace's stream rules, skipping (and reporting) any whose
-/// pattern doesn't compile — one bad regex in a shared repository file must
-/// not stop a session from starting.
+/// The workspace's stream rules, compiled. A rule whose pattern no longer
+/// compiles is reported and skipped rather than taking the session down —
+/// `harness_agent::rules::compile_all` owns that policy for both front ends.
 pub(crate) fn stream_rules(workspace_root: &std::path::Path) -> harness_agent::rules::RuleSet {
-    let rules = harness_runtime::rules::load(workspace_root)
-        .into_iter()
-        .filter_map(|spec| {
-            match harness_agent::rules::Rule::compile(
-                &spec.name,
-                &spec.pattern,
-                &spec.scope,
-                &spec.message,
-                spec.interrupt,
-                spec.repeat.as_deref(),
-            ) {
-                Ok(rule) => Some(rule),
-                Err(e) => {
-                    eprintln!("  skipping stream rule {:?}: {e}", spec.name);
-                    None
-                }
-            }
-        })
-        .collect();
-    harness_agent::rules::RuleSet::new(rules)
+    let specs = harness_runtime::rules::load(workspace_root);
+    let (rules, skipped) = harness_agent::rules::compile_all(specs.iter().map(|s| s.parts()));
+    for note in skipped {
+        eprintln!("  skipping stream rule {note}");
+    }
+    rules
 }
 
 /// Open the SQLite history store at its standard `~/.oxen-harness` location.

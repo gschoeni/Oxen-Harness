@@ -63,6 +63,21 @@ fn yes() -> bool {
     true
 }
 
+impl RuleSpec {
+    /// The rule in the shape the agent's compiler takes. Kept here so a host
+    /// doesn't have to know the field order — it just forwards.
+    pub fn parts(&self) -> (&str, &str, &[String], &str, bool, Option<&str>) {
+        (
+            &self.name,
+            &self.pattern,
+            &self.scope,
+            &self.message,
+            self.interrupt,
+            self.repeat.as_deref(),
+        )
+    }
+}
+
 /// The file's shape.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Rules {
