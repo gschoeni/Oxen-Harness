@@ -147,6 +147,7 @@ impl BackgroundTasks {
         command: &str,
         root: &Path,
         max_tail: usize,
+        env: &std::collections::BTreeMap<String, String>,
     ) -> Result<u64, ToolError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         tokio::fs::create_dir_all(&self.log_dir)
@@ -161,6 +162,7 @@ impl BackgroundTasks {
 
         let mut cmd = crate::shell::shell_command(command);
         cmd.current_dir(root)
+            .envs(env)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -608,7 +610,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tasks = temp_registry(dir.path());
         let id = tasks
-            .spawn("echo hello-bg", dir.path(), 1000)
+            .spawn("echo hello-bg", dir.path(), 1000, &Default::default())
             .await
             .unwrap();
         // Wait for it to finish, then read.
@@ -629,7 +631,10 @@ mod tests {
     async fn kill_terminates_a_running_task() {
         let dir = tempfile::tempdir().unwrap();
         let tasks = temp_registry(dir.path());
-        let id = tasks.spawn("sleep 30", dir.path(), 1000).await.unwrap();
+        let id = tasks
+            .spawn("sleep 30", dir.path(), 1000, &Default::default())
+            .await
+            .unwrap();
         let note = tasks.kill(id).await.unwrap();
         assert!(note.contains("kill signal sent"), "{note}");
         let exit = tasks.wait(id, Duration::from_secs(10)).await.unwrap();
