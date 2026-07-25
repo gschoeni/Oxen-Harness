@@ -380,7 +380,7 @@ or `--model`.
 
 ## Extending the agent
 
-Two concepts cover everything the agent can be taught:
+Three concepts cover everything the agent can be taught:
 
 - **Tools are what the agent can *do*** — read a file, run a command, search
   the web, call your API. Every tool's name, description, and schema are sent
@@ -389,10 +389,15 @@ Two concepts cover everything the agent can be taught:
   a procedure, written as markdown. The model sees only each skill's name and
   one-line description, and pulls the full instructions into the conversation
   on demand via the built-in `skill` tool.
+- **Rules are what the agent *must not do*** — a pattern to watch for and a
+  correction to send when it appears. Rules cost nothing until they match, and
+  an interrupting rule stops the model mid-sentence so the correction lands
+  before the work does.
 
 | You want the agent to… | Add a… | How |
 |---|---|---|
 | Follow your release-notes format, review checklist, deploy runbook | **Skill** (markdown, no code) | Settings → Skills, or drop a `SKILL.md` folder |
+| Stop reaching for `.unwrap()`, `--force`, or a generated directory | **Rule** (a regex + a sentence) | Settings → Rules, or `/rules add` |
 | Call your internal API or webhook | **Custom tool** (no code) | Settings → Tools → New tool (HTTP POST) |
 | Do something new on the machine (parse a format, drive a CLI…) | **Built-in tool** (Rust) | The recipe in [`AGENTS.md`](AGENTS.md#adding-a-built-in-tool) |
 
@@ -417,6 +422,80 @@ are referenced by their backticked names ("read it with `read_file`"), which
 the desktop editor autocompletes and lints. This repo ships
 [`add-a-tool`](.oxen-harness/skills/add-a-tool/SKILL.md), a skill that teaches
 the agent to extend itself with new tools.
+
+### Rules — catching mistakes as they're written
+
+Some corrections don't belong in the system prompt. "Never use `.unwrap()`
+here" is worth saying only when the model is about to write `.unwrap()`; the
+rest of the time it's paying rent on every request for a situation that hasn't
+come up. A rule inverts that: it sits dormant, watching the reply as it
+streams, and speaks only when its pattern appears.
+
+```jsonc
+// ~/.oxen-harness/rules.json — yours, in every project
+// <repo>/.oxen-harness/rules.json — the project's, committed and shared
+{
+  "rules": [
+    {
+      "name": "no-unwrap",
+      "when": "\\.unwrap\\(\\)",     // a regular expression
+      "scope": ["tool"],            // "tool" (tool-call arguments), "text" (prose), or both
+      "message": "This project doesn't unwrap outside tests — return a Result.",
+      "interrupt": true,            // throw the reply away and ask again
+      "repeat": "once"              // or "after:5" rounds
+    }
+  ]
+}
+```
+
+**What happens when one matches.** The rule's `message` is injected as a
+`<system-reminder>` — the same channel the built-in correctives use — and the
+model tries again. An `interrupt: true` rule (the default) also abandons the
+reply in flight, so a bad edit is stopped while it's being written rather than
+after it's applied. `interrupt: false` lets the reply finish and corrects
+before the next step, which is right for style notes that aren't worth
+discarding work over.
+
+**Where to watch.** `scope: ["tool"]` matches the arguments the model writes
+into a tool call — the earliest place a bad `edit_file` or `run_shell` becomes
+visible, and usually what you want. `["text"]` matches its prose. Omit `scope`
+to watch both.
+
+**How often.** `"once"` (the default) fires a rule once per session: a reminder
+the model has already seen and worked around is noise. `"after:5"` lets it
+return after five more rounds, which suits rules the model tends to drift back
+into.
+
+**Writing good rules.** A rule is a regular expression, so it catches text, not
+intent — which makes narrow, literal patterns the ones that work:
+
+- Match something unambiguous: `\.unwrap\(\)`, `generated/`,
+  `push\s+--force`, `TODO\(nobody\)`.
+- Say what to do instead, not just what's wrong. "Return a Result" beats "don't
+  unwrap" — the model has to act on it.
+- Prefer `["tool"]` scope for anything about *changes*. A rule watching prose
+  fires when the model merely discusses the thing.
+- Expect false positives and choose `interrupt` accordingly. A pattern that
+  fires on a legitimate mention costs a round trip each time it does.
+- Patterns use Rust's [`regex`](https://docs.rs/regex) syntax: no lookahead, no
+  backreferences. The editor tells you if a pattern won't compile — a rule that
+  can't compile is skipped, so it protects nothing while looking like it does.
+
+**Trying one before you trust it.** Both front ends run candidate patterns
+through the *agent's own* regex engine, not the editor's, so what you see is
+what will fire:
+
+- **Desktop** — Settings → Rules. Type what the model might write and the
+  match highlights in place, with the exact reminder the model would receive
+  and what happens to the reply.
+- **Terminal** — `/rules` lists what's in force, `/rules add` walks through
+  writing one (and offers to test it), `/rules test <name>` runs a saved rule
+  against text you paste, `/rules on|off <name>` and `/rules rm <name>` do the
+  rest. Edits apply to the running session immediately.
+
+Project rules travel with the repository and override a rule of yours with the
+same name, so a team can standardise on "don't touch the generated client"
+without anyone configuring anything.
 
 ## Contributing
 

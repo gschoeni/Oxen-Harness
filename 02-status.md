@@ -412,7 +412,9 @@ Branch `harness-parity-improvements`; the study and full roadmap are in
 - **Stream rules**: user/project regex corrections that watch the reply as it
   streams and interrupt it on a match, with a Settings → Rules page whose
   tester runs the agent's own regex engine (never the browser's) so what you
-  see is what will fire.
+  see is what will fire. The terminal gets the same capabilities via `/rules`
+  (list, guided add, on/off, rm, test), applied to the live session. Written up
+  in the README under "Extending the agent".
 
 ## What's left / next
 

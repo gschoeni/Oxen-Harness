@@ -43,7 +43,7 @@ oxen-harness/
                                  context_files.rs (AGENTS.md/CLAUDE.md/Cursor/Cline discovery → prompt section + path-scoped rules), rules.json discovery (global + per-project stream rules).
     harness-loop/            — Goal-driven, self-verifying loops (discover→verify→iterate): LoopSpec/Verify, runner, journal, shareable store + built-ins.
     harness-review/          — Configurable code-review pipeline: ordered prompt steps (find→verify→report default), diff targets (uncommitted / vs base branch), isolated side-agent runner (fan-out steps run as a parallel fleet), structured findings.
-    harness-cli/             — The `oxen-harness` interactive REPL binary. Slash-command handlers live in commands/ (auth, compression, loops, model, oxen, queue, review, theme, trace); the live sticky-bottom composer in live/; the fleet lanes display in fleet_ui.rs/fleet_sink.rs. Top-level subcommands: theme, loop, trace, oxen.
+    harness-cli/             — The `oxen-harness` interactive REPL binary. Slash-command handlers live in commands/ (auth, compression, loops, model, oxen, queue, review, rules, theme, trace); the live sticky-bottom composer in live/; the fleet lanes display in fleet_ui.rs/fleet_sink.rs. Top-level subcommands: theme, loop, trace, oxen.
   app/                       — Tauri v2 desktop app (separate project, excluded
                                from the core workspace). See app/README.md.
     src-tauri/src/           — Rust bridge, a thin adapter over harness-host:

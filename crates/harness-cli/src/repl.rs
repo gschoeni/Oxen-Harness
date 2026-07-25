@@ -42,6 +42,9 @@ pub enum Command {
     /// List the convention files (AGENTS.md and friends) folded into the
     /// system prompt for this workspace, and what they cost.
     Context,
+    /// Stream rules: the raw text after `/rules` (`add`, `on <name>`,
+    /// `off <name>`, `rm <name>`, `test <name>`), or `None` to list them.
+    Rules(Option<String>),
     /// Set the API key and provider endpoint: `/auth` walks a base-URL card
     /// pre-filled with the current endpoint (Enter accepts it; edit it to move
     /// to another Oxen server or any OpenAI-compatible provider) then a masked
@@ -162,6 +165,19 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
         description: "show the project conventions in the prompt",
         build: |_| Command::Context,
         completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/rules",
+        aliases: &["/rule"],
+        description: "corrections that fire while the model writes",
+        build: Command::Rules,
+        completer: ArgCompleter::Static(&[
+            ("add", "write a new rule, guided"),
+            ("on", "turn a rule back on"),
+            ("off", "stop a rule firing"),
+            ("rm", "delete a rule"),
+            ("test", "try a rule against sample text"),
+        ]),
     },
     SlashSpec {
         name: "/retry",
@@ -393,6 +409,12 @@ mod tests {
     #[test]
     fn skills_aliases() {
         assert_eq!(parse_command("/skills"), Command::Skills);
+        assert_eq!(parse_command("/rules"), Command::Rules(None));
+        assert_eq!(parse_command("/rule"), Command::Rules(None));
+        assert_eq!(
+            parse_command("/rules on no-unwrap"),
+            Command::Rules(Some("on no-unwrap".into()))
+        );
         assert_eq!(parse_command("/skill"), Command::Skills);
     }
 
