@@ -672,6 +672,12 @@ impl SessionService {
                 smol: limits.smol_model,
                 summary: limits.summary_model,
             },
+            // A model that keeps failing hands the call to the next one rather
+            // than ending the turn.
+            retry: harness_agent::RetryPolicy {
+                fallback_models: limits.fallback_models,
+                ..Default::default()
+            },
             // Gate tool calls behind the permission layer, with approval
             // prompts carried over the protocol (agent.approval_request ↔
             // answer_approval). Fleet/review subagents get the gate's
@@ -792,8 +798,11 @@ impl SessionService {
             workspace_root,
             store.clone(),
         );
-        Agent::resume_from_store(client, tools, store, session_id, config)
-            .map_err(|e| e.to_string())
+        let mut agent = Agent::resume_from_store(client, tools, store, session_id, config)
+            .map_err(|e| e.to_string())?;
+        // A resumed session is held to the same rules as a fresh one.
+        agent.set_rules(stream_rules(workspace_root));
+        Ok(agent)
     }
 
     /// Build a fresh agent for a new session rooted at `root`, reusing the

@@ -114,6 +114,14 @@ impl FleetSpawner {
         Some(lanes)
     }
 
+    /// The project root, when the host told us about one.
+    fn root(&self) -> Option<std::path::PathBuf> {
+        self.workspace_root
+            .lock()
+            .expect("fleet workspace poisoned")
+            .clone()
+    }
+
     /// Release the current fleet's worktrees (removing any the caller didn't
     /// keep a handle to).
     fn close_lanes(&self) {
@@ -187,9 +195,27 @@ impl FleetSpawner {
             .expect("fleet lanes poisoned")
             .get(index)
             .cloned();
-        let tools = match &lane {
-            Some(lane) => rooted_tools(&self.tools, lane.path()),
-            None => self.tools.clone(),
+        let tools = match (&lane, self.root()) {
+            // An isolated lane works in its own checkout, so its file and
+            // shell tools point there, with file state of its own (nothing
+            // else can touch that tree).
+            (Some(lane), _) => {
+                rooted_tools(&self.tools, lane.path(), harness_tools::FileState::gated())
+            }
+            // A shared lane keeps the parent's file state — that shared state
+            // is what makes the per-path lock serialize two lanes editing one
+            // file — but still gets its own shell, since `run_shell` now
+            // carries a working directory and environment between calls and
+            // one lane's `cd` must not relocate another's next command.
+            (None, Some(root)) => {
+                let files = self
+                    .tools
+                    .files()
+                    .cloned()
+                    .unwrap_or_else(harness_tools::FileState::gated);
+                rooted_tools(&self.tools, &root, files)
+            }
+            (None, None) => self.tools.clone(),
         };
         let store = Arc::new(HistoryStore::open_in_memory()?);
         let session = store.create_session(&SessionMeta {
@@ -215,7 +241,11 @@ impl FleetSpawner {
 /// `root`, so an isolated lane reads, writes, greps, and shells inside its own
 /// checkout. Host-surface tools (canvas, preview, custom HTTP tools) are
 /// carried over untouched — they aren't path-scoped.
-fn rooted_tools(base: &ToolRegistry, root: &std::path::Path) -> ToolRegistry {
+fn rooted_tools(
+    base: &ToolRegistry,
+    root: &std::path::Path,
+    files: std::sync::Arc<harness_tools::FileState>,
+) -> ToolRegistry {
     use harness_tools::fs::{EditFileTool, FindFilesTool, ReadFileTool, SearchTool, WriteFileTool};
     use harness_tools::tasks::{BackgroundTasks, KillTaskTool, TaskOutputTool};
 
@@ -223,7 +253,6 @@ fn rooted_tools(base: &ToolRegistry, root: &std::path::Path) -> ToolRegistry {
         return base.clone();
     };
     let mut tools = base.clone();
-    let files = harness_tools::FileState::gated();
     tools.register_typed(ReadFileTool::with_state(workspace.clone(), files.clone()));
     tools.register_typed(WriteFileTool::with_state(workspace.clone(), files.clone()));
     tools.register_typed(EditFileTool::with_state(workspace.clone(), files));
@@ -551,7 +580,11 @@ mod tests {
         for (index, contents) in [(0usize, "from lane 0\n"), (1, "from lane 1\n")] {
             // Build through the spawner so the tools come out re-rooted the
             // way a real lane's do.
-            let tools = rooted_tools(&spawner.tools, lanes[index].path());
+            let tools = rooted_tools(
+                &spawner.tools,
+                lanes[index].path(),
+                harness_tools::FileState::gated(),
+            );
             // Read first — the lane's own tools enforce that, as they should.
             tools
                 .invoke(

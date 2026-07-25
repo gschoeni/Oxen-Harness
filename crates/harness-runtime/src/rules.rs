@@ -93,14 +93,17 @@ pub fn load(workspace: &Path) -> Vec<RuleSpec> {
         .into_iter()
         .chain(project_rules(workspace).rules)
     {
-        if !spec.enabled {
-            continue;
-        }
+        // Override first, *then* filter: a repository shipping
+        // `{"name": "no-unwrap", "enabled": false}` is saying "not here", and
+        // dropping the disabled entry early would leave the user's own copy
+        // firing. Same for `/rules off` against a name the project also
+        // defines.
         match specs.iter_mut().find(|existing| existing.name == spec.name) {
             Some(existing) => *existing = spec,
             None => specs.push(spec),
         }
     }
+    specs.retain(|spec| spec.enabled);
     specs
 }
 
@@ -149,6 +152,38 @@ mod tests {
         // Unstated fields take the documented defaults.
         assert!(specs[0].interrupt);
         assert!(specs[0].scope.is_empty());
+    }
+
+    #[test]
+    fn a_project_can_switch_off_a_rule_of_yours() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_project_rules(
+            tmp.path(),
+            r#"{"schema_version":1,"rules":[
+                {"name":"shared","when":"p","message":"not in this repo","enabled":false}
+            ]}"#,
+        );
+
+        let specs = with_temp_home(|| {
+            save(&Rules {
+                rules: vec![RuleSpec {
+                    name: "shared".into(),
+                    pattern: "g".into(),
+                    scope: vec![],
+                    message: "from the user".into(),
+                    interrupt: true,
+                    repeat: None,
+                    enabled: true,
+                }],
+            })
+            .unwrap();
+            load(tmp.path())
+        });
+
+        assert!(
+            specs.is_empty(),
+            "the project's override should win: {specs:?}"
+        );
     }
 
     #[test]

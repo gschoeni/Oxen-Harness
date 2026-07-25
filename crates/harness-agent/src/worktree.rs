@@ -95,12 +95,72 @@ pub fn create(repo: &Path, label: &str, count: usize) -> Option<Vec<LaneWorktree
             // worktree are dropped (and removed) with `lanes`.
             return None;
         }
+        // `worktree add HEAD` checks out the last commit, not the tree the
+        // user is actually looking at. A lane asked to fix code that was just
+        // written would not find it, and would return a patch against a state
+        // nobody has — so the uncommitted work comes along.
+        carry_uncommitted(repo, &path);
         lanes.push(LaneWorktree {
             path,
             repo: repo.to_path_buf(),
         });
     }
     Some(lanes)
+}
+
+/// Reproduce the parent's uncommitted state in a fresh worktree: tracked
+/// modifications as a patch, then untracked (non-ignored) files copied, then a
+/// baseline commit so what the lane later reports is the lane's own work
+/// rather than the user's.
+///
+/// The commit lands on the worktree's detached HEAD, so no branch in the
+/// parent repository is touched.
+///
+/// Best-effort by design — a lane that starts from HEAD is still useful, and
+/// failing the whole fleet because one binary file wouldn't patch would not be.
+fn carry_uncommitted(repo: &Path, lane: &Path) {
+    if let Some(diff) = capture(repo, &["diff", "HEAD", "--binary"]) {
+        if !diff.trim().is_empty() {
+            let patch = lane.join(".oxen-harness-carry.patch");
+            if std::fs::write(&patch, &diff).is_ok() {
+                let _ = git(lane, &["apply", &patch.to_string_lossy()]);
+                let _ = std::fs::remove_file(&patch);
+            }
+        }
+    }
+    let Some(untracked) = capture(repo, &["ls-files", "--others", "--exclude-standard"]) else {
+        return;
+    };
+    for rel in untracked.lines().filter(|l| !l.trim().is_empty()) {
+        let (from, to) = (repo.join(rel), lane.join(rel));
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::copy(&from, &to);
+    }
+    baseline(lane);
+}
+
+/// Commit whatever the lane starts with, so `changes` reports only what the
+/// lane did. Identity is supplied inline: a repository without `user.email`
+/// configured would otherwise refuse the commit and every lane would report
+/// the user's own edits as its own.
+fn baseline(lane: &Path) {
+    let _ = git(lane, &["add", "-A"]);
+    let _ = git(
+        lane,
+        &[
+            "-c",
+            "user.email=agent@oxen-harness.local",
+            "-c",
+            "user.name=oxen-harness",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "lane baseline (the working tree this lane started from)",
+        ],
+    );
 }
 
 /// What a lane changed in its worktree, or `None` when it changed nothing.
@@ -198,6 +258,37 @@ mod tests {
         // A new file the lane never mentions must not vanish silently.
         assert!(changes.patch.contains("added.rs"), "{}", changes.patch);
         assert!(changes.summary.contains("main.rs"), "{}", changes.summary);
+    }
+
+    #[test]
+    fn a_lane_starts_from_the_tree_the_user_is_looking_at() {
+        let dir = repo();
+        // The state a fleet is usually spawned into: edited and new files that
+        // were never committed.
+        std::fs::write(
+            dir.path().join("main.rs"),
+            "fn main() { work_in_progress() }\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("scratch.rs"), "pub fn added() {}\n").unwrap();
+
+        let lanes = create(dir.path(), "test", 1).expect("worktrees");
+
+        assert_eq!(
+            std::fs::read_to_string(lanes[0].path().join("main.rs")).unwrap(),
+            "fn main() { work_in_progress() }\n",
+            "the lane should see uncommitted edits"
+        );
+        assert_eq!(
+            std::fs::read_to_string(lanes[0].path().join("scratch.rs")).unwrap(),
+            "pub fn added() {}\n",
+            "the lane should see untracked files"
+        );
+        // And the carrier patch must not be left behind as a change of its own.
+        assert!(
+            changes(&lanes[0]).is_none(),
+            "a fresh lane has changed nothing"
+        );
     }
 
     #[test]

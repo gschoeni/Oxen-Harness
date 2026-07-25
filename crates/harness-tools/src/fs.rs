@@ -45,6 +45,20 @@ const MAX_SEARCH_FILE_BYTES: u64 = 16 * 1024 * 1024;
 /// Default cap on `find_files` / `search_files` results.
 const DEFAULT_MAX_RESULTS: usize = 200;
 
+/// A resolved path expressed relative to the workspace root.
+///
+/// Path-scoped conventions are written as globs against the project (`app/**`),
+/// so they must be matched against that shape — not the model's raw argument,
+/// which `Workspace::resolve` also accepts as absolute or `./`-prefixed. A
+/// model that pasted an absolute path out of a grep would otherwise never see
+/// the convention governing it.
+fn relative_to(workspace: &Workspace, resolved: &Path) -> std::path::PathBuf {
+    resolved
+        .strip_prefix(workspace.root())
+        .unwrap_or(resolved)
+        .to_path_buf()
+}
+
 /// Read a UTF-8 text file with `cat -n`-style line numbers.
 pub struct ReadFileTool {
     workspace: Workspace,
@@ -61,6 +75,10 @@ impl ReadFileTool {
     /// shows the model is what their staleness checks compare against.
     pub fn with_state(workspace: Workspace, state: Arc<FileState>) -> Self {
         Self { workspace, state }
+    }
+
+    fn relative(&self, resolved: &Path) -> std::path::PathBuf {
+        relative_to(&self.workspace, resolved)
     }
 }
 
@@ -92,7 +110,6 @@ impl TypedTool for ReadFileTool {
 
     async fn run(&self, args: ReadFileArgs) -> Result<String, ToolError> {
         let path = self.workspace.resolve(&args.path)?;
-        let rules = self.state.take_rules_for(Path::new(&args.path));
 
         // A whole-file read of a big source file gets its shape rather than
         // every line. An explicit window is never outlined: the model asked
@@ -101,6 +118,7 @@ impl TypedTool for ReadFileTool {
             if let Some((outline, hash)) = try_outline(&path).await {
                 self.state
                     .record_parts(&path, hash, outline.total_lines, outline.seen.clone());
+                let rules = self.state.take_rules_for(&self.relative(&path));
                 return Ok(format!(
                     "{}… [{} of {} lines shown; bodies elided as marked]\n{rules}",
                     outline.text,
@@ -127,7 +145,9 @@ impl TypedTool for ReadFileTool {
             stats.lines,
             stats.shown.into_iter().collect(),
         );
-        Ok(rendered + &rules)
+        // Consumed only now: a read that failed shouldn't burn a rule that
+        // fires once per session.
+        Ok(rendered + &self.state.take_rules_for(&self.relative(&path)))
     }
 }
 
@@ -304,6 +324,10 @@ impl WriteFileTool {
     pub fn with_state(workspace: Workspace, state: Arc<FileState>) -> Self {
         Self { workspace, state }
     }
+
+    fn relative(&self, resolved: &Path) -> std::path::PathBuf {
+        relative_to(&self.workspace, resolved)
+    }
 }
 
 /// Arguments to `write_file`.
@@ -350,7 +374,7 @@ impl TypedTool for WriteFileTool {
         if let Some(note) = syntax::regression_note(&path, before.as_deref(), &args.contents) {
             result.push_str(&format!("\n{note}"));
         }
-        result.push_str(&self.state.take_rules_for(Path::new(&args.path)));
+        result.push_str(&self.state.take_rules_for(&self.relative(&path)));
         Ok(result)
     }
 }
@@ -371,6 +395,10 @@ impl EditFileTool {
     /// file the model has seen from one that moved underneath it.
     pub fn with_state(workspace: Workspace, state: Arc<FileState>) -> Self {
         Self { workspace, state }
+    }
+
+    fn relative(&self, resolved: &Path) -> std::path::PathBuf {
+        relative_to(&self.workspace, resolved)
     }
 }
 
@@ -491,7 +519,7 @@ impl TypedTool for EditFileTool {
         if let Some(note) = syntax::regression_note(&path, Some(&body), &outcome.text) {
             result.push_str(&format!("\n{note}"));
         }
-        result.push_str(&self.state.take_rules_for(Path::new(&display)));
+        result.push_str(&self.state.take_rules_for(&self.relative(&path)));
         Ok(result)
     }
 }
@@ -543,8 +571,20 @@ struct EditOutcome {
 }
 
 /// The 1-based line range a byte span covers in `text`.
+///
+/// Counts newline *bytes* rather than slicing: `end - 1` lands mid-character
+/// whenever the match ends on a multi-byte one (`old_string: "café"`), and
+/// slicing there panics — which aborts the turn, since tool calls aren't
+/// unwind-guarded. A newline can't occur inside a UTF-8 sequence, so counting
+/// bytes is equivalent and total.
 fn line_span(text: &str, start: usize, end: usize) -> (usize, usize) {
-    let line_of = |offset: usize| text[..offset.min(text.len())].matches('\n').count() + 1;
+    let line_of = |offset: usize| {
+        text.as_bytes()[..offset.min(text.len())]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count()
+            + 1
+    };
     (line_of(start), line_of(end.saturating_sub(1).max(start)))
 }
 
@@ -1274,6 +1314,68 @@ mod tests {
             .unwrap();
 
         assert!(!out.contains("syntax error"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn an_edit_ending_on_a_multibyte_character_is_applied_not_a_crash() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.rs", "let who = café;\nlet n = 1;\n").await;
+
+        // The match ends mid-way through é's byte sequence; computing its line
+        // span used to slice there and panic, which aborts the whole turn.
+        EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({
+                "path": "f.rs", "old_string": "café", "new_string": "tea"
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(read_raw(&ws, "f.rs").await, "let who = tea;\nlet n = 1;\n");
+    }
+
+    #[tokio::test]
+    async fn a_convention_fires_for_an_absolute_path_too() {
+        let (_dir, ws) = workspace();
+        write(&ws, "app/main.tsx", "export const App = () => null;\n").await;
+        let (read, _write, _edit, state) = gated_tools(&ws);
+        state.set_rules(vec![PathRule::new(
+            "app/AGENTS.md",
+            "Frontend: no default exports.",
+            &["app/**".to_string()],
+        )]);
+
+        // A model that pasted an absolute path out of a grep must still see
+        // the convention governing that file.
+        let absolute = ws.resolve("app/main.tsx").unwrap();
+        let out = read
+            .invoke(serde_json::json!({"path": absolute.to_string_lossy()}))
+            .await
+            .unwrap();
+
+        assert!(out.contains("no default exports"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_read_does_not_burn_a_once_per_session_convention() {
+        let (_dir, ws) = workspace();
+        write(&ws, "app/real.tsx", "export const App = () => null;\n").await;
+        let (read, _write, _edit, state) = gated_tools(&ws);
+        state.set_rules(vec![PathRule::new(
+            "app/AGENTS.md",
+            "Frontend: no default exports.",
+            &["app/**".to_string()],
+        )]);
+
+        // The file doesn't exist, so the read fails…
+        read.invoke(serde_json::json!({"path": "app/missing.tsx"}))
+            .await
+            .unwrap_err();
+        // …and the convention is still waiting for the next real read.
+        let out = read
+            .invoke(serde_json::json!({"path": "app/real.tsx"}))
+            .await
+            .unwrap();
+        assert!(out.contains("no default exports"), "got: {out}");
     }
 
     #[tokio::test]

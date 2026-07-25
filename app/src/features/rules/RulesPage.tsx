@@ -86,15 +86,19 @@ export function RulesPage() {
     load();
   }, [load]);
 
-  // Every change writes the whole set, so edit, delete, and toggle are one path.
-  async function persist(next: RuleSpec[]) {
+  // Every change writes the whole set, so edit, delete, and toggle are one
+  // path. Returns whether it stuck, so callers holding unsaved input can keep
+  // holding it.
+  async function persist(next: RuleSpec[]): Promise<boolean> {
     setUser(next);
     try {
       await saveRules(next);
       setError(null);
+      return true;
     } catch (e) {
       setError(String(e));
       load();
+      return false;
     }
   }
 
@@ -112,9 +116,12 @@ export function RulesPage() {
     const rules = user ?? [];
     const at = rules.findIndex((r) => r.name === editing);
     const next = at >= 0 ? rules.map((r, i) => (i === at ? rule : r)) : [...rules, rule];
-    setEditing(null);
-    setDraft(null);
-    await persist(next);
+    // The editor stays open until the write lands: a failed save used to
+    // reload from disk over the optimistic entry, losing what was just typed.
+    if (await persist(next)) {
+      setEditing(null);
+      setDraft(null);
+    }
   }
 
   const rules = user ?? [];
@@ -308,17 +315,22 @@ function RuleEditor({
   const latest = useRef(0);
 
   useEffect(() => {
-    if (!draft.when) {
-      setCheck(null);
-      return;
-    }
+    // Drop the previous verdict the moment the pattern changes: it described
+    // a different pattern, and leaving it up would let a save inside the
+    // debounce window store something the engine rejects — the exact failure
+    // this page exists to prevent.
+    setCheck(null);
+    if (!draft.when) return;
     const seq = ++latest.current;
     const timer = setTimeout(() => {
       checkRulePattern(draft.when, sample)
         .then((result) => {
           if (seq === latest.current) setCheck(result);
         })
-        .catch(() => {});
+        .catch((e) => {
+          // A failed check is not a passing check.
+          if (seq === latest.current) setCheck({ error: String(e), matches: [] });
+        });
     }, 120);
     return () => clearTimeout(timer);
   }, [draft.when, sample]);
@@ -330,11 +342,15 @@ function RuleEditor({
       ? "You already have a rule with that name."
       : !draft.when
         ? "Add a pattern to watch for."
-        : check?.error
-          ? `That pattern doesn't compile: ${check.error}`
-          : !draft.message.trim()
-            ? "Say what the model should do instead."
-            : null;
+        : check === null
+          ? "Checking the pattern…"
+          : check.error
+            ? `That pattern doesn't compile: ${check.error}`
+            : draft.scope.length === 0
+              ? "Choose where it watches: tool calls, prose, or both."
+              : !draft.message.trim()
+                ? "Say what the model should do instead."
+                : null;
 
   const set = (patch: Partial<RuleSpec>) => setDraft({ ...draft, ...patch });
 
@@ -388,6 +404,11 @@ function RuleEditor({
                     ? draft.scope.filter((s) => s !== scope)
                     : [...draft.scope, scope],
                 })
+              }
+              title={
+                draft.scope.includes(scope) && draft.scope.length === 1
+                  ? "A rule has to watch something — turn the other one on first"
+                  : undefined
               }
             >
               {scope === "tool" ? "tool calls" : "prose"}
@@ -453,6 +474,7 @@ function Tester({
   draft: RuleSpec;
 }) {
   const hits = check?.error ? [] : (check?.matches ?? []);
+  const mirror = useRef<HTMLPreElement>(null);
   return (
     <div className="rule-tester">
       <div className="rule-tester-head">
@@ -466,13 +488,18 @@ function Tester({
         )}
       </div>
       <div className="rule-sample-wrap">
-        <pre className="rule-sample-mirror" aria-hidden="true">
+        <pre className="rule-sample-mirror" aria-hidden="true" ref={mirror}>
           {highlight(sample, hits)}
         </pre>
         <textarea
           className="rule-sample"
           value={sample}
           onChange={(e) => setSample(e.target.value)}
+          // The mirror is a separate layer, so it has to follow the textarea's
+          // scroll or the highlight drifts onto unrelated lines.
+          onScroll={(e) => {
+            if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop;
+          }}
           spellCheck={false}
           rows={2}
           aria-label="Sample model output"

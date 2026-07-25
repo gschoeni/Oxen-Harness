@@ -68,6 +68,39 @@ describe("RulesPage", () => {
     expect(screen.getByText(/thrown away/)).toBeTruthy();
   });
 
+  it("won't save a rule that watches nothing", async () => {
+    ipc.listRules.mockResolvedValue({
+      user: [rule()],
+      project: [],
+      project_path: ".oxen-harness/rules.json",
+    });
+
+    render(<RulesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /Edit no-unwrap/ }));
+    // Turning off the only scope would mean "watch everything" downstream,
+    // which is the opposite of what the user just asked for.
+    await userEvent.click(screen.getByRole("button", { name: "tool calls", pressed: true }));
+
+    expect(await screen.findByText(/Choose where it watches/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save rule" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("never saves against a verdict from a previous pattern", async () => {
+    ipc.listRules.mockResolvedValue({
+      user: [rule()],
+      project: [],
+      project_path: ".oxen-harness/rules.json",
+    });
+
+    render(<RulesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /Edit no-unwrap/ }));
+    await screen.findByText(/1 match/);
+
+    // Mid-edit, the old verdict must not still be gating the save.
+    await userEvent.type(screen.getByDisplayValue(".unwrap()"), "(");
+    expect(screen.getByRole("button", { name: "Save rule" }).hasAttribute("disabled")).toBe(true);
+  });
+
   it("refuses to save a pattern the agent's engine rejects", async () => {
     ipc.listRules.mockResolvedValue({
       user: [rule()],

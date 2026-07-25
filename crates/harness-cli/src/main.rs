@@ -267,7 +267,9 @@ async fn main() -> Result<()> {
     // Resume an existing transcript, or strike out on a fresh session.
     let (mut agent, session, resumed_entries) = match &args.resume {
         Some(id) => {
-            let agent = Agent::resume_from_store(client, tools, store.clone(), id.clone(), config)?;
+            let mut agent =
+                Agent::resume_from_store(client, tools, store.clone(), id.clone(), config)?;
+            agent.set_rules(endpoint::stream_rules(workspace.root()));
             let entries = agent.messages().len();
             (agent, id.clone(), Some(entries))
         }
@@ -281,8 +283,6 @@ async fn main() -> Result<()> {
                 ..Default::default()
             })?;
             let mut agent = Agent::new(client, tools, store.clone(), session.clone(), config)?;
-            // Corrections that watch the model's stream; they cost nothing
-            // until one matches.
             agent.set_rules(endpoint::stream_rules(workspace.root()));
             (agent, session, None)
         }

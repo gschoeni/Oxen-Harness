@@ -290,6 +290,12 @@ pub(crate) fn agent_config(
             smol: limits.smol_model,
             summary: limits.summary_model,
         },
+        // A model that keeps failing hands the call to the next one rather
+        // than ending the turn.
+        retry: harness_agent::RetryPolicy {
+            fallback_models: limits.fallback_models,
+            ..Default::default()
+        },
         // Gate tool calls behind the permission layer, with approval prompts
         // rendered through the terminal picker. Fleet/review subagents get the
         // gate's auto-deny form automatically (see AgentConfig::permissions).

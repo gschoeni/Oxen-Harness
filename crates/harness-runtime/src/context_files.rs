@@ -154,8 +154,11 @@ impl ContextFiles {
         let mut included: Vec<&ContextFile> = Vec::new();
         let mut mentioned: Vec<&ContextFile> = Vec::new();
         for file in budgeted {
-            if spent + file.body.len() <= MAX_TOTAL_CHARS {
-                spent += file.body.len();
+            // Chars, not bytes: the per-file clip is in chars, so measuring
+            // the total in bytes would demote a CJK file that fits.
+            let cost = file.body.chars().count();
+            if spent + cost <= MAX_TOTAL_CHARS {
+                spent += cost;
                 included.push(file);
             } else {
                 mentioned.push(file);
@@ -294,7 +297,13 @@ pub fn discover(root: &Path) -> ContextFiles {
             .join(file_name(&path))
             .to_string_lossy()
             .replace('\\', "/");
-        let subtree = format!("{}/**", rel_dir.to_string_lossy().replace('\\', "/"));
+        // Escaped: a directory named `[slug]` or `{a,b}` is a literal path
+        // here, but glob syntax to the matcher — unescaped it would match the
+        // wrong files, or fail to compile and silently govern nothing.
+        let subtree = format!(
+            "{}/**",
+            globset::escape(&rel_dir.to_string_lossy().replace('\\', "/"))
+        );
         if let Some(file) = load(&path, Scope::Nested, display, Some(vec![subtree])) {
             push(&mut files, &mut seen, file);
         }
@@ -626,6 +635,34 @@ mod tests {
             user_at < repo_at,
             "global section must precede repo section"
         );
+    }
+
+    #[test]
+    fn a_directory_whose_name_looks_like_a_glob_still_governs_its_subtree() {
+        let tmp = workspace();
+        // Next.js route groups are the common case: `[slug]` is a literal
+        // directory, and a character class to a glob matcher.
+        write(tmp.path(), "app/[slug]/AGENTS.md", "Route rules.");
+
+        let found = discover_isolated(tmp.path());
+
+        assert_eq!(
+            found.rules_for(Path::new("app/[slug]/page.tsx")).len(),
+            1,
+            "the nested file should govern its own directory"
+        );
+    }
+
+    #[test]
+    fn the_budget_counts_characters_the_way_the_clip_does() {
+        let tmp = workspace();
+        // 12k CJK characters: well inside the per-file clip, ~36KB of bytes.
+        write(tmp.path(), "AGENTS.md", &"文".repeat(12_000));
+
+        let section = discover_isolated(tmp.path()).prompt_section();
+
+        assert!(section.contains('文'), "the file should be in the prompt");
+        assert!(!section.contains("too large to include"), "{section}");
     }
 
     #[test]

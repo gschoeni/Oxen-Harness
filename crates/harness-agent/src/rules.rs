@@ -101,14 +101,24 @@ impl Rule {
         let scopes = if scopes.is_empty() {
             vec![Scope::Text, Scope::ToolArguments]
         } else {
-            scopes
+            let recognized: Vec<Scope> = scopes
                 .iter()
                 .filter_map(|s| match s.trim().to_ascii_lowercase().as_str() {
                     "text" | "prose" => Some(Scope::Text),
                     "tool" | "tools" | "tool_arguments" => Some(Scope::ToolArguments),
                     _ => None,
                 })
-                .collect()
+                .collect();
+            // A rule that watches nothing loads, lists, and never fires — the
+            // failure this whole module is built to avoid. A typo'd scope is
+            // reported like a bad pattern instead.
+            if recognized.is_empty() {
+                return Err(regex::Error::Syntax(format!(
+                    "unknown scope {:?} — use \"text\", \"tool\", or omit it for both",
+                    scopes.join(", ")
+                )));
+            }
+            recognized
         };
         Ok(Self {
             name: name.into(),
@@ -430,11 +440,13 @@ mod tests {
         assert_eq!(tool_only.repeat, Repeat::AfterRounds(5));
         assert!(!tool_only.interrupt);
 
-        // Nonsense in either field degrades to the documented default rather
-        // than dropping the rule.
-        let odd = Rule::compile("r", "x", &["nonsense".into()], "m", true, Some("soon")).unwrap();
-        assert!(odd.scopes.is_empty(), "an unknown scope watches nothing");
+        // An unreadable repeat degrades to the documented default…
+        let odd = Rule::compile("r", "x", &[], "m", true, Some("soon")).unwrap();
         assert_eq!(odd.repeat, Repeat::Once);
+        // …but a scope nobody recognizes is an error, not a rule that loads
+        // and silently never fires.
+        let bad_scope = Rule::compile("r", "x", &["tool_args".into()], "m", true, None);
+        assert!(bad_scope.is_err(), "a typo'd scope must be reported");
 
         assert!(Rule::compile("r", "(unclosed", &[], "m", true, None).is_err());
     }
