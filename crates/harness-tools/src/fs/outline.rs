@@ -63,8 +63,9 @@ impl Outline {
     }
 }
 
-/// The grammar for a path's extension, if we ship one.
-fn language_for(path: &Path) -> Option<Language> {
+/// The grammar for a path's extension, if we ship one. Shared with
+/// [`super::syntax`], which parses the same files to check an edit's result.
+pub(super) fn language_for(path: &Path) -> Option<Language> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     Some(match ext.as_str() {
         "rs" => tree_sitter_rust::LANGUAGE.into(),

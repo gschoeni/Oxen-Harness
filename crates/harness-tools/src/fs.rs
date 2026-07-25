@@ -19,6 +19,7 @@ use crate::{ToolError, TypedTool};
 mod edit_diagnostics;
 pub mod outline;
 pub mod state;
+pub mod syntax;
 
 pub use state::{FileState, Freshness, PathRule};
 
@@ -316,8 +317,9 @@ impl TypedTool for WriteFileTool {
         let _guard = self.state.lock(&path).await;
         // Creating a new file is unrestricted; replacing one wholesale is an
         // edit by another name and answers to the same contract.
-        if let Ok(current) = tokio::fs::read_to_string(&path).await {
-            self.state.guard(&args.path, &path, &current)?;
+        let before = tokio::fs::read_to_string(&path).await.ok();
+        if let Some(current) = &before {
+            self.state.guard(&args.path, &path, current)?;
         }
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -328,12 +330,12 @@ impl TypedTool for WriteFileTool {
         // The model has now seen this content — it wrote it — so a follow-up
         // edit in the same turn doesn't have to re-read first.
         self.state.record(&path, &args.contents);
-        Ok(format!(
-            "wrote {} bytes to {}{}",
-            args.contents.len(),
-            path.display(),
-            self.state.take_rules_for(Path::new(&args.path))
-        ))
+        let mut result = format!("wrote {} bytes to {}", args.contents.len(), path.display());
+        if let Some(note) = syntax::regression_note(&path, before.as_deref(), &args.contents) {
+            result.push_str(&format!("\n{note}"));
+        }
+        result.push_str(&self.state.take_rules_for(Path::new(&args.path)));
+        Ok(result)
     }
 }
 
@@ -459,12 +461,14 @@ impl TypedTool for EditFileTool {
         // Re-anchor on what's now on disk, so a follow-up edit this turn is
         // measured against the model's own change rather than the stale read.
         self.state.record(&path, &updated);
-        Ok(format!(
-            "edited {} ({}){}",
-            path.display(),
-            outcome.summary,
-            self.state.take_rules_for(Path::new(&display))
-        ))
+        let mut result = format!("edited {} ({})", path.display(), outcome.summary);
+        // A patch that drops a brace is the most common way an edit goes
+        // wrong, and nothing else notices until a build runs.
+        if let Some(note) = syntax::regression_note(&path, Some(&body), &outcome.text) {
+            result.push_str(&format!("\n{note}"));
+        }
+        result.push_str(&self.state.take_rules_for(Path::new(&display)));
+        Ok(result)
     }
 }
 
@@ -1147,6 +1151,38 @@ mod tests {
         .unwrap();
 
         assert!(read_raw(&ws, "config.rs").await.contains("Box<str>"));
+    }
+
+    #[tokio::test]
+    async fn an_edit_that_breaks_the_file_says_so_on_the_result() {
+        let (_dir, ws) = workspace();
+        write(&ws, "m.rs", "fn main() {\n    let x = 1;\n}\n").await;
+
+        // Dropping the closing brace is the classic bad patch.
+        let out = EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({
+                "path": "m.rs", "old_string": "    let x = 1;\n}", "new_string": "    let x = 1;"
+            }))
+            .await
+            .unwrap();
+
+        assert!(out.contains("syntax error"), "{out}");
+        assert!(out.contains("edited"), "the edit still applied: {out}");
+    }
+
+    #[tokio::test]
+    async fn a_clean_edit_is_not_second_guessed() {
+        let (_dir, ws) = workspace();
+        write(&ws, "m.rs", "fn main() {\n    let x = 1;\n}\n").await;
+
+        let out = EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({
+                "path": "m.rs", "old_string": "let x = 1;", "new_string": "let x = 2;"
+            }))
+            .await
+            .unwrap();
+
+        assert!(!out.contains("syntax error"), "{out}");
     }
 
     #[tokio::test]
