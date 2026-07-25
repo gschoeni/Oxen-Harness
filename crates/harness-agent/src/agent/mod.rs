@@ -1,10 +1,18 @@
 //! The [`Agent`] itself: construction, session lifecycle, and accessors.
 //!
-//! The turn loop lives in [`turn`], compression wiring in [`compression`] —
-//! child modules, so the agent's fields stay private to this module tree while
-//! each concern reads as one file.
+//! The work is split across child modules, so the agent's fields stay private
+//! to this module tree while each concern reads as one file:
+//!
+//! - [`turn`] — the model/tool loop from a user message to a final reply.
+//! - [`call`] — one model call: streaming, retry/fallback, usage, request log.
+//! - [`tools`] — running a single tool call, and the permission gate.
+//! - [`compaction`] — keeping the transcript inside the context window.
+//! - [`compression`] — the reversible outbound compression wiring.
 
+mod call;
+mod compaction;
 mod compression;
+mod tools;
 mod turn;
 
 use std::borrow::Cow;
