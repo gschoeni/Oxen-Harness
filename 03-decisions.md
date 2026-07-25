@@ -727,3 +727,31 @@ the old one. Both live probes (`live_limits_probe`, `live_cache_probe`) take
 `OXEN_BASE_URL` so future deployments are verifiable the same way. Observed
 and worth tracking upstream: the new backend's usage `cost` field bills cached
 prompt tokens at the full input rate (identical cost with 0 vs 4,343 cached).
+
+**Read-before-edit is enforced, and outlines are only safe because of it** (2026-07-24)
+Two changes from the oh-my-pi/pi parity pass are load-bearing together. Edits
+now require that the model has read the file this session and that the file
+still matches what it read; separately, a whole-file read of a large source
+file returns a tree-sitter outline with function bodies elided. The second
+trades tokens for the risk of editing code nobody looked at — exactly the
+failure the first one closes — so `FileState` records which line *ranges*
+reached the model, and an edit landing inside an elided body is refused with
+the range to re-read. Shipping the outline without the range tracking would
+have been a net regression, however good the token numbers looked.
+
+**Fleet isolation is opt-in per call, and declines rather than pretending**
+(2026-07-24) `spawn_agents` gained `isolate_edits`, which cuts a detached git
+worktree per lane. It is not the default: most fleets read, and worktrees cost
+a checkout each. When the project isn't a git repository the fleet still runs,
+shared, with a NOTE saying so — silently sharing a workspace after isolation
+was requested is worse than declining, because the model would report clean
+parallel edits that actually collided.
+
+**A model switch reuses the retry event rather than adding an event kind**
+(2026-07-24) Fallback chains needed to tell the user "this call moved to
+another model". A new `AgentEvent` variant would have rippled through
+event.rs → host translate → harness-protocol → the CLI renderer → the desktop
+TS types for what is, in the end, a retry with a different endpoint. The
+payload gained an optional `switching_to` instead: serde-optional keeps the
+wire backwards compatible, and both hosts render "N attempts spent, continuing
+on X" rather than "attempt 5 of 4", which would read as a bug.

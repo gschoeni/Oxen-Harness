@@ -1,7 +1,7 @@
 # Project Status & Roadmap
 
 **Purpose:** Where we are, what's next, what's done. Pull this in for any working session.
-**Updated:** 2026-07-14
+**Updated:** 2026-07-24
 
 ---
 
@@ -381,6 +381,34 @@ Context growth, flaky endpoints, and recovering dead turns:
   rewrite only the touched record byte-for-byte; Parquet rewrites the file
   under a 256 MB cap and is read-only beyond it. CSV/TSV/JSONL keep a Raw
   toggle into the ordinary code editor.
+
+## Recent — parity pass against oh-my-pi and pi (2026-07-24)
+
+Branch `harness-parity-improvements`; the study and full roadmap are in
+`plans/harness-parity-improvements.md`, whose Progress log tracks what shipped.
+
+- **Project conventions in the prompt**: `AGENTS.md`/`CLAUDE.md` (plus Cursor,
+  Cline, and Copilot rule files) are discovered and folded into the system
+  prompt inside the cached prefix; path-scoped rules ride along on the first
+  touch of a file they govern. `/context` shows what was loaded.
+- **File-editing safety**: edits are gated on a prior read, refused when the
+  file moved on disk since that read, and serialized per path — the last of
+  which is what makes parallel fleet lanes survivable at all.
+- **`edit_file` takes a batch** of replacements (matched against the original,
+  all-or-nothing), and preserves CRLF/BOM.
+- **Truncated `run_shell` output is retrievable** rather than destroyed, via
+  the existing CCR store; `retrieve_original` is now always registered.
+- **Structural reads**: a whole-file read of a big source file returns an
+  outline with function bodies elided, and editing into an elided range is
+  refused with the range to re-read.
+- **Model roles + fallback chains**: `smol`/`summary` route work off the
+  session model; a model that keeps failing transiently hands the call to the
+  next configured one instead of ending the turn.
+- **`run_shell` remembers `cd` and `export`** between calls.
+- **Post-edit syntax check**: an edit that leaves the file unparseable says so
+  on the tool result, comparing before/after so an already-broken file isn't
+  blamed on the edit that touched it.
+- **Editing fleets isolate** in per-lane git worktrees and return patches.
 
 ## What's left / next
 
