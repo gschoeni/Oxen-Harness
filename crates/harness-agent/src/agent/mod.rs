@@ -564,9 +564,8 @@ impl Agent {
     /// when set, else the session model.
     pub(crate) fn summary_model(&self) -> &str {
         self.config
-            .summary_model
-            .as_deref()
-            .unwrap_or(&self.config.model)
+            .roles
+            .resolve(crate::config::Role::Summary, &self.config.model)
     }
 
     /// Only the public Oxen hub catalog has rates this harness can apply. Local

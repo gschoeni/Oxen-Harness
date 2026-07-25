@@ -19,6 +19,11 @@ use crate::prompt::default_system_prompt;
 pub struct RetryPolicy {
     pub max_attempts: u32,
     pub base_delay: Duration,
+    /// Models to fall back to, in order, once `max_attempts` on the current
+    /// model are spent and the failure still looks transient. A provider
+    /// having a bad day shouldn't end the turn when another model is healthy;
+    /// the switch is per-call, so the session model is unchanged.
+    pub fallback_models: Vec<String>,
 }
 
 /// The longest a single retry wait may be, whatever the configured base and
@@ -33,6 +38,7 @@ impl Default for RetryPolicy {
         Self {
             max_attempts: 4,
             base_delay: Duration::from_secs(1),
+            fallback_models: Vec::new(),
         }
     }
 }
@@ -44,6 +50,42 @@ impl RetryPolicy {
         self.base_delay
             .saturating_mul(2u32.saturating_pow(attempt.saturating_sub(1)))
             .min(MAX_RETRY_DELAY)
+    }
+}
+
+/// Which model does which kind of work.
+///
+/// One session model doing everything is the expensive default: a fleet lane
+/// grepping for call sites, a review pass, and a compaction summary do not
+/// need the model that writes the code. Each role falls back to the session
+/// model when unset, so an unconfigured harness behaves exactly as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// The session model — normal turns.
+    Default,
+    /// Cheap and fast, for bulk mechanical work: fleet lanes, review steps.
+    Smol,
+    /// Compaction summaries, which re-read a whole elided span.
+    Summary,
+}
+
+/// Per-role model overrides. Empty by default: no routing at all.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelRoles {
+    pub smol: Option<String>,
+    pub summary: Option<String>,
+}
+
+impl ModelRoles {
+    /// The model for `role`, falling back to `session_model` when that role
+    /// has no override.
+    pub fn resolve<'a>(&'a self, role: Role, session_model: &'a str) -> &'a str {
+        let configured = match role {
+            Role::Default => None,
+            Role::Smol => self.smol.as_deref(),
+            Role::Summary => self.summary.as_deref(),
+        };
+        configured.unwrap_or(session_model)
     }
 }
 
@@ -111,11 +153,11 @@ pub struct AgentConfig {
     /// [`crate::cache`]). Defaults to `Auto`: marked only for model families
     /// known to honor `cache_control`, ignored harmlessly elsewhere.
     pub prompt_cache: crate::cache::PromptCacheMode,
-    /// The model used for compaction summaries (the synchronous splice and the
-    /// speculative prefire). `None` uses the session model — correct but
-    /// expensive: summarization re-reads the whole elided span, so routing it
-    /// to a cheaper model cuts compaction cost without touching turn quality.
-    pub summary_model: Option<String>,
+    /// Per-role model overrides (see [`ModelRoles`]). Unset roles use the
+    /// session model — correct but expensive: a compaction summary re-reads a
+    /// whole elided span, and a fleet lane greps, neither of which needs the
+    /// model that writes the code.
+    pub roles: ModelRoles,
     /// Where to append the developer request log (JSONL, one entry per model
     /// call — prompt size, cache-prefix diff, latency, retries, and the
     /// provider's reported usage including cached tokens). `None` disables it.
@@ -168,7 +210,7 @@ impl Default for AgentConfig {
             initial_attachments: Vec::new(),
             compression: CompressionMode::Off,
             prompt_cache: crate::cache::PromptCacheMode::default(),
-            summary_model: None,
+            roles: ModelRoles::default(),
             request_log: None,
             budget: None,
             retry: RetryPolicy::default(),
@@ -181,6 +223,25 @@ impl Default for AgentConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unset_role_uses_the_session_model() {
+        let roles = ModelRoles::default();
+        assert_eq!(roles.resolve(Role::Smol, "opus"), "opus");
+        assert_eq!(roles.resolve(Role::Summary, "opus"), "opus");
+    }
+
+    #[test]
+    fn a_configured_role_routes_away_from_the_session_model() {
+        let roles = ModelRoles {
+            smol: Some("haiku".into()),
+            summary: None,
+        };
+        assert_eq!(roles.resolve(Role::Smol, "opus"), "haiku");
+        // Roles are independent: configuring one doesn't route the others.
+        assert_eq!(roles.resolve(Role::Summary, "opus"), "opus");
+        assert_eq!(roles.resolve(Role::Default, "opus"), "opus");
+    }
 
     #[test]
     fn retry_delay_doubles_then_clamps() {

@@ -1330,13 +1330,15 @@ export const useStore = create<AppState>((set, get) => {
       set((s) => {
         if (s.threads[e.session] === undefined) return {};
         const wait = Math.max(1, Math.ceil(e.delay_ms / 1000));
+        // A fallback restarts the attempt budget on a different model, so
+        // "attempt 5 of 4" would read as a bug rather than a recovery.
+        const notice = e.switching_to
+          ? `Model call failed (${e.error}) — ${e.max_attempts} attempts spent, continuing on ${e.switching_to}`
+          : `Model call failed (${e.error}) — retrying in ${wait}s (attempt ${e.attempt + 1} of ${e.max_attempts})`;
         return {
           threads: {
             ...s.threads,
-            [e.session]: appendNotice(
-              s.threads[e.session],
-              `Model call failed (${e.error}) — retrying in ${wait}s (attempt ${e.attempt + 1} of ${e.max_attempts})`,
-            ),
+            [e.session]: appendNotice(s.threads[e.session], notice),
           },
         };
       }),

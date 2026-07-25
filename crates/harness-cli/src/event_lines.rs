@@ -153,6 +153,7 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
             max_attempts,
             delay_ms,
             error,
+            switching_to,
         } => Cue::Block {
             lines: vec![format!(
                 "  {} {}",
@@ -161,7 +162,8 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
                     *attempt,
                     *max_attempts,
                     *delay_ms,
-                    error
+                    error,
+                    switching_to.as_deref(),
                 )),
             )],
             then: NextSpinner::Thinking,

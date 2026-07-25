@@ -40,7 +40,19 @@ pub(crate) fn ends_mid_turn(messages: &[harness_llm::ChatMessage]) -> bool {
 
 /// The one-line notice for a transient model-call failure being retried with
 /// backoff — shared by the classic renderer and the live composer.
-pub(crate) fn retry_notice(attempt: u32, max_attempts: u32, delay_ms: u64, error: &str) -> String {
+pub(crate) fn retry_notice(
+    attempt: u32,
+    max_attempts: u32,
+    delay_ms: u64,
+    error: &str,
+    switching_to: Option<&str>,
+) -> String {
+    // A model switch is the more useful headline: the attempt counter is
+    // starting over on a different endpoint, so reporting it as "attempt 5 of
+    // 4" would read as a bug.
+    if let Some(model) = switching_to {
+        return format!("{error} — {max_attempts} attempts spent, continuing on {model}");
+    }
     let secs = (delay_ms as f64 / 1000.0).ceil() as u64;
     format!(
         "{error} — retrying in {secs}s (attempt {} of {max_attempts})",
@@ -474,9 +486,19 @@ mod tests {
 
     #[test]
     fn retry_notice_reports_the_upcoming_attempt_and_wait() {
-        let notice = retry_notice(1, 4, 2000, "Oxen API error (502): provider error");
+        let notice = retry_notice(1, 4, 2000, "Oxen API error (502): provider error", None);
         assert!(notice.contains("Oxen API error (502)"));
         assert!(notice.contains("retrying in 2s"));
         assert!(notice.contains("attempt 2 of 4"));
+    }
+
+    #[test]
+    fn retry_notice_reports_a_model_switch_instead_of_a_countdown() {
+        // The attempt counter restarts on the new model, so showing "attempt 5
+        // of 4" would read as a bug rather than a fallback.
+        let notice = retry_notice(4, 4, 0, "Oxen API error (503)", Some("claude-sonnet-5"));
+        assert!(notice.contains("continuing on claude-sonnet-5"), "{notice}");
+        assert!(!notice.contains("attempt 5"), "{notice}");
+        assert!(!notice.contains("retrying in"), "{notice}");
     }
 }

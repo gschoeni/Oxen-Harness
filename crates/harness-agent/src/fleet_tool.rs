@@ -130,6 +130,12 @@ impl FleetSpawner {
         // deadlock reasoning as `subagent_tools` stripping `ask_user_question`):
         // their gate auto-denies and tells the lane to report the command back.
         config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
+        // Lanes read and grep far more than they write, and there are N of
+        // them: route them to the `smol` role when the user configured one.
+        config.model = config
+            .roles
+            .resolve(crate::config::Role::Smol, &config.model)
+            .to_string();
         let store = Arc::new(HistoryStore::open_in_memory()?);
         let session = store.create_session(&SessionMeta {
             model: config.model.clone(),

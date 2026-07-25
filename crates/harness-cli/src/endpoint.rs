@@ -282,7 +282,12 @@ pub(crate) fn agent_config(
         budget: limits
             .max_session_tokens
             .map(harness_agent::SessionBudget::new),
-        summary_model: limits.summary_model,
+        // Route the work that doesn't need the session model: compaction
+        // summaries and fleet/review lanes.
+        roles: harness_agent::ModelRoles {
+            smol: limits.smol_model,
+            summary: limits.summary_model,
+        },
         // Gate tool calls behind the permission layer, with approval prompts
         // rendered through the terminal picker. Fleet/review subagents get the
         // gate's auto-deny form automatically (see AgentConfig::permissions).

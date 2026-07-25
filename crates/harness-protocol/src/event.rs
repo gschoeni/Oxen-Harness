@@ -133,6 +133,10 @@ pub enum ProtocolEvent {
         max_attempts: u32,
         delay_ms: u64,
         error: String,
+        /// The model this call is moving to, when the retries on the current
+        /// one are spent. Absent for an ordinary backoff retry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        switching_to: Option<String>,
     },
     /// Stale tool output was compressed (or its savings measured, in audit
     /// mode) before a model call.

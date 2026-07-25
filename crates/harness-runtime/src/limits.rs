@@ -24,6 +24,16 @@ pub struct Limits {
     /// `None` summarizes with the session model.
     #[serde(default)]
     pub summary_model: Option<String>,
+    /// The model bulk mechanical work runs on: fleet lanes and review passes,
+    /// which grep and read far more than they write. `None` uses the session
+    /// model.
+    #[serde(default)]
+    pub smol_model: Option<String>,
+    /// Models to try, in order, when the session model keeps failing
+    /// transiently and its retries are spent. Empty means a failing provider
+    /// ends the turn, which is the old behavior.
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
 }
 
 /// Read the saved limits (defaults to no limits on a fresh install or an
@@ -53,15 +63,21 @@ mod tests {
             let fresh = load();
             assert!(fresh.max_session_tokens.is_none());
             assert!(fresh.summary_model.is_none());
+            assert!(fresh.smol_model.is_none());
+            assert!(fresh.fallback_models.is_empty());
 
             save(&Limits {
                 max_session_tokens: Some(2_000_000),
                 summary_model: Some("gemini-2-5-flash".into()),
+                smol_model: Some("claude-haiku-4-5".into()),
+                fallback_models: vec!["claude-sonnet-5".into()],
             })
             .unwrap();
             let loaded = load();
             assert_eq!(loaded.max_session_tokens, Some(2_000_000));
             assert_eq!(loaded.summary_model.as_deref(), Some("gemini-2-5-flash"));
+            assert_eq!(loaded.smol_model.as_deref(), Some("claude-haiku-4-5"));
+            assert_eq!(loaded.fallback_models, vec!["claude-sonnet-5".to_string()]);
         });
     }
 }

@@ -482,6 +482,10 @@ export interface RetryEvent {
   /** How long the agent waits before the next attempt. */
   delay_ms: number;
   error: string;
+  /** Set when the attempts on the current model are spent and the call moves to
+   *  a configured fallback instead of failing the turn. The session model is
+   *  unchanged — only this call switches. */
+  switching_to?: string;
 }
 
 /** The context-compression setting: off (send requests as recorded), audit

@@ -71,5 +71,9 @@ pub enum AgentEvent {
         max_attempts: u32,
         delay_ms: u64,
         error: String,
+        /// Set when the retries on the current model are spent and the call is
+        /// moving to a configured fallback instead of failing the turn. The
+        /// session model is unchanged — only this call switches.
+        switching_to: Option<String>,
     },
 }

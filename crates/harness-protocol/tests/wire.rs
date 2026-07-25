@@ -256,6 +256,15 @@ fn remaining_variants_round_trip() {
             max_attempts: 3,
             delay_ms: 500,
             error: "connection reset".into(),
+            switching_to: None,
+        },
+        ProtocolEvent::Retry {
+            session: "s1".into(),
+            attempt: 3,
+            max_attempts: 3,
+            delay_ms: 0,
+            error: "provider error".into(),
+            switching_to: Some("backup-model".into()),
         },
         ProtocolEvent::Compression {
             session: "s1".into(),
@@ -384,6 +393,7 @@ fn legacy_channel_names() {
                 max_attempts: 0,
                 delay_ms: 0,
                 error: "e".into(),
+                switching_to: None,
             },
             "agent://retry",
         ),

@@ -521,7 +521,7 @@ impl Agent {
             .config
             .prompt_cache
             .anchors_for(&self.config.model, &outbound);
-        let request = ChatRequest::new(&self.config.model, outbound)
+        let mut request = ChatRequest::new(&self.config.model, outbound)
             .with_tools(tool_defs.to_vec())
             .max_tokens(self.config.effective_response_reserve())
             .streaming(true)
@@ -530,6 +530,8 @@ impl Agent {
         let retry = self.config.retry.clone();
         let started = std::time::Instant::now();
         let mut attempt: u32 = 1;
+        // How far down `retry.fallback_models` this call has walked.
+        let mut fallbacks = retry.fallback_models.iter();
         loop {
             let result = self
                 .client
@@ -557,6 +559,44 @@ impl Agent {
                     };
                     return Ok((assembled, outcome));
                 }
+                // Retries on this model are spent but another model is
+                // configured: a provider having a bad minute shouldn't end the
+                // turn. Switch and start its attempt budget fresh, with no
+                // backoff — a different endpoint is a fresh chance, not a
+                // repeat of the one that just failed.
+                Err(e)
+                    if e.is_transient()
+                        && attempt >= retry.max_attempts
+                        && fallbacks.clone().next().is_some() =>
+                {
+                    let next = fallbacks.next().expect("checked above").clone();
+                    crate::errlog::record(
+                        self.config.error_log.as_deref(),
+                        "model_fallback",
+                        serde_json::json!({
+                            "session": self.session_id(),
+                            "from": request.model,
+                            "to": next,
+                            "attempts": attempt,
+                            "error": e.to_string(),
+                        }),
+                    );
+                    on_event(&AgentEvent::Retrying {
+                        attempt,
+                        max_attempts: retry.max_attempts,
+                        delay_ms: 0,
+                        error: e.to_string(),
+                        switching_to: Some(next.clone()),
+                    });
+                    // Cache breakpoints are per model family, so re-derive
+                    // them for the model actually about to be called.
+                    request.cache_anchors = self
+                        .config
+                        .prompt_cache
+                        .anchors_for(&next, &request.messages);
+                    request.model = next;
+                    attempt = 1;
+                }
                 Err(e) if e.is_transient() && attempt < retry.max_attempts => {
                     let delay = retry.delay_after(attempt);
                     crate::errlog::record(
@@ -577,6 +617,7 @@ impl Agent {
                         max_attempts: retry.max_attempts,
                         delay_ms: delay.as_millis() as u64,
                         error: e.to_string(),
+                        switching_to: None,
                     });
                     // A stop during the backoff wait ends the turn like any
                     // other cancellation: quietly, with nothing assembled.
@@ -1506,6 +1547,7 @@ mod tests {
         RetryPolicy {
             max_attempts,
             base_delay: std::time::Duration::from_millis(1),
+            fallback_models: Vec::new(),
         }
     }
 
@@ -1568,6 +1610,77 @@ mod tests {
         assert!(retries[0].2.contains("502"), "event should carry the error");
         bad.assert_async().await;
         good.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_model_that_stays_down_falls_back_instead_of_failing_the_turn() {
+        let mut server = mockito::Server::new_async().await;
+        // Two mocks keyed on the model in the request body: the session model
+        // is having a bad day, the fallback is healthy.
+        let down = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("claude-opus-4-8".into()))
+            .with_status(503)
+            .with_body(r#"{"error":{"title":"The model provider returned an error."}}"#)
+            .expect(2)
+            .create_async()
+            .await;
+        let healthy = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("backup-model".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("answered by the backup"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let retry = RetryPolicy {
+            fallback_models: vec!["backup-model".to_string()],
+            ..fast_retry(2)
+        };
+        let mut agent = retry_test_agent(server.url(), retry);
+        let mut switches = Vec::new();
+        let out = agent
+            .run_turn("hello", |e| {
+                if let AgentEvent::Retrying {
+                    switching_to: Some(model),
+                    ..
+                } = e
+                {
+                    switches.push(model.clone());
+                }
+            })
+            .await
+            .expect("the fallback model should carry the turn");
+
+        assert_eq!(out, "answered by the backup");
+        assert_eq!(switches, vec!["backup-model".to_string()]);
+        down.assert_async().await;
+        healthy.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn the_fallback_chain_is_exhausted_before_the_turn_fails() {
+        let mut server = mockito::Server::new_async().await;
+        let all_down = server
+            .mock("POST", "/chat/completions")
+            .with_status(503)
+            .with_body(r#"{"error":{"title":"The model provider returned an error."}}"#)
+            .expect(4) // 2 attempts on the session model, then 2 on the backup
+            .create_async()
+            .await;
+
+        let retry = RetryPolicy {
+            fallback_models: vec!["backup-model".to_string()],
+            ..fast_retry(2)
+        };
+        let mut agent = retry_test_agent(server.url(), retry);
+        agent
+            .run_turn("hello", |_| {})
+            .await
+            .expect_err("every model is down, so the turn must still fail");
+        all_down.assert_async().await;
     }
 
     #[tokio::test]

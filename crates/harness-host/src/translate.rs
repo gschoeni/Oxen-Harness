@@ -88,12 +88,14 @@ pub fn agent_event(
             max_attempts,
             delay_ms,
             error,
+            switching_to,
         } => ProtocolEvent::Retry {
             session,
             attempt: *attempt,
             max_attempts: *max_attempts,
             delay_ms: *delay_ms,
             error: error.clone(),
+            switching_to: switching_to.clone(),
         },
         AgentEvent::Compression {
             mode,

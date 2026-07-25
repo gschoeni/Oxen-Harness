@@ -48,7 +48,7 @@ mod test_support;
 
 pub use agent::Agent;
 pub use cache::PromptCacheMode;
-pub use config::{AgentConfig, RetryPolicy, SessionBudget};
+pub use config::{AgentConfig, ModelRoles, RetryPolicy, Role, SessionBudget};
 pub use error::AgentError;
 pub use event::AgentEvent;
 pub use fleet_tool::{FleetSpawner, FleetTool, FLEET_TOOL};
