@@ -198,11 +198,13 @@ pub(crate) fn register_fleet_tool(
     tools: &mut ToolRegistry,
     client: &harness_llm::OxenClient,
     config: &AgentConfig,
+    workspace: &Workspace,
     usage_store: Arc<HistoryStore>,
     ui: &Ui,
 ) {
     let spawner = Arc::new(
         harness_agent::FleetSpawner::new(client.clone(), tools.clone(), config.clone())
+            .with_workspace(workspace.root())
             .with_usage_store(usage_store),
     );
     // Keep a handle so a later model/endpoint swap reaches future subagents;

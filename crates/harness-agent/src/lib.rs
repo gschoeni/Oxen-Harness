@@ -35,6 +35,7 @@ mod error;
 mod event;
 mod interject;
 mod prompt;
+pub mod worktree;
 
 pub mod budget;
 pub mod cache;

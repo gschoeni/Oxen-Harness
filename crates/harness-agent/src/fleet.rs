@@ -147,15 +147,18 @@ enum Msg {
 /// `spawn_agents` tool uses a standalone [`FleetSpawner`](crate::fleet_tool::FleetSpawner)
 /// so a fleet can run from inside a turn.
 pub trait SpawnAgent {
-    fn spawn(&self) -> Result<Agent, AgentError>;
+    /// Build the agent for lane `index`. The index is passed so a spawner can
+    /// give each lane its own workspace (see [`crate::worktree`]) and match
+    /// the resulting changes back to the task that made them.
+    fn spawn(&self, index: usize) -> Result<Agent, AgentError>;
 }
 
 impl<F> SpawnAgent for F
 where
-    F: Fn() -> Result<Agent, AgentError>,
+    F: Fn(usize) -> Result<Agent, AgentError>,
 {
-    fn spawn(&self) -> Result<Agent, AgentError> {
-        self()
+    fn spawn(&self, index: usize) -> Result<Agent, AgentError> {
+        self(index)
     }
 }
 
@@ -194,7 +197,7 @@ where
     for (index, task) in tasks.into_iter().enumerate() {
         // Build the subagent up front so construction errors surface here,
         // synchronously, instead of as a mid-flight task failure.
-        let mut agent = spawn.spawn()?;
+        let mut agent = spawn.spawn(index)?;
         agent.set_cancel_token(cancel.clone());
         let tx = tx.clone();
         let slots = slots.clone();
@@ -339,7 +342,7 @@ mod tests {
         let base = base_agent(&server.url());
         let mut events = Vec::new();
         let outcomes = run_fleet(
-            || base.side_agent(),
+            |_| base.side_agent(),
             vec![
                 SubagentTask::new("alpha", "do TASK-ALPHA"),
                 SubagentTask::new("beta", "do TASK-BETA"),
@@ -395,7 +398,7 @@ mod tests {
         let base = base_agent(&server.url());
         let mut order = Vec::new();
         run_fleet(
-            || base.side_agent(),
+            |_| base.side_agent(),
             vec![
                 SubagentTask::new("first", "go"),
                 SubagentTask::new("second", "go"),
@@ -453,7 +456,7 @@ mod tests {
         let base = base_agent(&server.url());
         let mut completed = Vec::new();
         let outcomes = run_fleet(
-            || base.side_agent(),
+            |_| base.side_agent(),
             vec![
                 SubagentTask::new("good", "do TASK-GOOD"),
                 SubagentTask::new("bad", "do TASK-BAD"),
@@ -491,7 +494,7 @@ mod tests {
         cancel.cancel();
 
         let outcomes = run_fleet(
-            || base.side_agent(),
+            |_| base.side_agent(),
             vec![SubagentTask::new("a", "go"), SubagentTask::new("b", "go")],
             2,
             cancel.clone(),
@@ -510,7 +513,7 @@ mod tests {
     async fn empty_task_list_returns_no_outcomes() {
         let base = base_agent("http://127.0.0.1:1/api/ai");
         let outcomes = run_fleet(
-            || base.side_agent(),
+            |_| base.side_agent(),
             Vec::new(),
             4,
             CancellationToken::new(),

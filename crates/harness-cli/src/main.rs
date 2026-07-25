@@ -262,7 +262,7 @@ async fn main() -> Result<()> {
     let base_url = client.base_url().to_string();
     let config = agent_config(&model, context_window, &tools, &workspace, &ui);
 
-    endpoint::register_fleet_tool(&mut tools, &client, &config, store.clone(), &ui);
+    endpoint::register_fleet_tool(&mut tools, &client, &config, &workspace, store.clone(), &ui);
 
     // Resume an existing transcript, or strike out on a fresh session.
     let (mut agent, session, resumed_entries) = match &args.resume {

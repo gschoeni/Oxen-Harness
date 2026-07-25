@@ -678,6 +678,7 @@ impl SessionService {
         tools: &mut ToolRegistry,
         client: &OxenClient,
         config: &AgentConfig,
+        workspace_root: &Path,
         usage_store: Arc<HistoryStore>,
     ) {
         if !harness_runtime::tools::load().is_enabled(harness_agent::FLEET_TOOL) {
@@ -685,6 +686,7 @@ impl SessionService {
         }
         let spawner = Arc::new(
             harness_agent::FleetSpawner::new(client.clone(), tools.clone(), config.clone())
+                .with_workspace(workspace_root)
                 .with_usage_store(usage_store),
         );
         tools.register_typed(harness_agent::FleetTool::new(
@@ -728,7 +730,14 @@ impl SessionService {
             context_window,
             workspace_root,
         );
-        self.register_fleet(&session, &mut tools, &client, &config, store.clone());
+        self.register_fleet(
+            &session,
+            &mut tools,
+            &client,
+            &config,
+            workspace_root,
+            store.clone(),
+        );
         Agent::new(client, tools, store, session, config).map_err(|e| e.to_string())
     }
 
@@ -751,7 +760,14 @@ impl SessionService {
             context_window,
             workspace_root,
         );
-        self.register_fleet(&session_id, &mut tools, &client, &config, store.clone());
+        self.register_fleet(
+            &session_id,
+            &mut tools,
+            &client,
+            &config,
+            workspace_root,
+            store.clone(),
+        );
         Agent::resume_from_store(client, tools, store, session_id, config)
             .map_err(|e| e.to_string())
     }

@@ -205,7 +205,7 @@ impl ReviewRunner {
             .collect();
 
         let outcomes = fleet::run_fleet(
-            || agent.side_agent(),
+            |_| agent.side_agent(),
             tasks,
             self.config.max_parallel,
             self.cancel.clone(),

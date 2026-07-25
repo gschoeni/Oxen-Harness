@@ -49,6 +49,12 @@ pub const DEFAULT_FLEET_PARALLEL: usize = 3;
 /// the stale client/model captured at startup.
 pub struct FleetSpawner {
     tools: ToolRegistry,
+    /// The project root, so a fleet can cut worktrees from it. `None` (a
+    /// spawner built without one) simply never isolates.
+    workspace_root: StdMutex<Option<std::path::PathBuf>>,
+    /// Per-lane checkouts for the fleet currently running, indexed by lane.
+    /// Installed by the tool before `run_fleet` and cleared after.
+    lanes: StdMutex<Vec<std::sync::Arc<crate::worktree::LaneWorktree>>>,
     /// The client + config subagents are built from, updated in lockstep with
     /// the live agent via [`FleetSpawner::set_client`] / [`set_model`].
     endpoint: StdMutex<Endpoint>,
@@ -71,10 +77,47 @@ impl FleetSpawner {
     pub fn new(client: OxenClient, tools: ToolRegistry, config: AgentConfig) -> Self {
         Self {
             tools,
+            workspace_root: StdMutex::new(None),
+            lanes: StdMutex::new(Vec::new()),
             endpoint: StdMutex::new(Endpoint { client, config }),
             cancel: StdMutex::new(CancellationToken::new()),
             usage_store: None,
         }
+    }
+
+    /// Tell the spawner which project it is working in, enabling `isolation:
+    /// "worktree"`. Without it a fleet always shares the parent's workspace.
+    pub fn with_workspace(self, root: impl Into<std::path::PathBuf>) -> Self {
+        *self
+            .workspace_root
+            .lock()
+            .expect("fleet workspace poisoned") = Some(root.into());
+        self
+    }
+
+    /// Cut one detached worktree per lane, or `None` when the project isn't a
+    /// git repository (isolation is an upgrade, not a precondition).
+    fn open_lanes(
+        &self,
+        count: usize,
+    ) -> Option<Vec<std::sync::Arc<crate::worktree::LaneWorktree>>> {
+        let root = self
+            .workspace_root
+            .lock()
+            .expect("fleet workspace poisoned")
+            .clone()?;
+        let lanes: Vec<_> = crate::worktree::create(&root, "fleet", count)?
+            .into_iter()
+            .map(std::sync::Arc::new)
+            .collect();
+        *self.lanes.lock().expect("fleet lanes poisoned") = lanes.clone();
+        Some(lanes)
+    }
+
+    /// Release the current fleet's worktrees (removing any the caller didn't
+    /// keep a handle to).
+    fn close_lanes(&self) {
+        self.lanes.lock().expect("fleet lanes poisoned").clear();
     }
 
     /// Attach the host's persistent usage ledger to future fleet agents.
@@ -121,7 +164,7 @@ impl FleetSpawner {
 
     /// One detached subagent: in-memory store, the current client/config, and
     /// the subagent-narrowed tool set (no recursion, no interactive tools).
-    fn build_agent(&self) -> Result<Agent, AgentError> {
+    fn build_agent(&self, index: usize) -> Result<Agent, AgentError> {
         let (client, mut config) = {
             let endpoint = self.endpoint.lock().expect("fleet endpoint poisoned");
             (endpoint.client.clone(), endpoint.config.clone())
@@ -136,6 +179,18 @@ impl FleetSpawner {
             .roles
             .resolve(crate::config::Role::Smol, &config.model)
             .to_string();
+        // An isolated lane works in its own checkout, so its file and shell
+        // tools must point there rather than at the shared project.
+        let lane = self
+            .lanes
+            .lock()
+            .expect("fleet lanes poisoned")
+            .get(index)
+            .cloned();
+        let tools = match &lane {
+            Some(lane) => rooted_tools(&self.tools, lane.path()),
+            None => self.tools.clone(),
+        };
         let store = Arc::new(HistoryStore::open_in_memory()?);
         let session = store.create_session(&SessionMeta {
             model: config.model.clone(),
@@ -143,7 +198,7 @@ impl FleetSpawner {
         })?;
         let mut agent = Agent::new(
             client,
-            crate::agent::subagent_tools(self.tools.clone()),
+            crate::agent::subagent_tools(tools),
             store,
             session,
             config,
@@ -154,6 +209,76 @@ impl FleetSpawner {
         }
         Ok(agent)
     }
+}
+
+/// The parent's tool set with every workspace-rooted tool rebuilt against
+/// `root`, so an isolated lane reads, writes, greps, and shells inside its own
+/// checkout. Host-surface tools (canvas, preview, custom HTTP tools) are
+/// carried over untouched — they aren't path-scoped.
+fn rooted_tools(base: &ToolRegistry, root: &std::path::Path) -> ToolRegistry {
+    use harness_tools::fs::{EditFileTool, FindFilesTool, ReadFileTool, SearchTool, WriteFileTool};
+    use harness_tools::tasks::{BackgroundTasks, KillTaskTool, TaskOutputTool};
+
+    let Ok(workspace) = harness_tools::Workspace::new(root) else {
+        return base.clone();
+    };
+    let mut tools = base.clone();
+    let files = harness_tools::FileState::gated();
+    tools.register_typed(ReadFileTool::with_state(workspace.clone(), files.clone()));
+    tools.register_typed(WriteFileTool::with_state(workspace.clone(), files.clone()));
+    tools.register_typed(EditFileTool::with_state(workspace.clone(), files));
+    tools.register_typed(FindFilesTool::new(workspace.clone()));
+    tools.register_typed(SearchTool::new(workspace.clone()));
+    tools.register_typed(harness_tools::git::GitTool::new(workspace.clone()));
+    // A lane's background tasks are its own, so `task_output` ids resolve
+    // against the commands that lane actually started.
+    let tasks = BackgroundTasks::in_temp();
+    tools.register_typed(harness_tools::shell::ShellTool::with_tasks(
+        workspace,
+        tasks.clone(),
+    ));
+    tools.register_typed(TaskOutputTool::new(tasks.clone()));
+    tools.register_typed(KillTaskTool::new(tasks));
+    tools
+}
+
+/// The most of one lane's patch that reaches the model. A lane that rewrote
+/// half the repo is a fact worth reporting, not worth pasting.
+const MAX_PATCH_CHARS: usize = 20_000;
+
+/// What each isolated lane changed, appended to the fleet's result: a summary
+/// per lane and the patch itself, so the parent can review and apply rather
+/// than discovering the edits already merged.
+fn patches_section(
+    lanes: &[std::sync::Arc<crate::worktree::LaneWorktree>],
+    labels: &[String],
+) -> String {
+    let mut out = String::from("\n\n## Changes from isolated agents\n\n");
+    let mut any = false;
+    for (index, lane) in lanes.iter().enumerate() {
+        let label = labels.get(index).map(String::as_str).unwrap_or("agent");
+        match crate::worktree::changes(lane) {
+            Some(changes) => {
+                any = true;
+                out.push_str(&format!("### {label}\n\n{}\n\n```diff\n{}\n```\n\n", changes.summary,
+                    harness_core::text::truncate_with_marker(
+                        &changes.patch,
+                        MAX_PATCH_CHARS,
+                        "\n… [patch truncated — ask this agent for the rest, or redo the change yourself]",
+                    ).trim_end()));
+            }
+            None => out.push_str(&format!("### {label}\n\n(no file changes)\n\n")),
+        }
+    }
+    if !any {
+        return "\n\n(no agent changed any files)\n".to_string();
+    }
+    out.push_str(
+        "These changes are NOT in the project — each agent worked in its own copy. Apply the \
+         ones you want (write the diff to a file and `git apply` it, or make the edits \
+         yourself), and say which you kept.\n",
+    );
+    out
 }
 
 /// One subagent the model asked for.
@@ -176,6 +301,11 @@ pub struct FleetArgs {
     /// How many agents run at once (1-6). Defaults to 3.
     #[serde(default)]
     pub max_parallel: Option<usize>,
+    /// Set true when the agents will EDIT files. Each gets its own git
+    /// worktree and returns a patch instead of changing the project, so
+    /// parallel edits can't collide. Leave false for read-only work.
+    #[serde(default)]
+    pub isolate_edits: Option<bool>,
 }
 
 /// The `spawn_agents` tool. Register it *after* snapshotting the registry into
@@ -215,7 +345,9 @@ impl TypedTool for FleetTool {
          the full tool set but sees ONLY its own prompt (not this conversation), so make every \
          prompt self-contained: include paths, names, constraints, and the output you want back. \
          Results return labeled by agent name. Use 2-6 agents; prefer a few well-scoped agents \
-         over many vague ones. Subagents cannot spawn further agents."
+         over many vague ones. Subagents cannot spawn further agents. If the agents will EDIT \
+         files, set isolate_edits: each then works in its own copy of the project and returns a \
+         patch for you to review and apply, instead of several agents writing over each other."
     }
 
     async fn run(&self, args: FleetArgs) -> Result<String, ToolError> {
@@ -242,6 +374,15 @@ impl TypedTool for FleetTool {
             .map(|a| SubagentTask::new(a.name, a.prompt))
             .collect();
 
+        // Editing lanes each get their own checkout. Falling back to the
+        // shared workspace when git can't oblige keeps the fleet working, so
+        // the note below says which way it went — silently sharing when the
+        // model asked for isolation would be the dangerous outcome.
+        let isolated = args.isolate_edits.unwrap_or(false);
+        let lanes = isolated
+            .then(|| self.spawner.open_lanes(labels.len()))
+            .flatten();
+
         let cancel = self.spawner.run_token();
         self.sink.started(&labels, cancel.clone());
         let guard = SinkGuard(self.sink.clone());
@@ -249,7 +390,7 @@ impl TypedTool for FleetTool {
         let sink = self.sink.clone();
         let spawner = self.spawner.clone();
         let outcomes = run_fleet(
-            move || spawner.build_agent(),
+            move |index| spawner.build_agent(index),
             tasks,
             concurrency,
             cancel.clone(),
@@ -265,7 +406,18 @@ impl TypedTool for FleetTool {
                 "NOTE: the fleet was stopped before finishing; results below may be partial.\n\n",
             );
         }
+        if isolated && lanes.is_none() {
+            out.push_str(
+                "NOTE: isolation was requested but this project is not a git repository, so \
+                 the agents shared one workspace and their edits are already applied (and may \
+                 have collided). Check the result before trusting it.\n\n",
+            );
+        }
         out.push_str(&crate::fleet::combine_outcomes(&outcomes, "agent"));
+        if let Some(lanes) = &lanes {
+            out.push_str(&patches_section(lanes, &labels));
+        }
+        self.spawner.close_lanes();
         Ok(out.trim_end().to_string())
     }
 }
@@ -339,7 +491,7 @@ mod tests {
                 ..AgentConfig::default()
             },
         );
-        let sub = sp.build_agent().unwrap();
+        let sub = sp.build_agent(0).unwrap();
         let names: Vec<_> = sub
             .tool_definitions()
             .iter()
@@ -353,6 +505,105 @@ mod tests {
             !names.contains(&FLEET_TOOL.to_string()),
             "a subagent must not inherit spawn_agents (no recursive fan-out): {names:?}"
         );
+    }
+
+    /// A git repository with one commit, the state `worktree add` needs.
+    fn git_project() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .expect("git")
+                .status
+                .success()
+        };
+        assert!(run(&["init", "-q"]));
+        assert!(run(&["config", "user.email", "t@example.com"]));
+        assert!(run(&["config", "user.name", "T"]));
+        std::fs::write(dir.path().join("shared.txt"), "original\n").unwrap();
+        assert!(run(&["add", "-A"]));
+        assert!(run(&["commit", "-qm", "init"]));
+        dir
+    }
+
+    #[tokio::test]
+    async fn isolated_lanes_write_to_their_own_checkouts() {
+        let project = git_project();
+        let spawner = FleetSpawner::new(
+            OxenClient::new("http://localhost/api/ai", "k", "m"),
+            ToolRegistry::default_for_workspace(
+                harness_tools::Workspace::new(project.path()).unwrap(),
+            ),
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        )
+        .with_workspace(project.path());
+
+        let lanes = spawner.open_lanes(2).expect("worktrees");
+
+        // Each lane's tools are rooted in its own checkout, so the same
+        // relative path is a different file for each — which is the whole
+        // point: two lanes editing `shared.txt` can no longer collide.
+        for (index, contents) in [(0usize, "from lane 0\n"), (1, "from lane 1\n")] {
+            // Build through the spawner so the tools come out re-rooted the
+            // way a real lane's do.
+            let tools = rooted_tools(&spawner.tools, lanes[index].path());
+            // Read first — the lane's own tools enforce that, as they should.
+            tools
+                .invoke(
+                    harness_tools::READ_FILE_TOOL,
+                    serde_json::json!({"path": "shared.txt"}),
+                )
+                .await
+                .unwrap();
+            let result = tools
+                .invoke(
+                    harness_tools::WRITE_FILE_TOOL,
+                    serde_json::json!({"path": "shared.txt", "contents": contents}),
+                )
+                .await
+                .unwrap();
+            assert!(result.contains("wrote"), "{result}");
+        }
+
+        for (index, expected) in [(0usize, "from lane 0\n"), (1, "from lane 1\n")] {
+            assert_eq!(
+                std::fs::read_to_string(lanes[index].path().join("shared.txt")).unwrap(),
+                expected
+            );
+        }
+        // …and the project itself is untouched until the parent applies a patch.
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("shared.txt")).unwrap(),
+            "original\n"
+        );
+
+        // Each lane's work comes back as its own patch.
+        let section = patches_section(&lanes, &["alpha".into(), "beta".into()]);
+        assert!(section.contains("### alpha"), "{section}");
+        assert!(section.contains("from lane 0"), "{section}");
+        assert!(section.contains("from lane 1"), "{section}");
+        assert!(section.contains("NOT in the project"), "{section}");
+        spawner.close_lanes();
+    }
+
+    #[test]
+    fn a_project_without_git_declines_isolation_instead_of_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        let spawner = FleetSpawner::new(
+            OxenClient::new("http://localhost/api/ai", "k", "m"),
+            ToolRegistry::new(),
+            AgentConfig::default(),
+        )
+        .with_workspace(dir.path());
+
+        // The caller falls back to a shared workspace and says so, rather than
+        // failing a fleet that would have worked.
+        assert!(spawner.open_lanes(2).is_none());
     }
 
     #[tokio::test]
