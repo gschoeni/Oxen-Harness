@@ -53,6 +53,7 @@ oxen-harness/
                                (the #[tauri::command] handlers, one module per
                                feature, delegating to the service).
     src/                     — React + TS chat UI (features/, lib/, components/).
+                                 features/rules/ — the Rules settings page: edit stream rules with a live tester that runs the agent's own regex engine.
   examples/
     web-chat.html            — Dependency-free single-file web client for the HTTP
                                protocol (SSE + REST); the "build your own UI" demo.

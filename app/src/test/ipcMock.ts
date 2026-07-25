@@ -14,7 +14,10 @@ import type {
   HfHit,
   InstalledView,
   OxenModelHit,
+  PatternCheck,
   Project,
+  RuleSets,
+  RuleSpec,
   RuntimeStatus,
   StartProjectInput,
   SessionInfo,
@@ -246,6 +249,22 @@ export const totalTokensSaved = vi.fn(async () => 0);
 export const addCustomTool = vi.fn(async () => {});
 export const removeCustomTool = vi.fn(async () => {});
 export const listSkills = vi.fn(async () => [] as unknown[]);
+export const listRules = vi.fn(
+  async (): Promise<RuleSets> => ({
+    user: [],
+    project: [],
+    project_path: ".oxen-harness/rules.json",
+  }),
+);
+export const saveRules = vi.fn(async (_rules: RuleSpec[]) => {});
+export const checkRulePattern = vi.fn(
+  async (pattern: string, sample: string): Promise<PatternCheck> => {
+    // The real check runs Rust's regex engine; for tests a plain indexOf over
+    // the literal pattern exercises the match/no-match branches.
+    const at = sample.indexOf(pattern);
+    return { error: null, matches: at >= 0 ? [[at, at + pattern.length]] : [] };
+  },
+);
 export const saveSkill = vi.fn(async () => {});
 export const deleteSkill = vi.fn(async () => {});
 export const setSkillEnabled = vi.fn(async () => {});
@@ -586,6 +605,10 @@ export function resetIpc() {
   addCustomTool.mockReset().mockResolvedValue(undefined);
   removeCustomTool.mockReset().mockResolvedValue(undefined);
   listSkills.mockReset().mockResolvedValue([]);
+  listRules
+    .mockReset()
+    .mockResolvedValue({ user: [], project: [], project_path: ".oxen-harness/rules.json" });
+  saveRules.mockReset().mockResolvedValue(undefined);
   saveSkill.mockReset().mockResolvedValue(undefined);
   deleteSkill.mockReset().mockResolvedValue(undefined);
   setSkillEnabled.mockReset().mockResolvedValue(undefined);

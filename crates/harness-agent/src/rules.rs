@@ -128,6 +128,46 @@ impl Rule {
     }
 }
 
+/// What a pattern does against a sample, for an editor that wants to show it
+/// before the rule is ever live.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PatternCheck {
+    /// Why the pattern doesn't compile, if it doesn't.
+    pub error: Option<String>,
+    /// Byte ranges the pattern matches in the sample, in order.
+    pub matches: Vec<(usize, usize)>,
+}
+
+/// Compile `pattern` and find every match in `sample`.
+///
+/// This exists so a rules editor can show what a rule will actually do. It
+/// must run through *this* engine rather than the UI's own: JavaScript and
+/// Rust regexes differ in ways that matter here (Rust's has no lookahead or
+/// backreferences), so a browser-side preview would happily accept patterns
+/// the agent then rejects, and the first the user heard of it would be a rule
+/// that silently never fires.
+pub fn check_pattern(pattern: &str, sample: &str) -> PatternCheck {
+    match Regex::new(pattern) {
+        Err(e) => PatternCheck {
+            // regex's errors are multi-line and quote the pattern back; the
+            // first non-empty line is the part a person needs.
+            error: Some(
+                e.to_string()
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("invalid pattern")
+                    .trim()
+                    .to_string(),
+            ),
+            matches: Vec::new(),
+        },
+        Ok(re) => PatternCheck {
+            error: None,
+            matches: re.find_iter(sample).map(|m| (m.start(), m.end())).collect(),
+        },
+    }
+}
+
 /// The rules in force for a session.
 #[derive(Debug, Clone, Default)]
 pub struct RuleSet {
@@ -397,6 +437,29 @@ mod tests {
         assert_eq!(odd.repeat, Repeat::Once);
 
         assert!(Rule::compile("r", "(unclosed", &[], "m", true, None).is_err());
+    }
+
+    #[test]
+    fn checking_a_pattern_reports_matches_or_a_readable_error() {
+        let sample = "let a = x.unwrap(); let b = y.unwrap();";
+        let hit = check_pattern(r"\.unwrap\(\)", sample);
+        assert!(hit.error.is_none());
+        assert_eq!(hit.matches.len(), 2);
+        assert_eq!(&sample[hit.matches[0].0..hit.matches[0].1], ".unwrap()");
+
+        let bad = check_pattern("(unclosed", "anything");
+        assert!(bad.matches.is_empty());
+        let message = bad.error.expect("an error");
+        // One line, not the engine's multi-line dump.
+        assert!(!message.contains('\n'), "got: {message}");
+    }
+
+    #[test]
+    fn a_pattern_javascript_would_accept_is_still_rejected_here() {
+        // Lookahead is valid in a browser and not in this engine. A preview
+        // built on the browser's regex would call this fine, and the rule
+        // would then silently never fire.
+        assert!(check_pattern(r"foo(?=bar)", "foobar").error.is_some());
     }
 
     #[test]

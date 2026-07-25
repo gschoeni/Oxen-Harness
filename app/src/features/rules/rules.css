@@ -1,0 +1,426 @@
+/* ===========================================================================
+   Stream rules — Settings → Rules.
+
+   The page's one job is to make an unfired rule legible, so the visual weight
+   goes to two things: the pattern (mono, tinted, the thing being watched for)
+   and whether the rule *interrupts* — the only choice here that throws work
+   away. That distinction is carried by the left edge of each row rather than a
+   badge, so it reads at a glance down the list.
+   =========================================================================== */
+
+.rule-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.rule-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--separator);
+  /* The tell: a rule that stops the model in its tracks wears a heavier edge. */
+  border-left: 3px solid var(--separator-strong);
+  border-radius: var(--radius);
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.rule-row.interrupts {
+  border-left-color: var(--warning);
+}
+.rule-row.reminds {
+  border-left-color: var(--accent);
+}
+.rule-row.off {
+  opacity: 0.55;
+  border-left-color: var(--separator-strong);
+}
+.rule-row:hover:not(.editing) {
+  background: var(--surface-hover);
+}
+
+.rule-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0;
+  background: none;
+  border: none;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.rule-row-main:disabled {
+  cursor: default;
+}
+.rule-row-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.rule-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.rule-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+.rule-effect {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--surface-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs, 0.68rem);
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+}
+.rule-effect.interrupts {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+/* Patterns, samples, and the reminder are read character by character, so
+   ligatures are a hazard rather than a nicety: the display font renders `--`
+   as an em dash, which in a regex is a different pattern entirely. */
+.rule-pattern,
+.rule-pattern-input,
+.rule-sample,
+.rule-sample-mirror,
+.rule-reminder,
+.rule-starter code {
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
+}
+
+/* The pattern is the rule. Give it room and a surface of its own. */
+.rule-pattern {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 2px var(--space-2);
+  background: var(--code-bg);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.rule-message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.rule-watch {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.rule-scopes {
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs, 0.68rem);
+  white-space: nowrap;
+}
+
+/* --- Editing --- */
+.rule-row.editing {
+  flex-direction: column;
+  /* The row centres its resting content; the editor is a column of full-width
+     fields and must not inherit that. */
+  align-items: stretch;
+  gap: var(--space-3);
+  background: var(--surface-2);
+}
+.rule-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  gap: var(--space-3);
+  width: 100%;
+}
+.rule-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+.rule-field > span {
+  color: var(--text-tertiary);
+  font-size: var(--label-size);
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+}
+.rule-field input,
+.rule-field textarea {
+  width: 100%;
+  padding: var(--space-2);
+  background: var(--bg);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  resize: vertical;
+}
+.rule-field input:focus,
+.rule-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+.rule-pattern-input {
+  font-family: var(--font-mono) !important;
+}
+.rule-pattern-input.invalid {
+  border-color: var(--danger);
+}
+
+.rule-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5, 24px);
+}
+.rule-option-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rule-option-label {
+  margin-right: 2px;
+  color: var(--text-tertiary);
+  font-size: var(--label-size);
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+}
+.rule-chip {
+  padding: 3px 10px;
+  background: var(--bg);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill, 999px);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease);
+}
+.rule-chip:hover {
+  border-color: var(--separator-strong);
+  color: var(--text);
+}
+.rule-chip.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.rule-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- The tester: the reason this page exists --- */
+.rule-tester {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--bg);
+  border: 1px dashed var(--separator-strong);
+  border-radius: var(--radius-sm);
+}
+.rule-tester-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--text-tertiary);
+  font-size: var(--label-size);
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+}
+.rule-verdict {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--text-xs);
+}
+.rule-verdict.hit {
+  color: var(--warning);
+}
+
+/* A transparent textarea over a mirrored <pre>: the caret and selection stay
+   native while the matches underneath are marked. Both layers must share every
+   metric or the highlight drifts off the text. */
+.rule-sample-wrap {
+  position: relative;
+}
+.rule-sample,
+.rule-sample-mirror {
+  margin: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rule-sample {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: 3.6em;
+  background: transparent;
+  color: var(--text);
+  caret-color: var(--text);
+  resize: vertical;
+}
+.rule-sample:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+.rule-sample-mirror {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--surface);
+  border-color: transparent;
+  color: transparent;
+  pointer-events: none;
+  overflow: hidden;
+}
+.rule-hit {
+  background: var(--warning-soft);
+  color: transparent;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px var(--warning);
+}
+
+.rule-consequence {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rule-reminder {
+  padding: var(--space-2);
+  background: var(--surface-2);
+  border-left: 2px solid var(--warning);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.rule-consequence-note {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.rule-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+}
+.rule-actions-buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+/* Delete sits away from Save, at the opposite end of the row. */
+.rule-delete {
+  margin-right: auto;
+}
+.rule-problem {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.rule-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.rule-delete:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* --- Empty state: an invitation, with real rules behind it --- */
+.rule-empty {
+  padding: var(--space-4);
+  margin-top: var(--space-3);
+  background: var(--surface);
+  border: 1px dashed var(--separator-strong);
+  border-radius: var(--radius);
+}
+.rule-empty p {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.rule-starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.rule-starter {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.rule-starter:hover {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+.rule-starter code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+.rule-starter span {
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs, 0.68rem);
+}
+
+@media (max-width: 720px) {
+  .rule-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rule-row,
+  .rule-chip,
+  .rule-starter {
+    transition: none;
+  }
+}

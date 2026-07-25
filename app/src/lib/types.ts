@@ -488,6 +488,40 @@ export interface RetryEvent {
   switching_to?: string;
 }
 
+/** One stream rule as stored in rules.json — a pattern that watches the
+ *  model's output and a correction to send when it matches. */
+export interface RuleSpec {
+  name: string;
+  /** The regular expression to watch for (the agent's engine, not JS's). */
+  when: string;
+  /** Where it watches: "text" (prose), "tool" (tool-call arguments), or both
+   *  when empty. */
+  scope: string[];
+  message: string;
+  /** Whether a match throws away the reply in flight and asks again. */
+  interrupt: boolean;
+  /** "once" (default) or "after:<n>" rounds. */
+  repeat: string | null;
+  enabled: boolean;
+}
+
+/** Both sets of rules for the active project. */
+export interface RuleSets {
+  /** The user's own, editable here. */
+  user: RuleSpec[];
+  /** Committed to the repository — shown, not edited. */
+  project: RuleSpec[];
+  project_path: string;
+}
+
+/** What a pattern does against a sample, checked by the agent's regex engine
+ *  so the editor can't bless a pattern the engine would reject. */
+export interface PatternCheck {
+  error: string | null;
+  /** Byte ranges of each match, in order. */
+  matches: [number, number][];
+}
+
 /** The context-compression setting: off (send requests as recorded), audit
  *  (measure would-be savings without changing anything), or on (compress stale
  *  tool output before each request; originals stay retrievable). */
@@ -528,7 +562,8 @@ export type SettingsPage =
   | "compression"
   | "usage"
   | "appearance"
-  | "logs";
+  | "logs"
+  | "rules";
 
 /** Persisted live-preview preferences (mirrors `harness_runtime::preview`). */
 export interface PreviewPrefs {

@@ -12,6 +12,7 @@ import {
   Link2,
   Moon,
   Palette,
+  Radar,
   ScrollText,
   SearchCode,
   ShieldCheck,
@@ -28,6 +29,7 @@ import { LocalSetup } from "../models/LocalSetup";
 import { ThemesPanel } from "../themes/ThemesPanel";
 import { ToolsPage } from "../tools/ToolsPage";
 import { SkillsPage } from "../skills/SkillsPage";
+import { RulesPage } from "../rules/RulesPage";
 import { CloudModelsPage } from "./CloudModelsPage";
 import { CodeReviewPage } from "./CodeReviewPage";
 import { PermissionsPage } from "./PermissionsPage";
@@ -46,6 +48,7 @@ const NAV: { page: SettingsPage; icon: ReactNode; label: string; blurb: string }
   { page: "tools", icon: <Wrench size={18} />, label: "Tools", blurb: "What the agent can do" },
   { page: "permissions", icon: <ShieldCheck size={18} />, label: "Permissions", blurb: "When the agent asks first" },
   { page: "skills", icon: <GraduationCap size={18} />, label: "Skills", blurb: "Reusable workflows it can learn" },
+  { page: "rules", icon: <Radar size={18} />, label: "Rules", blurb: "Catch mistakes as they're written" },
   { page: "preview", icon: <Globe size={18} />, label: "Preview", blurb: "Live app preview & dev servers" },
   { page: "code-review", icon: <SearchCode size={18} />, label: "Code review", blurb: "The find → verify → report pipeline" },
   { page: "compression", icon: <Shrink size={18} />, label: "Compression", blurb: "Shrink stale context on the wire" },
@@ -61,6 +64,7 @@ const TITLE: Record<SettingsPage, string> = {
   tools: "Tools",
   permissions: "Permissions",
   skills: "Skills",
+  rules: "Rules",
   preview: "Preview",
   "code-review": "Code review",
   compression: "Compression",
@@ -138,6 +142,7 @@ export function Settings() {
             {page === "tools" && <ToolsPage />}
             {page === "permissions" && <PermissionsPage />}
             {page === "skills" && <SkillsPage />}
+            {page === "rules" && <RulesPage />}
             {page === "preview" && <PreviewPage />}
             {page === "code-review" && <CodeReviewPage />}
             {page === "compression" && <CompressionPage />}

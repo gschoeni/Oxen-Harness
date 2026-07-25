@@ -28,6 +28,7 @@ pub(crate) mod permissions;
 pub(crate) mod preview;
 pub(crate) mod project;
 pub(crate) mod review;
+pub(crate) mod rules;
 pub(crate) mod session;
 pub(crate) mod skills;
 pub(crate) mod theme;

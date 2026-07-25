@@ -409,6 +409,10 @@ Branch `harness-parity-improvements`; the study and full roadmap are in
   on the tool result, comparing before/after so an already-broken file isn't
   blamed on the edit that touched it.
 - **Editing fleets isolate** in per-lane git worktrees and return patches.
+- **Stream rules**: user/project regex corrections that watch the reply as it
+  streams and interrupt it on a match, with a Settings → Rules page whose
+  tester runs the agent's own regex engine (never the browser's) so what you
+  see is what will fire.
 
 ## What's left / next
 

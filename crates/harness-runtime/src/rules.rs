@@ -70,16 +70,29 @@ pub struct Rules {
     pub rules: Vec<RuleSpec>,
 }
 
+/// The user's own rules, which follow them between projects.
+pub fn user_rules() -> Rules {
+    crate::config::load_or_default(harness_config::paths::rules_file())
+}
+
+/// The rules committed to this repository, which travel with it.
+pub fn project_rules(workspace: &Path) -> Rules {
+    harness_config::read_versioned::<Rules>(&workspace.join(PROJECT_RULES_FILE)).1
+}
+
+/// Where a repository keeps its own rules.
+pub const PROJECT_RULES_FILE: &str = ".oxen-harness/rules.json";
+
 /// Every enabled rule for this workspace: the user's own first, then the
 /// repository's — so a project can add to what you carry, and a name defined
 /// in both resolves to the project's (it is the more specific claim).
 pub fn load(workspace: &Path) -> Vec<RuleSpec> {
     let mut specs: Vec<RuleSpec> = Vec::new();
-    let global: Rules = crate::config::load_or_default(harness_config::paths::rules_file());
-    let project: Rules =
-        harness_config::read_versioned::<Rules>(&workspace.join(".oxen-harness/rules.json")).1;
-
-    for spec in global.rules.into_iter().chain(project.rules) {
+    for spec in user_rules()
+        .rules
+        .into_iter()
+        .chain(project_rules(workspace).rules)
+    {
         if !spec.enabled {
             continue;
         }

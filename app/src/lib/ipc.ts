@@ -47,7 +47,10 @@ import type {
   CompactedEvent,
   CompressionEvent,
   CompressionMode,
+  PatternCheck,
   RetryEvent,
+  RuleSets,
+  RuleSpec,
   ChatMessage,
   DatasetPage,
   DatasetQueryReq,
@@ -321,6 +324,17 @@ export async function pickLoopExportPath(name: string): Promise<string | null> {
  *  already recorded, so this re-drives it without duplicating it. Resolves with
  *  the assistant's final text, exactly like `runTurn`. */
 export const retryTurn = (session: string) => invoke<string>("retry_turn", { session });
+
+/** Stream rules for the active project: the user's own plus the repository's. */
+export const listRules = () => invoke<RuleSets>("list_rules");
+
+/** Replace the user's rules (the page always sends the whole set). */
+export const saveRules = (rules: RuleSpec[]) => invoke<void>("save_rules", { rules });
+
+/** What `pattern` matches in `sample`, through the agent's own regex engine —
+ *  never the browser's, which accepts constructs the agent rejects. */
+export const checkRulePattern = (pattern: string, sample: string) =>
+  invoke<PatternCheck>("check_rule_pattern", { pattern, sample });
 
 /** Open a native file picker for images and PDFs, returning the chosen absolute
  *  paths (empty if the user cancels). These feed the same attachment flow as an
