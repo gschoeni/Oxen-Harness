@@ -826,9 +826,27 @@ isolation, 3.1 stream rules, 3.2 memory. Phase 4 items are unstarted.
 
 ### Known unrelated flake
 
-`harness-preview` `watch::tests::one_edit_batch_becomes_one_reload` fails on
-the first cold run and passes on every run after. Verified pre-existing by
-stashing this branch's changes and reproducing on a clean tree — it is not
-caused by this work, and it was left alone deliberately rather than fixed
-inside an unrelated feature branch. Worth its own commit: the debounce test
-appears to race the file watcher's initial registration.
+`harness-preview` `watch::tests::one_edit_batch_becomes_one_reload` fails
+under load (a cold run, or the whole preview suite together) and passes when
+run alone. Verified pre-existing by stashing this branch's changes and
+reproducing on a clean tree — not caused by this work, and deliberately left
+alone rather than fixed inside an unrelated feature branch.
+
+One attempt was made and reverted; what it established, for whoever picks it
+up:
+
+- `notify` registers its OS watch on a background thread, measured at **~400ms
+  on macOS**. The test writes immediately after `spawn`, so under load those
+  writes land before anything is listening and are never reported. A probe
+  that sleeps 500ms before a single write fires reliably (~400ms later:
+  FSEvents latency plus the 300ms debounce).
+- Nudging *continuously* to detect readiness is self-defeating — the debounce
+  absorbs changes until things go quiet, so a steady stream of warm-up writes
+  keeps the callback from ever firing. A readiness probe needs one write per
+  round followed by a quiet second.
+- Even with registration proven live first, the measured burst still fails to
+  produce a callback within 5s when the whole preview suite runs together.
+  That last part is unexplained and is where the next attempt should start —
+  possibly FSEvents coalescing across the two write groups in one directory,
+  which would argue for a fresh tempdir (or a subdirectory) for the measured
+  burst.
