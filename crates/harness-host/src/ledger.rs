@@ -54,8 +54,18 @@ impl SessionService {
 
     /// Tie off a thread: record when and (optionally) the user's one-line
     /// closing note. Settling is idempotent — settling again just refreshes
-    /// the mark. Errors when the session doesn't exist.
-    pub fn settle_session(&self, session: &str, note: &str) -> Result<SettleState, String> {
+    /// the mark. Errors when the session doesn't exist or has work in flight:
+    /// a board rendered a moment ago can offer "Tie the knot" on a thread
+    /// that just started a turn, and settling it would hide a live agent (and
+    /// its approval prompts) in the settled tally. The UI's render gate is a
+    /// convenience; this is the contract.
+    pub async fn settle_session(&self, session: &str, note: &str) -> Result<SettleState, String> {
+        if self.cancels.lock().await.contains_key(session) {
+            return Err(
+                "this thread is mid-turn — wait for it to finish (or stop it) before tying off"
+                    .to_string(),
+            );
+        }
         let store = self.store()?;
         // A clean "no such session" beats a foreign-key violation string.
         store.session_meta(session).map_err(|e| e.to_string())?;

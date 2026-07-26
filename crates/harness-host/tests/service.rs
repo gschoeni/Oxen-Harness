@@ -374,8 +374,22 @@ async fn ledger_snapshot_derives_entries_and_settles_round_trip() {
         .unwrap()
         .is_some());
 
+    // A thread with work in flight refuses to settle — the board's render
+    // gate can race a turn start, so the contract lives server-side.
+    service
+        .cancels
+        .lock()
+        .await
+        .insert(session.clone(), tokio_util::sync::CancellationToken::new());
+    let err = service.settle_session(&session, "").await.unwrap_err();
+    assert!(err.contains("mid-turn"), "got: {err}");
+    service.cancels.lock().await.remove(&session);
+
     // Settle with a note, see it in the snapshot, then reopen.
-    let settled = service.settle_session(&session, "  shipped as PR #42  ").unwrap();
+    let settled = service
+        .settle_session(&session, "  shipped as PR #42  ")
+        .await
+        .unwrap();
     assert_eq!(settled.note, "shipped as PR #42");
     let snapshot = service.ledger_snapshot().await.unwrap();
     let entry = snapshot.entries.iter().find(|e| e.id == session).unwrap();
@@ -387,7 +401,7 @@ async fn ledger_snapshot_derives_entries_and_settles_round_trip() {
     assert!(entry.settle.is_none());
 
     // Settling a session that doesn't exist is a clean error.
-    assert!(service.settle_session("nope", "").is_err());
+    assert!(service.settle_session("nope", "").await.is_err());
 
     // Marking seen advances the mark the next snapshot reports.
     let seen = service.mark_ledger_seen().unwrap();

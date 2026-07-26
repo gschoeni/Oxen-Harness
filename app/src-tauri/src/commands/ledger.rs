@@ -50,7 +50,10 @@ pub(crate) async fn settle_session(
     id: String,
     note: Option<String>,
 ) -> Result<SettleState, String> {
-    state.service.settle_session(&id, note.as_deref().unwrap_or(""))
+    state
+        .service
+        .settle_session(&id, note.as_deref().unwrap_or(""))
+        .await
 }
 
 /// Bring a settled thread back to the trail.

@@ -377,7 +377,7 @@ async fn settle_session(
     Json(request): Json<harness_protocol::SettleRequest>,
 ) -> ApiResult<Json<harness_protocol::SettleState>> {
     authorize(&state, &headers, None)?;
-    Ok(Json(state.service.settle_session(&id, &request.note)?))
+    Ok(Json(state.service.settle_session(&id, &request.note).await?))
 }
 
 /// Bring a settled thread back to the trail.
