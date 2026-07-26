@@ -35,6 +35,8 @@ pub enum ApprovalKind {
     FileEdit,
     GitCommit,
     TaskKill,
+    /// Publishing to the remote: a git push or a PR creation.
+    Ship,
 }
 
 /// What launched a fleet: a code-review pipeline step or the model's

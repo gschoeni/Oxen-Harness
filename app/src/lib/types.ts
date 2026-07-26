@@ -465,7 +465,7 @@ export interface QuestionAnswer {
 export interface ApprovalRequestEvent {
   session: string;
   id: string;
-  kind: "shell" | "file_edit" | "git_commit" | "task_kill";
+  kind: "shell" | "file_edit" | "git_commit" | "task_kill" | "ship";
   tool: string;
   command: string;
   risk: string;

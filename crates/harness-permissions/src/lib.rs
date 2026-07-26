@@ -54,6 +54,9 @@ struct SessionGrants {
     commits: bool,
     /// Cautious mode: background-task kills approved for the session.
     kills: bool,
+    /// Cautious mode: publishing to the remote (git push, PR creation)
+    /// approved for the session.
+    ships: bool,
 }
 
 /// The gate's verdict before any user interaction.
@@ -190,6 +193,7 @@ impl PermissionGate {
             "run_shell" => self.review_shell(args),
             "write_file" | "edit_file" => self.review_file_edit(tool, args),
             "git" => self.review_git(args),
+            "gh" => self.review_gh(args),
             "kill_task" => self.review_kill_task(args),
             _ => GateReview::Allow,
         }
@@ -329,25 +333,75 @@ impl PermissionGate {
         }))
     }
 
+    /// The `git` tool's operations are a fixed allow-list, so the gate matches
+    /// on the operation name: reads flow, commits ask in cautious mode, and
+    /// everything else — `push` today, any operation added later — is treated
+    /// as publishing. Fail closed: a new git operation must be classified here
+    /// before it runs unprompted in cautious mode.
     fn review_git(&self, args: &serde_json::Value) -> GateReview {
-        let is_commit = args.get("operation").and_then(|o| o.as_str()) == Some("commit");
+        match args.get("operation").and_then(|o| o.as_str()) {
+            // Malformed arguments: let the tool's own parsing produce the error.
+            None => GateReview::Allow,
+            Some("status" | "diff" | "log") => GateReview::Allow,
+            Some("commit") => {
+                let policy = self.policy.read().expect("policy poisoned").clone();
+                let approved = self.grants.read().expect("grants poisoned").commits;
+                if policy.mode != PermissionMode::Cautious || approved {
+                    return GateReview::Allow;
+                }
+                let message = args.get("message").and_then(|m| m.as_str()).unwrap_or("");
+                GateReview::Ask(Box::new(ApprovalRequest {
+                    kind: ApprovalKind::GitCommit,
+                    tool: "git".to_string(),
+                    command: format!("git commit — {message}"),
+                    risk: Risk::Unknown,
+                    reasons: Vec::new(),
+                    grant_label: "all git commits".to_string(),
+                    offer_project_grant: false,
+                    offer_trash: false,
+                }))
+            }
+            Some(_) => self.review_ship("git", "git push -u origin HEAD".to_string()),
+        }
+    }
+
+    /// The `gh` tool: `pr_view`/`pr_checks` are read-only and flow; everything
+    /// else — `pr_create` today, any operation added later — publishes to
+    /// GitHub and is gated as shipping. Same fail-closed default as
+    /// [`Self::review_git`].
+    fn review_gh(&self, args: &serde_json::Value) -> GateReview {
+        match args.get("operation").and_then(|o| o.as_str()) {
+            None => GateReview::Allow,
+            Some("pr_view" | "pr_checks") => GateReview::Allow,
+            Some(op) => {
+                let what = match args.get("title").and_then(|t| t.as_str()) {
+                    Some(title) if !title.trim().is_empty() => {
+                        format!("gh {op} — {}", title.trim())
+                    }
+                    _ => format!("gh {op}"),
+                };
+                self.review_ship("gh", what)
+            }
+        }
+    }
+
+    /// Publishing work to the remote (a push, a PR) mirrors how the classifier
+    /// treats `run_shell git push`: [`Risk::Unknown`], so it asks in cautious
+    /// mode and flows in relaxed/bypass. A session grant covers both tools —
+    /// approving "publish this thread's work" once is one decision, not two.
+    fn review_ship(&self, tool: &str, command: String) -> GateReview {
         let policy = self.policy.read().expect("policy poisoned").clone();
-        let approved = self.grants.read().expect("grants poisoned").commits;
-        if !is_commit || policy.mode != PermissionMode::Cautious || approved {
+        let approved = self.grants.read().expect("grants poisoned").ships;
+        if policy.mode != PermissionMode::Cautious || approved {
             return GateReview::Allow;
         }
-        let message = args
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("")
-            .to_string();
         GateReview::Ask(Box::new(ApprovalRequest {
-            kind: ApprovalKind::GitCommit,
-            tool: "git".to_string(),
-            command: format!("git commit — {message}"),
+            kind: ApprovalKind::Ship,
+            tool: tool.to_string(),
+            command,
             risk: Risk::Unknown,
             reasons: Vec::new(),
-            grant_label: "all git commits".to_string(),
+            grant_label: "all git pushes and PR creations".to_string(),
             offer_project_grant: false,
             offer_trash: false,
         }))
@@ -558,6 +612,7 @@ impl PermissionGate {
             ApprovalKind::FileEdit => grants.edits = true,
             ApprovalKind::GitCommit => grants.commits = true,
             ApprovalKind::TaskKill => grants.kills = true,
+            ApprovalKind::Ship => grants.ships = true,
         }
     }
 
@@ -928,6 +983,113 @@ mod tests {
             GateReview::Ask(_)
         ));
         std::env::remove_var("OXEN_HARNESS_DIR");
+    }
+
+    /// Publishing (git push, gh pr_create) must ask in cautious mode — the
+    /// tool names must not slip past the gate while `run_shell git push`
+    /// would ask. Reads through both tools still flow.
+    #[tokio::test]
+    async fn cautious_mode_gates_pushes_and_pr_creation_as_one_ship_grant() {
+        let _env = testutil::env_guard();
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("OXEN_HARNESS_DIR", home.path());
+        let ws = tempfile::tempdir().unwrap();
+        harness_config::io::write_versioned(
+            &policy::project_permissions_file(ws.path()),
+            SCHEMA_VERSION,
+            &PermissionsConfig {
+                mode: Some(PermissionMode::Cautious),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let gate = PermissionGate::new(ws.path(), Arc::new(Scripted(Some(
+            ApprovalDecision::AllowSession,
+        ))));
+
+        // Reads flow without asking.
+        for (tool, op) in [
+            ("git", "status"),
+            ("git", "diff"),
+            ("git", "log"),
+            ("gh", "pr_view"),
+            ("gh", "pr_checks"),
+        ] {
+            assert!(
+                matches!(
+                    gate.review(tool, &serde_json::json!({"operation": op})),
+                    GateReview::Allow
+                ),
+                "{tool} {op} should flow"
+            );
+        }
+        // Publishing asks…
+        let GateReview::Ask(request) =
+            gate.review("git", &serde_json::json!({"operation": "push"}))
+        else {
+            panic!("expected git push to ask in cautious mode");
+        };
+        assert_eq!(request.kind, ApprovalKind::Ship);
+        assert!(matches!(
+            gate.review(
+                "gh",
+                &serde_json::json!({"operation": "pr_create", "title": "Fix the bug"})
+            ),
+            GateReview::Ask(_)
+        ));
+        // …and one session grant covers both tools.
+        let (outcome, _) = gate.resolve(*request).await;
+        assert!(matches!(outcome, GateOutcome::Allow));
+        assert!(matches!(
+            gate.review("gh", &serde_json::json!({"operation": "pr_create"})),
+            GateReview::Allow
+        ));
+        std::env::remove_var("OXEN_HARNESS_DIR");
+    }
+
+    /// Fail closed: an operation the gate doesn't recognize (added to a tool
+    /// later, never classified here) is treated as publishing, not waved past.
+    #[test]
+    fn unrecognized_git_and_gh_operations_ask_in_cautious_mode() {
+        let _env = testutil::env_guard();
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("OXEN_HARNESS_DIR", home.path());
+        let ws = tempfile::tempdir().unwrap();
+        harness_config::io::write_versioned(
+            &policy::project_permissions_file(ws.path()),
+            SCHEMA_VERSION,
+            &PermissionsConfig {
+                mode: Some(PermissionMode::Cautious),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let gate = PermissionGate::new(ws.path(), Arc::new(Scripted(None)));
+        assert!(matches!(
+            gate.review("git", &serde_json::json!({"operation": "rebase"})),
+            GateReview::Ask(_)
+        ));
+        assert!(matches!(
+            gate.review("gh", &serde_json::json!({"operation": "release_create"})),
+            GateReview::Ask(_)
+        ));
+        std::env::remove_var("OXEN_HARNESS_DIR");
+    }
+
+    /// Relaxed mode matches `run_shell git push` parity: publishing flows
+    /// without asking (plain push is Risk::Unknown, below relaxed's bar).
+    #[test]
+    fn relaxed_mode_allows_pushes_and_pr_creation_without_asking() {
+        let _env = testutil::env_guard();
+        let (_home, _ws, gate) = gate(None);
+        assert!(matches!(
+            gate.review("git", &serde_json::json!({"operation": "push"})),
+            GateReview::Allow
+        ));
+        assert!(matches!(
+            gate.review("gh", &serde_json::json!({"operation": "pr_create"})),
+            GateReview::Allow
+        ));
     }
 
     #[test]

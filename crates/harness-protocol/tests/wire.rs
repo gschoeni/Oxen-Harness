@@ -188,6 +188,7 @@ fn approval_request_wire_shape() {
         serde_json::to_value(ApprovalKind::GitCommit).unwrap(),
         "git_commit"
     );
+    assert_eq!(serde_json::to_value(ApprovalKind::Ship).unwrap(), "ship");
 }
 
 #[test]

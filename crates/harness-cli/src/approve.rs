@@ -107,6 +107,7 @@ fn question_text(request: &ApprovalRequest) -> String {
         ApprovalKind::FileEdit => "The agent wants to write:",
         ApprovalKind::GitCommit => "The agent wants to commit:",
         ApprovalKind::TaskKill => "The agent wants to kill a background task:",
+        ApprovalKind::Ship => "The agent wants to publish to the remote:",
     };
     let mut text = format!("{action}\n\n    {}\n", request.command);
     if !request.reasons.is_empty() {
