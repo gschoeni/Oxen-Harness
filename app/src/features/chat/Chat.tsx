@@ -9,6 +9,7 @@ import type { CodeSnippet } from "../../lib/types";
 import { ThreadItem } from "./ThreadItem";
 import { FleetPanel } from "./FleetPanel";
 import { Plan } from "./Plan";
+import { TrailStrip } from "../ledger/TrailStrip";
 import { Composer } from "./Composer";
 import { Queue } from "./Queue";
 import { Hero } from "./Hero";
@@ -190,6 +191,7 @@ export function Chat() {
       onDrop={onInternalDrop}
     >
       <div className="messages-wrap">
+        <TrailStrip />
         <Plan />
         {showReopenCanvas && lastCanvas && (
           <button
