@@ -106,8 +106,8 @@ fn compile(globs: &[String]) -> Option<GlobSet> {
 }
 
 /// Per-session, per-workspace file state shared by the fs tools. Cloneable
-/// through an `Arc`: fleet lanes share their parent's, which is exactly what
-/// makes the per-path lock protect them from each other.
+/// through an `Arc`: lanes editing the same checkout share it so per-path locks
+/// protect them from each other; isolated worktrees use [`Self::fresh_with_rules`].
 pub struct FileState {
     /// Whether an unread file may be edited. On for the shipped registry; the
     /// bare `ToolTool::new` constructors leave it off so a tool built outside

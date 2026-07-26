@@ -411,12 +411,7 @@ impl RuleSet {
 
     /// A watcher for one model call. Cheap to make; holds the per-call buffers.
     pub fn watcher(&self) -> Watcher<'_> {
-        Watcher {
-            rules: self.rules.iter().collect(),
-            text: String::new(),
-            tool_args: String::new(),
-            hits: Vec::new(),
-        }
+        Watcher::new(self.rules.iter())
     }
 }
 
@@ -435,15 +430,19 @@ impl RuleHistory {
     }
 
     /// Whether `rule` may fire now, given how recently it last did.
-    fn allows(&self, rule: &Rule) -> bool {
+    fn allows_at(&self, rule: &Rule, round: u32) -> bool {
         match self.fired.get(&rule.name) {
             None => true,
             Some(_) if rule.repeat == Repeat::Once => false,
             Some(&last) => match rule.repeat {
-                Repeat::AfterRounds(gap) => self.round.saturating_sub(last) >= gap,
+                Repeat::AfterRounds(gap) => round.saturating_sub(last) >= gap,
                 Repeat::Once => false,
             },
         }
+    }
+
+    fn allows(&self, rule: &Rule) -> bool {
+        self.allows_at(rule, self.round)
     }
 
     fn record(&mut self, name: &str) {
@@ -469,16 +468,13 @@ impl RuleHistory {
     /// them to fire. Eligibility is checked before streaming so a spent
     /// interrupting rule cannot cancel and truncate a later response.
     pub fn watcher<'a>(&self, rules: &'a RuleSet) -> Watcher<'a> {
-        Watcher {
-            rules: rules
+        let upcoming_round = self.round.saturating_add(1);
+        Watcher::new(
+            rules
                 .rules
                 .iter()
-                .filter(|rule| self.allows(rule))
-                .collect(),
-            text: String::new(),
-            tool_args: String::new(),
-            hits: Vec::new(),
-        }
+                .filter(|rule| self.allows_at(rule, upcoming_round)),
+        )
     }
 }
 
@@ -492,7 +488,16 @@ pub struct Watcher<'a> {
     hits: Vec<RuleHit>,
 }
 
-impl Watcher<'_> {
+impl<'a> Watcher<'a> {
+    fn new(rules: impl IntoIterator<Item = &'a Rule>) -> Self {
+        Self {
+            rules: rules.into_iter().collect(),
+            text: String::new(),
+            tool_args: String::new(),
+            hits: Vec::new(),
+        }
+    }
+
     /// Whether this call has an eligible rule that could abandon its output.
     /// Presentation events are buffered in that case until the reply is known
     /// to be accepted.
@@ -648,18 +653,17 @@ mod tests {
         r.repeat = Repeat::AfterRounds(3);
         let rules = RuleSet::new(vec![r]);
         let mut history = RuleHistory::default();
-        let hit = || {
-            let mut w = rules.watcher();
+        let attempt = |history: &mut RuleHistory| {
+            let mut w = history.watcher(&rules);
             w.observe(Scope::Text, "unwrap");
-            w.hits()
+            history.next_round();
+            history.admit(w.hits(), &rules).len()
         };
 
-        assert_eq!(history.admit(hit(), &rules).len(), 1);
-        history.next_round();
-        assert!(history.admit(hit(), &rules).is_empty(), "too soon");
-        history.next_round();
-        history.next_round();
-        assert_eq!(history.admit(hit(), &rules).len(), 1, "gap has passed");
+        assert_eq!(attempt(&mut history), 1);
+        assert_eq!(attempt(&mut history), 0, "too soon");
+        assert_eq!(attempt(&mut history), 0, "still too soon");
+        assert_eq!(attempt(&mut history), 1, "gap has passed");
     }
 
     #[test]
