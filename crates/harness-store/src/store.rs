@@ -521,25 +521,39 @@ impl HistoryStore {
     /// not a thread of ours to tie off.
     pub fn ledger_rows(&self) -> Result<Vec<LedgerRow>, HistoryError> {
         let conn = self.lock();
+        // One grouped pass over messages finds each session's landmarks (the
+        // seqs of its title / last / last-reply messages, its count, its last
+        // activity); the landmark rows are then fetched by (session_id, seq)
+        // point-joins on the unique index. The board polls this on every
+        // refresh — five correlated per-session scans added up.
         let mut stmt = conn.prepare(
             "SELECT s.id, s.workspace, s.model, s.created_at,
-                    (SELECT m.content FROM messages m
-                       WHERE m.session_id = s.id AND m.role = 'user'
-                         AND m.content IS NOT NULL
-                       ORDER BY m.seq ASC LIMIT 1) AS title,
-                    (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id),
-                    COALESCE((SELECT MAX(m.created_at) FROM messages m
-                                WHERE m.session_id = s.id),
-                             s.created_at) AS last_activity,
-                    COALESCE((SELECT m.role FROM messages m
-                                WHERE m.session_id = s.id
-                                ORDER BY m.seq DESC LIMIT 1), ''),
-                    COALESCE((SELECT substr(m.content, 1, 280) FROM messages m
-                                WHERE m.session_id = s.id AND m.role = 'assistant'
-                                  AND m.content IS NOT NULL AND m.content != ''
-                                ORDER BY m.seq DESC LIMIT 1), ''),
+                    title.content AS title,
+                    COALESCE(agg.msg_count, 0),
+                    COALESCE(agg.last_msg_at, s.created_at) AS last_activity,
+                    COALESCE(last.role, ''),
+                    COALESCE(substr(reply.content, 1, 280), ''),
                     plan.raw_json, trail.raw_json, settle.raw_json, s.review_status
              FROM sessions s
+             LEFT JOIN (SELECT session_id,
+                               COUNT(*) AS msg_count,
+                               MAX(created_at) AS last_msg_at,
+                               MAX(seq) AS last_seq,
+                               MIN(CASE WHEN role = 'user' AND content IS NOT NULL
+                                        THEN seq END) AS title_seq,
+                               MAX(CASE WHEN role = 'assistant' AND content IS NOT NULL
+                                             AND content != ''
+                                        THEN seq END) AS reply_seq
+                        FROM messages
+                        WHERE session_id IN (SELECT id FROM sessions WHERE source = '')
+                        GROUP BY session_id) agg
+                    ON agg.session_id = s.id
+             LEFT JOIN messages title
+                    ON title.session_id = s.id AND title.seq = agg.title_seq
+             LEFT JOIN messages last
+                    ON last.session_id = s.id AND last.seq = agg.last_seq
+             LEFT JOIN messages reply
+                    ON reply.session_id = s.id AND reply.seq = agg.reply_seq
              LEFT JOIN session_state plan
                     ON plan.session_id = s.id AND plan.key = ?1
              LEFT JOIN session_state trail
