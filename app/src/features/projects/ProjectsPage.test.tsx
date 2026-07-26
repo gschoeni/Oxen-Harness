@@ -41,6 +41,16 @@ beforeEach(() => {
 });
 
 describe("ProjectsPage", () => {
+  it("opens settings from the projects page", async () => {
+    render(<ProjectsPage />);
+
+    // Models, tools, skills, and rules are global; before this the only door
+    // was the chat sidebar, which you can't reach without opening a project.
+    await userEvent.click(screen.getByRole("button", { name: /Settings/ }));
+
+    expect(useStore.getState().settingsOpen).toBe(true);
+  });
+
   it("lists every project and marks the current one", () => {
     render(<ProjectsPage />);
     expect(screen.getByText("Writer")).toBeInTheDocument();

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowDownAZ, Clock, FolderOpen, FolderPlus, Sparkles, Trash2 } from "lucide-react";
+import { ArrowDownAZ, Clock, FolderOpen, FolderPlus, Settings2, Sparkles, Trash2 } from "lucide-react";
 import { Button, Modal } from "../../components/ui";
 import { relativeTime } from "../../lib/format";
 import { useStore } from "../../lib/store";
@@ -33,6 +33,7 @@ export function ProjectsPage() {
   const runStatus = useStore((state) => state.runStatus);
   const activePath = useStore((state) => state.session?.workspace ?? null);
   const selectProject = useStore((state) => state.selectProject);
+  const setSettingsOpen = useStore((state) => state.setSettingsOpen);
   const enterProject = useStore((state) => state.enterProject);
   const resume = useStore((state) => state.resume);
   const setProjectsOpen = useStore((state) => state.setProjectsOpen);
@@ -120,9 +121,17 @@ export function ProjectsPage() {
                 Give every codebase a home, a purpose, and the context your agent should carry into each chat.
               </p>
             </div>
-            <Button variant="primary" className="start-project-button" onClick={() => setStarting(true)}>
-              <FolderPlus size={17} /> Start a project
-            </Button>
+            {/* Settings are global — models, tools, skills, rules — so they
+                have to be reachable before a project is open. Until now the
+                only door was the chat sidebar. */}
+            <div className="projects-header-actions">
+              <Button variant="ghost" onClick={() => setSettingsOpen(true)}>
+                <Settings2 size={16} /> Settings
+              </Button>
+              <Button variant="primary" className="start-project-button" onClick={() => setStarting(true)}>
+                <FolderPlus size={17} /> Start a project
+              </Button>
+            </div>
           </header>
 
           {projects.length > 1 && (
