@@ -100,7 +100,7 @@ pub struct DevServer {
     sink: RwLock<Arc<dyn PreviewSink>>,
     /// Reload-on-change watcher for servers without their own hot reload
     /// (see [`crate::watch`]); dropping it ends the watch.
-    watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    watcher: Mutex<Option<crate::watch::WorkspaceWatcher>>,
     /// Whether the process group was already SIGKILLed. Kill exactly once:
     /// pids (and thus group ids) are recycled, so a second kill much later —
     /// e.g. `Drop` on a server whose child crashed hours ago — could target
