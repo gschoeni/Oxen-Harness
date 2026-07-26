@@ -75,8 +75,12 @@ export default function App() {
         {layout.chatRailed ? <ChatRail /> : <Chat />}
         <DockColumn side="right" forceRail={!!layout.right?.railed} />
       </div>
-      {settingsOpen && <Settings />}
+      {/* Order is load-bearing: both are full-window takeovers in the same
+          stacking band (`--z-overlay`), so whichever renders last paints on
+          top. Settings opens *over* Projects — it's reachable from there —
+          and closing it returns to whatever it covered. */}
       {projectsOpen && <ProjectsPage />}
+      {settingsOpen && <Settings />}
       <InspectorDrawer />
     </div>
   );
