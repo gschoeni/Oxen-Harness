@@ -122,6 +122,164 @@ pub fn load(workspace: &Path) -> Vec<RuleSpec> {
     specs
 }
 
+/// A rule worth suggesting, with the words a person needs to decide.
+///
+/// Suggestions live here rather than in either front end, so the desktop
+/// gallery and `/rules suggest` offer the same set described the same way.
+#[derive(Debug, Clone, Serialize)]
+pub struct Suggestion {
+    /// What it does, in plain language — the headline someone reads first.
+    pub title: String,
+    /// Why you'd want it, in one line.
+    pub why: String,
+    /// What it catches, as prose rather than as the regex.
+    pub catches: String,
+    /// Which family it belongs to ("Any project", "Rust", …), for grouping.
+    pub group: String,
+    /// The rule itself.
+    pub rule: RuleSpec,
+}
+
+/// The parts that vary between suggestions. A borrowed twin of [`Suggestion`]
+/// so the library below reads as a list of descriptions rather than a wall of
+/// `.to_string()`.
+struct Draft {
+    group: &'static str,
+    name: &'static str,
+    title: &'static str,
+    why: &'static str,
+    catches: &'static str,
+    pattern: &'static str,
+    interrupt: bool,
+    message: &'static str,
+}
+
+impl From<Draft> for Suggestion {
+    fn from(d: Draft) -> Self {
+        Self {
+            title: d.title.into(),
+            why: d.why.into(),
+            catches: d.catches.into(),
+            group: d.group.into(),
+            rule: RuleSpec {
+                name: d.name.into(),
+                pattern: d.pattern.into(),
+                // Suggestions watch tool calls: that's where a change becomes
+                // visible early enough to stop, and a prose-scoped rule fires
+                // when the model merely discusses the thing.
+                scope: vec!["tool".into()],
+                message: d.message.into(),
+                interrupt: d.interrupt,
+                repeat: Some("once".into()),
+                enabled: true,
+            },
+        }
+    }
+}
+
+/// Rules worth offering to someone who has none.
+///
+/// Chosen to be legible: each catches something concrete, and the ones that
+/// interrupt are the ones where landing the correction late means undoing work
+/// (a force-push, a rewritten generated file) rather than merely reading worse.
+pub fn suggestions() -> Vec<Suggestion> {
+    [
+        Draft {
+            group: "Any project",
+            name: "no-force-push",
+            title: "Don't force-push",
+            why: "Rewriting shared history is the one git mistake that costs other people their work.",
+            catches: "git push --force, push -f",
+            pattern: r"push\s+--force|push\s+-f\b",
+            interrupt: true,
+            message: "Don't force-push. If history needs fixing, say what you'd do and let me decide.",
+        },
+        Draft {
+            group: "Any project",
+            name: "leave-generated-alone",
+            title: "Protect generated files",
+            why: "Edits to generated code vanish on the next build, and the real fix is upstream.",
+            catches: "paths under generated/",
+            pattern: r"generated/|\.generated\.",
+            interrupt: true,
+            message: "Files under generated/ are produced by the build. Change the generator or its input instead, then re-run it.",
+        },
+        Draft {
+            group: "Any project",
+            name: "no-hardcoded-secrets",
+            title: "Keep credentials out of the code",
+            why: "A key written into a file is a key in your git history, whether or not it ships.",
+            catches: "api_key = \"…\", password: \"…\"",
+            pattern: r#"(?i)(api[_-]?key|secret|password|token)\s*[:=]\s*["'][^"']{12,}"#,
+            interrupt: true,
+            message: "Don't write credentials into files. Read them from the environment, and tell me which variable to set.",
+        },
+        Draft {
+            group: "Any project",
+            name: "ask-before-adding-deps",
+            title: "Ask before adding a dependency",
+            why: "A dependency is permanent code you don't control — worth one sentence of justification.",
+            catches: "cargo add, npm install, pip install",
+            pattern: r"cargo add |npm install |pnpm add |pip install ",
+            interrupt: false,
+            message: "Before adding a dependency, check whether the project or its standard library already covers it. If you still want it, say what it buys us.",
+        },
+        Draft {
+            group: "Rust",
+            name: "no-unwrap",
+            title: "No .unwrap() outside tests",
+            why: "An unwrap is a panic waiting for the one input you didn't think of.",
+            catches: ".unwrap() anywhere in an edit",
+            pattern: r"\.unwrap\(\)",
+            interrupt: true,
+            message: "This project doesn't use `.unwrap()` outside tests — return a Result, or use `expect` with a reason that names the invariant you're relying on.",
+        },
+        Draft {
+            group: "Rust",
+            name: "no-allow-attributes",
+            title: "Don't silence the linter",
+            why: "An allow attribute hides the warning without answering it, and outlives whoever added it.",
+            catches: "#[allow(...)], #![allow(...)]",
+            pattern: r"#!?\[allow\(",
+            interrupt: false,
+            message: "Don't silence a lint with an allow attribute. Fix what it's pointing at, or explain here why the lint is wrong.",
+        },
+        Draft {
+            group: "TypeScript",
+            name: "no-any",
+            title: "No `any`",
+            why: "One `any` disables checking for everything downstream of it.",
+            catches: ": any, as any",
+            pattern: r":\s*any\b|as\s+any\b",
+            interrupt: false,
+            message: "Avoid `any` — give the real type, or `unknown` plus a narrowing check if you genuinely don't know it.",
+        },
+        Draft {
+            group: "TypeScript",
+            name: "no-stray-console-log",
+            title: "No console.log left behind",
+            why: "Debug output that ships is noise in someone else's terminal.",
+            catches: "console.log(",
+            pattern: r"console\.log\(",
+            interrupt: false,
+            message: "Remove the console.log before you finish, or switch it to the project's logger if it's worth keeping.",
+        },
+        Draft {
+            group: "Python",
+            name: "no-bare-except",
+            title: "No bare except",
+            why: "A bare except swallows KeyboardInterrupt and every bug you haven't met yet.",
+            catches: "except: with no exception type",
+            pattern: r"except\s*:",
+            interrupt: false,
+            message: "Catch the exception you mean — `except ValueError:` — rather than a bare `except:`.",
+        },
+    ]
+    .into_iter()
+    .map(Suggestion::from)
+    .collect()
+}
+
 /// Persist the user's global rules.
 pub fn save(rules: &Rules) -> Result<(), crate::RuntimeError> {
     crate::config::write_and_snapshot(
@@ -167,6 +325,49 @@ mod tests {
         // Unstated fields take the documented defaults.
         assert!(specs[0].interrupt);
         assert!(specs[0].scope.is_empty());
+    }
+
+    #[test]
+    fn every_suggestion_compiles_and_is_described() {
+        for s in suggestions() {
+            assert!(
+                regex::Regex::new(&s.rule.pattern).is_ok(),
+                "{} has an uncompilable pattern",
+                s.rule.name
+            );
+            // A suggestion nobody can read is not a suggestion.
+            assert!(!s.title.is_empty() && !s.why.is_empty() && !s.catches.is_empty());
+            assert!(
+                !s.rule.message.trim().is_empty(),
+                "{} says nothing",
+                s.rule.name
+            );
+            assert!(!s.rule.scope.is_empty(), "{} watches nothing", s.rule.name);
+        }
+    }
+
+    #[test]
+    fn suggested_patterns_catch_what_they_advertise() {
+        let hits = |name: &str, sample: &str| {
+            let s = suggestions()
+                .into_iter()
+                .find(|s| s.rule.name == name)
+                .unwrap();
+            regex::Regex::new(&s.rule.pattern).unwrap().is_match(sample)
+        };
+        assert!(hits("no-force-push", "git push --force origin main"));
+        assert!(hits("no-force-push", "git push -f"));
+        assert!(!hits("no-force-push", "git push origin main"));
+        assert!(hits("no-unwrap", "let v = x.unwrap();"));
+        assert!(!hits("no-unwrap", "let v = x?;"));
+        assert!(hits(
+            "no-hardcoded-secrets",
+            r#"API_KEY = "sk-live-abcdefghijkl""#
+        ));
+        assert!(!hits("no-hardcoded-secrets", r#"api_key = env("API_KEY")"#));
+        assert!(hits("no-any", "const x: any = 1;"));
+        assert!(hits("no-bare-except", "except:"));
+        assert!(!hits("no-bare-except", "except ValueError:"));
     }
 
     #[test]

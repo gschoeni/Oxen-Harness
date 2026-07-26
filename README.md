@@ -485,6 +485,12 @@ intent — which makes narrow, literal patterns the ones that work:
   backreferences. The editor tells you if a pattern won't compile — a rule that
   can't compile is skipped, so it protects nothing while looking like it does.
 
+**Where to start.** Neither front end ships rules turned on — a rule that
+interrupts is the kind of thing you want to have chosen — but both offer the
+same short library, each entry saying what it catches and why:
+**Settings → Rules** lists them with an Add button, and `/rules suggest` prints
+them with `/rules suggest <name>` to take one.
+
 **Trying one before you trust it.** Both front ends run candidate patterns
 through the *agent's own* regex engine, not the editor's, so what you see is
 what will fire:

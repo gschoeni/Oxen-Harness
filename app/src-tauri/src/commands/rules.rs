@@ -43,6 +43,14 @@ pub(crate) async fn save_rules(rules: Vec<harness_runtime::rules::RuleSpec>) -> 
         .map_err(|e| e.to_string())
 }
 
+/// Rules worth offering to someone who has none, with the words a person
+/// needs to decide. Shared with the CLI so both surfaces suggest the same set.
+#[tauri::command]
+pub(crate) async fn list_rule_suggestions(
+) -> Result<Vec<harness_runtime::rules::Suggestion>, String> {
+    Ok(harness_runtime::rules::suggestions())
+}
+
 /// What `pattern` matches in `sample`, through the agent's own regex engine.
 #[tauri::command]
 pub(crate) async fn check_rule_pattern(

@@ -40,11 +40,12 @@ pub(crate) fn handle_repl(
         }
         Some("rm") | Some("remove") | Some("delete") => remove(agent, ui, workspace_root, arg)?,
         Some("test") => test(ui, arg)?,
+        Some("suggest") | Some("suggestions") => suggest(agent, ui, workspace_root, arg)?,
         Some(other) => {
             println!("  {}", ui.dim(&format!("unknown: /rules {other}")));
             println!(
                 "  {}",
-                ui.dim("try /rules, /rules add, /rules on|off <name>, /rules rm <name>, /rules test <name>")
+                ui.dim("try /rules, /rules suggest, /rules add, /rules on|off <name>, /rules rm <name>, /rules test <name>")
             );
         }
     }
@@ -73,7 +74,7 @@ fn list(ui: &Ui, workspace_root: &Path) {
         );
         println!(
             "  {}",
-            ui.dim("write one with /rules add: a pattern to watch for, and what to say when it matches")
+            ui.dim("see some worth having with /rules suggest, or write your own with /rules add")
         );
         return;
     }
@@ -99,7 +100,7 @@ fn list(ui: &Ui, workspace_root: &Path) {
     }
     println!(
         "  {}",
-        ui.dim("/rules add · /rules on|off <name> · /rules rm <name> · /rules test <name>")
+        ui.dim("/rules suggest · /rules add · /rules on|off <name> · /rules rm <name> · /rules test <name>")
     );
 }
 
@@ -320,6 +321,66 @@ fn remove(agent: &mut Agent, ui: &Ui, workspace_root: &Path, name: Option<&str>)
     }
     persist(agent, ui, workspace_root, saved)?;
     println!("  {} {}", ui.green("⚖ rule removed:"), ui.cream(name));
+    Ok(())
+}
+
+/// `/rules suggest [name]` — rules worth having, described in plain language;
+/// with a name, add that one.
+///
+/// The same library the desktop gallery shows, so both surfaces suggest the
+/// same set and describe it the same way.
+fn suggest(agent: &mut Agent, ui: &Ui, workspace_root: &Path, name: Option<&str>) -> Result<()> {
+    let library = rules::suggestions();
+    if let Some(name) = name {
+        let Some(found) = library.into_iter().find(|s| s.rule.name == name) else {
+            println!("  {}", ui.dim(&format!("no suggestion named {name}")));
+            return Ok(());
+        };
+        let mut saved = rules::user_rules();
+        if saved.rules.iter().any(|r| r.name == found.rule.name) {
+            println!("  {}", ui.dim(&format!("you already have {name}")));
+            return Ok(());
+        }
+        saved.rules.push(found.rule.clone());
+        persist(agent, ui, workspace_root, saved)?;
+        println!(
+            "  {} {}",
+            ui.green("⚖ rule added:"),
+            ui.cream(&format!("{} — {}", found.rule.name, found.title))
+        );
+        return Ok(());
+    }
+
+    let mine = rules::user_rules();
+    let mut group = String::new();
+    for item in &library {
+        if item.group != group {
+            group = item.group.clone();
+            println!("  {}", ui.brown(&group.to_lowercase()));
+        }
+        let have = mine.rules.iter().any(|r| r.name == item.rule.name);
+        println!(
+            "    {} {}{}",
+            ui.accent(&format!("{:<26}", item.rule.name)),
+            if item.rule.interrupt {
+                ui.red("interrupts")
+            } else {
+                ui.dim("reminds")
+            },
+            if have {
+                ui.dim("  (you have this)")
+            } else {
+                String::new()
+            },
+        );
+        println!("      {}", ui.cream(&item.title));
+        println!("      {}", ui.dim(&item.why));
+        println!("      {}", ui.dim(&format!("catches {}", item.catches)));
+    }
+    println!(
+        "  {}",
+        ui.dim("add one with /rules suggest <name> · write your own with /rules add")
+    );
     Ok(())
 }
 

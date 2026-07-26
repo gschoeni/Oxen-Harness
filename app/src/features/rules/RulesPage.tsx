@@ -16,7 +16,8 @@ import { TeachingNav } from "../settings/TeachingNav";
 import type { RuleSpec } from "../../lib/types";
 import { RuleEditor } from "./RuleEditor";
 import { RuleRow } from "./RuleRow";
-import { blank, STARTERS } from "./starters";
+import { RuleSuggestions } from "./RuleSuggestions";
+import { blank } from "./starters";
 import "../tools/tools.css";
 import "./rules.css";
 
@@ -102,20 +103,21 @@ export function RulesPage() {
 
         {user && rules.length === 0 && editing === null && (
           <div className="rule-empty">
-            <p>No rules yet. Start with one of these, or write your own.</p>
-            <div className="rule-starters">
-              {STARTERS.map((starter) => (
-                <button
-                  key={starter.name}
-                  type="button"
-                  className="rule-starter"
-                  onClick={() => persist([...(user ?? []), starter])}
-                >
-                  <code>{starter.when}</code>
-                  <span>{starter.name}</span>
-                </button>
-              ))}
-            </div>
+            <p className="rule-how">
+              <span>
+                <strong>1</strong> It watches what the model writes
+              </span>
+              <span>
+                <strong>2</strong> A pattern matches
+              </span>
+              <span>
+                <strong>3</strong> It corrects the model, mid-reply
+              </span>
+            </p>
+            <p>
+              You have none yet. Add one below — each says what it catches and what it does
+              about it — or write your own.
+            </p>
           </div>
         )}
 
@@ -169,6 +171,20 @@ export function RulesPage() {
           </button>
         )}
       </section>
+
+      {editing === null && (
+        <section className="settings-section">
+          <div className="settings-label">Rules worth having</div>
+          <p className="hint">
+            Add one and it applies to your next chat in every project. You can edit or turn off
+            anything you add.
+          </p>
+          <RuleSuggestions
+            taken={rules.map((r) => r.name)}
+            onAdd={(rule) => persist([...(user ?? []), rule])}
+          />
+        </section>
+      )}
 
       {project.length > 0 && (
         <section className="settings-section">

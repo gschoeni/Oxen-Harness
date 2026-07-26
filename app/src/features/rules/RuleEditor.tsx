@@ -201,7 +201,11 @@ function Tester({
     <div className="rule-tester">
       <div className="rule-tester-head">
         <span>Try it</span>
-        {hits.length > 0 ? (
+        {/* An empty pattern hasn't been evaluated — saying "no match" there
+            reads as a broken tester rather than an unfinished rule. */}
+        {!draft.when ? (
+          <span className="rule-verdict">add a pattern above to see what it catches</span>
+        ) : hits.length > 0 ? (
           <span className="rule-verdict hit">
             {hits.length === 1 ? "1 match" : `${hits.length} matches`} — this rule would fire
           </span>

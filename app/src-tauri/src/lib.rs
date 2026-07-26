@@ -198,6 +198,7 @@ pub fn run() {
             commands::connection::configure_oxen_key,
             commands::turn::retry_turn,
             commands::rules::list_rules,
+            commands::rules::list_rule_suggestions,
             commands::rules::save_rules,
             commands::rules::check_rule_pattern,
             commands::models::installed_local_models,

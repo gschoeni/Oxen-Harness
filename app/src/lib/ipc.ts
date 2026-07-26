@@ -51,6 +51,7 @@ import type {
   RetryEvent,
   RuleSets,
   RuleSpec,
+  RuleSuggestion,
   ChatMessage,
   DatasetPage,
   DatasetQueryReq,
@@ -327,6 +328,9 @@ export const retryTurn = (session: string) => invoke<string>("retry_turn", { ses
 
 /** Stream rules for the active project: the user's own plus the repository's. */
 export const listRules = () => invoke<RuleSets>("list_rules");
+
+/** Rules worth offering to someone who has none, described in plain language. */
+export const listRuleSuggestions = () => invoke<RuleSuggestion[]>("list_rule_suggestions");
 
 /** Replace the user's rules (the page always sends the whole set). */
 export const saveRules = (rules: RuleSpec[]) => invoke<void>("save_rules", { rules });

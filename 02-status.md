@@ -414,7 +414,10 @@ Branch `harness-parity-improvements`; the study and full roadmap are in
   tester runs the agent's own regex engine (never the browser's) so what you
   see is what will fire. The terminal gets the same capabilities via `/rules`
   (list, guided add, on/off, rm, test), applied to the live session. Written up
-  in the README under "Extending the agent".
+  in the README under "Extending the agent". A shared suggestion library
+  (`harness_runtime::rules::suggestions`) backs both the desktop gallery and
+  `/rules suggest`, so a new user starts from explained examples rather than a
+  blank page and a regex field.
 
 ## What's left / next
 

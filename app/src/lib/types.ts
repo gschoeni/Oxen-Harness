@@ -505,6 +505,19 @@ export interface RuleSpec {
   enabled: boolean;
 }
 
+/** A rule worth offering, with the words needed to decide on it. */
+export interface RuleSuggestion {
+  /** What it does, in plain language. */
+  title: string;
+  /** Why you'd want it, in one line. */
+  why: string;
+  /** What it catches, as prose rather than the regex. */
+  catches: string;
+  /** Which family it belongs to ("Any project", "Rust", …). */
+  group: string;
+  rule: RuleSpec;
+}
+
 /** Both sets of rules for the active project. */
 export interface RuleSets {
   /** The user's own, editable here. */

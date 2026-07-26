@@ -18,6 +18,7 @@ import type {
   Project,
   RuleSets,
   RuleSpec,
+  RuleSuggestion,
   RuntimeStatus,
   StartProjectInput,
   SessionInfo,
@@ -257,6 +258,25 @@ export const listRules = vi.fn(
   }),
 );
 export const saveRules = vi.fn(async (_rules: RuleSpec[]) => {});
+export const listRuleSuggestions = vi.fn(
+  async (): Promise<RuleSuggestion[]> => [
+    {
+      title: "Don't force-push",
+      why: "Rewriting shared history costs other people their work.",
+      catches: "git push --force",
+      group: "Any project",
+      rule: {
+        name: "no-force-push",
+        when: "push\\s+--force",
+        scope: ["tool"],
+        message: "Don't force-push.",
+        interrupt: true,
+        repeat: "once",
+        enabled: true,
+      },
+    },
+  ],
+);
 export const checkRulePattern = vi.fn(
   async (pattern: string, sample: string): Promise<PatternCheck> => {
     // The real check runs Rust's regex engine; for tests a plain indexOf over
@@ -609,6 +629,7 @@ export function resetIpc() {
     .mockReset()
     .mockResolvedValue({ user: [], project: [], project_path: ".oxen-harness/rules.json" });
   saveRules.mockReset().mockResolvedValue(undefined);
+  listRuleSuggestions.mockClear();
   saveSkill.mockReset().mockResolvedValue(undefined);
   deleteSkill.mockReset().mockResolvedValue(undefined);
   setSkillEnabled.mockReset().mockResolvedValue(undefined);

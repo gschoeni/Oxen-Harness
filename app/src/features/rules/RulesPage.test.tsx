@@ -24,15 +24,28 @@ beforeEach(() => {
 });
 
 describe("RulesPage", () => {
-  it("offers starter rules when there are none, and adds one on click", async () => {
+  it("explains what a rule does before showing its pattern, and adds it on click", async () => {
     render(<RulesPage />);
-    const starter = await screen.findByText("no-unwrap");
 
-    await userEvent.click(starter);
+    // Plain language first — the regex is not what a new user needs to read.
+    expect(await screen.findByText("Don't force-push")).toBeTruthy();
+    expect(screen.getByText(/costs other people their work/)).toBeTruthy();
+    expect(screen.getByText("git push --force")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: /Add no-force-push/ }));
 
     expect(ipc.saveRules).toHaveBeenCalledTimes(1);
     const saved = ipc.saveRules.mock.calls[0]?.[0] ?? [];
-    expect(saved.map((r) => r.name)).toEqual(["no-unwrap"]);
+    expect(saved.map((r) => r.name)).toEqual(["no-force-push"]);
+  });
+
+  it("says the tester is waiting for a pattern rather than claiming no match", async () => {
+    render(<RulesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /New rule/ }));
+
+    // An empty form hasn't been evaluated; "no match" would read as broken.
+    expect(await screen.findByText(/add a pattern above/)).toBeTruthy();
+    expect(screen.queryByText(/no match/)).toBeNull();
   });
 
   it("shows what a rule watches for and whether it interrupts", async () => {
@@ -46,8 +59,10 @@ describe("RulesPage", () => {
 
     expect(await screen.findByText(".unwrap()")).toBeTruthy();
     // The consequential distinction is legible without opening the rule.
-    expect(screen.getByText("interrupts")).toBeTruthy();
-    expect(screen.getByText(/in tool calls/)).toBeTruthy();
+    // Scoped to the list: suggestion cards carry the same label.
+    const row = document.querySelector(".rule-row");
+    expect(row?.textContent).toContain("interrupts");
+    expect(row?.textContent).toContain("in tool calls");
   });
 
   it("previews the match and the reminder the model would receive", async () => {

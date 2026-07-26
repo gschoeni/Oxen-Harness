@@ -22,6 +22,7 @@ sha2 = "0.10"
 thiserror = { workspace = true }
 
 [dev-dependencies]
+regex = "1"
 tempfile = "3"
 
 [lints]

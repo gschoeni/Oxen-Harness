@@ -1085,6 +1085,7 @@ dependencies = [
  "harness-llm",
  "harness-oxen",
  "harness-tools",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

@@ -172,6 +172,7 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
         description: "corrections that fire while the model writes",
         build: Command::Rules,
         completer: ArgCompleter::Static(&[
+            ("suggest", "rules worth having, explained"),
             ("add", "write a new rule, guided"),
             ("on", "turn a rule back on"),
             ("off", "stop a rule firing"),
