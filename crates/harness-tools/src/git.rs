@@ -26,31 +26,8 @@ impl GitTool {
     }
 
     async fn run_git(&self, args: &[String]) -> Result<String, ToolError> {
-        let output = crate::process::run_bounded(
-            tokio::process::Command::new("git")
-                .args(args)
-                .current_dir(self.workspace.root()),
-            GIT_TIMEOUT,
-            MAX_GIT_CHARS,
-        )
-        .await
-        .map_err(|e| ToolError::Execution(format!("spawn git: {e}")))?;
-        if output.timed_out {
-            return Err(ToolError::Execution(format!(
-                "git {} exceeded {} seconds",
-                args.join(" "),
-                GIT_TIMEOUT.as_secs()
-            )));
-        }
-        if output.code == Some(0) {
-            Ok(output.stdout)
-        } else {
-            Err(ToolError::Execution(format!(
-                "git {} failed: {}",
-                args.join(" "),
-                output.stderr.trim()
-            )))
-        }
+        crate::process::run_cli("git", args, self.workspace.root(), GIT_TIMEOUT, MAX_GIT_CHARS)
+            .await
     }
 }
 
@@ -66,6 +43,9 @@ pub enum GitOperation {
     Log,
     /// Stage everything and commit (requires `message`).
     Commit,
+    /// Push the current branch (`git push -u origin HEAD` — sets the
+    /// upstream on first push, no-op flags after).
+    Push,
 }
 
 /// Arguments to `git`.
@@ -85,8 +65,9 @@ impl TypedTool for GitTool {
     type Args = GitArgs;
 
     fn description(&self) -> &str {
-        "Run a git operation in the workspace: `status`, `diff`, `log`, or `commit`. \
-         `commit` stages all changes (git add -A) and commits with `message`."
+        "Run a git operation in the workspace: `status`, `diff`, `log`, `commit`, or \
+         `push`. `commit` stages all changes (git add -A) and commits with `message`; \
+         `push` pushes the current branch (setting its upstream on first push)."
     }
 
     async fn run(&self, args: GitArgs) -> Result<String, ToolError> {
@@ -111,6 +92,18 @@ impl TypedTool for GitTool {
                     .run_git(&["commit".into(), "-m".into(), message.to_string()])
                     .await?;
                 Ok(format!("{add}{commit}"))
+            }
+            GitOperation::Push => {
+                // `-u origin HEAD`: pushes the current branch under its own
+                // name and records the upstream, so the first push and every
+                // later one are the same call.
+                self.run_git(&[
+                    "push".into(),
+                    "-u".into(),
+                    "origin".into(),
+                    "HEAD".into(),
+                ])
+                .await
             }
         }
     }

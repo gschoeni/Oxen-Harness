@@ -24,7 +24,9 @@ pub const TRAIL_TOOL: &str = "update_trail";
 
 /// The most waypoints a trail may carry. These are macro stages, not a todo
 /// list — past a handful they stop being a story and start being a plan.
-pub const MAX_WAYPOINTS: usize = 7;
+/// Sized so a full working route still has room for the three shipping
+/// stages code work must carry (pushed, pr-reviewed, merged).
+pub const MAX_WAYPOINTS: usize = 8;
 
 /// Lifecycle of a single waypoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -55,7 +57,7 @@ pub struct TrailArgs {
     /// every call; omitting it keeps the previously charted title.
     #[serde(default)]
     pub title: Option<String>,
-    /// The full route, in order (2–7 stages); replaces the previous trail.
+    /// The full route, in order (2–8 stages); replaces the previous trail.
     pub waypoints: Vec<Waypoint>,
 }
 
@@ -182,15 +184,15 @@ impl TypedTool for TrailTool {
     type Args = TrailArgs;
 
     fn description(&self) -> &str {
-        "Chart this session's journey for the user's overview board: a short \
-         thread title plus its macro waypoints, advanced as each stage is \
-         reached. The standard route is define, plan, implement, review — \
-         chart a different one when the work's shape differs (e.g. reproduce, \
-         isolate, fix, verify). Call it early in any session doing real work, \
-         then again whenever a stage completes; send the ENTIRE trail every \
-         call. Keep exactly one waypoint `current` and mark passed stages \
-         `done`. This is the whole session's story at a glance, NOT a todo \
-         list — use update_plan for fine-grained steps. Skip it for trivial \
+        "Chart this session's journey for the user's board: a short thread \
+         title plus its macro waypoints, advanced as each stage is reached. \
+         Chart BEFORE starting real work; re-chart freely when the user \
+         redirects you or the shape changes. Standard route: define, plan, \
+         implement, review. CODE work must END the route with the shipping \
+         stages, exactly named: pushed, pr-reviewed, merged — never mark \
+         them done on faith, verify first (`git` push, `gh` pr_view). Send \
+         the ENTIRE trail every call; keep exactly one waypoint `current`. \
+         NOT a todo list (use update_plan for fine steps); skip for trivial \
          exchanges."
     }
 
@@ -286,7 +288,7 @@ mod tests {
             "title": "t", "waypoints": [wp("only", "current")],
         }))
         .is_none());
-        let many: Vec<_> = (0..8).map(|i| wp(&format!("s{i}"), "ahead")).collect();
+        let many: Vec<_> = (0..9).map(|i| wp(&format!("s{i}"), "ahead")).collect();
         assert!(parse(serde_json::json!({ "title": "t", "waypoints": many })).is_none());
         // Two currents.
         assert!(parse(serde_json::json!({

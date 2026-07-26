@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 pub mod ask;
 pub mod canvas;
 pub mod fs;
+pub mod gh;
 pub mod git;
 mod http_body;
 pub mod plan;
@@ -54,6 +55,7 @@ pub use fs::{
     FileState, Freshness, PathRule, EDIT_FILE_TOOL, FIND_FILES_TOOL, READ_FILE_TOOL,
     SEARCH_FILES_TOOL, WRITE_FILE_TOOL,
 };
+pub use gh::{GhTool, GH_TOOL};
 pub use git::GIT_TOOL;
 pub use plan::{
     parse_plan_arguments, plan_is_open, plan_snapshot, PlanItem, PlanSnapshot, PlanStatus,
@@ -419,6 +421,10 @@ pub struct ToolRegistry {
     /// the fact — path-scoped project conventions are discovered a layer up
     /// (in `harness-runtime`, which depends on this crate) and installed here.
     files: Option<Arc<fs::FileState>>,
+    /// The workspace the default registry was built for, so callers that hold
+    /// only the registry (a resumed agent rehydrating read state) can resolve
+    /// the workspace-relative paths recorded in a transcript.
+    workspace: Option<Workspace>,
     /// Where output dropped by a tool's size cap is kept for
     /// `retrieve_original`. The agent reuses it for compression, so both kinds
     /// of `<<ccr:HASH>>` marker resolve through one store.
@@ -433,6 +439,11 @@ impl ToolRegistry {
     /// The shared fs session state, when this registry was built with one.
     pub fn files(&self) -> Option<&Arc<fs::FileState>> {
         self.files.as_ref()
+    }
+
+    /// The workspace this registry was built for, when built for one.
+    pub fn workspace(&self) -> Option<&Workspace> {
+        self.workspace.as_ref()
     }
 
     /// The store holding output that tool size caps dropped, when this
@@ -578,6 +589,9 @@ impl ToolRegistry {
             .with_typed(fs::FindFilesTool::new(workspace.clone()))
             .with_typed(fs::SearchTool::new(workspace.clone()))
             .with_typed(git::GitTool::new(workspace.clone()))
+            // GitHub PR checks/creation — how the model verifies the trail's
+            // shipping stages before marking them done.
+            .with_typed(gh::GhTool::new(workspace.clone()))
             // Planning/checklist tool — always available so any host gets it.
             .with_typed(plan::PlanTool::new())
             // The session's macro journey (title + waypoints) for the Ledger.
@@ -592,7 +606,7 @@ impl ToolRegistry {
         // log is one `retrieve_original` away instead of gone.
         let overflow = Arc::new(harness_compress::CcrStore::default());
         let tasks = tasks::BackgroundTasks::in_temp_with_overflow(Some(overflow.clone()));
-        registry.register_typed(shell::ShellTool::with_tasks(workspace, tasks.clone()));
+        registry.register_typed(shell::ShellTool::with_tasks(workspace.clone(), tasks.clone()));
         registry.register_typed(tasks::TaskOutputTool::new(tasks.clone()));
         registry.register_typed(tasks::KillTaskTool::new(tasks));
 
@@ -604,6 +618,7 @@ impl ToolRegistry {
         // context compression (when it's on) out of the same store.
         registry.register_typed(retrieve::RetrieveOriginalTool::new(overflow.clone()));
         registry.files = Some(files);
+        registry.workspace = Some(workspace);
         registry.overflow = Some(overflow);
         registry
     }
@@ -698,6 +713,7 @@ mod tests {
             vec![
                 fs::EDIT_FILE_TOOL,
                 fs::FIND_FILES_TOOL,
+                gh::GH_TOOL,
                 git::GIT_TOOL,
                 tasks::KILL_TASK_TOOL,
                 fs::READ_FILE_TOOL,
@@ -736,6 +752,11 @@ mod tests {
         // surface for every thread, and its guidance (when to chart, the
         // standard route, how it differs from update_plan) is what keeps
         // models from spamming it or skipping it.
+        //
+        // `gh` (~0.9K, 13.5K → 14.5K): every code trail now ends in shipping
+        // stages the MODEL must verify (pushed, pr-reviewed, merged) — this
+        // is the tool that verifies them and opens the PR, so it earns its
+        // permanent seat next to `git`.
         let workspace = Workspace::new(".").unwrap();
         let registry = ToolRegistry::default_for_workspace(workspace);
         let chars: usize = registry
@@ -744,8 +765,8 @@ mod tests {
             .map(|d| d.to_string().len())
             .sum();
         assert!(
-            chars < 13_500,
-            "default tool definitions grew to {chars} chars (budget 13500)"
+            chars < 14_500,
+            "default tool definitions grew to {chars} chars (budget 14500)"
         );
     }
 }

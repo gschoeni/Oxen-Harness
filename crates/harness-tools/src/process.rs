@@ -16,6 +16,42 @@ pub struct CapturedOutput {
     pub timed_out: bool,
 }
 
+/// Run an allow-listed CLI (`git`, `gh`) in a working directory and shape the
+/// outcome the way the tools report it: stdout on success, a tool error naming
+/// the failed invocation otherwise. Shared by [`crate::git`] and [`crate::gh`]
+/// so the timeout/exit-code/truncation handling can't drift between them.
+pub(crate) async fn run_cli(
+    binary: &str,
+    args: &[String],
+    cwd: &std::path::Path,
+    timeout: Duration,
+    max_chars: usize,
+) -> Result<String, crate::ToolError> {
+    let output = run_bounded(
+        Command::new(binary).args(args).current_dir(cwd),
+        timeout,
+        max_chars,
+    )
+    .await
+    .map_err(|e| crate::ToolError::Execution(format!("spawn {binary} (is it installed?): {e}")))?;
+    if output.timed_out {
+        return Err(crate::ToolError::Execution(format!(
+            "{binary} {} exceeded {} seconds",
+            args.join(" "),
+            timeout.as_secs()
+        )));
+    }
+    if output.code == Some(0) {
+        Ok(output.stdout)
+    } else {
+        Err(crate::ToolError::Execution(format!(
+            "{binary} {} failed: {}",
+            args.join(" "),
+            output.stderr.trim()
+        )))
+    }
+}
+
 /// Run a command while retaining at most `max_chars` from each output stream.
 pub async fn run_bounded(
     command: &mut Command,
