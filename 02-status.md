@@ -420,7 +420,9 @@ Branch `harness-parity-improvements`; the study and full roadmap are in
   blank page and a regex field. Rules can also be *drafted* by the model from a
   plain-language description (Settings → Rules, or `/rules draft`), with the
   draft verified against the model's own example and counter-example before it
-  is offered.
+  is offered. Drafting is a conversation: tokens stream to the editor
+  (`rules://draft`), each proposal shows the check that ran on it, and
+  follow-ups revise the rule on the table rather than starting over.
 
 ## What's left / next
 

@@ -367,24 +367,191 @@
   color: var(--danger);
 }
 
-/* --- Describe it, and the model writes it --- */
-.rule-describe {
+/* --- Writing a rule by talking about it ---------------------------------
+   A conversation sitting above the fields it fills in. Deliberately quiet:
+   the rule and its tester are the subject, this is the collaborator. */
+.rule-chat {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
   padding-bottom: var(--space-3);
   border-bottom: 1px solid var(--separator);
 }
-.rule-describe-row {
+.rule-chat-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: var(--label-size);
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+}
+.rule-chat-head svg {
+  align-self: center;
+  color: var(--accent);
+}
+.rule-chat-sub {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--text-xs);
+}
+
+.rule-chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: var(--space-2);
+  background: var(--bg);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+}
+.rule-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rule-msg-who {
+  color: var(--text-tertiary);
+  font-family: var(--font-display);
+  font-size: var(--text-2xs, 0.68rem);
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+}
+.rule-msg.you .rule-msg-who {
+  color: var(--accent);
+}
+.rule-msg-text {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.rule-msg.you .rule-msg-text {
+  color: var(--text-secondary);
+}
+.rule-msg.failed .rule-msg-text,
+.rule-msg.retrying .rule-msg-text {
+  color: var(--warning);
+}
+/* The cursor is the whole point of streaming: it says "still writing". */
+.rule-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 2px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: rule-caret 1s steps(2) infinite;
+}
+@keyframes rule-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* What the model wrote, with the check that ran on it. */
+.rule-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  padding: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--separator);
+  border-left: 2px solid var(--separator-strong);
+  border-radius: var(--radius-sm);
+}
+.rule-proposal.interrupts {
+  border-left-color: var(--warning);
+}
+.rule-proposal.reminds {
+  border-left-color: var(--accent);
+}
+.rule-proposal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.rule-proposal code,
+.rule-proposal-checks code {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+.rule-proposal-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: var(--text-2xs, 0.68rem);
+}
+.rule-proposal-checks span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-tertiary);
+}
+.rule-proposal-checks .hit svg {
+  color: var(--green);
+}
+.rule-proposal-checks .miss svg {
+  color: var(--text-tertiary);
+}
+.rule-proposal-applied {
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs, 0.68rem);
+  font-style: italic;
+}
+
+.rule-chat-composer {
   display: flex;
   gap: var(--space-2);
 }
-.rule-describe-row input {
+.rule-chat-composer input {
   flex: 1;
   min-width: 0;
+  padding: var(--space-2);
+  background: var(--bg);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
 }
-.rule-describe-error {
-  color: var(--danger);
+.rule-chat-composer input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+.rule-chat-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+.rule-chat-send:disabled {
+  background: var(--surface);
+  border-color: var(--separator);
+  color: var(--text-tertiary);
+  cursor: default;
+}
+.rule-chat-nudges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rule-chat-note {
+  margin: 0;
+  color: var(--text-tertiary);
   font-size: var(--text-xs);
 }
 

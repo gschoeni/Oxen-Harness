@@ -11,12 +11,17 @@
 //! pattern fine and the rule would then silently never fire. Every check goes
 //! through the same engine the agent runs.
 
+use harness_llm::stream::StreamEvent;
 use harness_llm::types::ChatMessage;
 use harness_llm::ChatRequest;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::state::AppState;
+
+/// Tokens from a rule being written, so the editor can show the model working
+/// rather than a spinner. One channel — only one draft runs at a time.
+const DRAFT_CHANNEL: &str = "rules://draft";
 
 /// Both sets of rules for the active project: the user's own, and the ones
 /// committed to this repository.
@@ -54,30 +59,53 @@ pub(crate) async fn list_rule_suggestions(
     Ok(harness_runtime::rules::suggestions())
 }
 
-/// Write a rule from a description, reusing the session's model and endpoint.
+/// What a drafting turn produced: what the model said, the rule it wrote, and
+/// the check that ran against its own examples.
+#[derive(serde::Serialize)]
+pub(crate) struct DraftOutcome {
+    note: String,
+    rule: harness_agent::rules::DraftedRule,
+    /// How many attempts it took — surfaced so a retry is visible rather than
+    /// hidden latency.
+    attempts: u32,
+}
+
+/// Write (or revise) a rule from a description, reusing the session's model.
 ///
-/// The draft is checked before it comes back — it must compile, catch the
-/// example the model says it catches, and leave the near-miss alone — so a
-/// rule that would never fire is retried rather than handed over. One retry,
-/// with the failure fed back, since the second attempt is usually the fix and
-/// a third rarely is.
+/// Tokens stream to `rules://draft` as they arrive, so the editor shows the
+/// model's sentence forming. The rule itself is checked before it returns — it
+/// must compile, catch the example the model gave, and leave the near-miss
+/// alone — so a rule that would never fire is retried rather than handed over.
 #[tauri::command]
 pub(crate) async fn draft_rule(
+    app: AppHandle,
     state: State<'_, AppState>,
-    description: String,
-) -> Result<harness_agent::rules::DraftedRule, String> {
-    let mut ask = description.clone();
+    request: String,
+    history: Vec<harness_agent::rules::DraftTurn>,
+) -> Result<DraftOutcome, String> {
+    let mut ask = harness_agent::rules::draft_prompt(&request, &history);
     let mut last = String::new();
-    for attempt in 0..2 {
-        let raw = complete_oneshot(&state, harness_agent::rules::DRAFT_SYSTEM, &ask).await?;
-        match harness_agent::rules::DraftedRule::from_model_output(&raw) {
-            Ok(drafted) => return Ok(drafted),
+    for attempt in 1..=2u32 {
+        let raw = stream_oneshot(&app, &state, harness_agent::rules::DRAFT_SYSTEM, &ask).await?;
+        match harness_agent::rules::DraftReply::from_model_output(&raw) {
+            Ok(reply) => {
+                return Ok(DraftOutcome {
+                    note: reply.note,
+                    rule: reply.rule,
+                    attempts: attempt,
+                })
+            }
             Err(why) => {
                 last = why.clone();
-                if attempt == 0 {
+                if attempt == 1 {
+                    // Say so in the conversation: a silent retry reads as lag.
+                    let _ = app.emit(
+                        DRAFT_CHANNEL,
+                        serde_json::json!({ "retry": format!("That one wouldn't work ({why}). Trying again.") }),
+                    );
                     ask = format!(
-                        "{description}\n\nYour previous attempt was unusable: {why}. \
-                         Try again, and check the pattern against your own examples first."
+                        "{ask}\n\nYour previous attempt was unusable: {why}. Try again, and \
+                         check the pattern against your own examples first."
                     );
                 }
             }
@@ -86,7 +114,14 @@ pub(crate) async fn draft_rule(
     Err(last)
 }
 
-async fn complete_oneshot(state: &AppState, system: &str, user: &str) -> Result<String, String> {
+/// A one-shot completion whose tokens are forwarded to the webview as they
+/// arrive.
+async fn stream_oneshot(
+    app: &AppHandle,
+    state: &AppState,
+    system: &str,
+    user: &str,
+) -> Result<String, String> {
     let (client, model, _) = state.client_for().await?;
     let request = ChatRequest::new(
         &model,
@@ -97,7 +132,11 @@ async fn complete_oneshot(state: &AppState, system: &str, user: &str) -> Result<
     )
     .streaming(true);
     let assembled = client
-        .stream_chat(&request, &CancellationToken::new(), |_| {})
+        .stream_chat(&request, &CancellationToken::new(), |event| {
+            if let StreamEvent::Token(t) = event {
+                let _ = app.emit(DRAFT_CHANNEL, serde_json::json!({ "delta": t }));
+            }
+        })
         .await
         .map_err(|e| e.to_string())?;
     Ok(assembled.content)

@@ -518,6 +518,30 @@ export interface DraftedRule {
   example_miss: string;
 }
 
+/** One exchange in a rule-writing conversation, sent back so a follow-up
+ *  revises the rule on the table instead of starting over. */
+export interface DraftTurn {
+  asked: string;
+  said: string;
+  rule: string | null;
+}
+
+/** What a drafting turn produced. */
+export interface DraftOutcome {
+  /** The model's own sentence, shown in the thread. */
+  note: string;
+  rule: DraftedRule;
+  /** How many attempts it took — a retry is visible rather than hidden lag. */
+  attempts: number;
+}
+
+/** `rules://draft` payload: a token as the model writes, or a note that its
+ *  first attempt failed its own check and it's trying again. */
+export interface RuleDraftEvent {
+  delta?: string;
+  retry?: string;
+}
+
 /** A rule worth offering, with the words needed to decide on it. */
 export interface RuleSuggestion {
   /** What it does, in plain language. */

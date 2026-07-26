@@ -15,7 +15,9 @@ import type {
   PermissionsView,
   CloudModel,
   ConnectionView,
-  DraftedRule,
+  DraftOutcome,
+  DraftTurn,
+  RuleDraftEvent,
   DownloadProgress,
   HardwareProfile,
   HfHit,
@@ -333,8 +335,13 @@ export const listRules = () => invoke<RuleSets>("list_rules");
 /** Write a rule from a description. The draft is checked before it returns —
  *  it compiles and catches its own example — so a rule that would never fire
  *  comes back as an error rather than as a rule. */
-export const draftRule = (description: string) =>
-  invoke<DraftedRule>("draft_rule", { description });
+export const draftRule = (request: string, history: DraftTurn[]) =>
+  invoke<DraftOutcome>("draft_rule", { request, history });
+
+/** Tokens from a rule being written, so the editor can show the model working
+ *  rather than a spinner. */
+export const onRuleDraft = (handler: (e: RuleDraftEvent) => void) =>
+  listen<RuleDraftEvent>("rules://draft", (e) => handler(e.payload));
 
 /** Rules worth offering to someone who has none, described in plain language. */
 export const listRuleSuggestions = () => invoke<RuleSuggestion[]>("list_rule_suggestions");

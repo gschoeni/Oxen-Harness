@@ -183,6 +183,65 @@ pub struct DraftedRule {
     pub example_miss: String,
 }
 
+/// One exchange in a rule-writing conversation, for the model to build on.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct DraftTurn {
+    /// What the user asked for.
+    pub asked: String,
+    /// What the model said it did (its note, not the JSON).
+    pub said: String,
+    /// The rule it produced, as JSON, so a follow-up revises rather than
+    /// starts over.
+    pub rule: Option<String>,
+}
+
+/// A model's reply to a drafting request: what it says it did, and the rule.
+#[derive(Debug, Clone)]
+pub struct DraftReply {
+    /// A sentence or two in the model's own words, shown in the conversation.
+    pub note: String,
+    pub rule: DraftedRule,
+}
+
+impl DraftReply {
+    /// Split a reply into the part a person reads and the part the editor
+    /// uses. The note is whatever precedes the JSON object.
+    pub fn from_model_output(raw: &str) -> Result<Self, String> {
+        let rule = DraftedRule::from_model_output(raw)?;
+        let note = raw
+            .split_once('{')
+            .map(|(before, _)| before)
+            .unwrap_or(raw)
+            .replace("```json", "")
+            .replace("```", "")
+            .trim()
+            .to_string();
+        Ok(Self { note, rule })
+    }
+}
+
+/// Build the user turn for a drafting request, carrying the conversation so a
+/// follow-up edits the rule on the table instead of starting fresh.
+pub fn draft_prompt(request: &str, history: &[DraftTurn]) -> String {
+    if history.is_empty() {
+        return request.to_string();
+    }
+    let mut prompt = String::from("Here is our conversation so far.\n\n");
+    for turn in history {
+        prompt.push_str(&format!("I asked: {}\n", turn.asked));
+        prompt.push_str(&format!("You said: {}\n", turn.said));
+        if let Some(rule) = &turn.rule {
+            prompt.push_str(&format!("You wrote: {rule}\n"));
+        }
+        prompt.push('\n');
+    }
+    prompt.push_str(&format!(
+        "Now: {request}\n\nRevise the rule above unless I'm clearly asking for a \
+         different one. Keep what still fits."
+    ));
+    prompt
+}
+
 /// What to tell a model asked to write a rule.
 ///
 /// The hard parts to get across are the engine's limits (this is Rust's regex,
@@ -193,7 +252,13 @@ pub const DRAFT_SYSTEM: &str = "\
 You write \"stream rules\" for a coding agent. A rule watches what the agent \
 writes and corrects it when a regular expression matches.
 
-Reply with ONLY a JSON object, no prose and no code fence:
+Reply with ONE short sentence saying what you're watching for and why, then \
+the JSON object. Nothing else — no code fence, no preamble like \"Sure!\".
+
+The sentence is shown to the user as your side of the conversation, so write \
+it to them: \"Watching for rm with a path that leaves the project root.\"
+
+The JSON:
 {
   \"name\": \"kebab-case-id\",
   \"pattern\": \"a regular expression\",
@@ -595,6 +660,40 @@ mod tests {
         assert_eq!(drafted.name, "no-force-push");
         assert!(drafted.interrupt);
         assert_eq!(drafted.scopes, vec!["tool".to_string()]);
+    }
+
+    #[test]
+    fn a_reply_splits_into_what_the_model_said_and_what_it_wrote() {
+        let raw = "Watching for rm with a path that leaves the project root.\n\
+                   {\"name\":\"n\",\"pattern\":\"rm .*\\\\.\\\\./\",\"scopes\":[\"tool\"],\
+                   \"message\":\"m\",\"interrupt\":true,\
+                   \"example_match\":\"rm ../secrets.env\",\"example_miss\":\"rm ./tmp\"}";
+
+        let reply = DraftReply::from_model_output(raw).expect("a usable reply");
+
+        assert_eq!(
+            reply.note,
+            "Watching for rm with a path that leaves the project root."
+        );
+        assert_eq!(reply.rule.name, "n");
+    }
+
+    #[test]
+    fn a_follow_up_carries_the_conversation_so_far() {
+        let history = [DraftTurn {
+            asked: "don't delete migrations".into(),
+            said: "Watching for rm on the migrations directory.".into(),
+            rule: Some("{\"name\":\"no-migration-deletes\"}".into()),
+        }];
+
+        let prompt = draft_prompt("also catch mv", &history);
+
+        assert!(prompt.contains("don't delete migrations"));
+        assert!(prompt.contains("no-migration-deletes"));
+        assert!(prompt.contains("Now: also catch mv"));
+        assert!(prompt.contains("Revise the rule above"));
+        // With no history it's just the request.
+        assert_eq!(draft_prompt("x", &[]), "x");
     }
 
     #[test]

@@ -39,22 +39,47 @@ describe("RulesPage", () => {
     expect(saved.map((r) => r.name)).toEqual(["no-force-push"]);
   });
 
-  it("writes a rule from a description and shows it catching the example", async () => {
+  it("writes a rule through a conversation and shows the check it ran", async () => {
     render(<RulesPage />);
     await userEvent.click(await screen.findByRole("button", { name: /New rule/ }));
 
     await userEvent.type(
-      screen.getByPlaceholderText(/don't let it delete/),
+      screen.getByPlaceholderText(/don't remove files/),
       "don't delete migrations",
     );
-    await userEvent.click(screen.getByRole("button", { name: /Write it/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    // The form fills in…
-    expect(await screen.findByDisplayValue("no-migration-deletes")).toBeTruthy();
+    // What you asked and what it said are both in the thread — you can see an
+    // LLM wrote this, and what it decided.
+    expect(await screen.findByText("don't delete migrations")).toBeTruthy();
+    expect(screen.getByText(/Watching for rm on the migrations directory/)).toBeTruthy();
+    // The proposal shows its own check rather than claiming to have run one.
+    const proposal = document.querySelector(".rule-proposal");
+    expect(proposal?.textContent).toContain("catches");
+    expect(proposal?.textContent).toContain("rm db/migrations/0007_add_users.sql");
+
+    // …and the fields below fill in, with the example loaded into the tester.
+    expect(screen.getByDisplayValue("no-migration-deletes")).toBeTruthy();
     expect(screen.getByDisplayValue("rm .*migrations/")).toBeTruthy();
-    // …and the model's own example becomes the sample, so the rule arrives
-    // demonstrating itself rather than asserting it works.
     expect(screen.getByDisplayValue(/rm db\/migrations/)).toBeTruthy();
+  });
+
+  it("carries the conversation so a follow-up revises rather than restarts", async () => {
+    render(<RulesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /New rule/ }));
+    const composer = screen.getByPlaceholderText(/don't remove files/);
+    await userEvent.type(composer, "don't delete migrations");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText(/Watching for rm/);
+
+    // A one-click follow-up sends the previous turn back with it.
+    await userEvent.click(screen.getByRole("button", { name: "make it stricter" }));
+
+    expect(ipc.draftRule).toHaveBeenCalledTimes(2);
+    const [request, history] = ipc.draftRule.mock.calls[1]!;
+    expect(request).toBe("make it stricter");
+    expect(history).toHaveLength(1);
+    expect(history[0].asked).toBe("don't delete migrations");
   });
 
   it("says the tester is waiting for a pattern rather than claiming no match", async () => {

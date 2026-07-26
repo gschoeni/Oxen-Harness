@@ -8,10 +8,11 @@
 // patterns that then silently never fire.
 
 import { useEffect, useRef, useState } from "react";
-import { Sparkles, Trash2 } from "lucide-react";
-import { Button, Spinner } from "../../components/ui";
-import { checkRulePattern, draftRule } from "../../lib/ipc";
+import { Trash2 } from "lucide-react";
+import { Button } from "../../components/ui";
+import { checkRulePattern } from "../../lib/ipc";
 import type { PatternCheck, RuleSpec } from "../../lib/types";
+import { RuleChat } from "./RuleChat";
 
 /** The editor, and the tester that makes an unfired rule legible. */
 export function RuleEditor({
@@ -78,12 +79,12 @@ export function RuleEditor({
 
   return (
     <div className={`rule-row editing ${draft.interrupt ? "interrupts" : "reminds"}`}>
-      <Describe
-        onDrafted={({ sample: drafted, ...fields }) => {
+      <RuleChat
+        onProposal={({ sample: proposed, ...fields }) => {
           setDraft({ ...draft, ...fields });
-          // The model's example becomes the tester's sample, so the new rule
-          // shows itself catching something the moment it lands.
-          if (drafted) setSample(drafted);
+          // The model's example becomes the tester's sample, so a proposed
+          // rule shows itself catching something the moment it lands.
+          if (proposed) setSample(proposed);
         }}
       />
       <div className="rule-fields">
@@ -279,67 +280,4 @@ function highlight(text: string, matches: [number, number][]) {
   });
   if (at < bytes.length) parts.push(decoder.decode(bytes.slice(at)));
   return parts;
-}
-
-/** Say what you want in plain language and let the model write the rule.
- *
- *  Regexes are the part of this feature people bounce off, and the model is
- *  good at them — but only if the result is checked. The draft that arrives
- *  here has already compiled, caught its own example, and left its
- *  counter-example alone; anything less comes back as an error, so this can
- *  fill the form without asking the user to audit it first.
- */
-function Describe({
-  onDrafted,
-}: {
-  onDrafted: (fields: Partial<RuleSpec> & { sample?: string }) => void;
-}) {
-  const [want, setWant] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function write() {
-    if (!want.trim() || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const drafted = await draftRule(want.trim());
-      onDrafted({
-        name: drafted.name,
-        when: drafted.pattern,
-        scope: drafted.scopes,
-        message: drafted.message,
-        interrupt: drafted.interrupt,
-        // The model's own example becomes the tester's sample, so the rule
-        // arrives with its proof visible rather than asserted.
-        sample: drafted.example_match,
-      });
-      setWant("");
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="rule-describe">
-      <label className="rule-field">
-        <span>Describe it, and I'll write it</span>
-        <div className="rule-describe-row">
-          <input
-            value={want}
-            onChange={(e) => setWant(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && write()}
-            placeholder="don't let it delete database migrations"
-            disabled={busy}
-          />
-          <Button onClick={write} disabled={!want.trim() || busy}>
-            {busy ? <Spinner /> : <Sparkles size={14} />} Write it
-          </Button>
-        </div>
-      </label>
-      {error && <span className="rule-describe-error">{error}</span>}
-    </div>
-  );
 }

@@ -491,21 +491,28 @@ same short library, each entry saying what it catches and why:
 **Settings → Rules** lists them with an Add button, and `/rules suggest` prints
 them with `/rules suggest <name>` to take one.
 
-**Or describe it and let the model write it.** Regexes are the part of this
-people bounce off, and the model is good at them — so **Settings → Rules → New
-rule** has a "describe it" box, and the terminal has `/rules draft <what you
-want>`:
+**Or write it by talking to the model.** Regexes are the part of this people
+bounce off, so **Settings → Rules → New rule** opens a conversation and the
+terminal has `/rules draft <what you want>`:
 
 ```
-/rules draft don't let it delete database migrations
+/rules draft don't remove files from outside the project without asking
 ```
 
-The draft is checked before you see it: the model must supply an example its
+It's a back-and-forth, not a one-shot. The model's sentence streams as it
+writes ("Watching for `rm` with a path that leaves the project root"), the rule
+it produces appears as a card showing what it catches and what it deliberately
+ignores, and the fields below fill in. Then you keep going — *"also catch mv"*,
+*"make it stricter"*, *"just remind, don't interrupt"* — and each message
+revises the rule on the table rather than starting over. The form and the
+tester stay visible throughout, so the conversation is about something you can
+see and edit yourself.
+
+Every draft is checked before you see it: the model must supply an example its
 pattern catches *and* a near-miss it shouldn't, and the harness runs both
 through the real engine. A pattern that doesn't compile, misses its own
-example, or is broad enough to catch the near-miss gets one retry with the
-reason fed back, and is reported rather than saved. What lands in the editor
-arrives with its example already in the tester, showing itself firing.
+example, or is broad enough to catch the near-miss is retried once — visibly,
+in the thread — and reported rather than saved if it fails again.
 
 **Trying one before you trust it.** Both front ends run candidate patterns
 through the *agent's own* regex engine, not the editor's, so what you see is

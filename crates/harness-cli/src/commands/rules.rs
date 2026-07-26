@@ -385,19 +385,18 @@ fn suggest(agent: &mut Agent, ui: &Ui, workspace_root: &Path, name: Option<&str>
     Ok(())
 }
 
-/// `/rules draft <what you want>` — describe a rule and let the model write it.
+/// `/rules draft <what you want>` — write a rule by talking about it.
 ///
-/// The draft is checked before it's offered: it must compile, catch the
-/// example the model gave, and leave its near-miss alone. A draft that fails
-/// gets one retry with the reason fed back, because the second attempt is
-/// usually the fix and a third rarely is.
+/// The model's sentence streams as it writes, its rule is shown running
+/// against its own example, and the loop keeps going: each follow-up revises
+/// what's on the table rather than starting over. Empty input saves it.
 async fn draft(
     agent: &mut Agent,
     ui: &Ui,
     workspace_root: &Path,
     want: Option<&str>,
 ) -> Result<()> {
-    let Some(want) = want.filter(|w| !w.trim().is_empty()) else {
+    let Some(first) = want.filter(|w| !w.trim().is_empty()) else {
         println!(
             "  {}",
             ui.dim("say what you want: /rules draft don't let it delete migrations")
@@ -405,86 +404,116 @@ async fn draft(
         return Ok(());
     };
 
-    let spinner = crate::theme::Spinner::start(
-        ui,
-        vec!["Writing the rule".into(), "Checking its own example".into()],
-    );
-    let mut ask = want.to_string();
-    let mut drafted = None;
-    let mut last = String::new();
-    for attempt in 0..2 {
-        let raw = agent
-            .complete(harness_agent::rules::DRAFT_SYSTEM, &ask)
-            .await;
-        match raw {
-            Err(e) => {
-                last = e.to_string();
-                break;
-            }
-            Ok(raw) => match harness_agent::rules::DraftedRule::from_model_output(&raw) {
-                Ok(d) => {
-                    drafted = Some(d);
-                    break;
-                }
-                Err(why) => {
-                    last = why.clone();
-                    if attempt == 0 {
-                        ask = format!(
-                            "{want}\n\nYour previous attempt was unusable: {why}. Try again, \
-                             and check the pattern against your own examples first."
-                        );
-                    }
-                }
-            },
+    let mut history: Vec<harness_agent::rules::DraftTurn> = Vec::new();
+    let mut request = first.to_string();
+    // The rule on the table: replaced by each turn, saved when the user stops.
+    let current: RuleSpec;
+
+    loop {
+        let Some((note, drafted)) = write_one(agent, ui, &request, &history).await? else {
+            return Ok(());
+        };
+        let spec = RuleSpec {
+            name: drafted.name.clone(),
+            pattern: drafted.pattern.clone(),
+            scope: drafted.scopes.clone(),
+            message: drafted.message.clone(),
+            interrupt: drafted.interrupt,
+            repeat: Some("once".into()),
+            enabled: true,
+        };
+        println!();
+        print_rule(ui, &spec);
+        // Its own example, run through the engine: the draft shows itself
+        // working rather than claiming to.
+        println!(
+            "      {} {}",
+            ui.dim("checked against"),
+            ui.cream(&drafted.example_match)
+        );
+        report_matches(ui, &spec.pattern, &drafted.example_match);
+        history.push(harness_agent::rules::DraftTurn {
+            asked: request.clone(),
+            said: note,
+            rule: serde_json::to_string(&drafted).ok(),
+        });
+        // Keep talking, or take it.
+        let Some(next) = ask(
+            ui,
+            "What next?",
+            "Say what to change, or press Enter to save it",
+            "",
+            &["e.g. also catch mv · make it stricter · just remind, don't interrupt".to_string()],
+        )?
+        else {
+            println!("  {}", ui.dim("discarded"));
+            return Ok(());
+        };
+        if next.trim().is_empty() {
+            current = spec;
+            break;
         }
-    }
-    spinner.stop();
-
-    let Some(drafted) = drafted else {
-        println!("  {} {}", ui.red("couldn't write that one:"), ui.dim(&last));
-        return Ok(());
-    };
-
-    let spec = RuleSpec {
-        name: drafted.name.clone(),
-        pattern: drafted.pattern.clone(),
-        scope: drafted.scopes.clone(),
-        message: drafted.message.clone(),
-        interrupt: drafted.interrupt,
-        repeat: Some("once".into()),
-        enabled: true,
-    };
-    println!("  {}", ui.brown("here's the rule:"));
-    print_rule(ui, &spec);
-    // Its own example, run through the engine — the draft shows itself working
-    // rather than claiming to.
-    println!(
-        "  {}",
-        ui.dim(&format!("against {:?}:", drafted.example_match))
-    );
-    report_matches(ui, &spec.pattern, &drafted.example_match);
-
-    let keep = picker::select(
-        ui,
-        "Keep it?",
-        &format!("Save {} to your rules?", spec.name),
-        &[
-            Choice::new("save", "add it now — you can edit or turn it off later"),
-            Choice::new("discard", "throw it away"),
-        ],
-        false,
-    )?;
-    if keep.and_then(|k| k.first().cloned()).as_deref() != Some("save") {
-        println!("  {}", ui.dim("discarded"));
-        return Ok(());
+        request = next.trim().to_string();
     }
 
+    let spec = current;
     let mut saved = rules::user_rules();
     saved.rules.retain(|r| r.name != spec.name);
     saved.rules.push(spec.clone());
     persist(agent, ui, workspace_root, saved)?;
     println!("  {} {}", ui.green("⚖ rule added:"), ui.cream(&spec.name));
     Ok(())
+}
+
+/// One drafting turn: stream the model's sentence, then check what it wrote.
+/// A draft that fails its own check is retried once with the reason fed back,
+/// and the retry is announced rather than hidden.
+async fn write_one(
+    agent: &mut Agent,
+    ui: &Ui,
+    request: &str,
+    history: &[harness_agent::rules::DraftTurn],
+) -> Result<Option<(String, harness_agent::rules::DraftedRule)>> {
+    let mut ask_text = harness_agent::rules::draft_prompt(request, history);
+    let mut last = String::new();
+    for attempt in 0..2 {
+        let spinner = crate::theme::Spinner::start(
+            ui,
+            vec!["Writing the rule".into(), "Checking its own example".into()],
+        );
+        let raw = agent
+            .complete(harness_agent::rules::DRAFT_SYSTEM, &ask_text)
+            .await;
+        spinner.stop();
+        match raw {
+            Err(e) => {
+                last = e.to_string();
+                break;
+            }
+            Ok(raw) => match harness_agent::rules::DraftReply::from_model_output(&raw) {
+                Ok(reply) => {
+                    println!("  {} {}", ui.accent("model:"), ui.cream(&reply.note));
+                    return Ok(Some((reply.note, reply.rule)));
+                }
+                Err(why) => {
+                    last = why.clone();
+                    if attempt == 0 {
+                        println!(
+                            "  {} {}",
+                            ui.accent("model:"),
+                            ui.dim(&format!("that one wouldn't work ({why}) — trying again"))
+                        );
+                        ask_text = format!(
+                            "{ask_text}\n\nYour previous attempt was unusable: {why}. Try \
+                             again, and check the pattern against your own examples first."
+                        );
+                    }
+                }
+            },
+        }
+    }
+    println!("  {} {}", ui.red("couldn't write that one:"), ui.dim(&last));
+    Ok(None)
 }
 
 /// `/rules test <name>` — run a saved rule's pattern against text you paste.
