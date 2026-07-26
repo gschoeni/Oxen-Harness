@@ -15,6 +15,7 @@ import type {
   HardwareProfile,
   HfHit,
   InstalledView,
+  LedgerSnapshot,
   OxenModelHit,
   PatternCheck,
   Project,
@@ -328,7 +329,7 @@ export const setReviewStatusMany = vi.fn(async () => 0);
 
 // ---- the Ledger ------------------------------------------------------------
 
-export const emptyLedger = { entries: [], running: [], last_seen: 0 };
+export const emptyLedger: LedgerSnapshot = { entries: [], running: [], last_seen: 0 };
 export const ledgerSnapshot = vi.fn(async () => ({ ...emptyLedger }));
 export const settleSession = vi.fn(async (_id: string, note?: string) => ({
   settled_at: Math.floor(Date.now() / 1000),
@@ -542,6 +543,14 @@ export function resetIpc() {
   }));
   setActiveProject.mockReset().mockResolvedValue(undefined);
   selectCloudModelForNewChats.mockReset().mockResolvedValue(undefined);
+  ledgerSnapshot.mockReset().mockResolvedValue({ ...emptyLedger });
+  settleSession.mockReset().mockImplementation(async (_id: string, note?: string) => ({
+    settled_at: Math.floor(Date.now() / 1000),
+    note: note ?? "",
+  }));
+  reopenSession.mockReset().mockResolvedValue(undefined);
+  ledgerMarkSeen.mockReset().mockResolvedValue(Math.floor(Date.now() / 1000));
+  workspaceGit.mockReset().mockResolvedValue({});
   getDefaultProjectLocation.mockReset().mockResolvedValue(null);
   setDefaultProjectLocation.mockReset().mockImplementation(async (path: string) => path);
   pickFolder.mockReset().mockResolvedValue(null);

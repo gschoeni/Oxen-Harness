@@ -68,6 +68,83 @@ describe("store: trail dust", () => {
   });
 });
 
+describe("store: ledger refreshes", () => {
+  const entry = (id: string, workspace: string, settled = false): import("./types").LedgerEntry => ({
+    id,
+    workspace,
+    model: "m",
+    created_at: 1,
+    last_activity_at: 1,
+    title: "t",
+    last_reply: "",
+    message_count: 1,
+    mid_turn: false,
+    plan: null,
+    trail: null,
+    review_status: "",
+    settle: settled ? { settled_at: 1, note: "" } : null,
+  });
+
+  it("a landed update_trail repaints the board even with the chat open (Home closed)", async () => {
+    useStore.setState({ homeOpen: false });
+    vi.mocked(ipc.ledgerSnapshot).mockClear();
+    useStore.getState().ingestTool({ session: "bg", name: "update_trail", phase: "end", detail: "" });
+    await vi.waitFor(() => expect(ipc.ledgerSnapshot).toHaveBeenCalled());
+  });
+
+  it("an older refresh's git probe never overwrites a newer board", async () => {
+    vi.mocked(ipc.ledgerSnapshot).mockResolvedValue({
+      entries: [entry("s1", "/work/app")],
+      running: [],
+      last_seen: 0,
+    });
+    // The older refresh's git probe hangs (a slow repo) while a newer refresh
+    // starts, completes with the pushed state, and paints. The stale probe
+    // then resolves LAST with pre-push state — it must be discarded.
+    let releaseOld: (v: Record<string, unknown>) => void = () => {};
+    vi.mocked(ipc.workspaceGit).mockImplementationOnce(
+      () => new Promise((resolve) => (releaseOld = resolve)) as never,
+    );
+    const older = useStore.getState().refreshLedger();
+    await vi.waitFor(() => expect(ipc.workspaceGit).toHaveBeenCalled());
+
+    vi.mocked(ipc.workspaceGit).mockResolvedValueOnce({
+      "/work/app": { branch: "main", dirty_files: 0, ahead: 0, behind: 0, has_upstream: true },
+    } as never);
+    await useStore.getState().refreshLedger();
+    expect(useStore.getState().ledgerGit["/work/app"]?.ahead).toBe(0);
+
+    releaseOld({
+      "/work/app": { branch: "main", dirty_files: 0, ahead: 1, behind: 0, has_upstream: true },
+    });
+    await older;
+    // The stale probe was discarded — the board still shows the pushed state.
+    expect(useStore.getState().ledgerGit["/work/app"]?.ahead).toBe(0);
+  });
+
+  it("a workspace whose threads all settled sheds its git banner", async () => {
+    vi.mocked(ipc.ledgerSnapshot).mockResolvedValue({
+      entries: [entry("s1", "/work/app")],
+      running: [],
+      last_seen: 0,
+    });
+    vi.mocked(ipc.workspaceGit).mockResolvedValue({
+      "/work/app": { branch: "main", dirty_files: 1, ahead: 0, behind: 0, has_upstream: true },
+    } as never);
+    await useStore.getState().refreshLedger();
+    expect(useStore.getState().ledgerGit["/work/app"]).toBeDefined();
+
+    vi.mocked(ipc.ledgerSnapshot).mockResolvedValue({
+      entries: [entry("s1", "/work/app", true)],
+      running: [],
+      last_seen: 0,
+    });
+    await useStore.getState().refreshLedger();
+    expect(useStore.getState().ledgerGit).toEqual({});
+    expect(ipc.workspaceGit).toHaveBeenCalledTimes(1); // no probe for settled-only
+  });
+});
+
 describe("store: theme palette", () => {
   it("maps the active theme's primary color onto the accent token", () => {
     useStore.getState().applyTheme(ipc.sampleTheme);

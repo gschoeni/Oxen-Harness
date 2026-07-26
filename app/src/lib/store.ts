@@ -577,6 +577,13 @@ export const useStore = create<AppState>((set, get) => {
     void s.refreshLedger();
   }
 
+  // Monotonic stamp for ledger refreshes. Concurrent calls race the network
+  // (board mount, window focus, turn end, settle clicks), and the git probe
+  // makes each one two sequential awaits — without the stamp, an older probe
+  // resolving last would overwrite a newer board with pre-push git state.
+  // Only the newest call gets to write.
+  let ledgerFetchSeq = 0;
+
   // Drive one turn for `id` (a fresh send, or a retry that continues the existing
   // transcript), then either send the next queued prompt or settle the run status
   // (read if the chat is in view, unread if it finished offscreen). The turn's UI
@@ -647,8 +654,11 @@ export const useStore = create<AppState>((set, get) => {
         }
         // The turn settled: the wagon parks and its live verb comes off.
         set((s) => ({ trailActivity: { ...s.trailActivity, [id]: undefined } }));
-        // A wagon just arrived somewhere — if the board is up, let it move.
-        if (get().homeOpen) void get().refreshLedger();
+        // A wagon just arrived somewhere — the board, and the trail strip
+        // pinned in any open chat, both need to see it move. Unconditional:
+        // gating this on homeOpen once left an open chat's strip showing
+        // "riding" forever after the turn ended.
+        void get().refreshLedger();
       });
   }
 
@@ -834,57 +844,17 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     removeSession: async (id) => {
-      await deleteSession(id);
-      const wasCurrent = get().session?.session_id === id;
-      genSamples.delete(id);
-      // Forget every per-session slice so nothing lingers for the deleted chat.
-      set((s) => {
-        const drop = <T,>(rec: Record<string, T>) => {
-          const copy = { ...rec };
-          delete copy[id];
-          return copy;
-        };
-        return {
-          session: wasCurrent ? null : s.session,
-          threads: drop(s.threads),
-          infos: drop(s.infos),
-          runStatus: drop(s.runStatus),
-          codeReview: drop(s.codeReview),
-          fleets: drop(s.fleets),
-          queues: drop(s.queues),
-          canvases: drop(s.canvases),
-          activeCanvas: drop(s.activeCanvas),
-          canvasWriting: drop(s.canvasWriting),
-          streamingTool: drop(s.streamingTool),
-          streamingCanvas: drop(s.streamingCanvas),
-          liveTokens: drop(s.liveTokens),
-          sessionUsage: drop(s.sessionUsage),
-          tokensPerSecond: drop(s.tokensPerSecond),
-          compression: drop(s.compression),
-          // The backend stops the deleted chat's dev server and closes its
-          // webview; drop the mirrored state so no stopped server lingers in
-          // the sidebar chips or the Settings → Preview list.
-          previews: drop(s.previews),
-          previewClosed: drop(s.previewClosed),
-          previewErrors: drop(s.previewErrors),
-          rightTab: drop(s.rightTab),
-          editorTabs: drop(s.editorTabs),
-          snippets: drop(s.snippets),
-        };
-      });
-      await get().refreshHistory();
-      // If we deleted the chat in view, drop into a fresh one so the UI isn't empty.
-      if (wasCurrent) await get().startNewSession();
+      await get().removeSessions([id]);
     },
 
     removeSessions: async (ids) => {
-      // The archive purge: many chats at once, one state sweep, one refresh.
-      for (const id of ids) {
-        await deleteSession(id);
-        genSamples.delete(id);
-      }
+      // The purge — one chat from the sidebar or the whole archive at once:
+      // parallel deletes, one state sweep, one history+board refresh.
+      await Promise.all(ids.map((id) => deleteSession(id)));
+      for (const id of ids) genSamples.delete(id);
       const gone = new Set(ids);
       const wasCurrent = gone.has(get().session?.session_id ?? "");
+      // Forget every per-session slice so nothing lingers for deleted chats.
       set((s) => {
         const drop = <T,>(rec: Record<string, T>) => {
           const copy = { ...rec };
@@ -908,6 +878,11 @@ export const useStore = create<AppState>((set, get) => {
           sessionUsage: drop(s.sessionUsage),
           tokensPerSecond: drop(s.tokensPerSecond),
           compression: drop(s.compression),
+          trailDust: drop(s.trailDust),
+          trailActivity: drop(s.trailActivity),
+          // The backend stops the deleted chat's dev server and closes its
+          // webview; drop the mirrored state so no stopped server lingers in
+          // the sidebar chips or the Settings → Preview list.
           previews: drop(s.previews),
           previewClosed: drop(s.previewClosed),
           previewErrors: drop(s.previewErrors),
@@ -917,6 +892,7 @@ export const useStore = create<AppState>((set, get) => {
         };
       });
       await Promise.all([get().refreshHistory(), get().refreshLedger()]);
+      // If we deleted the chat in view, drop into a fresh one so the UI isn't empty.
       if (wasCurrent) await get().startNewSession();
     },
 
@@ -932,11 +908,15 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     refreshLedger: async () => {
+      const seq = ++ledgerFetchSeq;
       try {
         const snapshot = await ledgerSnapshot();
+        if (seq !== ledgerFetchSeq) return; // superseded by a newer refresh
         set({ ledger: snapshot });
         // Git banners are decoration on top of the board — fetch them after
-        // the threads paint, only for workspaces still on the trail.
+        // the threads paint, only for workspaces still on the trail. The
+        // replace is wholesale so a workspace whose last thread settled (or
+        // left the board) sheds its stale banner instead of keeping it forever.
         const paths = [
           ...new Set(
             snapshot.entries
@@ -945,14 +925,14 @@ export const useStore = create<AppState>((set, get) => {
               .filter(Boolean),
           ),
         ];
-        if (paths.length > 0) {
-          const git = await workspaceGit(paths);
-          set({ ledgerGit: git });
-        }
+        const git = paths.length > 0 ? await workspaceGit(paths) : {};
+        if (seq !== ledgerFetchSeq) return;
+        set({ ledgerGit: git });
       } catch {
         /* keep the previous board on a transient error */
       }
     },
+
 
     settleThread: async (id, note) => {
       await settleSession(id, note);
@@ -1390,33 +1370,42 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     ingestTool: (e) => {
-      // The Ledger watches every session, cached thread or not: dust rises on
-      // any tool start, and a finished plan update repaints the board mid-turn
-      // (the agent persists the snapshot as the call lands).
-      if (e.phase === "start") {
-        set((s) => ({
-          trailDust: { ...s.trailDust, [e.session]: (s.trailDust[e.session] ?? 0) + 1 },
-          trailActivity: {
-            ...s.trailActivity,
-            [e.session]: { name: e.name, detail: e.detail, at: Date.now() },
-          },
-        }));
-      } else if (e.name === "update_plan" && get().homeOpen) {
+      // A landed plan or trail update repaints the board — and the trail strip
+      // pinned in any open chat — mid-turn (the agent persists the snapshot as
+      // the call lands, and refreshLedgerSoon absorbs bursts). Not gated on
+      // homeOpen: the strip lives outside the board.
+      if (e.phase !== "start" && (e.name === "update_plan" || e.name === "update_trail")) {
         refreshLedgerSoon(get());
       }
+      // One set() per event — this is the streaming hot path, and every set()
+      // re-renders every subscriber.
       set((s) => {
-        if (s.threads[e.session] === undefined) return {};
-        const updated =
+        // The Ledger watches every session, cached thread or not: dust rises
+        // on any tool start.
+        const update: Partial<AppState> =
           e.phase === "start"
-            ? toolStart(s.threads[e.session], e.name, e.detail, Date.now())
-            : toolEnd(s.threads[e.session], e.name, e.detail, Date.now());
-        // The call's args are fully assembled now (the real tool chip takes
-        // over), so drop the streaming file preview. Canvas keeps its provisional
-        // doc until the committed version lands via ingestCanvas.
-        return {
-          threads: { ...s.threads, [e.session]: updated },
-          streamingTool: { ...s.streamingTool, [e.session]: undefined },
-        };
+            ? {
+                trailDust: { ...s.trailDust, [e.session]: (s.trailDust[e.session] ?? 0) + 1 },
+                trailActivity: {
+                  ...s.trailActivity,
+                  [e.session]: { name: e.name, detail: e.detail, at: Date.now() },
+                },
+              }
+            : {};
+        if (s.threads[e.session] !== undefined) {
+          // The call's args are fully assembled now (the real tool chip takes
+          // over), so drop the streaming file preview. Canvas keeps its
+          // provisional doc until the committed version lands via ingestCanvas.
+          update.threads = {
+            ...s.threads,
+            [e.session]:
+              e.phase === "start"
+                ? toolStart(s.threads[e.session], e.name, e.detail, Date.now())
+                : toolEnd(s.threads[e.session], e.name, e.detail, Date.now()),
+          };
+          update.streamingTool = { ...s.streamingTool, [e.session]: undefined };
+        }
+        return update;
       });
     },
 
