@@ -67,7 +67,16 @@ impl TypedTool for WriteFileTool {
         let _guard = self.state.lock(&path).await;
         // Creating a new file is unrestricted; replacing one wholesale is an
         // edit by another name and answers to the same contract.
-        let before = tokio::fs::read_to_string(&path).await.ok();
+        let before = match tokio::fs::read_to_string(&path).await {
+            Ok(contents) => Some(contents),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(ToolError::Execution(format!(
+                    "read existing {} before overwrite: {error}",
+                    path.display()
+                )))
+            }
+        };
         if let Some(current) = &before {
             self.state.guard(&args.path, &path, current)?;
         }
@@ -122,6 +131,23 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArguments(_)));
         assert_eq!(read_raw(&ws, "old.rs").await, "important\n");
+    }
+
+    #[tokio::test]
+    async fn an_existing_non_utf8_file_is_never_treated_as_new() {
+        let (_dir, ws) = workspace();
+        let (_read, write_tool, _edit, _state) = gated_tools(&ws);
+        let path = ws.resolve("image.bin").unwrap();
+        let original = [0_u8, 159, 146, 150, 255];
+        tokio::fs::write(&path, original).await.unwrap();
+
+        let error = write_tool
+            .invoke(serde_json::json!({"path": "image.bin", "contents": "clobbered"}))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ToolError::Execution(_)), "{error}");
+        assert_eq!(tokio::fs::read(path).await.unwrap(), original);
     }
 
     #[tokio::test]

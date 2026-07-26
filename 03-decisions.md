@@ -1,7 +1,7 @@
 # Working Decisions & Rationale
 
 **Purpose:** Currently relevant decisions with enough "why" to be useful during implementation. For full deep-dive analysis, cite the source in each entry.
-**Updated:** 2026-07-14
+**Updated:** 2026-07-25
 
 ---
 
@@ -115,6 +115,9 @@ EXISTS`; it runs an ordered migration chain tracked by SQLite's `user_version`.
   `unpriced` events at the former row's update time; the original schema did
   not retain enough information to recover a provider or a cost. This is a
   forward-only repair because released databases already recorded version 5.
+- *M10* adds typed per-session state beside the transcript. Stream-rule repeat
+  history lives there so a cold resume cannot make a once-per-session rule
+  eligible again; the foreign key removes it with its owning session.
 -> *Why: changing `ChatMessage`, adding columns, or repairing derived fields was
   unsafe once users had real history; and resuming an old session was ambiguous
   with only `workspace` + `model` recorded as local models/tools/providers evolve.*
@@ -617,6 +620,8 @@ Each `/code-review` step gets a fresh `side_agent` (fleet lanes too): the
 verifier must judge the finders' candidates against the *code*, not be
 anchored by the finders' reasoning, and a review must never pollute the
 session's context window. Step outputs thread through `{{previous}}` only.
+All side agents resolve the configured `smol` role before construction, so
+review passes and fleet lanes share the same explicit cost-routing policy.
 
 **Durable history is unbounded; active memory is not** (2026-07-12)
 The SQLite transcript remains verbatim and authoritative, while active agent
@@ -684,7 +689,9 @@ prefix classification against the previous request (`first`/`append_only`/
 changes, latency, retries, and reported usage — so a cache miss is diagnosable
 to the message that invalidated it. Compaction summaries route to
 `limits.json`'s `summary_model` (default: session model) and are accounted
-under their own kind.
+under their own kind. A successful fallback records the model that actually
+answered in both the usage ledger and request log, rather than attributing its
+tokens and price to the failed session model.
 
 **Runaway spend is stopped by a loop guard and a session token budget** (2026-07-17)
 Consecutive identical (tool, arguments, result) triples — zero new information
@@ -745,7 +752,11 @@ worktree per lane. It is not the default: most fleets read, and worktrees cost
 a checkout each. When the project isn't a git repository the fleet still runs,
 shared, with a NOTE saying so — silently sharing a workspace after isolation
 was requested is worse than declining, because the model would report clean
-parallel edits that actually collided.
+parallel edits that actually collided. A selected repository subdirectory
+remains the lane's workspace boundary; lane-local file state preserves the
+parent's path-scoped conventions without inheriting its read licenses. Patches
+use Git's binary format, and RAII owns every checkout so cancellation removes
+lanes as reliably as normal completion.
 
 **A model switch reuses the retry event rather than adding an event kind**
 (2026-07-24) Fallback chains needed to tell the user "this call moved to
@@ -766,4 +777,17 @@ drift apart. An interrupting rule additionally cancels the in-flight stream
 through a child of the turn's token, so a rule abort and a user stop end the
 same way, and the turn's own cancellation still reaches the request. The
 partial reply is dropped but its tokens are still counted: the provider
-generated them whether or not we keep them.
+generated them whether or not we keep them. While any interrupting rule is
+eligible, presentation events are buffered until the round is accepted, so
+CLI and desktop hosts never need a rewind event. Repeat eligibility is applied
+when the watcher is built—before it can cancel a stream—and history is durable
+per session. Non-interrupting matches still arm the shared one-shot nudge and
+therefore always reach the following model round.
+
+**Temporary shell state stays owned through background completion**
+(2026-07-25) A foreground shell call that exceeds its wait budget becomes a
+background task, but its directory/environment carrier remains owned until
+that task settles. Cleanup follows the task's completion watch rather than the
+tool future's lifetime, preventing normally completed timed-out commands from
+leaving full environment snapshots—including credentials—in the temp
+directory.

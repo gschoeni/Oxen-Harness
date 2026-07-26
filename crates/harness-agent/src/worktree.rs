@@ -20,14 +20,28 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// One lane's private checkout.
 #[derive(Debug)]
 pub struct LaneWorktree {
+    /// The selected workspace inside the checkout. This may be a repository
+    /// subdirectory such as `packages/app`.
     path: PathBuf,
+    /// The root Git actually checked out.
+    checkout: PathBuf,
     /// The repository the worktree belongs to, for `git worktree remove`.
     repo: PathBuf,
+    /// Parent shared by this fleet's lane checkouts. The last lane removes it.
+    scratch_root: PathBuf,
 }
 
 impl LaneWorktree {
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn scope(&self) -> &Path {
+        self.path
+            .strip_prefix(&self.checkout)
+            .ok()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
     }
 }
 
@@ -41,9 +55,10 @@ impl Drop for LaneWorktree {
                 "worktree",
                 "remove",
                 "--force",
-                &self.path.to_string_lossy(),
+                &self.checkout.to_string_lossy(),
             ],
         );
+        let _ = std::fs::remove_dir(&self.scratch_root);
     }
 }
 
@@ -56,15 +71,16 @@ pub struct LaneChanges {
     pub summary: String,
 }
 
-/// Create `count` detached worktrees of `repo`'s HEAD, named after `label`.
+/// Create `count` detached worktrees containing `workspace`, named after
+/// `label`.
 ///
 /// Returns `None` when the workspace isn't a git repository or git refuses —
 /// callers fall back to the shared workspace rather than failing the fleet,
 /// since isolation is a safety upgrade, not a precondition.
-pub fn create(repo: &Path, label: &str, count: usize) -> Option<Vec<LaneWorktree>> {
-    if !is_git_repo(repo) {
-        return None;
-    }
+pub fn create(workspace: &Path, label: &str, count: usize) -> Option<Vec<LaneWorktree>> {
+    let workspace = workspace.canonicalize().ok()?;
+    let repo = repository_root(&workspace)?;
+    let prefix = workspace.strip_prefix(&repo).ok()?;
     // Pid plus a process-wide counter: two fleets running at once (two chat
     // sessions, or a fleet inside a review) must not land on each other's
     // lane directories — the first run's worktrees would be clobbered by the
@@ -77,16 +93,16 @@ pub fn create(repo: &Path, label: &str, count: usize) -> Option<Vec<LaneWorktree
     ));
     let mut lanes = Vec::with_capacity(count);
     for index in 0..count {
-        let path = root.join(format!("lane-{index}"));
+        let checkout = root.join(format!("lane-{index}"));
         // A stale directory from a crashed run would make `worktree add` fail.
-        let _ = std::fs::remove_dir_all(&path);
+        let _ = std::fs::remove_dir_all(&checkout);
         let added = git(
-            repo,
+            &repo,
             &[
                 "worktree",
                 "add",
                 "--detach",
-                &path.to_string_lossy(),
+                &checkout.to_string_lossy(),
                 "HEAD",
             ],
         );
@@ -95,15 +111,21 @@ pub fn create(repo: &Path, label: &str, count: usize) -> Option<Vec<LaneWorktree
             // worktree are dropped (and removed) with `lanes`.
             return None;
         }
+        let lane = LaneWorktree {
+            path: checkout.join(prefix),
+            checkout,
+            repo: repo.clone(),
+            scratch_root: root.clone(),
+        };
         // `worktree add HEAD` checks out the last commit, not the tree the
         // user is actually looking at. A lane asked to fix code that was just
         // written would not find it, and would return a patch against a state
         // nobody has — so the uncommitted work comes along.
-        carry_uncommitted(repo, &path);
-        lanes.push(LaneWorktree {
-            path,
-            repo: repo.to_path_buf(),
-        });
+        carry_uncommitted(&repo, &lane.checkout, prefix);
+        if std::fs::create_dir_all(&lane.path).is_err() {
+            return None;
+        }
+        lanes.push(lane);
     }
     Some(lanes)
 }
@@ -118,37 +140,49 @@ pub fn create(repo: &Path, label: &str, count: usize) -> Option<Vec<LaneWorktree
 ///
 /// Best-effort by design — a lane that starts from HEAD is still useful, and
 /// failing the whole fleet because one binary file wouldn't patch would not be.
-fn carry_uncommitted(repo: &Path, lane: &Path) {
-    if let Some(diff) = capture(repo, &["diff", "HEAD", "--binary"]) {
+fn carry_uncommitted(repo: &Path, checkout: &Path, prefix: &Path) {
+    let scope = pathspec(prefix);
+    if let Some(diff) = capture(repo, &["diff", "HEAD", "--binary", "--", &scope]) {
         if !diff.trim().is_empty() {
-            let patch = lane.join(".oxen-harness-carry.patch");
+            let patch = checkout.join(".oxen-harness-carry.patch");
             if std::fs::write(&patch, &diff).is_ok() {
-                let _ = git(lane, &["apply", &patch.to_string_lossy()]);
+                let _ = git(checkout, &["apply", &patch.to_string_lossy()]);
                 let _ = std::fs::remove_file(&patch);
             }
         }
     }
-    let Some(untracked) = capture(repo, &["ls-files", "--others", "--exclude-standard"]) else {
+    let Some(untracked) = capture(
+        repo,
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--full-name",
+            "--",
+            &scope,
+        ],
+    ) else {
         return;
     };
     for rel in untracked.lines().filter(|l| !l.trim().is_empty()) {
-        let (from, to) = (repo.join(rel), lane.join(rel));
+        let (from, to) = (repo.join(rel), checkout.join(rel));
         if let Some(parent) = to.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = std::fs::copy(&from, &to);
     }
-    baseline(lane);
+    baseline(checkout, prefix);
 }
 
 /// Commit whatever the lane starts with, so `changes` reports only what the
 /// lane did. Identity is supplied inline: a repository without `user.email`
 /// configured would otherwise refuse the commit and every lane would report
 /// the user's own edits as its own.
-fn baseline(lane: &Path) {
-    let _ = git(lane, &["add", "-A"]);
+fn baseline(checkout: &Path, prefix: &Path) {
+    let scope = pathspec(prefix);
+    let _ = git(checkout, &["add", "-A", "--", &scope]);
     let _ = git(
-        lane,
+        checkout,
         &[
             "-c",
             "user.email=agent@oxen-harness.local",
@@ -169,20 +203,36 @@ fn baseline(lane: &Path) {
 /// that adds a module and never mentions it would otherwise report "no
 /// changes" while its work sat invisible in a temp directory.
 pub fn changes(lane: &LaneWorktree) -> Option<LaneChanges> {
-    let _ = git(&lane.path, &["add", "-A"]);
-    let summary = capture(&lane.path, &["diff", "--cached", "--stat"])?;
+    let scope = lane.scope().to_string_lossy();
+    let _ = git(&lane.checkout, &["add", "-A", "--", &scope]);
+    let summary = capture(
+        &lane.checkout,
+        &["diff", "--cached", "--stat", "--", &scope],
+    )?;
     if summary.trim().is_empty() {
         return None;
     }
-    let patch = capture(&lane.path, &["diff", "--cached"])?;
+    let patch = capture(
+        &lane.checkout,
+        &["diff", "--cached", "--binary", "--", &scope],
+    )?;
     Some(LaneChanges {
         patch,
         summary: summary.trim().to_string(),
     })
 }
 
-fn is_git_repo(path: &Path) -> bool {
-    capture(path, &["rev-parse", "--git-dir"]).is_some()
+fn repository_root(path: &Path) -> Option<PathBuf> {
+    let root = capture(path, &["rev-parse", "--show-toplevel"])?;
+    PathBuf::from(root.trim()).canonicalize().ok()
+}
+
+fn pathspec(prefix: &Path) -> std::borrow::Cow<'_, str> {
+    if prefix.as_os_str().is_empty() {
+        std::borrow::Cow::Borrowed(".")
+    } else {
+        prefix.to_string_lossy()
+    }
 }
 
 fn git(cwd: &Path, args: &[&str]) -> bool {
@@ -258,6 +308,59 @@ mod tests {
         // A new file the lane never mentions must not vanish silently.
         assert!(changes.patch.contains("added.rs"), "{}", changes.patch);
         assert!(changes.summary.contains("main.rs"), "{}", changes.summary);
+    }
+
+    #[test]
+    fn a_subdirectory_workspace_keeps_its_repository_prefix() {
+        let dir = repo();
+        let app = dir.path().join("packages/app");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(app.join("lib.rs"), "pub fn app() {}\n").unwrap();
+        assert!(git(dir.path(), &["add", "-A"]));
+        assert!(git(dir.path(), &["commit", "-qm", "add app"]));
+        std::fs::write(app.join("scratch.rs"), "pub fn scratch() {}\n").unwrap();
+
+        let lanes = create(&app, "nested", 1).expect("nested worktree");
+        let lane = &lanes[0];
+
+        assert!(
+            lane.path().ends_with("packages/app"),
+            "selected prefix lost: {}",
+            lane.path().display()
+        );
+        assert_eq!(
+            std::fs::read_to_string(lane.path().join("lib.rs")).unwrap(),
+            "pub fn app() {}\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(lane.path().join("scratch.rs")).unwrap(),
+            "pub fn scratch() {}\n",
+            "subdirectory-relative untracked files belong under the prefix"
+        );
+        assert!(
+            !lane.path().join("main.rs").exists(),
+            "the repository root must not be exposed as the lane workspace"
+        );
+    }
+
+    #[test]
+    fn binary_changes_are_carried_in_the_returned_patch() {
+        let dir = repo();
+        let lanes = create(dir.path(), "binary", 1).unwrap();
+        std::fs::write(
+            lanes[0].path().join("image.bin"),
+            [0_u8, 159, 146, 150, 0, 255],
+        )
+        .unwrap();
+
+        let changes = changes(&lanes[0]).expect("binary change");
+
+        assert!(
+            changes.patch.contains("GIT binary patch"),
+            "{}",
+            changes.patch
+        );
+        assert!(changes.patch.contains("image.bin"), "{}", changes.patch);
     }
 
     #[test]

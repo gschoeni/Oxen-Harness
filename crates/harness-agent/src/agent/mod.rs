@@ -35,6 +35,8 @@ use crate::error::AgentError;
 
 use self::compression::setup_compression;
 
+const RULE_HISTORY_STATE: &str = "rule_history";
+
 /// Narrow a registry to what a detached subagent (a `side_agent`, a fleet
 /// lane) may hold. Two tools are stripped:
 ///
@@ -137,12 +139,23 @@ pub struct Agent {
 /// What one model call cost beyond its token counts: the cache-read/write
 /// split the provider reported, wall-clock latency, and retries burned before
 /// it landed. Defaults to "nothing observed" for estimate-only paths.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct CallOutcome {
+    /// The request model that produced the accepted answer. Usually the
+    /// session model; different after a successful per-call fallback.
+    pub(crate) model: Option<String>,
     pub(crate) cached_prompt_tokens: usize,
     pub(crate) cache_write_tokens: usize,
     pub(crate) latency_ms: Option<u64>,
     pub(crate) retries: u32,
+}
+
+impl CallOutcome {
+    /// The model responsible for this outcome, or the configured model for
+    /// estimate-only paths that never issued a request.
+    fn model_or<'a>(&'a self, configured: &'a str) -> &'a str {
+        self.model.as_deref().unwrap_or(configured)
+    }
 }
 
 /// A speculative compaction summary in flight (see [`Agent`]'s `prefire`).
@@ -234,6 +247,9 @@ impl Agent {
         // Seed the cumulative count from the loaded transcript so a resumed
         // session's dashboard reflects prior usage instead of starting at 0.
         let tokens_used = budget::estimate_prompt_tokens(&messages, &tools.definitions());
+        let rule_history = store
+            .session_state(&session_id, RULE_HISTORY_STATE)?
+            .unwrap_or_default();
         Ok(Self {
             client,
             tools,
@@ -264,7 +280,7 @@ impl Agent {
             prefire: None,
             interjections: crate::Interjections::default(),
             rules: crate::rules::RuleSet::default(),
-            rule_history: crate::rules::RuleHistory::default(),
+            rule_history,
         })
     }
 
@@ -311,6 +327,7 @@ impl Agent {
         self.prev_request_hashes = Vec::new();
         self.prev_tools_hash = None;
         self.tokens_saved = 0;
+        self.rule_history = crate::rules::RuleHistory::default();
         self.invalidate_prefire();
         Ok(())
     }
@@ -328,8 +345,13 @@ impl Agent {
             .messages_typed_after::<ChatMessage>(&session_id, through_seq)?;
         self.last_persisted_seq = through_seq + later.len() as i64;
         messages.extend(later);
+        let rule_history = self
+            .store
+            .session_state(&session_id, RULE_HISTORY_STATE)?
+            .unwrap_or_default();
         self.session_id = session_id;
         self.messages = messages;
+        self.rule_history = rule_history;
         // Seed the cumulative count from the loaded transcript so a resumed
         // session's dashboard reflects prior usage instead of starting at 0.
         self.tokens_used = self.context_tokens();
@@ -405,6 +427,19 @@ impl Agent {
     /// How many stream rules are watching this session.
     pub fn rule_count(&self) -> usize {
         self.rules.len()
+    }
+
+    /// Persist the repeat-policy counters that affect future rule eligibility.
+    /// Detached agents have no durable session and intentionally skip this.
+    fn save_rule_history(&self) -> Result<(), AgentError> {
+        if self.persist_transcript {
+            self.store.save_session_state(
+                &self.session_id,
+                RULE_HISTORY_STATE,
+                &self.rule_history,
+            )?;
+        }
+        Ok(())
     }
 
     /// The effective context window (tokens): the configured override, else a
@@ -509,6 +544,7 @@ impl Agent {
             completion,
             "oneshot",
             &CallOutcome {
+                model: Some(self.config.model.clone()),
                 cached_prompt_tokens: assembled
                     .usage
                     .map(|u| u.cached_prompt_tokens() as usize)
@@ -526,16 +562,21 @@ impl Agent {
 
     /// Spin up a detached agent for an isolated side task (e.g. one step of a
     /// code-review pipeline): same client, tools, and config as this agent, but
-    /// backed by an in-memory store, so nothing it does touches the user's
-    /// session, history, or context window. Its tool set is narrowed by
-    /// `subagent_tools` (no recursion, no interactive tools).
+    /// routed through the optional `smol` role and backed by an in-memory store,
+    /// so nothing it does touches the user's session, history, or context
+    /// window. Its tool set is narrowed by `subagent_tools` (no recursion, no
+    /// interactive tools).
     pub fn side_agent(&self) -> Result<Agent, AgentError> {
+        let mut config = self.config.clone();
+        config.model = config
+            .roles
+            .resolve(crate::config::Role::Smol, &config.model)
+            .to_owned();
         let store = Arc::new(HistoryStore::open_in_memory()?);
         let session = store.create_session(&SessionMeta {
-            model: self.config.model.clone(),
+            model: config.model.clone(),
             ..Default::default()
         })?;
-        let mut config = self.config.clone();
         config.initial_attachments.clear();
         // A side agent can't drive the host's approval prompt any more than it
         // can drive the question picker: demote its gate to auto-deny.
@@ -913,6 +954,31 @@ mod tests {
         assert_eq!(roles.last().unwrap(), "assistant");
         assert_eq!(roles[roles.len() - 2], "user");
         assert_eq!(store.messages(&session).unwrap().len(), before + 2);
+    }
+
+    #[test]
+    fn side_agents_use_the_configured_smol_role() {
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "frontier");
+        let client = OxenClient::new("http://localhost/api/ai", "key", "frontier");
+        let agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store,
+            session,
+            AgentConfig {
+                model: "frontier".into(),
+                roles: crate::config::ModelRoles {
+                    smol: Some("smol-reviewer".into()),
+                    summary: None,
+                },
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(agent.side_agent().unwrap().model(), "smol-reviewer");
+        assert_eq!(agent.model(), "frontier");
     }
 
     #[test]

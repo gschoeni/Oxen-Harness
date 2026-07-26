@@ -199,9 +199,14 @@ impl FleetSpawner {
             // An isolated lane works in its own checkout, so its file and
             // shell tools point there, with file state of its own (nothing
             // else can touch that tree).
-            (Some(lane), _) => {
-                rooted_tools(&self.tools, lane.path(), harness_tools::FileState::gated())
-            }
+            (Some(lane), _) => rooted_tools(
+                &self.tools,
+                lane.path(),
+                self.tools
+                    .files()
+                    .map(|files| files.fresh_with_rules())
+                    .unwrap_or_else(harness_tools::FileState::gated),
+            ),
             // A shared lane keeps the parent's file state — that shared state
             // is what makes the per-path lock serialize two lanes editing one
             // file — but still gets its own shell, since `run_shell` now
@@ -360,6 +365,16 @@ impl Drop for SinkGuard {
     }
 }
 
+/// Releases the spawner's owning references to isolated lane worktrees on
+/// every exit path, including cancellation that drops the tool future.
+struct LaneGuard(Arc<FleetSpawner>);
+
+impl Drop for LaneGuard {
+    fn drop(&mut self) {
+        self.0.close_lanes();
+    }
+}
+
 #[async_trait]
 impl TypedTool for FleetTool {
     const NAME: &'static str = FLEET_TOOL;
@@ -411,6 +426,7 @@ impl TypedTool for FleetTool {
         let lanes = isolated
             .then(|| self.spawner.open_lanes(labels.len()))
             .flatten();
+        let lane_guard = lanes.as_ref().map(|_| LaneGuard(self.spawner.clone()));
 
         let cancel = self.spawner.run_token();
         self.sink.started(&labels, cancel.clone());
@@ -446,7 +462,7 @@ impl TypedTool for FleetTool {
         if let Some(lanes) = &lanes {
             out.push_str(&patches_section(lanes, &labels));
         }
-        self.spawner.close_lanes();
+        drop(lane_guard);
         Ok(out.trim_end().to_string())
     }
 }
@@ -637,6 +653,31 @@ mod tests {
         // The caller falls back to a shared workspace and says so, rather than
         // failing a fleet that would have worked.
         assert!(spawner.open_lanes(2).is_none());
+    }
+
+    #[test]
+    fn lane_guard_releases_worktrees_when_a_run_is_dropped() {
+        let project = git_project();
+        let spawner = Arc::new(
+            FleetSpawner::new(
+                OxenClient::new("http://localhost/api/ai", "k", "m"),
+                ToolRegistry::new(),
+                AgentConfig::default(),
+            )
+            .with_workspace(project.path()),
+        );
+        let lanes = spawner.open_lanes(1).expect("worktree");
+        let path = lanes[0].path().to_path_buf();
+        let guard = LaneGuard(spawner.clone());
+
+        drop(lanes);
+        assert!(
+            path.exists(),
+            "the spawner still owns the lane until the run guard drops"
+        );
+        drop(guard);
+
+        assert!(!path.exists(), "dropping the run must release its lane");
     }
 
     #[tokio::test]

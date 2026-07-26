@@ -277,6 +277,17 @@ impl BackgroundTasks {
         .ok()
     }
 
+    /// A completion signal for resources whose lifetime must follow a task
+    /// beyond the foreground wait (for example the shell-state carrier a
+    /// timed-out command may write just before exiting).
+    pub(crate) async fn completion(&self, id: u64) -> Option<watch::Receiver<Option<TaskExit>>> {
+        self.tasks
+            .lock()
+            .await
+            .get(&id)
+            .map(|entry| entry.done.clone())
+    }
+
     /// Remove a finished task and hand back its bounded stdout/stderr tails —
     /// the foreground-completion path, matching `run_shell`'s classic output.
     ///

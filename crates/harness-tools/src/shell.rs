@@ -172,6 +172,13 @@ impl TypedTool for ShellTool {
                 // Bounded, though — past the cap of live tasks, revert to the
                 // classic kill so runaway commands can't accumulate forever.
                 None => {
+                    // The command's trailer may create this file only when the
+                    // now-background task eventually exits. Keep its RAII owner
+                    // alive until then so the final environment (including
+                    // credentials) cannot be stranded in the temp directory.
+                    if let (Some(carrier), Some(done)) = (carrier, tasks.completion(id).await) {
+                        carrier.remove_when_done(done);
+                    }
                     if tasks.running_count().await > crate::tasks::MAX_AUTO_BACKGROUND_TASKS {
                         let _ = tasks.kill(id).await;
                         return Ok(format!(
@@ -233,6 +240,20 @@ impl StateFile {
 
     fn path(&self) -> &std::path::Path {
         &self.0
+    }
+
+    fn remove_when_done(
+        self,
+        mut done: tokio::sync::watch::Receiver<Option<crate::tasks::TaskExit>>,
+    ) {
+        tokio::spawn(async move {
+            loop {
+                if done.borrow().is_some() || done.changed().await.is_err() {
+                    break;
+                }
+            }
+            drop(self);
+        });
     }
 }
 
@@ -354,6 +375,53 @@ mod tests {
         assert!(report.contains("running"), "{report}");
         // Clean up so the sleep doesn't outlive the test.
         tasks.kill(1).await.unwrap();
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn a_completed_timed_out_command_removes_its_state_carrier() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tool, tasks) = task_shell(dir.path());
+        let secret = format!(
+            "carrier-secret-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let command = format!("sleep 0.1; export OXEN_CARRIER_SECRET={secret}");
+        let out = tool
+            .invoke(serde_json::json!({"command": command, "timeout_ms": 10}))
+            .await
+            .unwrap();
+        assert!(out.contains("continues as background task 1"), "{out}");
+        tasks
+            .wait(1, Duration::from_secs(10))
+            .await
+            .expect("task should finish");
+
+        // The cleanup listener and the task completion signal are scheduled
+        // independently; yield briefly until the listener observes completion.
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+            let leaked = std::fs::read_dir(std::env::temp_dir())
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("oxen-harness-shell-")
+                })
+                .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+                .any(|contents| contents.contains(&secret));
+            if !leaked {
+                return;
+            }
+        }
+        panic!("the completed command left its environment carrier behind");
     }
 
     #[tokio::test]

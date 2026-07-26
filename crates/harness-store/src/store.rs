@@ -155,6 +155,18 @@ fn migrations() -> Migrations<'static> {
              CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_source_ref
                  ON sessions(source, source_ref) WHERE source_ref != '';",
         ),
+        // M10 — small durable agent projections that are neither transcript
+        // messages nor app-wide settings. Stream-rule repeat history is the
+        // first consumer: a cold resume must remember which once-per-session
+        // reminders already fired.
+        M::up(
+            "CREATE TABLE IF NOT EXISTS session_state (
+                 session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                 key        TEXT NOT NULL,
+                 raw_json   TEXT NOT NULL,
+                 PRIMARY KEY (session_id, key)
+             );",
+        ),
     ])
 }
 
@@ -589,6 +601,49 @@ impl HistoryStore {
             )
             .optional()?;
         row.map(|(seq, raw)| Ok((seq, serde_json::from_str(&raw)?)))
+            .transpose()
+    }
+
+    /// Save one compact, typed projection owned by an agent feature.
+    ///
+    /// This is intentionally separate from the verbatim transcript: state such
+    /// as once-per-session rule history affects future behavior but is not a
+    /// message the user or model said.
+    pub fn save_session_state<T: Serialize>(
+        &self,
+        session_id: &str,
+        key: &str,
+        value: &T,
+    ) -> Result<(), HistoryError> {
+        let raw = serde_json::to_string(value)?;
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO session_state (session_id, key, raw_json)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(session_id, key) DO UPDATE SET raw_json = excluded.raw_json",
+            rusqlite::params![session_id, key, raw],
+        )?;
+        Ok(())
+    }
+
+    /// Load a typed per-session projection, or `None` when that feature has not
+    /// saved state for this session yet.
+    pub fn session_state<T: DeserializeOwned>(
+        &self,
+        session_id: &str,
+        key: &str,
+    ) -> Result<Option<T>, HistoryError> {
+        use rusqlite::OptionalExtension;
+        let conn = self.lock();
+        let raw = conn
+            .query_row(
+                "SELECT raw_json FROM session_state
+                 WHERE session_id = ?1 AND key = ?2",
+                rusqlite::params![session_id, key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        raw.map(|raw| serde_json::from_str(&raw).map_err(HistoryError::from))
             .transpose()
     }
 
@@ -1161,6 +1216,36 @@ mod tests {
     }
 
     #[test]
+    fn typed_session_state_round_trips_and_is_scoped_by_key() {
+        let store = HistoryStore::open_in_memory().unwrap();
+        let session = store.create_session(&SessionMeta::default()).unwrap();
+        let state = vec!["no-unwrap".to_string(), "no-force-push".to_string()];
+
+        assert_eq!(
+            store
+                .session_state::<Vec<String>>(&session, "rule_history")
+                .unwrap(),
+            None
+        );
+        store
+            .save_session_state(&session, "rule_history", &state)
+            .unwrap();
+
+        assert_eq!(
+            store
+                .session_state::<Vec<String>>(&session, "rule_history")
+                .unwrap(),
+            Some(state)
+        );
+        assert_eq!(
+            store
+                .session_state::<Vec<String>>(&session, "other")
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn seq_increments_per_session() {
         let store = store();
         let session = store.create_session(&meta()).unwrap();
@@ -1649,7 +1734,7 @@ mod tests {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(user_version, 9);
+        assert_eq!(user_version, 10);
     }
 
     #[test]

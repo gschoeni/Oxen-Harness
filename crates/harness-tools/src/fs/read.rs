@@ -122,7 +122,12 @@ async fn try_outline(path: &Path) -> Option<(outline::Outline, u64)> {
     }
     let source = tokio::fs::read_to_string(path).await.ok()?;
     let hash = state::fingerprint(source.as_bytes());
-    outline::summarize(path, &source).map(|o| (o, hash))
+    outline::summarize(path, &source)
+        .filter(|outline| {
+            outline.text.lines().count() <= DEFAULT_READ_LIMIT
+                && outline.text.chars().count() <= MAX_READ_CHARS
+        })
+        .map(|outline| (outline, hash))
 }
 
 /// What one read learned about the file: its whole-file identity, its length,
@@ -327,6 +332,36 @@ mod tests {
         assert!(out.contains("pub fn load() -> Self {"));
         assert!(!out.contains("let step_100 = 100;"));
         assert!(out.contains("lines elided"));
+    }
+
+    #[tokio::test]
+    async fn an_oversized_outline_falls_back_to_the_normal_read_bounds() {
+        let (_dir, ws) = workspace();
+        let mut source = String::new();
+        for i in 0..2_500 {
+            source.push_str(&format!(
+                "pub const DECLARATION_{i}: &str = \"{}\";\n",
+                "x".repeat(80)
+            ));
+        }
+        source.push_str("pub fn hidden_body() {\n");
+        for i in 0..1_200 {
+            source.push_str(&format!("    let hidden_{i} = {i};\n"));
+        }
+        source.push_str("}\n");
+        write(&ws, "declarations.rs", &source).await;
+
+        let out = ReadFileTool::new(ws)
+            .invoke(serde_json::json!({"path": "declarations.rs"}))
+            .await
+            .unwrap();
+
+        assert!(
+            out.chars().count() <= MAX_READ_CHARS + 200,
+            "outline escaped the normal character cap: {} chars",
+            out.chars().count()
+        );
+        assert!(out.contains("output capped"), "{out}");
     }
 
     #[tokio::test]

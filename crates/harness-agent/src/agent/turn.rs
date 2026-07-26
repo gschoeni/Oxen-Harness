@@ -198,18 +198,17 @@ impl Agent {
             let (prefix_diff, tools_changed) = self.classify_prefix(&outbound, tools_hash);
             let outbound_len = outbound.len();
 
+            // Correctives are one-shot: take the pending message as it is sent.
+            // A rule that matches this reply may arm a new one for the following
+            // round without the previous reminder lingering alongside it.
+            let nudge = turn.nudge.take();
             let (assembled, mut outcome, rule_hits) = self
-                .stream_reply(
-                    outbound,
-                    &tool_defs,
-                    turn.nudge.as_ref(),
-                    &cancel,
-                    &mut on_event,
-                )
+                .stream_reply(outbound, &tool_defs, nudge.as_ref(), &cancel, &mut on_event)
                 .await?;
             self.rule_history.next_round();
 
             if cancel.is_cancelled() {
+                self.save_rule_history()?;
                 return self.finish_cancelled(
                     &assembled,
                     raw_prompt_tokens,
@@ -223,7 +222,9 @@ impl Agent {
             // the partial reply is dropped and the round re-runs carrying the
             // reminder. The spend is still counted: the provider generated
             // those tokens whether or not we keep them.
-            if self.apply_rule_hits(rule_hits, &mut turn) {
+            let interrupted = self.apply_rule_hits(rule_hits, &mut turn);
+            self.save_rule_history()?;
+            if interrupted {
                 self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens, outcome);
                 continue;
             }
@@ -274,8 +275,6 @@ impl Agent {
                 }
             }
 
-            // A tool call landed; the corrective (if any) served its purpose.
-            turn.nudge = None;
             let loop_stop = self
                 .run_tool_calls(&assembled, &mut turn, &mut on_event)
                 .await?;
@@ -296,8 +295,6 @@ impl Agent {
     /// next request, and report whether the reply just streamed must be
     /// discarded and re-run.
     ///
-    /// Rules the history has already spent are dropped here rather than at
-    /// match time, so the watcher stays free of session state.
     fn apply_rule_hits(&mut self, hits: Vec<crate::rules::RuleHit>, turn: &mut TurnState) -> bool {
         if hits.is_empty() {
             return false;
@@ -476,6 +473,11 @@ impl Agent {
     /// Each corrective fires at most once per turn and is never persisted, so
     /// it stays out of both the stored transcript and the visible chat.
     fn nudge_before_ending(&self, reply: &str, turn: &mut TurnState) -> bool {
+        // A non-interrupting stream rule lets this reply land, then asks for one
+        // more round carrying its correction.
+        if turn.nudge.is_some() {
+            return true;
+        }
         // "I'll go and do X" with no call to actually do it.
         if !turn.intent_nudged && prompt::looks_like_unfulfilled_intent(reply) {
             turn.intent_nudged = true;
@@ -629,9 +631,21 @@ mod tests {
         .unwrap();
         agent.set_rules(no_unwrap_rule(true));
 
-        let out = agent.run_turn("write it", |_| {}).await.unwrap();
+        let mut streamed = String::new();
+        let out = agent
+            .run_turn("write it", |event| {
+                if let AgentEvent::Token(token) = event {
+                    streamed.push_str(token);
+                }
+            })
+            .await
+            .unwrap();
 
         assert_eq!(out, "let x = thing?;");
+        assert_eq!(
+            streamed, "let x = thing?;",
+            "rejected output must never reach the live stream"
+        );
         // The offending reply never reached the transcript — that is the whole
         // point of interrupting rather than reminding afterwards.
         let text: String = agent
@@ -642,6 +656,290 @@ mod tests {
         assert!(!text.contains("unwrap()"), "the bad reply was kept: {text}");
         offending.assert_async().await;
         corrected.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_non_interrupting_rule_replies_again_with_its_reminder() {
+        let mut server = mockito::Server::new_async().await;
+        let noted = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("STYLE-TURN".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("TODO: tighten this later"))
+            .expect(1)
+            .create_async()
+            .await;
+        let corrected = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("system-reminder".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("Tightened now."))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store,
+            session,
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        agent.set_rules(crate::rules::RuleSet::new(vec![crate::rules::Rule {
+            name: "finish-todos".into(),
+            pattern: regex::Regex::new("TODO").unwrap(),
+            scopes: vec![crate::rules::Scope::Text],
+            message: "Finish the work now instead of leaving a TODO.".into(),
+            interrupt: false,
+            repeat: crate::rules::Repeat::Once,
+        }]));
+
+        let out = agent.run_turn("STYLE-TURN", |_| {}).await.unwrap();
+
+        assert_eq!(out, "Tightened now.");
+        noted.assert_async().await;
+        corrected.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_non_interrupting_tool_rule_survives_tool_execution() {
+        let mut server = mockito::Server::new_async().await;
+        let tool_call = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": "",
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_missing",
+                        "function": {
+                            "name": "missing_tool",
+                            "arguments": "{\"path\":\"forbidden/output\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let called = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("TOOL-RULE-TURN".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(format!("data: {tool_call}\n\ndata: [DONE]\n\n"))
+            .expect(1)
+            .create_async()
+            .await;
+        let reminded = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("system-reminder".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("Used the permitted path instead."))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store,
+            session,
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        agent.set_rules(crate::rules::RuleSet::new(vec![crate::rules::Rule {
+            name: "scoped-output".into(),
+            pattern: regex::Regex::new("forbidden/").unwrap(),
+            scopes: vec![crate::rules::Scope::ToolArguments],
+            message: "Choose a permitted output path.".into(),
+            interrupt: false,
+            repeat: crate::rules::Repeat::Once,
+        }]));
+
+        let out = agent.run_turn("TOOL-RULE-TURN", |_| {}).await.unwrap();
+
+        assert_eq!(out, "Used the permitted path instead.");
+        called.assert_async().await;
+        reminded.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_spent_once_rule_cannot_cancel_a_later_matching_reply() {
+        fn split_reply(first: &str, second: &str) -> String {
+            let first = serde_json::json!({
+                "choices": [{ "index": 0, "delta": { "content": first } }]
+            });
+            let second = serde_json::json!({
+                "choices": [{
+                    "index": 0,
+                    "delta": { "content": second },
+                    "finish_reason": "stop"
+                }]
+            });
+            format!("data: {first}\n\ndata: {second}\n\ndata: [DONE]\n\n")
+        }
+
+        let mut server = mockito::Server::new_async().await;
+        let first = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("FIRST-RULE-TURN".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(split_reply("thing.unwrap()", " rejected tail"))
+            .expect(1)
+            .create_async()
+            .await;
+        let correction = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("system-reminder".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("used ? instead"))
+            .expect(1)
+            .create_async()
+            .await;
+        let later = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("SECOND-RULE-TURN".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(split_reply(
+                "mentioning thing.unwrap()",
+                " must keep this suffix",
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store,
+            session,
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        agent.set_rules(no_unwrap_rule(true));
+
+        assert_eq!(
+            agent.run_turn("FIRST-RULE-TURN", |_| {}).await.unwrap(),
+            "used ? instead"
+        );
+        assert_eq!(
+            agent.run_turn("SECOND-RULE-TURN", |_| {}).await.unwrap(),
+            "mentioning thing.unwrap() must keep this suffix"
+        );
+        first.assert_async().await;
+        correction.assert_async().await;
+        later.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn once_rule_history_survives_a_cold_resume() {
+        fn split_reply() -> String {
+            let first = serde_json::json!({
+                "choices": [{
+                    "index": 0,
+                    "delta": { "content": "mentioning thing.unwrap()" }
+                }]
+            });
+            let second = serde_json::json!({
+                "choices": [{
+                    "index": 0,
+                    "delta": { "content": " after resume" },
+                    "finish_reason": "stop"
+                }]
+            });
+            format!("data: {first}\n\ndata: {second}\n\ndata: [DONE]\n\n")
+        }
+
+        let mut server = mockito::Server::new_async().await;
+        let first = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("BEFORE-RESUME".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("thing.unwrap()"))
+            .expect(1)
+            .create_async()
+            .await;
+        let correction = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("system-reminder".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("used ? instead"))
+            .expect(1)
+            .create_async()
+            .await;
+        let resumed = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("AFTER-RESUME".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(split_reply())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            ..AgentConfig::default()
+        };
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut agent = Agent::new(
+            client.clone(),
+            ToolRegistry::new(),
+            store.clone(),
+            session.clone(),
+            config.clone(),
+        )
+        .unwrap();
+        agent.set_rules(no_unwrap_rule(true));
+        assert_eq!(
+            agent.run_turn("BEFORE-RESUME", |_| {}).await.unwrap(),
+            "used ? instead"
+        );
+        drop(agent);
+
+        let mut resumed_agent =
+            Agent::resume_from_store(client, ToolRegistry::new(), store, session, config).unwrap();
+        resumed_agent.set_rules(no_unwrap_rule(true));
+
+        assert_eq!(
+            resumed_agent
+                .run_turn("AFTER-RESUME", |_| {})
+                .await
+                .unwrap(),
+            "mentioning thing.unwrap() after resume"
+        );
+        first.assert_async().await;
+        correction.assert_async().await;
+        resumed.assert_async().await;
     }
 
     #[tokio::test]

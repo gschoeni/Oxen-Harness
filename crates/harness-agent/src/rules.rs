@@ -412,7 +412,7 @@ impl RuleSet {
     /// A watcher for one model call. Cheap to make; holds the per-call buffers.
     pub fn watcher(&self) -> Watcher<'_> {
         Watcher {
-            rules: &self.rules,
+            rules: self.rules.iter().collect(),
             text: String::new(),
             tool_args: String::new(),
             hits: Vec::new(),
@@ -421,7 +421,7 @@ impl RuleSet {
 }
 
 /// Tracks how many times each rule has fired, across a session.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct RuleHistory {
     /// Rule name → the round index it last fired on.
     fired: HashMap<String, u32>,
@@ -464,19 +464,42 @@ impl RuleHistory {
         }
         out
     }
+
+    /// Build a watcher containing only rules whose repeat policy still permits
+    /// them to fire. Eligibility is checked before streaming so a spent
+    /// interrupting rule cannot cancel and truncate a later response.
+    pub fn watcher<'a>(&self, rules: &'a RuleSet) -> Watcher<'a> {
+        Watcher {
+            rules: rules
+                .rules
+                .iter()
+                .filter(|rule| self.allows(rule))
+                .collect(),
+            text: String::new(),
+            tool_args: String::new(),
+            hits: Vec::new(),
+        }
+    }
 }
 
 /// Watches one model call's stream. Accumulates per scope, because a pattern
 /// can straddle token boundaries — matching each delta in isolation would miss
 /// almost everything worth catching.
 pub struct Watcher<'a> {
-    rules: &'a [Rule],
+    rules: Vec<&'a Rule>,
     text: String,
     tool_args: String,
     hits: Vec<RuleHit>,
 }
 
 impl Watcher<'_> {
+    /// Whether this call has an eligible rule that could abandon its output.
+    /// Presentation events are buffered in that case until the reply is known
+    /// to be accepted.
+    pub fn can_interrupt(&self) -> bool {
+        self.rules.iter().any(|rule| rule.interrupt)
+    }
+
     /// Feed a streamed fragment. Returns true when an *interrupting* rule
     /// matched, which is the caller's signal to abandon the response.
     pub fn observe(&mut self, scope: Scope, delta: &str) -> bool {
@@ -489,7 +512,7 @@ impl Watcher<'_> {
         // n is one reply and the regexes are small; a streaming matcher would
         // be a lot of machinery for a fraction of a millisecond.
         let mut interrupt = false;
-        for rule in self.rules {
+        for rule in &self.rules {
             if !rule.scopes.contains(&scope) {
                 continue;
             }
@@ -603,6 +626,20 @@ mod tests {
         history.next_round();
         // The model has seen this reminder; repeating it is noise.
         assert!(history.admit(hit(), &rules).is_empty());
+    }
+
+    #[test]
+    fn a_spent_interrupting_rule_is_absent_from_future_watchers() {
+        let rules = RuleSet::new(vec![rule("no-unwrap", "unwrap", Scope::Text, true)]);
+        let mut history = RuleHistory::default();
+        let mut first = history.watcher(&rules);
+        assert!(first.observe(Scope::Text, "unwrap"));
+        assert_eq!(history.admit(first.hits(), &rules).len(), 1);
+
+        let mut later = history.watcher(&rules);
+        assert!(!later.can_interrupt());
+        assert!(!later.observe(Scope::Text, "unwrap"));
+        assert!(later.hits().is_empty());
     }
 
     #[test]

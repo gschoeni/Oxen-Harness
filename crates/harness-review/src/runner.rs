@@ -6,11 +6,12 @@
 //!
 //! Isolation is the point. The verify step must judge the finders' candidates
 //! from the *code*, not from the finders' reasoning — sharing a context would
-//! anchor it. Every reviewer therefore runs on [`Agent::side_agent`]: same
-//! model, tools, and config, but an in-memory transcript that vanishes when
-//! the step ends. Only the final report survives, and the host injects it into
-//! the real session (via [`Agent::inject_exchange`]) so a follow-up "fix 1 and
-//! 3" has the findings in context.
+//! anchor it. Every reviewer therefore runs on [`Agent::side_agent`]: the
+//! configured `smol` role (falling back to the session model), the same tools,
+//! and an in-memory transcript that vanishes when the step ends. Only the final
+//! report survives, and the host injects it into the real session (via
+//! [`Agent::inject_exchange`]) so a follow-up "fix 1 and 3" has the findings in
+//! context.
 
 use std::path::{Path, PathBuf};
 

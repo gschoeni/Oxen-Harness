@@ -19,6 +19,16 @@ use crate::{budget, cache};
 
 use super::{Agent, CallOutcome};
 
+fn emit_stream_event<F>(buffered: &mut Option<Vec<AgentEvent>>, event: AgentEvent, on_event: &mut F)
+where
+    F: FnMut(&AgentEvent),
+{
+    match buffered {
+        Some(events) => events.push(event),
+        None => on_event(&event),
+    }
+}
+
 impl Agent {
     /// Send the prepared outbound transcript (plus the optional one-shot
     /// nudge) to the model and stream the reply, translating provider stream
@@ -66,7 +76,12 @@ impl Agent {
             // child of the turn's — so a rule interrupt and a user stop both
             // end the stream, and the turn's own cancellation still reaches it.
             let rule_stop = cancel.child_token();
-            let mut watcher = self.rules.watcher();
+            let mut watcher = self.rule_history.watcher(&self.rules);
+            // Once an interrupt-capable rule is eligible, live presentation
+            // waits until the call is accepted. If the rule fires, the rejected
+            // prose/tool preview is simply never emitted; every host therefore
+            // sees only the corrected round without needing a rewind protocol.
+            let mut buffered_events = watcher.can_interrupt().then(Vec::new);
             let result = self
                 .client
                 .stream_chat(&request, &rule_stop, |event| match event {
@@ -74,28 +89,38 @@ impl Agent {
                         if watcher.observe(crate::rules::Scope::Text, t) {
                             rule_stop.cancel();
                         }
-                        on_event(&AgentEvent::Token(t.clone()));
+                        let event = AgentEvent::Token(t.clone());
+                        emit_stream_event(&mut buffered_events, event, on_event);
                     }
                     StreamEvent::ToolCallStart { name } => {
-                        on_event(&AgentEvent::ToolPending { name: name.clone() })
+                        let event = AgentEvent::ToolPending { name: name.clone() };
+                        emit_stream_event(&mut buffered_events, event, on_event);
                     }
                     StreamEvent::ToolCallDelta { name, arguments } => {
                         if watcher.observe(crate::rules::Scope::ToolArguments, arguments) {
                             rule_stop.cancel();
                         }
-                        on_event(&AgentEvent::ToolDelta {
+                        let event = AgentEvent::ToolDelta {
                             name: name.clone(),
                             delta: arguments.clone(),
-                        });
+                        };
+                        emit_stream_event(&mut buffered_events, event, on_event);
                     }
                     StreamEvent::Done { .. } => {}
                 })
                 .await;
             let hits = watcher.hits();
+            let interrupted = hits.iter().any(|hit| hit.interrupt);
+            if let Some(events) = buffered_events.filter(|_| !interrupted) {
+                for event in events {
+                    on_event(&event);
+                }
+            }
 
             match result {
                 Ok(assembled) => {
                     let outcome = CallOutcome {
+                        model: Some(request.model.clone()),
                         latency_ms: Some(started.elapsed().as_millis() as u64),
                         retries: attempt - 1,
                         ..CallOutcome::default()
@@ -118,7 +143,7 @@ impl Agent {
                         "model_fallback",
                         serde_json::json!({
                             "session": self.session_id(),
-                            "from": request.model,
+                            "from": request.model.as_str(),
                             "to": next,
                             "attempts": attempt,
                             "error": e.to_string(),
@@ -147,7 +172,7 @@ impl Agent {
                         "retrying",
                         serde_json::json!({
                             "session": self.session_id(),
-                            "model": self.config.model,
+                            "model": request.model.as_str(),
                             "endpoint": self.client.base_url(),
                             "attempt": attempt,
                             "max_attempts": retry.max_attempts,
@@ -183,7 +208,7 @@ impl Agent {
                 Err(e) if attempt > 1 => {
                     return Err(AgentError::RetriesExhausted {
                         attempts: attempt,
-                        model: self.config.model.clone(),
+                        model: request.model.clone(),
                         endpoint: self.client.base_url().to_string(),
                         source: e,
                     })
@@ -239,8 +264,9 @@ impl Agent {
         self.tokens_used += prompt_delta + completion_delta;
         self.cached_prompt_tokens_used += outcome.cached_prompt_tokens;
         self.cache_write_tokens_used += outcome.cache_write_tokens;
+        let answered_by = outcome.model_or(&self.config.model);
         self.record_usage_event(
-            &self.config.model,
+            answered_by,
             prompt_delta,
             completion_delta,
             "turn",
@@ -287,7 +313,7 @@ impl Agent {
             "model_request",
             serde_json::json!({
                 "session": self.session_id(),
-                "model": self.config.model,
+                "model": outcome.model_or(&self.config.model),
                 "kind": "turn",
                 "messages": message_count,
                 "est_prompt_tokens": est_prompt_tokens,
@@ -431,6 +457,63 @@ mod tests {
 
         assert_eq!(out, "answered by the backup");
         assert_eq!(switches, vec!["backup-model".to_string()]);
+        down.assert_async().await;
+        healthy.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn fallback_usage_and_request_logs_name_the_model_that_answered() {
+        let mut server = mockito::Server::new_async().await;
+        let down = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("claude-opus-4-8".into()))
+            .with_status(503)
+            .with_body(r#"{"error":{"title":"provider down"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let healthy = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("backup-model".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("backup answer"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let request_log = dir.path().join("requests.jsonl");
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store.clone(),
+            session,
+            AgentConfig {
+                system_prompt: None,
+                retry: RetryPolicy {
+                    fallback_models: vec!["backup-model".into()],
+                    ..fast_retry(1)
+                },
+                request_log: Some(request_log.clone()),
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            agent.run_turn("hello", |_| {}).await.unwrap(),
+            "backup answer"
+        );
+        let usage = store.model_usage_breakdown().unwrap();
+        assert_eq!(usage.len(), 1, "{usage:?}");
+        assert_eq!(usage[0].model, "backup-model");
+        let logged: serde_json::Value =
+            serde_json::from_str(std::fs::read_to_string(request_log).unwrap().trim()).unwrap();
+        assert_eq!(logged["model"], "backup-model");
         down.assert_async().await;
         healthy.assert_async().await;
     }

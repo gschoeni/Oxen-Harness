@@ -161,6 +161,17 @@ impl FileState {
         *self.rules.lock().expect("rules lock") = rules;
     }
 
+    /// Fresh read/freshness/lock state for an isolated workspace, carrying only
+    /// the parent's path-scoped conventions. A detached worktree must not share
+    /// snapshots or locks with the parent checkout, but the same `AGENTS.md` and
+    /// editor rules still govern its corresponding paths.
+    pub fn fresh_with_rules(&self) -> Arc<Self> {
+        let fresh = Arc::new(Self::with_require_read(self.require_read));
+        let rules = self.rules.lock().expect("rules lock").clone();
+        *fresh.rules.lock().expect("rules lock") = rules;
+        fresh
+    }
+
     /// Record what the model was just shown. Called after a successful read,
     /// and after a write/edit so the next edit in the same turn doesn't read
     /// as stale against content the model itself just produced.
@@ -575,6 +586,31 @@ mod tests {
             .take_rules_for(Path::new("app/src/other.tsx"))
             .is_empty());
         assert!(state.take_rules_for(Path::new("crates/lib.rs")).is_empty());
+    }
+
+    #[test]
+    fn isolated_state_keeps_rules_but_not_parent_reads_or_surface_history() {
+        let state = FileState::gated();
+        state.set_rules(vec![PathRule::new(
+            "nested/AGENTS.md",
+            "Use the nested convention.",
+            &["nested/**".to_string()],
+        )]);
+        let path = Path::new("/tmp/project/nested/lib.rs");
+        state.record(path, "old");
+        assert!(state
+            .take_rules_for(Path::new("nested/lib.rs"))
+            .contains("nested convention"));
+
+        let isolated = state.fresh_with_rules();
+
+        assert_eq!(isolated.verify(path, "old"), Freshness::NeverRead);
+        assert!(
+            isolated
+                .take_rules_for(Path::new("nested/lib.rs"))
+                .contains("nested convention"),
+            "each isolated lane must receive its own first-touch convention"
+        );
     }
 
     #[test]
