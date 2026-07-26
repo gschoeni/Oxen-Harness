@@ -135,6 +135,64 @@ describe("the board", () => {
     expect(ipc.ledgerMarkSeen).toHaveBeenCalled();
   });
 
+  it("holds the knot while shipping loops are open — tying anyway takes the confirm", async () => {
+    seed({
+      entries: [
+        entry({
+          id: "s3",
+          title: "bump deps",
+          trail: {
+            title: "bump deps",
+            waypoints: [
+              { name: "implement", status: "done" },
+              { name: "pushed", status: "done" },
+              { name: "pr-reviewed", status: "current" },
+              { name: "merged", status: "ahead" },
+            ],
+          },
+        }),
+      ],
+    });
+    const { container } = render(<HomePage />);
+
+    await clickWagon(container, /bump deps/);
+    // The open loops are spelled out in the waystation…
+    expect(screen.getByText("PR not reviewed")).toBeTruthy();
+    expect(screen.getByText("PR not merged")).toBeTruthy();
+    // …and the knot is hesitant: no one-click tie.
+    expect(screen.queryByRole("button", { name: /^tie the knot$/i })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /tie off anyway/i }));
+    expect(ipc.settleSession).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Tie off anyway" }));
+    await waitFor(() => expect(ipc.settleSession).toHaveBeenCalledWith("s3", ""), { timeout: 2_000 });
+  });
+
+  it("a fully shipped thread ties in one click", async () => {
+    seed({
+      entries: [
+        entry({
+          id: "s4",
+          title: "ship it",
+          trail: {
+            title: "ship it",
+            waypoints: [
+              { name: "implement", status: "done" },
+              { name: "pushed", status: "done" },
+              { name: "pr-reviewed", status: "done" },
+              { name: "merged", status: "done" },
+            ],
+          },
+        }),
+      ],
+    });
+    const { container } = render(<HomePage />);
+    await clickWagon(container, /ship it/);
+    // Every loop closed on the route — the knot is confident again.
+    await userEvent.click(screen.getByRole("button", { name: /tie the knot/i }));
+    await waitFor(() => expect(ipc.settleSession).toHaveBeenCalledWith("s4", ""), { timeout: 2_000 });
+  });
+
   it("ties off a thread in one click — no note, no extra step", async () => {
     seed({ entries: [entry({ id: "s3", title: "bump deps" })] });
     const { container } = render(<HomePage />);
@@ -212,6 +270,23 @@ describe("the board", () => {
     expect(live.join(" ")).toContain("⚙ edit_file");
     expect(live.join(" ")).toContain("HomePage.tsx");
     expect(live.join(" ")).toContain("thinking");
+  });
+
+  it("a stuck agent wears the warning and its whole row joins the chat", async () => {
+    seed({ entries: [entry({ id: "parked", title: "migrate the db", mid_turn: true })], running: ["parked"] });
+    useStore.setState({
+      approvals: {
+        parked: { session: "parked", id: "a1", kind: "shell", tool: "run_shell", title: "", command: "rm -rf" } as never,
+      },
+    });
+    const { container } = render(<HomePage />);
+    const row = container.querySelector(".ledger-wagon.stuck") as HTMLElement;
+    expect(row).toBeTruthy();
+    expect(row.textContent).toContain("waiting on you");
+    expect(screen.getByText(/waiting for your approval — join the chat/)).toBeTruthy();
+    // No waystation detour: the row IS the door.
+    await userEvent.click(row);
+    await waitFor(() => expect(ipc.resumeSession).toHaveBeenCalledWith("parked"));
   });
 
   it("purges the archive: select all, one confirm, every chat deleted", async () => {
@@ -303,6 +378,11 @@ describe("the board", () => {
     expect(screen.getByText(/implement ·/)).toBeTruthy();
     expect(container.querySelectorAll(".trail-station")).toHaveLength(3);
     expect(container.querySelectorAll(".trail-station.done")).toHaveLength(1);
+    // Every station tells its story on hover — including the road ahead.
+    expect(container.querySelector('.trail-station[data-tip="define ✓"]')).toBeTruthy();
+    expect(container.querySelector('.trail-station[data-tip="implement · current"]')).toBeTruthy();
+    expect(container.querySelector('.trail-station[data-tip="review · ahead"]')).toBeTruthy();
+    expect(container.querySelector('[data-tip="tie-off"]')).toBeTruthy();
   });
 
   it("caps a train at three wagons and rides the rest into the project page", async () => {
@@ -320,6 +400,23 @@ describe("the board", () => {
     await userEvent.click(more);
     // The project home opens (its trail carries the full list).
     await waitFor(() => expect(screen.getByLabelText("Project name")).toBeTruthy());
+  });
+
+  it("follows store navigation while mounted — the titlebar buttons are never dead", async () => {
+    seed({ entries: [entry({ title: "thread a" })] }, [project("/work/app", "App")]);
+    render(<HomePage />);
+
+    // Chrome outside Home targets a project page (e.g. the titlebar's
+    // project button) while the board is already up.
+    useStore.getState().openProjectHome("/work/app");
+    await waitFor(() => expect(screen.getByLabelText("Project name")).toBeTruthy());
+
+    // And the titlebar's "N running — open the Ledger" chip goes back to the
+    // board from that page. Before the store drove this, the page snapshot
+    // was mount-only and both buttons looked dead.
+    useStore.getState().setHomeOpen(true);
+    await waitFor(() => expect(screen.getByText("Home")).toBeTruthy());
+    expect(screen.queryByLabelText("Project name")).toBeNull();
   });
 
   it("keeps curation out of the waystation — that lives in the chat's Inspector", async () => {

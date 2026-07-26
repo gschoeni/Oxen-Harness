@@ -41,11 +41,20 @@ describe("Sidebar", () => {
     expect(screen.getByText("First chat").closest(".history-item")).toHaveClass("active");
   });
 
-  it("does not add a brand-new active chat to the history list", () => {
+  it("pins a brand-new active chat on top until its first message lands", async () => {
+    // A fresh chat has no user turn, so the persisted list can't carry it —
+    // without the pin the open chat would have no row and no highlight.
     useStore.setState({ session: { ...ipc.sampleSession, session_id: "fresh", workspace: "/w" } });
     render(<Sidebar />);
-    expect(screen.queryByText("New chat", { selector: ".history-title" })).toBeNull();
-    expect(document.querySelector(".history-item.active")).toBeNull();
+    const row = screen
+      .getByText("New chat", { selector: ".history-title" })
+      .closest(".history-item")!;
+    expect(row).toHaveClass("active");
+
+    // Pressing "+" while already on the fresh chat stays put — no orphan
+    // empty sessions pile up in the store.
+    await userEvent.click(screen.getByRole("button", { name: "New chat" }));
+    expect(ipc.newSession).not.toHaveBeenCalled();
   });
 
   it("starts a new session when New chat is clicked", async () => {

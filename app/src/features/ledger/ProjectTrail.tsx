@@ -4,15 +4,11 @@
 // deliberately uncapped. Rendered on the project's home page.
 
 import { useState } from "react";
-import { relativeTime } from "../../lib/format";
-import { useStore } from "../../lib/store";
-import { threadTitle } from "./ledger";
 import { useBoard } from "./useBoard";
-import { WagonRow } from "./Wagon";
+import { SettledRow, WagonRow } from "./Wagon";
 
 export function ProjectTrail({ workspace }: { workspace: string }) {
   const board = useBoard();
-  const reopenThread = useStore((s) => s.reopenThread);
   // One unfolded waystation at a time, same as the board.
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showSettled, setShowSettled] = useState(false);
@@ -52,23 +48,7 @@ export function ProjectTrail({ workspace }: { workspace: string }) {
           {showSettled && (
             <div className="ledger-foot-rows">
               {settled.map((thread) => (
-                <div key={thread.entry.id} className="ledger-settled-row">
-                  <span className="ledger-settled-check">✓</span>
-                  <span className="ledger-settled-title">{threadTitle(thread)}</span>
-                  {thread.entry.settle?.note && (
-                    <span className="ledger-settled-note">“{thread.entry.settle.note}”</span>
-                  )}
-                  <span className="ledger-settled-when">
-                    {relativeTime(thread.entry.settle?.settled_at ?? 0)}
-                  </span>
-                  <button
-                    className="ledger-row-action"
-                    title="Untie — bring this thread back to the trail"
-                    onClick={() => void reopenThread(thread.entry.id)}
-                  >
-                    untie
-                  </button>
-                </div>
+                <SettledRow key={thread.entry.id} thread={thread} />
               ))}
             </div>
           )}

@@ -7,6 +7,7 @@ import type { Project, ProjectContext, StartupModelChoice } from "../../lib/type
 import { ModelPicker } from "../chat/ModelPicker";
 import { ProjectTrail } from "../ledger/ProjectTrail";
 import { useBoard } from "../ledger/useBoard";
+import { RemoveProjectModal } from "./RemoveProjectModal";
 import "./projects.css";
 
 export function ProjectHome({
@@ -32,19 +33,6 @@ export function ProjectHome({
   const [startupModel, setStartupModel] = useState<StartupModelChoice | null>(null);
   const removeProject = useStore((state) => state.removeProject);
   const [pendingDelete, setPendingDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-
-  async function confirmDelete() {
-    setDeleting(true);
-    try {
-      await removeProject(project.path);
-      // The project is gone — there is no page left to stand on.
-      onBack();
-    } finally {
-      setDeleting(false);
-      setPendingDelete(false);
-    }
-  }
   const cleanName = name.trim();
   const cleanGoal = goal.trim();
   const detailsChanged = name !== project.name || goal !== project.description;
@@ -242,20 +230,16 @@ export function ProjectHome({
       </div>
 
       {pendingDelete && (
-        <Modal title="Remove project?" onClose={() => !deleting && setPendingDelete(false)}>
-          <p className="delete-confirm-text">
-            Remove <strong>{cleanName || project.name}</strong> from your projects? Its folder and
-            chat history stay on disk — it just won’t be listed here anymore.
-          </p>
-          <div className="delete-confirm-actions">
-            <Button variant="ghost" onClick={() => setPendingDelete(false)} disabled={deleting}>
-              Cancel
-            </Button>
-            <Button variant="danger" onClick={confirmDelete} disabled={deleting}>
-              {deleting ? "Removing…" : "Remove"}
-            </Button>
-          </div>
-        </Modal>
+        <RemoveProjectModal
+          name={cleanName || project.name}
+          onCancel={() => setPendingDelete(false)}
+          onConfirm={async () => {
+            await removeProject(project.path);
+            setPendingDelete(false);
+            // The project is gone — there is no page left to stand on.
+            onBack();
+          }}
+        />
       )}
 
       {editingInstructions && (

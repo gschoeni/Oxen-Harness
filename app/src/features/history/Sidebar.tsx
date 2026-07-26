@@ -42,9 +42,30 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
   // everything else lives on the Projects page. Imported transcripts (Claude
   // Code / Cursor) are review-only — they live in Settings → Training data,
   // not here, so they can't be resumed as live agents.
-  const rows = activePath
+  const listed = activePath
     ? sessions.filter((s) => s.workspace === activePath && s.source === "")
     : [];
+  // A brand-new chat has no user turn yet, so the persisted list can't show
+  // it — pin it on top until its first message lands. Without this the open
+  // chat has no row and no highlight, and clicking any listed chat navigates
+  // away with no way back.
+  const pinned: SessionSummary | null =
+    session && session.workspace === activePath && !listed.some((s) => s.id === session.session_id)
+      ? {
+          id: session.session_id,
+          workspace: session.workspace,
+          model: session.model,
+          created_at: 0,
+          title: null,
+          message_count: 0,
+          review_status: "",
+          source: "",
+        }
+      : null;
+  const rows = pinned ? [pinned, ...listed] : listed;
+  // Pressing "+" while already on that fresh, unstarted chat stays put —
+  // minting another empty session each press would only pile up orphans.
+  const onFreshChat = pinned !== null && runStatus[pinned.id] !== "running";
 
   return (
     <aside className="sidebar">
@@ -67,7 +88,12 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
             <DockToggle side="left" />
           </div>
 
-          <button className="new-chat" onClick={() => startNewSession()}>
+          <button
+            className="new-chat"
+            onClick={() => {
+              if (!onFreshChat) void startNewSession();
+            }}
+          >
             <Plus size={18} />
             New chat
           </button>

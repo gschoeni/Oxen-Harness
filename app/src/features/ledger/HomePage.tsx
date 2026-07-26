@@ -14,21 +14,36 @@ import { useStore } from "../../lib/store";
 import type { Project } from "../../lib/types";
 import { getUi, setUi } from "../../lib/uiState";
 import { ProjectHome } from "../projects/ProjectHome";
+import { RemoveProjectModal } from "../projects/RemoveProjectModal";
 import { StartProjectModal } from "../projects/StartProjectModal";
 import { threadTitle, type Board, type Train } from "./ledger";
 import { ProjectCards } from "./ProjectCards";
 import { useBoard } from "./useBoard";
-import { CutLoose, useOpenThread, WagonRow } from "./Wagon";
+import { CutLoose, SettledRow, useOpenThread, WagonRow } from "./Wagon";
 import "./ledger.css";
 
 export function HomePage() {
   const projects = useStore((s) => s.projects);
   const projectHomePath = useStore((s) => s.projectHomePath);
+  const openProjectHome = useStore((s) => s.openProjectHome);
+  const setHomeOpen = useStore((s) => s.setHomeOpen);
   const refreshHistory = useStore((s) => s.refreshHistory);
   const refreshLedger = useStore((s) => s.refreshLedger);
-  const [selected, setSelected] = useState<Project | null>(() =>
-    projectHomePath ? projects.find((p) => p.path === projectHomePath) ?? null : null,
-  );
+  // Which project page is open is the STORE's decision (projectHomePath) —
+  // the titlebar and other chrome navigate by setting it while Home is
+  // already mounted, so a mount-time snapshot would leave their buttons dead.
+  // The local state only mirrors it as a resolved Project object (and carries
+  // in-page edits between refreshes).
+  const [selected, setSelected] = useState<Project | null>(null);
+  useEffect(() => {
+    setSelected((current) =>
+      projectHomePath
+        ? current?.path === projectHomePath
+          ? current
+          : (projects.find((p) => p.path === projectHomePath) ?? null)
+        : null,
+    );
+  }, [projectHomePath, projects]);
   const [starting, setStarting] = useState(false);
 
   // The board loads itself: on first mount (app start opens the Ledger without
@@ -58,13 +73,15 @@ export function HomePage() {
       {selected ? (
         <ProjectHome
           project={selected}
-          onBack={() => setSelected(null)}
+          // Back to the board through the store, so projectHomePath agrees
+          // with what's on screen (and the board refreshes on return).
+          onBack={() => setHomeOpen(true)}
           onProjectChanged={projectChanged}
         />
       ) : (
         <BoardView
           board={board}
-          onOpenProject={setSelected}
+          onOpenProject={(project) => openProjectHome(project.path)}
           onStartProject={() => setStarting(true)}
         />
       )}
@@ -300,22 +317,9 @@ function QuietRow({
   onOpenProject: (project: Project) => void;
 }) {
   const removeProject = useStore((s) => s.removeProject);
-  // The project queued for removal (drives the confirm modal) and whether the
-  // request is in flight.
+  // The project queued for removal (drives the confirm modal).
   const [pendingDelete, setPendingDelete] = useState<Project | null>(null);
-  const [deleting, setDeleting] = useState(false);
   if (board.quiet.length === 0) return null;
-
-  async function confirmDelete() {
-    if (!pendingDelete) return;
-    setDeleting(true);
-    try {
-      await removeProject(pendingDelete.path);
-      setPendingDelete(null);
-    } finally {
-      setDeleting(false);
-    }
-  }
 
   return (
     <section className="ledger-quiet" aria-label="Quiet projects">
@@ -347,20 +351,14 @@ function QuietRow({
       ))}
 
       {pendingDelete && (
-        <Modal title="Remove project?" onClose={() => !deleting && setPendingDelete(null)}>
-          <p className="delete-confirm-text">
-            Remove <strong>{pendingDelete.name}</strong> from your projects? Its folder and chat
-            history stay on disk — it just won’t be listed here anymore.
-          </p>
-          <div className="delete-confirm-actions">
-            <Button variant="ghost" onClick={() => setPendingDelete(null)} disabled={deleting}>
-              Cancel
-            </Button>
-            <Button variant="danger" onClick={confirmDelete} disabled={deleting}>
-              {deleting ? "Removing…" : "Remove"}
-            </Button>
-          </div>
-        </Modal>
+        <RemoveProjectModal
+          name={pendingDelete.name}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={async () => {
+            await removeProject(pendingDelete.path);
+            setPendingDelete(null);
+          }}
+        />
       )}
     </section>
   );
@@ -368,7 +366,6 @@ function QuietRow({
 
 function SettledLedger({ board }: { board: Board }) {
   const [openList, setOpenList] = useState(false);
-  const reopenThread = useStore((s) => s.reopenThread);
   if (board.settled.length === 0) return null;
   return (
     <section className="ledger-settled" aria-label="Settled threads">
@@ -383,23 +380,7 @@ function SettledLedger({ board }: { board: Board }) {
       {openList && (
         <div className="ledger-foot-rows">
           {board.settled.slice(0, 30).map((thread) => (
-            <div key={thread.entry.id} className="ledger-settled-row">
-              <span className="ledger-settled-check">✓</span>
-              <span className="ledger-settled-title">{threadTitle(thread)}</span>
-              {thread.entry.settle?.note && (
-                <span className="ledger-settled-note">“{thread.entry.settle.note}”</span>
-              )}
-              <span className="ledger-settled-when">
-                {relativeTime(thread.entry.settle?.settled_at ?? 0)}
-              </span>
-              <button
-                className="ledger-row-action"
-                title="Untie — bring this thread back to the trail"
-                onClick={() => void reopenThread(thread.entry.id)}
-              >
-                untie
-              </button>
-            </div>
+            <SettledRow key={thread.entry.id} thread={thread} />
           ))}
           {board.settled.length > 30 && (
             <div className="ledger-foot-more">and {board.settled.length - 30} more, settled and gone</div>

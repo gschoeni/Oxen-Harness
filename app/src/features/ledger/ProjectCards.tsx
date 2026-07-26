@@ -5,11 +5,11 @@
 
 import { useMemo, useState } from "react";
 import { ArrowDownAZ, Clock, FolderOpen, FolderPlus, Trash2 } from "lucide-react";
-import { Button, Modal } from "../../components/ui";
 import { relativeTime } from "../../lib/format";
 import { useStore } from "../../lib/store";
 import type { Project } from "../../lib/types";
 import { getUi, setUi } from "../../lib/uiState";
+import { RemoveProjectModal } from "../projects/RemoveProjectModal";
 import type { Board } from "./ledger";
 
 type CardSort = "recent" | "name";
@@ -52,7 +52,6 @@ export function ProjectCards({
   const removeProject = useStore((s) => s.removeProject);
   const [sort, setSort] = useState<CardSort>(savedSort);
   const [pendingDelete, setPendingDelete] = useState<Project | null>(null);
-  const [deleting, setDeleting] = useState(false);
 
   function changeSort(next: CardSort) {
     setSort(next);
@@ -86,17 +85,6 @@ export function ProjectCards({
     }
     onOpenProject(project);
     await selectProject(project.path);
-  }
-
-  async function confirmDelete() {
-    if (!pendingDelete) return;
-    setDeleting(true);
-    try {
-      await removeProject(pendingDelete.path);
-      setPendingDelete(null);
-    } finally {
-      setDeleting(false);
-    }
   }
 
   return (
@@ -187,20 +175,14 @@ export function ProjectCards({
       </section>
 
       {pendingDelete && (
-        <Modal title="Remove project?" onClose={() => !deleting && setPendingDelete(null)}>
-          <p className="delete-confirm-text">
-            Remove <strong>{pendingDelete.name}</strong> from your projects? Its folder and chat
-            history stay on disk — it just won’t be listed here anymore.
-          </p>
-          <div className="delete-confirm-actions">
-            <Button variant="ghost" onClick={() => setPendingDelete(null)} disabled={deleting}>
-              Cancel
-            </Button>
-            <Button variant="danger" onClick={confirmDelete} disabled={deleting}>
-              {deleting ? "Removing…" : "Remove"}
-            </Button>
-          </div>
-        </Modal>
+        <RemoveProjectModal
+          name={pendingDelete.name}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={async () => {
+            await removeProject(pendingDelete.path);
+            setPendingDelete(null);
+          }}
+        />
       )}
     </>
   );
