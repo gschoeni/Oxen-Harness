@@ -355,8 +355,67 @@ impl Agent {
         // Seed the cumulative count from the loaded transcript so a resumed
         // session's dashboard reflects prior usage instead of starting at 0.
         self.tokens_used = self.context_tokens();
+        self.rehydrate_file_state();
         self.invalidate_prefire();
         Ok(())
+    }
+
+    /// Re-teach the read-before-edit guard what this transcript already read.
+    ///
+    /// `FileState` lives on the tool registry and dies with the evicted
+    /// agent, but the reads it recorded are right there in the transcript —
+    /// and in the resumed model's context. Without this, a resume turns every
+    /// remembered file into a false "read it before editing" refusal (seen in
+    /// the wild: README.md read at seq 4 and 21, refused at seq 40). Each
+    /// file a *successful* fs-tool call touched is re-recorded against its
+    /// current on-disk content; staleness between the original read and now
+    /// is what `edit_file`'s exact-match already guards structurally.
+    fn rehydrate_file_state(&self) {
+        let (Some(files), Some(workspace)) = (self.tools.files(), self.tools.workspace()) else {
+            return;
+        };
+        // First pass: which tool_call ids errored — a refused edit must not
+        // count as having touched (or seen) anything.
+        let failed: std::collections::HashSet<&str> = self
+            .messages
+            .iter()
+            .filter(|m| m.role == "tool")
+            .filter(|m| {
+                m.content
+                    .as_ref()
+                    .map(|c| c.as_text().starts_with("tool error:"))
+                    .unwrap_or(false)
+            })
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        let mut touched: Vec<String> = Vec::new();
+        for message in &self.messages {
+            for call in message.tool_calls.iter().flatten() {
+                if !matches!(
+                    call.function.name.as_str(),
+                    harness_tools::fs::READ_FILE_TOOL
+                        | harness_tools::fs::EDIT_FILE_TOOL
+                        | harness_tools::fs::WRITE_FILE_TOOL
+                ) || failed.contains(call.id.as_str())
+                {
+                    continue;
+                }
+                let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+                else {
+                    continue;
+                };
+                if let Some(path) = args.get("path").and_then(|p| p.as_str()) {
+                    touched.push(path.to_string());
+                }
+            }
+        }
+        for path in touched {
+            // Resolve exactly as the tools would; skip anything that no
+            // longer resolves (deleted, or outside the workspace).
+            let Ok(abs) = workspace.resolve(&path) else { continue };
+            let Ok(contents) = std::fs::read_to_string(&abs) else { continue };
+            files.record(&abs, &contents);
+        }
     }
 
     /// The model the agent currently calls.
@@ -832,6 +891,63 @@ fn build_user_message(
 mod tests {
     use super::*;
     use crate::test_support::test_session;
+
+    /// A cold resume must re-teach the read-before-edit guard everything this
+    /// transcript already read — the reads are in the resumed model's context,
+    /// so refusing an edit "from memory" would be a false accusation. Seen in
+    /// the wild: README.md read twice, then write_file refused after a resume.
+    #[test]
+    fn resume_rehydrates_the_read_before_edit_guard_from_the_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("seen.txt"), "hello\n").unwrap();
+        std::fs::write(dir.path().join("unseen.txt"), "nope\n").unwrap();
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = store
+            .create_session(&harness_store::SessionMeta {
+                workspace: dir.path().display().to_string(),
+                model: "m".into(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // The transcript: a successful read of seen.txt, and a FAILED edit of
+        // unseen.txt (a refusal must not count as having seen the file).
+        let call = |id: &str, name: &str, path: &str| {
+            serde_json::json!({
+                "role": "assistant", "content": null,
+                "tool_calls": [{"id": id, "type": "function",
+                    "function": {"name": name, "arguments": format!("{{\"path\":\"{path}\"}}")}}]
+            })
+        };
+        store.append_message(&session, &call("c1", "read_file", "seen.txt")).unwrap();
+        store
+            .append_message(&session, &serde_json::json!({
+                "role": "tool", "tool_call_id": "c1", "content": "     1\thello"
+            }))
+            .unwrap();
+        store.append_message(&session, &call("c2", "edit_file", "unseen.txt")).unwrap();
+        store
+            .append_message(&session, &serde_json::json!({
+                "role": "tool", "tool_call_id": "c2",
+                "content": "tool error: invalid arguments: `read_file` unseen.txt before editing it"
+            }))
+            .unwrap();
+
+        // A fresh agent (fresh gated registry — the resume scenario).
+        let workspace = harness_tools::Workspace::new(dir.path()).unwrap();
+        let registry = ToolRegistry::default_for_workspace(workspace.clone());
+        let files = registry.files().unwrap().clone();
+        let client = OxenClient::new("http://127.0.0.1:1".to_string(), "k", "m");
+        let mut agent =
+            Agent::new(client, registry, store, session.clone(), AgentConfig::default()).unwrap();
+        agent.load_session(session).unwrap();
+
+        // The transcript's read survives the resume; the refused file doesn't.
+        let seen = workspace.resolve("seen.txt").unwrap();
+        assert!(files.guard("seen.txt", &seen, "hello\n").is_ok());
+        let unseen = workspace.resolve("unseen.txt").unwrap();
+        assert!(files.guard("unseen.txt", &unseen, "nope\n").is_err());
+    }
 
     #[test]
     fn user_message_is_plain_without_attachments_and_multimodal_with() {
