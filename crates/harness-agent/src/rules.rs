@@ -167,6 +167,108 @@ pub fn compile_all<'a>(
     (RuleSet::new(rules), skipped)
 }
 
+/// A rule the model wrote from a description, with the examples it used to
+/// convince itself the pattern works.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct DraftedRule {
+    pub name: String,
+    pub pattern: String,
+    pub scopes: Vec<String>,
+    pub message: String,
+    pub interrupt: bool,
+    /// Something the rule should catch — checked before the draft is offered.
+    pub example_match: String,
+    /// Something close to it that the rule should *not* catch, which is where
+    /// an over-broad pattern gives itself away.
+    pub example_miss: String,
+}
+
+/// What to tell a model asked to write a rule.
+///
+/// The hard parts to get across are the engine's limits (this is Rust's regex,
+/// not JavaScript's) and that a rule catches text rather than intent, which is
+/// why it must supply a counter-example: a pattern that also matches
+/// `example_miss` is over-broad, and we can tell without asking a human.
+pub const DRAFT_SYSTEM: &str = "\
+You write \"stream rules\" for a coding agent. A rule watches what the agent \
+writes and corrects it when a regular expression matches.
+
+Reply with ONLY a JSON object, no prose and no code fence:
+{
+  \"name\": \"kebab-case-id\",
+  \"pattern\": \"a regular expression\",
+  \"scopes\": [\"tool\"],
+  \"message\": \"what the agent should do instead\",
+  \"interrupt\": true,
+  \"example_match\": \"a line the pattern must catch\",
+  \"example_miss\": \"a similar line it must NOT catch\"
+}
+
+Rules for the pattern:
+- It is Rust `regex` syntax: NO lookahead/lookbehind ((?=...), (?!...)) and NO \
+backreferences. Those fail to compile and the rule silently never fires.
+- Escape regex metacharacters that are meant literally: \\.unwrap\\(\\), not .unwrap().
+- Prefer narrow and literal. A rule matches text, not intent, so a loose \
+pattern fires on innocent mentions and costs the user a wasted turn.
+
+Rules for the rest:
+- `scopes`: [\"tool\"] watches the arguments the agent writes into a tool call \
+(the earliest place a bad edit or command is visible — use this for anything \
+about changes). [\"text\"] watches its prose. Both is [\"tool\", \"text\"].
+- `interrupt`: true throws the in-flight reply away so the correction lands \
+before the work does — right when landing late means undoing something \
+(a force-push, an overwritten file). false lets the reply finish and corrects \
+afterwards — right for style notes.
+- `message`: say what to do INSTEAD, in one or two sentences, addressed to the \
+agent. \"Return a Result instead\" beats \"don't unwrap\".
+- `example_miss` must be genuinely similar to `example_match` — that is how \
+an over-broad pattern gives itself away.";
+
+impl DraftedRule {
+    /// Parse and check a drafted rule, returning why it can't be used rather
+    /// than a rule that would never fire.
+    ///
+    /// The model's own examples do the checking: the pattern must compile,
+    /// catch what it says it catches, and leave the near-miss alone. A draft
+    /// that fails here is worth another attempt, not a save.
+    pub fn from_model_output(raw: &str) -> Result<Self, String> {
+        let json = raw
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+        let start = json.find('{').ok_or("the model didn't return JSON")?;
+        let end = json.rfind('}').ok_or("the model didn't return JSON")?;
+        let drafted: Self = serde_json::from_str(&json[start..=end])
+            .map_err(|e| format!("the model's JSON didn't parse: {e}"))?;
+
+        if drafted.name.trim().is_empty() {
+            return Err("the draft has no name".into());
+        }
+        if drafted.message.trim().is_empty() {
+            return Err("the draft doesn't say what to do instead".into());
+        }
+        let compiled = Regex::new(&drafted.pattern).map_err(|e| {
+            let first = e.to_string().lines().next().unwrap_or_default().to_string();
+            format!("the pattern doesn't compile: {first}")
+        })?;
+        if !compiled.is_match(&drafted.example_match) {
+            return Err(format!(
+                "the pattern doesn't catch its own example ({:?})",
+                drafted.example_match
+            ));
+        }
+        if !drafted.example_miss.is_empty() && compiled.is_match(&drafted.example_miss) {
+            return Err(format!(
+                "the pattern is too broad — it also catches {:?}, which it shouldn't",
+                drafted.example_miss
+            ));
+        }
+        Ok(drafted)
+    }
+}
+
 /// What a pattern does against a sample, for an editor that wants to show it
 /// before the rule is ever live.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -478,6 +580,53 @@ mod tests {
         assert!(bad_scope.is_err(), "a typo'd scope must be reported");
 
         assert!(Rule::compile("r", "(unclosed", &[], "m", true, None).is_err());
+    }
+
+    #[test]
+    fn a_drafted_rule_is_accepted_when_its_own_examples_hold() {
+        let raw = r#"```json
+        {"name":"no-force-push","pattern":"push\\s+--force","scopes":["tool"],
+         "message":"Don't force-push.","interrupt":true,
+         "example_match":"git push --force origin main","example_miss":"git push origin main"}
+        ```"#;
+
+        let drafted = DraftedRule::from_model_output(raw).expect("a usable draft");
+
+        assert_eq!(drafted.name, "no-force-push");
+        assert!(drafted.interrupt);
+        assert_eq!(drafted.scopes, vec!["tool".to_string()]);
+    }
+
+    #[test]
+    fn a_draft_that_misses_its_own_example_is_rejected() {
+        let raw = r#"{"name":"n","pattern":"nevermatches","scopes":["tool"],"message":"m",
+                      "interrupt":true,"example_match":"git push --force","example_miss":"x"}"#;
+        let err = DraftedRule::from_model_output(raw).unwrap_err();
+        assert!(err.contains("doesn't catch its own example"), "got: {err}");
+    }
+
+    #[test]
+    fn an_over_broad_draft_gives_itself_away_on_the_counter_example() {
+        // The near-miss is what catches a pattern that matches everything.
+        let raw = r#"{"name":"n","pattern":"push","scopes":["tool"],"message":"m",
+                      "interrupt":true,"example_match":"git push --force",
+                      "example_miss":"git push origin main"}"#;
+        let err = DraftedRule::from_model_output(raw).unwrap_err();
+        assert!(err.contains("too broad"), "got: {err}");
+    }
+
+    #[test]
+    fn a_draft_using_lookahead_is_rejected_with_the_reason() {
+        let raw = r#"{"name":"n","pattern":"foo(?=bar)","scopes":["tool"],"message":"m",
+                      "interrupt":true,"example_match":"foobar","example_miss":"foo"}"#;
+        let err = DraftedRule::from_model_output(raw).unwrap_err();
+        assert!(err.contains("doesn't compile"), "got: {err}");
+    }
+
+    #[test]
+    fn junk_from_the_model_is_reported_rather_than_panicking() {
+        assert!(DraftedRule::from_model_output("I'd be happy to help!").is_err());
+        assert!(DraftedRule::from_model_output("{not json}").is_err());
     }
 
     #[test]

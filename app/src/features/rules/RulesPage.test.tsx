@@ -39,6 +39,24 @@ describe("RulesPage", () => {
     expect(saved.map((r) => r.name)).toEqual(["no-force-push"]);
   });
 
+  it("writes a rule from a description and shows it catching the example", async () => {
+    render(<RulesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /New rule/ }));
+
+    await userEvent.type(
+      screen.getByPlaceholderText(/don't let it delete/),
+      "don't delete migrations",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Write it/ }));
+
+    // The form fills in…
+    expect(await screen.findByDisplayValue("no-migration-deletes")).toBeTruthy();
+    expect(screen.getByDisplayValue("rm .*migrations/")).toBeTruthy();
+    // …and the model's own example becomes the sample, so the rule arrives
+    // demonstrating itself rather than asserting it works.
+    expect(screen.getByDisplayValue(/rm db\/migrations/)).toBeTruthy();
+  });
+
   it("says the tester is waiting for a pattern rather than claiming no match", async () => {
     render(<RulesPage />);
     await userEvent.click(await screen.findByRole("button", { name: /New rule/ }));

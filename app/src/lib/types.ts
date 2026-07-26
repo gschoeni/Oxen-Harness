@@ -505,6 +505,19 @@ export interface RuleSpec {
   enabled: boolean;
 }
 
+/** A rule the model wrote from a description, with the examples it used to
+ *  check its own pattern. Verified before it reaches the editor: it compiles,
+ *  catches `example_match`, and leaves `example_miss` alone. */
+export interface DraftedRule {
+  name: string;
+  pattern: string;
+  scopes: string[];
+  message: string;
+  interrupt: boolean;
+  example_match: string;
+  example_miss: string;
+}
+
 /** A rule worth offering, with the words needed to decide on it. */
 export interface RuleSuggestion {
   /** What it does, in plain language. */

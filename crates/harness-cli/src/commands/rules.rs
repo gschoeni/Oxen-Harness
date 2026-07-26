@@ -25,7 +25,7 @@ use crate::theme::Ui;
 /// Edits apply to the live session immediately (the agent's rule set is
 /// replaced in place) *and* persist, so a rule written mid-session starts
 /// watching the next reply rather than the next chat.
-pub(crate) fn handle_repl(
+pub(crate) async fn handle_repl(
     rest: Option<String>,
     agent: &mut Agent,
     ui: &Ui,
@@ -41,11 +41,12 @@ pub(crate) fn handle_repl(
         Some("rm") | Some("remove") | Some("delete") => remove(agent, ui, workspace_root, arg)?,
         Some("test") => test(ui, arg)?,
         Some("suggest") | Some("suggestions") => suggest(agent, ui, workspace_root, arg)?,
+        Some("draft") | Some("write") => draft(agent, ui, workspace_root, arg).await?,
         Some(other) => {
             println!("  {}", ui.dim(&format!("unknown: /rules {other}")));
             println!(
                 "  {}",
-                ui.dim("try /rules, /rules suggest, /rules add, /rules on|off <name>, /rules rm <name>, /rules test <name>")
+                ui.dim("try /rules, /rules suggest, /rules draft <what you want>, /rules add, /rules on|off <name>, /rules rm <name>, /rules test <name>")
             );
         }
     }
@@ -74,7 +75,7 @@ fn list(ui: &Ui, workspace_root: &Path) {
         );
         println!(
             "  {}",
-            ui.dim("see some worth having with /rules suggest, or write your own with /rules add")
+            ui.dim("see some worth having with /rules suggest, describe one with /rules draft <what you want>, or write your own with /rules add")
         );
         return;
     }
@@ -100,7 +101,7 @@ fn list(ui: &Ui, workspace_root: &Path) {
     }
     println!(
         "  {}",
-        ui.dim("/rules suggest · /rules add · /rules on|off <name> · /rules rm <name> · /rules test <name>")
+        ui.dim("/rules suggest · /rules draft <what you want> · /rules add · /rules on|off <name> · /rules rm <name> · /rules test <name>")
     );
 }
 
@@ -381,6 +382,108 @@ fn suggest(agent: &mut Agent, ui: &Ui, workspace_root: &Path, name: Option<&str>
         "  {}",
         ui.dim("add one with /rules suggest <name> · write your own with /rules add")
     );
+    Ok(())
+}
+
+/// `/rules draft <what you want>` — describe a rule and let the model write it.
+///
+/// The draft is checked before it's offered: it must compile, catch the
+/// example the model gave, and leave its near-miss alone. A draft that fails
+/// gets one retry with the reason fed back, because the second attempt is
+/// usually the fix and a third rarely is.
+async fn draft(
+    agent: &mut Agent,
+    ui: &Ui,
+    workspace_root: &Path,
+    want: Option<&str>,
+) -> Result<()> {
+    let Some(want) = want.filter(|w| !w.trim().is_empty()) else {
+        println!(
+            "  {}",
+            ui.dim("say what you want: /rules draft don't let it delete migrations")
+        );
+        return Ok(());
+    };
+
+    let spinner = crate::theme::Spinner::start(
+        ui,
+        vec!["Writing the rule".into(), "Checking its own example".into()],
+    );
+    let mut ask = want.to_string();
+    let mut drafted = None;
+    let mut last = String::new();
+    for attempt in 0..2 {
+        let raw = agent
+            .complete(harness_agent::rules::DRAFT_SYSTEM, &ask)
+            .await;
+        match raw {
+            Err(e) => {
+                last = e.to_string();
+                break;
+            }
+            Ok(raw) => match harness_agent::rules::DraftedRule::from_model_output(&raw) {
+                Ok(d) => {
+                    drafted = Some(d);
+                    break;
+                }
+                Err(why) => {
+                    last = why.clone();
+                    if attempt == 0 {
+                        ask = format!(
+                            "{want}\n\nYour previous attempt was unusable: {why}. Try again, \
+                             and check the pattern against your own examples first."
+                        );
+                    }
+                }
+            },
+        }
+    }
+    spinner.stop();
+
+    let Some(drafted) = drafted else {
+        println!("  {} {}", ui.red("couldn't write that one:"), ui.dim(&last));
+        return Ok(());
+    };
+
+    let spec = RuleSpec {
+        name: drafted.name.clone(),
+        pattern: drafted.pattern.clone(),
+        scope: drafted.scopes.clone(),
+        message: drafted.message.clone(),
+        interrupt: drafted.interrupt,
+        repeat: Some("once".into()),
+        enabled: true,
+    };
+    println!("  {}", ui.brown("here's the rule:"));
+    print_rule(ui, &spec);
+    // Its own example, run through the engine — the draft shows itself working
+    // rather than claiming to.
+    println!(
+        "  {}",
+        ui.dim(&format!("against {:?}:", drafted.example_match))
+    );
+    report_matches(ui, &spec.pattern, &drafted.example_match);
+
+    let keep = picker::select(
+        ui,
+        "Keep it?",
+        &format!("Save {} to your rules?", spec.name),
+        &[
+            Choice::new("save", "add it now — you can edit or turn it off later"),
+            Choice::new("discard", "throw it away"),
+        ],
+        false,
+    )?;
+    if keep.and_then(|k| k.first().cloned()).as_deref() != Some("save") {
+        println!("  {}", ui.dim("discarded"));
+        return Ok(());
+    }
+
+    let mut saved = rules::user_rules();
+    saved.rules.retain(|r| r.name != spec.name);
+    saved.rules.push(spec.clone());
+    persist(agent, ui, workspace_root, saved)?;
+    println!("  {} {}", ui.green("⚖ rule added:"), ui.cream(&spec.name));
     Ok(())
 }
 

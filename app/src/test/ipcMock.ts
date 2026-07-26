@@ -9,6 +9,7 @@ import type {
   CloudModel,
   CodeReviewRunResult,
   CompressionMode,
+  DraftedRule,
   ConnectionView,
   HardwareProfile,
   HfHit,
@@ -258,6 +259,15 @@ export const listRules = vi.fn(
   }),
 );
 export const saveRules = vi.fn(async (_rules: RuleSpec[]) => {});
+export const draftRule = vi.fn(async (_description: string): Promise<DraftedRule> => ({
+  name: "no-migration-deletes",
+  pattern: "rm .*migrations/",
+  scopes: ["tool"],
+  message: "Don't delete migrations — add a new one that reverses the change.",
+  interrupt: true,
+  example_match: "rm db/migrations/0007_add_users.sql",
+  example_miss: "cat db/migrations/0007_add_users.sql",
+}));
 export const listRuleSuggestions = vi.fn(
   async (): Promise<RuleSuggestion[]> => [
     {

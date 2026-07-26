@@ -491,6 +491,22 @@ same short library, each entry saying what it catches and why:
 **Settings → Rules** lists them with an Add button, and `/rules suggest` prints
 them with `/rules suggest <name>` to take one.
 
+**Or describe it and let the model write it.** Regexes are the part of this
+people bounce off, and the model is good at them — so **Settings → Rules → New
+rule** has a "describe it" box, and the terminal has `/rules draft <what you
+want>`:
+
+```
+/rules draft don't let it delete database migrations
+```
+
+The draft is checked before you see it: the model must supply an example its
+pattern catches *and* a near-miss it shouldn't, and the harness runs both
+through the real engine. A pattern that doesn't compile, misses its own
+example, or is broad enough to catch the near-miss gets one retry with the
+reason fed back, and is reported rather than saved. What lands in the editor
+arrives with its example already in the tester, showing itself firing.
+
 **Trying one before you trust it.** Both front ends run candidate patterns
 through the *agent's own* regex engine, not the editor's, so what you see is
 what will fire:

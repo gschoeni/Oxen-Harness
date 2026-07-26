@@ -15,6 +15,7 @@ import type {
   PermissionsView,
   CloudModel,
   ConnectionView,
+  DraftedRule,
   DownloadProgress,
   HardwareProfile,
   HfHit,
@@ -328,6 +329,12 @@ export const retryTurn = (session: string) => invoke<string>("retry_turn", { ses
 
 /** Stream rules for the active project: the user's own plus the repository's. */
 export const listRules = () => invoke<RuleSets>("list_rules");
+
+/** Write a rule from a description. The draft is checked before it returns —
+ *  it compiles and catches its own example — so a rule that would never fire
+ *  comes back as an error rather than as a rule. */
+export const draftRule = (description: string) =>
+  invoke<DraftedRule>("draft_rule", { description });
 
 /** Rules worth offering to someone who has none, described in plain language. */
 export const listRuleSuggestions = () => invoke<RuleSuggestion[]>("list_rule_suggestions");

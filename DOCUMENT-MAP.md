@@ -36,7 +36,7 @@ oxen-harness/
     harness-theme/           — Configurable themes (palette + voice): built-ins, TOML/JSON load/save with partial overrides, active-theme store.
     harness-agent/           — The agent (Ralph) loop (llm + tools + store); the fleet (run_fleet: N parallel detached subagents) + the model-facing spawn_agents tool (FleetSpawner/FleetSink);
                                  worktree.rs (per-lane git checkouts for editing fleets); config.rs ModelRoles (route work to cheaper models) + RetryPolicy fallback chains;
-                                 rules.rs (stream rules: regex corrections that watch the reply and fire only on a match). agent/ splits the loop: turn (the cycle), call (one model call), tools, compaction.
+                                 rules.rs (stream rules: regex corrections that watch the reply and fire only on a match, plus DRAFT_SYSTEM/DraftedRule — model-written rules, self-verified). agent/ splits the loop: turn (the cycle), call (one model call), tools, compaction.
     harness-protocol/        — The transport-neutral wire types every UI speaks: the tagged ProtocolEvent enum + command DTOs (serde + JSON Schema); tests/wire.rs is the spec.
     harness-host/            — The transport-agnostic host layer: SessionService (multi-session agent cache, turn driving, question/approval round-trips, model swaps, review/loop runners), generic over an EventSink; the Tauri app and HTTP server are both thin adapters over it.
     harness-server/          — The agent backend as a standalone HTTP server (axum): REST commands + an SSE protocol-event stream with Last-Event-ID replay; bearer-token auth; see PROTOCOL.md.

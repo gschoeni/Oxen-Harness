@@ -237,7 +237,9 @@ async fn handle_line(
         }
         Command::Skills => print_skills(ui, ctx.workspace_root),
         Command::Context => print_context(ui, ctx.workspace_root),
-        Command::Rules(rest) => commands::rules::handle_repl(rest, agent, ui, ctx.workspace_root)?,
+        Command::Rules(rest) => {
+            commands::rules::handle_repl(rest, agent, ui, ctx.workspace_root).await?
+        }
         Command::Auth(rest) => commands::auth::handle_repl(rest, agent, ui)?,
         Command::Compression(rest) => commands::compression::handle_repl(rest, agent, ui)?,
         Command::Permissions(rest) => commands::permissions::handle_repl(rest, agent, ui)?,

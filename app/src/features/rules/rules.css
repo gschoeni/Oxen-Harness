@@ -367,6 +367,27 @@
   color: var(--danger);
 }
 
+/* --- Describe it, and the model writes it --- */
+.rule-describe {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--separator);
+}
+.rule-describe-row {
+  display: flex;
+  gap: var(--space-2);
+}
+.rule-describe-row input {
+  flex: 1;
+  min-width: 0;
+}
+.rule-describe-error {
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
 /* Placeholders must never read as filled-in values. In a dark theme at the
    default opacity they did: the new-rule form looked complete, which made the
    tester's honest "no match" look like a bug. */

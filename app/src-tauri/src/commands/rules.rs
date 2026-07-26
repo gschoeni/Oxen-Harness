@@ -11,7 +11,10 @@
 //! pattern fine and the rule would then silently never fire. Every check goes
 //! through the same engine the agent runs.
 
+use harness_llm::types::ChatMessage;
+use harness_llm::ChatRequest;
 use tauri::State;
+use tokio_util::sync::CancellationToken;
 
 use crate::state::AppState;
 
@@ -49,6 +52,55 @@ pub(crate) async fn save_rules(rules: Vec<harness_runtime::rules::RuleSpec>) -> 
 pub(crate) async fn list_rule_suggestions(
 ) -> Result<Vec<harness_runtime::rules::Suggestion>, String> {
     Ok(harness_runtime::rules::suggestions())
+}
+
+/// Write a rule from a description, reusing the session's model and endpoint.
+///
+/// The draft is checked before it comes back — it must compile, catch the
+/// example the model says it catches, and leave the near-miss alone — so a
+/// rule that would never fire is retried rather than handed over. One retry,
+/// with the failure fed back, since the second attempt is usually the fix and
+/// a third rarely is.
+#[tauri::command]
+pub(crate) async fn draft_rule(
+    state: State<'_, AppState>,
+    description: String,
+) -> Result<harness_agent::rules::DraftedRule, String> {
+    let mut ask = description.clone();
+    let mut last = String::new();
+    for attempt in 0..2 {
+        let raw = complete_oneshot(&state, harness_agent::rules::DRAFT_SYSTEM, &ask).await?;
+        match harness_agent::rules::DraftedRule::from_model_output(&raw) {
+            Ok(drafted) => return Ok(drafted),
+            Err(why) => {
+                last = why.clone();
+                if attempt == 0 {
+                    ask = format!(
+                        "{description}\n\nYour previous attempt was unusable: {why}. \
+                         Try again, and check the pattern against your own examples first."
+                    );
+                }
+            }
+        }
+    }
+    Err(last)
+}
+
+async fn complete_oneshot(state: &AppState, system: &str, user: &str) -> Result<String, String> {
+    let (client, model, _) = state.client_for().await?;
+    let request = ChatRequest::new(
+        &model,
+        vec![
+            ChatMessage::system(system.to_string()),
+            ChatMessage::user(user.to_string()),
+        ],
+    )
+    .streaming(true);
+    let assembled = client
+        .stream_chat(&request, &CancellationToken::new(), |_| {})
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(assembled.content)
 }
 
 /// What `pattern` matches in `sample`, through the agent's own regex engine.

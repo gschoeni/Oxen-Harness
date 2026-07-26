@@ -417,7 +417,10 @@ Branch `harness-parity-improvements`; the study and full roadmap are in
   in the README under "Extending the agent". A shared suggestion library
   (`harness_runtime::rules::suggestions`) backs both the desktop gallery and
   `/rules suggest`, so a new user starts from explained examples rather than a
-  blank page and a regex field.
+  blank page and a regex field. Rules can also be *drafted* by the model from a
+  plain-language description (Settings → Rules, or `/rules draft`), with the
+  draft verified against the model's own example and counter-example before it
+  is offered.
 
 ## What's left / next
 
