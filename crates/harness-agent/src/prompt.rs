@@ -15,6 +15,12 @@ pub struct OptionalTools {
     pub web_search: bool,
     pub canvas: bool,
     pub open_file: bool,
+    /// `gh` is registered by default but the user can disable it (or lack the
+    /// CLI); the prompt must not order the model to verify shipping through a
+    /// tool the registry would reject.
+    pub gh: bool,
+    /// `update_trail` — same: registered by default, disableable in Settings.
+    pub trail: bool,
 }
 
 impl OptionalTools {
@@ -25,6 +31,20 @@ impl OptionalTools {
             web_search: tools.get(harness_tools::WEB_SEARCH_TOOL).is_some(),
             canvas: tools.get(harness_tools::CANVAS_TOOL).is_some(),
             open_file: tools.get(harness_tools::OPEN_FILE_TOOL).is_some(),
+            gh: tools.get(harness_tools::GH_TOOL).is_some(),
+            trail: tools.get(harness_tools::TRAIL_TOOL).is_some(),
+        }
+    }
+
+    /// The default registry's optional set: `gh` and `update_trail` are
+    /// registered unless the user disables them, the host-injected tools are
+    /// not. Used where a prompt is built without a finished registry in hand
+    /// ([`crate::AgentConfig::default`], [`default_system_prompt`]).
+    pub fn default_registry() -> Self {
+        Self {
+            gh: true,
+            trail: true,
+            ..Self::default()
         }
     }
 }
@@ -36,7 +56,7 @@ impl OptionalTools {
 pub fn default_system_prompt(web_search: bool) -> String {
     system_prompt_with(OptionalTools {
         web_search,
-        ..OptionalTools::default()
+        ..OptionalTools::default_registry()
     })
 }
 
@@ -101,6 +121,41 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
     } else {
         ""
     };
+    let gh_tool = if tools.gh { ", `gh` (GitHub PRs)" } else { "" };
+    let trail_tool = if tools.trail {
+        ", `update_trail` (chart the session's journey)"
+    } else {
+        ""
+    };
+    // The trail guideline names the shipping stages the model can actually
+    // verify: with `gh` the review/merge state is checked; without it, only
+    // the push is verifiable and the rest is explicitly the user's to confirm.
+    let trail_guideline = match (tools.trail, tools.gh) {
+        (false, _) => "",
+        (true, true) => {
+            "\n- For any session doing real work, call `update_trail` BEFORE starting \
+             the work loop: title the thread and chart its macro stages (standard: \
+             define, plan, implement, review; code work ends with pushed, \
+             pr-reviewed, merged). Advance stages as you pass them, and re-chart \
+             the route whenever the user redirects you or you change approach — \
+             the trail must always tell the truth about where this thread stands. \
+             The shipping stages are verified, never assumed: `git` push to close \
+             \"pushed\", `gh` pr_view to confirm review and merge state. The \
+             user's board gates closing the thread on these — they are the open \
+             loops you exist to close."
+        }
+        (true, false) => {
+            "\n- For any session doing real work, call `update_trail` BEFORE starting \
+             the work loop: title the thread and chart its macro stages (standard: \
+             define, plan, implement, review; code work ends with pushed, \
+             pr-reviewed, merged). Advance stages as you pass them, and re-chart \
+             the route whenever the user redirects you or you change approach — \
+             the trail must always tell the truth about where this thread stands. \
+             Close \"pushed\" only after a verified `git` push; pr-reviewed and \
+             merged can't be auto-verified in this session, so leave them for the \
+             user to confirm rather than marking them done on faith."
+        }
+    };
     let open_file_guideline = if tools.open_file {
         "\n- After creating or substantially rewriting a project file the user \
          will want to look at — or when walking them through one — call \
@@ -115,7 +170,7 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
          project directory. Available tools: `find_files` (locate files by glob), \
          `search_files` (regex content search), `read_file` (line-numbered, supports \
          offset/limit), `write_file`, `edit_file` (exact-string patch), `run_shell`, \
-         `git`, `update_plan` (maintain a task checklist), \
+         `git`{gh_tool}, `update_plan` (maintain a task checklist){trail_tool}, \
          `ask_user_question` (interview the user){web_tool}{canvas_tool}{open_file_tool}.\n\n\
          Guidelines:\n\
          - Prefer the dedicated tools over shell equivalents: use `find_files` not \
@@ -132,7 +187,7 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
          - Think before you code. When a request is ambiguous, name the assumption \
            you're acting on and the trade-off you're making rather than filling the gap \
            with plausible-looking code. For anything multi-step, state the plan and a \
-           concrete success criterion first so a wrong approach is caught early.\n\
+           concrete success criterion first so a wrong approach is caught early.{trail_guideline}\n\
          - Default to working WITHOUT `update_plan`. Reach for it only on large, \
            multi-phase work (roughly 5+ substantial steps spanning clearly \
            separate pieces) or when the user explicitly asks for a plan/todo list \
@@ -271,6 +326,7 @@ mod tests {
                         web_search,
                         canvas,
                         open_file,
+                        ..OptionalTools::default()
                     };
                     let prompt = system_prompt_with(tools);
                     assert!(prompt.contains(needle), "guardrail missing for {tools:?}");
@@ -293,16 +349,54 @@ mod tests {
         assert!(!bare.contains("web_search"));
         assert!(!bare.contains("`canvas`"));
         assert!(!bare.contains("`open_file`"));
+        assert!(!bare.contains("`gh`"));
+        assert!(!bare.contains("update_trail"));
 
         let full = system_prompt_with(OptionalTools {
             web_search: true,
             canvas: true,
             open_file: true,
+            gh: true,
+            trail: true,
         });
         assert!(full.contains("`web_search` (Brave web search)"));
         assert!(full.contains("`canvas` (show a document in a side panel)"));
         assert!(full.contains("`open_file` (show a project file in the user's file viewer)"));
         assert!(full.contains("`open_file` to put it in their file viewer"));
+        assert!(full.contains("`gh` (GitHub PRs)"));
+        assert!(full.contains("`update_trail` (chart the session's journey)"));
+    }
+
+    /// The trail guideline must only order the model to verify through tools
+    /// it actually has: with `gh` disabled the prompt neither lists the tool
+    /// nor demands pr_view checks; with `update_trail` disabled the whole
+    /// trail mandate disappears.
+    #[test]
+    fn trail_guideline_adapts_to_the_registered_tools() {
+        let both = system_prompt_with(OptionalTools {
+            gh: true,
+            trail: true,
+            ..OptionalTools::default()
+        });
+        assert!(both.contains("`gh` pr_view to confirm review and merge state"));
+
+        let trail_only = system_prompt_with(OptionalTools {
+            trail: true,
+            ..OptionalTools::default()
+        });
+        assert!(trail_only.contains("update_trail"));
+        assert!(!trail_only.contains("`gh`"), "must not order an unregistered tool");
+        assert!(trail_only.contains("leave them for the user to confirm"));
+
+        let neither = system_prompt_with(OptionalTools::default());
+        assert!(!neither.contains("update_trail"));
+        assert!(!neither.contains("pr-reviewed"));
+
+        // The convenience default advertises the default registry (gh + trail
+        // are registered unless the user disables them).
+        let default = default_system_prompt(false);
+        assert!(default.contains("`gh` (GitHub PRs)"));
+        assert!(default.contains("update_trail"));
     }
 
     #[test]
