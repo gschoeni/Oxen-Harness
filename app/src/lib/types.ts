@@ -503,6 +503,11 @@ export interface RuleSpec {
   /** "once" (default) or "after:<n>" rounds. */
   repeat: string | null;
   enabled: boolean;
+  /** What was asked for, when the model wrote this rule — restored into the
+   *  editor's conversation so reopening continues it. */
+  prompt?: string | null;
+  /** A line this rule is meant to catch, which seeds the editor's tester. */
+  sample?: string | null;
 }
 
 /** A rule the model wrote from a description, with the examples it used to
@@ -533,6 +538,9 @@ export interface DraftOutcome {
   rule: DraftedRule;
   /** How many attempts it took — a retry is visible rather than hidden lag. */
   attempts: number;
+  /** Every ask so far as one line, saved with the rule so reopening it
+   *  restores the conversation's starting point. */
+  prompt: string;
 }
 
 /** `rules://draft` payload: a token as the model writes, or a note that its

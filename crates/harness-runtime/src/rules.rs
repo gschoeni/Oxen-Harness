@@ -57,6 +57,17 @@ pub struct RuleSpec {
     /// Set false to keep a rule in the file without it firing.
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// What the user asked for, when the model wrote this rule. Kept so
+    /// reopening it restores the conversation's starting point instead of an
+    /// empty box — the description is usually a better record of *intent*
+    /// than the regex it produced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// A line this rule is meant to catch, used to seed the editor's tester.
+    /// Without it, reopening a rule about `kill` offers a sample about
+    /// `.unwrap()` and reports "no match", which reads as a broken rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<String>,
 }
 
 fn yes() -> bool {
@@ -148,7 +159,11 @@ struct Draft {
     name: &'static str,
     title: &'static str,
     why: &'static str,
+    /// What it catches, in prose, for the card.
     catches: &'static str,
+    /// A real line the pattern matches, which becomes the tester's sample so
+    /// an added rule can demonstrate itself immediately.
+    example: &'static str,
     pattern: &'static str,
     interrupt: bool,
     message: &'static str,
@@ -172,6 +187,8 @@ impl From<Draft> for Suggestion {
                 interrupt: d.interrupt,
                 repeat: Some("once".into()),
                 enabled: true,
+                prompt: None,
+                sample: Some(d.example.into()),
             },
         }
     }
@@ -190,6 +207,7 @@ pub fn suggestions() -> Vec<Suggestion> {
             title: "Don't force-push",
             why: "Rewriting shared history is the one git mistake that costs other people their work.",
             catches: "git push --force, push -f",
+            example: "git push --force origin main",
             pattern: r"push\s+--force|push\s+-f\b",
             interrupt: true,
             message: "Don't force-push. If history needs fixing, say what you'd do and let me decide.",
@@ -200,6 +218,7 @@ pub fn suggestions() -> Vec<Suggestion> {
             title: "Protect generated files",
             why: "Edits to generated code vanish on the next build, and the real fix is upstream.",
             catches: "paths under generated/",
+            example: "write_file generated/api_client.ts",
             pattern: r"generated/|\.generated\.",
             interrupt: true,
             message: "Files under generated/ are produced by the build. Change the generator or its input instead, then re-run it.",
@@ -210,6 +229,7 @@ pub fn suggestions() -> Vec<Suggestion> {
             title: "Keep credentials out of the code",
             why: "A key written into a file is a key in your git history, whether or not it ships.",
             catches: "api_key = \"…\", password: \"…\"",
+            example: r#"API_KEY = "sk-live-9f2a7c4e18bd""#,
             pattern: r#"(?i)(api[_-]?key|secret|password|token)\s*[:=]\s*["'][^"']{12,}"#,
             interrupt: true,
             message: "Don't write credentials into files. Read them from the environment, and tell me which variable to set.",
@@ -220,6 +240,7 @@ pub fn suggestions() -> Vec<Suggestion> {
             title: "Ask before adding a dependency",
             why: "A dependency is permanent code you don't control — worth one sentence of justification.",
             catches: "cargo add, npm install, pip install",
+            example: "cargo add serde_yaml",
             pattern: r"cargo add |npm install |pnpm add |pip install ",
             interrupt: false,
             message: "Before adding a dependency, check whether the project or its standard library already covers it. If you still want it, say what it buys us.",
@@ -230,6 +251,7 @@ pub fn suggestions() -> Vec<Suggestion> {
             title: "No .unwrap() outside tests",
             why: "An unwrap is a panic waiting for the one input you didn't think of.",
             catches: ".unwrap() anywhere in an edit",
+            example: r#"let port = config.get("port").unwrap();"#,
             pattern: r"\.unwrap\(\)",
             interrupt: true,
             message: "This project doesn't use `.unwrap()` outside tests — return a Result, or use `expect` with a reason that names the invariant you're relying on.",
@@ -240,6 +262,7 @@ pub fn suggestions() -> Vec<Suggestion> {
             title: "Don't silence the linter",
             why: "An allow attribute hides the warning without answering it, and outlives whoever added it.",
             catches: "#[allow(...)], #![allow(...)]",
+            example: "#[allow(dead_code)]",
             pattern: r"#!?\[allow\(",
             interrupt: false,
             message: "Don't silence a lint with an allow attribute. Fix what it's pointing at, or explain here why the lint is wrong.",
@@ -250,6 +273,7 @@ pub fn suggestions() -> Vec<Suggestion> {
             title: "No `any`",
             why: "One `any` disables checking for everything downstream of it.",
             catches: ": any, as any",
+            example: "const payload: any = await res.json();",
             pattern: r":\s*any\b|as\s+any\b",
             interrupt: false,
             message: "Avoid `any` — give the real type, or `unknown` plus a narrowing check if you genuinely don't know it.",
@@ -260,6 +284,7 @@ pub fn suggestions() -> Vec<Suggestion> {
             title: "No console.log left behind",
             why: "Debug output that ships is noise in someone else's terminal.",
             catches: "console.log(",
+            example: r#"console.log("here", value);"#,
             pattern: r"console\.log\(",
             interrupt: false,
             message: "Remove the console.log before you finish, or switch it to the project's logger if it's worth keeping.",
@@ -270,6 +295,7 @@ pub fn suggestions() -> Vec<Suggestion> {
             title: "No bare except",
             why: "A bare except swallows KeyboardInterrupt and every bug you haven't met yet.",
             catches: "except: with no exception type",
+            example: "except:",
             pattern: r"except\s*:",
             interrupt: false,
             message: "Catch the exception you mean — `except ValueError:` — rather than a bare `except:`.",
@@ -347,6 +373,25 @@ mod tests {
     }
 
     #[test]
+    fn every_suggestion_carries_a_sample_its_pattern_catches() {
+        // The sample seeds the editor's tester. One that doesn't match would
+        // greet you with "no match" on a rule you just added, which reads as a
+        // broken rule rather than a mis-chosen example.
+        for s in suggestions() {
+            let sample = s
+                .rule
+                .sample
+                .as_deref()
+                .unwrap_or_else(|| panic!("{} has no sample", s.rule.name));
+            assert!(
+                regex::Regex::new(&s.rule.pattern).unwrap().is_match(sample),
+                "{}'s sample `{sample}` doesn't match its own pattern",
+                s.rule.name
+            );
+        }
+    }
+
+    #[test]
     fn suggested_patterns_catch_what_they_advertise() {
         let hits = |name: &str, sample: &str| {
             let s = suggestions()
@@ -390,6 +435,8 @@ mod tests {
                     interrupt: true,
                     repeat: None,
                     enabled: true,
+                    prompt: None,
+                    sample: None,
                 }],
             })
             .unwrap();
@@ -422,6 +469,8 @@ mod tests {
                     interrupt: true,
                     repeat: None,
                     enabled: true,
+                    prompt: None,
+                    sample: None,
                 }],
             })
             .unwrap();

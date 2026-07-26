@@ -14,6 +14,11 @@ import { checkRulePattern } from "../../lib/ipc";
 import type { PatternCheck, RuleSpec } from "../../lib/types";
 import { RuleChat } from "./RuleChat";
 
+/** What the tester holds before anyone has chosen a sample. Recognisably an
+ *  example rather than your code, so an unrelated "no match" doesn't read as a
+ *  broken rule. */
+const PLACEHOLDER_SAMPLE = 'let value = config.get("port").unwrap();';
+
 /** The editor, and the tester that makes an unfired rule legible. */
 export function RuleEditor({
   draft,
@@ -30,10 +35,17 @@ export function RuleEditor({
   onCancel: () => void;
   onDelete?: () => void;
 }) {
-  const [sample, setSample] = useState(
-    "let value = config.get(\"port\").unwrap();",
-  );
+  // The rule's own sample when it has one — a rule about `kill` should not
+  // open with a sample about `.unwrap()` and report "no match", which reads as
+  // a broken rule rather than an irrelevant example.
+  const [sample, setSample] = useState(draft.sample || PLACEHOLDER_SAMPLE);
+  // Only a sample someone chose is worth saving; the placeholder isn't, or
+  // every hand-written rule would come back paired with an unrelated line.
+  const [chosen, setChosen] = useState(Boolean(draft.sample));
   const [check, setCheck] = useState<PatternCheck | null>(null);
+  // The rule as it was when the editor opened, which is what the conversation
+  // resumes from — the live draft changes under it as the model works.
+  const original = useRef(draft);
   // Guards against an out-of-order response overwriting a newer check.
   const latest = useRef(0);
 
@@ -80,11 +92,15 @@ export function RuleEditor({
   return (
     <div className={`rule-row editing ${draft.interrupt ? "interrupts" : "reminds"}`}>
       <RuleChat
+        existing={original.current}
         onProposal={({ sample: proposed, ...fields }) => {
-          setDraft({ ...draft, ...fields });
+          setDraft({ ...draft, ...fields, sample: proposed ?? draft.sample });
           // The model's example becomes the tester's sample, so a proposed
           // rule shows itself catching something the moment it lands.
-          if (proposed) setSample(proposed);
+          if (proposed) {
+            setSample(proposed);
+            setChosen(true);
+          }
         }}
       />
       <div className="rule-fields">
@@ -167,7 +183,15 @@ export function RuleEditor({
         </div>
       </div>
 
-      <Tester sample={sample} setSample={setSample} check={check} draft={draft} />
+      <Tester
+        sample={sample}
+        setSample={(s) => {
+          setSample(s);
+          setChosen(true);
+        }}
+        check={check}
+        draft={draft}
+      />
 
       <div className="rule-actions">
         {onDelete && (
@@ -181,7 +205,13 @@ export function RuleEditor({
             Cancel
           </Button>
           <Button
-            onClick={() => onSave({ ...draft, name: draft.name.trim() })}
+            onClick={() =>
+              onSave({
+                ...draft,
+                name: draft.name.trim(),
+                sample: chosen ? sample : draft.sample,
+              })
+            }
             disabled={problem !== null}
           >
             Save rule
@@ -214,6 +244,11 @@ function Tester({
             reads as a broken tester rather than an unfinished rule. */}
         {!draft.when ? (
           <span className="rule-verdict">add a pattern above to see what it catches</span>
+        ) : check?.error ? (
+          // Nothing was evaluated, so "no match" would be a verdict on a run
+          // that never happened — the same lie as reporting it on an empty
+          // pattern.
+          <span className="rule-verdict invalid">that pattern doesn't compile — nothing runs</span>
         ) : hits.length > 0 ? (
           <span className="rule-verdict hit">
             {hits.length === 1 ? "1 match" : `${hits.length} matches`} — this rule would fire

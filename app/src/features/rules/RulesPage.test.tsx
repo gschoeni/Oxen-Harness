@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -80,6 +80,79 @@ describe("RulesPage", () => {
     expect(request).toBe("make it stricter");
     expect(history).toHaveLength(1);
     expect(history[0].asked).toBe("don't delete migrations");
+  });
+
+  it("saves the conversation and the example with the rule it produced", async () => {
+    render(<RulesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /New rule/ }));
+    await userEvent.type(
+      screen.getByPlaceholderText(/don't remove files/),
+      "don't delete migrations",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText(/Watching for rm/);
+    // Saving waits on the tester's verdict — the page won't store a rule it
+    // hasn't seen the engine accept.
+    const save = screen.getByRole("button", { name: "Save rule" }) as HTMLButtonElement;
+    await waitFor(() => expect(save.disabled).toBe(false));
+
+    await userEvent.click(save);
+
+    const saved = ipc.saveRules.mock.calls[0]?.[0]?.[0];
+    expect(saved?.prompt).toBe("don't delete migrations");
+    expect(saved?.sample).toBe("rm db/migrations/0007_add_users.sql");
+  });
+
+  it("picks the conversation back up when a drafted rule is reopened", async () => {
+    ipc.listRules.mockResolvedValue({
+      user: [
+        rule({
+          name: "no-migration-deletes",
+          when: "rm .*migrations/",
+          prompt: "don't delete migrations",
+          sample: "rm db/migrations/0007_add_users.sql",
+        }),
+      ],
+      project: [],
+      project_path: ".oxen-harness/rules.json",
+    });
+
+    render(<RulesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /Edit no-migration-deletes/ }));
+
+    // What you asked for is back, and the tester holds a line this rule is
+    // actually about — not an unrelated example reporting "no match".
+    expect(await screen.findByText("don't delete migrations")).toBeTruthy();
+    expect(screen.getByDisplayValue("rm db/migrations/0007_add_users.sql")).toBeTruthy();
+    expect(screen.queryByDisplayValue(/config.get/)).toBeNull();
+
+    // And a follow-up revises the saved rule rather than writing a stranger.
+    await userEvent.click(screen.getByRole("button", { name: "make it stricter" }));
+    const [, history] = ipc.draftRule.mock.calls[0]!;
+    expect(history[0].asked).toBe("don't delete migrations");
+    expect(history[0].rule).toContain("rm .*migrations/");
+  });
+
+  it("resumes a hand-written rule from the rule itself, having no prompt to show", async () => {
+    ipc.listRules.mockResolvedValue({
+      user: [rule()],
+      project: [],
+      project_path: ".oxen-harness/rules.json",
+    });
+
+    render(<RulesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /Edit no-unwrap/ }));
+
+    // Nothing was asked for, so nothing is put in your mouth — but the rule
+    // still goes back as history, which is what makes a nudge revise it.
+    expect(document.querySelector(".rule-msg.earlier")).toBeNull();
+    await userEvent.type(
+      screen.getByPlaceholderText(/don't remove files/),
+      "also catch expect",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    const [, history] = ipc.draftRule.mock.calls[0]!;
+    expect(history[0].rule).toContain(".unwrap()");
   });
 
   it("says the tester is waiting for a pattern rather than claiming no match", async () => {

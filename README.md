@@ -446,7 +446,9 @@ streams, and speaks only when its pattern appears.
       "scope": ["tool"],            // "tool" (tool-call arguments), "text" (prose), or both
       "message": "This project doesn't unwrap outside tests — return a Result.",
       "interrupt": true,            // throw the reply away and ask again
-      "repeat": "once"              // or "after:5" rounds
+      "repeat": "once",             // or "after:5" rounds
+      "prompt": "don't unwrap",     // what was asked for, if the model wrote it
+      "sample": "x.unwrap()"        // a line it should catch, for the tester
     }
   ]
 }
@@ -508,6 +510,12 @@ revises the rule on the table rather than starting over. The form and the
 tester stay visible throughout, so the conversation is about something you can
 see and edit yourself.
 
+Reopening a rule picks the conversation back up: what you asked for is in the
+thread, the rule you saved is the card under it, and the tester holds a line
+this rule is actually about — so a follow-up revises what's on disk instead of
+writing a stranger. That's what `prompt` and `sample` in the file are for; both
+are optional, and a rule written by hand still resumes from the rule itself.
+
 Every draft is checked before you see it: the model must supply an example its
 pattern catches *and* a near-miss it shouldn't, and the harness runs both
 through the real engine. A pattern that doesn't compile, misses its own
@@ -523,7 +531,7 @@ what will fire:
   and what happens to the reply.
 - **Terminal** — `/rules` lists what's in force, `/rules add` walks through
   writing one (and offers to test it), `/rules test <name>` runs a saved rule
-  against text you paste, `/rules on|off <name>` and `/rules rm <name>` do the
+  against text you paste (pre-filled with the sample it was written against), `/rules on|off <name>` and `/rules rm <name>` do the
   rest. Edits apply to the running session immediately.
 
 Project rules travel with the repository and override a rule of yours with the

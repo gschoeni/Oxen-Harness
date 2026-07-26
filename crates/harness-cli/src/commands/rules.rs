@@ -237,7 +237,7 @@ fn add(agent: &mut Agent, ui: &Ui, workspace_root: &Path) -> Result<()> {
         Some("interrupt") | None
     );
 
-    let spec = RuleSpec {
+    let mut spec = RuleSpec {
         name,
         pattern,
         scope,
@@ -245,6 +245,8 @@ fn add(agent: &mut Agent, ui: &Ui, workspace_root: &Path) -> Result<()> {
         interrupt,
         repeat: Some("once".into()),
         enabled: true,
+        prompt: None,
+        sample: None,
     };
 
     // Offer a dry run before it goes live — the terminal's version of the
@@ -258,6 +260,10 @@ fn add(agent: &mut Agent, ui: &Ui, workspace_root: &Path) -> Result<()> {
     )? {
         if !sample.trim().is_empty() {
             report_matches(ui, &spec.pattern, &sample);
+            // Kept with the rule: it's the one line you already know this
+            // pattern is about, and it seeds the tester next time either
+            // surface opens the rule.
+            spec.sample = Some(sample);
         }
     }
 
@@ -421,6 +427,10 @@ async fn draft(
             interrupt: drafted.interrupt,
             repeat: Some("once".into()),
             enabled: true,
+            // Saved with the rule so reopening it restores the conversation's
+            // starting point and a sample this pattern is known to catch.
+            prompt: Some(harness_agent::rules::combined_request(&history, &request)),
+            sample: Some(drafted.example_match.clone()),
         };
         println!();
         print_rule(ui, &spec);
@@ -530,11 +540,13 @@ fn test(ui: &Ui, name: Option<&str>) -> Result<()> {
         println!("  {}", ui.dim(&format!("no rule named {name}")));
         return Ok(());
     };
+    // Pre-filled with the sample the rule was written against, so testing it
+    // starts from a line this pattern is about rather than an empty prompt.
     let Some(sample) = ask(
         ui,
         "Try it",
         &format!("Paste something to test {name} against"),
-        "",
+        rule.sample.as_deref().unwrap_or(""),
         &[format!("watching for {}", rule.pattern)],
     )?
     else {

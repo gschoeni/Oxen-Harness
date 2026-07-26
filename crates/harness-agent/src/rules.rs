@@ -242,6 +242,22 @@ pub fn draft_prompt(request: &str, history: &[DraftTurn]) -> String {
     prompt
 }
 
+/// The conversation's asks as one line, saved with the rule it produced.
+///
+/// Reopening a rule should restore what was asked for, and the *last* message
+/// is usually a correction — "make it stricter" on its own says nothing about
+/// what the rule is for. So the whole thread is kept, in order, as a single
+/// request that would produce roughly the same rule if sent again.
+pub fn combined_request(history: &[DraftTurn], latest: &str) -> String {
+    history
+        .iter()
+        .map(|turn| turn.asked.trim())
+        .chain(std::iter::once(latest.trim()))
+        .filter(|ask| !ask.is_empty())
+        .collect::<Vec<_>>()
+        .join(", then ")
+}
+
 /// What to tell a model asked to write a rule.
 ///
 /// The hard parts to get across are the engine's limits (this is Rust's regex,
@@ -694,6 +710,29 @@ mod tests {
         assert!(prompt.contains("Revise the rule above"));
         // With no history it's just the request.
         assert_eq!(draft_prompt("x", &[]), "x");
+    }
+
+    #[test]
+    fn a_saved_prompt_keeps_the_whole_conversation() {
+        let history = [
+            DraftTurn {
+                asked: "  don't delete migrations  ".into(),
+                said: String::new(),
+                rule: None,
+            },
+            // A blank ask (the one-click nudges send text, but a stray empty
+            // turn shouldn't leave ", then , then " in the saved prompt).
+            DraftTurn {
+                asked: "  ".into(),
+                said: String::new(),
+                rule: None,
+            },
+        ];
+        assert_eq!(
+            combined_request(&history, "make it stricter"),
+            "don't delete migrations, then make it stricter"
+        );
+        assert_eq!(combined_request(&[], "just this"), "just this");
     }
 
     #[test]

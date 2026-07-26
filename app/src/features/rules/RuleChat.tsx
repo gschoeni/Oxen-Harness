@@ -26,12 +26,57 @@ interface Proposal {
   scopes: string[];
   catches: string;
   ignores: string;
+  /** True when this is the rule already on disk rather than a fresh proposal. */
+  saved?: boolean;
+}
+
+/** Rebuild the conversation for a rule being reopened.
+ *
+ *  Two things come back: the ask that produced it, shown in the thread, and the
+ *  rule itself as conversation history — so the first follow-up revises what's
+ *  saved instead of writing something unrelated. A rule written by hand has no
+ *  ask, but still gets the history, which is what makes "make it stricter" work
+ *  on a rule the model never saw. */
+function resume(rule?: RuleSpec): { messages: Message[]; history: DraftTurn[] } {
+  if (!rule?.when) return { messages: [], history: [] };
+  const proposal: Proposal = {
+    name: rule.name,
+    pattern: rule.when,
+    interrupt: rule.interrupt,
+    scopes: rule.scope,
+    catches: rule.sample ?? "",
+    ignores: "",
+    saved: true,
+  };
+  const asked = rule.prompt?.trim();
+  return {
+    messages: asked ? [{ kind: "earlier", text: asked, proposal }] : [],
+    history: [
+      {
+        asked: asked || "Write this rule.",
+        said: "",
+        rule: JSON.stringify({
+          name: rule.name,
+          pattern: rule.when,
+          scopes: rule.scope,
+          message: rule.message,
+          interrupt: rule.interrupt,
+          example_match: rule.sample ?? "",
+          example_miss: "",
+        }),
+      },
+    ],
+  };
 }
 
 type Message =
   | { kind: "you"; text: string }
   | { kind: "model"; text: string; proposal?: Proposal; retry?: string }
-  | { kind: "failed"; text: string };
+  | { kind: "failed"; text: string }
+  // A conversation restored from a saved rule: the ask is the user's own, the
+  // card is what's on disk. Neither is put in the model's mouth — its note
+  // isn't saved, so it isn't reconstructed.
+  | { kind: "earlier"; text: string; proposal: Proposal };
 
 /** Follow-ups worth one click, offered once there's a rule to revise. */
 const NUDGES = [
@@ -42,16 +87,23 @@ const NUDGES = [
 ];
 
 export function RuleChat({
+  existing,
   onProposal,
 }: {
+  /** The rule being edited, so reopening one resumes its conversation rather
+   *  than starting a stranger's. */
+  existing?: RuleSpec;
   /** Applies the model's proposal to the fields below. */
   onProposal: (fields: Partial<RuleSpec> & { sample?: string }) => void;
 }) {
-  const [messages, setMessages] = useState<Message[]>([]);
+  // Seeded once per mount: the editor is keyed by rule, so opening a different
+  // one brings its own conversation.
+  const [resumed] = useState(() => resume(existing));
+  const [messages, setMessages] = useState<Message[]>(resumed.messages);
   const [want, setWant] = useState("");
   const [streaming, setStreaming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const history = useRef<DraftTurn[]>([]);
+  const history = useRef<DraftTurn[]>(resumed.history);
   const thread = useRef<HTMLDivElement>(null);
 
   // Tokens arrive on a channel while the command is in flight; the partial
@@ -109,6 +161,8 @@ export function RuleChat({
         message: out.rule.message,
         interrupt: out.rule.interrupt,
         sample: out.rule.example_match,
+        // Saved with the rule, so this conversation is here again next time.
+        prompt: out.prompt,
       });
     } catch (e) {
       setMessages((m) => [...m, { kind: "failed", text: String(e) }]);
@@ -190,6 +244,20 @@ export function RuleChat({
 }
 
 function Bubble({ message }: { message: Message }) {
+  if (message.kind === "earlier") {
+    return (
+      <>
+        <div className="rule-msg you earlier">
+          <span className="rule-msg-who">you · earlier</span>
+          <p className="rule-msg-text">{message.text}</p>
+        </div>
+        <div className="rule-msg saved">
+          <span className="rule-msg-who">saved</span>
+          <ProposalCard proposal={message.proposal} />
+        </div>
+      </>
+    );
+  }
   if (message.kind === "you") {
     return (
       <div className="rule-msg you">
@@ -226,16 +294,31 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
       {/* Shown, not claimed: these two ran through the same engine the rule
           will run on. */}
       <div className="rule-proposal-checks">
-        <span className="hit">
-          <Check size={11} /> catches <code>{proposal.catches}</code>
-        </span>
+        {/* A rule written by hand has no example, so there is nothing to show
+            catching — an empty `catches` line would read as a failed check. */}
+        {proposal.catches &&
+          // A fresh proposal was checked before it was offered, so it can claim
+          // to catch its example. A saved rule's example is only what was kept
+          // with it — the tester below is what actually runs it, so this says
+          // no more than it knows.
+          (proposal.saved ? (
+            <span className="sample">
+              tested against <code>{proposal.catches}</code>
+            </span>
+          ) : (
+            <span className="hit">
+              <Check size={11} /> catches <code>{proposal.catches}</code>
+            </span>
+          ))}
         {proposal.ignores && (
           <span className="miss">
             <X size={11} /> ignores <code>{proposal.ignores}</code>
           </span>
         )}
       </div>
-      <span className="rule-proposal-applied">applied to the fields below</span>
+      <span className="rule-proposal-applied">
+        {proposal.saved ? "this is the rule below" : "applied to the fields below"}
+      </span>
     </div>
   );
 }

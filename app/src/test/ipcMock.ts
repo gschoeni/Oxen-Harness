@@ -261,9 +261,12 @@ export const listRules = vi.fn(
 );
 export const saveRules = vi.fn(async (_rules: RuleSpec[]) => {});
 export const draftRule = vi.fn(
-  async (_request: string, _history: DraftTurn[]): Promise<DraftOutcome> => ({
+  async (request: string, history: DraftTurn[]): Promise<DraftOutcome> => ({
     note: "Watching for rm on the migrations directory.",
     attempts: 1,
+    // The host joins the conversation's asks; mirrored here so a test can see
+    // what would be saved with the rule.
+    prompt: [...history.map((t) => t.asked), request].join(", then "),
     rule: {
       name: "no-migration-deletes",
       pattern: "rm .*migrations/",

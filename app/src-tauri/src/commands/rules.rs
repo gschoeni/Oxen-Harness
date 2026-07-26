@@ -68,6 +68,10 @@ pub(crate) struct DraftOutcome {
     /// How many attempts it took — surfaced so a retry is visible rather than
     /// hidden latency.
     attempts: u32,
+    /// Every ask in the conversation as one line, saved with the rule so
+    /// reopening it later restores what was asked for. Built here so the
+    /// desktop and `/rules draft` record the same thing.
+    prompt: String,
 }
 
 /// Write (or revise) a rule from a description, reusing the session's model.
@@ -93,6 +97,7 @@ pub(crate) async fn draft_rule(
                     note: reply.note,
                     rule: reply.rule,
                     attempts: attempt,
+                    prompt: harness_agent::rules::combined_request(&history, &request),
                 })
             }
             Err(why) => {

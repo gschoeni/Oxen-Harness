@@ -257,6 +257,9 @@
 .rule-verdict.hit {
   color: var(--warning);
 }
+.rule-verdict.invalid {
+  color: var(--danger);
+}
 
 /* A transparent textarea over a mirrored <pre>: the caret and selection stay
    native while the matches underneath are marked. Both layers must share every
@@ -435,6 +438,15 @@
 .rule-msg.failed .rule-msg-text,
 .rule-msg.retrying .rule-msg-text {
   color: var(--warning);
+}
+/* A conversation picked back up: quieter than a live turn, so the eye lands on
+   what's new rather than on what it already agreed to. */
+.rule-msg.you.earlier .rule-msg-who,
+.rule-msg.saved .rule-msg-who {
+  color: var(--text-tertiary);
+}
+.rule-msg.saved .rule-proposal {
+  opacity: 0.85;
 }
 /* The cursor is the whole point of streaming: it says "still writing". */
 .rule-caret {
