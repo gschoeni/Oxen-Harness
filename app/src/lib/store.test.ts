@@ -3,16 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./ipc", () => import("../test/ipcMock"));
 
 import { useStore } from "./store";
+import { getUi } from "./uiState";
 import * as ipc from "../test/ipcMock";
 import { resetAll } from "../test/utils";
 
 beforeEach(resetAll);
 
 describe("store: mode", () => {
-  it("toggles light/dark, persisting to the DOM and localStorage", () => {
+  it("toggles light/dark, persisting to the DOM and the UI prefs", () => {
     useStore.getState().setMode("light");
     expect(document.documentElement.dataset.theme).toBe("light");
-    expect(localStorage.getItem("oxen-ui-mode")).toBe("light");
+    expect(getUi("mode")).toBe("light");
 
     useStore.getState().toggleMode();
     expect(useStore.getState().mode).toBe("dark");
@@ -21,17 +22,49 @@ describe("store: mode", () => {
 });
 
 describe("store: navigation", () => {
-  it("starts at Projects, the application's navigation root", () => {
-    expect(useStore.getState().projectsOpen).toBe(true);
+  it("starts at the Ledger, the application's navigation root", () => {
+    expect(useStore.getState().homeOpen).toBe(true);
+  });
+
+  it("riding out of the Ledger records the visit; opening refreshes the board", async () => {
+    useStore.getState().setHomeOpen(false);
+    expect(ipc.ledgerMarkSeen).toHaveBeenCalled();
+
+    useStore.getState().setHomeOpen(true);
+    await vi.waitFor(() => expect(ipc.ledgerSnapshot).toHaveBeenCalled());
   });
 
   it("targets a project home explicitly and clears that target for the project list", () => {
     useStore.getState().openProjectHome("/work/demo");
-    expect(useStore.getState().projectsOpen).toBe(true);
+    expect(useStore.getState().homeOpen).toBe(true);
     expect(useStore.getState().projectHomePath).toBe("/work/demo");
 
-    useStore.getState().setProjectsOpen(true);
+    useStore.getState().setHomeOpen(true);
     expect(useStore.getState().projectHomePath).toBeNull();
+  });
+});
+
+describe("store: trail dust", () => {
+  it("tool starts raise dust for any session, cached thread or not", () => {
+    // No thread cached for "bg" — the chat runs entirely in the background —
+    // yet the Ledger still sees its wagon working.
+    useStore.getState().ingestTool({ session: "bg", name: "read_file", phase: "start", detail: "" });
+    useStore.getState().ingestTool({ session: "bg", name: "read_file", phase: "end", detail: "" });
+    useStore.getState().ingestTool({ session: "bg", name: "git", phase: "start", detail: "" });
+    expect(useStore.getState().trailDust.bg).toBe(2);
+  });
+
+  it("tool starts keep the riding-now readout current for background sessions", () => {
+    useStore
+      .getState()
+      .ingestTool({ session: "bg", name: "read_file", phase: "start", detail: "src/a.rs" });
+    expect(useStore.getState().trailActivity.bg?.name).toBe("read_file");
+    useStore
+      .getState()
+      .ingestTool({ session: "bg", name: "run_shell", phase: "start", detail: "cargo test" });
+    const activity = useStore.getState().trailActivity.bg;
+    expect(activity?.name).toBe("run_shell");
+    expect(activity?.detail).toBe("cargo test");
   });
 });
 

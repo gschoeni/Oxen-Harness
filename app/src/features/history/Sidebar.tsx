@@ -4,7 +4,6 @@ import { useStore } from "../../lib/store";
 import { relativeTime } from "../../lib/format";
 import { Button, Modal } from "../../components/ui";
 import { DockToggle } from "../docks/DockToggle";
-import { BrandMark } from "./BrandMark";
 import type { RunStatus, SessionSummary } from "../../lib/types";
 import "./sidebar.css";
 
@@ -58,13 +57,6 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
           aria-label="Resize chat list"
         />
       )}
-      {/* Transparent strip over the traffic-light row so the empty space above
-          the brand drags the window (overlay title bar). */}
-      <div className="brand" data-tauri-drag-region>
-        <BrandMark />
-        <span>oxen-harness</span>
-      </div>
-
       {activePath ? (
         <>
           <div className="current-project" title={activePath}>

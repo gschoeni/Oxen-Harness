@@ -5,7 +5,8 @@
 // utility buttons (project home, arcade, inspector) sit at its right edge,
 // clear of the macOS traffic lights on the left.
 
-import { Code2, Files, Gamepad2 } from "lucide-react";
+import { Activity, Code2, Files, Gamepad2 } from "lucide-react";
+import { setUi } from "./lib/uiState";
 import { useActiveProject, useStore } from "./lib/store";
 
 export function TitleBar() {
@@ -22,12 +23,51 @@ export function TitleBar() {
   const gameDockOpen = useStore((s) => s.gameDockOpen);
   const setGameDockOpen = useStore((s) => s.setGameDockOpen);
   const openInspector = useStore((s) => s.openInspector);
+  const runningCount = useStore((s) => {
+    const sessions = new Set(s.ledger?.running ?? []);
+    for (const [id, status] of Object.entries(s.runStatus)) {
+      // Live state wins over an older Ledger snapshot in either direction.
+      if (status === "running") sessions.add(id);
+      else sessions.delete(id);
+    }
+    for (const [id, fleet] of Object.entries(s.fleets)) {
+      if (fleet?.lanes.some((lane) => lane.status === "queued" || lane.status === "running")) {
+        sessions.add(id);
+      }
+    }
+    let count = 0;
+    for (const id of sessions) {
+      const activeLanes = s.fleets[id]?.lanes.filter(
+        (lane) => lane.status === "queued" || lane.status === "running",
+      ).length;
+      count += activeLanes || 1;
+    }
+    return count;
+  });
+  const setHomeOpen = useStore((s) => s.setHomeOpen);
+  const setSettingsOpen = useStore((s) => s.setSettingsOpen);
+
+  function openLedger() {
+    setUi("homeView", "ledger");
+    setSettingsOpen(false);
+    setHomeOpen(true);
+  }
 
   return (
     <header className="app-titlebar" data-tauri-drag-region>
       {/* pointer-events: none, so the name never blocks the drag region */}
       <span className="app-titlebar-name">{project?.name ?? "oxen-harness"}</span>
       <div className="app-titlebar-actions">
+        <button
+          className={`titlebar-running ${runningCount > 0 ? "active" : ""}`}
+          onClick={openLedger}
+          title={`${runningCount} running — open the Ledger`}
+          aria-label={`${runningCount} running — open the Ledger`}
+        >
+          <Activity size={14} />
+          <span>{runningCount}</span>
+          <span className="titlebar-running-label">running</span>
+        </button>
         {projectPath && (
           <button
             className="dev-view-btn"

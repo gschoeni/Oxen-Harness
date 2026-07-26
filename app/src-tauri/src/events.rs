@@ -31,3 +31,11 @@ pub(crate) struct PreviewConsolePayload {
 pub(crate) struct BrowserOpenPayload {
     pub(crate) url: String,
 }
+
+/// A `project://open` payload: a directory arrived from the command line
+/// (`oxen-harness ui <dir>`) while the app was already running — the UI
+/// should enter that project.
+#[derive(Clone, Serialize)]
+pub(crate) struct ProjectOpenPayload {
+    pub(crate) path: String,
+}

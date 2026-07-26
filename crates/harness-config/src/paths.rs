@@ -231,6 +231,26 @@ pub fn canvas_dir() -> Result<PathBuf, ConfigError> {
     under("canvas")
 }
 
+/// `~/.oxen-harness/ui.json` — the desktop app's UI preferences (color mode,
+/// dock layout, home view, …). Lives here rather than in the webview's
+/// localStorage so pointing `OXEN_HARNESS_DIR` elsewhere resets the whole app,
+/// not just the backend state.
+pub fn ui_state_file() -> Result<PathBuf, ConfigError> {
+    under("ui.json")
+}
+
+/// `~/.oxen-harness/cache/previews/` — latest preview/browser screenshot per
+/// session. Everything under `cache/` is regenerable: safe to delete, never
+/// user state.
+pub fn previews_cache_dir() -> Result<PathBuf, ConfigError> {
+    let dir = base_dir()?.join("cache").join("previews");
+    std::fs::create_dir_all(&dir).map_err(|source| ConfigError::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    Ok(dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

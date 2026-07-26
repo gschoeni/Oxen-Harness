@@ -170,6 +170,22 @@ fn migrations() -> Migrations<'static> {
     ])
 }
 
+/// `session_state` key for the latest plan snapshot (written by the agent on
+/// every successful `update_plan` call; shape is `harness_tools`'
+/// `Option<PlanSnapshot>`, where a stored `null` means "checked, no plan").
+/// Key names live here — next to the ledger query that joins on them — so the
+/// writer and the reader can never drift apart.
+pub const PLAN_STATE: &str = "plan";
+
+/// `session_state` key marking a thread tied off in the Ledger (written by the
+/// host's settle command; shape is `harness_protocol`'s `SettleState`).
+pub const SETTLE_STATE: &str = "settle";
+
+/// `session_state` key for the session's charted journey (written by the agent
+/// on every successful `update_trail` call; shape is `harness_tools`'
+/// `TrailSnapshot`: a model-chosen title plus named waypoints).
+pub const TRAIL_STATE: &str = "trail";
+
 /// Errors from the history store.
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryError {
@@ -223,6 +239,40 @@ pub struct SessionSummary {
     /// Where the conversation came from: `""` for native chats, else the
     /// import source (`"claude-code"`, `"cursor"`).
     pub source: String,
+}
+
+/// One session as the Ledger reads it: summary metadata plus the freshness and
+/// per-session projections that decide where its wagon sits on the trail.
+/// The `*_json` fields are the raw `session_state` payloads — the store hands
+/// them over verbatim and the host layer parses them into wire shapes, so the
+/// store stays ignorant of feature-owned schemas.
+#[derive(Debug, Clone)]
+pub struct LedgerRow {
+    pub id: String,
+    pub workspace: String,
+    pub model: String,
+    pub created_at: i64,
+    /// The first user message's text (the conversation title).
+    pub title: String,
+    pub message_count: i64,
+    /// The newest message's timestamp, falling back to session creation.
+    pub last_activity_at: i64,
+    /// The last message's role — `"user"`/`"tool"` means the transcript stops
+    /// mid-turn (a reply never arrived), the cheapest honest "left dangling"
+    /// signal we have.
+    pub last_role: String,
+    /// The opening of the newest assistant message (clipped in SQL) — the
+    /// thread's "last word", shown on its waystation card. Empty when the
+    /// model never replied.
+    pub last_reply: String,
+    /// Raw JSON under [`PLAN_STATE`]; `None` when never recorded.
+    pub plan_json: Option<String>,
+    /// Raw JSON under [`TRAIL_STATE`]; `None` when the model never charted one.
+    pub trail_json: Option<String>,
+    /// Raw JSON under [`SETTLE_STATE`]; `None` while the thread is open.
+    pub settle_json: Option<String>,
+    /// Training-data curation status: `""` (unreviewed), `"kept"`, `"rejected"`.
+    pub review_status: String,
 }
 
 /// Accumulated usage for a single model, summed across every session and
@@ -463,6 +513,95 @@ impl HistoryStore {
         Ok(out)
     }
 
+    /// Everything the Ledger needs about every native session, in one query.
+    ///
+    /// Ordered newest-activity first. Sessions without a user turn are skipped
+    /// (same rule as [`Self::list_sessions`] — nothing to title a wagon with),
+    /// as are imported transcripts: another tool's history is reading material,
+    /// not a thread of ours to tie off.
+    pub fn ledger_rows(&self) -> Result<Vec<LedgerRow>, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT s.id, s.workspace, s.model, s.created_at,
+                    (SELECT m.content FROM messages m
+                       WHERE m.session_id = s.id AND m.role = 'user'
+                         AND m.content IS NOT NULL
+                       ORDER BY m.seq ASC LIMIT 1) AS title,
+                    (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id),
+                    COALESCE((SELECT MAX(m.created_at) FROM messages m
+                                WHERE m.session_id = s.id),
+                             s.created_at) AS last_activity,
+                    COALESCE((SELECT m.role FROM messages m
+                                WHERE m.session_id = s.id
+                                ORDER BY m.seq DESC LIMIT 1), ''),
+                    COALESCE((SELECT substr(m.content, 1, 280) FROM messages m
+                                WHERE m.session_id = s.id AND m.role = 'assistant'
+                                  AND m.content IS NOT NULL AND m.content != ''
+                                ORDER BY m.seq DESC LIMIT 1), ''),
+                    plan.raw_json, trail.raw_json, settle.raw_json, s.review_status
+             FROM sessions s
+             LEFT JOIN session_state plan
+                    ON plan.session_id = s.id AND plan.key = ?1
+             LEFT JOIN session_state trail
+                    ON trail.session_id = s.id AND trail.key = ?2
+             LEFT JOIN session_state settle
+                    ON settle.session_id = s.id AND settle.key = ?3
+             WHERE s.source = ''
+             ORDER BY last_activity DESC",
+        )?;
+        let rows = stmt.query_map([PLAN_STATE, TRAIL_STATE, SETTLE_STATE], |row| {
+            Ok((
+                row.get::<_, Option<String>>(4)?,
+                LedgerRow {
+                    id: row.get(0)?,
+                    workspace: row.get(1)?,
+                    model: row.get(2)?,
+                    created_at: row.get(3)?,
+                    title: String::new(),
+                    message_count: row.get(5)?,
+                    last_activity_at: row.get(6)?,
+                    last_role: row.get(7)?,
+                    last_reply: row.get(8)?,
+                    plan_json: row.get(9)?,
+                    trail_json: row.get(10)?,
+                    settle_json: row.get(11)?,
+                    review_status: row.get(12)?,
+                },
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (title, mut ledger_row) = row?;
+            if let Some(title) = title {
+                ledger_row.title = title;
+                out.push(ledger_row);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Assistant messages that *might* hold an `update_plan` call, newest
+    /// first, as verbatim JSON. The `LIKE` is only a cheap textual prefilter
+    /// over one session's messages — the caller does the real tool-call parse,
+    /// walking the list until one yields a valid plan (a prose mention, or a
+    /// call whose bad arguments were rejected, simply doesn't). Exists to
+    /// backfill plan snapshots for sessions that predate them; new sessions
+    /// persist their snapshot as each call happens.
+    pub fn plan_message_candidates(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<String>, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT raw_json FROM messages
+             WHERE session_id = ?1 AND role = 'assistant'
+               AND raw_json LIKE '%update_plan%'
+             ORDER BY seq DESC LIMIT 20",
+        )?;
+        let rows = stmt.query_map([session_id], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// When each workspace was last used: the newest message timestamp across
     /// its sessions, falling back to session creation for message-less chats.
     /// Native chats only — imported transcripts keep their source tool's cwd
@@ -622,6 +761,17 @@ impl HistoryStore {
              VALUES (?1, ?2, ?3)
              ON CONFLICT(session_id, key) DO UPDATE SET raw_json = excluded.raw_json",
             rusqlite::params![session_id, key, raw],
+        )?;
+        Ok(())
+    }
+
+    /// Remove one per-session projection. Idempotent: clearing a key that was
+    /// never saved is a no-op.
+    pub fn clear_session_state(&self, session_id: &str, key: &str) -> Result<(), HistoryError> {
+        let conn = self.lock();
+        conn.execute(
+            "DELETE FROM session_state WHERE session_id = ?1 AND key = ?2",
+            rusqlite::params![session_id, key],
         )?;
         Ok(())
     }
@@ -1243,6 +1393,120 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn clear_session_state_removes_only_that_key_and_is_idempotent() {
+        let store = HistoryStore::open_in_memory().unwrap();
+        let session = store.create_session(&SessionMeta::default()).unwrap();
+        store.save_session_state(&session, "a", &1).unwrap();
+        store.save_session_state(&session, "b", &2).unwrap();
+
+        store.clear_session_state(&session, "a").unwrap();
+        store.clear_session_state(&session, "a").unwrap();
+
+        assert_eq!(store.session_state::<i64>(&session, "a").unwrap(), None);
+        assert_eq!(store.session_state::<i64>(&session, "b").unwrap(), Some(2));
+    }
+
+    #[test]
+    fn ledger_rows_carry_freshness_and_projections() {
+        let store = store();
+        let session = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&session, &Message::user("fix the bug"))
+            .unwrap();
+        store
+            .append_message(&session, &Message::assistant("done"))
+            .unwrap();
+        store
+            .save_session_state(&session, PLAN_STATE, &serde_json::json!({"done": 2}))
+            .unwrap();
+        store
+            .save_session_state(&session, TRAIL_STATE, &serde_json::json!({"title": "t"}))
+            .unwrap();
+        store.set_review_status(&session, "kept").unwrap();
+
+        let rows = store.ledger_rows().unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.id, session);
+        assert_eq!(row.title, "fix the bug");
+        assert_eq!(row.message_count, 2);
+        assert_eq!(row.last_role, "assistant");
+        assert_eq!(row.last_reply, "done");
+        assert!(row.last_activity_at > 0);
+        assert_eq!(row.plan_json.as_deref(), Some(r#"{"done":2}"#));
+        assert_eq!(row.trail_json.as_deref(), Some(r#"{"title":"t"}"#));
+        assert_eq!(row.settle_json, None);
+        assert_eq!(row.review_status, "kept");
+    }
+
+    #[test]
+    fn ledger_rows_skip_untitled_and_imported_sessions() {
+        let store = store();
+        // A session opened but never used: no user turn, so no wagon.
+        store.create_session(&meta()).unwrap();
+        // An imported transcript: another tool's history, not ours to tie off.
+        let conv = crate::import::ImportedConversation {
+            source_ref: "ext-1".into(),
+            workspace: "/w".into(),
+            model: "m".into(),
+            created_at: 1,
+            messages: vec![serde_json::json!({"role": "user", "content": "hi"})],
+        };
+        store.import_conversations("claude-code", &[conv]).unwrap();
+
+        assert!(store.ledger_rows().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ledger_rows_flag_a_transcript_stopped_mid_turn() {
+        let store = store();
+        let session = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&session, &Message::user("start big refactor"))
+            .unwrap();
+
+        let rows = store.ledger_rows().unwrap();
+        // Ends on a user message — the reply never arrived.
+        assert_eq!(rows[0].last_role, "user");
+    }
+
+    #[test]
+    fn plan_message_candidates_are_newest_first_and_prefiltered() {
+        let store = store();
+        let session = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&session, &Message::user("plan this"))
+            .unwrap();
+        store
+            .append_message(
+                &session,
+                &serde_json::json!({
+                    "role": "assistant", "content": null,
+                    "tool_calls": [{"id": "1", "function": {
+                        "name": "update_plan", "arguments": "{}"}}]
+                }),
+            )
+            .unwrap();
+        store
+            .append_message(&session, &Message::assistant("no plan talk here"))
+            .unwrap();
+        store
+            .append_message(
+                &session,
+                &serde_json::json!({
+                    "role": "assistant",
+                    "content": "I mentioned update_plan in prose only"
+                }),
+            )
+            .unwrap();
+
+        let candidates = store.plan_message_candidates(&session).unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates[0].contains("prose only"));
+        assert!(candidates[1].contains("tool_calls"));
     }
 
     #[test]

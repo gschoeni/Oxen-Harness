@@ -110,6 +110,87 @@ export interface Project {
   last_used_at: number | null;
 }
 
+/** A compact plan reading — "3/5, currently: Running tests" — persisted per
+ *  session by the agent so the Ledger renders progress without a transcript. */
+export interface PlanProgress {
+  done: number;
+  total: number;
+  /** The in-progress item's present-continuous label, when one is underway. */
+  active: string | null;
+}
+
+/** One named stage on a thread's charted journey. */
+export interface TrailWaypoint {
+  /** Stage name, e.g. "define", "implement". */
+  name: string;
+  status: "ahead" | "current" | "done";
+}
+
+/** The journey the model charted via `update_trail`: a self-chosen thread
+ *  title plus the macro stages the work passes through. */
+export interface TrailProgress {
+  title: string;
+  waypoints: TrailWaypoint[];
+}
+
+/** The mark a settled ("tied off") thread carries. Absence means open. */
+export interface SettleState {
+  /** Unix seconds when the thread was tied off. */
+  settled_at: number;
+  /** The user's one-line closing note; empty when skipped. */
+  note: string;
+}
+
+/** One thread as the Ledger renders it: a native session plus everything
+ *  derived that decides where its wagon sits on the trail. */
+export interface LedgerEntry {
+  id: string;
+  workspace: string;
+  model: string;
+  created_at: number;
+  /** Unix seconds of the newest message (session creation if none). */
+  last_activity_at: number;
+  /** The first user message's text — the thread's title. */
+  title: string;
+  /** The opening of the newest assistant message — the thread's last word,
+   *  shown on its waystation card. Empty when the model never replied. */
+  last_reply: string;
+  message_count: number;
+  /** The stored transcript stops on a user message or tool result — a reply
+   *  never arrived. Mid-turn and not running means left dangling. */
+  mid_turn: boolean;
+  plan: PlanProgress | null;
+  /** The model-charted journey; its `title` supersedes `title` for display. */
+  trail: TrailProgress | null;
+  settle: SettleState | null;
+  /** Training-data curation: "" (unreviewed), "kept", or "rejected". */
+  review_status: ReviewStatus;
+}
+
+/** Everything the Ledger board needs, in one read. */
+export interface LedgerSnapshot {
+  /** Every native thread, newest activity first. */
+  entries: LedgerEntry[];
+  /** Session ids with work in flight (a turn, review, or loop) — from the
+   *  host's authoritative registry, correct even after a UI restart. */
+  running: string[];
+  /** Unix seconds the Ledger was last marked seen; 0 on first visit. */
+  last_seen: number;
+}
+
+/** A workspace's git state, rendered on its wagon-train banner. Per-workspace
+ *  by design: git cannot attribute a dirty tree to any one conversation. */
+export interface GitOverview {
+  /** The checked-out branch, or a short sha when HEAD is detached. */
+  branch: string;
+  /** Files changed relative to HEAD (staged, unstaged, untracked). */
+  dirty_files: number;
+  /** Commits ahead of upstream; 0 when there is no upstream. */
+  ahead: number;
+  behind: number;
+  has_upstream: boolean;
+}
+
 export interface StartProjectInput {
   name: string;
   description: string;
@@ -929,55 +1010,6 @@ export interface FileBody {
    *  opens read-only so a save can't destroy the unread tail. */
   truncated: boolean;
   size: number;
-}
-
-/** Simplified dtype family the data grid keys icons and alignment off. */
-export type DatasetKind =
-  | "int"
-  | "float"
-  | "bool"
-  | "str"
-  | "date"
-  | "datetime"
-  | "time"
-  | "duration"
-  | "list"
-  | "struct"
-  | "other";
-
-/** One column of a tabular data file. */
-export interface DatasetColumn {
-  name: string;
-  /** The backend dtype, verbatim (shown in the header tooltip). */
-  dtype: string;
-  kind: DatasetKind;
-}
-
-/** One page request for a dataset window. */
-export interface DatasetQueryReq {
-  offset: number;
-  limit: number;
-  sortBy?: string;
-  descending?: boolean;
-  search?: string;
-}
-
-/** One window of a CSV/JSONL/Parquet file, plus grid chrome. */
-export interface DatasetPage {
-  columns: DatasetColumn[];
-  /** Cell values row-major; temporal/nested values arrive as display strings. */
-  rows: (string | number | boolean | null)[][];
-  /** Physical file record index of each row (addresses edits). */
-  rowIds: number[];
-  /** Rows in the current view (after search), not just this window. */
-  totalRows: number;
-  fileSize: number;
-  format: string;
-  elapsedMs: number;
-  editable: boolean;
-  /** File mtime when this page was read — echoed back on writes so a stale
-   *  edit (the file changed underneath) is refused, not misapplied. */
-  mtimeMs: number;
 }
 
 /** A highlighted code selection staged as context for the next prompt. */

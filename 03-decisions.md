@@ -638,7 +638,7 @@ deadlocks. Durable history remains the source of truth, while transient UI
 events carry capped display copies. Compression originals use workspace disk
 storage with only a bounded CCR index in memory.
 
-**The data grid pages datasets server-side; the webview never holds the file** (2026-07-16)
+**The data grid pages datasets server-side; the webview never holds the file** (2026-07-16; removed 2026-07-26 — the grid didn't pull its weight against the Polars dependency it dragged into the app build, so data files now open in the plain code editor)
 `dataset_query` windows CSV/TSV/JSONL/Parquet through Polars' lazy engine
 (slice/sort/filter pushdown, ≤128 MB files cached as DataFrames keyed by
 mtime, bigger ones re-scanned per request), so grid latency is independent of
@@ -791,3 +791,38 @@ that task settles. Cleanup follows the task's completion watch rather than the
 tool future's lifetime, preventing normally completed timed-out commands from
 leaving full environment snapshots—including credentials—in the temp
 directory.
+
+**The CLI and the desktop app release on independent tag lines**
+(2026-07-26) Tags are `cli-vX.Y.Z` and `app-vX.Y.Z`, never a shared `vX.Y.Z`,
+because the two are separate Cargo workspaces with separate cadences: a CLI
+patch shouldn't wait on a four-platform Tauri build, and an app fix shouldn't
+force a new CLI binary. Each line has one version source of truth — the root
+`[workspace.package]` version for the CLI (every crate inherits it), and
+`app/src-tauri/tauri.conf.json` for the app (it's what gets baked into the
+bundles), with `scripts/bump-version.sh` mirroring the app version into
+package.json and the bridge Cargo.toml so the three can't drift. The release
+workflows refuse to build when the tag disagrees with the committed version,
+so a stale tag can never ship a binary reporting the wrong `--version`.
+Cut-release (the Actions-UI path) invokes the release workflows as reusable
+workflows rather than relying on the tag push, because GITHUB_TOKEN pushes
+deliberately don't trigger other workflows. CLI releases publish
+automatically; app releases stop at a draft so installers get one human look
+before going public. `bundle.active` flipped to true in tauri.conf.json —
+it only affects explicit `tauri build` runs, and CI needs the bundles.
+
+**The CLI opens the desktop app with plain argv, not a deep link**
+(2026-07-26) `oxen-harness ui [dir]` hands the project directory to the app as
+a positional argument. Cold start reads it from `std::env::args` and makes it
+the active project before any state is built (no event, no race with the
+webview); a launch while the app is already open is absorbed by
+tauri-plugin-single-instance, which forwards argv + cwd to the running
+instance — it focuses the window and emits `project://open`, and the frontend
+enters the project. Deep links were rejected: macOS only registers URL
+schemes for bundled apps (dev builds silently break), and the payload is one
+path string. Finding the app is per-platform: `open -n -b ai.oxen.harness` on
+macOS (works wherever the .app lives; `-n` because `open` won't deliver
+--args to a running app), the `oxen-harness-app` binary from PATH on Linux,
+the default per-user NSIS location on Windows, with `OXEN_HARNESS_APP`
+overriding everything for dev builds. The bundle binary is renamed to
+`oxen-harness-app` (`mainBinaryName`) because the Linux packages would
+otherwise install a second `oxen-harness` over the CLI's name on PATH.

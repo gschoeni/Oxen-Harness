@@ -370,7 +370,7 @@ Context growth, flaky endpoints, and recovering dead turns:
   endpoint's model catalog and are labeled estimates. Models without published
   rates remain explicitly unpriced rather than `$0.00`.
 
-## Recent — data grid in the Editor pane (2026-07-16)
+## Recent — data grid in the Editor pane (2026-07-16; removed 2026-07-26 — cut as bloat along with the Polars dependency; data files open in the plain code editor)
 
 - CSV/TSV/JSONL/Parquet files open as an Airtable-style virtualized grid in the
   desktop Editor dock (`app/src/features/files/DataView.tsx`), with server-side

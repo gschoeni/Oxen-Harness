@@ -74,16 +74,6 @@ h1, h2, h3, h4 {
   border: 3px solid transparent;
 }
 
-/* Window dragging. Tauri moves the window when a drag starts on an element with
-   the `data-tauri-drag-region` attribute — the CSS `-webkit-app-region` idiom is
-   ignored by macOS WKWebView. The drag-region element itself must keep pointer
-   events; only its decorative children opt out, so a press over them falls
-   through to the drag region while buttons stay clickable. */
-.brand * {
-  pointer-events: none;
-  -webkit-user-select: none;
-  user-select: none;
-}
 
 @media (prefers-reduced-motion: reduce) {
   * {

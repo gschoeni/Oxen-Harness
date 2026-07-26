@@ -30,7 +30,7 @@ beforeEach(() => {
 describe("Chat", () => {
   it("opens the active project's files and settings from the titlebar", async () => {
     useStore.setState({
-      projectsOpen: false,
+      homeOpen: false,
       projects: [{
         path: ipc.sampleSession.workspace,
         name: "Demo",
@@ -52,7 +52,7 @@ describe("Chat", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Project files and settings" }));
 
-    expect(useStore.getState().projectsOpen).toBe(true);
+    expect(useStore.getState().homeOpen).toBe(true);
     expect(useStore.getState().projectHomePath).toBe(ipc.sampleSession.workspace);
   });
 

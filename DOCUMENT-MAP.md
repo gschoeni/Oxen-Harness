@@ -52,7 +52,9 @@ oxen-harness/
                                SessionService + TauriSink + native-preview hooks),
                                events.rs (the few Tauri-only payloads), commands/
                                (the #[tauri::command] handlers, one module per
-                               feature, delegating to the service).
+                               feature, delegating to the service), cli_open.rs
+                               (`oxen-harness ui <dir>` handoff: argv on cold
+                               start, single-instance forward when running).
     src/                     — React + TS chat UI (features/, lib/, components/).
                                  features/rules/ — the Rules settings page: RulesPage (data flow), RuleRow (a rule at rest), RuleEditor (+ the live
                                  tester that runs the agent's own regex engine), RuleChat (write a rule by talking to the model), RuleSuggestions, starters.ts.
@@ -62,6 +64,15 @@ oxen-harness/
                                protocol (SSE + REST); the "build your own UI" demo.
   plans/                     — Actionable execution docs. Pull in per-topic.
     archive/                 — Deprecated plans, kept for historical reference.
+  RELEASING.md               — Tag/version strategy + the release walkthrough (both paths).
+  scripts/                   — Release tooling: version.sh (print), bump-version.sh
+                               (rewrite version files + lockfiles), release.sh (tag + push),
+                               release-local.sh (build + install CLI/app for this machine, local-* tag),
+                               gen-icons.sh (icon set from assets/app-icon.png; inset icns for macOS).
+  .github/workflows/         — ci.yml (fmt/clippy/test/doc + frontend + bridge);
+                               release-cli.yml (cli-v* tags → 5-platform binaries + release);
+                               release-app.yml (app-v* tags → Tauri bundles, draft release);
+                               cut-release.yml (one-button bump→commit→tag→build from the Actions UI).
 ```
 
 ## Loading Guide

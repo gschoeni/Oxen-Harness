@@ -6,6 +6,7 @@ vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { DockColumn } from "./DockColumn";
 import { useStore } from "../../lib/store";
+import { getUi } from "../../lib/uiState";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
 
@@ -39,7 +40,7 @@ beforeEach(() => {
   useStore.setState({
     session: { ...ipc.sampleSession, session_id: "s1" },
     infos: { s1: { ...ipc.sampleSession, session_id: "s1" } },
-    projectsOpen: false,
+    homeOpen: false,
     dockWidths: {},
     dockCollapsed: {},
   });
@@ -60,24 +61,22 @@ describe("Dock columns", () => {
     expect(useStore.getState().dockCollapsed.left).toBe(false);
   });
 
-  it("keeps the app's mark visible in the collapsed rail", () => {
-    // The logo holds its spot in both states, so the top of the column doesn't
-    // lurch when it collapses. (The shared top inset that lines the two up is
-    // CSS — jsdom has no layout, so only presence is asserted here.)
+  it("collapses to a rail without carrying the app mark", () => {
+    // The brand mark left the rail (docks.tsx no longer wires a railHeader
+    // for it); collapsing just yields the dock icons.
     const { rerender } = render(<DockColumn side="left" />);
-    expect(screen.getByText("🐂")).toBeInTheDocument();
-
     act(() => useStore.getState().setDockCollapsed("left", true));
     rerender(<DockColumn side="left" />);
-    expect(screen.getByText("🐂")).toBeInTheDocument();
+    expect(screen.queryByText("🐂")).toBeNull();
+    expect(screen.getByRole("button", { name: "Expand left panel" })).toBeInTheDocument();
   });
 
   it("remembers the collapsed state and width across runs", () => {
     act(() => useStore.getState().setDockCollapsed("left", true));
     act(() => useStore.getState().setDockWidth("right", 640));
-    const saved = JSON.parse(localStorage.getItem("oxen-docks") ?? "{}");
-    expect(saved.collapsed.left).toBe(true);
-    expect(saved.widths.right).toBe(640);
+    const saved = getUi("docks");
+    expect(saved?.collapsed.left).toBe(true);
+    expect(saved?.widths.right).toBe(640);
   });
 
   it("a side with nothing docked renders no column", () => {

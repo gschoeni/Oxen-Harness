@@ -182,14 +182,6 @@
   overflow: hidden;
 }
 
-/* The app's mark, held in place when the column collapses (see `railHeader`).
-   Its bottom margin matches the expanded sidebar's brand→content gap. */
-.dock-rail-brand {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  margin-bottom: var(--space-3);
-}
 .dock-rail-btn {
   display: grid;
   place-items: center;

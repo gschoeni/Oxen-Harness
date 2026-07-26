@@ -6,7 +6,7 @@ import { DockColumn, useActiveDock, useDockShortcuts } from "./features/docks/Do
 import { docksOnSide, useAvailableDocks } from "./features/docks/docks";
 import { planColumns, type ColumnPlan, type LayoutPlan } from "./features/docks/layout";
 import { Settings } from "./features/settings/Settings";
-import { ProjectsPage } from "./features/projects/ProjectsPage";
+import { HomePage } from "./features/ledger/HomePage";
 import { InspectorDrawer } from "./features/inspector/Inspector";
 import { activeTheme, fsUnwatch, fsWatch } from "./lib/ipc";
 import { useStore } from "./lib/store";
@@ -19,7 +19,7 @@ export default function App() {
   const refreshTotalTokens = useStore((s) => s.refreshTotalTokens);
   const loadCloudModels = useStore((s) => s.loadCloudModels);
   const settingsOpen = useStore((s) => s.settingsOpen);
-  const projectsOpen = useStore((s) => s.projectsOpen);
+  const homeOpen = useStore((s) => s.homeOpen);
   const sessionId = useStore((s) => s.session?.session_id);
   const workspace = useStore((s) => s.session?.workspace ?? null);
   const syncPreview = useStore((s) => s.syncPreview);
@@ -77,9 +77,9 @@ export default function App() {
       </div>
       {/* Order is load-bearing: both are full-window takeovers in the same
           stacking band (`--z-overlay`), so whichever renders last paints on
-          top. Settings opens *over* Projects — it's reachable from there —
+          top. Settings opens *over* the Ledger — it's reachable from there —
           and closing it returns to whatever it covered. */}
-      {projectsOpen && <ProjectsPage />}
+      {homeOpen && <HomePage />}
       {settingsOpen && <Settings />}
       <InspectorDrawer />
     </div>

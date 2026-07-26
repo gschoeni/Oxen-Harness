@@ -26,7 +26,6 @@
 import type { ReactNode } from "react";
 import { Compass, FileCode2, FolderTree, Globe, MessagesSquare, NotebookPen } from "lucide-react";
 import { useStore } from "../../lib/store";
-import { BrandMark } from "../history/BrandMark";
 import { Sidebar } from "../history/Sidebar";
 import { Canvas } from "../canvas/Canvas";
 import { Preview } from "../preview/Preview";
@@ -58,10 +57,6 @@ export interface DockSpec {
   useAvailable: () => boolean;
   /** The dock's content. `onResizeStart` wires the column's drag handle. */
   render: (props: { onResizeStart?: (e: React.PointerEvent) => void }) => ReactNode;
-  /** Optional mark pinned to the top of this side's collapsed rail, so the
-   *  column keeps its identity (and its vertical rhythm) when collapsed —
-   *  the app's logo stays put instead of vanishing. */
-  railHeader?: () => ReactNode;
   /** Docks the user can't collapse away (the chat list is the app's spine —
    *  but it can still be collapsed to a rail; this is for future docks that
    *  must always render). */
@@ -107,7 +102,6 @@ export const DOCKS: DockSpec[] = [
     minWidth: 208,
     useAvailable: () => true,
     render: ({ onResizeStart }) => <Sidebar onResizeStart={onResizeStart} />,
-    railHeader: () => <BrandMark />,
   },
   {
     id: "files",

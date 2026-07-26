@@ -12,31 +12,6 @@
   min-height: 0;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-family: var(--font-readout);
-  font-size: 23px;
-  line-height: 1;
-  font-weight: 400;
-  letter-spacing: 0.01em;
-  color: var(--text);
-  padding-left: 2px;
-  flex-shrink: 0;
-}
-.brand-icon {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border: var(--frame-border-w) solid color-mix(in srgb, var(--accent) 35%, var(--separator-strong));
-  border-radius: var(--frame-radius);
-  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
-  font-size: 16px;
-  flex-shrink: 0;
-}
-
 /* The project the sidebar is scoped to. */
 .current-project {
   display: flex;

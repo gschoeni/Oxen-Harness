@@ -135,6 +135,12 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/v1/health", get(health))
         .route("/v1/events", get(events))
         .route("/v1/sessions", get(list_sessions).post(new_session))
+        .route("/v1/ledger", get(ledger_snapshot))
+        .route("/v1/ledger/seen", post(ledger_mark_seen))
+        .route(
+            "/v1/sessions/{id}/settle",
+            post(settle_session).delete(reopen_session),
+        )
         .route(
             "/v1/sessions/{id}",
             get(resume_session).delete(delete_session),
@@ -342,6 +348,47 @@ async fn new_session(
 ) -> ApiResult<Json<harness_protocol::SessionInfo>> {
     authorize(&state, &headers, None)?;
     Ok(Json(state.service.new_session().await?))
+}
+
+/// The Ledger board's one read: every native thread with derived status, the
+/// in-flight session ids, and the last-seen mark.
+async fn ledger_snapshot(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<harness_protocol::LedgerSnapshot>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(state.service.ledger_snapshot().await?))
+}
+
+/// Record that the user just looked at the board; returns the new mark.
+async fn ledger_mark_seen(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<i64>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(state.service.mark_ledger_seen()?))
+}
+
+/// Tie off a thread, optionally with a one-line closing note.
+async fn settle_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<harness_protocol::SettleRequest>,
+) -> ApiResult<Json<harness_protocol::SettleState>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(state.service.settle_session(&id, &request.note)?))
+}
+
+/// Bring a settled thread back to the trail.
+async fn reopen_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    authorize(&state, &headers, None)?;
+    state.service.reopen_session(&id)?;
+    Ok(StatusCode::OK)
 }
 
 async fn resume_session(

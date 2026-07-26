@@ -20,8 +20,8 @@
 
 pub(crate) mod browser;
 pub(crate) mod connection;
-pub(crate) mod dataset;
 pub(crate) mod files;
+pub(crate) mod ledger;
 pub(crate) mod loops;
 pub(crate) mod models;
 pub(crate) mod permissions;
@@ -34,4 +34,5 @@ pub(crate) mod skills;
 pub(crate) mod theme;
 pub(crate) mod tools;
 pub(crate) mod turn;
+pub(crate) mod ui;
 pub(crate) mod watch;

@@ -20,7 +20,7 @@ const SCRIM_SELECTOR = ".modal-scrim, .settings-overlay, .menu";
 
 export function useOverlayOpen(): boolean {
   const storeOverlay = useStore(
-    (s) => s.settingsOpen || s.projectsOpen || !!s.inspector || !!s.question,
+    (s) => s.settingsOpen || s.homeOpen || !!s.inspector || !!s.question,
   );
   const [scrimOpen, setScrimOpen] = useState(false);
 

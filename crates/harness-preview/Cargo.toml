@@ -9,6 +9,7 @@ authors.workspace = true
 description = "Dev-server management and live app preview for oxen-harness"
 
 [dependencies]
+harness-config = { workspace = true }
 harness-core = { workspace = true }
 harness-tools = { workspace = true }
 serde = { workspace = true }
@@ -18,7 +19,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
-dirs = { workspace = true }
 # Reload-on-change for previews of servers without their own hot reload.
 notify = "8"
 

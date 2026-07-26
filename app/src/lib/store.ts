@@ -11,10 +11,15 @@ import { applyThemePalette, applyThemeStyle } from "./theme";
 import {
   deleteProject,
   deleteSession,
+  ledgerMarkSeen,
+  ledgerSnapshot,
   listCloudModels,
   listProjects,
   listSessions,
   newSession,
+  reopenSession,
+  settleSession,
+  workspaceGit,
   resumeSession,
   runCodeReview as runCodeReviewIpc,
   runTurn,
@@ -52,6 +57,7 @@ import {
 } from "../features/chat/thread";
 import { partialCanvasDoc } from "./streamingArgs";
 import { withSnippetContext } from "./snippets";
+import { getUi, setUi } from "./uiState";
 import type {
   ApprovalEvent,
   ApprovalRequestEvent,
@@ -67,6 +73,8 @@ import type {
   LocalStatus,
   Mode,
   OpenFileEvent,
+  GitOverview,
+  LedgerSnapshot,
   Project,
   QuestionPayload,
   ReviewStatus,
@@ -88,34 +96,22 @@ import type {
   RetryEvent,
 } from "./types";
 
-const MODE_KEY = "oxen-ui-mode";
-const HERO_GAME_KEY = "oxen-hero-game";
-/** Dock layout (per-side widths + collapsed sides), remembered across runs. */
-const DOCKS_KEY = "oxen-docks";
-
 interface DockLayout {
   widths: Record<string, number>;
   collapsed: Record<string, boolean>;
 }
 
+/** Dock layout (per-side widths + collapsed sides), remembered across runs. */
 function loadDockLayout(): DockLayout {
-  try {
-    const raw = JSON.parse(localStorage.getItem(DOCKS_KEY) ?? "{}");
-    return {
-      widths: typeof raw.widths === "object" && raw.widths ? raw.widths : {},
-      collapsed: typeof raw.collapsed === "object" && raw.collapsed ? raw.collapsed : {},
-    };
-  } catch {
-    return { widths: {}, collapsed: {} };
-  }
+  const raw = getUi("docks");
+  return {
+    widths: typeof raw?.widths === "object" && raw.widths ? raw.widths : {},
+    collapsed: typeof raw?.collapsed === "object" && raw.collapsed ? raw.collapsed : {},
+  };
 }
 
 function saveDockLayout(layout: DockLayout) {
-  try {
-    localStorage.setItem(DOCKS_KEY, JSON.stringify(layout));
-  } catch {
-    /* a full/blocked localStorage must never break the layout */
-  }
+  setUi("docks", layout);
 }
 
 /** The right-column dock ids a user can pick as the active tab
@@ -261,11 +257,28 @@ interface AppState {
   projects: Project[];
   /** The cloud model catalog (built-ins + custom), for the picker + settings. */
   cloudModels: CloudModel[];
-  /** Whether the projects screen overlay is open. */
-  projectsOpen: boolean;
+  /** Whether Home — the board of threads across every project, with its
+   *  ledger and cards lenses — is open. It is the application's navigation
+   *  root. */
+  homeOpen: boolean;
   /** Project whose getting-started/files page was opened explicitly. Null shows
-   *  the project list instead. */
+   *  the Ledger board instead. */
   projectHomePath: string | null;
+  /** The Ledger's last backend snapshot; null until the first read. Holds the
+   *  authoritative running set and the last-seen mark the board renders ✦
+   *  against. Live events layer on top via `runStatus`. */
+  ledger: LedgerSnapshot | null;
+  /** Per-workspace git overviews for the board's train banners. */
+  ledgerGit: Record<string, GitOverview>;
+  /** Tool-call starts per session, every session — cached thread or not. The
+   *  Ledger's dust puffs key off these counters bumping; numbers only, so the
+   *  map stays feather-light no matter how many chats a day sees. */
+  trailDust: Record<string, number>;
+  /** The tool each session swung most recently — every session, cached thread
+   *  or not. The board's "riding now" lanes render this live ("⚙ edit_file
+   *  src/…"); `at` keys the update flash. Cleared when the turn settles so an
+   *  idle wagon never wears a stale verb. */
+  trailActivity: Record<string, { name: string; detail: string; at: number } | undefined>;
   /** Known session infos by id, so switching to a live chat keeps its header. */
   infos: Record<string, SessionInfo>;
   /** Live thread items per session id. */
@@ -372,7 +385,22 @@ interface AppState {
   resume: (id: string) => Promise<void>;
   /** Permanently delete a chat; if it was the current one, open a fresh chat. */
   removeSession: (id: string) => Promise<void>;
-  setProjectsOpen: (open: boolean) => void;
+  /** Permanently delete many chats at once (the archive purge): one state
+   *  sweep, one history+board refresh at the end. */
+  removeSessions: (ids: string[]) => Promise<void>;
+  /** Open/close Home. Opening refreshes the board; closing records the
+   *  visit, so the next look knows what "since you left" means. */
+  setHomeOpen: (open: boolean) => void;
+  /** Re-read the board: snapshot first (threads paint immediately), then git
+   *  banners for the workspaces it surfaced. */
+  refreshLedger: () => Promise<void>;
+  /** Tie off a thread, optionally with a one-line closing note. */
+  settleThread: (id: string, note?: string) => Promise<void>;
+  /** Bring a settled (or lost) thread back to the trail. */
+  reopenThread: (id: string) => Promise<void>;
+  /** Curate a thread for the training dataset from the board ("" | "kept" |
+   *  "rejected"), keeping the Ledger and the history list in step. */
+  setThreadReview: (id: string, status: ReviewStatus) => Promise<void>;
   /** Open a project's getting-started, guidance, and reference-files page. */
   openProjectHome: (path: string) => void;
   /** Make project-scoped surfaces point at a project without creating a chat. */
@@ -539,6 +567,16 @@ export const useStore = create<AppState>((set, get) => {
   const genSamples = new Map<string, { start: number; tokens: number; last: number }>();
   const BURST_GAP_MS = 1200;
 
+  // Mid-turn ledger repaints (live plan ticks) ride on tool events, which can
+  // land in bursts — one snapshot read per second is plenty for a board.
+  let ledgerRefreshedAt = 0;
+  function refreshLedgerSoon(s: AppState) {
+    const now = Date.now();
+    if (now - ledgerRefreshedAt < 1000) return;
+    ledgerRefreshedAt = now;
+    void s.refreshLedger();
+  }
+
   // Drive one turn for `id` (a fresh send, or a retry that continues the existing
   // transcript), then either send the next queued prompt or settle the run status
   // (read if the chat is in view, unread if it finished offscreen). The turn's UI
@@ -607,6 +645,10 @@ export const useStore = create<AppState>((set, get) => {
             return { runStatus };
           });
         }
+        // The turn settled: the wagon parks and its live verb comes off.
+        set((s) => ({ trailActivity: { ...s.trailActivity, [id]: undefined } }));
+        // A wagon just arrived somewhere — if the board is up, let it move.
+        if (get().homeOpen) void get().refreshLedger();
       });
   }
 
@@ -623,7 +665,7 @@ export const useStore = create<AppState>((set, get) => {
   return {
     mode: initialMode(),
     theme: null,
-    heroGame: localStorage.getItem(HERO_GAME_KEY),
+    heroGame: getUi("heroGame") ?? null,
     gameDockOpen: false,
     session: null,
     totalTokensUsed: 0,
@@ -632,10 +674,14 @@ export const useStore = create<AppState>((set, get) => {
     projects: [],
     cloudModels: [],
     localSwitch: null,
-    // Projects is the application's navigation root. Established projects
-    // enter their latest chat; their home is opened explicitly from chat.
-    projectsOpen: true,
+    // Home is the application's navigation root: every thread across every
+    // project, and the way into any of them.
+    homeOpen: true,
     projectHomePath: null,
+    ledger: null,
+    ledgerGit: {},
+    trailDust: {},
+    trailActivity: {},
     infos: {},
     threads: {},
     liveTokens: {},
@@ -670,13 +716,13 @@ export const useStore = create<AppState>((set, get) => {
 
     setMode: (mode) => {
       document.documentElement.dataset.theme = mode;
-      localStorage.setItem(MODE_KEY, mode);
+      setUi("mode", mode);
       set({ mode });
     },
     toggleMode: () => get().setMode(get().mode === "light" ? "dark" : "light"),
 
     setHeroGame: (name) => {
-      localStorage.setItem(HERO_GAME_KEY, name);
+      setUi("heroGame", name);
       set({ heroGame: name });
     },
     setGameDockOpen: (open) => set({ gameDockOpen: open }),
@@ -831,9 +877,99 @@ export const useStore = create<AppState>((set, get) => {
       if (wasCurrent) await get().startNewSession();
     },
 
-    setProjectsOpen: (projectsOpen) => set({ projectsOpen, projectHomePath: null }),
+    removeSessions: async (ids) => {
+      // The archive purge: many chats at once, one state sweep, one refresh.
+      for (const id of ids) {
+        await deleteSession(id);
+        genSamples.delete(id);
+      }
+      const gone = new Set(ids);
+      const wasCurrent = gone.has(get().session?.session_id ?? "");
+      set((s) => {
+        const drop = <T,>(rec: Record<string, T>) => {
+          const copy = { ...rec };
+          for (const id of ids) delete copy[id];
+          return copy;
+        };
+        return {
+          session: wasCurrent ? null : s.session,
+          threads: drop(s.threads),
+          infos: drop(s.infos),
+          runStatus: drop(s.runStatus),
+          codeReview: drop(s.codeReview),
+          fleets: drop(s.fleets),
+          queues: drop(s.queues),
+          canvases: drop(s.canvases),
+          activeCanvas: drop(s.activeCanvas),
+          canvasWriting: drop(s.canvasWriting),
+          streamingTool: drop(s.streamingTool),
+          streamingCanvas: drop(s.streamingCanvas),
+          liveTokens: drop(s.liveTokens),
+          sessionUsage: drop(s.sessionUsage),
+          tokensPerSecond: drop(s.tokensPerSecond),
+          compression: drop(s.compression),
+          previews: drop(s.previews),
+          previewClosed: drop(s.previewClosed),
+          previewErrors: drop(s.previewErrors),
+          rightTab: drop(s.rightTab),
+          editorTabs: drop(s.editorTabs),
+          snippets: drop(s.snippets),
+        };
+      });
+      await Promise.all([get().refreshHistory(), get().refreshLedger()]);
+      if (wasCurrent) await get().startNewSession();
+    },
 
-    openProjectHome: (projectHomePath) => set({ projectsOpen: true, projectHomePath }),
+    setHomeOpen: (homeOpen) => {
+      if (homeOpen) {
+        void get().refreshLedger();
+      } else if (get().homeOpen) {
+        // Leaving the board is what "seen" means: the ✦ story stays intact
+        // for the whole visit and resets only once the user rides out.
+        ledgerMarkSeen().catch(() => {});
+      }
+      set({ homeOpen, projectHomePath: null });
+    },
+
+    refreshLedger: async () => {
+      try {
+        const snapshot = await ledgerSnapshot();
+        set({ ledger: snapshot });
+        // Git banners are decoration on top of the board — fetch them after
+        // the threads paint, only for workspaces still on the trail.
+        const paths = [
+          ...new Set(
+            snapshot.entries
+              .filter((e) => !e.settle)
+              .map((e) => e.workspace)
+              .filter(Boolean),
+          ),
+        ];
+        if (paths.length > 0) {
+          const git = await workspaceGit(paths);
+          set({ ledgerGit: git });
+        }
+      } catch {
+        /* keep the previous board on a transient error */
+      }
+    },
+
+    settleThread: async (id, note) => {
+      await settleSession(id, note);
+      await get().refreshLedger();
+    },
+
+    reopenThread: async (id) => {
+      await reopenSession(id);
+      await get().refreshLedger();
+    },
+
+    setThreadReview: async (id, status) => {
+      await setReviewStatusIpc(id, status);
+      await Promise.all([get().refreshLedger(), get().refreshHistory()]);
+    },
+
+    openProjectHome: (projectHomePath) => set({ homeOpen: true, projectHomePath }),
 
     selectProject: async (path) => {
       await setActiveProject(path);
@@ -852,12 +988,14 @@ export const useStore = create<AppState>((set, get) => {
 
     enterProject: async (path) => {
       await get().prepareProject(path);
-      set({ projectsOpen: false, projectHomePath: null });
+      get().setHomeOpen(false);
     },
 
     removeProject: async (path) => {
       await deleteProject(path);
-      await get().refreshHistory();
+      // Both lists must forget it: the projects (cards, quiet rows) and the
+      // board snapshot (its threads no longer make a train).
+      await Promise.all([get().refreshHistory(), get().refreshLedger()]);
     },
 
     adoptSession: (info) =>
@@ -1251,7 +1389,21 @@ export const useStore = create<AppState>((set, get) => {
       }));
     },
 
-    ingestTool: (e) =>
+    ingestTool: (e) => {
+      // The Ledger watches every session, cached thread or not: dust rises on
+      // any tool start, and a finished plan update repaints the board mid-turn
+      // (the agent persists the snapshot as the call lands).
+      if (e.phase === "start") {
+        set((s) => ({
+          trailDust: { ...s.trailDust, [e.session]: (s.trailDust[e.session] ?? 0) + 1 },
+          trailActivity: {
+            ...s.trailActivity,
+            [e.session]: { name: e.name, detail: e.detail, at: Date.now() },
+          },
+        }));
+      } else if (e.name === "update_plan" && get().homeOpen) {
+        refreshLedgerSoon(get());
+      }
       set((s) => {
         if (s.threads[e.session] === undefined) return {};
         const updated =
@@ -1265,7 +1417,8 @@ export const useStore = create<AppState>((set, get) => {
           threads: { ...s.threads, [e.session]: updated },
           streamingTool: { ...s.streamingTool, [e.session]: undefined },
         };
-      }),
+      });
+    },
 
     ingestToolDelta: (e) =>
       set((s) => {
@@ -1680,7 +1833,7 @@ export function useActiveProject(): { path: string; name: string } | null {
 }
 
 function initialMode(): Mode {
-  const saved = localStorage.getItem(MODE_KEY) as Mode | null;
+  const saved = getUi("mode") as Mode | undefined;
   const mode =
     saved ??
     (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark");

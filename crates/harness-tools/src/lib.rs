@@ -37,6 +37,7 @@ pub mod fs;
 pub mod git;
 mod http_body;
 pub mod plan;
+pub mod trail;
 pub mod process;
 pub mod retrieve;
 pub mod sandbox;
@@ -54,8 +55,15 @@ pub use fs::{
     SEARCH_FILES_TOOL, WRITE_FILE_TOOL,
 };
 pub use git::GIT_TOOL;
-pub use plan::{parse_plan_arguments, plan_is_open, PlanItem, PlanStatus, PlanTool, PLAN_TOOL};
+pub use plan::{
+    parse_plan_arguments, plan_is_open, plan_snapshot, PlanItem, PlanSnapshot, PlanStatus,
+    PlanTool, PLAN_TOOL,
+};
 pub use retrieve::{RetrieveOriginalTool, RETRIEVE_ORIGINAL_TOOL};
+pub use trail::{
+    merge_trail, parse_trail_arguments, TrailSnapshot, TrailTool, Waypoint, WaypointStatus,
+    TRAIL_TOOL,
+};
 pub use sandbox::Workspace;
 pub use shell::RUN_SHELL_TOOL;
 pub use skill::{Skill, SkillScope, SkillTool, SKILL_TOOL};
@@ -572,6 +580,8 @@ impl ToolRegistry {
             .with_typed(git::GitTool::new(workspace.clone()))
             // Planning/checklist tool — always available so any host gets it.
             .with_typed(plan::PlanTool::new())
+            // The session's macro journey (title + waypoints) for the Ledger.
+            .with_typed(trail::TrailTool::new())
             // Fetch a web page into context (no key needed); pairs with the
             // web_search tool registered just below.
             .with_typed(web_fetch::WebFetchTool::new());
@@ -696,6 +706,7 @@ mod tests {
                 fs::SEARCH_FILES_TOOL,
                 tasks::TASK_OUTPUT_TOOL,
                 plan::PLAN_TOOL,
+                trail::TRAIL_TOOL,
                 web_fetch::WEB_FETCH_TOOL,
                 web::WEB_SEARCH_TOOL,
                 fs::WRITE_FILE_TOOL,
@@ -718,6 +729,13 @@ mod tests {
         // spend; `schema_for` strips what carries no meaning. Two raises in one
         // feature is the limit: the next tool either replaces one, or argues
         // for its permanent prefix cost in the commit that adds it.
+        //
+        // `update_trail` (~1.7K, budget 12K → 13.5K): the Ledger home screen
+        // renders every session's journey from the snapshot this tool
+        // maintains — it is the one tool whose absence degrades a headline
+        // surface for every thread, and its guidance (when to chart, the
+        // standard route, how it differs from update_plan) is what keeps
+        // models from spamming it or skipping it.
         let workspace = Workspace::new(".").unwrap();
         let registry = ToolRegistry::default_for_workspace(workspace);
         let chars: usize = registry
@@ -726,8 +744,8 @@ mod tests {
             .map(|d| d.to_string().len())
             .sum();
         assert!(
-            chars < 12_000,
-            "default tool definitions grew to {chars} chars (budget 12000)"
+            chars < 13_500,
+            "default tool definitions grew to {chars} chars (budget 13500)"
         );
     }
 }

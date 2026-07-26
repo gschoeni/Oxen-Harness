@@ -229,7 +229,7 @@ pub fn suggestions() -> Vec<Suggestion> {
             title: "Keep credentials out of the code",
             why: "A key written into a file is a key in your git history, whether or not it ships.",
             catches: "api_key = \"…\", password: \"…\"",
-            example: r#"API_KEY = "sk-live-9f2a7c4e18bd""#,
+            example: r#"API_KEY = "xxxx-not-a-real-key""#,
             pattern: r#"(?i)(api[_-]?key|secret|password|token)\s*[:=]\s*["'][^"']{12,}"#,
             interrupt: true,
             message: "Don't write credentials into files. Read them from the environment, and tell me which variable to set.",
@@ -407,7 +407,7 @@ mod tests {
         assert!(!hits("no-unwrap", "let v = x?;"));
         assert!(hits(
             "no-hardcoded-secrets",
-            r#"API_KEY = "sk-live-abcdefghijkl""#
+            r#"API_KEY = "xxxx-not-a-real-key""#
         ));
         assert!(!hits("no-hardcoded-secrets", r#"api_key = env("API_KEY")"#));
         assert!(hits("no-any", "const x: any = 1;"));

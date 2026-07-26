@@ -60,12 +60,12 @@ describe("Sidebar", () => {
     expect(ipc.resumeSession).toHaveBeenCalledWith("s2");
   });
 
-  // The Projects back-link is column chrome now (above the Chats/Files tabs),
+  // The home back-link is column chrome now (above the Chats/Files tabs),
   // not part of the Sidebar — see ProjectsNav.
-  it("opens the projects page from the Projects nav", async () => {
+  it("opens Home from the nav", async () => {
     render(<ProjectsNav />);
-    await userEvent.click(screen.getByRole("button", { name: /all projects/i }));
-    expect(useStore.getState().projectsOpen).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: /^home/i }));
+    expect(useStore.getState().homeOpen).toBe(true);
   });
 
   it("signals activity in other projects on the Projects nav", () => {

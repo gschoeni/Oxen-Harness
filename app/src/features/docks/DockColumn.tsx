@@ -104,15 +104,9 @@ export function DockColumn({
 
   if (!available.length) return null;
 
-  // Whatever mark this side wants to keep visible when collapsed (the app's
-  // logo, for the chat list) — so the column's top holds its place and the
-  // layout doesn't lurch when you collapse it.
-  const railHeader = available.find((d) => d.railHeader)?.railHeader;
-
   if (collapsed) {
     return (
       <nav className={`dock-rail ${side}`} aria-label={`Collapsed ${side} panel`}>
-        {railHeader && <div className="dock-rail-brand">{railHeader()}</div>}
         <button
           className="dock-rail-btn"
           onClick={expand}

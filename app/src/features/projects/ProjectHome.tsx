@@ -1,10 +1,13 @@
 import { FormEvent, useState } from "react";
-import { ArrowLeft, FileImage, FileText, FolderOpen, MessageSquare, Paperclip, Pencil, Plus, Send, X } from "lucide-react";
+import { ArrowLeft, FileImage, FileText, FolderOpen, MessageSquare, Paperclip, Pencil, Plus, Send, Trash2, X } from "lucide-react";
 import { Button, IconButton, Modal } from "../../components/ui";
 import { addProjectContext, pickProjectContext, removeProjectContext, updateProject } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import type { Project, ProjectContext, StartupModelChoice } from "../../lib/types";
 import { ModelPicker } from "../chat/ModelPicker";
+import { ProjectTrail } from "../ledger/ProjectTrail";
+import { useBoard } from "../ledger/useBoard";
+import "./projects.css";
 
 export function ProjectHome({
   project,
@@ -15,7 +18,7 @@ export function ProjectHome({
   onBack: () => void;
   onProjectChanged: (project: Project) => Promise<void> | void;
 }) {
-  const setProjectsOpen = useStore((state) => state.setProjectsOpen);
+  const setHomeOpen = useStore((state) => state.setHomeOpen);
   const prepareProject = useStore((state) => state.prepareProject);
   const send = useStore((state) => state.send);
   const [prompt, setPrompt] = useState("");
@@ -27,9 +30,32 @@ export function ProjectHome({
   const [startingChat, setStartingChat] = useState(false);
   const [chatError, setChatError] = useState("");
   const [startupModel, setStartupModel] = useState<StartupModelChoice | null>(null);
+  const removeProject = useStore((state) => state.removeProject);
+  const [pendingDelete, setPendingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function confirmDelete() {
+    setDeleting(true);
+    try {
+      await removeProject(project.path);
+      // The project is gone — there is no page left to stand on.
+      onBack();
+    } finally {
+      setDeleting(false);
+      setPendingDelete(false);
+    }
+  }
   const cleanName = name.trim();
   const cleanGoal = goal.trim();
   const detailsChanged = name !== project.name || goal !== project.description;
+  // Whether this project has anything to show on its trail (open, settled, or
+  // lost threads) — with history, the getting-started hint yields to it.
+  const board = useBoard();
+  const hasTrail =
+    !!board &&
+    (board.trains.some((t) => t.workspace === project.path) ||
+      board.settled.some((t) => t.entry.workspace === project.path) ||
+      board.lost.some((t) => t.entry.workspace === project.path));
 
   async function saveDetails() {
     if (!cleanName || !detailsChanged || savingDetails) return;
@@ -53,7 +79,7 @@ export function ProjectHome({
     setChatError("");
     try {
       await prepareProject(project.path, startupModel ?? undefined);
-      setProjectsOpen(false);
+      setHomeOpen(false);
       send(text);
     } catch (reason) {
       setChatError(String(reason));
@@ -85,7 +111,17 @@ export function ProjectHome({
   return (
     <main className="project-home">
       <header className="project-home-header">
-        <button className="project-breadcrumb" onClick={onBack}><ArrowLeft size={15} /> Projects</button>
+        <button className="project-breadcrumb" onClick={onBack}><ArrowLeft size={13} /> Home</button>
+        {/* The quiet way out, same manners as the cards: corner trash, always
+            behind a confirm, never louder than the work. */}
+        <button
+          className="project-home-delete"
+          title="Remove project"
+          aria-label={`Remove project: ${cleanName || project.name}`}
+          onClick={() => setPendingDelete(true)}
+        >
+          <Trash2 size={15} />
+        </button>
         <div className="project-home-heading">
           <div className="project-home-identity">
             <h1 aria-label={cleanName || "Untitled project"}>
@@ -157,10 +193,17 @@ export function ProjectHome({
             </div>
           </form>
           {chatError && <div className="project-home-error" role="alert">Could not start this chat: {chatError}</div>}
-          <div className="project-home-empty">
-            <MessageSquare size={28} />
-            <p>Start with a task and the agent will pick up the project goal, instructions, and references automatically.</p>
-          </div>
+          {/* The project's full trail — every open thread, no cap. The home
+              board's "…and N more on this trail" lands here. A project with
+              history doesn't need the getting-started hint anymore. */}
+          {hasTrail ? (
+            <ProjectTrail workspace={project.path} />
+          ) : (
+            <div className="project-home-empty">
+              <MessageSquare size={28} />
+              <p>Start with a task and the agent will pick up the project goal, instructions, and references automatically.</p>
+            </div>
+          )}
         </section>
 
         <aside className="project-context-panel">
@@ -197,6 +240,23 @@ export function ProjectHome({
           </section>
         </aside>
       </div>
+
+      {pendingDelete && (
+        <Modal title="Remove project?" onClose={() => !deleting && setPendingDelete(false)}>
+          <p className="delete-confirm-text">
+            Remove <strong>{cleanName || project.name}</strong> from your projects? Its folder and
+            chat history stay on disk — it just won’t be listed here anymore.
+          </p>
+          <div className="delete-confirm-actions">
+            <Button variant="ghost" onClick={() => setPendingDelete(false)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={confirmDelete} disabled={deleting}>
+              {deleting ? "Removing…" : "Remove"}
+            </Button>
+          </div>
+        </Modal>
+      )}
 
       {editingInstructions && (
         <EditInstructionsModal

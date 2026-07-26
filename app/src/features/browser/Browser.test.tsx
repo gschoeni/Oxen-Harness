@@ -16,7 +16,7 @@ beforeEach(() => {
     session: { ...ipc.sampleSession, session_id: "s1" },
     // resetAll boots on the Projects page, which counts as an overlay the
     // native webview must hide under — close it so the pane can attach.
-    projectsOpen: false,
+    homeOpen: false,
   });
 });
 

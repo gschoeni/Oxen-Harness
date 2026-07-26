@@ -296,3 +296,102 @@ async fn answering_an_unknown_question_id_is_ignored() {
         },
     );
 }
+
+/// The Ledger surface end-to-end: a turn leaves a titled, fresh entry; a plan
+/// laid out before snapshots existed is backfilled from the transcript;
+/// settling and reopening round-trip; the seen mark advances.
+#[tokio::test]
+async fn ledger_snapshot_derives_entries_and_settles_round_trip() {
+    let mut server = mockito::Server::new_async().await;
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink, workspace.path());
+
+    let mock = sse_mock(&mut server, FINAL_SSE);
+    let info = service.new_session().await.unwrap();
+    let session = info.session_id.clone();
+    service
+        .run_turn(&session, "what is 2 + 3?".to_string(), vec![])
+        .await
+        .unwrap();
+    mock.assert_async().await;
+
+    // Simulate a pre-snapshot-era plan: the tool call is in the transcript,
+    // but no `session_state` projection exists — the snapshot must backfill.
+    let store = service.store().unwrap();
+    store
+        .append_message(
+            &session,
+            &serde_json::json!({
+                "role": "assistant", "content": null,
+                "tool_calls": [{"id": "c1", "type": "function", "function": {
+                    "name": "update_plan",
+                    "arguments": "{\"plan\":[{\"content\":\"A\",\"active_form\":\"Doing A\",\"status\":\"completed\"},{\"content\":\"B\",\"active_form\":\"Doing B\",\"status\":\"pending\"}]}"
+                }}]
+            }),
+        )
+        .unwrap();
+
+    // A charted journey (normally written by the agent as `update_trail`
+    // lands) and a curation verdict both surface on the entry.
+    store
+        .save_session_state(
+            &session,
+            harness_store::TRAIL_STATE,
+            &serde_json::json!({
+                "title": "sum two numbers",
+                "waypoints": [
+                    {"name": "define", "status": "done"},
+                    {"name": "answer", "status": "current"},
+                ],
+            }),
+        )
+        .unwrap();
+    store.set_review_status(&session, "kept").unwrap();
+
+    let snapshot = service.ledger_snapshot().await.unwrap();
+    assert_eq!(snapshot.last_seen, 0, "board never marked seen yet");
+    assert!(snapshot.running.is_empty());
+    let entry = snapshot
+        .entries
+        .iter()
+        .find(|e| e.id == session)
+        .expect("the session has a ledger entry");
+    assert_eq!(entry.title, "what is 2 + 3?");
+    assert!(entry.settle.is_none());
+    let trail = entry.trail.as_ref().expect("charted trail surfaces");
+    assert_eq!(trail.title, "sum two numbers");
+    assert_eq!(trail.waypoints[1].status, "current");
+    assert_eq!(entry.review_status, "kept");
+    // The appended assistant message is the transcript tail: not mid-turn.
+    assert!(!entry.mid_turn);
+    let plan = entry.plan.as_ref().expect("plan backfilled from transcript");
+    assert_eq!((plan.done, plan.total), (1, 2));
+
+    // The backfill persisted its verdict: a second read must not rescan.
+    assert!(store
+        .session_state::<serde_json::Value>(&session, harness_store::PLAN_STATE)
+        .unwrap()
+        .is_some());
+
+    // Settle with a note, see it in the snapshot, then reopen.
+    let settled = service.settle_session(&session, "  shipped as PR #42  ").unwrap();
+    assert_eq!(settled.note, "shipped as PR #42");
+    let snapshot = service.ledger_snapshot().await.unwrap();
+    let entry = snapshot.entries.iter().find(|e| e.id == session).unwrap();
+    assert_eq!(entry.settle.as_ref().unwrap().note, "shipped as PR #42");
+
+    service.reopen_session(&session).unwrap();
+    let snapshot = service.ledger_snapshot().await.unwrap();
+    let entry = snapshot.entries.iter().find(|e| e.id == session).unwrap();
+    assert!(entry.settle.is_none());
+
+    // Settling a session that doesn't exist is a clean error.
+    assert!(service.settle_session("nope", "").is_err());
+
+    // Marking seen advances the mark the next snapshot reports.
+    let seen = service.mark_ledger_seen().unwrap();
+    assert!(seen > 0);
+    let snapshot = service.ledger_snapshot().await.unwrap();
+    assert_eq!(snapshot.last_seen, seen);
+}

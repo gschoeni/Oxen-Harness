@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use tauri::{Emitter, Manager, RunEvent};
 
 mod browser;
+mod cli_open;
 mod commands;
 mod events;
 mod preview;
@@ -56,10 +57,20 @@ pub fn run() {
             );
         }
     }
-    // Start in the last active project (or the launch directory on first run).
-    let initial_project = read_projects_config()
-        .active
+    // A directory passed on the command line (`oxen-harness ui <dir>`) becomes
+    // the active project before state is built, so a cold start opens straight
+    // into it. Otherwise start in the last active project (or the launch
+    // directory on first run).
+    let cli_dir = cli_open::dir_from_args(
+        std::env::args(),
+        &std::env::current_dir().unwrap_or_default(),
+    );
+    if let Some(dir) = &cli_dir {
+        let _ = commands::project::remember_project(dir);
+    }
+    let initial_project = cli_dir
         .map(PathBuf::from)
+        .or_else(|| read_projects_config().active.map(PathBuf::from))
         .unwrap_or_else(launch_dir);
     // Start on the model the user last chose: the selected cloud model, plus any
     // persisted local model (its server is started lazily on first use). Both are
@@ -67,6 +78,12 @@ pub fn run() {
     let initial_model = harness_runtime::models::selected();
     let initial_local = harness_runtime::models::active_local();
     tauri::Builder::default()
+        // First, so no other plugin runs in a doomed second instance: when the
+        // app is already open, a new launch (`oxen-harness ui <dir>`) forwards
+        // its argv + cwd to the running instance and exits.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            cli_open::open_from_second_instance(app, &argv, &cwd);
+        }))
         .plugin(tauri_plugin_dialog::init())
         // The main webview IS the app: navigating it to a clicked link would
         // replace the entire UI with that page, with no way back. The frontend
@@ -111,7 +128,6 @@ pub fn run() {
                 initial_local,
             ));
             app.manage(commands::watch::FsWatchState::default());
-            app.manage(commands::dataset::DatasetCache::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -159,6 +175,11 @@ pub fn run() {
             commands::session::daily_usage,
             commands::session::new_session,
             commands::session::resume_session,
+            commands::ledger::ledger_snapshot,
+            commands::ledger::settle_session,
+            commands::ledger::reopen_session,
+            commands::ledger::ledger_mark_seen,
+            commands::ledger::workspace_git,
             commands::browser::browser_attach,
             commands::browser::browser_detach,
             commands::browser::browser_close,
@@ -178,8 +199,6 @@ pub fn run() {
             commands::files::fs_read_file,
             commands::files::fs_write_file,
             commands::files::fs_create_entry,
-            commands::dataset::dataset_query,
-            commands::dataset::dataset_write_cell,
             commands::watch::fs_watch,
             commands::watch::fs_unwatch,
             commands::project::list_projects,
@@ -235,7 +254,9 @@ pub fn run() {
             commands::theme::remove_theme,
             commands::theme::new_theme,
             commands::theme::theme_location,
-            commands::theme::set_theme_location
+            commands::theme::set_theme_location,
+            commands::ui::load_ui_state,
+            commands::ui::save_ui_state
         ])
         .build(tauri::generate_context!())
         .expect("error while building oxen-harness desktop app")

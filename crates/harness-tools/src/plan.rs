@@ -98,6 +98,31 @@ pub fn plan_is_open(items: &[PlanItem]) -> bool {
     items.iter().any(|it| it.status != PlanStatus::Completed)
 }
 
+/// A compact reading of a plan — "3/5, currently: Running tests" — small
+/// enough to persist per session and render on an overview surface (the
+/// Ledger's wagon rows) without ever loading the transcript it came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanSnapshot {
+    /// Items marked completed.
+    pub done: usize,
+    /// Items in the plan overall.
+    pub total: usize,
+    /// The in-progress item's `active_form`, when one is underway.
+    pub active: Option<String>,
+}
+
+/// Condense a validated plan into its [`PlanSnapshot`].
+pub fn plan_snapshot(items: &[PlanItem]) -> PlanSnapshot {
+    PlanSnapshot {
+        done: completed(items),
+        total: items.len(),
+        active: items
+            .iter()
+            .find(|it| it.status == PlanStatus::InProgress)
+            .map(|it| it.active_form.clone()),
+    }
+}
+
 /// Number of completed items in a plan.
 fn completed(items: &[PlanItem]) -> usize {
     items
@@ -273,6 +298,29 @@ mod tests {
         })
         .to_string();
         assert!(parse_plan_arguments(&two_active).is_none());
+    }
+
+    #[test]
+    fn snapshot_condenses_counts_and_active_item() {
+        let items = parse_plan(&serde_json::json!({
+            "plan": [
+                item("Research", "completed"),
+                item("Build", "in_progress"),
+                item("Verify", "pending"),
+            ]
+        }))
+        .unwrap();
+        let snap = plan_snapshot(&items);
+        assert_eq!((snap.done, snap.total), (1, 3));
+        assert_eq!(snap.active.as_deref(), Some("Building"));
+
+        let all_done = parse_plan(&serde_json::json!({
+            "plan": [item("Research", "completed")]
+        }))
+        .unwrap();
+        let snap = plan_snapshot(&all_done);
+        assert_eq!((snap.done, snap.total), (1, 1));
+        assert_eq!(snap.active, None);
     }
 
     #[test]

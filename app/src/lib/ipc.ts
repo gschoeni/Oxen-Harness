@@ -35,8 +35,11 @@ import type {
   ImportReport,
   CanvasEvent,
   FsChangedEvent,
+  GitOverview,
+  LedgerSnapshot,
   OpenFileEvent,
   Project,
+  SettleState,
   StartProjectInput,
   SessionView,
   Theme,
@@ -56,8 +59,6 @@ import type {
   RuleSpec,
   RuleSuggestion,
   ChatMessage,
-  DatasetPage,
-  DatasetQueryReq,
   FileBody,
   FileEntry,
   ToolDefinition,
@@ -134,6 +135,15 @@ export const setToolEnabled = (name: string, enabled: boolean) =>
 export const setToolDescription = (name: string, description: string | null) =>
   invoke<void>("set_tool_description", { name, description });
 
+// ---- desktop UI preferences (~/.oxen-harness/ui.json) -----------------------
+
+/** The saved UI preferences object, or null on first run. Loaded once at boot
+ *  by `lib/uiState.ts` — components read through that cache, not this call. */
+export const loadUiState = () => invoke<Record<string, unknown> | null>("load_ui_state");
+/** Persist the full UI preferences object (always the whole state). */
+export const saveUiState = (state: Record<string, unknown>) =>
+  invoke<void>("save_ui_state", { state });
+
 // ---- context compression (shrink stale tool output on the wire) -------------
 
 /** The persisted context-compression mode ("off" | "audit" | "on"). */
@@ -188,11 +198,32 @@ export const setReviewStatus = (id: string, status: string) =>
 export const setReviewStatusMany = (ids: string[], status: string) =>
   invoke<number>("set_review_status_many", { ids, status });
 
+// ---- the Ledger (the home board of threads across every project) -----------
+
+/** Every native thread with derived status, the in-flight session ids, and
+ *  the last-seen mark — the board's one read. */
+export const ledgerSnapshot = () => invoke<LedgerSnapshot>("ledger_snapshot");
+/** Tie off a thread, optionally with a one-line closing note. */
+export const settleSession = (id: string, note?: string) =>
+  invoke<SettleState>("settle_session", { id, note });
+/** Bring a settled thread back to the trail. */
+export const reopenSession = (id: string) => invoke<void>("reopen_session", { id });
+/** Record that the user just looked at the board; resolves with the new mark. */
+export const ledgerMarkSeen = () => invoke<number>("ledger_mark_seen");
+/** Git overviews for workspaces, keyed by path; non-repos are absent. */
+export const workspaceGit = (paths: string[]) =>
+  invoke<Record<string, GitOverview>>("workspace_git", { paths });
+
 // ---- projects (chats grouped by working directory) -------------------------
 
 export const listProjects = () => invoke<Project[]>("list_projects");
 /** Add a folder as a project and make it active; new chats root there. */
 export const openProject = (path: string) => invoke<Project>("open_project", { path });
+/** Fires when a directory arrives from the command line (`oxen-harness ui <dir>`)
+ *  while the app is already running — the single-instance guard focused the
+ *  window and forwarded the directory; enter that project. */
+export const onProjectOpen = (handler: (path: string) => void) =>
+  listen<{ path: string }>("project://open", (e) => handler(e.payload.path));
 /** Switch the active project to an already-known directory. */
 export const setActiveProject = (path: string) => invoke<void>("set_active_project", { path });
 /** Select a cloud model for future chats without mutating the chat currently on screen. */
@@ -228,23 +259,6 @@ export const fsWriteFile = (root: string, path: string, content: string) =>
 /** Create an empty file or a folder (fails if the path already exists). */
 export const fsCreateEntry = (root: string, path: string, isDir: boolean) =>
   invoke<void>("fs_create_entry", { root, path, isDir });
-
-/** Read one window of a CSV/TSV/JSONL/Parquet file (paged, sorted, searched
- *  server-side — the webview only ever holds the visible rows). */
-export const datasetQuery = (root: string, path: string, req: DatasetQueryReq) =>
-  invoke<DatasetPage>("dataset_query", { root, path, req });
-
-/** Write one edited cell back to a data file, addressed by physical row.
- *  `expectedMtimeMs` is the page's staleness token; the returned mtime is the
- *  token for the next edit. */
-export const datasetWriteCell = (
-  root: string,
-  path: string,
-  row: number,
-  column: string,
-  value: string | number | boolean | null,
-  expectedMtimeMs?: number,
-) => invoke<number>("dataset_write_cell", { root, path, row, column, value, expectedMtimeMs });
 
 /** Start native FS watching of a workspace root (idempotent). Changes arrive
  *  as debounced `fs://changed` batches — see {@link onFsChanged}. */

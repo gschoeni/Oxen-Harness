@@ -1,13 +1,14 @@
-// The left column's top-level nav: back to the Projects page. It sits above
-// the dock tab strip (Chats / Files) — column chrome, not dock content — so
-// the way back to Projects is one click from either tab.
+// The left column's top-level nav: back to the Ledger, the home board of
+// threads across every project. It sits above the dock tab strip (Chats /
+// Files) — column chrome, not dock content — so home is one click from
+// either tab.
 
 import { useMemo } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useStore } from "../../lib/store";
 
 export function ProjectsNav() {
-  const setProjectsOpen = useStore((s) => s.setProjectsOpen);
+  const setHomeOpen = useStore((s) => s.setHomeOpen);
   const sessions = useStore((s) => s.sessions);
   const runStatus = useStore((s) => s.runStatus);
   const activePath = useStore(
@@ -15,7 +16,7 @@ export function ProjectsNav() {
   );
 
   // Chats running in *other* projects still deserve a signal — a small dot
-  // here says "something is happening elsewhere".
+  // here says "something is happening elsewhere on the trail".
   const elsewhereBusy = useMemo(
     () =>
       sessions.some(
@@ -27,12 +28,12 @@ export function ProjectsNav() {
   return (
     <button
       className="projects-nav"
-      onClick={() => setProjectsOpen(true)}
-      title="All projects"
-      aria-label="All projects"
+      onClick={() => setHomeOpen(true)}
+      title="Home — all threads, all projects"
+      aria-label="Home"
     >
       <ArrowLeft size={15} />
-      <span>Projects</span>
+      <span>Home</span>
       {elsewhereBusy && <span className="projects-nav-dot" title="Activity in another project" />}
     </button>
   );

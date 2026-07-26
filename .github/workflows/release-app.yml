@@ -1,0 +1,128 @@
+name: Release App
+
+# Builds the Tauri desktop app installers for macOS (both architectures),
+# Linux, and Windows, and uploads them to a draft GitHub release for review.
+# Triggered by pushing an app-vX.Y.Z tag (scripts/release.sh) or called by the
+# cut-release workflow.
+on:
+  push:
+    tags: ["app-v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing app-vX.Y.Z tag to build and release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The tag must match the version baked into the bundles (tauri.conf.json,
+  # which bump-version.sh keeps in sync with package.json and Cargo.toml).
+  verify:
+    name: tag matches app version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - id: v
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="$(scripts/version.sh app)"
+          if [ "$tag" != "app-v$version" ]; then
+            echo "::error::tag $tag does not match app version $version (run scripts/bump-version.sh first)"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: bundle ${{ matrix.name }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            runner: macos-latest
+            rust-target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - name: macos-x86_64
+            runner: macos-latest
+            rust-target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          # 22.04 rather than latest so the AppImage/deb link against an older
+          # glibc and run on more distros.
+          - name: linux-x86_64
+            runner: ubuntu-22.04
+            args: ""
+          - name: windows-x86_64
+            runner: windows-latest
+            args: ""
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+
+      - name: Webview system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Add cross target
+        if: matrix.rust-target != ''
+        run: rustup target add ${{ matrix.rust-target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          key: ${{ matrix.name }}
+
+      - name: Install frontend deps
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      # Builds the app, creates the draft release for the tag on the first
+      # matrix job to finish, and uploads each platform's bundles to it.
+      # The APPLE_* secrets are optional: when unset, macOS bundles are ad-hoc
+      # signed (users must right-click > Open on first launch).
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: app
+          tagName: ${{ needs.verify.outputs.tag }}
+          releaseName: oxen-harness desktop v${{ needs.verify.outputs.version }}
+          releaseDraft: true
+          args: ${{ matrix.args }}

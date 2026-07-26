@@ -78,18 +78,34 @@ impl EditFileArgs {
     /// Collapse the two accepted shapes into one list. Accepting both keeps
     /// the common one-line fix a one-liner while letting a rename land its six
     /// call sites in a single call instead of six round-trips.
-    fn replacements(self) -> Result<Vec<Replacement>, ToolError> {
-        match (self.edits, self.old_string, self.new_string) {
-            (Some(edits), None, None) if !edits.is_empty() => Ok(edits),
-            (None, Some(old_string), Some(new_string)) => Ok(vec![Replacement {
-                old_string,
-                new_string,
+    ///
+    /// Read the model's intent, not its punctuation: models routinely fill in
+    /// EVERY advertised field, leaving the unused form empty (`edits: []`
+    /// beside a real pair, or a populated `edits` beside empty-string
+    /// old/new). An empty form is "unused", never an error — the only real
+    /// error is both forms carrying content, because then the ordering of the
+    /// combined work is a guess. Pinned by the model-dialects corpus test.
+    pub fn replacements(self) -> Result<Vec<Replacement>, ToolError> {
+        let edits = self.edits.unwrap_or_default();
+        let pair = match (self.old_string, self.new_string) {
+            // A both-empty pair is the unused half of the schema, not a
+            // request to replace nothing with nothing.
+            (Some(old), Some(new)) if !(old.is_empty() && new.is_empty()) => Some(Replacement {
+                old_string: old,
+                new_string: new,
                 replace_all: self.replace_all,
-            }]),
-            (Some(_), _, _) => Err(ToolError::InvalidArguments(
-                "pass either `edits` or a single `old_string`/`new_string` pair, not both".into(),
+            }),
+            _ => None,
+        };
+        match (edits.is_empty(), pair) {
+            (false, None) => Ok(edits),
+            (true, Some(pair)) => Ok(vec![pair]),
+            (false, Some(_)) => Err(ToolError::InvalidArguments(
+                "both `edits` and the `old_string`/`new_string` pair carry content — put every \
+                 change in `edits` (or send only the single pair)"
+                    .into(),
             )),
-            _ => Err(ToolError::InvalidArguments(
+            (true, None) => Err(ToolError::InvalidArguments(
                 "`edit_file` needs either `edits` or both `old_string` and `new_string`".into(),
             )),
         }

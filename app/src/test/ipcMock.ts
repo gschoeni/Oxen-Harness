@@ -225,6 +225,8 @@ const emptyView: SessionView = { info: sampleSession, messages: [], running: fal
 
 // ---- mocked command + event functions --------------------------------------
 
+export const loadUiState = vi.fn(async () => null as Record<string, unknown> | null);
+export const saveUiState = vi.fn(async (_state: Record<string, unknown>) => {});
 export const sessionInfo = vi.fn(async () => sampleSession);
 export const listSessions = vi.fn(async () => []);
 export const totalTokensUsed = vi.fn(async () => 0);
@@ -320,6 +322,21 @@ export const newSession = vi.fn(async () => ({ ...sampleSession, session_id: "ne
 export const resumeSession = vi.fn(async () => emptyView);
 export const deleteSession = vi.fn(async () => {});
 export const listProjects = vi.fn(async () => [] as Project[]);
+
+export const setReviewStatus = vi.fn(async () => {});
+export const setReviewStatusMany = vi.fn(async () => 0);
+
+// ---- the Ledger ------------------------------------------------------------
+
+export const emptyLedger = { entries: [], running: [], last_seen: 0 };
+export const ledgerSnapshot = vi.fn(async () => ({ ...emptyLedger }));
+export const settleSession = vi.fn(async (_id: string, note?: string) => ({
+  settled_at: Math.floor(Date.now() / 1000),
+  note: note ?? "",
+}));
+export const reopenSession = vi.fn(async () => {});
+export const ledgerMarkSeen = vi.fn(async () => Math.floor(Date.now() / 1000));
+export const workspaceGit = vi.fn(async () => ({}));
 export const openProject = vi.fn(async (path: string) => ({
   path,
   name: path,
@@ -352,6 +369,7 @@ export const removeProjectContext = vi.fn(async (path: string): Promise<Project>
   path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true, last_used_at: null,
 }));
 export const setActiveProject = vi.fn(async () => {});
+export const onProjectOpen = listener("projectOpen");
 export const selectCloudModelForNewChats = vi.fn(async () => {});
 export const getDefaultProjectLocation = vi.fn(async () => null as string | null);
 export const setDefaultProjectLocation = vi.fn(async (path: string) => path);
@@ -423,30 +441,6 @@ export const fsReadFile = vi.fn(async (_root: string, _path: string) => ({
 }));
 export const fsWriteFile = vi.fn(async (_root: string, _path: string, _content: string) => {});
 export const fsCreateEntry = vi.fn(async (_root: string, _path: string, _isDir: boolean) => {});
-export const emptyDatasetPage = {
-  columns: [] as { name: string; dtype: string; kind: string }[],
-  rows: [] as (string | number | boolean | null)[][],
-  rowIds: [] as number[],
-  totalRows: 0,
-  fileSize: 0,
-  format: "csv",
-  elapsedMs: 0,
-  editable: true,
-  mtimeMs: 0,
-};
-export const datasetQuery = vi.fn(async (_root: string, _path: string, _req: unknown) => ({
-  ...emptyDatasetPage,
-}));
-export const datasetWriteCell = vi.fn(
-  async (
-    _root: string,
-    _path: string,
-    _row: number,
-    _column: string,
-    _value: unknown,
-    _expectedMtimeMs?: number,
-  ) => 0,
-);
 export const fsWatch = vi.fn(async (_root: string) => {});
 export const fsUnwatch = vi.fn(async (_root: string) => {});
 export const onFsChanged = listener("fsChanged");
@@ -593,8 +587,6 @@ export function resetIpc() {
   fsReadFile.mockReset().mockResolvedValue({ content: "", truncated: false, size: 0 });
   fsWriteFile.mockReset().mockResolvedValue(undefined);
   fsCreateEntry.mockReset().mockResolvedValue(undefined);
-  datasetQuery.mockReset().mockResolvedValue({ ...emptyDatasetPage });
-  datasetWriteCell.mockReset().mockResolvedValue(0);
   browserAttach.mockReset().mockResolvedValue(undefined);
   browserDetach.mockReset().mockResolvedValue(undefined);
   browserClose.mockReset().mockResolvedValue(undefined);
@@ -679,5 +671,6 @@ export function resetIpc() {
     onPreviewStatus,
     onPreviewConsole,
     onBrowserOpen,
+    onProjectOpen,
   ].forEach((fn) => fn.mockClear());
 }

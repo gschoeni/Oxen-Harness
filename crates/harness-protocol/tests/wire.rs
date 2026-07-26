@@ -648,6 +648,83 @@ fn review_and_loop_result_wire_shapes() {
     assert_eq!(outcome.iterations, 3);
 }
 
+/// The agent persists `harness_tools::PlanSnapshot` per session; the Ledger
+/// serves it back as the protocol's `PlanProgress`. The two must stay
+/// serde-compatible — a stored snapshot from either side must parse as the
+/// other.
+#[test]
+fn plan_progress_matches_harness_tools_snapshot() {
+    let items = harness_tools::parse_plan_arguments(
+        r#"{"plan": [
+            {"content": "Research", "active_form": "Researching", "status": "completed"},
+            {"content": "Build", "active_form": "Building", "status": "in_progress"}
+        ]}"#,
+    )
+    .unwrap();
+    let snapshot = harness_tools::plan_snapshot(&items);
+    let value = serde_json::to_value(&snapshot).unwrap();
+    let progress: harness_protocol::PlanProgress =
+        serde_json::from_value(value.clone()).expect("shapes match");
+    assert_eq!((progress.done, progress.total), (1, 2));
+    assert_eq!(progress.active.as_deref(), Some("Building"));
+    assert_eq!(serde_json::to_value(&progress).unwrap(), value);
+}
+
+/// The agent persists `harness_tools::TrailSnapshot`; the Ledger serves it as
+/// the protocol's `TrailProgress`. A stored snapshot from either side must
+/// parse as the other, including the waypoint status spellings.
+#[test]
+fn trail_progress_matches_harness_tools_snapshot() {
+    let snapshot = harness_tools::parse_trail_arguments(
+        r#"{"title": "fix flaky sse retry test", "waypoints": [
+            {"name": "define", "status": "done"},
+            {"name": "implement", "status": "current"},
+            {"name": "review", "status": "ahead"}
+        ]}"#,
+    )
+    .unwrap();
+    let value = serde_json::to_value(&snapshot).unwrap();
+    let progress: harness_protocol::TrailProgress =
+        serde_json::from_value(value.clone()).expect("shapes match");
+    assert_eq!(progress.title, "fix flaky sse retry test");
+    assert_eq!(progress.waypoints.len(), 3);
+    assert_eq!(progress.waypoints[0].status, "done");
+    assert_eq!(progress.waypoints[1].status, "current");
+    assert_eq!(progress.waypoints[2].status, "ahead");
+    assert_eq!(serde_json::to_value(&progress).unwrap(), value);
+}
+
+#[test]
+fn ledger_wire_shapes() {
+    // A stored settle payload with no note field still parses (note defaults).
+    let settle: harness_protocol::SettleState =
+        serde_json::from_value(serde_json::json!({ "settled_at": 1_753_000_000 })).unwrap();
+    assert_eq!(settle.note, "");
+
+    let entry: harness_protocol::LedgerEntry = serde_json::from_value(serde_json::json!({
+        "id": "s1",
+        "workspace": "/tmp/proj",
+        "model": "claude-opus-4-8",
+        "created_at": 1_753_000_000,
+        "last_activity_at": 1_753_000_500,
+        "title": "fix flaky sse test",
+        "message_count": 12,
+        "mid_turn": false,
+    }))
+    .unwrap();
+    assert_eq!(entry.plan, None);
+    assert_eq!(entry.settle, None);
+
+    let snapshot = harness_protocol::LedgerSnapshot {
+        entries: vec![entry],
+        running: vec!["s2".into()],
+        last_seen: 0,
+    };
+    let value = serde_json::to_value(&snapshot).unwrap();
+    let back: harness_protocol::LedgerSnapshot = serde_json::from_value(value).unwrap();
+    assert_eq!(back, snapshot);
+}
+
 /// The protocol self-describes: JSON Schema generation must work for the event
 /// enum and DTOs (this is what the TS type generation consumes).
 #[test]

@@ -1,0 +1,94 @@
+name: Cut Release
+
+# The one-button release path: bump the version(s), commit to main, tag, and
+# run the release build(s) — all from the Actions tab. The local equivalent is
+# scripts/bump-version.sh + git commit + scripts/release.sh.
+#
+# The release workflows are invoked here as reusable workflows (rather than
+# relying on the tag push) because pushes made with GITHUB_TOKEN deliberately
+# do not trigger other workflows.
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: What to release
+        type: choice
+        options: [cli, app, all]
+        required: true
+      bump:
+        description: Version bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: Explicit X.Y.Z (overrides bump)
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+# One release cut at a time; a second dispatch would race the version commit.
+concurrency: cut-release
+
+jobs:
+  tag:
+    name: bump, commit, tag
+    runs-on: ubuntu-latest
+    outputs:
+      cli_tag: ${{ steps.tags.outputs.cli_tag }}
+      app_tag: ${{ steps.tags.outputs.app_tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-tags: true
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Bump version
+        run: scripts/bump-version.sh "${{ inputs.component }}" "${{ inputs.version || inputs.bump }}"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          summary=""
+          if [ "${{ inputs.component }}" != "app" ]; then summary="cli v$(scripts/version.sh cli)"; fi
+          if [ "${{ inputs.component }}" != "cli" ]; then summary="$summary${summary:+, }app v$(scripts/version.sh app)"; fi
+          git add -A
+          git commit -m "release: $summary"
+          git push origin HEAD:main
+
+      - name: Tag and push tags
+        run: scripts/release.sh "${{ inputs.component }}" --yes
+
+      - id: tags
+        run: |
+          if [ "${{ inputs.component }}" != "app" ]; then
+            echo "cli_tag=cli-v$(scripts/version.sh cli)" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "${{ inputs.component }}" != "cli" ]; then
+            echo "app_tag=app-v$(scripts/version.sh app)" >> "$GITHUB_OUTPUT"
+          fi
+
+  release-cli:
+    needs: tag
+    if: inputs.component == 'cli' || inputs.component == 'all'
+    uses: ./.github/workflows/release-cli.yml
+    with:
+      tag: ${{ needs.tag.outputs.cli_tag }}
+    permissions:
+      contents: write
+    secrets: inherit
+
+  release-app:
+    needs: tag
+    if: inputs.component == 'app' || inputs.component == 'all'
+    uses: ./.github/workflows/release-app.yml
+    with:
+      tag: ${{ needs.tag.outputs.app_tag }}
+    permissions:
+      contents: write
+    secrets: inherit

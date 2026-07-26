@@ -17,8 +17,9 @@ mod dto;
 mod event;
 
 pub use dto::{
-    ApprovalAnswer, Choice, InterjectRequest, InterjectResponse, LoopResult, Question,
-    QuestionAnswer, ReviewResult, SessionInfo, SessionView, TurnRequest, TurnResponse,
+    ApprovalAnswer, Choice, InterjectRequest, InterjectResponse, LedgerEntry, LedgerSnapshot,
+    LoopResult, PlanProgress, Question, QuestionAnswer, ReviewResult, SessionInfo, SessionView,
+    SettleRequest, SettleState, TrailProgress, TrailWaypoint, TurnRequest, TurnResponse,
 };
 pub use event::{
     ApprovalKind, ApprovalPhase, FleetActivityKind, FleetAgentPhase, FleetSource, LocalPhase,

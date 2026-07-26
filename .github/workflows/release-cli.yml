@@ -1,0 +1,132 @@
+name: Release CLI
+
+# Builds the oxen-harness CLI for every supported platform and publishes a
+# GitHub release. Triggered by pushing a cli-vX.Y.Z tag (scripts/release.sh)
+# or called by the cut-release workflow.
+on:
+  push:
+    tags: ["cli-v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing cli-vX.Y.Z tag to build and release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The tag must match the workspace version, so a stale tag can never ship a
+  # binary that reports the wrong --version.
+  verify:
+    name: tag matches workspace version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - id: v
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="$(scripts/version.sh cli)"
+          if [ "$tag" != "cli-v$version" ]; then
+            echo "::error::tag $tag does not match workspace version $version (run scripts/bump-version.sh first)"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+
+      # rust-toolchain.toml pins the channel; add the (possibly cross) target.
+      - name: Install pinned toolchain
+        run: |
+          rustup show
+          rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release -p harness-cli --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          name="oxen-harness-${{ needs.verify.outputs.version }}-${{ matrix.target }}"
+          mkdir "$name"
+          cp "target/${{ matrix.target }}/release/oxen-harness" LICENSE README.md "$name/"
+          tar czf "$name.tar.gz" "$name"
+          (sha256sum "$name.tar.gz" 2>/dev/null || shasum -a 256 "$name.tar.gz") > "$name.tar.gz.sha256"
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "oxen-harness-${{ needs.verify.outputs.version }}-${{ matrix.target }}"
+          New-Item -ItemType Directory $name | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/oxen-harness.exe", LICENSE, README.md $name/
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: |
+            oxen-harness-*.tar.gz
+            oxen-harness-*.tar.gz.sha256
+            oxen-harness-*.zip
+            oxen-harness-*.zip.sha256
+          if-no-files-found: error
+
+  release:
+    name: publish GitHub release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat dist/*.sha256 > dist/SHA256SUMS
+          gh release create "${{ needs.verify.outputs.tag }}" dist/* \
+            --repo "${{ github.repository }}" \
+            --title "oxen-harness CLI v${{ needs.verify.outputs.version }}" \
+            --generate-notes \
+            --verify-tag

@@ -530,10 +530,37 @@ impl Agent {
                 }
             }
             // Track the latest plan state from successful `update_plan` calls
-            // (invalid arguments were rejected, so they changed nothing).
+            // (invalid arguments were rejected, so they changed nothing). The
+            // snapshot is also persisted so overview surfaces (the Ledger) can
+            // read "3/5 · Running tests" without loading the transcript; a
+            // failed projection write must never fail the turn itself.
             if call.function.name == harness_tools::PLAN_TOOL {
                 if let Some(items) = harness_tools::parse_plan_arguments(&call.function.arguments) {
                     turn.plan_open = harness_tools::plan_is_open(&items);
+                    let _ = self.store.save_session_state(
+                        &self.session_id,
+                        harness_store::PLAN_STATE,
+                        &Some(harness_tools::plan_snapshot(&items)),
+                    );
+                }
+            }
+            // Likewise the charted journey from successful `update_trail`
+            // calls — the Ledger's named stations and the thread's title. An
+            // update that omits the title keeps the previously charted name.
+            if call.function.name == harness_tools::TRAIL_TOOL {
+                if let Some(trail) =
+                    harness_tools::parse_trail_arguments(&call.function.arguments)
+                {
+                    let previous = self
+                        .store
+                        .session_state(&self.session_id, harness_store::TRAIL_STATE)
+                        .ok()
+                        .flatten();
+                    let _ = self.store.save_session_state(
+                        &self.session_id,
+                        harness_store::TRAIL_STATE,
+                        &harness_tools::merge_trail(previous, trail),
+                    );
                 }
             }
             // A tool that produced an image (e.g. the preview screenshot) marks

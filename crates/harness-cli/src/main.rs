@@ -123,6 +123,11 @@ enum TopCommand {
         #[command(subcommand)]
         action: commands::oxen::OxenAction,
     },
+    /// Open the desktop app on a project directory (defaults to the current one).
+    Ui {
+        /// The project directory to open.
+        path: Option<std::path::PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -178,6 +183,7 @@ async fn main() -> Result<()> {
         }
         Some(TopCommand::Trace { action }) => return commands::trace::run_trace(action, &ui),
         Some(TopCommand::Oxen { action }) => return commands::oxen::run_oxen(action, &ui),
+        Some(TopCommand::Ui { path }) => return commands::ui::run_ui(path, &ui),
         None => {}
     }
 

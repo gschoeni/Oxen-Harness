@@ -12,7 +12,6 @@ import {
   useState,
   type DragEvent,
   type PointerEvent,
-  type ReactNode,
 } from "react";
 import {
   Check,
@@ -24,7 +23,6 @@ import {
   Images,
   MessageSquarePlus,
   Save,
-  Table2,
   X,
 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -33,8 +31,6 @@ import { fsReadFile, fsWriteFile } from "../../lib/ipc";
 import { basename } from "../../lib/format";
 import { isImagePath, isVideoPath } from "../../lib/attachments";
 import { CodeEditor, type EditorSelection } from "./CodeEditor";
-import { DataView } from "./DataView";
-import { isDataPath } from "./datafile";
 import { rendererFor } from "./renderers";
 import { setDragPaths } from "./dnd";
 import { useFsChanged } from "./useFsChanged";
@@ -118,15 +114,6 @@ export function EditorPane({ onResizeStart }: { onResizeStart?: (e: PointerEvent
           body = <Gallery workspace={workspace} paths={tab} onClose={requestClosePane} />;
         } else if (single && (isImagePath(single) || isVideoPath(single))) {
           body = <MediaView workspace={workspace} path={single} onClose={requestClosePane} />;
-        } else if (single && isDataPath(single)) {
-          body = (
-            <DataFileView
-              workspace={workspace}
-              path={single}
-              onClose={requestClosePane}
-              onDirtyChange={(d) => reportDirty(key, d)}
-            />
-          );
         } else if (single) {
           body = (
             <CodeView
@@ -171,8 +158,6 @@ function Tab({
     <Film size={12} aria-hidden="true" />
   ) : isImagePath(path) ? (
     <ImageIcon size={12} aria-hidden="true" />
-  ) : isDataPath(path) ? (
-    <Table2 size={12} aria-hidden="true" />
   ) : (
     <FileCode2 size={12} aria-hidden="true" />
   );
@@ -213,72 +198,6 @@ function CloseButton({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ---- data files: the grid, with a Raw escape hatch ---------------------------
-
-/** CSV/TSV/JSONL open as the data grid with a Table/Raw toggle; the Raw side
- *  is the ordinary code editor. Parquet is binary, so it's grid-only. Once
- *  Raw has been opened it stays mounted (hidden) behind the grid, so unsaved
- *  raw edits and undo history survive flipping views — the same contract as
- *  the markdown Preview/Raw toggle. */
-function DataFileView({
-  workspace,
-  path,
-  onClose,
-  onDirtyChange,
-}: {
-  workspace: string;
-  path: string;
-  onClose: () => void;
-  onDirtyChange?: (dirty: boolean) => void;
-}) {
-  const [mode, setMode] = useState<"table" | "raw">("table");
-  const [rawMounted, setRawMounted] = useState(false);
-  function showRaw() {
-    setRawMounted(true);
-    setMode("raw");
-  }
-  const toggle = path.toLowerCase().endsWith(".parquet") ? null : (
-    <div className="editor-mode" role="tablist" aria-label="View mode">
-      <button
-        role="tab"
-        aria-selected={mode === "table"}
-        className={mode === "table" ? "active" : ""}
-        onClick={() => setMode("table")}
-      >
-        <Table2 size={12} aria-hidden="true" />
-        Table
-      </button>
-      <button
-        role="tab"
-        aria-selected={mode === "raw"}
-        className={mode === "raw" ? "active" : ""}
-        onClick={showRaw}
-      >
-        <Code2 size={12} aria-hidden="true" />
-        Raw
-      </button>
-    </div>
-  );
-  return (
-    <>
-      <div className="editor-datafile-pane" hidden={mode !== "table"}>
-        <DataView workspace={workspace} path={path} onClose={onClose} actions={toggle} />
-      </div>
-      {rawMounted && (
-        <div className="editor-datafile-pane" hidden={mode !== "raw"}>
-          <CodeView
-            workspace={workspace}
-            path={path}
-            onClose={onClose}
-            onDirtyChange={onDirtyChange}
-            viewToggle={toggle}
-          />
-        </div>
-      )}
-    </>
-  );
-}
-
 // ---- text files: the code editor --------------------------------------------
 
 function CodeView({
@@ -286,14 +205,11 @@ function CodeView({
   path,
   onClose,
   onDirtyChange,
-  viewToggle,
 }: {
   workspace: string;
   path: string;
   onClose: () => void;
   onDirtyChange?: (dirty: boolean) => void;
-  /** Extra header control (the data grid's Table/Raw toggle). */
-  viewToggle?: ReactNode;
 }) {
   const addSnippet = useStore((s) => s.addSnippet);
   const running = useStore((s) => !!s.session && s.runStatus[s.session.session_id] === "running");
@@ -403,7 +319,6 @@ function CodeView({
               <Save size={14} />
             </button>
           )}
-          {viewToggle}
           {renderer && (
             <div className="editor-mode" role="tablist" aria-label="View mode">
               <button

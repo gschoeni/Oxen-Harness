@@ -351,14 +351,11 @@ fn write_screenshot(session: &str, png: &[u8]) -> Result<PathBuf, ToolError> {
     Ok(path)
 }
 
-/// `<cache>/oxen-harness/previews/`, created 0700 on Unix so no other local
+/// `~/.oxen-harness/cache/previews/`, created 0700 on Unix so no other local
 /// user can pre-plant symlinks in it.
 fn screenshot_dir() -> Result<PathBuf, ToolError> {
-    let base = dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("oxen-harness")
-        .join("previews");
-    std::fs::create_dir_all(&base)?;
+    let base = harness_config::paths::previews_cache_dir()
+        .map_err(|e| ToolError::Execution(format!("resolve screenshot dir: {e}")))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

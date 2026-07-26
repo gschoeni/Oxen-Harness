@@ -47,6 +47,43 @@
   gap: var(--space-1);
 }
 
+/* Global in-flight work: persisted running sessions plus live fleet lanes.
+   It remains a quiet way back to the Ledger at zero, then takes on the active
+   theme color while work is underway. */
+.titlebar-running {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 28px;
+  padding: 0 var(--space-2);
+  background: transparent;
+  color: var(--text-tertiary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.titlebar-running:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--separator);
+}
+.titlebar-running.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.titlebar-running.active:hover {
+  background: var(--accent-tint-strong);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+@media (max-width: 640px) {
+  .titlebar-running-label { display: none; }
+}
+
 /* Utility buttons in the title bar (project home, arcade, inspector). */
 .dev-view-btn {
   display: inline-flex;

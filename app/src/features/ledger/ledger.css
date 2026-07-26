@@ -1,0 +1,1217 @@
+/* The Ledger — the home board. The design is a ledger book crossed with a
+ * trail map: quiet typographic rows, hairline rules, and one signature mark —
+ * the trail line each thread travels. Every color, face, and corner comes
+ * from the theme tokens, so all five built-in themes (and any generated one)
+ * re-skin the board without a line here changing. */
+
+.home-overlay {
+  position: fixed;
+  /* Below the app title bar, which must stay draggable everywhere. */
+  inset: var(--titlebar-h) 0 0;
+  z-index: var(--z-overlay);
+  background:
+    radial-gradient(circle at 82% 4%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 32%),
+    var(--bg);
+  overflow-y: auto;
+}
+
+.home-page {
+  /* One width for both lenses — the page doesn't breathe when you switch. */
+  width: min(960px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: var(--space-6) 0 var(--space-8);
+}
+
+/* ---- header ---------------------------------------------------------------- */
+
+.home-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.home-eyebrow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+}
+
+.home-away {
+  color: var(--accent);
+}
+
+.home-title {
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  letter-spacing: var(--wordmark-spacing);
+  text-transform: var(--label-transform);
+  color: var(--text);
+}
+
+.home-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Section labels share one voice: the theme's small-display treatment. */
+.ledger-label {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--label-size, var(--text-2xs));
+  font-weight: 700;
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+  color: var(--text-tertiary);
+}
+
+/* ✦ — happened since you last looked. */
+.ledger-fresh {
+  color: var(--accent);
+  margin-right: var(--space-1);
+}
+
+/* ---- wagon trains ---------------------------------------------------------- */
+
+.ledger-trains {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.ledger-train-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
+}
+
+.ledger-train-name {
+  border: none;
+  background: none;
+  padding: 2px 0;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+  color: var(--text);
+}
+
+.ledger-train-name:hover {
+  color: var(--accent);
+}
+
+.ledger-train-name.plain {
+  cursor: default;
+}
+
+.ledger-git {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+}
+
+.ledger-git-chip.ahead {
+  color: var(--accent);
+}
+
+.ledger-git-chip.clean {
+  color: var(--green, var(--text-tertiary));
+}
+
+/* The banner's rule takes whatever room the words leave — the ledger's
+ * horizontal grain. */
+.ledger-train-rule {
+  flex: 1;
+  border-top: var(--frame-border-w, 1px) solid var(--separator);
+}
+
+.ledger-new-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  background: none;
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+}
+
+.ledger-new-trail:hover {
+  color: var(--accent);
+  background: var(--surface-hover);
+}
+
+/* One thread: title / trail / status. The row is a single button — the whole
+ * line is the target, like a ledger entry under a fingertip. */
+.ledger-wagon {
+  display: grid;
+  grid-template-columns: minmax(150px, 230px) 1fr 130px;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  padding: 7px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.ledger-wagon:hover {
+  background: var(--surface-hover);
+}
+
+.ledger-wagon-title {
+  font-size: var(--text-sm);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ledger-wagon-status {
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ledger-wagon.running .ledger-wagon-status {
+  color: var(--accent);
+}
+
+/* Weathering: an untouched thread fades, never shouts. */
+.ledger-wagon.weather-1 {
+  opacity: 0.78;
+}
+
+.ledger-wagon.weather-2 {
+  opacity: 0.55;
+}
+
+.ledger-wagon.weather-1:hover,
+.ledger-wagon.weather-2:hover {
+  opacity: 1;
+}
+
+/* The live readout under a riding wagon — what it's doing this second. */
+.ledger-wagon-live {
+  padding: 0 var(--space-2) 6px calc(var(--space-2) + var(--space-3));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--accent);
+  animation: activity-land 0.35s var(--ease);
+}
+
+.ledger-wagon-live.thinking {
+  color: var(--text-tertiary);
+  font-style: italic;
+  animation: none;
+}
+
+.ledger-wagon-live-detail {
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-tertiary));
+}
+
+/* Each tool call lands with a small flash — the row's heartbeat. */
+@keyframes activity-land {
+  from {
+    opacity: 0.2;
+    transform: translateX(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The caret blinks while the agent thinks between calls. */
+.ledger-live-caret {
+  display: inline-block;
+  width: 5px;
+  height: 0.9em;
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: caret-blink 1s steps(1) infinite;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ledger-wagon-live,
+  .ledger-live-caret {
+    animation: none;
+  }
+}
+
+/* ---- the trail line (the signature) ---------------------------------------- */
+
+.trail {
+  position: relative;
+  height: 20px;
+}
+
+/* Where the wagon has been: a solid line in the theme's ink. */
+.trail-behind {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  height: 2px;
+  margin-top: -1px;
+  background: color-mix(in srgb, var(--accent) 72%, var(--text));
+}
+
+/* Where it hasn't: stitched, like a dotted route on a paper map. */
+.trail-ahead {
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  height: 1px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--separator-strong) 0 5px,
+    transparent 5px 10px
+  );
+}
+
+/* The trailhead post. */
+.trail-post-start {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 2px;
+  height: 8px;
+  transform: translateY(-50%);
+  background: color-mix(in srgb, var(--accent) 72%, var(--text));
+}
+
+/* Plan stations: a notch per task, inked as each is finished. */
+.trail-tick {
+  position: absolute;
+  top: 50%;
+  width: 1px;
+  height: 7px;
+  transform: translate(-50%, -50%);
+  background: var(--separator-strong);
+}
+
+.trail-tick.done {
+  width: 2px;
+  background: color-mix(in srgb, var(--accent) 72%, var(--text));
+}
+
+/* Named waypoint stations — the model's charted route. Square posts, larger
+ * than plan ticks: these are the journey's chapters, not its footnotes. */
+.trail-station {
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--text-tertiary);
+  background: var(--bg);
+}
+
+.trail-station.done {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--text));
+  background: color-mix(in srgb, var(--accent) 72%, var(--text));
+}
+
+/* Camp: where the last word was spoken; the user's stretch begins here. */
+.trail-camp {
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid var(--text-tertiary);
+  border-radius: 50%;
+  background: var(--bg);
+}
+
+/* The settle ring at trail's end — empty until the knot is tied. */
+.trail-ring {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  width: 11px;
+  height: 11px;
+  transform: translateY(-50%);
+  border: 1.5px solid var(--text-tertiary);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.trail-ring-knot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* The wagon: a diamond in the theme's accent, carrying the frame shadow so
+ * pixel themes get their hard offset and soft themes their lift. */
+.trail-wagon {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  background: var(--accent);
+  box-shadow: var(--frame-shadow);
+}
+
+.trail-state-dangling .trail-wagon {
+  background: var(--bg);
+  border: 1.5px solid var(--accent);
+}
+
+/* A wagon waiting at camp has told its story — its line recedes a step so
+ * the trails still being ridden carry the eye. */
+.trail-state-camp .trail-behind,
+.trail-state-camp .trail-tick.done {
+  opacity: 0.6;
+}
+
+/* A settled trail lies flat and quiet. */
+.trail-state-settled .trail-behind {
+  background: var(--separator-strong);
+}
+
+/* ---- liveliness — every motion is an event, idle wagons are dead still ----- */
+
+/* A riding wagon ambles in place… */
+.trail-state-running .trail-wagon {
+  animation: wagon-amble 1.1s ease-in-out infinite;
+}
+
+@keyframes wagon-amble {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) rotate(45deg);
+  }
+  50% {
+    transform: translate(-50%, calc(-50% - 1.5px)) rotate(49deg);
+  }
+}
+
+/* …while the route ahead is still being surveyed: the stitches crawl. */
+.trail-state-running .trail-ahead {
+  animation: trail-survey 1.4s linear infinite;
+}
+
+@keyframes trail-survey {
+  from {
+    background-position-x: 0;
+  }
+  to {
+    background-position-x: -10px;
+  }
+}
+
+/* One puff of dust per tool call, kicked up behind the wagon and gone. */
+.trail-dust {
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin-left: -12px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  opacity: 0;
+  animation: dust-puff 0.7s ease-out;
+}
+
+@keyframes dust-puff {
+  0% {
+    opacity: 0.7;
+    transform: translate(0, -50%) scale(0.6);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-10px, -140%) scale(1.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trail-state-running .trail-wagon,
+  .trail-state-running .trail-ahead {
+    animation: none;
+  }
+
+  .trail-dust {
+    display: none;
+  }
+}
+
+/* The board shows a train's first few wagons; the rest live one click away
+ * on the project's page. */
+.ledger-train-more {
+  display: block;
+  width: 100%;
+  padding: 3px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.ledger-train-more:hover {
+  color: var(--accent);
+  background: var(--surface-hover);
+}
+
+/* ---- the waystation (an unfolded ledger row) ------------------------------- */
+
+.ledger-wagon-block.expanded {
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  /* An inset hairline instead of a border: the unfolded entry gets a frame
+   * without shifting its neighbors by a pixel. */
+  box-shadow: inset 0 0 0 1px var(--separator);
+}
+
+/* The unfolded entry reads top to bottom in descending ink: the last word,
+ * the charted route, the bookkeeping, then two ways out side by side —
+ * ride back in, or tie it off. The delete waits in the top corner. */
+.ledger-waystation {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-4);
+  margin: 0 var(--space-2);
+  border-top: 1px solid var(--separator);
+  animation: waystation-unfold 0.16s ease-out;
+}
+
+.ledger-waystation > .ledger-cut-loose {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+}
+
+@keyframes waystation-unfold {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.ledger-waystation-story {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* The last word never runs under the delete button. */
+  padding-right: var(--space-7);
+}
+
+/* The hero: the thread's last word. */
+.ledger-waystation-reply {
+  margin: 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  font-size: var(--text-xs);
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* …or the honest absence of one. */
+.ledger-waystation-silence {
+  margin: 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--separator-strong);
+  font-size: var(--text-xs);
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+/* The charted route, spelled out: "define ✓ — implement — review · plan 2/3". */
+.ledger-waystation-route {
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+}
+
+.ledger-waystation-route .route-done {
+  color: color-mix(in srgb, var(--accent) 60%, var(--text-tertiary));
+}
+
+.ledger-waystation-route .route-current {
+  color: var(--text);
+}
+
+/* The bookkeeping line: count · when, interpunct-separated. */
+.ledger-waystation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+}
+
+.ledger-waystation-meta > * + *::before {
+  content: "·";
+  margin-right: var(--space-2);
+  opacity: 0.6;
+}
+
+.ledger-waystation-meta .dangling {
+  color: var(--warning, var(--accent));
+}
+
+/* Two ways out, side by side on the right — where the trail ends. */
+.ledger-waystation-ctas {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.ledger-waystation-ctas > .btn {
+  min-width: 130px;
+}
+
+/* The knot keeps a hairline outline so both ways out read as buttons —
+ * one framed, one quiet. */
+
+/* Curation flags: solid = kept for training, hollow = rejected. */
+.ledger-training-flag {
+  margin-right: var(--space-1);
+}
+
+.ledger-training-flag.kept {
+  color: var(--green, var(--accent));
+}
+
+.ledger-training-flag.rejected {
+  color: var(--text-tertiary);
+}
+
+.ledger-row-action.selected {
+  color: var(--accent);
+  background: var(--accent-soft, var(--surface-hover));
+}
+
+/* The quiet way out. Ghost until hovered; never loud. */
+.ledger-cut-loose {
+  border: none;
+  background: none;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-tertiary);
+}
+
+.ledger-cut-loose:hover {
+  color: var(--danger);
+  background: var(--surface-hover);
+}
+
+.ledger-cut-loose:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+
+
+
+/* The ritual: the line pulls taut to the ring, then the knot pops in. */
+.trail-settling .trail-behind {
+  transition: width 0.45s var(--ease);
+}
+
+.trail-settling .trail-ring {
+  border-color: var(--accent);
+}
+
+.trail-settling .trail-ring-knot,
+.trail-state-settled .trail-ring-knot {
+  animation: knot-pop 0.25s var(--ease) 0.35s backwards;
+}
+
+@keyframes knot-pop {
+  from {
+    transform: scale(0);
+  }
+  60% {
+    transform: scale(1.5);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trail-settling .trail-behind {
+    transition: none;
+  }
+
+  .trail-settling .trail-ring-knot,
+  .trail-state-settled .trail-ring-knot {
+    animation: none;
+  }
+
+  .ledger-waystation {
+    animation: none;
+  }
+}
+
+/* ---- quiet projects -------------------------------------------------------- */
+
+.ledger-quiet {
+  margin-top: var(--space-6);
+  display: flex;
+  flex-direction: column;
+}
+
+.ledger-quiet-row {
+  display: flex;
+  align-items: center;
+}
+
+.ledger-quiet-open {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 5px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ledger-quiet-open:hover {
+  background: var(--surface-hover);
+}
+
+.ledger-quiet-name {
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+  color: var(--text-tertiary);
+}
+
+.ledger-quiet-open:hover .ledger-quiet-name {
+  color: var(--text);
+}
+
+.ledger-quiet-note {
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+}
+
+.ledger-quiet-delete {
+  border: none;
+  background: none;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: transparent;
+}
+
+.ledger-quiet-row:hover .ledger-quiet-delete {
+  color: var(--text-tertiary);
+}
+
+.ledger-quiet-delete:hover {
+  color: var(--danger);
+  background: var(--surface-hover);
+}
+
+/* ---- the foot: settled + lost ---------------------------------------------- */
+
+.ledger-foot {
+  margin-top: var(--space-7);
+  border-top: var(--frame-border-w, 1px) solid var(--separator);
+  padding-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ledger-foot-toggle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+}
+
+.ledger-foot-toggle:hover {
+  background: var(--surface-hover);
+}
+
+.ledger-foot-tally {
+  display: flex;
+  gap: var(--space-3);
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+}
+
+.ledger-foot-count {
+  color: var(--text-tertiary);
+}
+
+.ledger-foot-rows {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1) var(--space-2) var(--space-2);
+}
+
+.ledger-settled-row,
+.ledger-lost-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 4px 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.ledger-settled-check {
+  color: var(--green, var(--accent));
+}
+
+.ledger-settled-title,
+.ledger-lost-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ledger-settled-note {
+  color: var(--text-tertiary);
+  font-style: italic;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ledger-settled-when,
+.ledger-lost-when,
+.ledger-lost-where {
+  flex: none;
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+}
+
+.ledger-settled-when,
+.ledger-lost-when {
+  margin-left: auto;
+}
+
+.ledger-foot-more {
+  padding-top: var(--space-1);
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+/* The archive purge: select some or all, one confirmed delete. */
+.ledger-lost-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 2px 0 var(--space-1);
+}
+
+.ledger-lost-purge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ledger-lost-purge:hover {
+  color: var(--danger);
+}
+
+.ledger-lost-pick {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Per-row delete in the archive stays ghost until the row is hovered. */
+.ledger-lost-row > .ledger-cut-loose {
+  color: transparent;
+  padding: 2px;
+}
+
+.ledger-lost-row:hover > .ledger-cut-loose,
+.ledger-lost-row:focus-within > .ledger-cut-loose {
+  color: var(--text-tertiary);
+}
+
+.ledger-lost-row > .ledger-cut-loose:hover {
+  color: var(--danger);
+}
+
+.ledger-row-action {
+  flex: none;
+  border: none;
+  background: none;
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+}
+
+.ledger-row-action:hover {
+  color: var(--accent);
+  background: var(--surface-hover);
+}
+
+/* ---- empty state ----------------------------------------------------------- */
+
+.ledger-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  margin-top: var(--space-7);
+  padding: var(--space-7) var(--space-4);
+  border: var(--frame-border-w, 1px) dashed var(--separator-strong);
+  border-radius: var(--frame-radius, var(--radius-lg));
+  background: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.ledger-empty:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.ledger-empty-icon {
+  color: var(--accent);
+}
+
+.ledger-empty strong {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  letter-spacing: var(--label-spacing);
+  text-transform: var(--label-transform);
+  color: var(--text);
+}
+
+/* ---- the two lenses: view toggle + the card view --------------------------- */
+
+.home-view-toggle,
+.ledger-sort {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill);
+}
+
+.home-view-option,
+.ledger-sort-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+}
+
+.home-view-option:hover,
+.ledger-sort-option:hover {
+  color: var(--text);
+}
+
+.home-view-option.selected,
+.ledger-sort-option.selected {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.ledger-cards-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-3);
+}
+
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.project-card {
+  position: relative;
+  min-height: 154px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: var(--frame-border-w) solid var(--separator);
+  border-radius: max(var(--frame-radius), var(--radius-lg));
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+  transition: transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.project-card-open {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-4);
+  width: 100%;
+  min-height: 154px;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: var(--space-5);
+  cursor: pointer;
+}
+.project-card::after {
+  content: "";
+  position: absolute;
+  inset: auto -20% -70% 30%;
+  height: 100%;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  pointer-events: none;
+}
+.project-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--separator-strong));
+  transform: translateY(-2px);
+  box-shadow: var(--frame-shadow-hover), var(--shadow-1);
+}
+.project-card.active { border-color: color-mix(in srgb, var(--accent) 48%, var(--separator)); }
+.project-card-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  color: var(--accent);
+  background: var(--accent-tint-strong);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--separator));
+  border-radius: var(--radius);
+}
+.project-card-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.project-card-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xl);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.project-card-badge {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.project-card-description {
+  min-height: 38px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.project-card-path {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-card-meta {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  z-index: 1;
+}
+.project-card-running { display: grid; place-items: center; width: 12px; height: 12px; }
+.project-card-used { margin-left: auto; }
+
+/* Hover-revealed remove button in the card's top-right corner. */
+.project-card-delete {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--text-tertiary);
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.project-card:hover .project-card-delete,
+.project-card-delete:focus-visible {
+  opacity: 1;
+}
+.project-card-delete:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.projects-empty {
+  grid-column: 1 / -1;
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border: 1px dashed var(--separator-strong);
+  border-radius: var(--radius-lg);
+}
+.projects-empty strong { color: var(--text); font-size: var(--text-xl); }
+.projects-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  color: var(--accent);
+  background: var(--accent-tint);
+  border-radius: var(--radius-lg);
+}
+
+/* New since the cards came back: the board's needs-you count, in accent. */
+.project-card-needs {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---- a project's full trail (on its home page) ----------------------------- */
+
+.project-trail {
+  margin-top: var(--space-5);
+  padding-top: var(--space-3);
+  border-top: var(--frame-border-w, 1px) solid var(--separator);
+}
+
+.project-trail > .ledger-label {
+  margin-bottom: var(--space-2);
+}
+
+.project-trail-quiet {
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.project-trail-settled {
+  margin-top: var(--space-2);
+}
+
+/* ---- small screens --------------------------------------------------------- */
+
+@media (max-width: 640px) {
+  .ledger-wagon {
+    grid-template-columns: 1fr 90px;
+  }
+
+
+  /* The trail yields first — the words are the record. */
+  .ledger-wagon .trail {
+    display: none;
+  }
+
+  .home-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

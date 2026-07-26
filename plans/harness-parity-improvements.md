@@ -673,10 +673,11 @@ Code, and it makes parallel implementation fleets actually safe.
 - **`read_file` polymorphism.** omp's single `read` handles directories, images,
   PDFs, notebooks, SQLite, archives, URLs, and internal `pr://`/`issue://`
   schemes via one `path` string plus a selector grammar (`:50-100`, `:raw`,
-  `:5-16,960-973`). We have most of the *rendering* already (viewer, data grid,
+  `:5-16,960-973`). We have most of the *rendering* already (viewer,
   attachments) but the model can't reach it. Highest-value slices, in order:
   (1) directory listing instead of an error, (2) multi-range selectors,
-  (3) PDF/image into context, (4) our existing Parquet/CSV path.
+  (3) PDF/image into context. (The data grid and its Parquet/CSV path were
+  removed 2026-07-26.)
 - **`git` tool depth.** omp's `github` tool + `pr://`/`issue://` caching (SQLite,
   soft TTL 5 min / hard 7 days, stale-hit + background refresh) is a good model
   for making PR review cheap. Ours is `crates/harness-tools/src/git.rs`, 173

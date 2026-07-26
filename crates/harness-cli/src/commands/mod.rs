@@ -34,4 +34,5 @@ pub(crate) mod review;
 pub(crate) mod rules;
 pub(crate) mod theme;
 pub(crate) mod trace;
+pub(crate) mod ui;
 pub(crate) mod usage;
