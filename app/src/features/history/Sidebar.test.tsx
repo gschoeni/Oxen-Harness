@@ -41,11 +41,11 @@ describe("Sidebar", () => {
     expect(screen.getByText("First chat").closest(".history-item")).toHaveClass("active");
   });
 
-  it("pins a brand-new (untitled) active chat to the top of the list", () => {
+  it("does not add a brand-new active chat to the history list", () => {
     useStore.setState({ session: { ...ipc.sampleSession, session_id: "fresh", workspace: "/w" } });
     render(<Sidebar />);
-    const newChat = screen.getByText("New chat", { selector: ".history-title" });
-    expect(newChat.closest(".history-item")).toHaveClass("active");
+    expect(screen.queryByText("New chat", { selector: ".history-title" })).toBeNull();
+    expect(document.querySelector(".history-item.active")).toBeNull();
   });
 
   it("starts a new session when New chat is clicked", async () => {
