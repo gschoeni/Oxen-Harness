@@ -32,24 +32,33 @@ export function Trail({
     >
       <span className="trail-behind" style={{ width: pct(progress) }} />
       {!settled && <span className="trail-ahead" style={{ left: pct(progress) }} />}
-      <span className="trail-post trail-post-start" />
+      <span className="trail-post trail-post-start" data-tip="trailhead" />
       {shape.ticks.map((at, i) => (
         <span
           key={i}
           className={`trail-tick ${i < shape.ticksDone ? "done" : ""}`}
           style={{ left: pct(at) }}
+          data-tip={`plan ${i + 1}/${shape.ticks.length}${i < shape.ticksDone ? " ✓" : " · ahead"}`}
         />
       ))}
       {shape.stations.map((station) => (
         <span
           key={station.name + station.at}
-          className={`trail-station ${station.done ? "done" : ""}`}
+          className={`${station.ship ? "trail-ship" : "trail-station"} ${station.done ? "done" : ""}`}
           style={{ left: pct(station.at) }}
-          title={station.name}
+          data-tip={`${station.name}${station.status === "done" ? " ✓" : ` · ${station.status}`}`}
         />
       ))}
-      {!settled && <span className="trail-camp" style={{ left: pct(CAMP_AT) }} />}
-      <span className="trail-ring">{settled && <span className="trail-ring-knot" />}</span>
+      {/* `shape.camp` says whether the camp position is unoccupied: on a
+          standard charted route the last working station sits AT camp (a
+          separate circle would only steal its hover), but uncharted trails
+          and ship-only routes still need the landmark drawn. */}
+      {!settled && shape.camp && (
+        <span className="trail-camp" style={{ left: pct(CAMP_AT) }} data-tip="camp · work done" />
+      )}
+      <span className="trail-ring" data-tip={settled ? "tied off ✓" : "tie-off"}>
+        {settled && <span className="trail-ring-knot" />}
+      </span>
       {!settled && <span className="trail-wagon" style={{ left: pct(progress) }} />}
       {dust > 0 && <span key={dust} className="trail-dust" style={{ left: pct(progress) }} />}
     </div>

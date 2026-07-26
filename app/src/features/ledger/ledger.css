@@ -215,6 +215,25 @@
   opacity: 1;
 }
 
+/* Stuck: running, but parked on an approval — the warning color takes the
+ * row, and the whole line is the door back into the chat. */
+.ledger-wagon.stuck {
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+.ledger-wagon.stuck:hover {
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+.ledger-wagon.stuck .ledger-wagon-status {
+  color: var(--warning);
+}
+
+.ledger-wagon-live.stuck {
+  color: var(--warning);
+  animation: none;
+}
+
 /* The live readout under a riding wagon — what it's doing this second. */
 .ledger-wagon-live {
   padding: 0 var(--space-2) 6px calc(var(--space-2) + var(--space-3));
@@ -273,11 +292,68 @@
   }
 }
 
+/* The thread's trail pinned inside its chat: line, status, and the knot. */
+.chat-trail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+}
+
+.chat-trail .trail {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-trail-status {
+  flex: none;
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 /* ---- the trail line (the signature) ---------------------------------------- */
 
 .trail {
   position: relative;
   height: 20px;
+}
+
+/* Every landmark tells its name on hover — instant, themed, no native-title
+ * lag. The markers are tiny, so each grows an invisible hit pad; the bubble
+ * rides above the line where the row can't clip it. */
+.trail [data-tip] {
+  cursor: default;
+}
+
+.trail [data-tip]::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+}
+
+.trail [data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 7px;
+  white-space: nowrap;
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  font-style: normal;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text);
+  background: var(--surface-3, var(--surface));
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-1);
+  z-index: 2;
+  pointer-events: none;
 }
 
 /* Where the wagon has been: a solid line in the theme's ink. */
@@ -356,6 +432,24 @@
   border: 1.5px solid var(--text-tertiary);
   border-radius: 50%;
   background: var(--bg);
+}
+
+/* Shipping stations on the camp → ring stretch: pushed, reviewed, merged —
+ * open circles that fill as git and GitHub confirm each loop closed. */
+.trail-ship {
+  position: absolute;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid var(--text-tertiary);
+  border-radius: 50%;
+  background: var(--bg);
+}
+
+.trail-ship.done {
+  border-color: var(--green, var(--accent));
+  background: var(--green, var(--accent));
 }
 
 /* The settle ring at trail's end — empty until the knot is tied. */
@@ -702,6 +796,22 @@
   .ledger-waystation {
     animation: none;
   }
+}
+
+/* Gated tie-off: hesitant until the shipping loops close. */
+.ledger-tie-gated {
+  color: var(--warning, var(--text-secondary));
+}
+
+.ledger-gate-list {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-5);
+  color: var(--warning, var(--text-secondary));
+  font-size: var(--text-sm);
+}
+
+.ledger-waystation-meta .ship-open {
+  color: var(--warning, var(--text-secondary));
 }
 
 /* ---- quiet projects -------------------------------------------------------- */

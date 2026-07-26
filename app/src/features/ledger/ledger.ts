@@ -25,16 +25,49 @@ export const WEATHER_DAYS = 3;
 export const COLD_DAYS = 7;
 export const ARCHIVE_DAYS = 14;
 
-/** How many threads the attention rail shows before "and N more". */
-export const RAIL_LIMIT = 5;
-
 /** How many threads a train shows on the home board. Past this, the project
  *  deserves its own page — the board is for focus, not completeness. */
 export const TRAIN_LIMIT = 3;
 
+/** The shipping stretch: code leaves the machine, gets its review, lands.
+ *  These stages live on the charted trail as ordinary waypoints (exactly
+ *  named: pushed, pr-reviewed, merged) — the AGENT verifies them with its
+ *  git/gh tools and marks them done; the board only renders and gates. */
+export type ShipStage = "pushed" | "reviewed" | "merged";
+
+/** Which shipping stage a waypoint name spells, if any. Tolerant of the
+ *  dialects models actually write ("push", "pr reviewed", "code merged") —
+ *  but on whole words only: a working waypoint like "code review", "review
+ *  approach", or "fix merge conflicts" must never read as a shipping gate
+ *  (substring matching once turned "approach" into a PR and "unmerged" into
+ *  merged). The past-tense token is the signal that a stage is a gate. */
+export function shipStage(name: string): ShipStage | null {
+  const n = name.trim().toLowerCase().replace(/[-_]/g, " ").replace(/\s+/g, " ");
+  const words = n.split(" ");
+  if (words.includes("pushed") || n === "push") return "pushed";
+  if (
+    (words.includes("reviewed") &&
+      (words.length === 1 || words.includes("pr") || words.includes("pull") || words.includes("code"))) ||
+    n === "pr review"
+  ) {
+    return "reviewed";
+  }
+  if (words.includes("merged") || n === "merge") return "merged";
+  return null;
+}
+
 export interface Thread {
   entry: LedgerEntry;
   state: ThreadState;
+  /** Shipping waypoints the agent charted but hasn't verified done — the
+   *  open loops that gate tie-off. Empty when clear (or never charted:
+   *  the board refuses to block on stages nobody promised). */
+  shipGates: ShipStage[];
+  /** Running, but the agent is parked on a permission approval — the ride
+   *  continues the moment the user joins and answers. The board paints this
+   *  in the warning color with a join CTA: it outranks everything, because
+   *  the agent is burning wall-clock waiting. */
+  stuck: boolean;
   /** ✦ — activity landed after the board was last seen, and it isn't still
    *  running: something finished (or died) while the user wasn't looking. */
   fresh: boolean;
@@ -73,10 +106,6 @@ export interface QuietTrain {
 }
 
 export interface Board {
-  /** Cross-project "needs you", ranked strongest first, capped at RAIL_LIMIT. */
-  rail: Thread[];
-  /** Threads that need attention beyond the rail's cap. */
-  railOverflow: number;
   /** Workspaces with open threads, newest activity first. */
   trains: Train[];
   /** Projects with no open threads. */
@@ -99,6 +128,8 @@ export interface BoardInputs {
   /** The union of the snapshot's authoritative running set and any live
    *  "running" statuses the event bridge has seen since. */
   running: Set<string>;
+  /** Sessions parked on a pending permission approval right now. */
+  waiting?: Set<string>;
   lastSeen: number;
   projects: Project[];
   git: Record<string, GitOverview>;
@@ -111,8 +142,9 @@ const DAY = 86_400;
 /** Fold the raw inputs into the board. */
 export function deriveBoard(inputs: BoardInputs): Board {
   const { entries, running, lastSeen, projects, git, now } = inputs;
+  const waiting = inputs.waiting ?? new Set<string>();
 
-  const threads = entries.map((entry) => deriveThread(entry, running, lastSeen, now));
+  const threads = entries.map((entry) => deriveThread(entry, running, waiting, lastSeen, now));
 
   const settled = threads
     .filter((t) => t.state === "settled")
@@ -121,14 +153,6 @@ export function deriveBoard(inputs: BoardInputs): Board {
   // Running threads never archive, no matter how long the turn has run.
   const lost = open.filter((t) => t.idleDays >= ARCHIVE_DAYS && t.state !== "running");
   const onBoard = open.filter((t) => !lost.includes(t));
-
-  const needy = onBoard
-    .filter((t) => t.need !== null)
-    .sort(
-      (a, b) =>
-        NEED_RANK[a.need as Need] - NEED_RANK[b.need as Need] ||
-        b.entry.last_activity_at - a.entry.last_activity_at,
-    );
 
   const byWorkspace = new Map<string, Thread[]>();
   for (const thread of onBoard) {
@@ -171,8 +195,6 @@ export function deriveBoard(inputs: BoardInputs): Board {
 
   const startOfToday = now - localSecondsSinceMidnight(now);
   return {
-    rail: needy.slice(0, RAIL_LIMIT),
-    railOverflow: Math.max(0, needy.length - RAIL_LIMIT),
     trains,
     quiet,
     settled,
@@ -212,6 +234,20 @@ export function threadTitle(thread: Thread): string {
   return thread.entry.trail?.title || thread.entry.title;
 }
 
+/** One session's thread, wherever it lives on the board — a train, the
+ *  settled tally, or the archive. Null before its first user turn. */
+export function findThread(board: Board, sessionId: string): Thread | null {
+  for (const train of board.trains) {
+    const hit = train.threads.find((t) => t.entry.id === sessionId);
+    if (hit) return hit;
+  }
+  return (
+    board.settled.find((t) => t.entry.id === sessionId) ??
+    board.lost.find((t) => t.entry.id === sessionId) ??
+    null
+  );
+}
+
 /** The stage label a thread wears: the current waypoint's name; "done" once
  *  every waypoint is passed; null when no trail was charted. */
 export function currentStage(thread: Thread): string | null {
@@ -222,16 +258,10 @@ export function currentStage(thread: Thread): string | null {
   return trail.waypoints.every((w) => w.status === "done") ? "done" : null;
 }
 
-const NEED_RANK: Record<Need, number> = {
-  dangling: 0,
-  finished: 1,
-  "plan-open": 2,
-  "going-cold": 3,
-};
-
 function deriveThread(
   entry: LedgerEntry,
   running: Set<string>,
+  waiting: Set<string>,
   lastSeen: number,
   now: number,
 ): Thread {
@@ -248,6 +278,11 @@ function deriveThread(
   return {
     entry,
     state,
+    shipGates: (entry.trail?.waypoints ?? [])
+      .filter((w) => w.status !== "done")
+      .map((w) => shipStage(w.name))
+      .filter((stage): stage is ShipStage => stage !== null),
+    stuck: isRunning && waiting.has(entry.id),
     fresh,
     idleDays,
     weather: idleDays >= COLD_DAYS ? 2 : idleDays >= WEATHER_DAYS ? 1 : 0,
@@ -285,18 +320,29 @@ function localSecondsSinceMidnight(now: number): number {
  *  human's stretch of trail (review it, push it, tie it off). */
 export const CAMP_AT = 0.72;
 
-/** A named station on the line — a waypoint the model charted. */
+/** A named station on the line — a waypoint the model charted. Shipping
+ *  waypoints (`ship`) live on the camp → ring stretch and draw differently. */
 export interface TrailStation {
   at: number;
   name: string;
   done: boolean;
+  status: "done" | "current" | "ahead";
+  ship: boolean;
 }
 
 export interface TrailShape {
-  /** Named waypoint stations, when the model charted a trail. They own the
-   *  line: the last station sits exactly at camp, so finishing the route IS
-   *  arriving. */
+  /** Named waypoint stations, when the model charted a trail. Working
+   *  stations own the start → camp stretch (the last one sits exactly at
+   *  camp, so finishing the working route IS arriving); shipping-named
+   *  waypoints (pushed, pr-reviewed, merged) continue onto the camp → ring
+   *  stretch — the loops that outlive the code. Positions are always
+   *  monotonic in route order. */
   stations: TrailStation[];
+  /** Whether the camp circle itself still needs drawing: true when no station
+   *  occupies the camp position (no charted trail, or a ship-only route that
+   *  starts from camp). When a working route's last station IS camp, drawing
+   *  both would stack two landmarks on one spot. */
+  camp: boolean;
   /** Plan tick positions along the working stretch. Only drawn when there are
    *  no stations — with both, the ticks would read as noise between them
    *  (plan progress still shows in the status line and waystation). */
@@ -316,20 +362,41 @@ export function trailShape(thread: Thread): TrailShape {
   const plan = entry.plan;
 
   if (waypoints.length > 0) {
-    const stations = waypoints.map((w, i) => ({
-      at: ((i + 1) / waypoints.length) * CAMP_AT,
-      name: w.name,
-      done: w.status === "done",
-    }));
-    const progress = state === "settled" ? 1 : stationProgress(waypoints, stations);
-    return { stations, ticks: [], ticksDone: 0, progress };
+    const ship = waypoints.map((w) => shipStage(w.name) !== null);
+    const workingCount = ship.filter((s) => !s).length;
+    const shipCount = waypoints.length - workingCount;
+    // The two-stretch layout (working stations up to camp, shipping stations
+    // beyond it) assumes the route ships at the end — the standard shape the
+    // trail tool teaches. A degenerate interleaved route (a working waypoint
+    // after a shipping one) would make those independent ordinals walk the
+    // wagon backwards, so it falls back to even spacing: positions must stay
+    // monotonic in route order, whatever the model charted.
+    const interleaved = ship.slice(ship.indexOf(true) + 1).includes(false) && ship.includes(true);
+    let wi = 0;
+    let si = 0;
+    const stations = waypoints.map((w, i) => {
+      const at = interleaved
+        ? (i + 1) / (waypoints.length + 1)
+        : ship[i]
+          ? CAMP_AT + (++si / (shipCount + 1)) * (1 - CAMP_AT)
+          : (++wi / Math.max(workingCount, 1)) * CAMP_AT;
+      return { at, name: w.name, done: w.status === "done", status: w.status, ship: ship[i] };
+    });
+    // A ship-only route (a reopened thread closing its loops) starts from
+    // camp: the working stretch is already travelled, and the camp circle
+    // still needs drawing because no station sits there.
+    const shipOnly = !interleaved && workingCount === 0;
+    const base = state === "settled" ? 1 : stationProgress(waypoints, stations);
+    const progress = shipOnly ? Math.max(base, CAMP_AT) : base;
+    return { stations, camp: shipOnly || interleaved, ticks: [], ticksDone: 0, progress };
   }
 
   const ticks = plan
     ? Array.from({ length: plan.total }, (_, i) => ((i + 1) / (plan.total + 1)) * CAMP_AT)
     : [];
 
-  if (state === "settled") return { stations: [], ticks, ticksDone: plan?.done ?? 0, progress: 1 };
+  if (state === "settled")
+    return { stations: [], camp: true, ticks, ticksDone: plan?.done ?? 0, progress: 1 };
 
   let progress: number;
   if (plan && plan.done < plan.total) {
@@ -341,7 +408,7 @@ export function trailShape(thread: Thread): TrailShape {
     // Working (or dangling) without a plan: mid-stretch, honestly vague.
     progress = CAMP_AT * 0.55;
   }
-  return { stations: [], ticks, ticksDone: plan?.done ?? 0, progress };
+  return { stations: [], camp: true, ticks, ticksDone: plan?.done ?? 0, progress };
 }
 
 /** Where the wagon stands on a charted route: at the current station; at the

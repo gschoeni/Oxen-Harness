@@ -11,6 +11,7 @@ export function useBoard(): Board | null {
   const ledgerGit = useStore((s) => s.ledgerGit);
   const projects = useStore((s) => s.projects);
   const runStatus = useStore((s) => s.runStatus);
+  const approvals = useStore((s) => s.approvals);
 
   return useMemo(() => {
     if (!ledger) return null;
@@ -20,13 +21,20 @@ export function useBoard(): Board | null {
     for (const [id, status] of Object.entries(runStatus)) {
       if (status === "running") running.add(id);
     }
+    // A pending approval means the agent is parked mid-turn on the user.
+    const waiting = new Set(
+      Object.entries(approvals)
+        .filter(([, request]) => request !== undefined)
+        .map(([session]) => session),
+    );
     return deriveBoard({
       entries: ledger.entries,
       running,
+      waiting,
       lastSeen: ledger.last_seen,
       projects,
       git: ledgerGit,
       now: Math.floor(Date.now() / 1000),
     });
-  }, [ledger, runStatus, projects, ledgerGit]);
+  }, [ledger, runStatus, approvals, projects, ledgerGit]);
 }

@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CircleDot, MessageSquare, Trash2 } from "lucide-react";
 import { Button, Modal } from "../../components/ui";
-import { relativeTime } from "../../lib/format";
+import { relativeTime, truncate } from "../../lib/format";
 import { useStore } from "../../lib/store";
 import { currentStage, threadTitle, type Thread } from "./ledger";
 import { Trail } from "./Trail";
@@ -24,13 +24,16 @@ export function WagonRow({
   // *before* the settle write lands, so closure is felt, not just recorded.
   const [settling, setSettling] = useState(false);
   const dust = useDust(thread);
+  const open = useOpenThread();
   return (
     <div className={`ledger-wagon-block ${expanded ? "expanded" : ""}`}>
       <button
-        className={`ledger-wagon weather-${thread.weather} ${thread.state}`}
-        onClick={onToggle}
+        className={`ledger-wagon weather-${thread.weather} ${thread.state} ${thread.stuck ? "stuck" : ""}`}
+        // A stuck agent has exactly one useful action — join and answer — so
+        // its whole row is that door instead of unfolding a waystation.
+        onClick={thread.stuck ? () => open(thread) : onToggle}
         aria-expanded={expanded}
-        title={wagonTooltip(thread)}
+        aria-label={wagonTooltip(thread)}
       >
         <span className="ledger-wagon-title">
           {thread.fresh && <span className="ledger-fresh">✦</span>}
@@ -56,6 +59,13 @@ export function WagonRow({
  *  screen. Idle rows never grow this line. */
 function LiveLine({ thread }: { thread: Thread }) {
   const activity = useStore((s) => s.trailActivity[thread.entry.id]);
+  if (thread.stuck) {
+    return (
+      <div className="ledger-wagon-live stuck" aria-label="Waiting for approval">
+        ⏸ waiting for your approval — join the chat →
+      </div>
+    );
+  }
   return activity ? (
     // Keyed by `at`: every tool call remounts the readout and replays the
     // land-flash. The caret blinks while the agent thinks between calls.
@@ -110,28 +120,16 @@ function Waystation({
   onSettling: (v: boolean) => void;
 }) {
   const open = useOpenThread();
-  const settleThread = useStore((s) => s.settleThread);
   const { entry, state } = thread;
   const plan = entry.plan;
   const route = entry.trail?.waypoints ?? [];
-
-  // One click, no ceremony: the knot ritual plays and the settle lands.
-  // (Closing notes still exist on the wire for old settles; the UI just
-  // stopped asking — tie-off should cost nothing.)
-  function tieOff() {
-    onSettling(true);
-    const delay = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : KNOT_MS;
-    window.setTimeout(() => {
-      void settleThread(entry.id, "").finally(() => onSettling(false));
-    }, delay);
-  }
 
   return (
     <div className="ledger-waystation" role="region" aria-label={`${threadTitle(thread)} — waystation`}>
       <CutLoose thread={thread} disabled={settling} />
       <div className="ledger-waystation-story">
         {entry.last_reply ? (
-          <blockquote className="ledger-waystation-reply">{clip(entry.last_reply, 240)}</blockquote>
+          <blockquote className="ledger-waystation-reply">{truncate(entry.last_reply, 240)}</blockquote>
         ) : (
           <p className="ledger-waystation-silence">
             {state === "running" ? "Still riding — no word yet." : "No parting word was recorded."}
@@ -156,6 +154,7 @@ function Waystation({
           </div>
         )}
         <div className="ledger-waystation-meta">
+          <ShipFacts thread={thread} />
           {state === "dangling" && <span className="dangling">the reply never arrived</span>}
           <span>{entry.message_count} messages</span>
           <span>{relativeTime(entry.last_activity_at)}</span>
@@ -167,14 +166,97 @@ function Waystation({
           {state === "dangling" ? "Pick it back up" : "Open chat"}
         </Button>
         {state !== "running" && (
-          <Button variant="primary" size="sm" onClick={tieOff} disabled={settling}>
-            <CircleDot size={13} />
-            {settling ? "Tying…" : "Tie the knot"}
-          </Button>
+          <TieKnot thread={thread} settling={settling} onSettling={onSettling} />
         )}
       </div>
     </div>
   );
+}
+
+/** The knot, gated by the shipping loops. Clear gates: one click, ritual,
+ *  done. Unmet gates (unpushed work, an unreviewed or unmerged PR): the
+ *  button turns hesitant and a confirm names every loop still open — closing
+ *  eyes-open stays possible, closing by accident doesn't. */
+export function TieKnot({
+  thread,
+  settling,
+  onSettling,
+}: {
+  thread: Thread;
+  settling: boolean;
+  onSettling: (v: boolean) => void;
+}) {
+  const settleThread = useStore((s) => s.settleThread);
+  const [confirming, setConfirming] = useState(false);
+  const gates = thread.shipGates;
+
+  function ritual() {
+    setConfirming(false);
+    onSettling(true);
+    const delay = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : KNOT_MS;
+    window.setTimeout(() => {
+      void settleThread(thread.entry.id, "").finally(() => onSettling(false));
+    }, delay);
+  }
+
+  if (gates.length === 0) {
+    return (
+      <Button variant="primary" size="sm" onClick={ritual} disabled={settling}>
+        <CircleDot size={13} />
+        {settling ? "Tying…" : "Tie the knot"}
+      </Button>
+    );
+  }
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="ledger-tie-gated"
+        title={`Still open: ${gates.map(gateLabel).join(", ")}`}
+        onClick={() => setConfirming(true)}
+        disabled={settling}
+      >
+        <CircleDot size={13} />
+        {settling ? "Tying…" : "Tie off anyway…"}
+      </Button>
+      {confirming && (
+        <Modal title="Loops still open" onClose={() => setConfirming(false)}>
+          <p className="delete-confirm-text">
+            This thread hasn’t finished shipping:
+          </p>
+          <ul className="ledger-gate-list">
+            {gates.map((gate) => (
+              <li key={gate}>{gateLabel(gate)}</li>
+            ))}
+          </ul>
+          <p className="delete-confirm-text">
+            Tie it off anyway? The knot won’t push, review, or merge anything for you.
+          </p>
+          <div className="delete-confirm-actions">
+            <Button variant="ghost" onClick={() => setConfirming(false)}>
+              Keep it open
+            </Button>
+            <Button variant="primary" onClick={ritual}>
+              <CircleDot size={13} /> Tie off anyway
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function gateLabel(gate: "pushed" | "reviewed" | "merged"): string {
+  switch (gate) {
+    case "pushed":
+      return "code not pushed";
+    case "reviewed":
+      return "PR not reviewed";
+    case "merged":
+      return "PR not merged";
+  }
 }
 
 /** The quiet way out: permanently delete the chat. Kept small and far from
@@ -227,8 +309,45 @@ export function CutLoose({ thread, disabled }: { thread: Thread; disabled: boole
   );
 }
 
-function clip(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max).trimEnd()}…` : s;
+/** The open shipping loops, spelled out in warning — the closed ones are
+ *  already visible as ✓ on the charted route above. */
+function ShipFacts({ thread }: { thread: Thread }) {
+  if (thread.shipGates.length === 0) return null;
+  return (
+    <>
+      {thread.shipGates.map((gate) => (
+        <span key={gate} className="ship-open">
+          {gateLabel(gate)}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** One settled thread's ledger line: the check, the title, the closing note,
+ *  when it was tied off — and the untie that brings it back to the trail.
+ *  Shared by the home board's settled tally and a project page's own. */
+export function SettledRow({ thread }: { thread: Thread }) {
+  const reopenThread = useStore((s) => s.reopenThread);
+  return (
+    <div className="ledger-settled-row">
+      <span className="ledger-settled-check">✓</span>
+      <span className="ledger-settled-title">{threadTitle(thread)}</span>
+      {thread.entry.settle?.note && (
+        <span className="ledger-settled-note">“{thread.entry.settle.note}”</span>
+      )}
+      <span className="ledger-settled-when">
+        {relativeTime(thread.entry.settle?.settled_at ?? 0)}
+      </span>
+      <button
+        className="ledger-row-action"
+        title="Untie — bring this thread back to the trail"
+        onClick={() => void reopenThread(thread.entry.id)}
+      >
+        untie
+      </button>
+    </div>
+  );
 }
 
 /** Open a thread: resume its chat and ride out of the board. */
@@ -251,7 +370,7 @@ function TrainingFlag({ status }: { status: string }) {
   );
 }
 
-function statusLine(thread: Thread): string {
+export function statusLine(thread: Thread): string {
   const plan = thread.entry.plan;
   const progress = plan && plan.total > 0 ? `${plan.done}/${plan.total}` : "";
   const when = relativeTime(thread.entry.last_activity_at);
@@ -259,6 +378,7 @@ function statusLine(thread: Thread): string {
   const stage = currentStage(thread);
   switch (thread.state) {
     case "running":
+      if (thread.stuck) return "waiting on you";
       return [stage ?? "riding", progress].filter(Boolean).join(" · ");
     case "dangling":
       return `left dangling · ${when}`;
@@ -272,6 +392,7 @@ function statusLine(thread: Thread): string {
 }
 
 function wagonTooltip(thread: Thread): string {
+  if (thread.stuck) return "Waiting for your approval — click to join the chat";
   const active = thread.entry.plan?.active;
   if (thread.state === "running" && active) return active;
   if (thread.state === "dangling") return "The reply never arrived — open to pick it back up";

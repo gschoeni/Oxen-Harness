@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { LedgerEntry, Project } from "../../lib/types";
 import {
   ARCHIVE_DAYS,
+  shipStage,
+  findThread,
   COLD_DAYS,
   currentStage,
   deriveBoard,
-  RAIL_LIMIT,
   threadTitle,
   TRAIN_LIMIT,
   trailShape,
@@ -116,8 +117,8 @@ describe("thread states", () => {
   });
 });
 
-describe("the attention rail", () => {
-  it("ranks dangling above finished above open plans above going cold", () => {
+describe("thread needs", () => {
+  it("names each thread's strongest claim on the user", () => {
     const board = deriveBoard(
       inputs({
         entries: [
@@ -133,23 +134,18 @@ describe("the attention rail", () => {
         lastSeen: NOW - DAY,
       }),
     );
-    expect(board.rail.map((t) => t.entry.id)).toEqual(["dangle", "finished", "plan", "cold"]);
-    expect(board.railOverflow).toBe(0);
-  });
-
-  it("caps the rail and reports the overflow", () => {
-    const board = deriveBoard(
-      inputs({
-        entries: Array.from({ length: RAIL_LIMIT + 3 }, (_, i) =>
-          entry({ id: `d${i}`, mid_turn: true }),
-        ),
-      }),
+    const needs = Object.fromEntries(
+      board.trains.flatMap((t) => t.threads).map((t) => [t.entry.id, t.need]),
     );
-    expect(board.rail).toHaveLength(RAIL_LIMIT);
-    expect(board.railOverflow).toBe(3);
+    expect(needs).toEqual({
+      dangle: "dangling",
+      finished: "finished",
+      plan: "plan-open",
+      cold: "going-cold",
+    });
   });
 
-  it("keeps running and content threads off the rail", () => {
+  it("running and content threads need nothing", () => {
     const board = deriveBoard(
       inputs({
         entries: [
@@ -159,7 +155,7 @@ describe("the attention rail", () => {
         running: new Set(["busy"]),
       }),
     );
-    expect(board.rail).toEqual([]);
+    expect(board.trains.flatMap((t) => t.threads).every((t) => t.need === null)).toBe(true);
   });
 });
 
@@ -249,6 +245,43 @@ describe("amnesty and the archive", () => {
     expect(board.settled.map((t) => t.entry.id)).toEqual(["today", "midweek", "lastMonth"]);
     expect(board.settledToday).toBe(1);
     expect(board.settledWeek).toBe(2);
+  });
+});
+
+describe("stuck threads and finding one", () => {
+  it("a running thread parked on an approval is stuck; the rest are not", () => {
+    const board = deriveBoard(
+      inputs({
+        entries: [entry({ id: "parked", mid_turn: true }), entry({ id: "busy", mid_turn: true })],
+        running: new Set(["parked", "busy"]),
+        waiting: new Set(["parked"]),
+      }),
+    );
+    const threads = board.trains[0].threads;
+    expect(threads.find((t) => t.entry.id === "parked")?.stuck).toBe(true);
+    expect(threads.find((t) => t.entry.id === "busy")?.stuck).toBe(false);
+    // An idle session with a stale approval id is not stuck — stuck means
+    // running AND waiting.
+    const idle = deriveBoard(
+      inputs({ entries: [entry({ id: "idle" })], waiting: new Set(["idle"]) }),
+    );
+    expect(idle.trains[0].threads[0].stuck).toBe(false);
+  });
+
+  it("findThread locates a session in trains, settled, archive — or nowhere", () => {
+    const board = deriveBoard(
+      inputs({
+        entries: [
+          entry({ id: "open" }),
+          entry({ id: "tied", settle: { settled_at: NOW - 60, note: "" } }),
+          entry({ id: "cold", last_activity_at: NOW - (ARCHIVE_DAYS + 1) * DAY }),
+        ],
+      }),
+    );
+    expect(findThread(board, "open")?.state).toBe("camp");
+    expect(findThread(board, "tied")?.state).toBe("settled");
+    expect(findThread(board, "cold")?.entry.id).toBe("cold");
+    expect(findThread(board, "nope")).toBeNull();
   });
 });
 
@@ -389,6 +422,82 @@ describe("the charted trail", () => {
   });
 });
 
+describe("the shipping stretch", () => {
+  const route = (shipStatuses: [string, string][]) => ({
+    title: "ship the ledger",
+    waypoints: [
+      { name: "implement", status: "done" as const },
+      { name: "review", status: "done" as const },
+      ...shipStatuses.map(([name, status]) => ({ name, status }) as never),
+    ],
+  });
+
+  it("recognizes the shipping dialects models write", () => {
+    expect(shipStage("pushed")).toBe("pushed");
+    expect(shipStage("push")).toBe("pushed");
+    expect(shipStage("code pushed")).toBe("pushed");
+    expect(shipStage("pr-reviewed")).toBe("reviewed");
+    expect(shipStage("PR reviewed")).toBe("reviewed");
+    expect(shipStage("pull request reviewed")).toBe("reviewed");
+    expect(shipStage("reviewed")).toBe("reviewed");
+    expect(shipStage("merged")).toBe("merged");
+    expect(shipStage("merge")).toBe("merged");
+    expect(shipStage("pr merged")).toBe("merged");
+    // Working stages never read as shipping.
+    expect(shipStage("review")).toBeNull();
+    expect(shipStage("implement")).toBeNull();
+    expect(shipStage("plan")).toBeNull();
+  });
+
+  it("whole words only: working waypoints never read as ship gates", () => {
+    // Substring matching once turned these into shipping stages — "approach"
+    // and "approve" contain "pr", "unmerged" contains "merged".
+    expect(shipStage("code review")).toBeNull();
+    expect(shipStage("review approach")).toBeNull();
+    expect(shipStage("approve review")).toBeNull();
+    expect(shipStage("unmerged")).toBeNull();
+    expect(shipStage("fix merge conflicts")).toBeNull();
+    expect(shipStage("changes reviewed")).toBeNull();
+  });
+
+  it("un-done shipping waypoints gate the tie-off; done ones clear it", () => {
+    const gated = deriveBoard(
+      inputs({
+        entries: [entry({ id: "g", trail: route([["pushed", "done"], ["pr-reviewed", "current"], ["merged", "ahead"]]) })],
+      }),
+    ).trains[0].threads[0];
+    expect(gated.shipGates).toEqual(["reviewed", "merged"]);
+
+    const clear = deriveBoard(
+      inputs({
+        entries: [entry({ id: "c", trail: route([["pushed", "done"], ["pr-reviewed", "done"], ["merged", "done"]]) })],
+      }),
+    ).trains[0].threads[0];
+    expect(clear.shipGates).toEqual([]);
+
+    // No charted trail: nothing was promised, nothing gates.
+    const uncharted = deriveBoard(inputs({ entries: [entry({ id: "u" })] })).trains[0].threads[0];
+    expect(uncharted.shipGates).toEqual([]);
+  });
+
+  it("shipping waypoints ride the camp → ring stretch; the wagon walks them", () => {
+    const board = deriveBoard(
+      inputs({
+        entries: [entry({ id: "s", trail: route([["pushed", "done"], ["pr-reviewed", "current"], ["merged", "ahead"]]) })],
+      }),
+    );
+    const shape = trailShape(board.trains[0].threads[0]);
+    const ship = shape.stations.filter((st) => st.ship);
+    const working = shape.stations.filter((st) => !st.ship);
+    expect(ship.map((st) => st.name)).toEqual(["pushed", "pr-reviewed", "merged"]);
+    // Working stations end at camp; shipping ones live past it.
+    expect(Math.max(...working.map((st) => st.at))).toBeCloseTo(0.72);
+    expect(ship.every((st) => st.at > 0.72 && st.at < 1)).toBe(true);
+    // The wagon stands at the current shipping station.
+    expect(shape.progress).toBeCloseTo(ship[1].at);
+  });
+});
+
 describe("trail geometry", () => {
   const thread = (overrides: Partial<LedgerEntry> = {}, running = false) =>
     deriveBoard(
@@ -417,5 +526,78 @@ describe("trail geometry", () => {
   it("a finished plan parks the wagon at camp", () => {
     const shape = trailShape(thread({ plan: { done: 4, total: 4, active: null } }));
     expect(shape.progress).toBeCloseTo(0.72);
+  });
+
+  it("only routes whose last working station sits at camp drop the camp circle", () => {
+    // Uncharted: the plain camp marker is the only landmark there.
+    expect(trailShape(thread()).camp).toBe(true);
+    // A standard charted route: the last working station IS camp.
+    const standard = trailShape(
+      thread({
+        trail: {
+          title: "t",
+          waypoints: [
+            { name: "implement", status: "done" },
+            { name: "review", status: "current" },
+            { name: "pushed", status: "ahead" },
+          ],
+        },
+      }),
+    );
+    expect(standard.camp).toBe(false);
+  });
+
+  it("a ship-only route (a reopened thread) keeps its camp landmark and starts from camp", () => {
+    const shape = trailShape(
+      thread({
+        trail: {
+          title: "close the loops",
+          waypoints: [
+            { name: "pushed", status: "done" },
+            { name: "pr-reviewed", status: "current" },
+            { name: "merged", status: "ahead" },
+          ],
+        },
+      }),
+    );
+    // No station occupies camp, so the circle still draws…
+    expect(shape.camp).toBe(true);
+    expect(shape.stations.every((s) => s.at > 0.72)).toBe(true);
+    // …and the wagon never renders behind camp on a route that starts there.
+    const untravelled = trailShape(
+      thread({
+        trail: {
+          title: "close the loops",
+          waypoints: [
+            { name: "pushed", status: "ahead" },
+            { name: "merged", status: "ahead" },
+          ],
+        },
+      }),
+    );
+    expect(untravelled.progress).toBeCloseTo(0.72);
+  });
+
+  it("a degenerate interleaved route keeps station positions monotonic", () => {
+    const shape = trailShape(
+      thread({
+        trail: {
+          title: "t",
+          waypoints: [
+            { name: "implement", status: "done" },
+            { name: "pushed", status: "done" },
+            { name: "polish", status: "current" },
+            { name: "merged", status: "ahead" },
+          ],
+        },
+      }),
+    );
+    const ats = shape.stations.map((s) => s.at);
+    expect([...ats].sort((a, b) => a - b)).toEqual(ats);
+    // The wagon stands at the current station, never behind a done one.
+    expect(shape.progress).toBeCloseTo(shape.stations[2].at);
+    expect(shape.progress).toBeGreaterThan(shape.stations[1].at);
+    // Ship styling survives the fallback layout.
+    expect(shape.stations.map((s) => s.ship)).toEqual([false, true, false, true]);
   });
 });
