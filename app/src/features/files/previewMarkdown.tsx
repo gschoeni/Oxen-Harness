@@ -3,10 +3,11 @@
 // protocol, and repo-relative links opened in the editor pane instead of
 // being shipped to the link browser as dead localhost URLs.
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Components } from "react-markdown";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Markdown } from "../../components/ui/Markdown";
+import { fsAssetPath } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 
 /** A URL's workspace resolution: the file it points at, plus any fragment. */
@@ -49,6 +50,36 @@ export function resolveWorkspaceUrl(dir: string, url: string): WorkspaceTarget |
 
 const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
 
+/** A workspace image, loaded only after the backend confirms the path stays
+ *  inside the CANONICAL workspace. The lexical resolve above can't see
+ *  symlinks — a README embedding `docs/link.png → ~/Pictures/…` must render
+ *  nothing, not quietly read outside the project (the asset protocol itself
+ *  would happily follow the link). */
+function WorkspaceImage({
+  workspace,
+  rel,
+  alt,
+  ...rest
+}: { workspace: string; rel: string; alt?: string } & React.ImgHTMLAttributes<HTMLImageElement>) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let stale = false;
+    setSrc(null);
+    fsAssetPath(workspace, rel)
+      .then((abs) => {
+        if (!stale) setSrc(convertFileSrc(abs));
+      })
+      .catch(() => {
+        /* outside the boundary (or gone): render nothing */
+      });
+    return () => {
+      stale = true;
+    };
+  }, [workspace, rel]);
+  if (!src) return null;
+  return <img src={src} alt={alt} loading="lazy" {...rest} />;
+}
+
 /** The rendered markdown Preview for one workspace file. */
 export function MarkdownPreview({
   workspace,
@@ -74,8 +105,10 @@ export function MarkdownPreview({
         if (fragment === "gh-dark-mode-only" && mode !== "dark") return null;
         if (fragment === "gh-light-mode-only" && mode !== "light") return null;
         const resolved = resolveWorkspaceUrl(dir, url);
-        const finalSrc = resolved ? convertFileSrc(`${workspace}/${resolved.rel}`) : url;
-        return <img src={finalSrc} alt={alt} loading="lazy" {...rest} />;
+        if (resolved) {
+          return <WorkspaceImage workspace={workspace} rel={resolved.rel} alt={alt} {...rest} />;
+        }
+        return <img src={url} alt={alt} loading="lazy" {...rest} />;
       },
       a({ node: _node, href, children, ...rest }) {
         const resolved = resolveWorkspaceUrl(dir, typeof href === "string" ? href : "");

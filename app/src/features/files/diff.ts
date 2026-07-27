@@ -1,12 +1,15 @@
 // Diff tabs and unified-diff parsing. A diff rides the existing editor tab
-// model as a marked path (`diff:<rel-path>`), so opening, fronting, and
-// closing all reuse the store's tab plumbing untouched. The marker is checked
-// BEFORE any extension sniffing (a `diff:photo.png` tab is a diff, not an
-// image).
+// model as a marked path, so opening, fronting, and closing all reuse the
+// store's tab plumbing untouched. The marker is checked BEFORE any extension
+// sniffing (a diff tab for photo.png is a diff, not an image).
 
 import type { GitStatusKind } from "../../lib/types";
 
-const DIFF_PREFIX = "diff:";
+// The marker starts with NUL — the one byte no POSIX filename can contain —
+// so no real workspace file can ever collide with it (a file literally named
+// `diff:notes.md` is a valid filename and must open as a FILE). Tab paths are
+// in-memory only; the marker never reaches disk or the backend.
+const DIFF_PREFIX = "\u0000diff:";
 
 /** The editor-tab path that shows the diff for a workspace file. */
 export const diffTab = (path: string) => DIFF_PREFIX + path;

@@ -8,6 +8,15 @@ describe("diff tabs", () => {
     expect(diffTarget(tab)).toBe("src/photo.png");
     expect(isDiffPath("src/photo.png")).toBe(false);
   });
+
+  it("a real file named like the marker is a file, not a diff", () => {
+    // `diff:notes.md` is a perfectly legal filename on macOS/Linux; the
+    // marker starts with NUL, which no filename can contain, so the two can
+    // never collide.
+    expect(isDiffPath("diff:notes.md")).toBe(false);
+    expect(isDiffPath(diffTab("diff:notes.md"))).toBe(true);
+    expect(diffTarget(diffTab("diff:notes.md"))).toBe("diff:notes.md");
+  });
 });
 
 describe("parseUnifiedDiff", () => {

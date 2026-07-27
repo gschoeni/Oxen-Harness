@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../../lib/store";
-import { fsReadFile, fsWriteFile } from "../../lib/ipc";
+import { fsAssetPath, fsReadFile, fsWriteFile } from "../../lib/ipc";
 import { basename } from "../../lib/format";
 import { isImagePath, isVideoPath } from "../../lib/attachments";
 import { CodeEditor, type EditorSelection } from "./CodeEditor";
@@ -411,13 +411,36 @@ function CodeView({
 
 // ---- one image or video ------------------------------------------------------
 
+/** Asset-protocol URL for a workspace file, gated on the backend's CANONICAL
+ *  boundary check: the asset protocol follows symlinks, so a workspace entry
+ *  linking outside the project must yield nothing, not someone's home file.
+ *  Null until validated (and forever, for anything outside). */
+function useAssetSrc(workspace: string, path: string, bust: number): string | null {
+  const [abs, setAbs] = useState<string | null>(null);
+  useEffect(() => {
+    let stale = false;
+    setAbs(null);
+    fsAssetPath(workspace, path)
+      .then((real) => {
+        if (!stale) setAbs(real);
+      })
+      .catch(() => {
+        /* outside the boundary (or gone): render nothing */
+      });
+    return () => {
+      stale = true;
+    };
+  }, [workspace, path]);
+  return abs ? convertFileSrc(abs) + (bust ? `?v=${bust}` : "") : null;
+}
+
 function MediaView({ workspace, path, onClose }: { workspace: string; path: string; onClose: () => void }) {
   const abs = `${workspace}/${path}`;
   // The asset URL is stable, so a changed file would show its cached pixels —
   // bust the cache whenever the watcher sees this path rewritten.
   const [bust, setBust] = useState(0);
   useFsChanged(workspace, [path], () => setBust((b) => b + 1));
-  const src = convertFileSrc(abs) + (bust ? `?v=${bust}` : "");
+  const src = useAssetSrc(workspace, path, bust);
   const video = isVideoPath(path);
   return (
     <>
@@ -431,7 +454,7 @@ function MediaView({ workspace, path, onClose }: { workspace: string; path: stri
         </div>
       </header>
       <div className="media-view">
-        {video ? (
+        {src === null ? null : video ? (
           <video src={src} controls />
         ) : (
           <img
@@ -474,28 +497,28 @@ function Gallery({
         </div>
       </header>
       <div className="media-grid">
-        {images.map((p) => {
-          const abs = `${workspace}/${p}`;
-          return (
-            <button
-              key={p}
-              className="media-tile"
-              title={`${p} — drag into the chat to attach`}
-              draggable
-              onDragStart={(e: DragEvent) => setDragPaths(e.dataTransfer, [abs])}
-            >
-              <img
-                src={convertFileSrc(abs) + (bust ? `?v=${bust}` : "")}
-                alt={basename(p)}
-                loading="lazy"
-                draggable={false}
-              />
-              <span className="media-tile-name">{basename(p)}</span>
-            </button>
-          );
-        })}
+        {images.map((p) => (
+          <GalleryTile key={p} workspace={workspace} path={p} bust={bust} />
+        ))}
       </div>
       <p className="editor-hint">Drag a tile into the chat to attach it as context.</p>
     </>
+  );
+}
+
+function GalleryTile({ workspace, path, bust }: { workspace: string; path: string; bust: number }) {
+  const abs = `${workspace}/${path}`;
+  const src = useAssetSrc(workspace, path, bust);
+  if (!src) return null;
+  return (
+    <button
+      className="media-tile"
+      title={`${path} — drag into the chat to attach`}
+      draggable
+      onDragStart={(e: DragEvent) => setDragPaths(e.dataTransfer, [abs])}
+    >
+      <img src={src} alt={basename(path)} loading="lazy" draggable={false} />
+      <span className="media-tile-name">{basename(path)}</span>
+    </button>
   );
 }

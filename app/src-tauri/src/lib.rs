@@ -201,6 +201,7 @@ pub fn run() {
             commands::files::fs_create_entry,
             commands::files::git_status,
             commands::files::git_diff,
+            commands::files::fs_asset_path,
             commands::watch::fs_watch,
             commands::watch::fs_unwatch,
             commands::project::list_projects,

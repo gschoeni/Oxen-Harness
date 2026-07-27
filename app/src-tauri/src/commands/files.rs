@@ -5,8 +5,10 @@
 //! so the webview can never reach outside the project it's showing.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -67,6 +69,99 @@ fn run_git(root: &str, args: &[&str]) -> Result<std::process::Output, String> {
         .args(args)
         .output()
         .map_err(|e| format!("could not run git: {e}"))
+}
+
+/// How long a viewer git command may run before it's killed — a diff for a
+/// UI pane is worthless after this long anyway.
+const GIT_VIEW_TIMEOUT: Duration = Duration::from_secs(20);
+/// The most stderr the viewer keeps for an error message.
+const MAX_STDERR_BYTES: usize = 8 * 1024;
+
+/// A git command's output with its stdout hard-capped DURING the read.
+struct CappedGit {
+    stdout: Vec<u8>,
+    stderr: String,
+    truncated: bool,
+    success: bool,
+}
+
+/// Run git streaming stdout with a hard byte cap and a wall-clock timeout.
+///
+/// `Command::output()` would buffer the ENTIRE stream before any truncation
+/// could apply — a diff of a huge generated file could take the desktop
+/// process down with it. Here the reader stops at the cap (dropping the pipe,
+/// which ends git with EPIPE), and a deadline kills a wedged child.
+fn run_git_capped(root: &str, args: &[&str], cap: usize) -> Result<CappedGit, String> {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not run git: {e}"))?;
+
+    let mut stdout_pipe = child.stdout.take().expect("stdout piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr piped");
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let mut truncated = false;
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            match stdout_pipe.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let room = cap.saturating_sub(out.len());
+                    out.extend_from_slice(&buf[..n.min(room)]);
+                    if n > room {
+                        truncated = true;
+                        break; // dropping the pipe ends the child's stream
+                    }
+                }
+            }
+        }
+        (out, truncated)
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut err = Vec::new();
+        let _ = (&mut stderr_pipe)
+            .take(MAX_STDERR_BYTES as u64)
+            .read_to_end(&mut err);
+        // Drain the rest so a chatty child can't block on a full pipe.
+        let _ = std::io::copy(&mut stderr_pipe, &mut std::io::sink());
+        String::from_utf8_lossy(&err).into_owned()
+    });
+
+    let deadline = Instant::now() + GIT_VIEW_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => break None,
+        }
+    };
+    let (stdout, truncated) = reader.join().unwrap_or_default();
+    let stderr = err_reader.join().unwrap_or_default();
+    let Some(status) = status else {
+        return Err(format!(
+            "git {} did not finish within {}s",
+            args.join(" "),
+            GIT_VIEW_TIMEOUT.as_secs()
+        ));
+    };
+    Ok(CappedGit {
+        stdout,
+        stderr,
+        truncated,
+        // A cap-truncated child dies of EPIPE — that's our doing, not a failure.
+        success: status.success() || truncated,
+    })
 }
 
 /// Map porcelain status letters (index, worktree) to the VS Code-style
@@ -138,45 +233,57 @@ pub(crate) fn git_status(root: String) -> Result<Option<Vec<GitFileState>>, Stri
 #[tauri::command]
 pub(crate) fn git_diff(root: String, path: String) -> Result<GitFileDiff, String> {
     resolve(&root, &path)?;
+    // The viewer must never execute repository-configured programs: a repo's
+    // .gitattributes/config can attach external diff drivers and textconv
+    // helpers, and "look at a diff" must not run them.
+    const SAFE_DIFF: &[&str] = &["diff", "--no-ext-diff", "--no-textconv", "--no-color"];
+    fn args<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+        [SAFE_DIFF, rest].concat()
+    }
     // Tracked or not decides which diff exists for this path.
     let tracked = run_git(&root, &["ls-files", "--error-unmatch", "--", &path])
         .map(|out| out.status.success())
         .unwrap_or(false);
     let out = if tracked {
-        let head = run_git(&root, &["diff", "HEAD", "--", &path])?;
-        if head.status.success() {
+        let head = run_git_capped(&root, &args(&["HEAD", "--", &path]), MAX_READ_BYTES)?;
+        if head.success {
             head
         } else {
             // No HEAD yet (unborn branch): everything tracked is newly staged.
-            run_git(&root, &["diff", "--cached", "--", &path])?
+            run_git_capped(&root, &args(&["--cached", "--", &path]), MAX_READ_BYTES)?
         }
     } else {
         // --no-index exits 1 when the files differ — that's the diff, not an
         // error.
-        run_git(&root, &["diff", "--no-index", "--", "/dev/null", &path])?
+        run_git_capped(
+            &root,
+            &args(&["--no-index", "--", "/dev/null", &path]),
+            MAX_READ_BYTES,
+        )?
     };
-    let diff = String::from_utf8_lossy(&out.stdout);
-    if diff.is_empty() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        if !err.is_empty() {
-            return Err(format!("git diff failed for {path}: {}", err.trim()));
+    if out.stdout.is_empty() && !out.stderr.is_empty() {
+        return Err(format!("git diff failed for {path}: {}", out.stderr.trim()));
+    }
+    let mut bytes = out.stdout;
+    if out.truncated {
+        // The byte cap can split a trailing UTF-8 sequence; drop the partial.
+        if let Err(e) = std::str::from_utf8(&bytes) {
+            if bytes.len() - e.valid_up_to() < 4 {
+                bytes.truncate(e.valid_up_to());
+            }
         }
     }
-    let truncated = diff.len() > MAX_READ_BYTES;
-    let content = if truncated {
-        let mut cut = MAX_READ_BYTES;
-        while cut > 0 && !diff.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        diff[..cut].to_string()
-    } else {
-        diff.into_owned()
-    };
-    Ok(GitFileDiff { content, truncated })
+    Ok(GitFileDiff {
+        content: String::from_utf8_lossy(&bytes).into_owned(),
+        truncated: out.truncated,
+    })
 }
 
-/// Join `rel` onto `root`, refusing absolute paths and any `..` step so the
-/// result provably stays inside the workspace.
+/// Join `rel` onto `root`, refusing absolute paths and any `..` step — and
+/// then confirm against the REAL filesystem: lexical checks can't see
+/// symlinks, and a workspace entry (`docs/secret-link → ~/.ssh/config`) must
+/// not carry a read or write outside the project. The returned path is
+/// canonical, so every operation acts on the file the check approved.
 pub(super) fn resolve(root: &str, rel: &str) -> Result<PathBuf, String> {
     let root_path = Path::new(root);
     if !root_path.is_absolute() || !root_path.is_dir() {
@@ -190,7 +297,53 @@ pub(super) fn resolve(root: &str, rel: &str) -> Result<PathBuf, String> {
             _ => return Err(format!("path escapes the workspace: {rel}")),
         }
     }
-    Ok(resolved)
+    let canon_root = fs::canonicalize(root_path)
+        .map_err(|e| format!("not a workspace directory: {root} ({e})"))?;
+    let canon = canonicalize_allowing_missing_tail(&resolved)
+        .ok_or_else(|| format!("could not resolve {rel}"))?;
+    if !canon.starts_with(&canon_root) {
+        return Err(format!("path escapes the workspace: {rel}"));
+    }
+    Ok(canon)
+}
+
+/// Canonicalize a path whose tail may not exist yet (a file being created):
+/// the deepest existing ancestor is resolved for real — following, and
+/// thereby exposing, any symlink — and the uncreated remainder (already
+/// lexically validated by the caller) is re-joined. `None` only when nothing
+/// on the path exists at all.
+fn canonicalize_allowing_missing_tail(path: &Path) -> Option<PathBuf> {
+    let mut existing = path.to_path_buf();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        match fs::canonicalize(&existing) {
+            Ok(canon) => {
+                let mut out = canon;
+                for seg in tail.iter().rev() {
+                    out.push(seg);
+                }
+                return Some(out);
+            }
+            Err(_) => {
+                tail.push(existing.file_name()?.to_os_string());
+                existing = existing.parent()?.to_path_buf();
+            }
+        }
+    }
+}
+
+/// The canonical absolute path of a workspace file, for the webview's asset
+/// protocol (markdown-preview images and similar). Same boundary as every
+/// other command: a symlink pointing outside the workspace is refused here,
+/// BEFORE the path ever reaches `convertFileSrc` — the asset protocol itself
+/// would happily follow it.
+#[tauri::command]
+pub(crate) fn fs_asset_path(root: String, path: String) -> Result<String, String> {
+    let file = resolve(&root, &path)?;
+    if !file.is_file() {
+        return Err(format!("not a file: {path}"));
+    }
+    Ok(file.display().to_string())
 }
 
 /// List one directory of the workspace tree (the tree loads lazily, a level
@@ -431,6 +584,98 @@ mod tests {
         assert!(fs_read_file(root.clone(), "../etc/passwd".into()).is_err());
         assert!(fs_read_file(root.clone(), "/etc/passwd".into()).is_err());
         assert!(fs_create_entry(root, "../oops".into(), true).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Lexical checks can't see symlinks: a workspace entry linking outside
+    /// the project must be refused for reads, writes, diffs, and asset
+    /// resolution alike — the boundary is the CANONICAL root.
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_cannot_carry_operations_outside_the_workspace() {
+        let outside = std::env::temp_dir().join(format!(
+            "oxen-harness-files-outside-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&outside);
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.txt"), "s3cret").unwrap();
+
+        let dir = workspace("symlink");
+        std::os::unix::fs::symlink(outside.join("secret.txt"), dir.join("leak.txt")).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("leakdir")).unwrap();
+        // An INTERNAL symlink is fine — the boundary is the workspace, not
+        // "no symlinks".
+        std::os::unix::fs::symlink(dir.join("README.md"), dir.join("alias.md")).unwrap();
+
+        let root = dir.display().to_string();
+        assert!(fs_read_file(root.clone(), "leak.txt".into()).is_err());
+        assert!(fs_write_file(root.clone(), "leak.txt".into(), "overwrite".into()).is_err());
+        assert!(fs_read_file(root.clone(), "leakdir/secret.txt".into()).is_err());
+        assert!(fs_create_entry(root.clone(), "leakdir/new.txt".into(), false).is_err());
+        assert!(fs_asset_path(root.clone(), "leak.txt".into()).is_err());
+        assert!(git_diff(root.clone(), "leak.txt".into()).is_err());
+        assert_eq!(
+            fs_read_file(root, "alias.md".into()).unwrap().content,
+            "hello"
+        );
+        // The outside file was never touched.
+        assert_eq!(fs::read_to_string(outside.join("secret.txt")).unwrap(), "s3cret");
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    /// The diff cap applies WHILE streaming — a huge diff comes back cut at
+    /// the cap instead of ballooning through memory first.
+    #[test]
+    fn git_diff_streams_and_caps_a_huge_file() {
+        let dir = workspace("gitcap");
+        git_init(&dir);
+        // ~6 MB of changed lines — three times the cap.
+        let big: String = (0..200_000)
+            .map(|i| format!("line number {i} padded out a bit\n"))
+            .collect();
+        fs::write(dir.join("big.txt"), big).unwrap();
+        let diff = git_diff(dir.display().to_string(), "big.txt".into()).unwrap();
+        assert!(diff.truncated);
+        assert!(diff.content.len() <= MAX_READ_BYTES);
+        assert!(diff.content.contains("line number 0"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Viewing a diff must not run repository-configured programs: a repo's
+    /// .gitattributes can attach a textconv/external-diff helper, and the
+    /// safe flags keep it inert.
+    #[test]
+    fn git_diff_never_runs_repository_configured_helpers() {
+        let dir = workspace("gitconv");
+        git_init(&dir);
+        let marker = dir.join("pwned");
+        fs::write(dir.join(".gitattributes"), "*.md diff=evil\n").unwrap();
+        let run = |args: &[&str]| {
+            assert!(Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success());
+        };
+        run(&[
+            "config",
+            "diff.evil.textconv",
+            &format!("touch {} #", marker.display()),
+        ]);
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "attrs"]);
+        fs::write(dir.join("README.md"), "changed").unwrap();
+        let diff = git_diff(dir.display().to_string(), "README.md".into()).unwrap();
+        assert!(diff.content.contains("-hello"), "{}", diff.content);
+        assert!(
+            !marker.exists(),
+            "viewing a diff executed a repository-configured helper"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
+import { diffTab } from "./diff";
 import { FilesPanel } from "./FilesPanel";
 import { fsCreateEntry, fsListDir, gitStatus, sampleSession } from "../../test/ipcMock";
 import { useStore } from "../../lib/store";
@@ -134,7 +135,10 @@ describe("FilesPanel", () => {
       screen.getByTitle("README.md — modified · click to view the diff"),
     );
     const id = sampleSession.session_id;
-    expect(useStore.getState().editorTabs[id]).toEqual({ tabs: [["diff:README.md"]], active: 0 });
+    expect(useStore.getState().editorTabs[id]).toEqual({
+      tabs: [[diffTab("README.md")]],
+      active: 0,
+    });
     expect(useStore.getState().rightTab[id]).toBe("editor");
 
     // The hover affordance opens the file itself, not the diff.

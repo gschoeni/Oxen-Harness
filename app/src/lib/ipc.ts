@@ -262,6 +262,12 @@ export const fsWriteFile = (root: string, path: string, content: string) =>
 export const fsCreateEntry = (root: string, path: string, isDir: boolean) =>
   invoke<void>("fs_create_entry", { root, path, isDir });
 
+/** The canonical absolute path of a workspace file, symlink-checked against
+ *  the workspace boundary — the only path that may be handed to the asset
+ *  protocol (`convertFileSrc`). Errors for anything that resolves outside. */
+export const fsAssetPath = (root: string, path: string) =>
+  invoke<string>("fs_asset_path", { root, path });
+
 /** The workspace's changed files (VS Code Source-Control style), or null when
  *  the workspace isn't a git repository. */
 export const gitStatus = (root: string) =>
