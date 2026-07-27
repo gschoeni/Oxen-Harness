@@ -113,7 +113,10 @@ fn validate_trail(
     for wp in &waypoints {
         match wp.status {
             WaypointStatus::Done if seen_open => {
-                return Err("waypoints must be in order: a `done` stage cannot follow an unfinished one".into());
+                return Err(
+                    "waypoints must be in order: a `done` stage cannot follow an unfinished one"
+                        .into(),
+                );
             }
             WaypointStatus::Done => {}
             _ => seen_open = true,
@@ -197,7 +200,8 @@ impl TypedTool for TrailTool {
     }
 
     async fn run(&self, args: TrailArgs) -> Result<String, ToolError> {
-        let trail = validate_trail(args.title, args.waypoints).map_err(ToolError::InvalidArguments)?;
+        let trail =
+            validate_trail(args.title, args.waypoints).map_err(ToolError::InvalidArguments)?;
         Ok(render(&trail))
     }
 }
@@ -263,10 +267,18 @@ mod tests {
 
         // No previous trail: stays unnamed. A named update always wins.
         assert_eq!(merge_trail(None, unnamed).title, "");
-        assert_eq!(merge_trail(Some(named), parse(serde_json::json!({
-            "title": "better name",
-            "waypoints": [wp("a", "current"), wp("b", "ahead")],
-        })).unwrap()).title, "better name");
+        assert_eq!(
+            merge_trail(
+                Some(named),
+                parse(serde_json::json!({
+                    "title": "better name",
+                    "waypoints": [wp("a", "current"), wp("b", "ahead")],
+                }))
+                .unwrap()
+            )
+            .title,
+            "better name"
+        );
     }
 
     #[tokio::test]

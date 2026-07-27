@@ -2,7 +2,7 @@
 //!
 //! The harness already carries three hard-coded correctives — "you announced
 //! an action but never called a tool", "your plan still has open items", "you
-//! called the same tool with the same arguments again" (see [`crate::prompt`]).
+//! called the same tool with the same arguments again" (see the `prompt` module).
 //! Each is a rule someone decided was worth a round trip. Users have their own:
 //! *never `.unwrap()` in this crate*, *don't touch `generated/`*, *stop writing
 //! migrations by hand*. Putting those in the system prompt makes every request

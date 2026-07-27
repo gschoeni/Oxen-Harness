@@ -26,8 +26,14 @@ impl GitTool {
     }
 
     async fn run_git(&self, args: &[String]) -> Result<String, ToolError> {
-        crate::process::run_cli("git", args, self.workspace.root(), GIT_TIMEOUT, MAX_GIT_CHARS)
-            .await
+        crate::process::run_cli(
+            "git",
+            args,
+            self.workspace.root(),
+            GIT_TIMEOUT,
+            MAX_GIT_CHARS,
+        )
+        .await
     }
 }
 
@@ -97,13 +103,8 @@ impl TypedTool for GitTool {
                 // `-u origin HEAD`: pushes the current branch under its own
                 // name and records the upstream, so the first push and every
                 // later one are the same call.
-                self.run_git(&[
-                    "push".into(),
-                    "-u".into(),
-                    "origin".into(),
-                    "HEAD".into(),
-                ])
-                .await
+                self.run_git(&["push".into(), "-u".into(), "origin".into(), "HEAD".into()])
+                    .await
             }
         }
     }

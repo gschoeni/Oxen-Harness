@@ -181,7 +181,11 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
         ""
     };
     let gh_tool = if tools.gh { ", `gh` (GitHub PRs)" } else { "" };
-    let trail_tool = if tools.trail { TRAIL_TOOL_LIST_ENTRY } else { "" };
+    let trail_tool = if tools.trail {
+        TRAIL_TOOL_LIST_ENTRY
+    } else {
+        ""
+    };
     // The trail guideline names the shipping stages the model can actually
     // verify: with `gh` the review/merge state is checked; without it, only
     // the push is verifiable and the rest is explicitly the user's to confirm.
@@ -430,7 +434,10 @@ mod tests {
             ..OptionalTools::default()
         });
         assert!(trail_only.contains("update_trail"));
-        assert!(!trail_only.contains("`gh`"), "must not order an unregistered tool");
+        assert!(
+            !trail_only.contains("`gh`"),
+            "must not order an unregistered tool"
+        );
         assert!(trail_only.contains("leave them for the user to confirm"));
 
         let neither = system_prompt_with(OptionalTools::default());

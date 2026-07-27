@@ -74,7 +74,9 @@ fn edit_file_real_pair_beside_empty_edits_list() {
         r#"{"path":"src/app/(app)/account/api-keys/page.tsx","edits":[],"old_string":"import { createClient } from \"@/lib/supabase/server\";","new_string":"import { KeyIcon } from \"@/components/ui/icons\";\nimport { createClient } from \"@/lib/supabase/server\";","replace_all":false}"#,
     )
     .unwrap();
-    let edits = args.replacements().expect("empty `edits` beside a real pair is the pair");
+    let edits = args
+        .replacements()
+        .expect("empty `edits` beside a real pair is the pair");
     assert_eq!(edits.len(), 1);
     assert!(edits[0].new_string.contains("KeyIcon"));
 }
@@ -87,7 +89,9 @@ fn edit_file_real_edits_beside_empty_pair() {
         r#"{"path":"src/app/(app)/account/api-keys/page.tsx","edits":[{"old_string":"a","new_string":"b","replace_all":false},{"old_string":"c","new_string":"d","replace_all":false}],"old_string":"","new_string":"","replace_all":false}"#,
     )
     .unwrap();
-    let edits = args.replacements().expect("an empty pair beside real `edits` is the edits");
+    let edits = args
+        .replacements()
+        .expect("an empty pair beside real `edits` is the edits");
     assert_eq!(edits.len(), 2);
 }
 

@@ -199,8 +199,9 @@ mod tests {
     #[test]
     fn last_plan_call_ignores_prose_and_other_tools() {
         // Prose mention only — the LIKE prefilter let it through, we must not.
-        assert!(last_plan_call_in(r#"{"role":"assistant","content":"update_plan is neat"}"#)
-            .is_none());
+        assert!(
+            last_plan_call_in(r#"{"role":"assistant","content":"update_plan is neat"}"#).is_none()
+        );
 
         // A different tool plus a real plan call: the plan call wins.
         let msg = serde_json::json!({

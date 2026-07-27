@@ -601,10 +601,7 @@ impl HistoryStore {
     /// call whose bad arguments were rejected, simply doesn't). Exists to
     /// backfill plan snapshots for sessions that predate them; new sessions
     /// persist their snapshot as each call happens.
-    pub fn plan_message_candidates(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<String>, HistoryError> {
+    pub fn plan_message_candidates(&self, session_id: &str) -> Result<Vec<String>, HistoryError> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
             "SELECT raw_json FROM messages

@@ -615,8 +615,7 @@ impl Agent {
             // calls — the Ledger's named stations and the thread's title. An
             // update that omits the title keeps the previously charted name.
             if call.function.name == harness_tools::TRAIL_TOOL {
-                if let Some(trail) =
-                    harness_tools::parse_trail_arguments(&call.function.arguments)
+                if let Some(trail) = harness_tools::parse_trail_arguments(&call.function.arguments)
                 {
                     let previous = self
                         .store
@@ -1384,7 +1383,10 @@ mod tests {
             .mock("POST", "/chat/completions")
             .with_status(200)
             .with_header("content-type", "text/event-stream")
-            .with_body(sse_tool_call(harness_tools::RUN_SHELL_TOOL, serde_json::json!({})))
+            .with_body(sse_tool_call(
+                harness_tools::RUN_SHELL_TOOL,
+                serde_json::json!({}),
+            ))
             .create_async()
             .await;
         server
@@ -1439,7 +1441,10 @@ mod tests {
             .mock("POST", "/chat/completions")
             .with_status(200)
             .with_header("content-type", "text/event-stream")
-            .with_body(sse_tool_call(harness_tools::RUN_SHELL_TOOL, serde_json::json!({})))
+            .with_body(sse_tool_call(
+                harness_tools::RUN_SHELL_TOOL,
+                serde_json::json!({}),
+            ))
             .create_async()
             .await;
         server
@@ -1500,7 +1505,10 @@ mod tests {
             .mock("POST", "/chat/completions")
             .with_status(200)
             .with_header("content-type", "text/event-stream")
-            .with_body(sse_tool_call(harness_tools::RUN_SHELL_TOOL, serde_json::json!({})))
+            .with_body(sse_tool_call(
+                harness_tools::RUN_SHELL_TOOL,
+                serde_json::json!({}),
+            ))
             .create_async()
             .await;
         server
@@ -1549,7 +1557,10 @@ mod tests {
             .mock("POST", "/chat/completions")
             .with_status(200)
             .with_header("content-type", "text/event-stream")
-            .with_body(sse_tool_call(harness_tools::RUN_SHELL_TOOL, serde_json::json!({})))
+            .with_body(sse_tool_call(
+                harness_tools::RUN_SHELL_TOOL,
+                serde_json::json!({}),
+            ))
             .create_async()
             .await;
         server

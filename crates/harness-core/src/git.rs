@@ -86,16 +86,18 @@ pub fn overview(root: &Path) -> Option<GitOverview> {
     // `HEAD...@{upstream}` counts divergence in both directions in one call:
     // "<ahead>\t<behind>". It fails when no upstream is configured (and on an
     // unborn HEAD), which is exactly the `has_upstream: false` story.
-    let (ahead, behind, has_upstream) =
-        match capture(root, &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]) {
-            Ok(counts) => {
-                let mut parts = counts.split_whitespace();
-                let ahead = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-                let behind = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-                (ahead, behind, true)
-            }
-            Err(_) => (0, 0, false),
-        };
+    let (ahead, behind, has_upstream) = match capture(
+        root,
+        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+    ) {
+        Ok(counts) => {
+            let mut parts = counts.split_whitespace();
+            let ahead = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            let behind = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            (ahead, behind, true)
+        }
+        Err(_) => (0, 0, false),
+    };
 
     Some(GitOverview {
         branch,

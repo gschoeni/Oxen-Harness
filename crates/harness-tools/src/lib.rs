@@ -38,13 +38,13 @@ pub mod gh;
 pub mod git;
 mod http_body;
 pub mod plan;
-pub mod trail;
 pub mod process;
 pub mod retrieve;
 pub mod sandbox;
 pub mod shell;
 pub mod skill;
 pub mod tasks;
+pub mod trail;
 pub mod viewer;
 pub mod web;
 pub mod web_fetch;
@@ -62,13 +62,13 @@ pub use plan::{
     PlanTool, PLAN_TOOL,
 };
 pub use retrieve::{RetrieveOriginalTool, RETRIEVE_ORIGINAL_TOOL};
+pub use sandbox::Workspace;
+pub use shell::RUN_SHELL_TOOL;
+pub use skill::{Skill, SkillScope, SkillTool, SKILL_TOOL};
 pub use trail::{
     merge_trail, parse_trail_arguments, TrailSnapshot, TrailTool, Waypoint, WaypointStatus,
     TRAIL_TOOL,
 };
-pub use sandbox::Workspace;
-pub use shell::RUN_SHELL_TOOL;
-pub use skill::{Skill, SkillScope, SkillTool, SKILL_TOOL};
 pub use viewer::{FileView, OpenFileTool, ViewerSink, OPEN_FILE_TOOL};
 pub use web::WEB_SEARCH_TOOL;
 pub use web_fetch::{WebFetchTool, WEB_FETCH_TOOL};
@@ -606,7 +606,10 @@ impl ToolRegistry {
         // log is one `retrieve_original` away instead of gone.
         let overflow = Arc::new(harness_compress::CcrStore::default());
         let tasks = tasks::BackgroundTasks::in_temp_with_overflow(Some(overflow.clone()));
-        registry.register_typed(shell::ShellTool::with_tasks(workspace.clone(), tasks.clone()));
+        registry.register_typed(shell::ShellTool::with_tasks(
+            workspace.clone(),
+            tasks.clone(),
+        ));
         registry.register_typed(tasks::TaskOutputTool::new(tasks.clone()));
         registry.register_typed(tasks::KillTaskTool::new(tasks));
 

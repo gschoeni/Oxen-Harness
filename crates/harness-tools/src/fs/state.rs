@@ -261,7 +261,7 @@ impl FileState {
     /// Decide whether a mutation of `path` may proceed, given what's on disk
     /// right now. The messages are the whole point: a model that gets
     /// "not found" retries blindly, while a model told *what* to do next does
-    /// it. Same reasoning as [`super::edit_diagnostics`].
+    /// it. Same reasoning as `edit_diagnostics` in the parent module.
     pub fn guard(&self, display: &str, path: &Path, current: &str) -> Result<(), crate::ToolError> {
         match self.verify(path, current) {
             Freshness::Fresh => Ok(()),

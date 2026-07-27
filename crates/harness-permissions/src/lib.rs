@@ -1003,9 +1003,10 @@ mod tests {
             },
         )
         .unwrap();
-        let gate = PermissionGate::new(ws.path(), Arc::new(Scripted(Some(
-            ApprovalDecision::AllowSession,
-        ))));
+        let gate = PermissionGate::new(
+            ws.path(),
+            Arc::new(Scripted(Some(ApprovalDecision::AllowSession))),
+        );
 
         // Reads flow without asking.
         for (tool, op) in [

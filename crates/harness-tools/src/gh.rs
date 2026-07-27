@@ -147,7 +147,10 @@ mod tests {
             let err = tool.invoke(args.clone()).await.unwrap_err();
             match err {
                 ToolError::InvalidArguments(msg) => {
-                    assert!(msg.contains("omit both"), "unhelpful error for {args}: {msg}")
+                    assert!(
+                        msg.contains("omit both"),
+                        "unhelpful error for {args}: {msg}"
+                    )
                 }
                 other => panic!("expected InvalidArguments for {args}, got {other:?}"),
             }

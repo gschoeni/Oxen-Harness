@@ -216,7 +216,9 @@ pub(crate) fn spawn(
             }
         }
         let _ = std::fs::remove_file(&canary);
-        let Some(backend) = weak.upgrade() else { return };
+        let Some(backend) = weak.upgrade() else {
+            return;
+        };
         if alive {
             return;
         }
@@ -307,7 +309,10 @@ mod tests {
                 break;
             }
         }
-        assert!(hits.load(Ordering::SeqCst) > 0, "no watch backend ever delivered an event");
+        assert!(
+            hits.load(Ordering::SeqCst) > 0,
+            "no watch backend ever delivered an event"
+        );
 
         // Let every pending report drain, then phase-align on the backend:
         // one probe write, and the moment its reload lands we know a scan

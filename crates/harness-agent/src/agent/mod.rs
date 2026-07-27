@@ -424,8 +424,12 @@ impl Agent {
         for path in touched {
             // Resolve exactly as the tools would; skip anything that no
             // longer resolves (deleted, or outside the workspace).
-            let Ok(abs) = workspace.resolve(&path) else { continue };
-            let Ok(contents) = std::fs::read_to_string(&abs) else { continue };
+            let Ok(abs) = workspace.resolve(&path) else {
+                continue;
+            };
+            let Ok(contents) = std::fs::read_to_string(&abs) else {
+                continue;
+            };
             files.record(&abs, &contents);
         }
     }
@@ -936,13 +940,20 @@ mod tests {
                     "function": {"name": name, "arguments": format!("{{\"path\":\"{path}\"}}")}}]
             })
         };
-        store.append_message(&session, &call("c1", "read_file", "seen.txt")).unwrap();
         store
-            .append_message(&session, &serde_json::json!({
-                "role": "tool", "tool_call_id": "c1", "content": "     1\thello"
-            }))
+            .append_message(&session, &call("c1", "read_file", "seen.txt"))
             .unwrap();
-        store.append_message(&session, &call("c2", "edit_file", "unseen.txt")).unwrap();
+        store
+            .append_message(
+                &session,
+                &serde_json::json!({
+                    "role": "tool", "tool_call_id": "c1", "content": "     1\thello"
+                }),
+            )
+            .unwrap();
+        store
+            .append_message(&session, &call("c2", "edit_file", "unseen.txt"))
+            .unwrap();
         store
             .append_message(&session, &serde_json::json!({
                 "role": "tool", "tool_call_id": "c2",
@@ -978,9 +989,14 @@ mod tests {
             let registry = ToolRegistry::default_for_workspace(workspace.clone());
             let files = registry.files().unwrap().clone();
             let client = OxenClient::new("http://127.0.0.1:1".to_string(), "k", "m");
-            let mut agent =
-                Agent::new(client, registry, store, session.clone(), AgentConfig::default())
-                    .unwrap();
+            let mut agent = Agent::new(
+                client,
+                registry,
+                store,
+                session.clone(),
+                AgentConfig::default(),
+            )
+            .unwrap();
             agent.load_session(session).unwrap();
             assert!(files.guard("seen.txt", &seen, "hello\n").is_ok());
             assert!(files.guard("unseen.txt", &unseen, "nope\n").is_err());

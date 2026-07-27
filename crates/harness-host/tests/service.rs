@@ -365,7 +365,10 @@ async fn ledger_snapshot_derives_entries_and_settles_round_trip() {
     assert_eq!(entry.review_status, "kept");
     // The appended assistant message is the transcript tail: not mid-turn.
     assert!(!entry.mid_turn);
-    let plan = entry.plan.as_ref().expect("plan backfilled from transcript");
+    let plan = entry
+        .plan
+        .as_ref()
+        .expect("plan backfilled from transcript");
     assert_eq!((plan.done, plan.total), (1, 2));
 
     // The backfill persisted its verdict: a second read must not rescan.
@@ -428,7 +431,10 @@ async fn a_run_starting_on_a_settled_thread_reopens_it() {
         .run_turn(&info.session_id, "hello".into(), vec![])
         .await
         .unwrap();
-    service.settle_session(&info.session_id, "done").await.unwrap();
+    service
+        .settle_session(&info.session_id, "done")
+        .await
+        .unwrap();
 
     service
         .run_turn(&info.session_id, "actually, keep going".into(), vec![])
