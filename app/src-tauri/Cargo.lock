@@ -1517,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "harness-agent"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "harness-compress",
@@ -1538,7 +1538,7 @@ dependencies = [
 
 [[package]]
 name = "harness-compress"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1547,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "harness-config"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "dirs 5.0.1",
  "dotenvy",
@@ -1558,7 +1558,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1566,14 +1566,14 @@ dependencies = [
 
 [[package]]
 name = "harness-crash"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "harness-host"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "harness-agent",
@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "harness-llm"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "base64 0.22.1",
  "dirs 5.0.1",
@@ -1614,7 +1614,7 @@ dependencies = [
 
 [[package]]
 name = "harness-local"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "flate2",
  "futures-util",
@@ -1631,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "harness-loop"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "globset",
  "harness-agent",
@@ -1647,14 +1647,14 @@ dependencies = [
 
 [[package]]
 name = "harness-oxen"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "harness-permissions"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "dirs 5.0.1",
@@ -1669,7 +1669,7 @@ dependencies = [
 
 [[package]]
 name = "harness-preview"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "harness-config",
@@ -1687,7 +1687,7 @@ dependencies = [
 
 [[package]]
 name = "harness-protocol"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -1696,7 +1696,7 @@ dependencies = [
 
 [[package]]
 name = "harness-review"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "harness-agent",
  "harness-config",
@@ -1709,7 +1709,7 @@ dependencies = [
 
 [[package]]
 name = "harness-runtime"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "globset",
  "harness-compress",
@@ -1726,7 +1726,7 @@ dependencies = [
 
 [[package]]
 name = "harness-store"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "harness-core",
  "libc",
@@ -1740,7 +1740,7 @@ dependencies = [
 
 [[package]]
 name = "harness-theme"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "harness-config",
  "harness-core",
@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "harness-tools"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "globset",
@@ -2857,7 +2857,7 @@ dependencies = [
 
 [[package]]
 name = "oxen-harness-app"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "block2",

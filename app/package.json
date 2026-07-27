@@ -1,7 +1,7 @@
 {
   "name": "oxen-harness-app",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.1",
   "type": "module",
   "description": "Cross-platform desktop UI for oxen-harness",
   "scripts": {
