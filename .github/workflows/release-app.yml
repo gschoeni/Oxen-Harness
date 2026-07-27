@@ -107,19 +107,39 @@ jobs:
         working-directory: app
         run: pnpm install --frozen-lockfile
 
-      # Builds the app, creates the draft release for the tag on the first
-      # matrix job to finish, and uploads each platform's bundles to it.
       # The APPLE_* secrets are optional: when unset, macOS bundles are ad-hoc
-      # signed (users must right-click > Open on first launch).
-      - uses: tauri-apps/tauri-action@v0
+      # signed (users must right-click > Open on first launch). They must be
+      # exported ONLY when actually configured — an env var declared from a
+      # missing secret arrives as an empty string, which the Tauri bundler
+      # reads as "signing requested" and then fails importing an empty
+      # certificate (seen on the first v0.0.1 cut).
+      - name: Apple code signing env (only when certificates are configured)
+        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                      APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              {
+                echo "$name<<__SECRET_EOF__"
+                echo "$value"
+                echo "__SECRET_EOF__"
+              } >> "$GITHUB_ENV"
+            fi
+          done
+
+      # Builds the app, creates the draft release for the tag on the first
+      # matrix job to finish, and uploads each platform's bundles to it.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: app
           tagName: ${{ needs.verify.outputs.tag }}
