@@ -22,6 +22,12 @@ use super::{build_user_message, Agent};
 /// a non-empty reply.
 const MAX_EMPTY_RESAMPLES: u32 = 2;
 
+/// How many times the trail corrective re-arms in one turn. Unlike the
+/// one-shot nudges, this one re-checks whether a trail actually LANDED — a
+/// prose "charted and done" with no `update_trail` call would otherwise
+/// satisfy it. Bounded so a model that flatly refuses can't spin the turn.
+const MAX_TRAIL_NUDGES: u32 = 2;
+
 /// The bookkeeping one turn carries across its rounds.
 ///
 /// All of it is per-turn by design: a corrective that fired in an earlier turn
@@ -39,8 +45,9 @@ struct TurnState {
     plan_nudged: bool,
     /// Whether a plan updated *this turn* still has unfinished items.
     plan_open: bool,
-    /// Whether the "you did real work but charted no trail" corrective has fired.
-    trail_nudged: bool,
+    /// How many times the "you did real work but charted no trail" corrective
+    /// has fired (it re-arms until a trail lands or [`MAX_TRAIL_NUDGES`]).
+    trail_nudges: u32,
     /// Whether this turn edited files or ran shell commands — the work that
     /// obliges a charted trail (mirrors the prompt guideline's trigger).
     did_real_work: bool,
@@ -501,11 +508,29 @@ impl Agent {
         // charted trail: the "question that quietly became work" case the
         // prompt guideline alone doesn't reliably catch. Gated on the tool
         // being registered (subagents drop it) and on the session state, so a
-        // trail charted in any earlier turn suppresses it.
-        if !turn.trail_nudged && turn.did_real_work && self.needs_trail() {
-            turn.trail_nudged = true;
-            turn.nudge = Some(ChatMessage::user(prompt::TRAIL_STALL_NUDGE.to_string()));
-            return true;
+        // trail charted in any earlier turn suppresses it. Unlike the
+        // one-shot nudges above, this re-checks that a trail actually
+        // PERSISTED — a prose "charted!" with no successful `update_trail`
+        // call re-arms the corrective (bounded, so the turn can't spin).
+        if turn.did_real_work && self.needs_trail() {
+            if turn.trail_nudges < MAX_TRAIL_NUDGES {
+                turn.trail_nudges += 1;
+                turn.nudge = Some(ChatMessage::user(prompt::TRAIL_STALL_NUDGE.to_string()));
+                return true;
+            }
+            // The model declined every chance. Accept the reply — failing the
+            // turn would hold the user's actual answer hostage over board
+            // bookkeeping — but leave a trace for the developer log, and let
+            // the board render the thread honestly as uncharted.
+            crate::errlog::record(
+                self.config.error_log.as_deref(),
+                "trail_left_uncharted",
+                serde_json::json!({
+                    "session": self.session_id(),
+                    "model": self.config.model,
+                    "nudges": turn.trail_nudges,
+                }),
+            );
         }
         false
     }
@@ -1346,12 +1371,15 @@ mod tests {
         Agent::new(client, tools, store, session.to_string(), config).unwrap()
     }
 
+    /// A prose "charted and done" with no actual `update_trail` call must not
+    /// satisfy the corrective: it re-arms (the trail still isn't persisted)
+    /// up to `MAX_TRAIL_NUDGES`, then the turn ends rather than spinning.
     #[tokio::test]
-    async fn trail_nudge_fires_when_real_work_ends_uncharted() {
+    async fn trail_nudge_rearms_on_a_prose_bypass_then_gives_up_at_the_cap() {
         let mut server = mockito::Server::new_async().await;
         // Bottom-up: the base reply runs a command; the round carrying its
-        // result ends in prose with no trail charted; the nudged round gives
-        // the final answer.
+        // result ends in prose with no trail charted; every nudged round
+        // *claims* to have charted without calling the tool.
         server
             .mock("POST", "/chat/completions")
             .with_status(200)
@@ -1373,17 +1401,22 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "text/event-stream")
             .with_body(sse_prose("Charted and done."))
-            .expect(1)
+            .expect(MAX_TRAIL_NUDGES as usize)
             .create_async()
             .await;
 
         let store = Arc::new(HistoryStore::open_in_memory().unwrap());
         let session = test_session(&store, "claude-opus-4-8");
-        let mut agent = trail_test_agent(server.url(), store, &session);
+        let mut agent = trail_test_agent(server.url(), store.clone(), &session);
 
         let out = agent.run_turn("tidy the build", |_| {}).await.unwrap();
         assert_eq!(out, "Charted and done.");
         recovery.assert_async().await;
+        // Still honestly uncharted — the board renders it that way.
+        assert!(store
+            .session_state::<harness_tools::TrailSnapshot>(&session, harness_store::TRAIL_STATE)
+            .unwrap()
+            .is_none());
 
         // Request-only corrective: never persisted, the user's message stays
         // the only user turn.
@@ -1395,6 +1428,69 @@ mod tests {
             agent.messages().iter().filter(|m| m.role == "user").count(),
             1
         );
+    }
+
+    /// The corrective stops re-arming the moment an `update_trail` call
+    /// actually persists a snapshot.
+    #[tokio::test]
+    async fn trail_nudge_is_satisfied_by_a_real_charting_call() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_tool_call(harness_tools::RUN_SHELL_TOOL, serde_json::json!({})))
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("FAKE-SHELL-OK".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("Command ran; we're done here."))
+            .create_async()
+            .await;
+        // The nudged round charts for real…
+        let nudged = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("no charted trail".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_tool_call(
+                harness_tools::TRAIL_TOOL,
+                serde_json::json!({
+                    "title": "tidy the build",
+                    "waypoints": [
+                        {"name": "fix", "status": "done"},
+                        {"name": "verify", "status": "current"}
+                    ]
+                }),
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+        // …and the round carrying the trail result ends in prose, no re-nudge.
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("Trail".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("Charted for real; done."))
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let mut agent = trail_test_agent(server.url(), store.clone(), &session);
+
+        let out = agent.run_turn("tidy the build", |_| {}).await.unwrap();
+        assert_eq!(out, "Charted for real; done.");
+        nudged.assert_async().await;
+        let trail = store
+            .session_state::<harness_tools::TrailSnapshot>(&session, harness_store::TRAIL_STATE)
+            .unwrap()
+            .expect("trail persisted");
+        assert_eq!(trail.title, "tidy the build");
     }
 
     #[tokio::test]

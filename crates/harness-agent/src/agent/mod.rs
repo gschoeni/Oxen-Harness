@@ -256,7 +256,7 @@ impl Agent {
         let rule_history = store
             .session_state(&session_id, RULE_HISTORY_STATE)?
             .unwrap_or_default();
-        Ok(Self {
+        let agent = Self {
             client,
             tools,
             usage_store: store.clone(),
@@ -287,7 +287,13 @@ impl Agent {
             interjections: crate::Interjections::default(),
             rules: crate::rules::RuleSet::default(),
             rule_history,
-        })
+        };
+        // This is the constructor every real resume flow (host, CLI) goes
+        // through — the read-before-edit guard must be re-taught here, not
+        // only in `load_session`, or a cold resume rejects edits to files the
+        // transcript already read.
+        agent.rehydrate_file_state();
+        Ok(agent)
     }
 
     /// Drop (and stop) any in-flight speculative compaction summary — it was
@@ -944,20 +950,41 @@ mod tests {
             }))
             .unwrap();
 
-        // A fresh agent (fresh gated registry — the resume scenario).
         let workspace = harness_tools::Workspace::new(dir.path()).unwrap();
-        let registry = ToolRegistry::default_for_workspace(workspace.clone());
-        let files = registry.files().unwrap().clone();
-        let client = OxenClient::new("http://127.0.0.1:1".to_string(), "k", "m");
-        let mut agent =
-            Agent::new(client, registry, store, session.clone(), AgentConfig::default()).unwrap();
-        agent.load_session(session).unwrap();
-
-        // The transcript's read survives the resume; the refused file doesn't.
         let seen = workspace.resolve("seen.txt").unwrap();
-        assert!(files.guard("seen.txt", &seen, "hello\n").is_ok());
         let unseen = workspace.resolve("unseen.txt").unwrap();
-        assert!(files.guard("unseen.txt", &unseen, "nope\n").is_err());
+
+        // Path 1: `resume_from_store` — the constructor every REAL resume
+        // flow (host agent_or_build, CLI resume) goes through. The transcript's
+        // read survives the resume; the refused file doesn't.
+        {
+            let registry = ToolRegistry::default_for_workspace(workspace.clone());
+            let files = registry.files().unwrap().clone();
+            let client = OxenClient::new("http://127.0.0.1:1".to_string(), "k", "m");
+            let _agent = Agent::resume_from_store(
+                client,
+                registry,
+                store.clone(),
+                session.clone(),
+                AgentConfig::default(),
+            )
+            .unwrap();
+            assert!(files.guard("seen.txt", &seen, "hello\n").is_ok());
+            assert!(files.guard("unseen.txt", &unseen, "nope\n").is_err());
+        }
+
+        // Path 2: `load_session` — a live agent switching to the session.
+        {
+            let registry = ToolRegistry::default_for_workspace(workspace.clone());
+            let files = registry.files().unwrap().clone();
+            let client = OxenClient::new("http://127.0.0.1:1".to_string(), "k", "m");
+            let mut agent =
+                Agent::new(client, registry, store, session.clone(), AgentConfig::default())
+                    .unwrap();
+            agent.load_session(session).unwrap();
+            assert!(files.guard("seen.txt", &seen, "hello\n").is_ok());
+            assert!(files.guard("unseen.txt", &unseen, "nope\n").is_err());
+        }
     }
 
     #[test]
