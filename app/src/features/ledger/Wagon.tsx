@@ -260,12 +260,15 @@ function gateLabel(gate: "pushed" | "reviewed" | "merged"): string {
 }
 
 /** The quiet way out: permanently delete the chat. Kept small and far from
- *  the primary actions; always behind a confirm. */
+ *  the primary actions; always behind a confirm. A RIDING thread can't be
+ *  cut loose from here — deleting a live run is almost always a misclick, so
+ *  stop the run first (the host cancels-and-awaits any stragglers anyway). */
 export function CutLoose({ thread, disabled }: { thread: Thread; disabled: boolean }) {
   const removeSession = useStore((s) => s.removeSession);
   const refreshLedger = useStore((s) => s.refreshLedger);
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const running = thread.state === "running";
 
   async function confirmDelete() {
     setDeleting(true);
@@ -282,9 +285,13 @@ export function CutLoose({ thread, disabled }: { thread: Thread; disabled: boole
     <>
       <button
         className="ledger-cut-loose"
-        title="Cut loose — delete this chat and its history"
+        title={
+          running
+            ? "Still riding — stop the run before cutting this thread loose"
+            : "Cut loose — delete this chat and its history"
+        }
         aria-label={`Delete chat: ${threadTitle(thread)}`}
-        disabled={disabled}
+        disabled={disabled || running}
         onClick={() => setConfirming(true)}
       >
         <Trash2 size={13} />

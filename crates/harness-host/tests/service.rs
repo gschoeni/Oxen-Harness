@@ -409,3 +409,81 @@ async fn ledger_snapshot_derives_entries_and_settles_round_trip() {
     let snapshot = service.ledger_snapshot().await.unwrap();
     assert_eq!(snapshot.last_seen, seen);
 }
+
+/// The other half of the settle/turn-start race: however the two interleave,
+/// a running thread is never settled. `settle_session` holds the running-set
+/// lock across its check-and-write (tested above); here, a run that starts
+/// AFTER a settle landed clears the mark — riding again means back on the
+/// trail.
+#[tokio::test]
+async fn a_run_starting_on_a_settled_thread_reopens_it() {
+    let mut server = mockito::Server::new_async().await;
+    let _m = sse_mock(&mut server, FINAL_SSE);
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink, workspace.path());
+
+    let info = service.new_session().await.unwrap();
+    service
+        .run_turn(&info.session_id, "hello".into(), vec![])
+        .await
+        .unwrap();
+    service.settle_session(&info.session_id, "done").await.unwrap();
+
+    service
+        .run_turn(&info.session_id, "actually, keep going".into(), vec![])
+        .await
+        .unwrap();
+    let snapshot = service.ledger_snapshot().await.unwrap();
+    let entry = snapshot
+        .entries
+        .iter()
+        .find(|e| e.id == info.session_id)
+        .unwrap();
+    assert!(
+        entry.settle.is_none(),
+        "a thread that rode again must not stay settled"
+    );
+}
+
+/// Deleting a chat with a run in flight stops the run FIRST and waits for it
+/// to deregister — history must never vanish under an agent still executing
+/// tools. The fake run mirrors the real turn's contract: it removes itself
+/// from the running set only after its post-cancel cleanup.
+#[tokio::test]
+async fn deleting_a_running_chat_cancels_and_awaits_the_run() {
+    let mut server = mockito::Server::new_async().await;
+    let _m = sse_mock(&mut server, FINAL_SSE);
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink, workspace.path());
+
+    let info = service.new_session().await.unwrap();
+    service
+        .run_turn(&info.session_id, "hello".into(), vec![])
+        .await
+        .unwrap();
+
+    let token = tokio_util::sync::CancellationToken::new();
+    service
+        .cancels
+        .lock()
+        .await
+        .insert(info.session_id.clone(), token.clone());
+    let fake_turn = {
+        let service = service.clone();
+        let id = info.session_id.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            token.cancelled().await;
+            // "final persistence" before deregistering, like a real turn.
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+            service.cancels.lock().await.remove(&id);
+        })
+    };
+
+    service.delete_session(&info.session_id).await.unwrap();
+    assert!(token.is_cancelled(), "delete must stop the run");
+    assert!(service.list_sessions().unwrap().is_empty());
+    fake_turn.await.unwrap();
+}

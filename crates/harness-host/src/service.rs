@@ -1025,10 +1025,27 @@ impl SessionService {
         self.store()?.messages(id).map_err(|e| e.to_string())
     }
 
-    /// Permanently delete a chat session: remove it (and its messages) from
-    /// history, drop any cached live agent, stop its dev server, and clear it
-    /// as the current chat if it was active.
+    /// Permanently delete a chat session: stop any in-flight run first, then
+    /// remove it (and its messages) from history, drop any cached live agent,
+    /// stop its dev server, and clear it as the current chat if it was active.
+    ///
+    /// The stop-first matters: deleting history under a running turn would
+    /// leave an untracked agent still executing tools against the workspace,
+    /// with every later persistence failing. The turn is cancelled and
+    /// *awaited* — it deregisters from the running set only after its final
+    /// persistence — so nothing survives its own deletion.
     pub async fn delete_session(&self, id: &str) -> Result<(), String> {
+        self.cancel_turn(id).await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while self.cancels.lock().await.contains_key(id) {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(
+                    "this chat is still winding down a run — try deleting again in a moment"
+                        .to_string(),
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         self.store()?
             .delete_session(id)
             .map_err(|e| e.to_string())?;
@@ -1145,6 +1162,8 @@ impl SessionService {
             .lock()
             .await
             .insert(sid.clone(), cancel.clone());
+        // Registered ⇒ running ⇒ not settled (see ledger::reopen_for_run).
+        self.reopen_for_run(&sid);
         self.interjections
             .lock()
             .await
@@ -1316,6 +1335,7 @@ impl SessionService {
             }
             cancels.insert(session.to_string(), cancel.clone());
         }
+        self.reopen_for_run(session);
 
         let result = {
             let mut agent = arc.lock().await;
@@ -1454,6 +1474,7 @@ impl SessionService {
             }
             cancels.insert(session.to_string(), cancel.clone());
         }
+        self.reopen_for_run(session);
         let root = self.session_workspace(session);
         let runner =
             LoopRunner::new(spec.clone(), root).persisting_to(store.journal_path_for(&spec.name));

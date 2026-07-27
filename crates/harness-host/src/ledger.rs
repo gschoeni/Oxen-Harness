@@ -59,8 +59,14 @@ impl SessionService {
     /// that just started a turn, and settling it would hide a live agent (and
     /// its approval prompts) in the settled tally. The UI's render gate is a
     /// convenience; this is the contract.
+    ///
+    /// The running-set lock is held across the whole check-and-write, and a
+    /// turn registering its token clears any settle mark right after — so
+    /// however a settle races a turn start, the outcome is coherent: a
+    /// running thread is never settled.
     pub async fn settle_session(&self, session: &str, note: &str) -> Result<SettleState, String> {
-        if self.cancels.lock().await.contains_key(session) {
+        let cancels = self.cancels.lock().await;
+        if cancels.contains_key(session) {
             return Err(
                 "this thread is mid-turn — wait for it to finish (or stop it) before tying off"
                     .to_string(),
@@ -73,9 +79,12 @@ impl SessionService {
             settled_at: now(),
             note: note.trim().to_string(),
         };
+        // Written while the lock is still held: a turn can't slip into the
+        // gap between the check above and this write.
         store
             .save_session_state(session, SETTLE_STATE, &state)
             .map_err(|e| e.to_string())?;
+        drop(cancels);
         Ok(state)
     }
 
@@ -84,6 +93,17 @@ impl SessionService {
         self.store()?
             .clear_session_state(session, SETTLE_STATE)
             .map_err(|e| e.to_string())
+    }
+
+    /// Running and settled are mutually exclusive: called right after a run
+    /// (turn, loop, review) registers its cancellation token, so a settle
+    /// that landed a beat before the registration — the other side of the
+    /// [`Self::settle_session`] race — is undone. A thread that rides again
+    /// is back on the trail, whatever the board said a moment ago.
+    pub(crate) fn reopen_for_run(&self, session: &str) {
+        if let Ok(store) = self.store() {
+            let _ = store.clear_session_state(session, SETTLE_STATE);
+        }
     }
 
     /// Record that the user just looked at the board, returning the new mark.
