@@ -40,6 +40,15 @@ if (!window.ResizeObserver) {
   } as unknown as typeof ResizeObserver;
 }
 
+// jsdom lacks the Tauri bridge; the markdown preview resolves local images
+// through `convertFileSrc`, which delegates to it.
+type TauriInternals = { __TAURI_INTERNALS__?: { convertFileSrc: (p: string, protocol?: string) => string } };
+if (!(window as TauriInternals).__TAURI_INTERNALS__) {
+  (window as TauriInternals).__TAURI_INTERNALS__ = {
+    convertFileSrc: (p: string, protocol = "asset") => `${protocol}://localhost/${p}`,
+  };
+}
+
 // ThemesModal's "Export" copies to the clipboard.
 if (!navigator.clipboard) {
   Object.defineProperty(navigator, "clipboard", {

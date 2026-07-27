@@ -444,6 +444,22 @@ export const fsWriteFile = vi.fn(async (_root: string, _path: string, _content: 
 export const fsCreateEntry = vi.fn(async (_root: string, _path: string, _isDir: boolean) => {});
 export const fsWatch = vi.fn(async (_root: string) => {});
 export const fsUnwatch = vi.fn(async (_root: string) => {});
+export const gitStatus = vi.fn(
+  async (_root: string) =>
+    null as
+      | null
+      | {
+          path: string;
+          original_path: string | null;
+          status: string;
+          index: string;
+          worktree: string;
+        }[],
+);
+export const gitDiff = vi.fn(async (_root: string, _path: string) => ({
+  content: "",
+  truncated: false,
+}));
 export const onFsChanged = listener("fsChanged");
 
 // ---- link browser ------------------------------------------------------------
@@ -596,6 +612,8 @@ export function resetIpc() {
   fsReadFile.mockReset().mockResolvedValue({ content: "", truncated: false, size: 0 });
   fsWriteFile.mockReset().mockResolvedValue(undefined);
   fsCreateEntry.mockReset().mockResolvedValue(undefined);
+  gitStatus.mockReset().mockResolvedValue(null);
+  gitDiff.mockReset().mockResolvedValue({ content: "", truncated: false });
   browserAttach.mockReset().mockResolvedValue(undefined);
   browserDetach.mockReset().mockResolvedValue(undefined);
   browserClose.mockReset().mockResolvedValue(undefined);

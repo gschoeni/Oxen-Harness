@@ -85,6 +85,65 @@ pub fn system_prompt_with_env(tools: OptionalTools, workspace: &std::path::Path)
     )
 }
 
+/// The trail's entry in the prompt's tool list. A named constant so
+/// [`strip_trail_sections`] can remove exactly what was added.
+const TRAIL_TOOL_LIST_ENTRY: &str = ", `update_trail` (chart the session's journey)";
+
+/// The trail guideline when `gh` is registered: the shipping stages are
+/// verifiable in-session, so the model is ordered to verify them.
+///
+/// The trigger is a *condition*, not a moment: sessions routinely open as a
+/// question ("what could we improve about X?") and only later turn into real
+/// work — a "chart before you start" instruction has already expired by then,
+/// so the mandate is pinned to the first file edit or shell command instead.
+/// It also explicitly severs itself from `update_plan`'s "default to not
+/// using it" guidance in the next bullet, which otherwise bleeds onto its
+/// sibling tool and suppresses charting.
+const TRAIL_GUIDELINE_WITH_GH: &str =
+    "\n- Chart this session with `update_trail` as soon as it involves real \
+     work — at the latest, right before your first file edit or shell command. \
+     A session that opens as a question still gets charted the moment you \
+     start actually working. Unlike `update_plan` below, the trail is NOT \
+     optional for work sessions. Title the thread and chart its macro stages \
+     (standard: define, plan, implement, review; code work ends with pushed, \
+     pr-reviewed, merged). Advance stages as you pass them, and re-chart \
+     the route whenever the user redirects you or you change approach — \
+     the trail must always tell the truth about where this thread stands. \
+     The shipping stages are verified, never assumed: `git` push to close \
+     \"pushed\", `gh` pr_view to confirm review and merge state. The \
+     user's board gates closing the thread on these — they are the open \
+     loops you exist to close.";
+
+/// The trail guideline without `gh`: only the push is verifiable in-session;
+/// review/merge state is explicitly the user's to confirm.
+const TRAIL_GUIDELINE_NO_GH: &str =
+    "\n- Chart this session with `update_trail` as soon as it involves real \
+     work — at the latest, right before your first file edit or shell command. \
+     A session that opens as a question still gets charted the moment you \
+     start actually working. Unlike `update_plan` below, the trail is NOT \
+     optional for work sessions. Title the thread and chart its macro stages \
+     (standard: define, plan, implement, review; code work ends with pushed, \
+     pr-reviewed, merged). Advance stages as you pass them, and re-chart \
+     the route whenever the user redirects you or you change approach — \
+     the trail must always tell the truth about where this thread stands. \
+     Close \"pushed\" only after a verified `git` push; pr-reviewed and \
+     merged can't be auto-verified in this session, so leave them for the \
+     user to confirm rather than marking them done on faith.";
+
+/// Remove the trail sections from a finished system prompt, for detached
+/// subagents (side agents, fleet lanes). Their registries drop `update_trail`
+/// (see `subagent_tools`): a lane's transcript lives in a throwaway in-memory
+/// store, so a charted trail would never reach the user's board — the mandate
+/// would be either wasted tokens or a wasted call. The parent's prompt is
+/// inherited verbatim otherwise (environment, conventions, project metadata),
+/// so this strips exactly the constants the builder spliced in.
+pub(crate) fn strip_trail_sections(prompt: &str) -> String {
+    prompt
+        .replace(TRAIL_TOOL_LIST_ENTRY, "")
+        .replace(TRAIL_GUIDELINE_WITH_GH, "")
+        .replace(TRAIL_GUIDELINE_NO_GH, "")
+}
+
 /// The system prompt, advertising the host-optional tools (`web_search`,
 /// `canvas`, `open_file`) only when the host actually registered them.
 pub fn system_prompt_with(tools: OptionalTools) -> String {
@@ -122,39 +181,14 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
         ""
     };
     let gh_tool = if tools.gh { ", `gh` (GitHub PRs)" } else { "" };
-    let trail_tool = if tools.trail {
-        ", `update_trail` (chart the session's journey)"
-    } else {
-        ""
-    };
+    let trail_tool = if tools.trail { TRAIL_TOOL_LIST_ENTRY } else { "" };
     // The trail guideline names the shipping stages the model can actually
     // verify: with `gh` the review/merge state is checked; without it, only
     // the push is verifiable and the rest is explicitly the user's to confirm.
     let trail_guideline = match (tools.trail, tools.gh) {
         (false, _) => "",
-        (true, true) => {
-            "\n- For any session doing real work, call `update_trail` BEFORE starting \
-             the work loop: title the thread and chart its macro stages (standard: \
-             define, plan, implement, review; code work ends with pushed, \
-             pr-reviewed, merged). Advance stages as you pass them, and re-chart \
-             the route whenever the user redirects you or you change approach — \
-             the trail must always tell the truth about where this thread stands. \
-             The shipping stages are verified, never assumed: `git` push to close \
-             \"pushed\", `gh` pr_view to confirm review and merge state. The \
-             user's board gates closing the thread on these — they are the open \
-             loops you exist to close."
-        }
-        (true, false) => {
-            "\n- For any session doing real work, call `update_trail` BEFORE starting \
-             the work loop: title the thread and chart its macro stages (standard: \
-             define, plan, implement, review; code work ends with pushed, \
-             pr-reviewed, merged). Advance stages as you pass them, and re-chart \
-             the route whenever the user redirects you or you change approach — \
-             the trail must always tell the truth about where this thread stands. \
-             Close \"pushed\" only after a verified `git` push; pr-reviewed and \
-             merged can't be auto-verified in this session, so leave them for the \
-             user to confirm rather than marking them done on faith."
-        }
+        (true, true) => TRAIL_GUIDELINE_WITH_GH,
+        (true, false) => TRAIL_GUIDELINE_NO_GH,
     };
     let open_file_guideline = if tools.open_file {
         "\n- After creating or substantially rewriting a project file the user \
@@ -256,6 +290,17 @@ pub(crate) const PLAN_STALL_NUDGE: &str =
      step, continue any steps that don't depend on it — and then give your final \
      answer explaining what's blocked and what you completed instead. Do not leave \
      the checklist stale.";
+
+/// The one-shot corrective appended when a turn did real work (edited files or
+/// ran shell commands) but the session has no charted trail — the "question
+/// that quietly became a work session" failure mode the prompt guideline alone
+/// doesn't reliably catch (see `Agent::drive_turn`). Sent only on the retry
+/// request and never persisted.
+pub(crate) const TRAIL_STALL_NUDGE: &str =
+    "You did real work this turn, but this session has no charted trail. Call \
+     `update_trail` now: title the thread and chart its macro stages, marking \
+     stages already passed as done and the stage you're in as current. Then \
+     give your final answer.";
 
 /// The one-shot corrective appended when the same tool call has repeated with
 /// identical arguments *and* an identical result several times in a row (see
@@ -392,11 +437,54 @@ mod tests {
         assert!(!neither.contains("update_trail"));
         assert!(!neither.contains("pr-reviewed"));
 
+        // The trigger is a condition (first edit/shell command), not a
+        // "before you start" moment a question-shaped session sails past, and
+        // it explicitly severs itself from update_plan's default-off guidance.
+        assert!(both.contains("right before your first file edit or shell command"));
+        assert!(both.contains("NOT optional for work sessions"));
+
         // The convenience default advertises the default registry (gh + trail
         // are registered unless the user disables them).
         let default = default_system_prompt(false);
         assert!(default.contains("`gh` (GitHub PRs)"));
         assert!(default.contains("update_trail"));
+    }
+
+    /// Subagents inherit the parent's finished prompt but drop `update_trail`
+    /// from their registry — stripping must remove every trail section (tool
+    /// list entry + guideline, both gh variants) and nothing else.
+    #[test]
+    fn strip_trail_sections_removes_the_mandate_from_any_variant() {
+        for gh in [false, true] {
+            let full = system_prompt_with(OptionalTools {
+                gh,
+                trail: true,
+                ..OptionalTools::default()
+            });
+            let stripped = strip_trail_sections(&full);
+            assert!(!stripped.contains("update_trail"), "gh={gh}");
+            assert!(!stripped.contains("pr-reviewed"), "gh={gh}");
+            // The rest of the prompt survives untouched.
+            assert!(stripped.contains("update_plan"));
+            if gh {
+                assert!(stripped.contains("`gh` (GitHub PRs)"));
+            }
+            assert_eq!(
+                stripped,
+                system_prompt_with(OptionalTools {
+                    gh,
+                    ..OptionalTools::default()
+                }),
+                "stripping must equal never having advertised the trail (gh={gh})"
+            );
+        }
+        // Still works on a full prompt with the environment section appended,
+        // the shape a subagent actually inherits.
+        let inherited = system_prompt_with_env(
+            OptionalTools::default_registry(),
+            std::path::Path::new("/w"),
+        );
+        assert!(!strip_trail_sections(&inherited).contains("update_trail"));
     }
 
     #[test]

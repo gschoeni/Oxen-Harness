@@ -1012,6 +1012,35 @@ export interface FileBody {
   size: number;
 }
 
+/** VS Code-style summary of one changed file in the workspace's git tree. */
+export type GitStatusKind =
+  | "modified"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "untracked"
+  | "conflicted";
+
+/** A changed path in the workspace's Git working tree. */
+export interface GitFileState {
+  /** Workspace-relative path (`/`-joined) — matches the Files tree's keys. */
+  path: string;
+  /** Where a rename came from, when Git reports one. */
+  original_path: string | null;
+  status: GitStatusKind;
+  /** Git's index status letter (space when clean). */
+  index: string;
+  /** Git's working-tree status letter (space when clean). */
+  worktree: string;
+}
+
+/** A unified diff for one changed file. */
+export interface GitFileDiff {
+  content: string;
+  /** True when the diff was longer than the backend's read cap. */
+  truncated: boolean;
+}
+
 /** A highlighted code selection staged as context for the next prompt. */
 export interface CodeSnippet {
   /** Workspace-relative path of the file the selection came from. */

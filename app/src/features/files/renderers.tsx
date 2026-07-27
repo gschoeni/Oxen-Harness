@@ -5,7 +5,15 @@
 // a matching file opens on.
 
 import type { ReactNode } from "react";
-import { Markdown } from "../../components/ui/Markdown";
+import { MarkdownPreview } from "./previewMarkdown";
+
+/** Where the previewed content lives, for resolving relative links/images. */
+export interface PreviewContext {
+  /** The workspace root (absolute). */
+  workspace: string;
+  /** The previewed file's workspace-relative path. */
+  path: string;
+}
 
 export interface FileRenderer {
   id: string;
@@ -15,7 +23,7 @@ export interface FileRenderer {
    *  open pretty; source-first formats (html) open raw. */
   defaultMode: "preview" | "raw";
   matches: (path: string) => boolean;
-  render: (content: string) => ReactNode;
+  render: (content: string, ctx: PreviewContext) => ReactNode;
 }
 
 const ext = (path: string) => path.split(".").pop()?.toLowerCase() ?? "";
@@ -26,10 +34,8 @@ export const RENDERERS: FileRenderer[] = [
     label: "Preview",
     defaultMode: "preview",
     matches: (p) => ["md", "markdown", "mdx"].includes(ext(p)),
-    render: (content) => (
-      <div className="editor-preview editor-preview-md">
-        <Markdown text={content} />
-      </div>
+    render: (content, ctx) => (
+      <MarkdownPreview workspace={ctx.workspace} path={ctx.path} content={content} />
     ),
   },
   {

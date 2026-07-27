@@ -35,6 +35,8 @@ import type {
   ImportReport,
   CanvasEvent,
   FsChangedEvent,
+  GitFileDiff,
+  GitFileState,
   GitOverview,
   LedgerSnapshot,
   OpenFileEvent,
@@ -259,6 +261,16 @@ export const fsWriteFile = (root: string, path: string, content: string) =>
 /** Create an empty file or a folder (fails if the path already exists). */
 export const fsCreateEntry = (root: string, path: string, isDir: boolean) =>
   invoke<void>("fs_create_entry", { root, path, isDir });
+
+/** The workspace's changed files (VS Code Source-Control style), or null when
+ *  the workspace isn't a git repository. */
+export const gitStatus = (root: string) =>
+  invoke<GitFileState[] | null>("git_status", { root });
+
+/** The unified diff for one changed file (working tree vs HEAD; untracked
+ *  files read as fully added). */
+export const gitDiff = (root: string, path: string) =>
+  invoke<GitFileDiff>("git_diff", { root, path });
 
 /** Start native FS watching of a workspace root (idempotent). Changes arrive
  *  as debounced `fs://changed` batches — see {@link onFsChanged}. */

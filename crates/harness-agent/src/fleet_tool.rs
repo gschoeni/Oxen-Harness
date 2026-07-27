@@ -181,6 +181,11 @@ impl FleetSpawner {
         // deadlock reasoning as `subagent_tools` stripping `ask_user_question`):
         // their gate auto-denies and tells the lane to report the command back.
         config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
+        // The registry drops `update_trail` (see `subagent_tools`), so the
+        // inherited prompt must not mandate a tool the registry would reject.
+        config.system_prompt = config
+            .system_prompt
+            .map(|p| crate::prompt::strip_trail_sections(&p));
         // Lanes read and grep far more than they write, and there are N of
         // them: route them to the `smol` role when the user configured one.
         config.model = config
@@ -513,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn subagents_cannot_recurse_or_ask() {
+    fn subagents_cannot_recurse_ask_or_chart() {
         use harness_tools::{AskUserTool, Question, QuestionAnswer, QuestionAsker, ToolError};
 
         struct NoopAsker;
@@ -524,15 +529,18 @@ mod tests {
             }
         }
 
-        // A registry carrying both host-owned singular tools, plus the fleet
-        // tool itself — the shape a real session hands the spawner.
+        // A registry carrying the session-singular tools, plus the fleet tool
+        // itself — the shape a real session hands the spawner.
         let mut tools = ToolRegistry::new();
         tools.register_typed(AskUserTool::new(Arc::new(NoopAsker)));
+        tools.register_typed(harness_tools::TrailTool::new());
         let sp = FleetSpawner::new(
             OxenClient::new("http://localhost/api/ai", "k", "m"),
             tools,
             AgentConfig {
-                system_prompt: None,
+                // The parent's real prompt mandates charting; a lane must not
+                // inherit a mandate for a tool its registry rejects.
+                system_prompt: Some(crate::prompt::default_system_prompt(false)),
                 ..AgentConfig::default()
             },
         );
@@ -549,6 +557,15 @@ mod tests {
         assert!(
             !names.contains(&FLEET_TOOL.to_string()),
             "a subagent must not inherit spawn_agents (no recursive fan-out): {names:?}"
+        );
+        assert!(
+            !names.contains(&harness_tools::TRAIL_TOOL.to_string()),
+            "a subagent must not inherit update_trail (its trail never reaches a board): {names:?}"
+        );
+        let system = sub.messages()[0].content_text().unwrap_or_default();
+        assert!(
+            !system.contains("update_trail"),
+            "the inherited prompt must drop the trail mandate along with the tool"
         );
     }
 

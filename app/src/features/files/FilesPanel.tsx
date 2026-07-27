@@ -5,10 +5,11 @@
 // directory is selected, and the tree refreshes itself when the agent
 // finishes a turn (it may well have written files).
 
-import { useCallback, useEffect, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import {
   ChevronRight,
   FileCode2,
+  FileDiff,
   FilePlus2,
   FileText,
   File as FileIcon,
@@ -24,7 +25,9 @@ import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
 import { isImagePath, isVideoPath } from "../../lib/attachments";
 import { setDragPaths } from "./dnd";
-import type { FileEntry } from "../../lib/types";
+import { diffTab, statusLetter } from "./diff";
+import { useGitStatus } from "./useGitStatus";
+import type { FileEntry, GitFileState } from "../../lib/types";
 import "./files.css";
 
 const CODE_EXTS = new Set([
@@ -58,6 +61,15 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
   const [targetDir, setTargetDir] = useState("");
   const [creating, setCreating] = useState<{ dir: string; isDir: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [changesOpen, setChangesOpen] = useState(true);
+
+  /** Changed files per git; null = not a repository (section hidden). The
+   *  hook owns every refresh trigger except the manual Refresh button. */
+  const git = useGitStatus(workspace);
+  const refreshGit = useStore((s) => s.refreshGitStatus);
+  const loadGit = useCallback(() => {
+    if (workspace) void refreshGit(workspace);
+  }, [workspace, refreshGit]);
 
   const loadDir = useCallback(
     async (dir: string) => {
@@ -87,7 +99,8 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
   const refresh = useCallback(() => {
     void loadDir("");
     for (const dir of expanded) void loadDir(dir);
-  }, [loadDir, expanded]);
+    void loadGit();
+  }, [loadDir, loadGit, expanded]);
 
   // The agent writes files during a turn; re-list what's on screen when it ends.
   const wasRunning = useRef(running);
@@ -110,6 +123,31 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
     for (const dir of dirs) if (dir === "" || entries[dir]) void loadDir(dir);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fsChange]);
+
+  /** Git state per changed path, for the tree rows' badges. */
+  const gitByPath = useMemo(() => {
+    const map = new Map<string, GitFileState>();
+    for (const state of git ?? []) map.set(state.path, state);
+    return map;
+  }, [git]);
+
+  /** Directories with a change somewhere below, for the folder dot. */
+  const dirsChanged = useMemo(() => {
+    const dirs = new Set<string>();
+    for (const state of git ?? []) {
+      let dir = parentOf(state.path);
+      while (dir) {
+        dirs.add(dir);
+        dir = parentOf(dir);
+      }
+    }
+    return dirs;
+  }, [git]);
+
+  const openDiff = useCallback(
+    (path: string) => openInViewer([diffTab(path)]),
+    [openInViewer],
+  );
 
   function toggleDir(path: string) {
     setSelected(new Set([path]));
@@ -209,12 +247,13 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
         {renderNewRow(dir, depth)}
         {list.map((entry) => {
           const open = entry.is_dir && expanded.has(entry.path);
+          const state = entry.is_dir ? undefined : gitByPath.get(entry.path);
           return (
             <div key={entry.path}>
               <button
-                className={`ft-row${selected.has(entry.path) ? " selected" : ""}`}
+                className={`ft-row${selected.has(entry.path) ? " selected" : ""}${state ? ` git-${state.status}` : ""}`}
                 style={{ paddingLeft: 10 + depth * 14 }}
-                title={entry.path}
+                title={state ? `${entry.path} — ${state.status}` : entry.path}
                 draggable={!entry.is_dir}
                 onDragStart={(e) => dragRow(e, entry)}
                 onClick={(e) => (entry.is_dir ? toggleDir(entry.path) : clickFile(e, entry.path))}
@@ -226,6 +265,14 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
                 )}
                 <span className="ft-icon">{iconFor(entry, open)}</span>
                 <span className="ft-name">{entry.name}</span>
+                {entry.is_dir && dirsChanged.has(entry.path) && (
+                  <span className="ft-dirdot" title="Contains changes" aria-hidden="true" />
+                )}
+                {state && (
+                  <span className="ft-badge" aria-label={state.status}>
+                    {statusLetter[state.status]}
+                  </span>
+                )}
               </button>
               {open && renderDir(entry.path, depth + 1)}
             </div>
@@ -276,6 +323,53 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
         </div>
       </header>
       {error && <p className="ft-error">{error}</p>}
+      {git !== null && git.length > 0 && (
+        <section className="ft-changes" aria-label="Git changes">
+          <button
+            className="ft-changes-head"
+            aria-expanded={changesOpen}
+            onClick={() => setChangesOpen((open) => !open)}
+          >
+            <ChevronRight size={13} className={`ft-chev${changesOpen ? " open" : ""}`} />
+            <span className="ft-changes-title">Changes</span>
+            <span className="ft-changes-count">{git.length}</span>
+          </button>
+          {changesOpen && (
+            <div className="ft-changes-list">
+              {git.map((state) => {
+                const dir = parentOf(state.path);
+                const renamed = state.original_path ? `${state.original_path} → ${state.path}` : state.path;
+                return (
+                  <div key={state.path} className={`ft-change git-${state.status}`}>
+                    <button
+                      className="ft-change-main"
+                      title={`${renamed} — ${state.status} · click to view the diff`}
+                      onClick={() => openDiff(state.path)}
+                    >
+                      <FileDiff size={13} aria-hidden="true" />
+                      <span className="ft-change-name">{basename(state.path)}</span>
+                      {dir && <span className="ft-change-dir">{dir}</span>}
+                    </button>
+                    {state.status !== "deleted" && (
+                      <button
+                        className="ft-change-open"
+                        title={`Open ${basename(state.path)}`}
+                        aria-label={`Open ${basename(state.path)}`}
+                        onClick={() => openInViewer([state.path])}
+                      >
+                        <FileCode2 size={12} />
+                      </button>
+                    )}
+                    <span className="ft-badge" title={state.status} aria-label={state.status}>
+                      {statusLetter[state.status]}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
       <div className="ft-tree" role="tree">
         {renderDir("", 0)}
       </div>

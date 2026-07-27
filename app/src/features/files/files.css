@@ -558,3 +558,239 @@
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
 }
+
+/* ---- git state: the Changes section + tree badges ------------------------- */
+
+/* Status colors, VS Code-style: yellow modified, green added/untracked,
+   red deleted/conflicted, accent renamed. Applied to tree rows and change
+   rows via a shared git-<status> class. */
+.git-modified { --git-color: var(--warning); }
+.git-added,
+.git-untracked { --git-color: var(--green); }
+.git-deleted,
+.git-conflicted { --git-color: var(--danger, #ff5d57); }
+.git-renamed { --git-color: var(--accent); }
+
+.ft-changes {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--separator);
+  max-height: 40%;
+  display: flex;
+  flex-direction: column;
+}
+.ft-changes-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.ft-changes-head:hover {
+  background: var(--surface-hover);
+}
+.ft-changes-count {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+}
+.ft-changes-list {
+  overflow-y: auto;
+  padding-bottom: var(--space-2);
+}
+
+.ft-change {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: var(--space-3);
+}
+.ft-change:hover {
+  background: var(--surface-hover);
+}
+.ft-change-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px var(--space-2) 3px var(--space-3);
+  background: none;
+  border: 0;
+  color: var(--git-color, var(--text));
+  font-size: var(--text-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.ft-change-main svg {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.ft-change-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.git-deleted .ft-change-name {
+  text-decoration: line-through;
+}
+.ft-change-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+}
+.ft-change-open {
+  display: none;
+  align-items: center;
+  padding: 2px;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ft-change:hover .ft-change-open {
+  display: inline-flex;
+}
+.ft-change-open:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+/* The one-letter status badge (tree rows + change rows). */
+.ft-badge {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  color: var(--git-color, var(--text-secondary));
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.ft-row .ft-badge {
+  margin-left: auto;
+  margin-right: 6px;
+}
+.ft-row.git-modified .ft-name,
+.ft-row.git-added .ft-name,
+.ft-row.git-untracked .ft-name,
+.ft-row.git-deleted .ft-name,
+.ft-row.git-conflicted .ft-name,
+.ft-row.git-renamed .ft-name {
+  color: var(--git-color);
+}
+
+/* A folder holding changes somewhere below it. */
+.ft-dirdot {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  margin-left: auto;
+  margin-right: 10px;
+  border-radius: 50%;
+  background: var(--warning);
+  opacity: 0.85;
+}
+
+/* ---- the diff viewer ------------------------------------------------------ */
+/* Everything inside is `dv-`-prefixed: `.diff-line`/`.add`/`.meta` are taken
+   by the chat toolcall diff and the Settings cards, and this file's styles
+   are global. */
+
+.diff-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg);
+}
+.dv-empty {
+  margin: 0;
+  padding: var(--space-4) var(--space-3);
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+.dv-lines {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  min-width: max-content;
+  padding-bottom: var(--space-4);
+}
+.dv-line {
+  display: flex;
+  white-space: pre;
+}
+.dv-no {
+  flex-shrink: 0;
+  width: 3.2em;
+  padding-right: 0.6em;
+  text-align: right;
+  color: var(--text-tertiary);
+  user-select: none;
+  font-size: 11px;
+  line-height: inherit;
+}
+.dv-mark {
+  flex-shrink: 0;
+  width: 1.2em;
+  text-align: center;
+  user-select: none;
+}
+.dv-text {
+  padding-right: var(--space-3);
+}
+.dv-line.dv-add {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+}
+.dv-line.dv-add .dv-mark {
+  color: var(--green);
+}
+.dv-line.dv-del {
+  background: color-mix(in srgb, var(--danger, #ff5d57) 12%, transparent);
+}
+.dv-line.dv-del .dv-mark {
+  color: var(--danger, #ff5d57);
+}
+.dv-line.dv-hunk {
+  margin-top: var(--space-2);
+  padding: 2px 0;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.dv-line.dv-hunk .dv-no {
+  visibility: hidden;
+}
+
+/* Wrapped mode: long lines fold instead of scrolling sideways. Numbers and
+   marks keep their columns; only the text column reflows. */
+.dv-lines.wrap {
+  min-width: 0;
+}
+.dv-lines.wrap .dv-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Preview links: repo-relative anchors carry no href (the global interceptor
+   would grab them), so give them the link affordance by hand; images resolved
+   through the asset protocol stay inside the pane. */
+.editor-preview-md .prose a {
+  cursor: pointer;
+}
+.editor-preview-md .prose img {
+  max-width: 100%;
+}

@@ -18,11 +18,13 @@ import {
   Code2,
   Eye,
   FileCode2,
+  FileDiff,
   Film,
   Image as ImageIcon,
   Images,
   MessageSquarePlus,
   Save,
+  WrapText,
   X,
 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -31,6 +33,9 @@ import { fsReadFile, fsWriteFile } from "../../lib/ipc";
 import { basename } from "../../lib/format";
 import { isImagePath, isVideoPath } from "../../lib/attachments";
 import { CodeEditor, type EditorSelection } from "./CodeEditor";
+import { DiffView } from "./DiffView";
+import { diffTab, diffTarget, isDiffPath } from "./diff";
+import { useGitStatus } from "./useGitStatus";
 import { rendererFor } from "./renderers";
 import { setDragPaths } from "./dnd";
 import { useFsChanged } from "./useFsChanged";
@@ -45,6 +50,9 @@ export function EditorPane({ onResizeStart }: { onResizeStart?: (e: PointerEvent
   const activateTab = useStore((s) => s.activateEditorTab);
   const closeTab = useStore((s) => s.closeEditorTab);
   const closeViewer = useStore((s) => s.closeViewer);
+  // Keeps git status fresh even when the Files tree isn't mounted, so the
+  // editor's "view diff" affordance appears/disappears with the file's state.
+  useGitStatus(workspace);
 
   // Unsaved-edit state per tab key, reported up by each CodeView so the tab
   // strip can mark dirty tabs and closes can warn before discarding.
@@ -112,6 +120,9 @@ export function EditorPane({ onResizeStart }: { onResizeStart?: (e: PointerEvent
         let body;
         if (tab.length > 1) {
           body = <Gallery workspace={workspace} paths={tab} onClose={requestClosePane} />;
+        } else if (single && isDiffPath(single)) {
+          // Checked before extension sniffing: `diff:photo.png` is a diff.
+          body = <DiffView workspace={workspace} path={diffTarget(single)} onClose={requestClosePane} />;
         } else if (single && (isImagePath(single) || isVideoPath(single))) {
           body = <MediaView workspace={workspace} path={single} onClose={requestClosePane} />;
         } else if (single) {
@@ -151,9 +162,12 @@ function Tab({
 }) {
   const gallery = tab.length > 1;
   const path = tab[0];
-  const name = gallery ? `${tab.length} images` : basename(path);
+  const diff = !gallery && isDiffPath(path);
+  const name = gallery ? `${tab.length} images` : basename(diff ? diffTarget(path) : path);
   const icon = gallery ? (
     <Images size={12} aria-hidden="true" />
+  ) : diff ? (
+    <FileDiff size={12} aria-hidden="true" />
   ) : isVideoPath(path) ? (
     <Film size={12} aria-hidden="true" />
   ) : isImagePath(path) ? (
@@ -166,7 +180,7 @@ function Tab({
       className={`editor-tab${active ? " active" : ""}${dirty ? " dirty" : ""}`}
       role="tab"
       aria-selected={active}
-      title={gallery ? tab.join("\n") : path}
+      title={gallery ? tab.join("\n") : diff ? `${diffTarget(path)} — diff` : path}
       onClick={onActivate}
       onAuxClick={(e) => {
         // Middle-click closes, like every tabbed editor.
@@ -213,6 +227,11 @@ function CodeView({
 }) {
   const addSnippet = useStore((s) => s.addSnippet);
   const running = useStore((s) => !!s.session && s.runStatus[s.session.session_id] === "running");
+  const openInViewer = useStore((s) => s.openInViewer);
+  const wrap = useStore((s) => s.editorWrap);
+  const toggleWrap = useStore((s) => s.toggleEditorWrap);
+  /** Whether git says this file differs from HEAD — shows the diff jump. */
+  const changed = useStore((s) => !!s.gitStates[workspace]?.some((g) => g.path === path));
 
   // Files with a registered rich renderer (markdown, html, …) get a
   // Preview/Raw toggle; the raw editor stays mounted underneath so unsaved
@@ -319,6 +338,25 @@ function CodeView({
               <Save size={14} />
             </button>
           )}
+          {changed && (
+            <button
+              className="icon-btn sm"
+              aria-label={`View diff of ${basename(path)}`}
+              title="View diff"
+              onClick={() => openInViewer([diffTab(path)])}
+            >
+              <FileDiff size={14} />
+            </button>
+          )}
+          <button
+            className={`icon-btn sm${wrap ? " active" : ""}`}
+            aria-label="Toggle word wrap"
+            aria-pressed={wrap}
+            title={wrap ? "Unwrap long lines" : "Wrap long lines"}
+            onClick={toggleWrap}
+          >
+            <WrapText size={14} />
+          </button>
           {renderer && (
             <div className="editor-mode" role="tablist" aria-label="View mode">
               <button
@@ -346,13 +384,17 @@ function CodeView({
       </header>
       {error && <p className="editor-error">{error}</p>}
       <div className="editor-body">
-        {loaded && renderer && mode === "preview" && renderer.render(dirty ? buffer.current : loaded.doc)}
+        {loaded &&
+          renderer &&
+          mode === "preview" &&
+          renderer.render(dirty ? buffer.current : loaded.doc, { workspace, path })}
         {loaded && (
           <div className="editor-raw" hidden={!!renderer && mode === "preview"}>
             <CodeEditor
               initial={loaded.doc}
               filename={basename(path)}
               readOnly={loaded.truncated}
+              wrap={wrap}
               onChange={(doc) => {
                 buffer.current = doc;
                 setDirty(doc !== loaded.doc);

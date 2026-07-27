@@ -80,6 +80,7 @@ export function CodeEditor({
   initial,
   filename,
   readOnly = false,
+  wrap = false,
   onChange,
   onSelection,
   onSave,
@@ -89,6 +90,8 @@ export function CodeEditor({
   /** Picks the language grammar (matched by name/extension, lazy-loaded). */
   filename: string;
   readOnly?: boolean;
+  /** Soft-wrap long lines. Toggles live — no rebuild, undo history kept. */
+  wrap?: boolean;
   onChange?: (doc: string) => void;
   onSelection?: (selection: EditorSelection | null) => void;
   /** ⌘S inside the editor. */
@@ -98,11 +101,23 @@ export function CodeEditor({
   // Latest callbacks without rebuilding the editor when they change identity.
   const cb = useRef({ onChange, onSelection, onSave });
   cb.current = { onChange, onSelection, onSave };
+  // Wrapping lives in a compartment so toggling reconfigures the live view;
+  // the ref carries the current value into (re)builds without being a dep.
+  const view = useRef<EditorView | null>(null);
+  const wrapComp = useRef(new Compartment());
+  const wrapNow = useRef(wrap);
+  wrapNow.current = wrap;
+
+  useEffect(() => {
+    view.current?.dispatch({
+      effects: wrapComp.current.reconfigure(wrap ? EditorView.lineWrapping : []),
+    });
+  }, [wrap]);
 
   useEffect(() => {
     if (!host.current) return;
     const language = new Compartment();
-    const view = new EditorView({
+    const editor = new EditorView({
       parent: host.current,
       state: EditorState.create({
         doc: initial,
@@ -111,6 +126,7 @@ export function CodeEditor({
           theme,
           syntaxHighlighting(highlight),
           language.of([]),
+          wrapComp.current.of(wrapNow.current ? EditorView.lineWrapping : []),
           EditorState.readOnly.of(readOnly),
           // Word completion from the buffer, for every language — grammars
           // that ship real completions (html/css/…) add theirs on top.
@@ -144,12 +160,14 @@ export function CodeEditor({
       }),
     });
 
+    view.current = editor;
+
     let disposed = false;
     const description = LanguageDescription.matchFilename(languages, filename);
     description
       ?.load()
       .then((support) => {
-        if (!disposed) view.dispatch({ effects: language.reconfigure(support) });
+        if (!disposed) editor.dispatch({ effects: language.reconfigure(support) });
       })
       .catch(() => {
         /* no grammar for this file — plain text is fine */
@@ -157,7 +175,8 @@ export function CodeEditor({
 
     return () => {
       disposed = true;
-      view.destroy();
+      view.current = null;
+      editor.destroy();
     };
   }, [initial, filename, readOnly]);
 

@@ -38,7 +38,7 @@ use self::compression::setup_compression;
 const RULE_HISTORY_STATE: &str = "rule_history";
 
 /// Narrow a registry to what a detached subagent (a `side_agent`, a fleet
-/// lane) may hold. Two tools are stripped:
+/// lane) may hold. Three tools are stripped:
 ///
 /// - `spawn_agents` — a subagent must not spawn its own fleet, so fan-out is
 ///   exactly one level deep (no fork bombs, bounded cost).
@@ -47,13 +47,19 @@ const RULE_HISTORY_STATE: &str = "rule_history";
 ///   only one of which can be shown, and since a tool call is awaited without
 ///   cancellation the un-shown lanes (and the whole turn) would hang forever.
 ///   Subagents run headless; a question is the orchestrating turn's job.
+/// - `update_trail` — the trail is the *session's* journey on the user's
+///   board, and a subagent's transcript lives in a throwaway in-memory store:
+///   a lane's charted trail would never reach any surface. Charting is the
+///   parent session's job. (`strip_trail_sections` removes the matching
+///   prompt guideline wherever a subagent inherits the parent's prompt.)
 ///
-/// Both are host-owned, singular capabilities — this is the one place that
-/// decides a subagent can't have them, so `side_agent` and the fleet
-/// spawner can't drift on the policy.
+/// All are host-owned or session-owned, singular capabilities — this is the
+/// one place that decides a subagent can't have them, so `side_agent` and the
+/// fleet spawner can't drift on the policy.
 pub(crate) fn subagent_tools(mut tools: ToolRegistry) -> ToolRegistry {
     tools.remove(crate::fleet_tool::FLEET_TOOL);
     tools.remove(harness_tools::ASK_USER_TOOL);
+    tools.remove(harness_tools::TRAIL_TOOL);
     tools
 }
 
@@ -640,6 +646,11 @@ impl Agent {
         // A side agent can't drive the host's approval prompt any more than it
         // can drive the question picker: demote its gate to auto-deny.
         config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
+        // The registry drops `update_trail` (see `subagent_tools`), so the
+        // inherited prompt must not mandate a tool the registry would reject.
+        config.system_prompt = config
+            .system_prompt
+            .map(|p| crate::prompt::strip_trail_sections(&p));
         let mut side = Agent::new(
             self.client.clone(),
             subagent_tools(self.tools.clone()),
@@ -1058,6 +1069,11 @@ mod tests {
         let mut side = agent.side_agent().unwrap();
         assert_ne!(side.session_id(), agent.session_id());
         assert_eq!(side.model(), agent.model());
+        // The trail is session-singular: the side agent loses the tool (see
+        // `subagent_tools`) and, with it, the prompt's charting mandate — the
+        // default config's prompt carries one.
+        let side_system = side.messages()[0].content_text().unwrap_or_default();
+        assert!(!side_system.contains("update_trail"));
         side.inject_exchange("scratch work", "scratch reply")
             .unwrap();
         assert_eq!(store.messages(&session).unwrap().len(), before);

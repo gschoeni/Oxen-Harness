@@ -22,6 +22,8 @@ export interface UiState {
   homeView?: string;
   /** Project-cards ordering: "recent" | "name". */
   projectsSort?: string;
+  /** Whether the code editor + diff viewer wrap long lines. */
+  editorWrap?: boolean;
 }
 
 let cache: UiState = {};
@@ -34,6 +36,8 @@ const LEGACY_KEYS: Record<keyof UiState, string> = {
   docks: "oxen-docks",
   homeView: "oxen-harness.home-view",
   projectsSort: "oxen-harness.projects-sort",
+  // Never lived in localStorage (born after the ui.json move).
+  editorWrap: "oxen-editor-wrap",
 };
 
 /** Load ui.json into the cache. Awaited in `main.tsx` before the store module

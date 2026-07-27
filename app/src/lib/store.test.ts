@@ -21,6 +21,36 @@ describe("store: mode", () => {
   });
 });
 
+describe("store: editor git state + wrap", () => {
+  it("toggleEditorWrap flips and persists the preference", () => {
+    expect(useStore.getState().editorWrap).toBe(false);
+    useStore.getState().toggleEditorWrap();
+    expect(useStore.getState().editorWrap).toBe(true);
+    expect(getUi("editorWrap")).toBe(true);
+    useStore.getState().toggleEditorWrap();
+    expect(useStore.getState().editorWrap).toBe(false);
+  });
+
+  it("refreshGitStatus caches per workspace and survives a failed probe", async () => {
+    ipc.gitStatus.mockResolvedValueOnce([
+      { path: "a.txt", original_path: null, status: "modified", index: " ", worktree: "M" },
+    ]);
+    await useStore.getState().refreshGitStatus("/ws");
+    expect(useStore.getState().gitStates["/ws"]).toHaveLength(1);
+
+    // A failure keeps the last known state rather than erasing the badges.
+    ipc.gitStatus.mockRejectedValueOnce(new Error("git exploded"));
+    await useStore.getState().refreshGitStatus("/ws");
+    expect(useStore.getState().gitStates["/ws"]).toHaveLength(1);
+
+    // A non-repo workspace records null — its UI hides, others keep theirs.
+    ipc.gitStatus.mockResolvedValueOnce(null);
+    await useStore.getState().refreshGitStatus("/elsewhere");
+    expect(useStore.getState().gitStates["/elsewhere"]).toBeNull();
+    expect(useStore.getState().gitStates["/ws"]).toHaveLength(1);
+  });
+});
+
 describe("store: navigation", () => {
   it("starts at the Ledger, the application's navigation root", () => {
     expect(useStore.getState().homeOpen).toBe(true);

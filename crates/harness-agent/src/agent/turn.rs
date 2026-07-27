@@ -39,6 +39,11 @@ struct TurnState {
     plan_nudged: bool,
     /// Whether a plan updated *this turn* still has unfinished items.
     plan_open: bool,
+    /// Whether the "you did real work but charted no trail" corrective has fired.
+    trail_nudged: bool,
+    /// Whether this turn edited files or ran shell commands — the work that
+    /// obliges a charted trail (mirrors the prompt guideline's trigger).
+    did_real_work: bool,
     /// Consecutive rounds that produced neither prose nor a tool call.
     empty_rounds: u32,
     /// Identical (tool, arguments, result) repeats — one nudge, then stop.
@@ -492,7 +497,33 @@ impl Agent {
             turn.nudge = Some(ChatMessage::user(prompt::PLAN_STALL_NUDGE.to_string()));
             return true;
         }
+        // A turn that edited files or ran commands in a session with no
+        // charted trail: the "question that quietly became work" case the
+        // prompt guideline alone doesn't reliably catch. Gated on the tool
+        // being registered (subagents drop it) and on the session state, so a
+        // trail charted in any earlier turn suppresses it.
+        if !turn.trail_nudged && turn.did_real_work && self.needs_trail() {
+            turn.trail_nudged = true;
+            turn.nudge = Some(ChatMessage::user(prompt::TRAIL_STALL_NUDGE.to_string()));
+            return true;
+        }
         false
+    }
+
+    /// Whether this session owes the board a trail: the `update_trail` tool is
+    /// registered but no trail has ever been charted (this turn included —
+    /// successful calls persist the snapshot before this runs).
+    fn needs_trail(&self) -> bool {
+        if self.tools.get(harness_tools::TRAIL_TOOL).is_none() {
+            return false;
+        }
+        !matches!(
+            self.store.session_state::<harness_tools::TrailSnapshot>(
+                &self.session_id,
+                harness_store::TRAIL_STATE,
+            ),
+            Ok(Some(_))
+        )
     }
 
     /// Run every tool call in a reply, recording results (and any images they
@@ -517,6 +548,17 @@ impl Agent {
 
         for call in &assembled.tool_calls {
             let result = self.run_tool(call, reply_truncated, on_event).await;
+            // The work that obliges a charted trail, per the prompt guideline
+            // ("at the latest, right before your first file edit or shell
+            // command"). Attempts count — a refused edit is still work.
+            if matches!(
+                call.function.name.as_str(),
+                harness_tools::EDIT_FILE_TOOL
+                    | harness_tools::WRITE_FILE_TOOL
+                    | harness_tools::RUN_SHELL_TOOL
+            ) {
+                turn.did_real_work = true;
+            }
             match turn
                 .loop_guard
                 .observe(&call.function.name, &call.function.arguments, &result)
@@ -1254,6 +1296,194 @@ mod tests {
 
         let out = agent.run_turn("research this topic", |_| {}).await.unwrap();
         assert_eq!(out, "All done.");
+        nudge.assert_async().await;
+    }
+
+    /// SSE for a reply that makes one tool call with the given name/arguments.
+    fn sse_tool_call(name: &str, arguments: serde_json::Value) -> String {
+        let chunk = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_1",
+                        "function": { "name": name, "arguments": arguments.to_string() }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
+
+    /// A stand-in registered under `run_shell`'s name, so a turn can "do real
+    /// work" without actually shelling out.
+    struct FakeShell;
+    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    struct FakeShellArgs {}
+    #[async_trait::async_trait]
+    impl harness_tools::TypedTool for FakeShell {
+        const NAME: &'static str = harness_tools::RUN_SHELL_TOOL;
+        type Args = FakeShellArgs;
+        fn description(&self) -> &str {
+            "pretend to run a command"
+        }
+        async fn run(&self, _: FakeShellArgs) -> Result<String, harness_tools::ToolError> {
+            Ok("FAKE-SHELL-OK".into())
+        }
+    }
+
+    fn trail_test_agent(url: String, store: Arc<HistoryStore>, session: &str) -> Agent {
+        let client = OxenClient::new(url, "key", "claude-opus-4-8");
+        let mut tools = ToolRegistry::new();
+        tools.register_typed(FakeShell);
+        tools.register_typed(harness_tools::TrailTool::new());
+        let config = AgentConfig {
+            system_prompt: None,
+            ..AgentConfig::default()
+        };
+        Agent::new(client, tools, store, session.to_string(), config).unwrap()
+    }
+
+    #[tokio::test]
+    async fn trail_nudge_fires_when_real_work_ends_uncharted() {
+        let mut server = mockito::Server::new_async().await;
+        // Bottom-up: the base reply runs a command; the round carrying its
+        // result ends in prose with no trail charted; the nudged round gives
+        // the final answer.
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_tool_call(harness_tools::RUN_SHELL_TOOL, serde_json::json!({})))
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("FAKE-SHELL-OK".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("Command ran; we're done here."))
+            .create_async()
+            .await;
+        let recovery = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("no charted trail".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("Charted and done."))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let mut agent = trail_test_agent(server.url(), store, &session);
+
+        let out = agent.run_turn("tidy the build", |_| {}).await.unwrap();
+        assert_eq!(out, "Charted and done.");
+        recovery.assert_async().await;
+
+        // Request-only corrective: never persisted, the user's message stays
+        // the only user turn.
+        assert!(agent.messages().iter().all(|m| !m
+            .content_text()
+            .unwrap_or_default()
+            .contains("no charted trail")));
+        assert_eq!(
+            agent.messages().iter().filter(|m| m.role == "user").count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn no_trail_nudge_when_the_session_is_already_charted() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_tool_call(harness_tools::RUN_SHELL_TOOL, serde_json::json!({})))
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("FAKE-SHELL-OK".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("Done."))
+            .create_async()
+            .await;
+        let nudge = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("no charted trail".into()))
+            .expect(0)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        // A trail charted in an earlier turn satisfies the session for good.
+        store
+            .save_session_state(
+                &session,
+                harness_store::TRAIL_STATE,
+                &harness_tools::parse_trail_arguments(
+                    r#"{"title":"tidy the build","waypoints":[
+                        {"name":"fix","status":"current"},
+                        {"name":"verify","status":"ahead"}]}"#,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut agent = trail_test_agent(server.url(), store, &session);
+
+        let out = agent.run_turn("keep going", |_| {}).await.unwrap();
+        assert_eq!(out, "Done.");
+        nudge.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn no_trail_nudge_without_the_trail_tool_registered() {
+        // A subagent's registry drops `update_trail`; ending real work
+        // uncharted must not demand a tool the registry would reject.
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_tool_call(harness_tools::RUN_SHELL_TOOL, serde_json::json!({})))
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("FAKE-SHELL-OK".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("Done."))
+            .create_async()
+            .await;
+        let nudge = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("no charted trail".into()))
+            .expect(0)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut tools = ToolRegistry::new();
+        tools.register_typed(FakeShell);
+        let config = AgentConfig {
+            system_prompt: None,
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, tools, store, session, config).unwrap();
+
+        let out = agent.run_turn("do the thing", |_| {}).await.unwrap();
+        assert_eq!(out, "Done.");
         nudge.assert_async().await;
     }
 

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { FilesPanel } from "./FilesPanel";
-import { fsCreateEntry, fsListDir, sampleSession } from "../../test/ipcMock";
+import { fsCreateEntry, fsListDir, gitStatus, sampleSession } from "../../test/ipcMock";
 import { useStore } from "../../lib/store";
 import { resetAll } from "../../test/utils";
 
@@ -109,5 +109,44 @@ describe("FilesPanel", () => {
   it("renders nothing without a workspace", () => {
     const { container } = render(<FilesPanel />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("shows git changes VS Code-style and opens a diff tab on click", async () => {
+    gitStatus.mockResolvedValue([
+      { path: "README.md", original_path: null, status: "modified", index: " ", worktree: "M" },
+      { path: "src/new.rs", original_path: null, status: "untracked", index: "?", worktree: "?" },
+    ]);
+    seedSession();
+    render(<FilesPanel />);
+
+    // The Changes section lists both, with their status letters.
+    const section = await screen.findByRole("region", { name: "Git changes" });
+    expect(section).toHaveTextContent("Changes");
+    expect(section).toHaveTextContent("2");
+    expect(screen.getAllByLabelText("modified").length).toBeGreaterThan(0);
+
+    // The tree row for a changed file carries its badge too.
+    const row = await screen.findByTitle("README.md — modified");
+    expect(row).toHaveTextContent("M");
+
+    // Clicking a change opens its diff tab (marked path), fronting the editor.
+    await userEvent.click(
+      screen.getByTitle("README.md — modified · click to view the diff"),
+    );
+    const id = sampleSession.session_id;
+    expect(useStore.getState().editorTabs[id]).toEqual({ tabs: [["diff:README.md"]], active: 0 });
+    expect(useStore.getState().rightTab[id]).toBe("editor");
+
+    // The hover affordance opens the file itself, not the diff.
+    await userEvent.click(screen.getByRole("button", { name: "Open README.md" }));
+    expect(useStore.getState().editorTabs[id]!.tabs).toContainEqual(["README.md"]);
+  });
+
+  it("hides the Changes section outside a git repository", async () => {
+    gitStatus.mockResolvedValue(null);
+    seedSession();
+    render(<FilesPanel />);
+    await screen.findByText("README.md");
+    expect(screen.queryByRole("region", { name: "Git changes" })).not.toBeInTheDocument();
   });
 });

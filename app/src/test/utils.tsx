@@ -42,6 +42,8 @@ export function resetAll() {
     editorTabs: {},
     fsChange: null,
     snippets: {},
+    gitStates: {},
+    editorWrap: false,
     settingsOpen: false,
     settingsPage: "connection",
     question: null,

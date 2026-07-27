@@ -11,6 +11,7 @@ import { applyThemePalette, applyThemeStyle } from "./theme";
 import {
   deleteProject,
   deleteSession,
+  gitStatus,
   ledgerMarkSeen,
   ledgerSnapshot,
   listCloudModels,
@@ -70,6 +71,7 @@ import type {
   FleetAgentEvent,
   FleetStartedEvent,
   FsChangedEvent,
+  GitFileState,
   LocalStatus,
   Mode,
   OpenFileEvent,
@@ -356,6 +358,12 @@ interface AppState {
   /** Code selections staged as context for the next prompt, per session —
    *  shown as chips by the composer, baked into the prompt at send time. */
   snippets: Record<string, CodeSnippet[]>;
+  /** Changed files per workspace root (git status). `null` = not a git
+   *  repository; absent = not loaded yet. Read by the Files tree's badges and
+   *  the editor's "view diff" affordance. */
+  gitStates: Record<string, GitFileState[] | null>;
+  /** Whether the code editor and diff viewer wrap long lines. Persisted. */
+  editorWrap: boolean;
   /** Each dock column's width in px, keyed by side. Drag-resized, persisted. */
   dockWidths: Record<string, number>;
   /** Sides the user collapsed to a rail, keyed by side. Persisted. */
@@ -525,6 +533,11 @@ interface AppState {
   closeEditorTab: (index: number) => void;
   /** Close the current chat's Editor/viewer pane (all tabs). */
   closeViewer: () => void;
+  /** Re-read a workspace's git status into `gitStates` (silent on failure —
+   *  the state is decoration on top of the tree, never an error surface). */
+  refreshGitStatus: (root: string) => Promise<void>;
+  /** Flip line wrapping for the code editor + diff viewer (persisted). */
+  toggleEditorWrap: () => void;
   /** Stage a code selection as context for the current chat's next prompt. */
   addSnippet: (snippet: CodeSnippet) => void;
   /** Unstage one snippet chip by index. */
@@ -716,6 +729,8 @@ export const useStore = create<AppState>((set, get) => {
     editorTabs: {},
     fsChange: null,
     snippets: {},
+    gitStates: {},
+    editorWrap: getUi("editorWrap") ?? false,
     dockWidths: loadDockLayout().widths,
     dockCollapsed: loadDockLayout().collapsed,
     settingsOpen: false,
@@ -1677,6 +1692,21 @@ export const useStore = create<AppState>((set, get) => {
       // Picking a dock means "show me this" — expand a collapsed column first.
       if (get().dockCollapsed.left) get().setDockCollapsed("left", false);
       set({ leftTab: id });
+    },
+
+    refreshGitStatus: async (root) => {
+      try {
+        const states = await gitStatus(root);
+        set((s) => ({ gitStates: { ...s.gitStates, [root]: states } }));
+      } catch {
+        /* leave whatever we last knew */
+      }
+    },
+
+    toggleEditorWrap: () => {
+      const wrap = !get().editorWrap;
+      setUi("editorWrap", wrap);
+      set({ editorWrap: wrap });
     },
 
     openInViewer: (paths) => {
