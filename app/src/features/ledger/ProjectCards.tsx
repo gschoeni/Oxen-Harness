@@ -66,7 +66,9 @@ export function ProjectCards({
       map.set(train.workspace, {
         open: train.threads.length,
         running: train.threads.filter((t) => t.state === "running").length,
-        needs: train.threads.filter((t) => t.need !== null).length,
+        // A stuck agent (parked on an approval) has `need === null` — it's
+        // running — but it is the loudest claim on attention there is.
+        needs: train.threads.filter((t) => t.need !== null || t.stuck).length,
       });
     }
     return map;
@@ -126,6 +128,14 @@ export function ProjectCards({
                   <span className="project-card-name">
                     {project.name}
                     {project.path === activePath && <span className="project-card-badge">current</span>}
+                    {(v?.needs ?? 0) > 0 && (
+                      <span
+                        className="project-card-attention"
+                        title={`${v?.needs} trail${v?.needs === 1 ? "" : "s"} waiting on you — open the ledger`}
+                      >
+                        {v?.needs} need{v?.needs === 1 ? "s" : ""} you
+                      </span>
+                    )}
                   </span>
                   <span className="project-card-description">
                     {project.description || "Add a goal and instructions for this project"}
@@ -139,9 +149,6 @@ export function ProjectCards({
                     <span className="project-card-running" title={`${v?.running} riding right now`}>
                       <span className="run-dot" />
                     </span>
-                  )}
-                  {(v?.needs ?? 0) > 0 && (
-                    <span className="project-card-needs">{v?.needs} need you</span>
                   )}
                   {(v?.open ?? 0) > 0 && <span>{v?.open} on the trail</span>}
                   <span>

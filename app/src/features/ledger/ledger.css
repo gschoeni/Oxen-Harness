@@ -1277,10 +1277,40 @@
   border-radius: var(--radius-lg);
 }
 
-/* New since the cards came back: the board's needs-you count, in accent. */
-.project-card-needs {
-  color: var(--accent);
-  font-weight: 600;
+/* The board's needs-you count as a pill beside the name — the one loud
+   thing on an otherwise calm card. Warning-toned (these are open loops,
+   not decoration) with a soft pulse so a waiting trail catches the eye
+   without shouting; the pulse respects reduced motion. */
+.project-card-attention {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--warning, var(--accent));
+  background: color-mix(in srgb, var(--warning, var(--accent)) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, var(--accent)) 32%, transparent);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--space-2) 2px var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.project-card-attention::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning, var(--accent));
+  animation: card-attention-pulse 2.4s ease-in-out infinite;
+}
+@keyframes card-attention-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-card-attention::before { animation: none; }
 }
 
 /* ---- a project's full trail (on its home page) ----------------------------- */

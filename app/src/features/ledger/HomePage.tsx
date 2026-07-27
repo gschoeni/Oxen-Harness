@@ -99,12 +99,13 @@ export function HomePage() {
   );
 }
 
-/** Home's two lenses: the ledger (the trail map — threads, working view) and
- *  the project cards (altitude, calm view). Persisted — a lens is a habit. */
+/** Home's two lenses: the project cards (altitude, calm view — the default)
+ *  and the ledger (the trail map — threads, working view). Persisted — a
+ *  lens is a habit. */
 type HomeView = "ledger" | "cards";
 
 function savedView(): HomeView {
-  return getUi("homeView") === "cards" ? "cards" : "ledger";
+  return getUi("homeView") === "ledger" ? "ledger" : "cards";
 }
 
 function BoardView({
@@ -143,20 +144,20 @@ function BoardView({
         <div className="home-header-actions">
           <div className="home-view-toggle" role="group" aria-label="Home view">
             <button
-              className={`home-view-option ${view === "ledger" ? "selected" : ""}`}
-              aria-pressed={view === "ledger"}
-              title="The Ledger — every thread on its trail line"
-              onClick={() => changeView("ledger")}
-            >
-              <Rows3 size={13} /> ledger
-            </button>
-            <button
               className={`home-view-option ${view === "cards" ? "selected" : ""}`}
               aria-pressed={view === "cards"}
               title="Cards — one card per project"
               onClick={() => changeView("cards")}
             >
               <LayoutGrid size={13} /> cards
+            </button>
+            <button
+              className={`home-view-option ${view === "ledger" ? "selected" : ""}`}
+              aria-pressed={view === "ledger"}
+              title="The Ledger — every thread on its trail line"
+              onClick={() => changeView("ledger")}
+            >
+              <Rows3 size={13} /> ledger
             </button>
           </div>
           <Button variant="ghost" onClick={() => setSettingsOpen(true)}>

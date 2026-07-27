@@ -56,6 +56,9 @@ function seed(snapshot: Partial<LedgerSnapshot>, projects: Project[] = []) {
 
 beforeEach(() => {
   resetAll();
+  // Cards are Home's default lens; most of these tests exercise the ledger
+  // lens, so pin it here — the default and the toggle get their own tests.
+  setUi("homeView", "ledger");
 });
 
 /** Unfold the wagon row wearing this title. The header's pick-up button and
@@ -456,7 +459,8 @@ describe("the board", () => {
     await waitFor(() => expect(screen.queryByText(/thread a/)).toBeNull());
   });
 
-  it("toggles between the ledger and cards lenses, and the lens sticks", async () => {
+  it("opens on the cards lens by default; the ledger is a toggle away and sticks", async () => {
+    setUi("homeView", undefined); // a fresh install has no lens habit yet
     seed(
       {
         entries: [
@@ -469,22 +473,44 @@ describe("the board", () => {
       [project("/work/app", "App")],
     );
     const { container } = render(<HomePage />);
-    // The ledger lens by default.
-    expect(container.querySelector(".ledger-wagon")).toBeTruthy();
-
-    await userEvent.click(screen.getByRole("button", { name: /cards/i }));
+    // Cards by default — one card per project, wearing its vital signs from
+    // the board: the run dot for "b", the attention pill for dangling "c",
+    // all three on the trail.
     expect(container.querySelector(".ledger-wagon")).toBeNull();
-    // One card per project, wearing its vital signs from the board: the run
-    // dot for "b", a need for dangling "c", all three on the trail.
     expect(screen.getByText("App")).toBeTruthy();
     expect(container.querySelector(".project-card-running .run-dot")).toBeTruthy();
-    expect(screen.getByText("1 need you")).toBeTruthy();
+    expect(screen.getByText("1 needs you")).toBeTruthy();
+    expect(screen.getByText("1 needs you")).toHaveClass("project-card-attention");
     expect(screen.getByText("3 on the trail")).toBeTruthy();
-    expect(getUi("homeView")).toBe("cards");
 
     await userEvent.click(screen.getByRole("button", { name: /^ledger$/i }));
     expect(container.querySelector(".ledger-wagon")).toBeTruthy();
     expect(getUi("homeView")).toBe("ledger");
+
+    await userEvent.click(screen.getByRole("button", { name: /cards/i }));
+    expect(container.querySelector(".ledger-wagon")).toBeNull();
+    expect(getUi("homeView")).toBe("cards");
+  });
+
+  it("a stuck agent counts toward the card's attention pill", () => {
+    setUi("homeView", "cards");
+    seed(
+      {
+        entries: [
+          entry({ id: "parked", title: "waiting on approval", mid_turn: true }),
+          entry({ id: "calm", title: "cruising", mid_turn: true }),
+        ],
+        running: ["parked", "calm"],
+      },
+      [project("/work/app", "App")],
+    );
+    // A running thread needs nothing — unless it's parked on an approval,
+    // which is the loudest claim on attention there is.
+    useStore.setState({
+      approvals: { parked: { id: "a1", session: "parked" } as never },
+    });
+    render(<HomePage />);
+    expect(screen.getByText("1 needs you")).toHaveClass("project-card-attention");
   });
 
   it("a card resumes the project's newest chat and rides out", async () => {
