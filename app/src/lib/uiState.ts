@@ -28,6 +28,12 @@ export interface UiState {
 
 let cache: UiState = {};
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+// Saves are serialized: at most one write in flight, and changes that land
+// while it flies mark it dirty for one follow-up write. Overlapping async
+// writes could otherwise land out of order, a stale save clobbering a newer
+// one (the backend write itself is atomic; ordering is the frontend's job).
+let saving = false;
+let dirty = false;
 
 /** localStorage keys this state lived under before it moved to ui.json. */
 const LEGACY_KEYS: Record<keyof UiState, string> = {
@@ -66,13 +72,28 @@ export function setUi<K extends keyof UiState>(key: K, value: UiState[K]): void 
   saveTimer = setTimeout(flushUiState, 300);
 }
 
-/** Persist the cache immediately (a failed save must never break the UI). */
+/** Persist the cache immediately (a failed save must never break the UI).
+ *  Serialized: a save already in flight defers this one to a single
+ *  follow-up write of the then-current cache. */
 export function flushUiState(): void {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
-  void saveUiState(cache as Record<string, unknown>).catch(() => {});
+  if (saving) {
+    dirty = true;
+    return;
+  }
+  saving = true;
+  void saveUiState({ ...cache } as Record<string, unknown>)
+    .catch(() => {})
+    .finally(() => {
+      saving = false;
+      if (dirty) {
+        dirty = false;
+        flushUiState();
+      }
+    });
 }
 
 /** One-time pickup of prefs saved by pre-ui.json builds, then clear them so
@@ -99,5 +120,7 @@ export function resetUiState(state: UiState = {}): void {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
+  saving = false;
+  dirty = false;
   cache = state;
 }

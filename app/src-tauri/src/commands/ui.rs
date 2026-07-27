@@ -19,10 +19,12 @@ pub(crate) fn load_ui_state() -> Result<Option<serde_json::Value>, String> {
 }
 
 /// Persist the full UI preferences object (the frontend always saves the
-/// whole state, never a patch).
+/// whole state, never a patch). Atomically — a crash mid-write must leave
+/// the previous ui.json intact, never a half-written one that parses as
+/// nothing and silently resets every preference.
 #[tauri::command]
 pub(crate) fn save_ui_state(state: serde_json::Value) -> Result<(), String> {
     let path = paths::ui_state_file().map_err(|e| e.to_string())?;
     let raw = serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?;
-    std::fs::write(&path, raw).map_err(|e| e.to_string())
+    harness_config::io::atomic_write(&path, raw.as_bytes()).map_err(|e| e.to_string())
 }
