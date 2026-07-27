@@ -113,8 +113,10 @@ jobs:
       # missing secret arrives as an empty string, which the Tauri bundler
       # reads as "signing requested" and then fails importing an empty
       # certificate (seen on the first v0.0.1 cut).
+      # (`secrets` is not a permitted context in a step `if`, so the
+      # emptiness guard lives in the run body instead.)
       - name: Apple code signing env (only when certificates are configured)
-        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE != ''
+        if: runner.os == 'macOS'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
