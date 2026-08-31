@@ -1,0 +1,7 @@
+# One build cache for the whole repo. The Tauri app (app/src-tauri) is a
+# separate cargo workspace, and without this it keeps its own target dir —
+# compiling the harness crates and every shared dependency a second time and
+# doubling the on-disk cache. Relative paths here resolve against the repo
+# root, so both workspaces land in <repo>/target.
+[build]
+target-dir = "target"

@@ -95,9 +95,11 @@ jobs:
       - name: Install pinned toolchain
         run: rustup show
 
+      # The app workspace shares the repo-root target dir (.cargo/config.toml),
+      # so point the cache there rather than at app/src-tauri/target.
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: app/src-tauri
+          workspaces: app/src-tauri -> ../../target
 
       - name: Clippy (deny warnings)
         run: cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets

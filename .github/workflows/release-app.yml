@@ -98,9 +98,11 @@ jobs:
         if: matrix.rust-target != ''
         run: rustup target add ${{ matrix.rust-target }}
 
+      # The app workspace shares the repo-root target dir (.cargo/config.toml),
+      # so point the cache there rather than at app/src-tauri/target.
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: app/src-tauri
+          workspaces: app/src-tauri -> ../../target
           key: ${{ matrix.name }}
 
       - name: Install frontend deps

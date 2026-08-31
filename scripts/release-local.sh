@@ -48,14 +48,16 @@ if [[ "$component" != "cli" ]]; then
   echo "==> building desktop app (release bundle)"
   (cd app && pnpm tauri build)
   if [[ "$(uname)" == "Darwin" ]]; then
-    ditto app/src-tauri/target/release/bundle/macos/oxen-harness.app \
+    # Bundles land in the repo-root target dir shared by both cargo
+    # workspaces (.cargo/config.toml).
+    ditto target/release/bundle/macos/oxen-harness.app \
       /Applications/oxen-harness.app
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
       -f /Applications/oxen-harness.app
     installed+=("app v$(scripts/version.sh app) -> /Applications/oxen-harness.app")
   else
-    echo "bundles under app/src-tauri/target/release/bundle/ — install with your package manager:"
-    find app/src-tauri/target/release/bundle -maxdepth 2 -type f \
+    echo "bundles under target/release/bundle/ — install with your package manager:"
+    find target/release/bundle -maxdepth 2 -type f \
       \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.msi' -o -name '*.exe' \) 2>/dev/null || true
     installed+=("app v$(scripts/version.sh app) (bundle built, not auto-installed on this OS)")
   fi
