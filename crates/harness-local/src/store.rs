@@ -187,10 +187,15 @@ impl ModelStore {
     /// optional bearer token (Hugging Face / Oxen) for gated or private repos.
     /// Streams to a `.part` file and atomically renames, so an interrupted
     /// download never looks installed. A no-op if already present.
+    ///
+    /// When `cancel` fires mid-stream the download stops with
+    /// [`LocalError::Cancelled`] and its `.part` file is deleted — a stopped
+    /// download reclaims its bytes immediately instead of leaving dead space.
     pub async fn download<F>(
         &self,
         model: &ModelRef,
         token: Option<&str>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
         on_progress: F,
     ) -> Result<PathBuf, LocalError>
     where
@@ -208,6 +213,7 @@ impl ModelStore {
             &model.download_url(),
             token,
             &final_path,
+            cancel,
             on_progress,
         )
         .await?;
@@ -278,13 +284,14 @@ async fn stream_to_file<F>(
     url: &str,
     token: Option<&str>,
     dest: &Path,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
     mut on_progress: F,
 ) -> Result<(), LocalError>
 where
     F: FnMut(DownloadProgress),
 {
     let part_path = dest.with_extension("gguf.part");
-    crate::download::fetch_to_file(
+    let fetched = crate::download::fetch_to_file(
         client,
         url,
         &part_path,
@@ -292,12 +299,25 @@ where
             token,
             user_agent: Some("oxen-harness"),
             gated_message: Some("access denied — this model may be gated or private; add a token"),
+            cancel,
         },
         |downloaded, total| on_progress(DownloadProgress { downloaded, total }),
     )
-    .await?;
-    tokio::fs::rename(&part_path, dest).await?;
-    Ok(())
+    .await;
+    match fetched {
+        Ok(()) => {
+            tokio::fs::rename(&part_path, dest).await?;
+            Ok(())
+        }
+        Err(e) => {
+            // A deliberate stop reclaims its partial bytes right away; any other
+            // failure leaves the `.part` for `partial_downloads()` to surface.
+            if matches!(e, LocalError::Cancelled) {
+                let _ = tokio::fs::remove_file(&part_path).await;
+            }
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -422,6 +442,7 @@ mod tests {
             &format!("{}/m.gguf", server.url()),
             None,
             &dest,
+            None,
             |_| {},
         )
         .await
@@ -433,5 +454,46 @@ mod tests {
         assert_eq!(store.read_meta("dl").unwrap().quant, "Q4_K_M");
         assert!(!dest.with_extension("gguf.part").exists());
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_download_errors_and_reclaims_the_part_file() {
+        let mut server = mockito::Server::new_async().await;
+        let body = vec![7u8; 1 << 20];
+        let _mock = server
+            .mock("GET", "/m.gguf")
+            .with_status(200)
+            .with_header("content-length", &body.len().to_string())
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let (_d, store) = store();
+        let dest = store.path_for("stopped");
+        let cancel = tokio_util::sync::CancellationToken::new();
+        // Fire the token from the progress callback: the next loop iteration
+        // must observe it (biased select) even if the stream has more to give.
+        let trigger = cancel.clone();
+        let err = super::stream_to_file(
+            &reqwest::Client::new(),
+            &format!("{}/m.gguf", server.url()),
+            None,
+            &dest,
+            Some(&cancel),
+            move |p| {
+                if p.downloaded > 0 {
+                    trigger.cancel();
+                }
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, LocalError::Cancelled), "got {err:?}");
+        assert!(!store.is_installed("stopped"));
+        assert!(
+            store.partial_downloads().is_empty(),
+            "a stopped download must reclaim its .part bytes"
+        );
     }
 }

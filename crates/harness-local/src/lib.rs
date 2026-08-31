@@ -54,6 +54,8 @@ pub enum LocalError {
     LlamaServerMissing(String),
     #[error("download failed: {0}")]
     Download(String),
+    #[error("download cancelled")]
+    Cancelled,
     #[error("llama-server failed to start: {0}")]
     Server(String),
     #[error("install failed: {0}")]

@@ -213,7 +213,7 @@ async fn pull(store: &ModelStore, id: &str, ui: &Ui) -> Result<(ModelRef, std::p
     let mut stdout = std::io::stdout();
 
     let result = store
-        .download(&model, None, |p| {
+        .download(&model, None, None, |p| {
             // Live in-place bar on a TTY; skip per-chunk noise when piped.
             if !animate {
                 return;

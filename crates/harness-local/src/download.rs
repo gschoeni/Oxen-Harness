@@ -11,6 +11,7 @@ use std::path::Path;
 
 use futures_util::StreamExt;
 use reqwest::StatusCode;
+use tokio_util::sync::CancellationToken;
 
 use crate::LocalError;
 
@@ -24,6 +25,9 @@ pub(crate) struct FetchOpts<'a> {
     /// When set, a `401`/`403` response returns this message instead of the
     /// generic HTTP error — used to hint that a model is gated/private.
     pub gated_message: Option<&'a str>,
+    /// When set, the stream aborts with [`LocalError::Cancelled`] as soon as
+    /// the token fires; `dest` is left behind for the caller to clean up.
+    pub cancel: Option<&'a CancellationToken>,
 }
 
 /// GET `url` and stream the response body to `dest`, invoking
@@ -75,7 +79,16 @@ where
     on_progress(downloaded, total);
 
     let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let next = match opts.cancel {
+            Some(cancel) => tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(LocalError::Cancelled),
+                chunk = stream.next() => chunk,
+            },
+            None => stream.next().await,
+        };
+        let Some(chunk) = next else { break };
         let chunk = chunk.map_err(|e| LocalError::Download(format!("stream error: {e}")))?;
         tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
         downloaded += chunk.len() as u64;
