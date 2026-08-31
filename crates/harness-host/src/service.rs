@@ -446,13 +446,20 @@ impl SessionService {
     }
 
     /// Ensure a `llama-server` is running for local model `id`, returning its
-    /// base URL and context size. Reuses the running server if there is one;
-    /// otherwise validates the runtime + weights and starts it (sized to this
-    /// machine), streaming `local.status` load phases.
+    /// base URL and context size. Reuses the running server only when it is
+    /// alive *and* serving this model; a dead process (crashed, or reclaimed
+    /// under memory pressure) or one serving a different model is dropped —
+    /// freeing its memory before the new load — and replaced, streaming
+    /// `local.status` load phases.
     pub async fn ensure_local_server(&self, id: &str) -> Result<(String, usize), String> {
         let mut guard = self.local_server.lock().await;
-        if let Some(s) = guard.as_ref() {
-            return Ok((s.base_url().to_string(), s.context_size() as usize));
+        if let Some(s) = guard.as_mut() {
+            if s.model_id() == id && s.is_alive() {
+                return Ok((s.base_url().to_string(), s.context_size() as usize));
+            }
+            // Drop (and kill) the stale server *before* starting the new one:
+            // two resident models can exceed the machine's memory.
+            *guard = None;
         }
         if llama_server_path().is_none() {
             return Err("the local runtime isn't installed".to_string());
@@ -1517,9 +1524,17 @@ impl SessionService {
 
     // --- Live settings swaps -----------------------------------------------------
 
-    /// Switch the current chat to a downloaded local model: start
-    /// `llama-server` (with a context window sized to this machine) and
-    /// rebuild the agent against it. The model must already be downloaded.
+    /// Switch the current chat to a downloaded local model: ensure a
+    /// `llama-server` is running for it (with a context window sized to this
+    /// machine) and rebuild the agent against it. The model must already be
+    /// downloaded.
+    ///
+    /// If the running server is already serving `id` (e.g. "Use model" clicked
+    /// again), it is reused as-is — starting a second copy would double the
+    /// resident weights and, on slot replacement, kill the old server under
+    /// any turn still streaming from it. Only an actual model change (or a
+    /// dead process) replaces the server, and the old one is dropped *before*
+    /// the new load so both never sit in memory together.
     pub async fn use_local_model(&self, id: &str) -> Result<SessionInfo, String> {
         if llama_server_path().is_none() {
             return Err(format!(
@@ -1527,44 +1542,20 @@ impl SessionService {
                 harness_local::install_hint()
             ));
         }
-        let store = ModelStore::open().map_err(|e| e.to_string())?;
-        if !store.is_installed(id) {
-            return Err(format!("{id} isn't downloaded yet"));
-        }
-
-        // Size the served context to the machine: weights + KV cache must
-        // fit budget.
-        let profile = harness_local::detect_hardware();
-        let weight_bytes = store.installed_size(id).unwrap_or(0);
-        let native = store.native_context(id);
-        let context = fit::plan_context(profile.usable_budget, weight_bytes, native);
-
-        // Stream load phases so the switch shows what it's doing (runtime
-        // init vs. loading weights) instead of an opaque "Switching…".
-        let sink = self.sink.clone();
-        let model = id.to_string();
-        let server =
-            LocalServer::start_with_context(&store.path_for(id), id, context, move |phase| {
-                sink.emit(ProtocolEvent::LocalStatus {
-                    model: model.clone(),
-                    phase: translate::local_phase(phase),
-                });
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-        let context_window = Some(server.context_size() as usize);
+        // `ensure_local_server` holds the server slot's lock across the start,
+        // so two rapid switches serialize instead of racing two model loads.
+        let (base_url, context) = self.ensure_local_server(id).await?;
         let root = self.active_root().await;
         let agent = self.new_agent(
-            OxenClient::new(server.base_url(), "local", id),
+            OxenClient::new(&base_url, "local", id),
             id,
-            context_window,
+            Some(context),
             &root,
         )?;
 
-        // Remember the local server + model so new sessions reuse it,
-        // persist the choice so it survives a restart, then install the
-        // agent as the current chat.
-        *self.local_server.lock().await = Some(server);
+        // Remember the local model so new sessions reuse the server, persist
+        // the choice so it survives a restart, then install the agent as the
+        // current chat.
         *self.local_model.lock().await = Some(id.to_string());
         let _ = harness_runtime::models::set_active_local(id);
         Ok(self.install_agent(agent).await)

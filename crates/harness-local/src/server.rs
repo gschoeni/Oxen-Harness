@@ -217,6 +217,9 @@ pub struct LocalServer {
     base_url: String,
     port: u16,
     context: u32,
+    /// The model id/alias this server is serving (`-a`), so callers can tell
+    /// whether a running server is the one they need or a leftover.
+    model: String,
 }
 
 impl LocalServer {
@@ -270,6 +273,7 @@ impl LocalServer {
             base_url: format!("http://127.0.0.1:{port}/v1"),
             port,
             context,
+            model: alias.to_string(),
         };
         server.await_healthy(rx, &mut on_status).await?;
         on_status(LoadPhase::Ready);
@@ -291,6 +295,20 @@ impl LocalServer {
     /// smaller than the model's theoretical maximum.
     pub fn context_size(&self) -> u32 {
         self.context
+    }
+
+    /// The model id/alias this server is serving.
+    pub fn model_id(&self) -> &str {
+        &self.model
+    }
+
+    /// Whether the server process is still running. A crashed or killed
+    /// `llama-server` (e.g. reclaimed under memory pressure) reports `false`,
+    /// so callers can start a fresh one instead of reusing a dead endpoint.
+    pub fn is_alive(&mut self) -> bool {
+        // `Ok(Some(_))` = exited; `Ok(None)` = running; `Err` = can't tell,
+        // treat as alive rather than churning a healthy server.
+        !matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
     async fn await_healthy(
@@ -401,5 +419,35 @@ mod tests {
     #[test]
     fn free_port_is_nonzero() {
         assert!(find_free_port().unwrap() > 0);
+    }
+
+    /// A LocalServer wrapped around an arbitrary child process, bypassing the
+    /// spawn/health-check path, to test the liveness/identity accessors.
+    fn fake_server(child: Child, model: &str) -> LocalServer {
+        LocalServer {
+            child,
+            base_url: "http://127.0.0.1:1/v1".to_string(),
+            port: 1,
+            context: 512,
+            model: model.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn is_alive_tracks_the_process_and_model_id_is_kept() {
+        let child = Command::new("sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut server = fake_server(child, "muse-glimmer-30b-gguf-q4-k-m");
+        assert_eq!(server.model_id(), "muse-glimmer-30b-gguf-q4-k-m");
+        assert!(server.is_alive());
+
+        // Kill it (as the OS would under memory pressure) and wait for the
+        // exit to be reaped; a dead server must report so.
+        server.child.start_kill().unwrap();
+        let _ = server.child.wait().await;
+        assert!(!server.is_alive());
     }
 }
