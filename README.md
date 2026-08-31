@@ -145,19 +145,23 @@ brew install llama.cpp                       # macOS
 ```
 
 Use a current build for newer formats. The desktop setup manages a pinned
-Apple Silicon build (`b10002`); if Homebrew is already installed, run
-`brew upgrade llama.cpp` before using Bonsai 27B.
+Apple Silicon build (`b10353`); if Homebrew is already installed, run
+`brew upgrade llama.cpp` before using Bonsai 27B or Muse Glimmer 30B
+(Muse Glimmer needs `b10353` or newer).
 
 **2. Browse and download a model.** The catalog lives in configuration files,
-not code: Qwen3 at `Q4_K_M` (0.6B through 32B and 30B-A3B), plus
+not code: Qwen3 at `Q4_K_M` (0.6B through 32B and 30B-A3B),
 [Bonsai 27B](https://huggingface.co/collections/prism-ml/bonsai-27b) at its
-native 1-bit and ternary formats. Your own additions live in
-`~/.oxen-harness/local-models.json`:
+native 1-bit and ternary formats, plus Meta's
+[Muse Glimmer 30B](https://huggingface.co/collections/meta-models/muse-glimmer)
+(reasoning, native tool calling, 128K context) at `Q4_K_M` and `Q4_K_XL`. Your
+own additions live in `~/.oxen-harness/local-models.json`:
 
 ```bash
 oxen-harness models list            # catalog + everything downloaded, sizes, disk used
 oxen-harness models pull qwen3-8b   # download with a live progress bar
 oxen-harness models pull bonsai-27b # 27B reasoning/tool calling in ~3.8 GB
+oxen-harness models pull muse-glimmer-30b # Meta's agentic 30B, ~16.8 GB
 oxen-harness models remove qwen3-8b # reclaim the disk (also clears stale .part files)
 ```
 

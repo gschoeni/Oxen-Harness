@@ -418,8 +418,9 @@ chat template (and thus tool calling) works.
   feature the user asked for. Weights live in `~/.oxen-harness/models/`.
 - **`llama-server` resolution** prefers `LLAMA_SERVER`, then the desktop-managed
   runtime, then `PATH`/Homebrew. The managed Apple Silicon build is deliberately
-  pinned (now llama.cpp `b10002`, new enough for Bonsai Q1 and mainline Q2 on
-  CPU/Metal); other platforms get an actionable install hint rather than a
+  pinned (now llama.cpp `b10353`, the first release with Muse Glimmer's
+  `LLM_ARCH_MUSE_GLIMMER`; Bonsai Q1 and mainline Q2 CPU/Metal have worked since
+  `b10002`); other platforms get an actionable install hint rather than a
   cryptic spawn error.
 - **Server lifecycle**: a free port is picked, the process spawned, `/health`
   polled until the model loads, and the process killed on `Drop` so a session never

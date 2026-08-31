@@ -24,6 +24,28 @@
       "note": "Higher-quality 27B Q2 build for a current stock llama.cpp CPU or Metal runtime; ~7.6 GB download."
     },
     {
+      "id": "muse-glimmer-30b",
+      "display": "Muse Glimmer 30B",
+      "params": "30B",
+      "repo": "meta-models/Muse-Glimmer-30B-GGUF",
+      "file": "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "approx_bytes": 16756683904,
+      "context": 131072,
+      "note": "Meta's local-agent flagship: reasoning, native tool calls, 128K context. Needs llama.cpp b10353+; ~16.8 GB download, wants 24 GB."
+    },
+    {
+      "id": "muse-glimmer-30b-xl",
+      "display": "Muse Glimmer 30B (Q4_K_XL)",
+      "params": "30B",
+      "repo": "meta-models/Muse-Glimmer-30B-GGUF",
+      "file": "Muse-Glimmer-30B-KQuant-Dynamic-Q4_K_XL.gguf",
+      "quant": "Q4_K_XL",
+      "approx_bytes": 19653960832,
+      "context": 131072,
+      "note": "Higher-quality dynamic quant of Muse Glimmer; ~19.7 GB download, wants 32 GB."
+    },
+    {
       "id": "qwen3-0.6b",
       "display": "Qwen3 0.6B",
       "params": "0.6B",

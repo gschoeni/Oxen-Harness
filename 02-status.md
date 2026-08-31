@@ -241,7 +241,8 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
       runtime, or `PATH`), pick a free port, spawn against a GGUF (`--jinja` for
       tool calling), poll `/health` until loaded, and kill on drop (no leaked
       background server). The managed Apple Silicon runtime is pinned to
-      llama.cpp `b10002` for Bonsai Q1 plus Q2 CPU/Metal support.
+      llama.cpp `b10353` for Muse Glimmer support (Bonsai Q1/Q2 already worked
+      on `b10002`).
 - [x] Talks to the agent as just another OpenAI-compatible endpoint
       (`http://127.0.0.1:<port>/v1`, throwaway key) — no client changes needed
 - [x] Downloads managed in-process (not delegated to `llama-server --hf`) so both

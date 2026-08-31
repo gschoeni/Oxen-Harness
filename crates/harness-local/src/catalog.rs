@@ -361,6 +361,42 @@ mod tests {
     }
 
     #[test]
+    fn muse_glimmer_entries_match_the_published_ggufs() {
+        with_temp_harness_dir(|| {
+            let base = find("muse-glimmer-30b").expect("Muse Glimmer 30B should be built in");
+            assert_eq!(base.repo, "meta-models/Muse-Glimmer-30B-GGUF");
+            assert_eq!(base.file, "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf");
+            assert_eq!(base.quant, "Q4_K_M");
+            assert_eq!(base.approx_bytes, 16_756_683_904);
+            assert_eq!(base.context, 131_072);
+            // The repo publishes no sibling quant ladder — only the exact file.
+            let base_refs = quant_refs(&base);
+            assert_eq!(base_refs.len(), 1);
+            assert_eq!(base_refs[0].size_bytes, base.approx_bytes);
+
+            let xl = find("muse-glimmer-30b-xl").expect("Q4_K_XL variant should be built in");
+            assert_eq!(xl.repo, "meta-models/Muse-Glimmer-30B-GGUF");
+            assert_eq!(xl.file, "Muse-Glimmer-30B-KQuant-Dynamic-Q4_K_XL.gguf");
+            assert_eq!(xl.quant, "Q4_K_XL");
+            assert_eq!(xl.approx_bytes, 19_653_960_832);
+            assert_eq!(xl.context, 131_072);
+            let xl_refs = quant_refs(&xl);
+            assert_eq!(xl_refs.len(), 1);
+            assert_eq!(xl_refs[0].size_bytes, xl.approx_bytes);
+            // Q4_K_XL must be a recognized quant token so HF-search listings of
+            // this repo label the file correctly.
+            assert_eq!(
+                crate::source::parse_quant(&xl.file).as_deref(),
+                Some("Q4_K_XL")
+            );
+
+            // The two entries share a repo but must resolve to distinct store
+            // slugs, or the downloads would overwrite each other on disk.
+            assert_ne!(base_refs[0].id, xl_refs[0].id);
+        });
+    }
+
+    #[test]
     fn quant_refs_fall_back_to_a_single_file_without_a_quant_token() {
         let spec = normalize(ModelSpec {
             id: "custom".into(),
