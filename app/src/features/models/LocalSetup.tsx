@@ -9,19 +9,18 @@ import {
   Search,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import {
   detectHardware,
-  downloadModel,
   installRuntime,
   installedLocalModels,
   listModelCatalog,
-  onModelProgress,
   onRuntimeInstall,
   removeModel,
   runtimeStatus,
 } from "../../lib/ipc";
-import { useStore } from "../../lib/store";
+import { useStore, type ActiveDownload } from "../../lib/store";
 import { formatBytes } from "../../lib/format";
 import type {
   CatalogModel,
@@ -55,6 +54,14 @@ export function LocalSetup() {
   const close = () => useStore.getState().setSettingsOpen(false);
   const switchToLocalModel = useStore((s) => s.switchToLocalModel);
 
+  // Downloads live in the store (not here), so every in-flight download stays
+  // visible — and keeps its progress — across model switches and page changes.
+  const downloads = useStore((s) => s.downloads);
+  const downloadsRev = useStore((s) => s.downloadsRev);
+  const startDownload = useStore((s) => s.startDownload);
+  const stopDownload = useStore((s) => s.stopDownload);
+  const dismissDownload = useStore((s) => s.dismissDownload);
+
   const [hardware, setHardware] = useState<HardwareProfile | null>(null);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [catalog, setCatalog] = useState<CatalogModel[]>([]);
@@ -68,9 +75,6 @@ export function LocalSetup() {
   const [runtimeLog, setRuntimeLog] = useState<string>("");
   const [runtimePct, setRuntimePct] = useState<number | null>(null);
 
-  // Download (keyed by model id → fraction 0..1)
-  const [progress, setProgress] = useState<Record<string, number>>({});
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [usingId, setUsingId] = useState<string | null>(null);
 
   // Hugging Face — one smart input: type to autocomplete GGUF repos, or paste a
@@ -118,18 +122,31 @@ export function LocalSetup() {
   useEffect(() => {
     detectHardware().then(setHardware).catch(() => {});
     refreshAll();
-    const unProg = onModelProgress((p) =>
-      setProgress((prev) => ({ ...prev, [p.id]: p.fraction ?? 0 })),
-    );
     const unRt = onRuntimeInstall((e) => {
       if (e.kind === "log") setRuntimeLog((prev) => prev + e.line + "\n");
       else setRuntimePct(e.total ? e.downloaded / e.total : null);
     });
     return () => {
-      unProg.then((fn) => fn());
       unRt.then((fn) => fn());
     };
   }, []);
+
+  // A download landing anywhere — even one started before this mount — makes
+  // the installed list and the open model panel reflect it.
+  const initialRev = useRef(true);
+  useEffect(() => {
+    if (initialRev.current) {
+      initialRev.current = false;
+      return;
+    }
+    installedLocalModels().then(setInstalled).catch(() => {});
+    listModelCatalog()
+      .then((fresh) => {
+        setCatalog(fresh);
+        setSelected((cur) => cur && (fresh.find((m) => m.id === cur.id) ?? cur));
+      })
+      .catch(() => {});
+  }, [downloadsRev]);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -158,24 +175,9 @@ export function LocalSetup() {
     setError(null);
   }
 
-  async function doDownload(q: QuantOption) {
-    setDownloadingId(q.model.id);
+  function doDownload(q: QuantOption) {
     setError(null);
-    setProgress((p) => ({ ...p, [q.model.id]: 0 }));
-    try {
-      await downloadModel(q.model);
-      refreshAll();
-      // Reflect the newly-installed quant in the open panel.
-      if (selected) {
-        const fresh = await listModelCatalog();
-        setCatalog(fresh);
-        setSelected(fresh.find((m) => m.id === selected.id) ?? selected);
-      }
-    } catch (e) {
-      setError(`Download failed: ${e}`);
-    } finally {
-      setDownloadingId(null);
-    }
+    startDownload(q.model); // completion/failure surfaces via the downloads list
   }
 
   async function doUse(id: string) {
@@ -317,6 +319,26 @@ export function LocalSetup() {
             </section>
           )}
 
+          {/* 2b — Active downloads: every in-flight (or failed) download, in one
+               place, regardless of which model is selected below. */}
+          {Object.keys(downloads).length > 0 && (
+            <section className="ls-section">
+              <div className="ls-step">Downloading</div>
+              <div className="ls-installed">
+                {Object.values(downloads)
+                  .sort((a, b) => a.startedAt - b.startedAt)
+                  .map((d) => (
+                    <DownloadRow
+                      key={d.model.id}
+                      d={d}
+                      onStop={() => stopDownload(d.model.id)}
+                      onDismiss={() => dismissDownload(d.model.id)}
+                    />
+                  ))}
+              </div>
+            </section>
+          )}
+
           {/* 3 — Install a model */}
           <section className="ls-section">
             <div className="ls-step">Install a model</div>
@@ -453,8 +475,9 @@ export function LocalSetup() {
               <div className="ls-quants">
                 {selected.quants.map((q) => {
                   const isRec = q.quant === selected.recommended_quant;
-                  const dl = downloadingId === q.model.id;
-                  const pct = Math.round((progress[q.model.id] ?? 0) * 100);
+                  const active = downloads[q.model.id];
+                  const dl = !!active && active.status !== "error";
+                  const pct = Math.round((active?.fraction ?? 0) * 100);
                   // Warn before a download that won't fit the free disk space.
                   const noSpace =
                     installed?.disk_free != null &&
@@ -536,6 +559,63 @@ function DiskBar({ total, free, models }: { total: number; free: number; models:
           {formatBytes(free)} free of {formatBytes(total)}
         </span>
       </div>
+    </div>
+  );
+}
+
+/** One in-flight (or failed) download: name, live progress, and a stop control.
+ *  Rendered from the store's `downloads` slice, so the row outlives model
+ *  switches and page navigation and clears only when the download settles. */
+function DownloadRow({
+  d,
+  onStop,
+  onDismiss,
+}: {
+  d: ActiveDownload;
+  onStop: () => void;
+  onDismiss: () => void;
+}) {
+  if (d.status === "error") {
+    return (
+      <div className="ls-installed-row ls-download-row">
+        <AlertTriangle size={15} />
+        <span className="ls-installed-name">{d.model.display}</span>
+        <span className="ls-download-error" title={d.error}>
+          {d.error}
+        </span>
+        <button
+          className="ls-icon-btn"
+          onClick={onDismiss}
+          aria-label={`Dismiss failed download of ${d.model.display}`}
+        >
+          <X size={15} />
+        </button>
+      </div>
+    );
+  }
+  const pct = Math.round(d.fraction * 100);
+  return (
+    <div className="ls-installed-row ls-download-row">
+      <Download size={15} />
+      <span className="ls-installed-name">{d.model.display}</span>
+      <div className="ls-bar">
+        <span style={{ width: `${pct}%` }} />
+      </div>
+      <span className="ls-download-bytes">
+        {d.total
+          ? `${formatBytes(d.downloaded)} of ${formatBytes(d.total)}`
+          : formatBytes(d.downloaded)}
+      </span>
+      <span className="ls-dl-pct">{d.status === "cancelling" ? "stopping…" : `${pct}%`}</span>
+      <button
+        className="ls-icon-btn"
+        onClick={onStop}
+        disabled={d.status === "cancelling"}
+        aria-label={`Stop downloading ${d.model.display}`}
+        title="Stop download"
+      >
+        <X size={15} />
+      </button>
     </div>
   );
 }

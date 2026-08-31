@@ -668,6 +668,9 @@ export const hfTokenPresent = () => invoke<boolean>("hf_token_present");
 export const setHfToken = (token: string) => invoke<void>("set_hf_token", { token });
 /** Download a specific model (a chosen quant), streaming `models://progress`. */
 export const downloadModel = (model: ModelRef) => invoke<void>("download_model", { model });
+/** Stop an in-flight model download (aborts the stream, reclaims the `.part`).
+ *  The pending `downloadModel` invoke then rejects with "download cancelled". */
+export const cancelDownload = (id: string) => invoke<void>("cancel_download", { id });
 /** Delete a downloaded local model by id. */
 export const removeModel = (id: string) => invoke<void>("remove_model", { id });
 /** Switch the current session to a downloaded local model (starts a fresh chat). */

@@ -236,6 +236,7 @@ pub fn run() {
             commands::models::hf_token_present,
             commands::models::set_hf_token,
             commands::models::download_model,
+            commands::models::cancel_download,
             commands::models::remove_model,
             commands::models::use_local_model,
             commands::models::list_cloud_models,

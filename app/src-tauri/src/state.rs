@@ -6,6 +6,7 @@
 //! the native-preview hooks, and the bits of state that are about this
 //! window (the console bridge, the preview-attach lock).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use harness_host::{EventSink, HostHooks, SessionService};
 use harness_protocol::ProtocolEvent;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 pub use harness_host::launch_dir;
 
@@ -26,6 +28,10 @@ pub struct AppState {
     /// Serializes `preview_attach` (see its docs): the frontend calls it at
     /// frame rate during a resize, and webview creation must not race itself.
     pub(crate) preview_attach: Mutex<()>,
+    /// In-flight model downloads, keyed by model id. The token stops the
+    /// stream (`cancel_download`); an id's presence doubles as the guard that
+    /// keeps two invokes from racing the same `.part` file.
+    pub(crate) downloads: Mutex<HashMap<String, CancellationToken>>,
 }
 
 impl std::ops::Deref for AppState {
@@ -78,6 +84,7 @@ impl AppState {
             service,
             console_bridge: tokio::sync::OnceCell::new(),
             preview_attach: Mutex::new(()),
+            downloads: Mutex::new(HashMap::new()),
         }
     }
 }

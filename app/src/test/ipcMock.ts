@@ -487,6 +487,7 @@ export const searchHfModels = vi.fn(async (): Promise<HfHit[]> => []);
 export const hfTokenPresent = vi.fn(async () => false);
 export const setHfToken = vi.fn(async () => {});
 export const downloadModel = vi.fn(async () => {});
+export const cancelDownload = vi.fn(async () => {});
 export const installLlama = vi.fn(async () => {});
 export const removeModel = vi.fn(async () => {});
 export const useLocalModel = vi.fn(async () => ({ ...sampleSession, session_id: "local-session" }));
@@ -633,6 +634,7 @@ export function resetIpc() {
   hfTokenPresent.mockReset().mockResolvedValue(false);
   setHfToken.mockReset().mockResolvedValue(undefined);
   downloadModel.mockReset().mockResolvedValue(undefined);
+  cancelDownload.mockReset().mockResolvedValue(undefined);
   installLlama.mockReset().mockResolvedValue(undefined);
   removeModel.mockReset().mockResolvedValue(undefined);
   useLocalModel.mockReset().mockResolvedValue({ ...sampleSession, session_id: "local-session" });

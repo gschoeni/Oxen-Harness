@@ -525,6 +525,28 @@
   color: var(--text-tertiary);
 }
 
+/* Active-downloads list (shares the installed-row shell) */
+.ls-download-row .ls-installed-name {
+  flex: 0 1 auto;
+  min-width: 90px;
+}
+.ls-download-row .ls-bar {
+  min-width: 80px;
+}
+.ls-download-bytes {
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.ls-download-error {
+  flex: 1;
+  font-size: var(--text-2xs);
+  color: var(--danger);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Buttons + bars */
 .ls-btn {
   display: inline-flex;

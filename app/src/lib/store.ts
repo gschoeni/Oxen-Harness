@@ -27,6 +27,8 @@ import {
   runLoop,
   retryTurn,
   cancelTurn,
+  cancelDownload as cancelDownloadIpc,
+  downloadModel as downloadModelIpc,
   configureOxenKey,
   sessionInfo,
   selectCloudModelForNewChats,
@@ -92,11 +94,28 @@ import type {
   CompactedEvent,
   CompressionEvent,
   CompressionMode,
+  DownloadProgress,
+  ModelRef,
   PreviewConsoleEvent,
   PreviewEvent,
   PreviewStatus,
   RetryEvent,
 } from "./types";
+
+/** One model download the store is tracking — in flight (or failed), keyed by
+ *  the [`ModelRef`] id. Lives in the store, not the settings page, so every
+ *  download stays visible (and keeps streaming progress) while the user browses
+ *  other models, other settings pages, or the chat. */
+export interface ActiveDownload {
+  model: ModelRef;
+  downloaded: number;
+  total: number | null;
+  /** Best-known fraction complete, 0..1 (0 until the first progress event). */
+  fraction: number;
+  status: "downloading" | "cancelling" | "error";
+  error?: string;
+  startedAt: number;
+}
 
 interface DockLayout {
   widths: Record<string, number>;
@@ -436,6 +455,18 @@ interface AppState {
   localSwitch: { model: string; phase: LocalStatus["phase"]; startedAt: number } | null;
   /** Update the local-switch phase from a `local://status` event. */
   setLocalStatus: (s: LocalStatus) => void;
+  /** Every model download in flight (or failed), keyed by model id. */
+  downloads: Record<string, ActiveDownload>;
+  /** Bumped each time a download lands, so open views re-read the catalog. */
+  downloadsRev: number;
+  /** Start downloading a model. A no-op if that id is already in flight. */
+  startDownload: (model: ModelRef) => void;
+  /** Stop an in-flight download (backend aborts the stream + reclaims bytes). */
+  stopDownload: (id: string) => void;
+  /** Clear a failed download row. */
+  dismissDownload: (id: string) => void;
+  /** Update a download's progress from a `models://progress` event. */
+  ingestDownloadProgress: (p: DownloadProgress) => void;
   /** Send (or queue) a prompt in the current chat. */
   send: (text: string, attachments?: string[]) => void;
   /** Run the code-review pipeline in the current chat's workspace (uncommitted
@@ -697,6 +728,8 @@ export const useStore = create<AppState>((set, get) => {
     projects: [],
     cloudModels: [],
     localSwitch: null,
+    downloads: {},
+    downloadsRev: 0,
     // Home is the application's navigation root: every thread across every
     // project, and the way into any of them.
     homeOpen: true,
@@ -1057,6 +1090,85 @@ export const useStore = create<AppState>((set, get) => {
         set({ localSwitch: null });
       }
     },
+
+    startDownload: (model) => {
+      const existing = get().downloads[model.id];
+      if (existing && existing.status !== "error") return; // already in flight
+      set((s) => ({
+        downloads: {
+          ...s.downloads,
+          [model.id]: {
+            model,
+            downloaded: 0,
+            total: model.size_bytes > 0 ? model.size_bytes : null,
+            fraction: 0,
+            status: "downloading",
+            startedAt: Date.now(),
+          },
+        },
+      }));
+      // The invoke lives here — not in a component — so it survives the settings
+      // page unmounting; the row clears (or turns into an error) when it settles.
+      downloadModelIpc(model)
+        .then(() => {
+          set((s) => {
+            const { [model.id]: _done, ...rest } = s.downloads;
+            return { downloads: rest, downloadsRev: s.downloadsRev + 1 };
+          });
+        })
+        .catch((e) => {
+          set((s) => {
+            const entry = s.downloads[model.id];
+            if (!entry) return {};
+            // A stopped download rejects its invoke; that's the expected end of
+            // a cancel, not a failure to report.
+            if (entry.status === "cancelling") {
+              const { [model.id]: _gone, ...rest } = s.downloads;
+              return { downloads: rest };
+            }
+            return {
+              downloads: {
+                ...s.downloads,
+                [model.id]: { ...entry, status: "error", error: String(e) },
+              },
+            };
+          });
+        });
+    },
+
+    stopDownload: (id) => {
+      const entry = get().downloads[id];
+      if (!entry || entry.status !== "downloading") return;
+      set((s) => ({
+        downloads: { ...s.downloads, [id]: { ...s.downloads[id], status: "cancelling" } },
+      }));
+      // Fire-and-forget, like cancelTurn: the pending downloadModel invoke is
+      // what observes the cancel and clears the row.
+      void cancelDownloadIpc(id).catch(() => {});
+    },
+
+    dismissDownload: (id) =>
+      set((s) => {
+        const { [id]: _gone, ...rest } = s.downloads;
+        return { downloads: rest };
+      }),
+
+    ingestDownloadProgress: (p) =>
+      set((s) => {
+        const entry = s.downloads[p.id];
+        if (!entry || entry.status !== "downloading") return {};
+        return {
+          downloads: {
+            ...s.downloads,
+            [p.id]: {
+              ...entry,
+              downloaded: p.downloaded,
+              total: p.total ?? entry.total,
+              fraction: p.fraction ?? entry.fraction,
+            },
+          },
+        };
+      }),
 
     setLocalStatus: (s) =>
       set((st) => {

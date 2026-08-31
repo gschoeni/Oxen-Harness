@@ -336,6 +336,10 @@ pub(crate) async fn install_runtime(app: AppHandle) -> Result<(), String> {
 /// Download a model's weights (from any source), emitting `models://progress` as
 /// it streams. The `model` is a concrete [`ModelRef`] the UI chose (a specific
 /// quant); the token for its origin is resolved server-side.
+///
+/// Downloads run concurrently — each id registers a cancellation token in
+/// `state.downloads` (see [`cancel_download`]), and a second invoke for an id
+/// already in flight is rejected rather than racing the same `.part` file.
 #[tauri::command]
 pub(crate) async fn download_model(
     state: State<'_, AppState>,
@@ -344,9 +348,18 @@ pub(crate) async fn download_model(
     let store = ModelStore::open().map_err(|e| e.to_string())?;
     let token = token_for(&model);
     let id = model.id.clone();
+    let cancel = {
+        let mut downloads = state.downloads.lock().await;
+        if downloads.contains_key(&id) {
+            return Err(format!("{id} is already downloading"));
+        }
+        let cancel = tokio_util::sync::CancellationToken::new();
+        downloads.insert(id.clone(), cancel.clone());
+        cancel
+    };
     let sink = state.sink.clone();
-    store
-        .download(&model, token.as_deref(), |p| {
+    let result = store
+        .download(&model, token.as_deref(), Some(&cancel), |p| {
             sink.emit(ProtocolEvent::DownloadProgress {
                 id: id.clone(),
                 downloaded: p.downloaded,
@@ -354,8 +367,21 @@ pub(crate) async fn download_model(
                 fraction: p.fraction(),
             });
         })
-        .await
-        .map_err(|e| e.to_string())?;
+        .await;
+    state.downloads.lock().await.remove(&model.id);
+    result.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Stop an in-flight model download. Cancelling the token aborts the stream and
+/// deletes the partial `.part` file, reclaiming the space; the pending
+/// `download_model` invoke then rejects with "download cancelled". A no-op if
+/// the id isn't downloading (e.g. it finished in the meantime).
+#[tauri::command]
+pub(crate) async fn cancel_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    if let Some(token) = state.downloads.lock().await.get(&id) {
+        token.cancel();
+    }
     Ok(())
 }
 

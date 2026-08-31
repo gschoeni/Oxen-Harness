@@ -22,6 +22,8 @@ export function resetAll() {
     ledgerGit: {},
     infos: {},
     threads: {},
+    downloads: {},
+    downloadsRev: 0,
     sessionUsage: {},
     compression: {},
     runStatus: {},
