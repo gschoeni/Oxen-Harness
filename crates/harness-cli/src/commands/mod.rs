@@ -33,6 +33,7 @@ pub(crate) mod print;
 pub(crate) mod queue;
 pub(crate) mod resume;
 pub(crate) mod review;
+pub(crate) mod rewind;
 pub(crate) mod rules;
 pub(crate) mod theme;
 pub(crate) mod trace;

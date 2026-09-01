@@ -66,6 +66,13 @@ impl<'a> ReplContext<'a> {
         *self.session.borrow_mut() = session_id.to_string();
         Ok(agent)
     }
+
+    /// Move the REPL onto an agent built elsewhere (a fork), so the exit
+    /// screen and `/export` follow it.
+    pub(crate) fn adopt(&self, agent: Agent) -> Agent {
+        *self.session.borrow_mut() = agent.session_id().to_string();
+        agent
+    }
 }
 
 /// The classic readline REPL for pipes, dumb terminals, and
@@ -285,6 +292,8 @@ async fn handle_line(
         Command::Permissions(rest) => commands::permissions::handle_repl(rest, agent, ui)?,
         Command::Usage => commands::usage::handle_repl(ctx.store, ui).await,
         Command::Resume(rest) => commands::resume::handle_repl(rest, agent, ui, ctx).await?,
+        Command::Fork => commands::rewind::fork_repl(agent, ui, ctx)?,
+        Command::Rewind(rest) => commands::rewind::rewind_repl(rest, agent, ui, ctx)?,
         Command::Preview => commands::preview::handle_repl(ui),
         Command::Model(rest) => commands::model::handle_repl(rest, agent, ui).await?,
         Command::Export(dest) => export(ctx.store, &ctx.session(), dest, ui)?,

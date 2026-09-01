@@ -63,6 +63,10 @@ pub enum Command {
     /// Pick up an earlier trail in this workspace: `/resume` opens a picker
     /// over the recent sessions, `/resume <id-prefix>` jumps straight to one.
     Resume(Option<String>),
+    /// `/fork` — continue on a copy of this session.
+    Fork,
+    /// `/rewind [n]` — fork the session at just before message `n`.
+    Rewind(Option<String>),
     /// Open the agent-started dev server in the browser (live preview).
     Preview,
     /// Re-drive the last turn against the existing transcript — for a turn
@@ -189,6 +193,20 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
         aliases: &["/trails"],
         description: "pick up an earlier trail in this project",
         build: Command::Resume,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/fork",
+        aliases: &[],
+        description: "branch this trail into a new session (the original keeps everything)",
+        build: |_| Command::Fork,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/rewind",
+        aliases: &["/back"],
+        description: "go back to just before an earlier message, on a fork",
+        build: Command::Rewind,
         completer: ArgCompleter::None,
     },
     SlashSpec {
@@ -472,6 +490,8 @@ mod tests {
     fn resume_with_and_without_an_id_prefix() {
         assert_eq!(parse_command("/resume"), Command::Resume(None));
         assert_eq!(parse_command("/trails"), Command::Resume(None));
+        assert_eq!(parse_command("/fork"), Command::Fork);
+        assert_eq!(parse_command("/back 3"), Command::Rewind(Some("3".into())));
         assert_eq!(
             parse_command("/resume 8f3c"),
             Command::Resume(Some("8f3c".into()))
