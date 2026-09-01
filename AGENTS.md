@@ -120,7 +120,10 @@ Each tool is a small Rust type in `crates/harness-tools/src/`, one file per
 concern. A tool has three parts: a **name** the model calls, a **description**
 telling the model when to use it, and a **typed args struct** whose doc comments
 become the JSON Schema the model reads. The schema is derived from the struct,
-so the advertised interface and what your code parses can never drift. (This
+so the advertised interface and what your code parses can never drift. A tool
+that mutates the workspace or runs a process also overrides `concurrency()` to
+`Exclusive` — the loop runs shared tools from one reply together and exclusive
+ones alone, so an edit can never race a read of the same file. (This
 recipe also ships as the `add-a-tool` skill in
 `.oxen-harness/skills/add-a-tool/SKILL.md`; user-facing extension points —
 skills and no-code HTTP tools — are covered in the README.)

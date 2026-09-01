@@ -88,8 +88,9 @@ user input ─▶ harness-cli ─▶ Agent::run_turn
                                  ├─▶ budget check → compact transcript if needed
                                  ├─▶ harness-llm: stream a chat completion
                                  │        └─ emits AgentEvent::{Token, ToolStart, ToolEnd, …}
-                                 ├─▶ for each tool call: ToolRegistry::invoke
-                                 │        └─ result appended to the transcript
+                                 ├─▶ tool calls run in waves (shared together, exclusive alone)
+                                 │        └─ results appended to the transcript in call order
+                                 ├─▶ finished background tasks delivered as messages
                                  ├─▶ harness-store: persist every message verbatim
                                  └─▶ loop until the model stops calling tools
 ```
@@ -105,14 +106,15 @@ The crate seams are designed so common extensions touch one place:
 
 | To add… | Do this |
 |---|---|
-| **A tool** | Implement the [`TypedTool`](crates/harness-tools/src/lib.rs) trait (typed args struct; doc comments become the model-facing schema), expose a `*_TOOL` name constant, register it with `with_typed` in the `ToolRegistry`, and add its name to the registry completeness test. Full recipe: ["Adding a built-in tool"](AGENTS.md#adding-a-built-in-tool) in AGENTS.md. |
+| **A tool** | Implement the [`TypedTool`](crates/harness-tools/src/lib.rs) trait (typed args struct; doc comments become the model-facing schema), expose a `*_TOOL` name constant, register it with `with_typed` in the `ToolRegistry`, and add its name to the registry completeness test. Override `concurrency()` to `Exclusive` if it mutates the workspace or runs a process — shared tools in one reply run together, exclusive ones run alone. Full recipe: ["Adding a built-in tool"](AGENTS.md#adding-a-built-in-tool) in AGENTS.md. |
+| **A custom command** | No code: drop `<name>.md` in `.oxen-harness/commands/` (project) or `~/.oxen-harness/commands/` (global); `$ARGUMENTS`/`$1…` are filled in. Discovery + expansion live in [`harness-runtime/src/commands.rs`](crates/harness-runtime/src/commands.rs); the CLI consults them in [`custom_commands.rs`](crates/harness-cli/src/custom_commands.rs). |
 | **A skill** | No code: drop a `SKILL.md` folder into `~/.oxen-harness/skills/` (global) or `<repo>/.oxen-harness/skills/` (project), or use Settings → Skills in the desktop app. Parsing + the `skill` tool live in [`harness-tools/src/skill.rs`](crates/harness-tools/src/skill.rs); discovery/prefs in [`harness-runtime/src/skills.rs`](crates/harness-runtime/src/skills.rs). See ["Extending the agent"](README.md#extending-the-agent). |
 | **A built-in theme** | Add a factory in [`harness-theme/src/builtins.rs`](crates/harness-theme/src/builtins.rs) (overlay a small patch on `Theme::default()`) and list it in `all()`. Theme *data* all lives in that module. |
 | **A config file** | Define a serde struct and lean on `harness-runtime`'s `config::{load_or_default, write_and_snapshot}`; you get atomic writes + Oxen snapshotting for free. |
 | **A cloud model** | Add an entry to `harness_runtime::models::builtins()`. |
 | **A local model** | No Rust required: add an exact GGUF entry to [`harness-local/assets/catalog.json`](crates/harness-local/assets/catalog.json), or install/override one in `~/.oxen-harness/local-models.json`. Set `derive_quants: true` only when the repo publishes the standard Q8→Q3 filename ladder; native formats default to the one declared file. Loading/merging lives in [`harness-local/src/catalog.rs`](crates/harness-local/src/catalog.rs). |
 | **A theme/loop field** | Add the field (serde `default`) — partial-override loading means existing files keep working. |
-| **A slash command** | Three synchronized spots in `harness-cli`: a `Command` variant + its parse arm in [`repl.rs`](crates/harness-cli/src/repl.rs), a dispatch arm in [`repl_loop.rs`](crates/harness-cli/src/repl_loop.rs) calling your new [`commands/`](crates/harness-cli/src/commands/mod.rs) module, and a `SLASH_COMMANDS` entry in [`live/mod.rs`](crates/harness-cli/src/live/mod.rs) (a test fails if the three drift). Model a command with subcommands on [`commands/loops.rs`](crates/harness-cli/src/commands/loops.rs). |
+| **A built-in slash command** | Three synchronized spots in `harness-cli`: a `Command` variant + a `SLASH_COMMANDS` entry in [`repl.rs`](crates/harness-cli/src/repl.rs) (completion derives from that registry), and a dispatch arm in [`repl_loop.rs`](crates/harness-cli/src/repl_loop.rs) calling your new [`commands/`](crates/harness-cli/src/commands/mod.rs) module (a test fails if they drift). Model a command with subcommands on [`commands/loops.rs`](crates/harness-cli/src/commands/loops.rs); one that swaps the session on [`commands/rewind.rs`](crates/harness-cli/src/commands/rewind.rs). |
 | **A review step** | No code: edit the pipeline in `~/.oxen-harness/code-review.json` or Settings → Code review — steps are ordered prompts (placeholders: `{{target}}`, `{{diff}}`, `{{previous}}`, `{{max_findings}}`), and any step can carry parallel `agents`. Defaults + schema live in [`harness-review/src/config.rs`](crates/harness-review/src/config.rs). |
 | **A subagent fan-out** | Call [`harness_agent::fleet::run_fleet`](crates/harness-agent/src/fleet.rs) with `SubagentTask`s and a spawn source (`\|\| agent.side_agent()`), render its `FleetEvent`s; or let the model do it — the `spawn_agents` tool ([`fleet_tool.rs`](crates/harness-agent/src/fleet_tool.rs)) is registered by both hosts, with a `FleetSink` per host for the lanes display. |
 

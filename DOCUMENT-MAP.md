@@ -29,22 +29,31 @@ oxen-harness/
     harness-tools/           — TypedTool trait, bounded process/HTTP capture, fs read/write/edit, glob/search, shell, git, web, questions, canvas, plans, skills, and custom HTTP tools.
                                  fs/ is one module per tool — read (windows + outlines), write, edit (batch hunks, CRLF/BOM), find (glob + grep) —
                                  over shared state.rs (what the model has read, per-path locks, path-scoped conventions), outline.rs (tree-sitter
-                                 structural reads), and syntax.rs (did this edit break the file?); shell/session.rs carries cwd + env between commands.
-    harness-store/           — SQLite history (verbatim) + JSONL export; rusqlite_migration schema versioning; rich session metadata.
+                                 structural reads), and syntax.rs (did this edit break the file?); edit hunks may be line-addressed (line_start/line_end, insert_after_line).
+                                 shell/session.rs carries cwd + env between commands; shell/intercept.rs redirects bare grep/find/cat to the dedicated tools; every command runs
+                                 under the non-interactive env (PAGER=cat, CI=true…). tasks.rs: background tasks with settled-task announcements + live output broadcast; steer.rs: the
+                                 host's "user spoke mid-turn" signal a foreground wait races against.
+    harness-store/           — SQLite history (verbatim) + JSONL export; rusqlite_migration schema versioning; rich session metadata; session forks (fork_session/forked_from/user_turns).
     harness-oxen/            — Version config/data + export/share traces via the `oxen` CLI (testable Runner shell-out; no liboxen).
     harness-local/           — Local models: extensible GGUF catalog (Qwen3 + Bonsai), downloads + disk tracking, llama-server launcher.
     harness-theme/           — Configurable themes (palette + voice): built-ins, TOML/JSON load/save with partial overrides, active-theme store.
     harness-agent/           — The agent (Ralph) loop (llm + tools + store); the fleet (run_fleet: N parallel detached subagents) + the model-facing spawn_agents tool (FleetSpawner/FleetSink);
                                  worktree.rs (per-lane git checkouts for editing fleets); config.rs ModelRoles (route work to cheaper models) + RetryPolicy fallback chains;
-                                 rules.rs (stream rules: regex corrections that watch the reply and fire only on a match, plus DRAFT_SYSTEM/DraftedRule — model-written rules, self-verified). agent/ splits the loop: turn (the cycle), call (one model call), tools, compaction.
+                                 rules.rs (stream rules: regex corrections that watch the reply and fire only on a match, plus DRAFT_SYSTEM/DraftedRule — model-written rules, self-verified). agent/ splits the loop: turn (the cycle),
+                                 call (one model call), tools (gate → waves: shared calls together, exclusive alone; live ToolProgress), repair (heal cut-off JSON, coerce args to the schema), fork (session forks), compaction.
+                                 Background tasks that finish are delivered to the model as messages (never polled); every re-call with a corrective emits Nudged; side agents run under a RoundBudget.
     harness-protocol/        — The transport-neutral wire types every UI speaks: the tagged ProtocolEvent enum + command DTOs (serde + JSON Schema); tests/wire.rs is the spec.
     harness-host/            — The transport-agnostic host layer: SessionService (multi-session agent cache, turn driving, question/approval round-trips, model swaps, review/loop runners), generic over an EventSink; the Tauri app and HTTP server are both thin adapters over it.
     harness-server/          — The agent backend as a standalone HTTP server (axum): REST commands + an SSE protocol-event stream with Last-Event-ID replay; bearer-token auth; see PROTOCOL.md.
     harness-runtime/         — Front-end-agnostic services shared by CLI/desktop: connection settings + secrets (.env), cloud-model catalog, tool prefs + custom tools, skill discovery/prefs/authoring, opt-in Oxen versioning of ~/.oxen-harness,
-                                 context_files.rs (AGENTS.md/CLAUDE.md/Cursor/Cline discovery → prompt section + path-scoped rules), rules.json discovery (global + per-project stream rules).
+                                 context_files.rs (AGENTS.md/CLAUDE.md/Cursor/Cline discovery → prompt section + path-scoped rules), rules.json discovery (global + per-project stream rules),
+                                 commands.rs (custom slash commands from Markdown templates: .oxen-harness/commands + .claude/commands, $ARGUMENTS expansion).
     harness-loop/            — Goal-driven, self-verifying loops (discover→verify→iterate): LoopSpec/Verify, runner, journal, shareable store + built-ins.
     harness-review/          — Configurable code-review pipeline: ordered prompt steps (find→verify→report default), diff targets (uncommitted / vs base branch), isolated side-agent runner (fan-out steps run as a parallel fleet), structured findings.
-    harness-cli/             — The `oxen-harness` interactive REPL binary. Slash-command handlers live in commands/ (auth, compression, loops, model, oxen, queue, review, rules, theme, trace); the live sticky-bottom composer in live/; the fleet lanes display in fleet_ui.rs/fleet_sink.rs. Top-level subcommands: theme, loop, trace, oxen.
+    harness-cli/             — The `oxen-harness` interactive REPL binary. Slash-command handlers live in commands/ (auth, compression, loops, model, oxen, queue, resume, rewind [/fork, /rewind], review, rules, theme, trace, print [-p headless]);
+                                 custom_commands.rs holds the workspace's Markdown commands; the live sticky-bottom composer in live/ (card.rs: the streaming command-output card + Ctrl+O results;
+                                 keys: Esc cancels, Ctrl+Q/Ctrl+Enter queue, Alt+↑ un-queue, Ctrl+O expand); the meters (branch, mode, timer) in turn.rs; the fleet lanes display in fleet_ui.rs/fleet_sink.rs.
+                                 Top-level subcommands: theme, loop, trace, oxen.
   app/                       — Tauri v2 desktop app (separate project, excluded
                                from the core workspace). See app/README.md.
     src-tauri/src/           — Rust bridge, a thin adapter over harness-host:

@@ -268,14 +268,45 @@ You may:
   9. Make camp / End         — /exit  (or Ctrl-D)
 ```
 
-### Queuing messages
+### Steering, queuing, and watching the work
 
 While the agent is thinking, streaming, or running tools, the composer stays
-live — keep typing and press Enter to **stack** messages (the prompt shows the
-depth: `[2 queued] ❯`), and they drain automatically, in order, as each turn
-finishes. Stacked messages render as a navigable list above the composer:
-**↑** steps into it, **Enter**/**e** edits a message inline, and **d** removes
-it. The desktop app has the same live queue above its composer.
+live. What you type goes one of two ways:
+
+- **Enter steers** — the message is delivered *into* the running turn at its
+  next safe point, so a "no, the other file" lands mid-work. If a shell
+  command is in the way, it moves to the background at once and its result
+  is delivered to the model when it finishes.
+- **Ctrl+Q (or Ctrl+Enter) queues** — the message runs *after* this turn
+  (the prompt shows the depth: `[2 queued] ❯`). Queued messages render as a
+  navigable list above the composer: **↑** steps into it, **Enter**/**e**
+  edits one inline, **d** removes it, and **Alt+↑** pulls the newest one back
+  into the composer.
+
+**Esc** cancels the running turn and never touches your draft; **Ctrl-C** is
+the staged clear → confirm → exit. Multi-line pastes keep their lines, and a
+big paste collapses to a `[Paste #1, +240 lines]` chip that expands on send.
+
+While a shell command runs, its last few lines of output stream in a card
+under the conversation, so a build or a test run is visibly working instead
+of hiding behind a spinner. When it ends the card seals into one line —
+`└─ exit_code: 0 (+42 lines · ctrl+o expands)` — and **Ctrl+O** prints the
+full result. The meter above the prompt shows the git branch, the permission
+mode, an elapsed timer while a turn runs, and the context fill; the terminal
+title reads `🐂 ⠋ project` while working and `🐂 ! project` when a question
+is waiting for you, and the bell rings when a turn ends.
+
+Two things happen on their own and are always announced: a background
+command that finishes has its output delivered to the model at the next
+round (`⚙ background task 3 finished — output delivered to the model`), and
+when the harness re-calls the model with a corrective — a reply that
+announced work without doing it, an uncharted trail, a repeated call — a
+`↻ nudge: …` line says why. The desktop app has the same live queue and
+tool chips.
+
+Independent tool calls in one reply run at the same time (reads, searches,
+fetches); anything that changes the workspace or runs a process waits its
+turn and runs alone.
 
 Piped / non-interactive sessions fall back to explicit commands: `/queue add
 <msg>`, `/queue` to list, `/queue edit|up|down|rm <n>`, and `/queue run`.
@@ -380,7 +411,18 @@ back up:
 
 Resuming restores the full transcript (so the model keeps its memory) along with
 that session's working directory and model; override either with `--workspace`
-or `--model`.
+or `--model`. Inside a session, `/resume` opens a picker over this project's
+recent trails (they are also listed in the banner), and a bare `--resume`
+does the same before the REPL starts.
+
+**Forks and rewinds.** `/fork` continues on a copy of the session, and
+`/rewind` (pick a message, or `/rewind 3`) goes back to just before an earlier
+message you sent — both leave the original trail complete and move you onto
+the copy, so a wrong turn is retried without losing the record.
+
+**Headless.** `oxen-harness -p "summarize src/lib.rs"` runs one turn with the
+plain renderer and exits; with no prompt it reads stdin (`git diff | oxen-harness
+-p`), so the agent slots into scripts and pipelines.
 
 ## Extending the agent
 
@@ -404,10 +446,16 @@ looking at.
 
 | You want the agent to… | Add a… | How |
 |---|---|---|
+| Run the same prompt often (`/review-pr 42`, `/standup`) | **Command** (a markdown template) | Drop `<name>.md` in `.oxen-harness/commands/` (or `~/.oxen-harness/commands/`) |
 | Follow your release-notes format, review checklist, deploy runbook | **Skill** (markdown, no code) | Settings → Skills, or drop a `SKILL.md` folder |
 | Stop reaching for `.unwrap()`, `--force`, or a generated directory | **Rule** (a regex + a sentence) | Settings → Rules, or `/rules add` |
 | Call your internal API or webhook | **Custom tool** (no code) | Settings → Tools → New tool (HTTP POST) |
 | Do something new on the machine (parse a format, drive a CLI…) | **Built-in tool** (Rust) | The recipe in [`AGENTS.md`](AGENTS.md#adding-a-built-in-tool) |
+
+A command is one Markdown file: `.oxen-harness/commands/review-pr.md`
+becomes `/review-pr`, its body is the prompt, and `$ARGUMENTS` (or `$1`, `$2`)
+is filled from whatever follows the command. Existing `.claude/commands`
+trees are read as-is, so a team's Claude Code commands work unchanged.
 
 A skill is a folder holding a `SKILL.md` (the same shape as Claude Code skills):
 

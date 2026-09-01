@@ -425,6 +425,36 @@ Branch `harness-parity-improvements`; the study and full roadmap are in
   (`rules://draft`), each proposal shows the check that ran on it, and
   follow-ups revise the rule on the table rather than starting over.
 
+## Recent — smoothness pass from the oh-my-pi study (2026-09-01)
+
+A deep read of oh-my-pi (report: the "omp Field Notes" artifact) turned into a
+port of the patterns that make an agent feel smooth, all green under
+fmt/clippy/nextest (1107 tests) and verified at the pty surface:
+
+- **Loop** — tool calls in one reply run in waves (shared together, exclusive
+  alone; `Tool::concurrency`), results folded in call order, `call_id` on
+  ToolStart/ToolEnd/protocol. Background tasks auto-deliver their output as
+  messages (no polling); a mid-turn user message backgrounds a running shell
+  command early (steer channel). Argument repair (heal cut-off JSON, coerce
+  to the schema), empty results spelled out, loop guard canonicalizes args,
+  stage-1 compaction prunes only what the overflow needs, side agents run
+  under a RoundBudget (40/60), every corrective re-call emits `Nudged`.
+- **Tools** — non-interactive shell env, grep/find/cat interception, 60 s
+  patience, `task_output wait_ms`, live output broadcast, line-addressed
+  edit hunks (hashline-inspired), `update_plan`/`ask` hygiene lines.
+- **CLI** — streaming command-output card + Ctrl+O, richer sealed summaries,
+  Esc cancels, Ctrl+Q/Ctrl+Enter queue + Alt+↑ un-queue, multi-line pastes +
+  paste chips, meters with branch/mode/timer/colour-graded fill, terminal
+  title + bell, instant startup (pricing off the critical path), recent trails
+  in the banner, `/resume` picker + bare `--resume`, `-p` print mode, custom
+  Markdown slash commands, `/fork` + `/rewind` on session forks, prompt
+  history keeps newlines.
+- **Store/app** — session forks (migration 11); the desktop app pairs tool
+  chips by `call_id`, appends live output, and shows `agent.notice` lines.
+
+Deliberately not copied: sixty providers, yolo-by-default approvals, magic
+keywords, vibe/goal modes, IRC between subagents, in-process TS extensions.
+
 ## What's left / next
 
 - [ ] Run-time GUI smoke test of the desktop app (`cargo tauri dev`), incl. live
