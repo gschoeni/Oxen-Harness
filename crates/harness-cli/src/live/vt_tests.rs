@@ -314,3 +314,94 @@ fn first_paint_preserves_the_banner_tail() {
         "composer row must be painted:\n{all}"
     );
 }
+
+/// While a turn runs the meter line leads with a braille spinner and a
+/// whole-second timer, so "how long has this been going" is readable at a
+/// glance; at idle the line is just the meters again.
+#[test]
+fn the_meter_line_carries_the_turn_spinner_and_timer() {
+    let (mut live, handle) = capture_live(60, 12);
+    live.status_lines = vec![
+        "  🧭 context 10.0k / 200.0k tokens (5%)".into(),
+        "  📊 10.0k tokens used".into(),
+    ];
+    live.begin_elapsed();
+    live.render();
+
+    let rows = rows_text(&screen(&handle, 60, 12, ""));
+    let meter = rows
+        .iter()
+        .find(|r| r.contains("context 10.0k"))
+        .unwrap_or_else(|| panic!("meter line missing:\n{}", rows.join("\n")));
+    assert!(
+        meter.contains("0s") && meter.chars().any(|c| ('⠀'..='⣿').contains(&c)),
+        "meter must lead with a braille spinner and a timer: {meter:?}"
+    );
+    // The second meter line is left alone — one clock is enough.
+    let totals = rows
+        .iter()
+        .find(|r| r.contains("tokens used"))
+        .expect("the totals line must be painted");
+    assert!(!totals.contains("0s"), "only one clock: {totals:?}");
+
+    // Once the turn ends the clock disappears rather than freezing on screen.
+    live.end_elapsed();
+    live.render();
+    let rows = rows_text(&screen(&handle, 60, 12, ""));
+    let meter = rows.iter().find(|r| r.contains("context 10.0k")).unwrap();
+    assert!(
+        !meter.contains("0s") && !meter.chars().any(|c| ('⠀'..='⣿').contains(&c)),
+        "the idle meter must be the meter alone: {meter:?}"
+    );
+}
+
+/// The terminal title tracks the session state (so a backgrounded tab says
+/// what it's doing), and the bell rings only where it's wanted: when a prompt
+/// starts waiting on the user — never as a side effect of re-titling.
+#[test]
+fn the_title_tracks_the_session_and_a_waiting_prompt_rings() {
+    let (mut live, handle) = capture_live(40, 12);
+    let paused = Arc::new(AtomicBool::new(false));
+
+    // Idle: the ox is waiting for you.
+    live.end_elapsed();
+    let parser = screen(&handle, 40, 12, "");
+    assert!(
+        parser.screen().title().starts_with("🐂 > "),
+        "idle title: {:?}",
+        parser.screen().title()
+    );
+    // Re-titling must not ring: OSC 0's BEL terminator is a string terminator.
+    assert_eq!(parser.screen().audible_bell_count(), 0, "titles are silent");
+
+    // Working: the spinner frame rides in the title too.
+    live.begin_turn(&[]);
+    live.begin_elapsed();
+    let parser = screen(&handle, 40, 12, "");
+    let title = parser.screen().title().to_string();
+    assert!(title.starts_with("🐂 "), "working title: {title:?}");
+    assert!(
+        !title.starts_with("🐂 > ") && !title.starts_with("🐂 ! "),
+        "working title must carry the spinner: {title:?}"
+    );
+
+    // Waiting on an approval: the title flags it and the bell rings once.
+    live.on_event(
+        &AgentEvent::ApprovalPending {
+            name: "shell".into(),
+            command: "rm -rf ./build".into(),
+        },
+        &paused,
+    );
+    let parser = screen(&handle, 40, 12, "");
+    assert!(
+        parser.screen().title().starts_with("🐂 ! "),
+        "waiting title: {:?}",
+        parser.screen().title()
+    );
+    assert_eq!(
+        parser.screen().audible_bell_count(),
+        1,
+        "a waiting prompt must ring exactly once"
+    );
+}

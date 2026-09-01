@@ -308,6 +308,7 @@ fn print_context_usage(agent: &Agent, ui: &Ui) {
 /// it's auditable — and the running price. The two are deliberately distinct:
 /// context fill ≠ total tokens used.
 pub(crate) fn context_usage_lines(agent: &Agent, ui: &Ui) -> Vec<String> {
+    remember_permission_mode(agent);
     context_usage_lines_from(
         ui,
         agent.model(),
@@ -325,7 +326,10 @@ pub(crate) fn context_usage_lines(agent: &Agent, ui: &Ui) -> Vec<String> {
 ///
 /// `used` is the current context fill; `prompt_tokens`/`completion_tokens` are
 /// the session's cumulative input/output totals (their sum is the total tokens
-/// used, and what the price is computed from).
+/// used, and what the price is computed from). The workspace's git branch and
+/// the permission mode are read from the process (see [`git_branch`] and
+/// [`permission_mode`]) rather than passed in, so this signature stays the one
+/// a `Usage` event can satisfy.
 pub(crate) fn context_usage_lines_from(
     ui: &Ui,
     model: &str,
@@ -334,44 +338,245 @@ pub(crate) fn context_usage_lines_from(
     prompt_tokens: usize,
     completion_tokens: usize,
 ) -> Vec<String> {
-    // Line 1 — the context window fill, with the model + its per-token rate.
-    let pct = (used * 100).checked_div(window).map_or(0, |p| p.min(100));
-    let rate = crate::pricing::session_rate(model)
+    meter_lines(
+        ui,
+        &Meters {
+            model,
+            used,
+            window,
+            prompt_tokens,
+            completion_tokens,
+            branch: git_branch(),
+            mode: permission_mode(),
+        },
+        meter_budget(),
+    )
+}
+
+/// Everything the two meter lines report about the session right now.
+struct Meters<'a> {
+    model: &'a str,
+    used: usize,
+    window: usize,
+    prompt_tokens: usize,
+    completion_tokens: usize,
+    /// The workspace's git branch, when it is a git work tree.
+    branch: Option<String>,
+    /// The permission mode in force (`relaxed` / `cautious` / `bypass`).
+    mode: Option<&'static str>,
+}
+
+/// One `· `-joined piece of a meter line, with the width it costs and how
+/// eagerly it gives way on a narrow terminal (higher `expendable` goes first).
+struct Seg {
+    plain: String,
+    styled: String,
+    expendable: u8,
+}
+
+impl Seg {
+    fn new(plain: impl Into<String>, styled: impl Into<String>, expendable: u8) -> Self {
+        Seg {
+            plain: plain.into(),
+            styled: styled.into(),
+            expendable,
+        }
+    }
+}
+
+/// Render `segs` into one indented line, dropping the most expendable pieces
+/// until the result fits `budget` columns. `budget` is `None` when the terminal
+/// width is unknown (piped output, tests) — then nothing is dropped.
+fn fit(mut segs: Vec<Seg>, budget: Option<usize>) -> String {
+    if let Some(budget) = budget {
+        // Two-space indent, plus a `· ` joiner ahead of every segment but the
+        // first — the same arithmetic the render below uses.
+        let width = |segs: &[Seg]| -> usize {
+            2 + segs
+                .iter()
+                .map(|s| crate::width::str_width(&s.plain))
+                .sum::<usize>()
+                + 3 * segs.len().saturating_sub(1)
+        };
+        while width(&segs) > budget {
+            // The price gives way first, then the mode, branch, and model —
+            // the context fill itself is never dropped.
+            let Some(worst) = segs
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.expendable > 0)
+                .max_by_key(|(_, s)| s.expendable)
+                .map(|(i, _)| i)
+            else {
+                break;
+            };
+            segs.remove(worst);
+        }
+    }
+    let joined: Vec<&str> = segs.iter().map(|s| s.styled.as_str()).collect();
+    format!("  {}", joined.join(" · "))
+}
+
+/// The two meter lines for a set of figures, fitted to `budget` columns.
+fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
+    // Line 1 — the context window fill, with the branch, permission mode, the
+    // model, and its per-token rate.
+    let pct = (m.used * 100)
+        .checked_div(m.window)
+        .map_or(0, |p| p.min(100));
+    let fill = format!(
+        "🧭 context {} / {} tokens",
+        human_tokens(m.used),
+        human_tokens(m.window),
+    );
+    let pct_text = format!("({pct}%)");
+    let mut line1 = vec![Seg::new(
+        format!("{fill} {pct_text}"),
+        format!("{} {}", ui.dim(&fill), paint_pct(ui, pct, &pct_text)),
+        0,
+    )];
+    if let Some(branch) = &m.branch {
+        let text = format!("⎇ {branch}");
+        line1.push(Seg::new(text.clone(), ui.dim(&text), 2));
+    }
+    if let Some(mode) = m.mode {
+        line1.push(Seg::new(mode, ui.dim(mode), 3));
+    }
+    line1.push(Seg::new(m.model, ui.accent(m.model), 1));
+    if let Some(rate) = crate::pricing::session_rate(m.model)
         .as_ref()
         .and_then(crate::pricing::format_rate)
-        .map(|r| format!(" {}", ui.dim(&r)))
-        .unwrap_or_default();
-    let context_line = format!(
-        "  {} {}{rate}",
-        ui.dim(&format!(
-            "🧭 context {} / {} tokens ({pct}%) ·",
-            human_tokens(used),
-            human_tokens(window),
-        )),
-        ui.accent(model),
-    );
+    {
+        line1.push(Seg::new(rate.clone(), ui.dim(&rate), 4));
+    }
 
     // Line 2 — the session's cumulative spend: total tokens = input + output,
     // spelled out so the figure is auditable, plus the running dollar cost.
-    let total = prompt_tokens + completion_tokens;
-    let cost = crate::pricing::session_cost(model, prompt_tokens, completion_tokens)
+    let total = m.prompt_tokens + m.completion_tokens;
+    let totals = format!(
+        "📊 {} tokens used · {} in · {} out",
+        human_tokens(total),
+        human_tokens(m.prompt_tokens),
+        human_tokens(m.completion_tokens),
+    );
+    let mut line2 = vec![Seg::new(totals.clone(), ui.dim(&totals), 0)];
+    if let Some(cost) = crate::pricing::session_cost(m.model, m.prompt_tokens, m.completion_tokens)
         // Only surface a price once it rounds to something visible, so a session
         // with a few cheap tokens doesn't read as "$0.00".
         .filter(|&c| c > 0.0)
-        .map(|c| format!(" · {}", ui.accent(&crate::theme::format_usd(c))))
-        .unwrap_or_default();
-    let usage_line = format!(
-        "  {}{cost}",
-        ui.dim(&format!(
-            "📊 {} tokens used · {} in · {} out",
-            human_tokens(total),
-            human_tokens(prompt_tokens),
-            human_tokens(completion_tokens),
-        )),
-    );
+        .map(crate::theme::format_usd)
+    {
+        line2.push(Seg::new(cost.clone(), ui.accent(&cost), 4));
+    }
 
-    vec![context_line, usage_line]
+    vec![fit(line1, budget), fit(line2, budget)]
 }
+
+/// The context percentage, colored by how much room is left: normal below 60%,
+/// a warning through 85%, red above it — so a context about to compact is
+/// visible from across the room.
+fn paint_pct(ui: &Ui, pct: usize, text: &str) -> String {
+    match pct {
+        0..=59 => ui.dim(text),
+        60..=85 => ui.brown(text),
+        _ => ui.red(text),
+    }
+}
+
+/// Columns available to a meter line, or `None` when the width is unknown
+/// (output isn't a terminal) — in which case nothing is dropped, since a
+/// guessed width would silently hide real figures.
+///
+/// A running turn prefixes the first line with its spinner + timer
+/// ([`TURN_INDICATOR_CELLS`]), so that much is reserved up front rather than
+/// letting the indicator push the line past the right edge.
+fn meter_budget() -> Option<usize> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        return None;
+    }
+    crossterm::terminal::size()
+        .ok()
+        .map(|(cols, _)| (cols as usize).saturating_sub(TURN_INDICATOR_CELLS))
+        .filter(|w| *w > 0)
+}
+
+/// Cells reserved on the meter line for the running turn's `⠋ 123s ` prefix.
+pub(crate) const TURN_INDICATOR_CELLS: usize = 10;
+
+/// How long a resolved git branch is trusted before re-reading `.git/HEAD`.
+const BRANCH_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The branch shown on the meter line, cached for [`BRANCH_TTL`] so a meter
+/// rebuilt on every `Usage` event doesn't stat the repo each time.
+fn git_branch() -> Option<String> {
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Option<String>)>> =
+        std::sync::Mutex::new(None);
+    let mut cache = CACHE.lock().expect("branch cache poisoned");
+    if let Some((at, branch)) = cache.as_ref() {
+        if at.elapsed() < BRANCH_TTL {
+            return branch.clone();
+        }
+    }
+    let branch = std::env::current_dir().ok().and_then(|d| read_branch(&d));
+    *cache = Some((std::time::Instant::now(), branch.clone()));
+    branch
+}
+
+/// Read the checked-out branch by walking up from `start` for a `.git`, then
+/// parsing its `HEAD` — a couple of file reads, no `git` subprocess, because
+/// this runs on the meter's refresh path. A detached HEAD reports its short
+/// sha; anything unreadable reports `None`.
+fn read_branch(start: &std::path::Path) -> Option<String> {
+    let git = start
+        .ancestors()
+        .map(|d| d.join(".git"))
+        .find(|p| p.exists())?;
+    // A worktree/submodule `.git` is a file pointing at the real git dir.
+    let git = if git.is_file() {
+        let text = std::fs::read_to_string(&git).ok()?;
+        let target = text.trim().strip_prefix("gitdir:")?.trim();
+        let target = std::path::Path::new(target);
+        if target.is_absolute() {
+            target.to_path_buf()
+        } else {
+            git.parent()?.join(target)
+        }
+    } else {
+        git
+    };
+    let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
+    let head = head.trim();
+    Some(match head.strip_prefix("ref: ") {
+        Some(r) => r.rsplit('/').next().unwrap_or(r).to_string(),
+        None => head.chars().take(7).collect(),
+    })
+}
+
+/// The permission mode last seen on the agent, for the meter line.
+///
+/// The mode lives on the agent's gate, but the meter is also rebuilt from
+/// mid-turn `Usage` events that carry only token figures — so
+/// [`context_usage_lines`] records it here as it passes, and the figures-only
+/// path reads it back. The mode can only change between turns (`/permissions`),
+/// so the remembered value is never stale on screen.
+fn remember_permission_mode(agent: &Agent) {
+    let mode = agent
+        .permission_gate()
+        .map(|g| g.mode())
+        .unwrap_or_else(|| {
+            harness_permissions::policy::load_global()
+                .mode
+                .unwrap_or_default()
+        })
+        .label();
+    *MODE.lock().expect("permission mode poisoned") = Some(mode);
+}
+
+fn permission_mode() -> Option<&'static str> {
+    *MODE.lock().expect("permission mode poisoned")
+}
+
+static MODE: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
 
 /// Human-friendly token count: `980`, `12.3k`, `1.2M`.
 // Token counts render identically everywhere; the shared formatter lives in
@@ -380,7 +585,10 @@ pub(crate) use harness_core::fmt::human_tokens;
 
 #[cfg(test)]
 mod tests {
-    use super::{context_usage_lines_from, ends_mid_turn, retry_notice, seed_retry};
+    use super::{
+        context_usage_lines_from, ends_mid_turn, meter_lines, read_branch, retry_notice,
+        seed_retry, Meters,
+    };
     use crate::theme::Ui;
     use harness_agent::AgentError;
     use harness_llm::{ChatMessage, LlmError};
@@ -437,6 +645,159 @@ mod tests {
         assert!(later[1].contains("40.0k out"), "output: {later:?}");
         // 100k * 3e-6 + 40k * 15e-6 = 0.30 + 0.60 = 0.90
         assert!(later[1].contains("$0.90"), "cost: {later:?}");
+    }
+
+    fn meters<'a>(used: usize, model: &'a str) -> Meters<'a> {
+        Meters {
+            model,
+            used,
+            window: 200_000,
+            prompt_tokens: 40_000,
+            completion_tokens: 10_000,
+            branch: Some("wagon-trail".to_string()),
+            mode: Some("cautious"),
+        }
+    }
+
+    #[test]
+    fn the_meter_reports_branch_and_permission_mode() {
+        let ui = plain_ui();
+        let lines = meter_lines(&ui, &meters(50_000, "meter-facts-model"), None);
+        // Where you are and how much rope the agent has, on the same glance as
+        // how full the context is.
+        assert!(lines[0].contains("⎇ wagon-trail"), "branch: {lines:?}");
+        assert!(lines[0].contains("cautious"), "mode: {lines:?}");
+        assert!(lines[0].contains("(25%)"), "fill: {lines:?}");
+
+        // Neither is invented when there's nothing to report.
+        let bare = Meters {
+            branch: None,
+            mode: None,
+            ..meters(50_000, "meter-facts-model")
+        };
+        let lines = meter_lines(&ui, &bare, None);
+        assert!(!lines[0].contains("⎇"), "phantom branch: {lines:?}");
+        assert!(!lines[0].contains("cautious"), "phantom mode: {lines:?}");
+    }
+
+    #[test]
+    fn the_context_percentage_is_colored_by_how_full_it_is() {
+        let ui = Ui::with(true, std::sync::Arc::new(harness_theme::Theme::default()));
+        // The percentage carries its own color; the same three thresholds a
+        // reader learns once — comfortable, filling up, about to compact.
+        let color_of = |used: usize| -> String {
+            let line = meter_lines(&ui, &meters(used, "meter-color-model"), None).remove(0);
+            let at = line.find("(").expect("a percentage");
+            let start = line[..at].rfind("\x1b[").expect("a color before it");
+            line[start..at].to_string()
+        };
+        let normal = color_of(40_000); // 20%
+        let warn = color_of(140_000); // 70%
+        let danger = color_of(190_000); // 95%
+        assert_ne!(normal, warn, "a filling context must change color");
+        assert_ne!(warn, danger, "a nearly-full context must change again");
+        // …and the danger color is the palette's own alarm color.
+        assert!(
+            danger.contains(ui.red("x").trim_end_matches("x\x1b[0m")),
+            "danger must be the red slot: {danger}"
+        );
+    }
+
+    #[test]
+    fn a_narrow_terminal_drops_the_price_before_anything_else() {
+        use harness_local::source::ModelPricing;
+        crate::pricing::seed_for_test(
+            "meter-width-model",
+            Some(ModelPricing {
+                input_cost_per_token: 0.000_003,
+                output_cost_per_token: 0.000_015,
+            }),
+        );
+        let ui = plain_ui();
+        let m = meters(50_000, "meter-width-model");
+        let width = |lines: &[String]| {
+            lines
+                .iter()
+                .map(|l| crate::width::str_width(l))
+                .max()
+                .unwrap()
+        };
+
+        // Wide enough for everything.
+        let full = meter_lines(&ui, &m, Some(200));
+        assert!(full[0].contains("$3/M in"), "rate: {full:?}");
+        assert!(full[1].contains("$0.27"), "cost: {full:?}");
+
+        // Squeezed: both lines stay inside the width, and what gives way first
+        // is the price — the rate off line 1, the running cost off line 2.
+        let tight = meter_lines(&ui, &m, Some(60));
+        assert!(width(&tight) <= 60, "over width: {tight:?}");
+        assert!(
+            !tight[0].contains("$3/M in"),
+            "rate must go first: {tight:?}"
+        );
+        assert!(
+            tight[0].contains("meter-width-model"),
+            "the model outlives the price: {tight:?}"
+        );
+        let tighter = meter_lines(&ui, &m, Some(45));
+        assert!(width(&tighter) <= 45, "over width: {tighter:?}");
+        assert!(
+            !tighter[1].contains("$0.27"),
+            "price must go first: {tighter:?}"
+        );
+        // The context fill itself survives every squeeze.
+        assert!(tighter[0].contains("🧭 context"), "fill lost: {tighter:?}");
+        assert!(
+            tighter[1].contains("tokens used"),
+            "totals lost: {tighter:?}"
+        );
+
+        // Brutally narrow: only the un-droppable core is left.
+        let squeezed = meter_lines(&ui, &m, Some(20));
+        assert!(squeezed[0].contains("(25%)"), "fill lost: {squeezed:?}");
+        assert!(
+            !squeezed[0].contains("meter-width-model"),
+            "model should give way: {squeezed:?}"
+        );
+    }
+
+    #[test]
+    fn read_branch_reads_head_without_shelling_out_to_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = dir.path().join(".git");
+        std::fs::create_dir_all(&git).unwrap();
+
+        // The ordinary case: HEAD points at a branch ref.
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/feature/wagon\n").unwrap();
+        assert_eq!(read_branch(dir.path()).as_deref(), Some("wagon"));
+
+        // From a subdirectory, the walk up still finds the repo.
+        let deep = dir.path().join("crates/harness-cli");
+        std::fs::create_dir_all(&deep).unwrap();
+        assert_eq!(read_branch(&deep).as_deref(), Some("wagon"));
+
+        // A detached HEAD (mid-rebase, a checked-out tag) labels itself with
+        // the short sha rather than lying about a branch.
+        std::fs::write(
+            git.join("HEAD"),
+            "9f1c0de6b3a2f4c5d6e7f8091a2b3c4d5e6f7081\n",
+        )
+        .unwrap();
+        assert_eq!(read_branch(dir.path()).as_deref(), Some("9f1c0de"));
+
+        // A worktree/submodule `.git` file points at the real git dir.
+        let wt = tempfile::tempdir().unwrap();
+        std::fs::write(
+            wt.path().join(".git"),
+            format!("gitdir: {}\n", git.display()),
+        )
+        .unwrap();
+        assert_eq!(read_branch(wt.path()).as_deref(), Some("9f1c0de"));
+
+        // Not a repo at all: nothing to show, and no panic.
+        let bare = tempfile::tempdir().unwrap();
+        assert_eq!(read_branch(bare.path()), None);
     }
 
     #[test]

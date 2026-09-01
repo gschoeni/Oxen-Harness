@@ -1,6 +1,59 @@
 //! The composer's edit buffer and recallable input history — the pure,
 //! terminal-free core of the live input box, so the editing rules can be
 //! unit-tested in isolation.
+//!
+//! It also owns the **paste registry**: a bulky paste (a stack trace, a whole
+//! file) is staged here and shown as a one-line `[Paste #1, +240 lines]` chip
+//! instead of burying the composer, then expanded back to the real text at
+//! submit ([`stage_paste`] / [`expand_pastes`]). Same shape as the media chips
+//! in [`crate::media`], but the text never leaves the process — there is no
+//! file to attach, so it round-trips through this registry instead.
+
+use std::sync::Mutex;
+
+/// A paste bulky enough to collapse into a chip: more lines than this…
+const PASTE_MAX_LINES: usize = 10;
+/// …or more characters than this.
+const PASTE_MAX_CHARS: usize = 1000;
+
+/// Bulky pastes staged this session, newest last, looked up by chip label.
+static PASTES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// Whether a paste is too big to sit in the composer as raw text.
+pub(super) fn is_bulky(text: &str) -> bool {
+    text.chars().count() > PASTE_MAX_CHARS || text.lines().count() > PASTE_MAX_LINES
+}
+
+/// Stage `text` behind a fresh chip label and return the label — either
+/// `[Paste #1, +240 lines]` for a multi-line paste or `[Paste #1, 4021 chars]`
+/// for one long line. The size rides in the label so the chip says *what* was
+/// pasted without the user having to expand it.
+pub(super) fn stage_paste(text: &str) -> String {
+    let mut staged = PASTES.lock().expect("paste registry poisoned");
+    let n = staged.len() + 1;
+    let lines = text.lines().count();
+    let label = if lines > 1 {
+        format!("[Paste #{n}, +{lines} lines]")
+    } else {
+        format!("[Paste #{n}, {} chars]", text.chars().count())
+    };
+    staged.push((label.clone(), text.to_string()));
+    label
+}
+
+/// Expand every staged paste chip in `text` back to the text it stands for.
+/// Chips that were never handed out (the user typed those words) are left
+/// alone, and expansion is idempotent for text holding none.
+pub(super) fn expand_pastes(text: &str) -> String {
+    let staged = PASTES.lock().expect("paste registry poisoned");
+    let mut out = text.to_string();
+    for (label, body) in staged.iter() {
+        if out.contains(label.as_str()) {
+            out = out.replace(label.as_str(), body);
+        }
+    }
+    out
+}
 
 /// The composer's edit buffer: text (which may contain `\n` for multi-line
 /// input) and a caret position. Pure and terminal-free so the editing rules can
@@ -318,6 +371,39 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bulky_pastes_chip_and_round_trip_at_submit() {
+        // Short pastes stay raw — chipping them would hide what you pasted.
+        assert!(!is_bulky("a short line"));
+        assert!(!is_bulky(&"line\n".repeat(9)));
+        // Too many lines, or one very long line, collapses.
+        let many = "line\n".repeat(40);
+        assert!(is_bulky(&many));
+        let long = "x".repeat(1500);
+        assert!(is_bulky(&long));
+
+        // The chip says how big the paste was, and expands back verbatim.
+        let label = stage_paste(&many);
+        assert!(label.starts_with("[Paste #"), "{label}");
+        assert!(label.contains("+40 lines"), "{label}");
+        assert_eq!(
+            expand_pastes(&format!("fix this:\n{label}")),
+            format!("fix this:\n{many}")
+        );
+
+        // A single long line is measured in characters instead.
+        let long_label = stage_paste(&long);
+        assert!(long_label.contains("1500 chars"), "{long_label}");
+        assert_eq!(expand_pastes(&long_label), long);
+
+        // Text with no chips (or an unknown one) passes through untouched.
+        assert_eq!(expand_pastes("no chips here"), "no chips here");
+        assert_eq!(
+            expand_pastes("[Paste #99999, +2 lines]"),
+            "[Paste #99999, +2 lines]"
+        );
+    }
 
     fn typed(text: &str) -> Composer {
         let mut c = Composer::new();

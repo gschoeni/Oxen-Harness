@@ -30,6 +30,10 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 pub(super) struct LiveTerminal {
     pub(super) cols: u16,
     pub(super) rows: u16,
+    /// Whether the terminal takes decorations (title/bell) — false when output
+    /// isn't a TTY, or under `NO_COLOR` / `TERM=dumb`. Teardown restores the
+    /// bare workspace title only when we were allowed to set one.
+    decorates: bool,
     /// Whether we pushed keyboard-enhancement flags (so teardown pops them).
     kbd_enhanced: bool,
     /// Set by [`LiveTerminal::restore`] so Drop doesn't tear down twice.
@@ -37,7 +41,7 @@ pub(super) struct LiveTerminal {
 }
 
 impl LiveTerminal {
-    pub(super) fn new() -> Result<Self> {
+    pub(super) fn new(decorates: bool) -> Result<Self> {
         terminal::enable_raw_mode()?;
         let (cols, rows) = terminal::size().unwrap_or((80, 24));
         // Ask the terminal to disambiguate modified keys (the kitty keyboard
@@ -61,6 +65,7 @@ impl LiveTerminal {
         Ok(Self {
             cols,
             rows,
+            decorates,
             kbd_enhanced,
             restored: false,
         })
@@ -80,6 +85,11 @@ impl LiveTerminal {
         }
         let mut out = io::stdout();
         let _ = write!(out, "{}", teardown_sequence(region_bottom, self.rows));
+        // Leave the tab named after the workspace, with none of our status
+        // marks — the session no longer owns the screen.
+        if self.decorates {
+            let _ = write!(out, "{}", title_sequence(&workspace_name()));
+        }
         let _ = out.flush();
         let _ = terminal::disable_raw_mode();
     }
@@ -102,6 +112,9 @@ impl Drop for LiveTerminal {
             "\x1b[?2004l\x1b[r\x1b[{};1H\x1b[2K\x1b[?25h\r\n",
             self.rows
         );
+        if self.decorates {
+            let _ = write!(out, "{}", title_sequence(&workspace_name()));
+        }
         let _ = out.flush();
         let _ = terminal::disable_raw_mode();
     }
@@ -114,6 +127,49 @@ impl Drop for LiveTerminal {
 /// park the shown cursor just below the conversation.
 pub(super) fn teardown_sequence(region_bottom: u16, rows: u16) -> String {
     format!("\x1b[?2004l{}", suspend_sequence(region_bottom, rows))
+}
+
+/// The terminal bell. Rung when a turn ends or a prompt starts waiting — the
+/// two moments a user who looked away needs to come back for.
+pub(super) const BELL: &str = "\x07";
+
+/// What the terminal title should say about the session right now.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum TitleState {
+    /// Waiting for you to type.
+    Idle,
+    /// A turn is running; the char is the current braille spinner frame.
+    Working(char),
+    /// An approval or `ask_user_question` prompt is waiting on you.
+    Waiting,
+}
+
+/// Wrap `text` in an OSC 0 sequence (sets both the window title and the icon
+/// name — the widely-supported spelling).
+pub(super) fn title_sequence(text: &str) -> String {
+    format!("\x1b]0;{text}\x07")
+}
+
+/// The window title for a session state: `🐂 > repo` idle, `🐂 ⠋ repo` while a
+/// turn runs, `🐂 ! repo` while something waits on the user. The ox leads so a
+/// row of tabs is scannable, and the workspace name comes last (where a
+/// truncated tab still shows the most-specific part).
+pub(super) fn window_title(state: TitleState, workspace: &str) -> String {
+    match state {
+        TitleState::Idle => format!("🐂 > {workspace}"),
+        TitleState::Working(frame) => format!("🐂 {frame} {workspace}"),
+        TitleState::Waiting => format!("🐂 ! {workspace}"),
+    }
+}
+
+/// The workspace's display name for the title: the current directory's
+/// basename, or `oxen-harness` when there isn't one (a deleted cwd, `/`).
+pub(super) fn workspace_name() -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "oxen-harness".to_string())
 }
 
 /// The last row usable for scrolling output (the composer sits below it).
@@ -260,6 +316,17 @@ mod tests {
             seq.contains("\x1b[23;1H"),
             "must park at the region bottom: {seq:?}"
         );
+    }
+
+    #[test]
+    fn window_titles_mark_the_session_state() {
+        assert_eq!(window_title(TitleState::Idle, "repo"), "🐂 > repo");
+        assert_eq!(window_title(TitleState::Working('⠙'), "repo"), "🐂 ⠙ repo");
+        assert_eq!(window_title(TitleState::Waiting, "repo"), "🐂 ! repo");
+        // OSC 0 with a BEL terminator — the portable spelling.
+        assert_eq!(title_sequence("🐂 > repo"), "\x1b]0;🐂 > repo\x07");
+        // The workspace name is a basename, never a whole path.
+        assert!(!workspace_name().contains(std::path::MAIN_SEPARATOR));
     }
 
     #[test]

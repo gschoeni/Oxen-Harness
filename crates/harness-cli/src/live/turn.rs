@@ -24,10 +24,10 @@ use crate::theme::Ui;
 
 use crate::interrupt::{arm_notice, interrupted_lines, CtrlC, ExitGuard};
 
-use super::composer::{Composer, History};
+use super::composer::{expand_pastes, Composer, History};
 use super::dispatch::{apply_action, Residual};
 use super::keys::KeyAction;
-use super::terminal::{spawn_input, LiveTerminal};
+use super::terminal::{spawn_input, LiveTerminal, TitleState};
 use super::text::composer_prompt;
 use super::Live;
 
@@ -46,7 +46,7 @@ pub(crate) async fn run_prompt(
     ui: &Ui,
     queue: &mut MessageQueue,
 ) -> Result<(bool, String)> {
-    let term = LiveTerminal::new()?;
+    let term = LiveTerminal::new(ui.decorates())?;
     let (rows, cols) = (term.rows, term.cols);
     // While the composer owns the terminal, a `spawn_agents` fleet must paint
     // through its pinned area (not a painter thread of its own). The guard
@@ -190,7 +190,7 @@ pub(crate) async fn read_idle(
     status: Vec<String>,
     compression: Option<String>,
 ) -> Result<Idle> {
-    let term = LiveTerminal::new()?;
+    let term = LiveTerminal::new(ui.decorates())?;
     let (rows, cols) = (term.rows, term.cols);
     let stop = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
@@ -206,6 +206,7 @@ pub(crate) async fn read_idle(
         s.status_lines = status;
         s.compression_line = compression;
         s.sync_queue(queue.items());
+        s.set_title(TitleState::Idle);
         s.render();
     }
 
@@ -251,6 +252,9 @@ pub(crate) async fn read_idle(
                         }
                     }
                     Some(Residual::Exit) => break Idle::Exit,
+                    // Esc at idle has no turn to cancel — and must never touch
+                    // the draft, so it is deliberately inert.
+                    Some(Residual::CancelTurn) => {}
                     Some(Residual::Interrupt) => {
                         // Staged Ctrl-C: clear the draft first, then confirm,
                         // then exit — never a surprise quit mid-thought.
@@ -303,7 +307,12 @@ pub(crate) async fn read_idle(
         let (_, styled) = composer_prompt(ui, queue.len());
         println!("{styled}{}", ui.cream(text));
     }
-    Ok(result)
+    // The echo above shows what the composer showed (paste chips and all); the
+    // caller gets the real text those chips stand for.
+    Ok(match result {
+        Idle::Submit(text) => Idle::Submit(expand_pastes(&text)),
+        Idle::Exit => Idle::Exit,
+    })
 }
 
 /// Extract a short "target" from a tool's JSON `arguments` to show beside the
@@ -339,7 +348,7 @@ fn recover_interjections(
 /// Whether a mid-turn submission can be sent to the model as chat (steered
 /// into a running turn, or queued): only plain prompts — a recognized
 /// `/command` would reach the LLM as literal chat text instead of running.
-fn stackable(text: &str) -> bool {
+pub(super) fn stackable(text: &str) -> bool {
     matches!(
         crate::repl::parse_command(text),
         crate::repl::Command::Prompt(_)
@@ -391,7 +400,12 @@ async fn run_one_turn(
         crate::turn::TurnRequest::Continue => (String::new(), Vec::new()),
     };
 
-    state.borrow_mut().begin_turn(queue.items());
+    {
+        let mut s = state.borrow_mut();
+        s.begin_turn(queue.items());
+        // Start the meter line's elapsed clock and flip the title to working.
+        s.begin_elapsed();
+    }
 
     // The steering channel into the running turn: messages pushed here are
     // drained at the loop's safe points, so the model sees them mid-work.
@@ -419,7 +433,14 @@ async fn run_one_turn(
     loop {
         tokio::select! {
             result = &mut turn => {
-                state.borrow_mut().finish();
+                let mut s = state.borrow_mut();
+                s.finish();
+                s.end_elapsed();
+                // The turn is done — ring once for whoever looked away. (The
+                // cancelled paths below deliberately stay silent: you don't
+                // need calling back to a screen you just interrupted.)
+                s.bell();
+                drop(s);
                 recover_interjections(&interject, queue);
                 return TurnOutcome::Done(result);
             }
@@ -438,14 +459,17 @@ async fn run_one_turn(
                                 } else if stackable(trimmed) {
                                     // Steer the running turn: the message is
                                     // delivered into it at the next safe point
-                                    // (not queued for after). Stack follow-up
-                                    // prompts for later with /queue instead.
-                                    interject.push(trimmed);
+                                    // (not queued for after). Ctrl+Enter /
+                                    // Ctrl+Q stack a follow-up for later.
+                                    interject.push(expand_pastes(trimmed));
                                     let ui = s.ui.clone();
                                     s.print_line(&format!(
                                         "  {} {}",
                                         ui.brown("🗣 steering:"),
-                                        ui.cream(&truncate(trimmed, 80)),
+                                        ui.cream(&truncate(
+                                            trimmed.split('\n').next().unwrap_or(trimmed),
+                                            80
+                                        )),
                                     ));
                                 } else {
                                     // A /command can't stack — the queue drains
@@ -466,16 +490,22 @@ async fn run_one_turn(
                                 s.sync_queue(queue.items());
                                 s.request_paint();
                             }
-                            Some(Residual::Interrupt) => {
-                                // Mid-turn, Ctrl-C cancels the running turn —
-                                // that *is* its clear-first stage; the idle
-                                // prompt then owns the staged exit.
-                                state.borrow_mut().finish();
+                            // Ctrl-C and Esc both cancel the running turn —
+                            // Ctrl-C because cancelling *is* its clear-first
+                            // stage (the idle prompt then owns the staged
+                            // exit), Esc because that is all it ever does.
+                            Some(Residual::Interrupt) | Some(Residual::CancelTurn) => {
+                                let mut s = state.borrow_mut();
+                                s.finish();
+                                s.end_elapsed();
+                                drop(s);
                                 recover_interjections(&interject, queue);
                                 return TurnOutcome::Interrupted;
                             }
                             Some(Residual::Exit) => {
-                                state.borrow_mut().finish();
+                                let mut s = state.borrow_mut();
+                                s.finish();
+                                s.end_elapsed();
                                 return TurnOutcome::Exit;
                             }
                         }
@@ -496,6 +526,10 @@ async fn run_one_turn(
             _ = ticker.tick() => {
                 let mut s = state.borrow_mut();
                 s.tick_spinner();
+                // The meter line's spinner + whole-second timer (and the
+                // matching terminal title) ride this same tick.
+                s.refresh_title();
+                s.request_paint();
                 // A running fleet animates in the pinned area on the same tick.
                 if s.tick_fleet() {
                     s.request_paint();

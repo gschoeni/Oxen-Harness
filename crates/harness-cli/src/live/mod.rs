@@ -63,6 +63,7 @@ mod vt_tests;
 
 pub(crate) use turn::{read_idle, run_prompt, tool_target, Idle};
 
+use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -80,7 +81,7 @@ use layout::Focus;
 use lease::ScreenSuspension;
 use region::RegionWriter;
 use sink::Sink;
-use terminal::{region_bottom, CrlfWriter};
+use terminal::{region_bottom, title_sequence, CrlfWriter, TitleState, BELL};
 
 /// Blank rows kept between the agent's scrolling output and the pinned input
 /// area, so the prompt always has at least one full line of breathing room.
@@ -103,6 +104,19 @@ const PREVIEW_CAP: usize = 256;
 /// arrive back-to-back (they're already buffered), so anything past this gap
 /// is the user typing, not a drop mid-delivery.
 const MEDIA_SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The braille spinner shown on the meter line (and in the terminal title)
+/// while a turn runs — one frame per [`SPIN_MS`].
+const BRAILLE: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// How long each [`BRAILLE`] frame is held.
+const SPIN_MS: u128 = 110;
+
+/// The braille frame for an elapsed duration — a pure function of the clock, so
+/// the spinner animates without any per-tick state to keep in sync.
+fn braille_frame(elapsed: std::time::Duration) -> char {
+    BRAILLE[(elapsed.as_millis() / SPIN_MS) as usize % BRAILLE.len()]
+}
 
 /// All mutable state shared between the turn callback and the event loop: the
 /// streamed-output renderer, the spinner, the composer, and the navigable queue
@@ -195,6 +209,13 @@ struct Live {
     /// (e.g. `photo.png` inside `photo.png\ copy.png`) and attach the wrong
     /// file.
     media_check: Option<std::time::Instant>,
+    /// When the running turn started, or `None` at idle. Drives the meter
+    /// line's braille spinner + whole-second timer (see
+    /// [`Live::turn_indicator`]) and the `🐂 ⠋ …` terminal title.
+    turn_started: Option<std::time::Instant>,
+    /// The last terminal title written, so the ~110ms ticker only emits an OSC
+    /// sequence when the title actually changes (once a second, not nine times).
+    title: Option<String>,
 }
 
 impl Live {
@@ -230,7 +251,63 @@ impl Live {
             fleet: FleetHub::global(),
             fleet_frame: 0,
             media_check: None,
+            turn_started: None,
+            title: None,
         }
+    }
+
+    // --- terminal title + bell ---------------------------------------------
+
+    /// Write the terminal title (OSC 0) for `state`, unless the terminal can't
+    /// take it (not a TTY, `NO_COLOR`, `TERM=dumb`) or it already says this.
+    /// The title is how a backgrounded session announces itself in the tab
+    /// bar: `🐂 > repo` idle, `🐂 ⠋ repo` working, `🐂 ! repo` waiting on you.
+    pub(super) fn set_title(&mut self, state: TitleState) {
+        if !self.ui.decorates() {
+            return;
+        }
+        let text = terminal::window_title(state, &terminal::workspace_name());
+        if self.title.as_deref() == Some(text.as_str()) {
+            return;
+        }
+        let _ = write!(self.out, "{}", title_sequence(&text));
+        let _ = self.out.flush();
+        self.title = Some(text);
+    }
+
+    /// Re-title for the turn's current phase: working (with the live spinner
+    /// glyph) while a turn runs, idle otherwise. Cheap to call on the ticker.
+    pub(super) fn refresh_title(&mut self) {
+        match self.turn_started {
+            Some(started) => self.set_title(TitleState::Working(braille_frame(started.elapsed()))),
+            None => self.set_title(TitleState::Idle),
+        }
+    }
+
+    /// Ring the terminal bell — for a turn that just finished, or a prompt that
+    /// just started waiting on the user. Never for an interrupted turn: the
+    /// user is already looking at the screen they just interrupted.
+    pub(super) fn bell(&mut self) {
+        if !self.ui.decorates() {
+            return;
+        }
+        let _ = write!(self.out, "{BELL}");
+        let _ = self.out.flush();
+    }
+
+    // --- turn clock ---------------------------------------------------------
+
+    /// Start the meter line's elapsed clock (and the working title).
+    pub(super) fn begin_elapsed(&mut self) {
+        self.turn_started = Some(std::time::Instant::now());
+        self.refresh_title();
+    }
+
+    /// Stop the clock — the meter line drops its spinner/timer and the title
+    /// goes back to idle.
+    pub(super) fn end_elapsed(&mut self) {
+        self.turn_started = None;
+        self.refresh_title();
     }
 
     /// The fleet block for the pinned area (empty when no fleet is running).
@@ -351,7 +428,19 @@ impl Live {
         ) {
             KeyIntent::Ignore => KeyAction::None,
             KeyIntent::Interrupt => KeyAction::Interrupt,
+            KeyIntent::CancelTurn => KeyAction::CancelTurn,
             KeyIntent::Exit => KeyAction::Exit,
+            KeyIntent::QueueFollowUp => {
+                self.accept_completion_on_submit();
+                let text = self.composer.take();
+                self.history.push(&text);
+                self.completion = None;
+                KeyAction::QueueFollowUp(text)
+            }
+            // Only from an empty composer: pulling an item back while a draft
+            // is open would silently discard what's typed.
+            KeyIntent::PullQueued if self.composer.is_empty() => KeyAction::PullQueued,
+            KeyIntent::PullQueued => KeyAction::None,
             KeyIntent::Compose(op) => {
                 let inserted = match op {
                     keys::BufOp::Insert(c) => Some(c),
@@ -500,23 +589,53 @@ impl Live {
         }
     }
 
-    /// Insert pasted / drag-dropped text into whichever single-line editor has
-    /// focus (the inline item editor while editing, otherwise the composer),
-    /// flattening newlines to spaces. Bracketed paste delivers a drop as one
-    /// block, so a path with escaped spaces lands intact. A pasted media path
-    /// (image/PDF/video) stages the file and shows up as its `[Image #N]` /
-    /// `[PDF #N]` / `[Video #N]` chip instead.
+    /// Insert pasted / drag-dropped text at the caret. Bracketed paste delivers
+    /// a drop as one block, so a path with escaped spaces lands intact.
+    ///
+    /// Three shapes, in order: a pasted media path (image/PDF/video) stages the
+    /// file and shows up as its `[Image #N]` / `[PDF #N]` / `[Video #N]` chip;
+    /// a **bulky** paste (a stack trace, a whole file) collapses to a
+    /// `[Paste #N, +240 lines]` chip that expands back at submit; anything else
+    /// goes in verbatim — **newlines included**, since the composer is
+    /// multi-line and a pasted snippet should keep its shape.
+    ///
+    /// The one exception is the inline queue-item editor, which is a single
+    /// line: pasting there still flattens newlines to spaces.
     fn insert_paste(&mut self, text: &str) {
         let rewritten = crate::media::rewrite_paste(text);
         let text = rewritten.as_deref().unwrap_or(text);
-        let target = self.edit.as_mut().unwrap_or(&mut self.composer);
-        for ch in text.chars() {
-            let ch = if ch == '\n' || ch == '\r' { ' ' } else { ch };
-            target.insert_char(ch);
+        if let Some(edit) = self.edit.as_mut() {
+            for ch in text.chars() {
+                edit.insert_char(if ch == '\n' || ch == '\r' { ' ' } else { ch });
+            }
+            return;
         }
-        if self.edit.is_none() {
-            self.refresh_completion();
+        // A terminal appends a newline when a file is dropped; that one is a
+        // delimiter, not a line — keep it as the space it always was, so the
+        // next word doesn't run into the path. Newlines *inside* the paste are
+        // the paste's own shape and stay.
+        let dropped = text.ends_with('\n');
+        let body = text.trim_end_matches(['\n', '\r']);
+        let staged;
+        let body = if composer::is_bulky(body) {
+            staged = composer::stage_paste(body);
+            staged.as_str()
+        } else {
+            body
+        };
+        for ch in body.chars() {
+            // A lone `\r` (an old-Mac line ending, or the CR of a CRLF pair
+            // whose `\n` already made the line) would move the caret, not add
+            // a line.
+            if ch == '\r' {
+                continue;
+            }
+            self.composer.insert_char(ch);
         }
+        if dropped {
+            self.composer.insert_char(' ');
+        }
+        self.refresh_completion();
     }
 
     /// Ctrl+V: read the system clipboard ourselves. A copied image (e.g. a
@@ -568,6 +687,10 @@ impl Live {
             return;
         }
         self.finish(); // stop the spinner, flush any open Markdown
+                       // The turn has stopped to ask something: say so in the title and ring
+                       // once, so an unattended session gets noticed instead of stalling.
+        self.set_title(TitleState::Waiting);
+        self.bell();
         self.region.set_muted(true);
         self.suspension = Some(ScreenSuspension::begin(
             self.out.clone(),
@@ -587,6 +710,7 @@ impl Live {
         };
         lease.reclaim();
         self.region.set_muted(false);
+        self.refresh_title();
         // The reclaim carved a composer-only region; record it so the forced
         // repaint below re-carves to fit the queue list.
         self.region_bottom = region_bottom(self.rows);
@@ -725,14 +849,91 @@ mod tests {
         assert!(l.composer.is_empty());
     }
 
+    // --- cancel / queue chords ---------------------------------------------
+
+    #[test]
+    fn escape_cancels_the_turn_and_leaves_the_draft_alone() {
+        let mut l = live(80, 24);
+        for ch in "half a thought".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        assert!(matches!(
+            l.handle_key(key(KeyCode::Esc), 0),
+            KeyAction::CancelTurn
+        ));
+        // The whole point: Esc costs you nothing you typed.
+        assert_eq!(l.composer.text(), "half a thought");
+    }
+
+    #[test]
+    fn ctrl_enter_and_ctrl_q_hand_the_line_to_the_queue() {
+        for chord in [ctrl(KeyCode::Enter), ctrl(KeyCode::Char('q'))] {
+            let mut l = live(80, 24);
+            for ch in "run the tests".chars() {
+                l.handle_key(key(KeyCode::Char(ch)), 0);
+            }
+            match l.handle_key(chord, 0) {
+                KeyAction::QueueFollowUp(text) => assert_eq!(text, "run the tests"),
+                other => panic!("expected a queued follow-up, got {other:?}"),
+            }
+            // The composer is handed over empty, like a submit.
+            assert!(l.composer.is_empty());
+            // …and the line is recallable with Up, like any other submission.
+            assert_eq!(l.history.prev(""), Some("run the tests".to_string()));
+        }
+    }
+
+    #[test]
+    fn alt_up_pulls_a_queued_item_back_only_when_nothing_is_typed() {
+        let mut l = live(80, 24);
+        assert!(matches!(
+            l.handle_key(alt(KeyCode::Up), 1),
+            KeyAction::PullQueued
+        ));
+        // With a draft open, pulling would silently overwrite it — so it doesn't.
+        l.handle_key(key(KeyCode::Char('x')), 1);
+        assert!(matches!(l.handle_key(alt(KeyCode::Up), 1), KeyAction::None));
+        assert_eq!(l.composer.text(), "x");
+    }
+
     // --- paste --------------------------------------------------------------
 
     #[test]
-    fn paste_inserts_into_the_composer_and_flattens_newlines() {
+    fn a_dropped_paths_trailing_newline_stays_a_separator() {
         let mut l = live(80, 24);
-        // A drag-dropped path (with a trailing newline the terminal appends).
+        // A drag-dropped path (with a trailing newline the terminal appends):
+        // that newline is the drop's delimiter, not a line the user wants.
         l.insert_paste("/tmp/My\\ Shot.png\n");
         assert_eq!(l.composer.take(), "/tmp/My\\ Shot.png ");
+    }
+
+    #[test]
+    fn a_multi_line_paste_keeps_its_lines() {
+        let mut l = live(80, 24);
+        l.insert_paste("fn main() {\r\n    println!(\"hi\");\n}");
+        // The composer is multi-line: a pasted snippet keeps its shape (and a
+        // CRLF paste doesn't leave stray carriage returns behind).
+        assert_eq!(l.composer.text(), "fn main() {\n    println!(\"hi\");\n}");
+        assert_eq!(l.composer.line_count(), 3);
+    }
+
+    #[test]
+    fn a_bulky_paste_collapses_to_a_chip_that_expands_at_submit() {
+        let mut l = live(80, 24);
+        let dump = (0..40)
+            .map(|i| format!("stack frame {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        l.insert_paste(&format!("why?\n{dump}"));
+        let text = l.composer.text();
+        // One tidy line in the composer, not 41 rows of stack trace…
+        assert!(text.contains("[Paste #"), "no chip: {text}");
+        assert!(text.contains("+41 lines"), "size missing: {text}");
+        assert!(!text.contains("stack frame 7"), "raw paste leaked: {text}");
+        // …and the model still gets every line of it at submit.
+        let expanded = composer::expand_pastes(&text);
+        assert!(expanded.contains("stack frame 39"), "lost text: {expanded}");
+        assert!(expanded.starts_with("why?\n"), "lost context: {expanded}");
     }
 
     #[test]

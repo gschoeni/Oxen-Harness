@@ -124,9 +124,8 @@ impl Live {
             }
             queue_lines.push(self.queue_footer(box_w));
         }
-        let mut meter_lines: Vec<String> = Vec::new();
         let compression_lines: Vec<String> = self.compression_line.iter().cloned().collect();
-        meter_lines.extend(self.status_lines.iter().cloned());
+        let meter_lines = self.meter_lines();
         let divider = vec![self.ui.dim(&"─".repeat(self.cols as usize)); DIVIDER_ROWS];
 
         // Every section above is bounded (the queue plan caps against `rows`,
@@ -198,6 +197,29 @@ impl Live {
         let _ = self.out.flush();
     }
 
+    /// The pinned meter lines. While a turn runs the first one leads with a
+    /// braille spinner and a whole-second elapsed timer (`⠋ 12s`), so the time
+    /// a turn has been going is readable without watching the spinner scroll
+    /// past. [`crate::turn::TURN_INDICATOR_CELLS`] is reserved for it when the
+    /// meters are built, so the prefix can't push the line past the edge.
+    fn meter_lines(&self) -> Vec<String> {
+        let mut lines: Vec<String> = self.status_lines.to_vec();
+        let (Some(started), Some(first)) = (self.turn_started, lines.first()) else {
+            return lines;
+        };
+        let elapsed = started.elapsed();
+        let indicator = format!(
+            "{} {}",
+            self.ui.accent(&super::braille_frame(elapsed).to_string()),
+            self.ui.dim(&format!("{}s", elapsed.as_secs())),
+        );
+        lines[0] = format!(
+            "  {indicator} {}",
+            first.strip_prefix("  ").unwrap_or(first)
+        );
+        lines
+    }
+
     /// The inner content width of the queue table — the columns available
     /// *between* the `│ ` and ` │` of a framed row. Two-space left margin plus
     /// the four border/padding columns are reserved out of the terminal width.
@@ -231,7 +253,7 @@ impl Live {
         let hint = match self.mode() {
             Mode::Edit => "enter save · esc cancel",
             Mode::Browse => "enter edit · d delete",
-            Mode::Compose => "↑ edit queued",
+            Mode::Compose => "↑ edit queued · alt+↑ un-queue · ctrl+q queue",
         };
         if str_width(hint) < box_w {
             let fill = box_w.saturating_sub(1 + str_width(hint));

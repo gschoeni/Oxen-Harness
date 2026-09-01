@@ -13,6 +13,7 @@ use super::composer::Composer;
 /// touches the shared [`crate::queue::MessageQueue`] is deferred to the loop
 /// (which owns it); everything self-contained is handled inside `Live` and
 /// reported as `Redraw`.
+#[derive(Debug)]
 pub(super) enum KeyAction {
     /// Nothing actionable.
     None,
@@ -30,6 +31,15 @@ pub(super) enum KeyAction {
     DeleteFocused,
     /// Ctrl-C — interrupt the turn.
     Interrupt,
+    /// Esc — cancel a running turn without touching the draft or the exit
+    /// guard (see [`KeyIntent::CancelTurn`]).
+    CancelTurn,
+    /// Ctrl+Enter / Ctrl+Q in the composer: stack this line as a follow-up
+    /// that runs *after* the turn, instead of steering the running one.
+    QueueFollowUp(String),
+    /// Alt+Up on an empty composer: pull the newest queued item back out of
+    /// the queue and into the composer for another edit.
+    PullQueued,
     /// Ctrl-D on an empty composer — exit.
     Exit,
 }
@@ -77,6 +87,18 @@ pub(super) enum BufOp {
 pub(super) enum KeyIntent {
     Ignore,
     Interrupt,
+    /// Esc: cancel the *turn*, never the draft. Distinct from
+    /// [`KeyIntent::Interrupt`] because Ctrl-C also clears the composer and
+    /// arms the staged exit — Escape must do neither, so a mis-hit Esc can
+    /// never cost you a half-typed message or drop you out of the session.
+    CancelTurn,
+    /// Ctrl+Enter / Ctrl+Q: queue the composer's text as a follow-up (it runs
+    /// after the current turn) instead of steering the running one. Ctrl+Enter
+    /// only reaches us on terminals speaking the kitty keyboard protocol, so
+    /// Ctrl+Q is the portable spelling of the same thing.
+    QueueFollowUp,
+    /// Alt+Up: pull the most recent queued item back into the composer.
+    PullQueued,
     Exit,
     Compose(BufOp),
     /// Insert a hard line break in the composer (Alt/Shift+Enter, Ctrl+J).
@@ -118,6 +140,11 @@ pub(super) fn classify_key(
     if ctrl && code == KeyCode::Char('d') && mode == Mode::Compose && composer_empty {
         return KeyIntent::Exit;
     }
+    // Ctrl+Q is the portable "queue this as a follow-up" chord (Ctrl+Enter
+    // needs the kitty protocol); it works from the composer only.
+    if ctrl && code == KeyCode::Char('q') && mode == Mode::Compose {
+        return KeyIntent::QueueFollowUp;
+    }
     // Ctrl+V pastes from the system clipboard into whichever editor is open
     // (the terminal's own paste arrives as `Event::Paste` instead).
     if ctrl && code == KeyCode::Char('v') && mode != Mode::Browse {
@@ -134,8 +161,16 @@ pub(super) fn classify_key(
                 KeyCode::Enter if alt || mods.contains(KeyModifiers::SHIFT) => {
                     return KeyIntent::ComposeNewline
                 }
+                // Ctrl+Enter stacks a follow-up for after the turn; plain
+                // Enter still sends (mid-turn: steers).
+                KeyCode::Enter if ctrl => return KeyIntent::QueueFollowUp,
                 KeyCode::Enter if !ctrl => return KeyIntent::ComposerSubmit,
                 KeyCode::Tab if !ctrl && !alt => return KeyIntent::Complete,
+                // Esc cancels the running turn — never the draft (Ctrl-C owns
+                // that), so it is inert at idle.
+                KeyCode::Esc if !ctrl && !alt => return KeyIntent::CancelTurn,
+                // Alt+Up un-queues the newest follow-up back into the composer.
+                KeyCode::Up if alt && !ctrl => return KeyIntent::PullQueued,
                 KeyCode::Up if !ctrl && !alt => return KeyIntent::ComposeUp,
                 KeyCode::Down if !ctrl && !alt => return KeyIntent::ComposeDown,
                 _ => {}
@@ -295,6 +330,72 @@ mod tests {
         assert_eq!(
             classify_key(KeyCode::Char('v'), c, Mode::Browse, false),
             KeyIntent::Ignore
+        );
+    }
+
+    #[test]
+    fn escape_cancels_the_turn_only_from_the_composer() {
+        let n = KeyModifiers::NONE;
+        // In the composer Esc is the turn's cancel — distinct from Ctrl-C, so
+        // the loops can cancel without clearing the draft or arming the exit.
+        assert_eq!(
+            classify_key(KeyCode::Esc, n, Mode::Compose, false),
+            KeyIntent::CancelTurn
+        );
+        assert_eq!(
+            classify_key(KeyCode::Esc, n, Mode::Compose, true),
+            KeyIntent::CancelTurn
+        );
+        // Inline editing keeps Esc as "discard this edit"; browsing ignores it.
+        assert_eq!(
+            classify_key(KeyCode::Esc, n, Mode::Edit, false),
+            KeyIntent::EditCancel
+        );
+        assert_eq!(
+            classify_key(KeyCode::Esc, n, Mode::Browse, false),
+            KeyIntent::Ignore
+        );
+    }
+
+    #[test]
+    fn ctrl_enter_and_ctrl_q_queue_a_follow_up() {
+        let c = KeyModifiers::CONTROL;
+        // Ctrl+Enter (kitty protocol only) and Ctrl+Q (everywhere else) are
+        // the same intent, so the chord that works is never the mystery.
+        assert_eq!(
+            classify_key(KeyCode::Enter, c, Mode::Compose, false),
+            KeyIntent::QueueFollowUp
+        );
+        assert_eq!(
+            classify_key(KeyCode::Char('q'), c, Mode::Compose, false),
+            KeyIntent::QueueFollowUp
+        );
+        // Plain Enter still submits (mid-turn: steers) — unchanged.
+        assert_eq!(
+            classify_key(KeyCode::Enter, KeyModifiers::NONE, Mode::Compose, false),
+            KeyIntent::ComposerSubmit
+        );
+        // Neither chord hijacks the inline item editor or the queue browser.
+        assert_eq!(
+            classify_key(KeyCode::Char('q'), c, Mode::Edit, false),
+            KeyIntent::Ignore
+        );
+        assert_eq!(
+            classify_key(KeyCode::Enter, c, Mode::Browse, false),
+            KeyIntent::Ignore
+        );
+    }
+
+    #[test]
+    fn alt_up_pulls_the_newest_queued_item_back() {
+        assert_eq!(
+            classify_key(KeyCode::Up, KeyModifiers::ALT, Mode::Compose, true),
+            KeyIntent::PullQueued
+        );
+        // Unmodified Up is still line-move / history / queue focus.
+        assert_eq!(
+            classify_key(KeyCode::Up, KeyModifiers::NONE, Mode::Compose, true),
+            KeyIntent::ComposeUp
         );
     }
 
