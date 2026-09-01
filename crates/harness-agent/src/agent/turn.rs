@@ -38,6 +38,9 @@ struct TurnState {
     /// A one-shot corrective appended to the *next* request only. Never
     /// persisted, so it stays out of the stored transcript and the chat.
     nudge: Option<ChatMessage>,
+    /// Why the pending nudge was armed, surfaced to the UI when it is sent
+    /// so a re-called round is never silent.
+    nudge_reason: Option<String>,
     /// Whether the "announced an action but didn't call a tool" corrective has
     /// already fired this turn.
     intent_nudged: bool,
@@ -59,6 +62,14 @@ struct TurnState {
     budget_warned: bool,
     /// Model rounds so far this turn, for the round budget.
     rounds: u32,
+}
+
+impl TurnState {
+    /// Arm a corrective for the next request, with the reason a UI shows.
+    fn set_nudge(&mut self, text: impl Into<String>, reason: impl Into<String>) {
+        self.nudge = Some(ChatMessage::user(text.into()));
+        self.nudge_reason = Some(reason.into());
+    }
 }
 
 impl Agent {
@@ -206,7 +217,10 @@ impl Agent {
                     return Ok(message);
                 }
                 if turn.rounds == budget.wrap_up_at {
-                    turn.nudge = Some(ChatMessage::user(prompt::WRAP_UP_NUDGE.to_string()));
+                    turn.set_nudge(
+                        prompt::WRAP_UP_NUDGE,
+                        "round budget nearly spent — asked to wrap up",
+                    );
                 }
             }
 
@@ -234,6 +248,9 @@ impl Agent {
             // A rule that matches this reply may arm a new one for the following
             // round without the previous reminder lingering alongside it.
             let nudge = turn.nudge.take();
+            if let Some(reason) = turn.nudge_reason.take() {
+                on_event(&AgentEvent::Nudged { reason });
+            }
             let (assembled, mut outcome, rule_hits) = self
                 .stream_reply(outbound, &tool_defs, nudge.as_ref(), &cancel, &mut on_event)
                 .await?;
@@ -355,7 +372,12 @@ impl Agent {
             .map(|hit| hit.reminder())
             .collect::<Vec<_>>()
             .join("\n");
-        turn.nudge = Some(ChatMessage::user(reminder));
+        let names = admitted
+            .iter()
+            .map(|hit| hit.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        turn.set_nudge(reminder, format!("stream rule matched: {names}"));
         admitted.iter().any(|hit| hit.interrupt)
     }
 
@@ -528,7 +550,10 @@ impl Agent {
         // "I'll go and do X" with no call to actually do it.
         if !turn.intent_nudged && prompt::looks_like_unfulfilled_intent(reply) {
             turn.intent_nudged = true;
-            turn.nudge = Some(ChatMessage::user(prompt::INTENT_NUDGE.to_string()));
+            turn.set_nudge(
+                prompt::INTENT_NUDGE,
+                "the reply announced work without doing it",
+            );
             return true;
         }
         // Ending while this turn's own plan has unfinished items is almost
@@ -536,7 +561,7 @@ impl Agent {
         // continue or tidy the checklist.
         if !turn.plan_nudged && turn.plan_open {
             turn.plan_nudged = true;
-            turn.nudge = Some(ChatMessage::user(prompt::PLAN_STALL_NUDGE.to_string()));
+            turn.set_nudge(prompt::PLAN_STALL_NUDGE, "the plan still has open items");
             return true;
         }
         // A turn that edited files or ran commands in a session with no
@@ -550,7 +575,10 @@ impl Agent {
         if turn.did_real_work && self.needs_trail() {
             if turn.trail_nudges < MAX_TRAIL_NUDGES {
                 turn.trail_nudges += 1;
-                turn.nudge = Some(ChatMessage::user(prompt::TRAIL_STALL_NUDGE.to_string()));
+                turn.set_nudge(
+                    prompt::TRAIL_STALL_NUDGE,
+                    "real work was done but no trail was charted",
+                );
                 return true;
             }
             // The model declined every chance. Accept the reply — failing the
@@ -658,7 +686,10 @@ impl Agent {
             {
                 crate::loopguard::LoopVerdict::Fine => {}
                 crate::loopguard::LoopVerdict::Nudge => {
-                    turn.nudge = Some(ChatMessage::user(prompt::LOOP_NUDGE.to_string()));
+                    turn.set_nudge(
+                        prompt::LOOP_NUDGE,
+                        "the same tool call repeated with the same result",
+                    );
                 }
                 crate::loopguard::LoopVerdict::Stop { name, repeats } => {
                     loop_stop = Some((name, repeats));

@@ -81,6 +81,11 @@ pub fn agent_event(
             prompt_tokens_used: *prompt_tokens_used,
             completion_tokens_used: *completion_tokens_used,
         },
+        AgentEvent::Nudged { reason } => ProtocolEvent::Notice {
+            session,
+            kind: "nudge".into(),
+            text: format!("nudged the model: {reason}"),
+        },
         AgentEvent::BackgroundTaskDone {
             task_id,
             command,

@@ -122,6 +122,16 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
         },
         // The context filled and was compacted to keep the session going;
         // surface a quiet notice so the trimming isn't invisible.
+        // Another round is starting because of a corrective: say why, and
+        // close the reply that was streaming so the next one starts clean.
+        AgentEvent::Nudged { reason } => Cue::Block {
+            lines: vec![format!(
+                "  {} {}",
+                ui.brown("↻"),
+                ui.dim(&format!("nudge: {reason}"))
+            )],
+            then: NextSpinner::Thinking,
+        },
         // A background command finished and its output went to the model:
         // one quiet line so the model's next move has a visible cause.
         AgentEvent::BackgroundTaskDone {

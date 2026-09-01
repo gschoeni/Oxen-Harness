@@ -50,6 +50,12 @@ pub enum AgentEvent {
         prompt_tokens_used: usize,
         completion_tokens_used: usize,
     },
+    /// The agent is re-calling the model with a one-shot corrective (a reply
+    /// that announced work without doing it, an uncharted trail, a repeated
+    /// call, a matched stream rule, a spent round budget). The corrective
+    /// itself is never shown or persisted; this says why another round is
+    /// starting.
+    Nudged { reason: String },
     /// A background shell task (started with `is_background`, or a foreground
     /// command that outlived its patience) finished, and its final output was
     /// just delivered to the model as a message. Surfaced so a UI can print a
