@@ -842,6 +842,12 @@ mod tests {
         // plan-only turns, and questions the model could have answered from
         // the repo — each of which costs a whole round trip (system prompt,
         // tools, transcript) every time it happens.
+        //
+        // Line-addressed edits (~0.6K, 15.2K → 15.9K): `edit_file` hunks may
+        // name a line range instead of retyping the old text. Modelled on
+        // oh-my-pi's hashline, whose benchmark lifted weak models' edit
+        // success 2-10x — exactly the local GGUF class this harness ships —
+        // and it cuts output tokens on every large rewrite.
         let workspace = Workspace::new(".").unwrap();
         let registry = ToolRegistry::default_for_workspace(workspace);
         let chars: usize = registry
@@ -850,8 +856,8 @@ mod tests {
             .map(|d| d.to_string().len())
             .sum();
         assert!(
-            chars < 15_200,
-            "default tool definitions grew to {chars} chars (budget 15200)"
+            chars < 15_900,
+            "default tool definitions grew to {chars} chars (budget 15900)"
         );
     }
 }
