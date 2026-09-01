@@ -115,6 +115,10 @@ impl TypedTool for ShellTool {
     const NAME: &'static str = RUN_SHELL_TOOL;
     type Args = ShellArgs;
 
+    fn concurrency(&self) -> crate::Concurrency {
+        crate::Concurrency::Exclusive
+    }
+
     fn description(&self) -> &str {
         "Run a shell command. Returns exit code, stdout, and stderr. The working directory \
          and exported variables persist between calls (starting at the project root), so \

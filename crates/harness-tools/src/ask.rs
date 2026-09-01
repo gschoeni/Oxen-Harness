@@ -131,6 +131,10 @@ impl TypedTool for AskUserTool {
     const NAME: &'static str = ASK_USER_TOOL;
     type Args = AskArgs;
 
+    fn concurrency(&self) -> crate::Concurrency {
+        crate::Concurrency::Exclusive
+    }
+
     fn description(&self) -> &str {
         "Ask the user one or more multiple-choice questions to resolve an \
          ambiguous product, design, or implementation decision before acting. \

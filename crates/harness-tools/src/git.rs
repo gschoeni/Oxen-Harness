@@ -70,6 +70,10 @@ impl TypedTool for GitTool {
     const NAME: &'static str = GIT_TOOL;
     type Args = GitArgs;
 
+    fn concurrency(&self) -> crate::Concurrency {
+        crate::Concurrency::Exclusive
+    }
+
     fn description(&self) -> &str {
         "Run a git operation in the workspace: `status`, `diff`, `log`, `commit`, or \
          `push`. `commit` stages all changes (git add -A) and commits with `message`; \

@@ -86,6 +86,23 @@ pub enum ToolError {
     Io(#[from] std::io::Error),
 }
 
+/// How a tool may be scheduled alongside the other calls in one reply.
+///
+/// The agent runs the calls of one reply as waves: consecutive `Shared` calls
+/// run at the same time; an `Exclusive` call waits for every earlier call to
+/// finish and runs alone. Reads, searches, and fetches are shared; anything
+/// that mutates the workspace or runs a process is exclusive, so two edits
+/// can never race and a shell command always sees the files a preceding
+/// edit wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Concurrency {
+    /// Safe to run at the same time as other shared calls.
+    #[default]
+    Shared,
+    /// Runs alone, after every earlier call in the reply has finished.
+    Exclusive,
+}
+
 /// A capability the agent can invoke during the loop — the raw, dyn-dispatched
 /// form the registry stores.
 ///
@@ -110,6 +127,13 @@ pub trait Tool: Send + Sync {
     /// Execute the tool with model-provided arguments, returning a string
     /// result that is appended to the transcript as a `tool` message.
     async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError>;
+
+    /// How this tool may be scheduled next to the other calls of one reply.
+    /// Defaults to [`Concurrency::Shared`]; override for anything with side
+    /// effects.
+    fn concurrency(&self) -> Concurrency {
+        Concurrency::Shared
+    }
 }
 
 /// The preferred way to write a built-in tool: arguments are a typed struct,
@@ -176,6 +200,13 @@ pub trait TypedTool: Send + Sync {
 
     /// Execute the tool with already-validated, typed arguments.
     async fn run(&self, args: Self::Args) -> Result<String, ToolError>;
+
+    /// How this tool may be scheduled next to the other calls of one reply
+    /// (see [`Concurrency`]). Defaults to shared; override for anything that
+    /// mutates the workspace or runs a process.
+    fn concurrency(&self) -> Concurrency {
+        Concurrency::Shared
+    }
 
     /// Parse raw JSON arguments and run — exactly what the registry does when
     /// the model calls the tool. Provided; useful in tests and for hosts that
@@ -317,6 +348,9 @@ impl<T: TypedTool> Tool for TypedAdapter<T> {
     async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
         self.0.invoke(args).await
     }
+    fn concurrency(&self) -> Concurrency {
+        self.0.concurrency()
+    }
 }
 
 /// Build the OpenAI-compatible tool definition for a tool.
@@ -377,6 +411,12 @@ impl Tool for CustomTool {
 
     fn parameters_schema(&self) -> serde_json::Value {
         self.spec.parameters.clone()
+    }
+
+    /// A POST may have side effects the registry can't see, so custom tools
+    /// never overlap with other calls.
+    fn concurrency(&self) -> Concurrency {
+        Concurrency::Exclusive
     }
 
     async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {

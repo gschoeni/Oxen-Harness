@@ -599,6 +599,10 @@ impl TypedTool for KillTaskTool {
     const NAME: &'static str = KILL_TASK_TOOL;
     type Args = KillTaskArgs;
 
+    fn concurrency(&self) -> crate::Concurrency {
+        crate::Concurrency::Exclusive
+    }
+
     fn description(&self) -> &str {
         "Terminate a background task started by run_shell (kills its whole process group)."
     }

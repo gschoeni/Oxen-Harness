@@ -117,6 +117,10 @@ impl TypedTool for EditFileTool {
     const NAME: &'static str = EDIT_FILE_TOOL;
     type Args = EditFileArgs;
 
+    fn concurrency(&self) -> crate::Concurrency {
+        crate::Concurrency::Exclusive
+    }
+
     fn description(&self) -> &str {
         "Replace exact text in a file you have already read. One change: pass \
          `old_string` + `new_string`. Several changes to the same file: pass `edits` \

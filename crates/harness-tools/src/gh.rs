@@ -64,6 +64,10 @@ impl TypedTool for GhTool {
     const NAME: &'static str = GH_TOOL;
     type Args = GhArgs;
 
+    fn concurrency(&self) -> crate::Concurrency {
+        crate::Concurrency::Exclusive
+    }
+
     fn description(&self) -> &str {
         "GitHub via the gh CLI: `pr_view` (the current branch's PR — state, \
          review decision, merged; USE THIS to verify the trail's shipping \

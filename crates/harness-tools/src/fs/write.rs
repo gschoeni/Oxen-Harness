@@ -54,6 +54,10 @@ impl TypedTool for WriteFileTool {
     const NAME: &'static str = WRITE_FILE_TOOL;
     type Args = WriteFileArgs;
 
+    fn concurrency(&self) -> crate::Concurrency {
+        crate::Concurrency::Exclusive
+    }
+
     fn description(&self) -> &str {
         "Create or overwrite a text file at a path relative to the workspace root. \
          Overwriting an existing file requires having read it first (use `edit_file` \
