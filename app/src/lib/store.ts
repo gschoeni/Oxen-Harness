@@ -55,6 +55,7 @@ import {
   startTurn,
   toolEnd,
   toolStart,
+  toolProgress,
   transcriptToItems,
   type Item,
 } from "../features/chat/thread";
@@ -89,6 +90,7 @@ import type {
   StartupModelChoice,
   Theme,
   ToolEvent,
+  ToolProgressEvent,
   NoticeEvent,
   ToolDeltaEvent,
   UsageEvent,
@@ -517,6 +519,8 @@ interface AppState {
   /** A one-line notice about something the agent did on its own (a
    *  background task's output delivered to the model). */
   ingestNotice: (e: NoticeEvent) => void;
+  /** A running tool's live output chunk, appended to its chip. */
+  ingestToolProgress: (e: ToolProgressEvent) => void;
   /** Add a notice when a model call hit a transient error and is retrying. */
   ingestRetry: (e: RetryEvent) => void;
   /** Update a session's compression savings counters. Fires per model call —
@@ -1595,6 +1599,17 @@ export const useStore = create<AppState>((set, get) => {
           threads: {
             ...s.threads,
             [e.session]: appendNotice(s.threads[e.session], `Compacted context — ${e.detail}`),
+          },
+        };
+      }),
+
+    ingestToolProgress: (e) =>
+      set((s) => {
+        if (s.threads[e.session] === undefined) return {};
+        return {
+          threads: {
+            ...s.threads,
+            [e.session]: toolProgress(s.threads[e.session], e.name, e.chunk, e.call_id),
           },
         };
       }),

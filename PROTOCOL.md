@@ -58,6 +58,7 @@ The catalog (see `harness-protocol/src/event.rs` for the exact fields):
 | `agent.token` | streamed assistant text (batched ~512 bytes) |
 | `agent.tool` | tool call start (`detail` = args) / end (`detail` = result) |
 | `agent.tool_delta` | streaming fragments of a tool call's JSON args |
+| `agent.tool_progress` | a running tool's live output (a shell command streaming), keyed by `call_id` |
 | `agent.usage` | live token usage around each model call |
 | `agent.compacted` / `agent.compression` / `agent.retry` | context + resilience notices |
 | `agent.notice` | a one-line notice about something the agent did on its own (`kind` = `background_task`: a finished task's output was delivered to the model) |

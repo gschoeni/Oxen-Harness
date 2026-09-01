@@ -147,8 +147,16 @@ impl Live {
         let fleet_budget = self.rows.saturating_sub(fixed + 1) as usize;
         let mut fleet_lines = self.fleet_lines();
         fleet_lines.truncate(fleet_budget);
+        // The command-output card gets what the fleet left; a card that
+        // doesn't fit shows its newest rows.
+        let card_budget = fleet_budget.saturating_sub(fleet_lines.len());
+        let mut card_lines = self.tool_card_lines();
+        if card_lines.len() > card_budget {
+            card_lines.drain(..card_lines.len() - card_budget);
+        }
 
         sections.push(Section::new(SectionKind::Fleet, fleet_lines));
+        sections.push(Section::new(SectionKind::ToolCard, card_lines));
         sections.push(Section::new(SectionKind::Compression, compression_lines));
         sections.push(Section::new(SectionKind::Status, meter_lines));
         sections.push(Section::new(SectionKind::Divider, divider));
@@ -505,6 +513,7 @@ mod tests {
             vec![
                 SectionKind::Spacer,
                 SectionKind::Fleet,
+                SectionKind::ToolCard,
                 SectionKind::Compression,
                 SectionKind::Status,
                 SectionKind::Divider,

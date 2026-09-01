@@ -40,6 +40,8 @@ pub(super) enum KeyAction {
     /// Alt+Up on an empty composer: pull the newest queued item back out of
     /// the queue and into the composer for another edit.
     PullQueued,
+    /// Ctrl+O: print the newest sealed tool result in full.
+    ExpandLast,
     /// Ctrl-D on an empty composer — exit.
     Exit,
 }
@@ -99,6 +101,8 @@ pub(super) enum KeyIntent {
     QueueFollowUp,
     /// Alt+Up: pull the most recent queued item back into the composer.
     PullQueued,
+    /// Ctrl+O: print the newest tool result in full.
+    ExpandLast,
     Exit,
     Compose(BufOp),
     /// Insert a hard line break in the composer (Alt/Shift+Enter, Ctrl+J).
@@ -157,6 +161,7 @@ pub(super) fn classify_key(
                 // Ctrl-J is a portable "insert newline" that survives terminals
                 // which don't distinguish Shift/Alt+Enter.
                 KeyCode::Char('j') if ctrl => return KeyIntent::ComposeNewline,
+                KeyCode::Char('o') if ctrl && !alt => return KeyIntent::ExpandLast,
                 // Alt/Shift+Enter add a line; plain Enter sends (or queues).
                 KeyCode::Enter if alt || mods.contains(KeyModifiers::SHIFT) => {
                     return KeyIntent::ComposeNewline

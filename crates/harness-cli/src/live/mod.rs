@@ -41,6 +41,7 @@
 //!
 //! [`MessageQueue`]: crate::queue::MessageQueue
 
+mod card;
 mod completion;
 mod composer;
 mod dispatch;
@@ -61,6 +62,7 @@ mod test_support;
 #[cfg(test)]
 mod vt_tests;
 
+pub(crate) use card::summarize_result;
 pub(crate) use turn::{read_idle, run_prompt, tool_target, Idle};
 
 use std::io::Write;
@@ -216,6 +218,11 @@ struct Live {
     /// The last terminal title written, so the ~110ms ticker only emits an OSC
     /// sequence when the title actually changes (once a second, not nine times).
     title: Option<String>,
+    /// The running command whose output streams into the pinned card (see
+    /// [`card`]); `None` between commands.
+    tool_card: Option<card::ToolCard>,
+    /// The last few sealed tool results, newest last, for Ctrl+O.
+    results: std::collections::VecDeque<card::KeptResult>,
 }
 
 impl Live {
@@ -253,6 +260,8 @@ impl Live {
             media_check: None,
             turn_started: None,
             title: None,
+            tool_card: None,
+            results: std::collections::VecDeque::new(),
         }
     }
 
@@ -311,6 +320,26 @@ impl Live {
     }
 
     /// The fleet block for the pinned area (empty when no fleet is running).
+    /// The pinned rows of the running command's output card.
+    fn tool_card_lines(&self) -> Vec<String> {
+        match &self.tool_card {
+            Some(card) => card.lines(&self.ui, self.cols as usize),
+            None => Vec::new(),
+        }
+    }
+
+    /// Ctrl+O: print the newest sealed tool result in full into the
+    /// conversation, under the summary line that stood in for it.
+    pub(super) fn expand_last_result(&mut self) {
+        let ui = self.ui.clone();
+        let block = match self.results.back() {
+            Some(kept) => card::expanded_block(&ui, kept, self.cols as usize),
+            None => vec![format!("  {}", ui.dim("nothing to expand yet"))],
+        };
+        self.region.write(&format!("{}\n", block.join("\n")));
+        self.request_paint();
+    }
+
     fn fleet_lines(&self) -> Vec<String> {
         let guard = self.fleet.lock();
         match guard.as_ref() {
@@ -441,6 +470,7 @@ impl Live {
             // is open would silently discard what's typed.
             KeyIntent::PullQueued if self.composer.is_empty() => KeyAction::PullQueued,
             KeyIntent::PullQueued => KeyAction::None,
+            KeyIntent::ExpandLast => KeyAction::ExpandLast,
             KeyIntent::Compose(op) => {
                 let inserted = match op {
                     keys::BufOp::Insert(c) => Some(c),

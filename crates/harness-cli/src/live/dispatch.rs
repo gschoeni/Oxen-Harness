@@ -80,6 +80,10 @@ pub(super) fn apply_action(
             live.request_paint();
             None
         }
+        KeyAction::ExpandLast => {
+            live.expand_last_result();
+            None
+        }
         KeyAction::PullQueued => {
             // The newest item comes back out for another pass; queue positions
             // are 1-based, so the last one is at `len`.

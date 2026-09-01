@@ -446,21 +446,70 @@ fn load_prompt_history(path: Option<&Path>) -> Vec<String> {
         .map(|s| {
             s.lines()
                 .filter(|l| !l.is_empty())
-                .map(str::to_string)
+                .map(unescape_history_entry)
                 .collect()
         })
         .unwrap_or_default()
 }
 
-/// Persist the prompt history, flattening newlines so the one-line-per-entry
-/// file stays valid (a recalled multi-line entry returns single-line next run).
+/// Persist the prompt history, one entry per line, with newlines escaped so
+/// a multi-line prompt recalls as it was typed next run.
 fn save_prompt_history(path: Option<&Path>, entries: &[String]) {
     if let Some(p) = path {
         let body = entries
             .iter()
-            .map(|e| e.replace('\n', " "))
+            .map(|e| escape_history_entry(e))
             .collect::<Vec<_>>()
             .join("\n");
         let _ = std::fs::write(p, body);
+    }
+}
+
+/// `\` → `\\`, newline → `\n`, so the one-line-per-entry file stays valid.
+fn escape_history_entry(entry: &str) -> String {
+    entry.replace('\\', "\\\\").replace('\n', "\\n")
+}
+
+/// The inverse of [`escape_history_entry`]. Entries written before escaping
+/// existed contain no backslash sequences and pass through unchanged.
+fn unescape_history_entry(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('\\') => out.push('\\'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn prompt_history_keeps_newlines_across_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history");
+        let entries = vec![
+            "one line".to_string(),
+            "two\nlines\\with a backslash".to_string(),
+        ];
+        super::save_prompt_history(Some(&path), &entries);
+        assert_eq!(super::load_prompt_history(Some(&path)), entries);
+        // A pre-escaping file still loads.
+        std::fs::write(&path, "plain\nentries").unwrap();
+        assert_eq!(
+            super::load_prompt_history(Some(&path)),
+            vec!["plain".to_string(), "entries".to_string()]
+        );
     }
 }

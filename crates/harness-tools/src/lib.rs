@@ -106,6 +106,18 @@ pub enum Concurrency {
     Exclusive,
 }
 
+/// A chunk of a running tool's output, for a UI that shows work as it
+/// happens. Today only `run_shell` reports progress (the foreground
+/// command's stdout/stderr as it streams); the agent attributes chunks to
+/// the running call by tool name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolProgress {
+    pub name: String,
+    /// The background-task id the output belongs to.
+    pub task_id: u64,
+    pub chunk: String,
+}
+
 /// A capability the agent can invoke during the loop — the raw, dyn-dispatched
 /// form the registry stores.
 ///
@@ -513,6 +525,12 @@ impl ToolRegistry {
     /// was built with the default tool set.
     pub fn steer_notifier(&self) -> Option<steer::SteerNotifier> {
         self.steer.clone()
+    }
+
+    /// Subscribe to live output from running tools (see [`ToolProgress`]).
+    /// `None` unless this registry was built with the default tool set.
+    pub fn progress(&self) -> Option<tokio::sync::broadcast::Receiver<ToolProgress>> {
+        self.tasks.as_ref().map(|t| t.progress())
     }
 
     /// Register a tool, returning the registry for chaining.

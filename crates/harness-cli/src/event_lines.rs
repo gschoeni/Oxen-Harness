@@ -38,7 +38,9 @@ pub(crate) enum Cue {
     },
     /// `spawn_agents` started: print the announcement; the fleet display owns
     /// activity from here (the cooked painter or the live pinned block).
-    FleetStart { lines: Vec<String> },
+    FleetStart {
+        lines: Vec<String>,
+    },
     /// The ask-user picker takes the screen (suppress all tool chrome).
     AskUserStart,
     /// The picker returned the screen; resume thinking.
@@ -46,10 +48,14 @@ pub(crate) enum Cue {
     /// A gated tool call awaits the user's approval decision.
     ApprovalPending,
     /// The decision landed; print it and resume thinking.
-    ApprovalResolved { line: String },
+    ApprovalResolved {
+        line: String,
+    },
     /// `web_search` ran without a key: flag the post-turn prompt, show a
     /// friendlier line than the raw error.
-    BraveKeyMissing { line: String },
+    BraveKeyMissing {
+        line: String,
+    },
     /// Live pins the context meters from these figures; classic ignores it.
     Usage {
         context_tokens: usize,
@@ -63,6 +69,12 @@ pub(crate) enum Cue {
         scroll_line: String,
     },
     /// Nothing to show on this surface.
+    /// A chunk of a running command's live output; the live surface shows a
+    /// tail of it in a pinned card, the classic renderer waits for the end.
+    ToolProgress {
+        call_id: String,
+        chunk: String,
+    },
     Ignore,
 }
 
@@ -190,6 +202,12 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
         },
         // Streaming tool-argument fragments drive the desktop UI only.
         AgentEvent::ToolDelta { .. } => Cue::Ignore,
+        // Live command output paints in the live surface's pinned card (see
+        // `live::events`); the classic renderer waits for the result.
+        AgentEvent::ToolProgress { call_id, chunk, .. } => Cue::ToolProgress {
+            call_id: call_id.clone(),
+            chunk: chunk.clone(),
+        },
     }
 }
 
@@ -280,7 +298,7 @@ fn tool_end_cue(ui: &Ui, name: &str, result: &str) -> Cue {
         lines: vec![format!(
             "  {} {}",
             ui.brown("└─"),
-            ui.dim(&truncate(result, 140)),
+            ui.dim(&crate::live::summarize_result(result, 140)),
         )],
         then: NextSpinner::Thinking,
     }

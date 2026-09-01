@@ -96,6 +96,14 @@ pub struct BackgroundTasks {
     log_dir: PathBuf,
     next_id: AtomicU64,
     tasks: Mutex<HashMap<u64, TaskEntry>>,
+    /// The task a `run_shell` call is currently waiting on in the
+    /// foreground, if any — the one whose output is worth showing live.
+    /// Shared with the output pumps, which check it per chunk.
+    foreground_shared: Arc<StdMutex<Option<u64>>>,
+    /// Live output chunks of the foreground task, for a UI that wants to
+    /// show a command's output as it happens. Lagging receivers just miss
+    /// chunks; the log file and tails are the record.
+    progress: tokio::sync::broadcast::Sender<crate::ToolProgress>,
     /// Where the middle of a truncated command's output goes so the model can
     /// still ask for it. Without this, everything past the cap is destroyed
     /// with the log file and the only recourse is re-running the command.
@@ -106,6 +114,9 @@ pub struct BackgroundTasks {
 /// spill itself would be the memory problem the cap exists to prevent.
 const MAX_SPILL_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Progress chunks buffered for a slow UI before it starts missing some.
+const PROGRESS_CHANNEL_CAPACITY: usize = 256;
+
 impl BackgroundTasks {
     /// A registry writing task logs under `log_dir` (created on first spawn).
     pub fn new(log_dir: PathBuf) -> Arc<Self> {
@@ -113,6 +124,8 @@ impl BackgroundTasks {
             log_dir,
             next_id: AtomicU64::new(0),
             tasks: Mutex::new(HashMap::new()),
+            foreground_shared: Arc::new(StdMutex::new(None)),
+            progress: tokio::sync::broadcast::channel(PROGRESS_CHANNEL_CAPACITY).0,
             overflow: None,
         })
     }
@@ -124,8 +137,29 @@ impl BackgroundTasks {
             log_dir,
             next_id: AtomicU64::new(0),
             tasks: Mutex::new(HashMap::new()),
+            foreground_shared: Arc::new(StdMutex::new(None)),
+            progress: tokio::sync::broadcast::channel(PROGRESS_CHANNEL_CAPACITY).0,
             overflow: Some(store),
         })
+    }
+
+    /// Subscribe to the foreground task's live output.
+    pub fn progress(&self) -> tokio::sync::broadcast::Receiver<crate::ToolProgress> {
+        self.progress.subscribe()
+    }
+
+    /// Mark (or clear) the task a foreground `run_shell` is waiting on; only
+    /// its output is broadcast as progress.
+    pub fn set_foreground(&self, id: Option<u64>) {
+        *self.foreground_shared.lock().expect("foreground lock") = id;
+    }
+
+    /// A checker the pumps call per chunk: is `id` the foreground task now?
+    fn foreground_flag(&self, id: u64) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        // The registry outlives its pumps (they're aborted with the child on
+        // drop), but a weak pointer keeps this honest either way.
+        let foreground: Arc<StdMutex<Option<u64>>> = self.foreground_shared.clone();
+        Arc::new(move || *foreground.lock().expect("foreground lock") == Some(id))
     }
 
     /// A registry logging under the OS temp directory — the default used by
@@ -197,14 +231,19 @@ impl BackgroundTasks {
 
         let stdout_tail = Arc::new(StdMutex::new(Some(BoundedText::new(max_tail))));
         let stderr_tail = Arc::new(StdMutex::new(Some(BoundedText::new(max_tail))));
+        let progress = Progress {
+            sender: self.progress.clone(),
+            id,
+            foreground: self.foreground_flag(id),
+        };
         let out_pump = child
             .stdout
             .take()
-            .map(|s| tokio::spawn(pump(s, log.clone(), stdout_tail.clone())));
+            .map(|s| tokio::spawn(pump(s, log.clone(), stdout_tail.clone(), progress.clone())));
         let err_pump = child
             .stderr
             .take()
-            .map(|s| tokio::spawn(pump(s, log.clone(), stderr_tail.clone())));
+            .map(|s| tokio::spawn(pump(s, log.clone(), stderr_tail.clone(), progress)));
 
         let (done_tx, done_rx) = watch::channel(None);
         let reaped = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -487,10 +526,31 @@ impl BackgroundTasks {
 /// in-memory tail (text). The tail decodes with a carry buffer so a
 /// multibyte character split across two 8 KiB reads isn't torn into
 /// replacement chars.
+/// What a pump needs to report a chunk as live progress.
+#[derive(Clone)]
+struct Progress {
+    sender: tokio::sync::broadcast::Sender<crate::ToolProgress>,
+    id: u64,
+    foreground: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl Progress {
+    fn emit(&self, text: &str) {
+        if (self.foreground)() {
+            let _ = self.sender.send(crate::ToolProgress {
+                name: crate::shell::RUN_SHELL_TOOL.to_string(),
+                task_id: self.id,
+                chunk: text.to_string(),
+            });
+        }
+    }
+}
+
 async fn pump(
     mut reader: impl AsyncRead + Unpin,
     log: Arc<Mutex<tokio::fs::File>>,
     tail: Arc<StdMutex<Option<BoundedText>>>,
+    progress: Progress,
 ) {
     let mut bytes = [0u8; 8192];
     let mut carry: Vec<u8> = Vec::new();
@@ -513,11 +573,13 @@ async fn pump(
                     Err(_) => carry.len(),
                 };
                 if take > 0 {
+                    let text = String::from_utf8_lossy(&carry[..take]);
                     if let Ok(mut tail) = tail.lock() {
                         if let Some(tail) = tail.as_mut() {
-                            tail.push(&String::from_utf8_lossy(&carry[..take]));
+                            tail.push(&text);
                         }
                     }
+                    progress.emit(&text);
                     carry.drain(..take);
                 }
             }

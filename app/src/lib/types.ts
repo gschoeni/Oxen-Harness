@@ -528,6 +528,15 @@ export interface ToolEvent {
   detail: string;
 }
 
+/** `agent://tool-progress` payload — a chunk of a running tool's output (a
+ *  shell command streaming), keyed by the call it belongs to. */
+export interface ToolProgressEvent {
+  session: string;
+  call_id: string;
+  name: string;
+  chunk: string;
+}
+
 /** `agent://tool-delta` payload — a fragment of a tool call's JSON arguments,
  *  tagged with the tool name, streamed so the UI can show content as it's
  *  written (a file, a canvas document). */

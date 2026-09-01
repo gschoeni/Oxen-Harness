@@ -174,6 +174,27 @@ export function toolStart(
   return capThread(next);
 }
 
+/** The most live output a running chip accumulates before the head is dropped. */
+const MAX_LIVE_OUTPUT_CHARS = 8_000;
+
+/** Append a chunk of live output to the running chip it belongs to (by call
+ *  id, else the newest running chip of that name). The end event replaces
+ *  this with the real result. */
+export function toolProgress(prev: Item[], name: string, chunk: string, callId?: string): Item[] {
+  const next = [...prev];
+  for (let i = next.length - 1; i >= 0; i--) {
+    const it = next[i];
+    if (it.kind !== "tool" || !it.running) continue;
+    const matches = callId && it.callId ? it.callId === callId : it.name === name;
+    if (matches) {
+      const combined = it.result + chunk;
+      next[i] = { ...it, result: combined.slice(Math.max(0, combined.length - MAX_LIVE_OUTPUT_CHARS)) };
+      return next;
+    }
+  }
+  return prev;
+}
+
 /** Finish the matching running tool chip (recording its result) and open a
  *  fresh bubble for any text the model emits next. The match is by call id
  *  when the event carries one (concurrent calls of the same tool end in any

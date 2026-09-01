@@ -68,13 +68,14 @@ impl Live {
     // --- event rendering (cues from crate::event_lines) --------------------
 
     pub(super) fn on_event(&mut self, event: &AgentEvent, paused: &Arc<AtomicBool>) {
+        self.track_tool_card(event);
         let cue = cue_for(&self.ui, event);
         // Tokens arrive at streaming rate and change nothing in the pinned
         // chrome — their text lands instantly through the markdown writer, and
         // the paint they request is flushed by the turn loop's ~110ms ticker.
         // Flushing per token would repaint the whole pinned area (composer
         // wrap, queue box, divider, meters) hundreds of times a second.
-        let defer_flush = matches!(cue, Cue::Token(_));
+        let defer_flush = matches!(cue, Cue::Token(_) | Cue::ToolProgress { .. });
         match cue {
             Cue::Token(t) => self.on_token(&t),
             Cue::Block { lines, then } => {
@@ -129,6 +130,7 @@ impl Live {
                 self.compression_line = Some(pinned_line);
                 self.request_paint();
             }
+            Cue::ToolProgress { call_id, chunk } => self.on_tool_progress(&call_id, &chunk),
             Cue::Ignore => {}
         }
         // The one paint per (non-token) event: handlers above only mark the
@@ -137,6 +139,52 @@ impl Live {
         // select loop.)
         if !defer_flush {
             self.flush_paint();
+        }
+    }
+
+    /// Open the output card when a shell command starts, seal it when the
+    /// call ends, and keep the sealed result for Ctrl+O.
+    fn track_tool_card(&mut self, event: &AgentEvent) {
+        match event {
+            AgentEvent::ToolStart { call_id, name, .. }
+                if name == harness_tools::RUN_SHELL_TOOL =>
+            {
+                self.tool_card = Some(super::card::ToolCard::new(call_id.clone()));
+            }
+            AgentEvent::ToolEnd {
+                call_id,
+                name,
+                result,
+            } => {
+                if self
+                    .tool_card
+                    .as_ref()
+                    .is_some_and(|card| &card.call_id == call_id)
+                {
+                    self.tool_card = None;
+                }
+                if name != harness_tools::ASK_USER_TOOL && name != harness_tools::PLAN_TOOL {
+                    if self.results.len() == super::card::KEPT_RESULTS {
+                        self.results.pop_front();
+                    }
+                    self.results.push_back(super::card::KeptResult {
+                        name: name.clone(),
+                        result: result.clone(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A chunk of the running command's output: grows the pinned card. The
+    /// repaint rides the turn ticker like tokens do.
+    fn on_tool_progress(&mut self, call_id: &str, chunk: &str) {
+        if let Some(card) = self.tool_card.as_mut() {
+            if card.call_id == call_id {
+                card.push(chunk);
+                self.request_paint();
+            }
         }
     }
 

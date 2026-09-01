@@ -110,6 +110,16 @@ pub enum ProtocolEvent {
         name: String,
         detail: String,
     },
+    /// A chunk of a running tool's output (a shell command streaming), keyed
+    /// by the call it belongs to. The full result still arrives on the
+    /// `agent.tool` end event.
+    #[serde(rename = "agent.tool_progress")]
+    ToolProgress {
+        session: String,
+        call_id: String,
+        name: String,
+        chunk: String,
+    },
     /// An incremental fragment of a tool call's JSON arguments, so a UI can
     /// stream in-progress content (a file being written, a canvas document).
     #[serde(rename = "agent.tool_delta")]
@@ -321,6 +331,7 @@ impl ProtocolEvent {
             Self::Tool { .. } => "agent.tool",
             Self::Notice { .. } => "agent.notice",
             Self::ToolDelta { .. } => "agent.tool_delta",
+            Self::ToolProgress { .. } => "agent.tool_progress",
             Self::Usage { .. } => "agent.usage",
             Self::Compacted { .. } => "agent.compacted",
             Self::Retry { .. } => "agent.retry",
@@ -363,6 +374,7 @@ impl ProtocolEvent {
             Self::Token { session, .. }
             | Self::Tool { session, .. }
             | Self::ToolDelta { session, .. }
+            | Self::ToolProgress { session, .. }
             | Self::Notice { session, .. }
             | Self::Usage { session, .. }
             | Self::Compacted { session, .. }

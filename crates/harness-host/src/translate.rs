@@ -36,6 +36,16 @@ pub fn agent_event(
             name: name.clone(),
             delta: delta.clone(),
         },
+        AgentEvent::ToolProgress {
+            call_id,
+            name,
+            chunk,
+        } => ProtocolEvent::ToolProgress {
+            session,
+            call_id: call_id.clone(),
+            name: name.clone(),
+            chunk: chunk.clone(),
+        },
         AgentEvent::ToolStart {
             call_id,
             name,

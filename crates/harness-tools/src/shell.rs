@@ -255,9 +255,12 @@ impl TypedTool for ShellTool {
                      with kill_task."
                 ));
             }
+            // While waited on, the command's output streams to the UI.
+            tasks.set_foreground(Some(id));
             let outcome = self
                 .wait_or_steer(tasks, id, Duration::from_millis(timeout_ms))
                 .await;
+            tasks.set_foreground(None);
             return match outcome {
                 Waited::Exited => {
                     let (exit, stdout, stderr, overflow) = tasks

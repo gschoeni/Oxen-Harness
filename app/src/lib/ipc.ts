@@ -48,6 +48,7 @@ import type {
   ThemeSummary,
   TokenEvent,
   ToolEvent,
+  ToolProgressEvent,
   ToolDeltaEvent,
   UsageEvent,
   UsageBreakdown,
@@ -414,6 +415,10 @@ export const onToken = (handler: (e: TokenEvent) => void) =>
 
 export const onTool = (handler: (e: ToolEvent) => void) =>
   listen<ToolEvent>("agent://tool", (e) => handler(e.payload));
+
+/** A running tool's live output (a shell command streaming). */
+export const onToolProgress = (handler: (e: ToolProgressEvent) => void) =>
+  listen<ToolProgressEvent>("agent://tool-progress", (e) => handler(e.payload));
 
 /** Streamed fragments of a tool call's JSON args (file/canvas content forming). */
 export const onToolDelta = (handler: (e: ToolDeltaEvent) => void) =>

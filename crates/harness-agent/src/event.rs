@@ -25,6 +25,14 @@ pub enum AgentEvent {
         name: String,
         arguments: String,
     },
+    /// A chunk of a running tool's output (a shell command's stdout/stderr as
+    /// it streams), so a UI can show the work as it happens. The full result
+    /// still arrives on [`AgentEvent::ToolEnd`].
+    ToolProgress {
+        call_id: String,
+        name: String,
+        chunk: String,
+    },
     /// A tool finished, with its (possibly truncated for display) result.
     ToolEnd {
         call_id: String,

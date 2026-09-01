@@ -630,7 +630,7 @@ impl Agent {
                 .into_iter()
                 .filter_map(|i| prepared[i].take())
                 .collect();
-            for (index, result) in Self::run_wave(batch, on_event).await {
+            for (index, result) in self.run_wave(batch, on_event).await {
                 results[index] = Some(result);
             }
         }

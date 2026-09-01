@@ -266,6 +266,7 @@ impl Agent {
     /// pairs in completion order. A wave of one runs inline; a larger wave
     /// runs its calls concurrently.
     pub(super) async fn run_wave<F>(
+        &self,
         wave: Vec<PreparedCall>,
         on_event: &mut F,
     ) -> Vec<(usize, String)>
@@ -277,8 +278,35 @@ impl Agent {
         }
         let mut results = Vec::with_capacity(wave.len());
         if wave.len() == 1 {
+            // A lone call (every exclusive tool, notably the shell) is the one
+            // whose progress can be attributed: forward the registry's live
+            // output chunks tagged with its name while it runs.
             let prepared = wave.into_iter().next().expect("one call");
-            let result = Self::execute_prepared(prepared.outcome).await;
+            let mut progress = self.tools.progress();
+            let run = Self::execute_prepared(prepared.outcome);
+            tokio::pin!(run);
+            let result = loop {
+                match progress.as_mut() {
+                    Some(rx) => tokio::select! {
+                        biased;
+                        result = &mut run => break result,
+                        received = rx.recv() => match received {
+                            Ok(p) if p.name == prepared.name => on_event(&AgentEvent::ToolProgress {
+                                call_id: prepared.call_id.clone(),
+                                name: prepared.name.clone(),
+                                chunk: p.chunk,
+                            }),
+                            Ok(_) => {}
+                            // Lagged: chunks were missed, the result has them all.
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                progress = None;
+                            }
+                        },
+                    },
+                    None => break run.await,
+                }
+            };
             Self::emit_tool_end(&prepared.call_id, &prepared.name, &result, on_event);
             results.push((prepared.index, result));
             return results;
