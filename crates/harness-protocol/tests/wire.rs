@@ -39,6 +39,7 @@ fn token_event_wire_shape() {
 fn tool_event_wire_shape() {
     let event = ProtocolEvent::Tool {
         session: "s1".into(),
+        call_id: "call_1".into(),
         phase: ToolPhase::Start,
         name: "run_shell".into(),
         detail: "{\"command\":\"ls\"}".into(),
@@ -50,6 +51,7 @@ fn tool_event_wire_shape() {
 
     let end = ProtocolEvent::Tool {
         session: "s1".into(),
+        call_id: "call_1".into(),
         phase: ToolPhase::End,
         name: "run_shell".into(),
         detail: "ok".into(),
@@ -355,6 +357,7 @@ fn legacy_channel_names() {
         (
             ProtocolEvent::Tool {
                 session: "s".into(),
+                call_id: "c".into(),
                 phase: ToolPhase::Start,
                 name: "n".into(),
                 detail: "d".into(),

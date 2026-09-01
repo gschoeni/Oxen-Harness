@@ -21,9 +21,22 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Default)]
 pub struct Interjections {
     inner: Arc<Mutex<VecDeque<String>>>,
+    /// Woken on every push, so a tool waiting on a slow command (the shell)
+    /// can background it and let the message through instead of making the
+    /// user wait out the command.
+    notifier: Option<harness_tools::SteerNotifier>,
 }
 
 impl Interjections {
+    /// A buffer that also pokes `notifier` on every push — the registry's
+    /// steer channel, so `run_shell` backgrounds early when the user speaks.
+    pub fn with_notifier(notifier: Option<harness_tools::SteerNotifier>) -> Self {
+        Self {
+            inner: Arc::default(),
+            notifier,
+        }
+    }
+
     /// Queue a message for delivery at the turn's next safe point. Callable
     /// from any thread while the turn runs.
     pub fn push(&self, text: impl Into<String>) {
@@ -31,6 +44,9 @@ impl Interjections {
             .lock()
             .expect("interjection lock")
             .push_back(text.into());
+        if let Some(notifier) = &self.notifier {
+            notifier.notify();
+        }
     }
 
     /// Drain everything queued, in arrival order.

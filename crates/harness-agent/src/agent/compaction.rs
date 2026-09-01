@@ -100,8 +100,17 @@ impl Agent {
     where
         F: FnMut(&AgentEvent),
     {
-        // Stage 1: prune stale tool output — cheap, no model call.
-        let freed = compact::prune_tool_results(&mut self.messages, KEEP_RECENT_TOOLS);
+        // Stage 1: prune stale tool output — cheap, no model call. Oldest
+        // first, and only as much as the overflow calls for, so a small
+        // overrun doesn't blank every tool result the model is still
+        // working from. If the estimate was optimistic, the rest goes too
+        // before the (expensive) summary is considered.
+        let target = self.chars_over_budget(budget, tool_defs);
+        let mut freed =
+            compact::prune_tool_results_to_free(&mut self.messages, KEEP_RECENT_TOOLS, target);
+        if !self.fits_budget(budget, tool_defs) {
+            freed += compact::prune_tool_results(&mut self.messages, KEEP_RECENT_TOOLS);
+        }
         if freed > 0 {
             on_event(&AgentEvent::Compacted {
                 detail: format!("pruned ~{freed} chars of older tool output"),
@@ -157,6 +166,18 @@ impl Agent {
             on_event,
         );
         Ok(self.fits_budget(budget, tool_defs))
+    }
+
+    /// How many transcript characters must go for the prompt to fit `budget`
+    /// (with a little slack, since the estimate is a heuristic), in the raw
+    /// units the pruner counts.
+    fn chars_over_budget(&self, budget: usize, tool_defs: &[serde_json::Value]) -> usize {
+        let raw = budget::estimate_prompt_tokens(&self.messages, tool_defs);
+        let calibrated = self.calibrated(raw).max(1);
+        let over = calibrated.saturating_sub(budget);
+        // Undo the calibration so the target is in the pruner's raw units.
+        let over_raw = over.saturating_mul(raw) / calibrated;
+        budget::chars_for_tokens(over_raw).saturating_mul(11) / 10
     }
 
     /// Record a summarization call's spend against the summary model under the

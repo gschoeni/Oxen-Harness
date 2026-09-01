@@ -451,3 +451,158 @@ async fn permission_gate_intercepts_dangerous_shell_calls_in_the_loop() {
     }
     std::env::remove_var("OXEN_HARNESS_DIR");
 }
+
+/// A tool that takes a fixed time and echoes its `tag` — for observing
+/// whether shared calls in one reply overlap.
+struct SleepTool {
+    exclusive: bool,
+}
+
+#[async_trait]
+impl Tool for SleepTool {
+    fn name(&self) -> &str {
+        if self.exclusive {
+            "sleep_exclusive"
+        } else {
+            "sleep"
+        }
+    }
+    fn description(&self) -> &str {
+        "Sleep briefly, then echo the tag."
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object", "properties": { "tag": {"type": "string"} } })
+    }
+    fn concurrency(&self) -> harness_tools::Concurrency {
+        if self.exclusive {
+            harness_tools::Concurrency::Exclusive
+        } else {
+            harness_tools::Concurrency::Shared
+        }
+    }
+    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        Ok(format!("done:{}", args["tag"].as_str().unwrap_or("")))
+    }
+}
+
+/// One reply carrying three calls: two shared sleeps and one exclusive.
+fn three_call_sse() -> String {
+    let call = |index: usize, id: &str, name: &str, tag: &str| {
+        let args = serde_json::json!({ "tag": tag }).to_string();
+        let chunk = serde_json::json!({
+            "choices": [{ "index": 0, "delta": { "tool_calls": [{
+                "index": index, "id": id, "type": "function",
+                "function": { "name": name, "arguments": args }
+            }]}}]
+        });
+        format!("data: {chunk}\n\n")
+    };
+    format!(
+        "{}{}{}data: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n",
+        call(0, "call_a", "sleep", "a"),
+        call(1, "call_b", "sleep", "b"),
+        call(2, "call_c", "sleep_exclusive", "c"),
+    )
+}
+
+#[tokio::test]
+async fn shared_tool_calls_in_one_reply_overlap_and_results_keep_call_order() {
+    let mut server = mockito::Server::new_async().await;
+    let m1 = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(three_call_sse())
+        .expect(1)
+        .create_async()
+        .await;
+    let m2 = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(FINAL_SSE)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let client = OxenClient::new(server.url(), "sk-test", "claude-opus-4-8");
+    let tools = ToolRegistry::new()
+        .with(Arc::new(SleepTool { exclusive: false }))
+        .with(Arc::new(SleepTool { exclusive: true }));
+    let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+    let session = store
+        .create_session(&harness_store::SessionMeta {
+            workspace: "/tmp/proj".into(),
+            model: "claude-opus-4-8".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let config = AgentConfig {
+        model: "claude-opus-4-8".into(),
+        system_prompt: None,
+        ..AgentConfig::default()
+    };
+    let mut agent = Agent::new(client, tools, store.clone(), session.clone(), config).unwrap();
+
+    let started = std::time::Instant::now();
+    let mut events = Vec::new();
+    agent
+        .run_turn("go", |e| events.push(e.clone()))
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+    m1.assert_async().await;
+    m2.assert_async().await;
+
+    // Two shared sleeps overlap (one ~250ms wave), the exclusive one runs
+    // alone after them: ~500ms total, not ~750ms sequential.
+    assert!(
+        elapsed < std::time::Duration::from_millis(650),
+        "calls ran sequentially: {elapsed:?}"
+    );
+
+    // Every call started before any of the wave ended, and each end is
+    // paired to its start by call id.
+    let starts: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolStart { call_id, .. } => Some(call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts, vec!["call_a", "call_b", "call_c"]);
+    let first_end = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::ToolEnd { .. }))
+        .unwrap();
+    let second_start = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::ToolStart { call_id, .. } if call_id == "call_b"))
+        .unwrap();
+    assert!(
+        second_start < first_end,
+        "the second shared call waited for the first"
+    );
+
+    // The transcript pairs results with calls in the order the model made them.
+    let stored = store.messages(&session).unwrap();
+    let tool_msgs: Vec<(&str, &str)> = stored
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| {
+            (
+                m["tool_call_id"].as_str().unwrap(),
+                m["content"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        tool_msgs,
+        vec![
+            ("call_a", "done:a"),
+            ("call_b", "done:b"),
+            ("call_c", "done:c")
+        ]
+    );
+}

@@ -358,6 +358,36 @@ pub(crate) fn looks_like_unfulfilled_intent(text: &str) -> bool {
     SIGNALS.iter().any(|s| t.contains(s)) && !t.contains("let me know")
 }
 
+/// The most of a finished background task's output delivered inline; the
+/// rest stays reachable through `task_output`'s log reference.
+const BACKGROUND_DELIVERY_CHARS: usize = 12_000;
+
+/// Frame a finished background task's output as the message that delivers it
+/// to the model — clearly marked as automatic, so the model neither thanks
+/// the user for it nor keeps polling.
+pub fn background_task_delivery(
+    task_id: u64,
+    command: &str,
+    exit_code: Option<i32>,
+    output: &str,
+) -> String {
+    let exit = match exit_code {
+        Some(code) => code.to_string(),
+        None => "signal".to_string(),
+    };
+    let body = harness_core::text::truncate_with_marker(
+        output,
+        BACKGROUND_DELIVERY_CHARS,
+        "\n… [delivery truncated — the rest is in the task log]",
+    );
+    format!(
+        "<background-task-result task_id=\"{task_id}\" exit=\"{exit}\">\n\
+         This is the automatic delivery of a background task's final output — not a \
+         message from the user. Act on it and continue your work.\n\
+         command: {command}\n{body}\n</background-task-result>"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

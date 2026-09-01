@@ -29,6 +29,19 @@ use harness_llm::types::{ChatMessage, MessageContent};
 /// model is likely still working with it). Idempotent: an already-stubbed or
 /// tiny message is left alone, so repeated calls don't churn.
 pub fn prune_tool_results(messages: &mut [ChatMessage], keep_recent_tools: usize) -> usize {
+    prune_tool_results_to_free(messages, keep_recent_tools, usize::MAX)
+}
+
+/// [`prune_tool_results`] that stops as soon as it has freed `target_chars`:
+/// the oldest results go first, and the ones the model may still be working
+/// from survive when the overflow was small. Freeing exactly what's needed
+/// keeps more of the transcript readable, and each prune is one rewrite of
+/// the cached prefix, so pruning less doesn't cost extra cache misses.
+pub fn prune_tool_results_to_free(
+    messages: &mut [ChatMessage],
+    keep_recent_tools: usize,
+    target_chars: usize,
+) -> usize {
     let tool_indices: Vec<usize> = messages
         .iter()
         .enumerate()
@@ -38,6 +51,9 @@ pub fn prune_tool_results(messages: &mut [ChatMessage], keep_recent_tools: usize
     let protect_from = tool_indices.len().saturating_sub(keep_recent_tools);
     let mut freed = 0;
     for &i in &tool_indices[..protect_from] {
+        if freed >= target_chars {
+            break;
+        }
         let msg = &mut messages[i];
         let text = match &msg.content {
             Some(c) => c.as_text(),
@@ -162,6 +178,28 @@ mod tests {
         assert!(freed > 4000);
         assert!(msgs[2].content_text().unwrap().contains("elided"));
         assert_eq!(msgs[5].content_text().unwrap(), big); // recent kept verbatim
+    }
+
+    #[test]
+    fn targeted_prune_stops_once_enough_is_freed() {
+        let big = "x".repeat(5000);
+        let mut msgs = vec![
+            ChatMessage::user("q"),
+            tool_msg("a", &big),
+            tool_msg("b", &big),
+            tool_msg("c", &big),
+            tool_msg("d", &big),
+        ];
+        // Need ~one result's worth: only the oldest goes.
+        let freed = prune_tool_results_to_free(&mut msgs, 1, 4000);
+        assert!((4000..8000).contains(&freed), "freed {freed}");
+        assert!(msgs[1].content_text().unwrap().contains("elided"));
+        assert_eq!(msgs[2].content_text().unwrap(), big);
+        assert_eq!(msgs[3].content_text().unwrap(), big);
+        // A later, larger need continues from where it left off.
+        let more = prune_tool_results_to_free(&mut msgs, 1, usize::MAX);
+        assert!(more >= 8000, "freed {more}");
+        assert_eq!(msgs[4].content_text().unwrap(), big); // most recent kept
     }
 
     #[test]

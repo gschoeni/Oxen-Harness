@@ -60,6 +60,7 @@ The catalog (see `harness-protocol/src/event.rs` for the exact fields):
 | `agent.tool_delta` | streaming fragments of a tool call's JSON args |
 | `agent.usage` | live token usage around each model call |
 | `agent.compacted` / `agent.compression` / `agent.retry` | context + resilience notices |
+| `agent.notice` | a one-line notice about something the agent did on its own (`kind` = `background_task`: a finished task's output was delivered to the model) |
 | `agent.question` | `ask_user_question` — answer via `POST /v1/questions/{id}/answer` |
 | `agent.approval_request` | permission gate — answer via `POST /v1/approvals/{id}/answer` |
 | `agent.approval` | pending/resolved thread markers for gated calls |

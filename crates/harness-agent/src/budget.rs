@@ -90,6 +90,12 @@ pub fn estimate_tokens_for_chars(chars: usize) -> usize {
     chars / CHARS_PER_TOKEN
 }
 
+/// The inverse of [`estimate_tokens_for_chars`]: how many characters a raw
+/// token count stands for.
+pub fn chars_for_tokens(tokens: usize) -> usize {
+    tokens.saturating_mul(CHARS_PER_TOKEN)
+}
+
 /// The full prompt size one call's reported usage describes, reconciling the
 /// two counting styles seen in the wild (both verified against real
 /// endpoints):

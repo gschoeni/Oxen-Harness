@@ -17,10 +17,20 @@ pub enum AgentEvent {
     /// the tool name — lets a UI stream the in-progress content (a file being
     /// written, a canvas document) before the call is complete.
     ToolDelta { name: String, delta: String },
-    /// A tool is about to run, with its name and JSON arguments.
-    ToolStart { name: String, arguments: String },
+    /// A tool is about to run, with its name and JSON arguments. `call_id` is
+    /// the model's id for the call; calls in one reply may run concurrently,
+    /// so a UI pairs [`AgentEvent::ToolEnd`] with its start by id, not name.
+    ToolStart {
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
     /// A tool finished, with its (possibly truncated for display) result.
-    ToolEnd { name: String, result: String },
+    ToolEnd {
+        call_id: String,
+        name: String,
+        result: String,
+    },
     /// The session's cumulative token usage and current context fill, surfaced
     /// around each model call so a UI can track usage live *within* a turn (each
     /// tool-loop iteration re-sends the growing context, which this captures)
@@ -31,6 +41,17 @@ pub enum AgentEvent {
         context_tokens: usize,
         prompt_tokens_used: usize,
         completion_tokens_used: usize,
+    },
+    /// A background shell task (started with `is_background`, or a foreground
+    /// command that outlived its patience) finished, and its final output was
+    /// just delivered to the model as a message. Surfaced so a UI can print a
+    /// one-line notice where the delivery happened — the message itself
+    /// never renders.
+    BackgroundTaskDone {
+        task_id: u64,
+        command: String,
+        /// The exit code, or `None` when the task died on a signal.
+        exit_code: Option<i32>,
     },
     /// The transcript was compacted to fit the context window — older history
     /// was pruned and/or summarized so the session can continue instead of
@@ -76,4 +97,15 @@ pub enum AgentEvent {
         /// session model is unchanged — only this call switches.
         switching_to: Option<String>,
     },
+}
+
+/// The one-line notice for a background task whose output was just delivered
+/// to the model — shared by every front end so the wording can't drift.
+pub fn background_task_notice(task_id: u64, command: &str, exit_code: Option<i32>) -> String {
+    let exit = match exit_code {
+        Some(0) => "finished".to_string(),
+        Some(code) => format!("exited with code {code}"),
+        None => "ended on a signal".to_string(),
+    };
+    format!("background task {task_id} {exit} — output delivered to the model: {command}")
 }

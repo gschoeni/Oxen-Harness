@@ -173,8 +173,11 @@ impl Agent {
 
             // Messages the user sent while the last round ran enter the
             // transcript here — before the next model call — so steering
-            // lands mid-work, not after the turn ends.
+            // lands mid-work, not after the turn ends. Background commands
+            // that finished meanwhile land the same way, so the model never
+            // has to poll for them.
             self.drain_interjections()?;
+            self.deliver_settled_tasks(&mut on_event).await?;
 
             // Make room for the next request, then send it and fold the round's
             // token usage back into the running totals.
@@ -278,6 +281,12 @@ impl Agent {
                 // Checked before the nudges — a real user message outranks a
                 // synthetic corrective.
                 if self.drain_interjections()? {
+                    continue;
+                }
+                // Likewise a background task that finished while the reply
+                // streamed: the model asked for that work, so it sees the
+                // result before it signs off.
+                if self.deliver_settled_tasks(&mut on_event).await? {
                     continue;
                 }
                 // Otherwise: a corrective, or the final answer.
@@ -554,6 +563,13 @@ impl Agent {
     /// Run every tool call in a reply, recording results (and any images they
     /// produced) into the transcript. Returns the loop-guard's stop verdict
     /// when identical calls have repeated past the line.
+    ///
+    /// Every call is gated and parsed first (approval prompts stay sequential
+    /// and nothing runs until the last one is answered), then the calls run
+    /// in waves — shared tools together, exclusive tools alone (see
+    /// [`super::tools::plan_waves`]) — and finally the results are folded
+    /// into the transcript in the order the model made the calls, so the
+    /// provider sees one `tool` message per call in the order it asked.
     async fn run_tool_calls<F>(
         &mut self,
         assembled: &AssembledMessage,
@@ -569,10 +585,36 @@ impl Agent {
             assembled.finish_reason.as_deref(),
             Some("length" | "max_tokens")
         );
-        let mut loop_stop = None;
+        let calls = &assembled.tool_calls;
 
-        for call in &assembled.tool_calls {
-            let result = self.run_tool(call, reply_truncated, on_event).await;
+        let mut prepared = Vec::with_capacity(calls.len());
+        for (index, call) in calls.iter().enumerate() {
+            prepared.push(
+                self.prepare_tool(index, call, reply_truncated, on_event)
+                    .await,
+            );
+        }
+
+        let waves = super::tools::plan_waves(calls, |name| self.concurrency_of(name));
+        let mut results: Vec<Option<String>> = (0..calls.len()).map(|_| None).collect();
+        let mut prepared: Vec<Option<super::tools::PreparedCall>> =
+            prepared.into_iter().map(Some).collect();
+        for wave in waves {
+            let batch: Vec<_> = wave
+                .into_iter()
+                .filter_map(|i| prepared[i].take())
+                .collect();
+            for (index, result) in Self::run_wave(batch, on_event).await {
+                results[index] = Some(result);
+            }
+        }
+
+        let mut loop_stop = None;
+        for (call, result) in calls.iter().zip(results) {
+            // A call whose task vanished (a panicking tool) still owes the
+            // model a result, or the provider rejects the unpaired call.
+            let result = result
+                .unwrap_or_else(|| "tool error: the tool crashed before producing a result".into());
             // The work that obliges a charted trail, per the prompt guideline
             // ("at the latest, right before your first file edit or shell
             // command"). Attempts count — a refused edit is still work.
@@ -641,6 +683,42 @@ impl Agent {
             }
         }
         Ok(loop_stop)
+    }
+
+    /// Deliver the final output of every background task that finished since
+    /// the last check, each as its own framed user message, so the model
+    /// reads results it asked for without polling `task_output`. Returns
+    /// whether anything was delivered, so a turn about to end can go one
+    /// more round instead.
+    async fn deliver_settled_tasks<F>(&mut self, on_event: &mut F) -> Result<bool, AgentError>
+    where
+        F: FnMut(&AgentEvent),
+    {
+        let Some(tasks) = self.tools.background_tasks().cloned() else {
+            return Ok(false);
+        };
+        let settled = tasks.take_settled_unannounced().await;
+        if settled.is_empty() {
+            return Ok(false);
+        }
+        for task in settled {
+            let output = match tasks.output(task.id).await {
+                Ok(text) => text,
+                Err(e) => format!("(output unavailable: {e})"),
+            };
+            self.push(ChatMessage::user(prompt::background_task_delivery(
+                task.id,
+                &task.command,
+                task.exit.code,
+                &output,
+            )))?;
+            on_event(&AgentEvent::BackgroundTaskDone {
+                task_id: task.id,
+                command: task.command,
+                exit_code: task.exit.code,
+            });
+        }
+        Ok(true)
     }
 
     /// Move everything the user sent mid-turn into the transcript, each as

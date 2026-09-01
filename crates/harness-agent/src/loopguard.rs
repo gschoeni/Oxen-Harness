@@ -42,7 +42,7 @@ impl LoopGuard {
     /// Observe one executed tool call and its result.
     pub fn observe(&mut self, name: &str, arguments: &str, result: &str) -> LoopVerdict {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (name, arguments, result).hash(&mut hasher);
+        (name, canonical_arguments(arguments), result).hash(&mut hasher);
         let key = hasher.finish();
         if self.last == Some(key) {
             self.consecutive += 1;
@@ -64,9 +64,62 @@ impl LoopGuard {
     }
 }
 
+/// Arguments in a canonical form — parsed and re-serialized, so key order
+/// and whitespace differences between two otherwise identical calls (which
+/// models produce freely) don't hide a repeat. Unparseable arguments hash
+/// as written.
+fn canonical_arguments(arguments: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(arguments) {
+        Ok(value) => canonical_json(&value),
+        Err(_) => arguments.to_string(),
+    }
+}
+
+fn canonical_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let fields: Vec<String> = keys
+                .into_iter()
+                .map(|k| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap_or_default(),
+                        canonical_json(&map[k])
+                    )
+                })
+                .collect();
+            format!("{{{}}}", fields.join(","))
+        }
+        serde_json::Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(canonical_json).collect();
+            format!("[{}]", items.join(","))
+        }
+        other => other.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_order_and_whitespace_do_not_hide_a_repeat() {
+        let mut guard = LoopGuard::default();
+        assert_eq!(
+            guard.observe("t", r#"{"a":1,"b":2}"#, "r"),
+            LoopVerdict::Fine
+        );
+        assert_eq!(
+            guard.observe("t", r#"{ "b": 2, "a": 1 }"#, "r"),
+            LoopVerdict::Fine
+        );
+        assert_eq!(
+            guard.observe("t", r#"{"b":2,"a":1}"#, "r"),
+            LoopVerdict::Nudge
+        );
+    }
 
     #[test]
     fn identical_repeats_nudge_then_stop() {

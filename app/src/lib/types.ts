@@ -520,6 +520,9 @@ export interface TokenEvent {
 /** `agent://tool` payload, tagged with the chat session it belongs to. */
 export interface ToolEvent {
   session: string;
+  /** The model's id for the call; calls in one reply may run concurrently,
+   *  so pair an `end` with its `start` by this id, not by name. */
+  call_id?: string;
   phase: "start" | "end";
   name: string;
   detail: string;

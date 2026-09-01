@@ -84,8 +84,10 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
             },
         },
         AgentEvent::ToolPending { .. } => Cue::Ignore,
-        AgentEvent::ToolStart { name, arguments } => tool_start_cue(ui, name, arguments),
-        AgentEvent::ToolEnd { name, result } => tool_end_cue(ui, name, result),
+        AgentEvent::ToolStart {
+            name, arguments, ..
+        } => tool_start_cue(ui, name, arguments),
+        AgentEvent::ToolEnd { name, result, .. } => tool_end_cue(ui, name, result),
         AgentEvent::ApprovalPending { .. } => Cue::ApprovalPending,
         AgentEvent::ApprovalResolved {
             command, decision, ..
@@ -108,6 +110,24 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
         },
         // The context filled and was compacted to keep the session going;
         // surface a quiet notice so the trimming isn't invisible.
+        // A background command finished and its output went to the model:
+        // one quiet line so the model's next move has a visible cause.
+        AgentEvent::BackgroundTaskDone {
+            task_id,
+            command,
+            exit_code,
+        } => Cue::Block {
+            lines: vec![format!(
+                "  {} {}",
+                ui.green("⚙"),
+                ui.dim(&harness_agent::event::background_task_notice(
+                    *task_id,
+                    &truncate(command, 80),
+                    *exit_code,
+                )),
+            )],
+            then: NextSpinner::Thinking,
+        },
         AgentEvent::Compacted { detail } => Cue::Block {
             lines: vec![format!(
                 "  {} {}",
@@ -279,6 +299,7 @@ mod tests {
         let cue = cue_for(
             &ui(),
             &AgentEvent::ToolStart {
+                call_id: "c".into(),
                 name: "shell".into(),
                 arguments: r#"{"command":"ls -la"}"#.into(),
             },
@@ -301,6 +322,7 @@ mod tests {
         let cue = cue_for(
             &ui(),
             &AgentEvent::ToolStart {
+                call_id: "c".into(),
                 name: harness_tools::PLAN_TOOL.into(),
                 arguments: args.into(),
             },
@@ -317,6 +339,7 @@ mod tests {
         let cue = cue_for(
             &ui(),
             &AgentEvent::ToolEnd {
+                call_id: "c".into(),
                 name: harness_tools::PLAN_TOOL.into(),
                 result: "plan updated".into(),
             },
@@ -359,6 +382,7 @@ mod tests {
             cue_for(
                 &ui(),
                 &AgentEvent::ToolStart {
+                    call_id: "c".into(),
                     name: harness_tools::ASK_USER_TOOL.into(),
                     arguments: "{}".into()
                 }
@@ -369,6 +393,7 @@ mod tests {
             cue_for(
                 &ui(),
                 &AgentEvent::ToolEnd {
+                    call_id: "c".into(),
                     name: harness_tools::ASK_USER_TOOL.into(),
                     result: "chose: yes".into()
                 }

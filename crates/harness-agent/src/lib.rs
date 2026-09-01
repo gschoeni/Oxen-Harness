@@ -32,7 +32,7 @@ mod agent;
 mod config;
 pub mod errlog;
 mod error;
-mod event;
+pub mod event;
 mod interject;
 mod prompt;
 pub mod rules;

@@ -12,6 +12,7 @@
 mod call;
 mod compaction;
 mod compression;
+mod repair;
 mod tools;
 mod turn;
 
@@ -198,6 +199,7 @@ impl Agent {
         }
         let attachments = config.attachment_root.clone().map(AttachmentStore::new);
         let ccr = setup_compression(&config, &mut tools);
+        let steer = tools.steer_notifier();
         Ok(Self {
             client,
             tools,
@@ -223,7 +225,7 @@ impl Agent {
             compression_cache: HashMap::new(),
             tokens_saved: 0,
             prefire: None,
-            interjections: crate::Interjections::default(),
+            interjections: crate::Interjections::with_notifier(steer),
             rules: crate::rules::RuleSet::default(),
             rule_history: crate::rules::RuleHistory::default(),
         })
@@ -256,6 +258,7 @@ impl Agent {
         let rule_history = store
             .session_state(&session_id, RULE_HISTORY_STATE)?
             .unwrap_or_default();
+        let steer = tools.steer_notifier();
         let agent = Self {
             client,
             tools,
@@ -284,7 +287,7 @@ impl Agent {
             compression_cache: HashMap::new(),
             tokens_saved: 0,
             prefire: None,
-            interjections: crate::Interjections::default(),
+            interjections: crate::Interjections::with_notifier(steer),
             rules: crate::rules::RuleSet::default(),
             rule_history,
         };

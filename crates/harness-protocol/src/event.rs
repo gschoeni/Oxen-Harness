@@ -102,6 +102,10 @@ pub enum ProtocolEvent {
     #[serde(rename = "agent.tool")]
     Tool {
         session: String,
+        /// The model's id for the call. Calls in one reply may run at the
+        /// same time, so a UI pairs the `end` with its `start` by this id.
+        #[serde(default)]
+        call_id: String,
         phase: ToolPhase,
         name: String,
         detail: String,
@@ -123,6 +127,15 @@ pub enum ProtocolEvent {
         context_window: usize,
         prompt_tokens_used: usize,
         completion_tokens_used: usize,
+    },
+    /// A one-line notice about something the agent did on its own that a
+    /// transcript never shows — for now, a background task's output being
+    /// delivered to the model (`kind = "background_task"`).
+    #[serde(rename = "agent.notice")]
+    Notice {
+        session: String,
+        kind: String,
+        text: String,
     },
     /// The transcript was compacted to fit the context window.
     #[serde(rename = "agent.compacted")]
@@ -306,6 +319,7 @@ impl ProtocolEvent {
         match self {
             Self::Token { .. } => "agent.token",
             Self::Tool { .. } => "agent.tool",
+            Self::Notice { .. } => "agent.notice",
             Self::ToolDelta { .. } => "agent.tool_delta",
             Self::Usage { .. } => "agent.usage",
             Self::Compacted { .. } => "agent.compacted",
@@ -349,6 +363,7 @@ impl ProtocolEvent {
             Self::Token { session, .. }
             | Self::Tool { session, .. }
             | Self::ToolDelta { session, .. }
+            | Self::Notice { session, .. }
             | Self::Usage { session, .. }
             | Self::Compacted { session, .. }
             | Self::Retry { session, .. }

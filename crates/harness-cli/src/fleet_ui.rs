@@ -138,7 +138,9 @@ impl FleetState {
                 lane.activity = roll_tail(&lane.activity, t, ACTIVITY_TAIL);
                 harness_core::text::push_capped(&mut lane.tail, t, OUTPUT_TAIL);
             }
-            AgentEvent::ToolStart { name, arguments } => {
+            AgentEvent::ToolStart {
+                name, arguments, ..
+            } => {
                 let verbs = ui.tool_verbs(name);
                 let verb = verbs.first().map(String::as_str).unwrap_or("Working");
                 let target = crate::live::tool_target(arguments).unwrap_or_default();

@@ -36,14 +36,24 @@ pub fn agent_event(
             name: name.clone(),
             delta: delta.clone(),
         },
-        AgentEvent::ToolStart { name, arguments } => ProtocolEvent::Tool {
+        AgentEvent::ToolStart {
+            call_id,
+            name,
+            arguments,
+        } => ProtocolEvent::Tool {
             session,
+            call_id: call_id.clone(),
             phase: harness_protocol::ToolPhase::Start,
             name: name.clone(),
             detail: arguments.clone(),
         },
-        AgentEvent::ToolEnd { name, result } => ProtocolEvent::Tool {
+        AgentEvent::ToolEnd {
+            call_id,
+            name,
+            result,
+        } => ProtocolEvent::Tool {
             session,
+            call_id: call_id.clone(),
             phase: harness_protocol::ToolPhase::End,
             name: name.clone(),
             detail: result.clone(),
@@ -60,6 +70,15 @@ pub fn agent_event(
             context_window,
             prompt_tokens_used: *prompt_tokens_used,
             completion_tokens_used: *completion_tokens_used,
+        },
+        AgentEvent::BackgroundTaskDone {
+            task_id,
+            command,
+            exit_code,
+        } => ProtocolEvent::Notice {
+            session,
+            kind: "background_task".into(),
+            text: harness_agent::event::background_task_notice(*task_id, command, *exit_code),
         },
         AgentEvent::Compacted { detail } => ProtocolEvent::Compacted {
             session,
