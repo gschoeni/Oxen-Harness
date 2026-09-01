@@ -5,6 +5,7 @@
 //! [`crate::turn`]. This module is the loop that connects them: prompt
 //! history, the stacked-queue reminder, and the `/command` dispatch table.
 
+use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -19,13 +20,52 @@ use crate::theme::{self, Ui};
 use crate::turn::{ends_mid_turn, run_turn_and_drain, TurnRequest};
 use crate::{commands, live};
 
-/// Immutable, session-scoped context for a REPL run: the values set once at
-/// startup and threaded through the line handler unchanged. Bundling them keeps
-/// [`handle_line`] to the state that actually varies (the agent, UI, and queue).
+/// Rebuild the live agent on an earlier session's transcript. `main` owns the
+/// pieces a resume needs (client, tools, config, stream rules), so it hands the
+/// REPL a closure rather than the parts.
+pub(crate) type AgentFactory<'a> = dyn Fn(&str) -> Result<Agent> + 'a;
+
+/// Session-scoped context for a REPL run: the values set once at startup and
+/// threaded through the line handler. Bundling them keeps [`handle_line`] to
+/// the state that actually varies (the agent, UI, and queue).
+///
+/// The session id is the one exception to "set once" — `/resume` moves the
+/// whole REPL onto another trail — so it lives behind a cell and is read
+/// through [`ReplContext::session`].
 pub(crate) struct ReplContext<'a> {
     pub(crate) store: &'a Arc<HistoryStore>,
-    pub(crate) session: &'a str,
     pub(crate) workspace_root: &'a Path,
+    session: RefCell<String>,
+    resume: &'a AgentFactory<'a>,
+}
+
+impl<'a> ReplContext<'a> {
+    pub(crate) fn new(
+        store: &'a Arc<HistoryStore>,
+        session: &str,
+        workspace_root: &'a Path,
+        resume: &'a AgentFactory<'a>,
+    ) -> Self {
+        Self {
+            store,
+            workspace_root,
+            session: RefCell::new(session.to_string()),
+            resume,
+        }
+    }
+
+    /// The session the REPL is on right now.
+    pub(crate) fn session(&self) -> String {
+        self.session.borrow().clone()
+    }
+
+    /// Build the agent for `session_id` and move the REPL onto it, so the exit
+    /// screen and `/export` follow the trail the user actually picked up.
+    pub(crate) fn resume_agent(&self, session_id: &str) -> Result<Agent> {
+        let agent = (self.resume)(session_id)?;
+        *self.session.borrow_mut() = session_id.to_string();
+        Ok(agent)
+    }
 }
 
 /// The classic readline REPL for pipes, dumb terminals, and
@@ -116,7 +156,7 @@ pub(crate) async fn run_classic_repl(
             Err(rustyline::error::ReadlineError::Interrupted) => {
                 match exit_guard.on_ctrl_c(false) {
                     crate::interrupt::CtrlC::Exit => {
-                        print!("{}", theme::death_screen(ui, ctx.session));
+                        print!("{}", theme::death_screen(ui, &ctx.session()));
                         break;
                     }
                     // No draft exists here, so the first press always arms.
@@ -125,7 +165,7 @@ pub(crate) async fn run_classic_repl(
             }
             // Ctrl-D: leave cleanly.
             Err(rustyline::error::ReadlineError::Eof) => {
-                print!("{}", theme::death_screen(ui, ctx.session));
+                print!("{}", theme::death_screen(ui, &ctx.session()));
                 break;
             }
             Err(e) => return Err(e.into()),
@@ -169,7 +209,7 @@ pub(crate) async fn run_box_repl(
             live::read_idle(ui, &mut queue, &mut history, &seed, status, compression).await?;
         match idle {
             live::Idle::Exit => {
-                print!("{}", theme::death_screen(ui, ctx.session));
+                print!("{}", theme::death_screen(ui, &ctx.session()));
                 break;
             }
             live::Idle::Submit(line) => {
@@ -205,7 +245,7 @@ async fn handle_line(
     match parse_command(line) {
         Command::Empty => {}
         Command::Exit => {
-            print!("{}", theme::death_screen(ui, ctx.session));
+            print!("{}", theme::death_screen(ui, &ctx.session()));
             return Ok(true);
         }
         Command::Help => print!("{}", theme::help(ui)),
@@ -213,21 +253,21 @@ async fn handle_line(
         Command::Queue(rest) => {
             // `/queue run` may stream turns that the user can Ctrl-C to quit.
             if commands::queue::handle_repl(rest, queue, agent, ui, carryover).await? {
-                print!("{}", theme::death_screen(ui, ctx.session));
+                print!("{}", theme::death_screen(ui, &ctx.session()));
                 return Ok(true);
             }
         }
         Command::Loop(rest) => {
             // A running loop streams turns the user can Ctrl-C to quit.
             if commands::loops::handle_repl(rest, agent, ui, ctx.workspace_root).await? {
-                print!("{}", theme::death_screen(ui, ctx.session));
+                print!("{}", theme::death_screen(ui, &ctx.session()));
                 return Ok(true);
             }
         }
         Command::CodeReview(rest) => {
             // A running review streams turns the user can Ctrl-C to quit.
             if commands::review::handle_repl(rest, agent, ui, ctx.workspace_root).await? {
-                print!("{}", theme::death_screen(ui, ctx.session));
+                print!("{}", theme::death_screen(ui, &ctx.session()));
                 return Ok(true);
             }
         }
@@ -244,9 +284,10 @@ async fn handle_line(
         Command::Compression(rest) => commands::compression::handle_repl(rest, agent, ui)?,
         Command::Permissions(rest) => commands::permissions::handle_repl(rest, agent, ui)?,
         Command::Usage => commands::usage::handle_repl(ctx.store, ui).await,
+        Command::Resume(rest) => commands::resume::handle_repl(rest, agent, ui, ctx).await?,
         Command::Preview => commands::preview::handle_repl(ui),
         Command::Model(rest) => commands::model::handle_repl(rest, agent, ui).await?,
-        Command::Export(dest) => export(ctx.store, ctx.session, dest, ui)?,
+        Command::Export(dest) => export(ctx.store, &ctx.session(), dest, ui)?,
         Command::Retry => {
             // Only a transcript that stops mid-turn has anything to re-drive;
             // retrying a settled conversation would confuse the model (and
@@ -260,14 +301,14 @@ async fn handle_line(
                 return Ok(false);
             }
             if run_turn_and_drain(agent, TurnRequest::Continue, ui, queue, carryover).await? {
-                print!("{}", theme::death_screen(ui, ctx.session));
+                print!("{}", theme::death_screen(ui, &ctx.session()));
                 return Ok(true);
             }
         }
         Command::Prompt(prompt) => {
             // Ctrl-C mid-stream ends the expedition just like quitting does.
             if run_turn_and_drain(agent, TurnRequest::Prompt(prompt), ui, queue, carryover).await? {
-                print!("{}", theme::death_screen(ui, ctx.session));
+                print!("{}", theme::death_screen(ui, &ctx.session()));
                 return Ok(true);
             }
         }

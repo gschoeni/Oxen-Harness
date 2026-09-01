@@ -75,9 +75,16 @@ struct Args {
     host: Option<String>,
 
     /// Resume a previous session by id (printed on the death screen when you
-    /// quit). Restores that session's transcript, workspace, and model.
-    #[arg(long, value_name = "SESSION_ID")]
+    /// quit). Restores that session's transcript, workspace, and model. Bare
+    /// `--resume` opens a picker over this project's recent trails.
+    #[arg(long, value_name = "SESSION_ID", num_args = 0..=1, default_missing_value = "")]
     resume: Option<String>,
+
+    /// Run one turn headlessly and exit, printing the model's reply on stdout:
+    /// `-p "fix the flaky test"`. With no prompt, the whole of a piped stdin is
+    /// the prompt. No banner, no session review — exit code 1 if the turn fails.
+    #[arg(short = 'p', long, value_name = "PROMPT", num_args = 0..=1, default_missing_value = "")]
+    print: Option<String>,
 
     /// Continue your most recent session — transcript, workspace, and model
     /// restored. Handy after a provider outage or lost internet: relaunch with
@@ -189,6 +196,21 @@ async fn main() -> Result<()> {
 
     let store = Arc::new(open_store()?);
 
+    // A bare `--resume` (no id) asks which trail to pick up, before anything
+    // else is built. Backing out of the picker sets out fresh.
+    if args.resume.as_deref() == Some("") {
+        let root = args
+            .workspace
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        // Sessions record the *canonical* workspace (that's what `Workspace`
+        // stores), so match against the same form — otherwise `/tmp` finds
+        // nothing that `/private/tmp` recorded.
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
+        args.resume = commands::resume::pick_at_startup(&store, &root, &ui);
+    }
+
     // `--continue` is `--resume` pointed at the newest *native* session on
     // record. Imported transcripts (Claude Code / Cursor) share the store but
     // are review-only — they must never resume as a live agent.
@@ -259,6 +281,19 @@ async fn main() -> Result<()> {
         context_window,
         local_server: _local_server,
     } = resolve_endpoint(&args, resume_meta.as_ref(), &ui).await;
+
+    // Everything that needs the network gets kicked off here, the moment the
+    // model is known, and is *never* awaited on the way to the first prompt:
+    // the pricing catalog feeds the banner's spend row and the context
+    // trailer's rate, and both read "not priced yet" without complaint.
+    // A headless `-p` run shows neither figure, so it doesn't even ask.
+    let warm_pricing = args.print.is_none().then(|| {
+        tokio::spawn({
+            let model = model.clone();
+            async move { pricing::warm_for(&model).await }
+        })
+    });
+
     // Migrate any legacy plaintext keys out of connection.json into .env (the
     // shared store, already loaded into the env above) so web search and auth
     // work without re-entering keys.
@@ -269,6 +304,28 @@ async fn main() -> Result<()> {
     let config = agent_config(&model, context_window, &tools, &workspace, &ui);
 
     endpoint::register_fleet_tool(&mut tools, &client, &config, &workspace, store.clone(), &ui);
+
+    // Everything a mid-session `/resume` needs to rebuild the agent on another
+    // transcript. The client, tools, and config are all cheap to clone, so the
+    // REPL gets a factory rather than a restart.
+    let rebuild_agent = {
+        let client = client.clone();
+        let tools = tools.clone();
+        let config = config.clone();
+        let store = store.clone();
+        let root = workspace.root().to_path_buf();
+        move |session_id: &str| -> Result<Agent> {
+            let mut agent = Agent::resume_from_store(
+                client.clone(),
+                tools.clone(),
+                store.clone(),
+                session_id.to_string(),
+                config.clone(),
+            )?;
+            agent.set_rules(endpoint::stream_rules(&root));
+            Ok(agent)
+        }
+    };
 
     // Resume an existing transcript, or strike out on a fresh session.
     let (mut agent, session, resumed_entries) = match &args.resume {
@@ -294,12 +351,34 @@ async fn main() -> Result<()> {
         }
     };
 
-    // The opening banner shows the all-time grand total spend across every model
-    // and project (best-effort; unavailable reads as `None` → "—"). Per-turn
-    // usage is priced and recorded as the session runs (see `handle_line`).
-    let cost_usd = commands::usage::total_cost_usd(&store).await;
-    let total_tokens = commands::usage::total_tokens(&store);
+    // `-p/--print`: one turn, straight to stdout, then out — before the banner,
+    // the store scans, and the exit review, none of which a script wants.
+    if let Some(arg) = args.print.as_deref() {
+        let Some(prompt) = commands::print::resolve_prompt(arg) else {
+            eprintln!("--print needs a prompt: pass one as an argument or pipe it on stdin");
+            std::process::exit(2);
+        };
+        let code = commands::print::run(&mut agent, &ui, prompt).await;
+        preview::shutdown().await;
+        std::process::exit(code);
+    }
 
+    // Give the catalog fetch a moment to land so the banner can show real
+    // spend, then move on regardless: an endpoint that's slow (or down) costs
+    // a dash in one row, never the first prompt.
+    if let Some(warm) = warm_pricing {
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(250), warm).await;
+    }
+
+    // The opening banner shows the all-time grand total spend across every model
+    // and project (priced from the warmed cache; unpriced reads as `None` → "—").
+    // Per-turn usage is priced and recorded as the session runs (see `handle_line`).
+    let recent = commands::resume::recent_trails(
+        &store,
+        workspace.root(),
+        &session,
+        commands::resume::BANNER_TRAILS,
+    );
     print!(
         "{}",
         theme::banner(
@@ -308,39 +387,25 @@ async fn main() -> Result<()> {
             &model,
             &workspace.root().display().to_string(),
             &session,
-            total_tokens,
-            cost_usd,
+            &theme::BannerFacts {
+                tokens_used: commands::usage::total_tokens(&store),
+                cost_usd: commands::usage::total_cost_usd(&store),
+                weather: Some(almanac::weather()),
+                recent: &recent,
+            },
         )
     );
     println!();
     if let Some(n) = resumed_entries {
-        println!(
-            "  {} {}",
-            ui.green("↺ Picking up the trail:"),
-            ui.cream(&format!("{n} journal entries restored")),
-        );
-        // A transcript that stops mid-turn (the reply never landed — provider
-        // error, no internet, a crash) can be continued in place.
-        if ends_mid_turn(agent.messages()) {
-            println!(
-                "  {} {}",
-                ui.red("⚠"),
-                ui.dim(
-                    "this expedition stopped mid-turn — /retry is pre-filled, \
-                     press ⏎ to pick up where it left off"
-                ),
-            );
+        for line in commands::resume::restored_lines(&ui, n, ends_mid_turn(agent.messages())) {
+            println!("{line}");
         }
         println!();
     }
 
-    // Shared per-run context (store, pricing cache, session) used by both the
+    // Shared per-run context (store, session, resume factory) used by both the
     // one-shot loop path and the interactive REPL.
-    let ctx = ReplContext {
-        store: &store,
-        session: &session,
-        workspace_root: workspace.root(),
-    };
+    let ctx = ReplContext::new(&store, &session, workspace.root(), &rebuild_agent);
 
     // `oxen-harness loop run ...`: run the loop once, then exit (no REPL).
     // Dev servers the loop started must be stopped on *both* paths — the
@@ -351,11 +416,6 @@ async fn main() -> Result<()> {
         outcome?;
         return Ok(());
     }
-
-    // Warm the pricing cache before the REPL paints its first context trailer,
-    // so the per-token rate is visible next to the model up front — before the
-    // session has spent a single token.
-    pricing::warm_for(agent.model()).await;
 
     // Interactive TTYs use the bordered, bottom-pinned box composer (multi-line,
     // history, queue) for both idle and in-turn input. Pipes, dumb terminals, and
@@ -374,4 +434,49 @@ async fn main() -> Result<()> {
     // explicitly so an `npm run dev` never outlives the expedition.
     preview::shutdown().await;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+    use clap::Parser;
+
+    fn parse(argv: &[&str]) -> Args {
+        Args::try_parse_from(argv).expect("valid arguments")
+    }
+
+    #[test]
+    fn print_takes_a_prompt_or_stands_alone() {
+        // `-p "…"` carries the prompt; a bare `-p` is the read-stdin form
+        // (empty, not absent — that's what tells the two apart).
+        assert_eq!(
+            parse(&["oxen-harness", "-p", "fix the flaky test"])
+                .print
+                .as_deref(),
+            Some("fix the flaky test")
+        );
+        assert_eq!(
+            parse(&["oxen-harness", "--print"]).print.as_deref(),
+            Some("")
+        );
+        assert_eq!(parse(&["oxen-harness"]).print, None);
+    }
+
+    #[test]
+    fn resume_takes_an_id_or_opens_the_picker() {
+        assert_eq!(
+            parse(&["oxen-harness", "--resume", "8f3c"])
+                .resume
+                .as_deref(),
+            Some("8f3c")
+        );
+        // Bare `--resume` is the picker form.
+        assert_eq!(
+            parse(&["oxen-harness", "--resume"]).resume.as_deref(),
+            Some("")
+        );
+        assert_eq!(parse(&["oxen-harness"]).resume, None);
+        // `--continue` still refuses to share the wagon with `--resume`.
+        assert!(Args::try_parse_from(["oxen-harness", "-c", "--resume", "8f3c"]).is_err());
+    }
 }

@@ -60,6 +60,9 @@ pub enum Command {
     Permissions(Option<String>),
     /// Show all-time input/output tokens and estimated spend by model.
     Usage,
+    /// Pick up an earlier trail in this workspace: `/resume` opens a picker
+    /// over the recent sessions, `/resume <id-prefix>` jumps straight to one.
+    Resume(Option<String>),
     /// Open the agent-started dev server in the browser (live preview).
     Preview,
     /// Re-drive the last turn against the existing transcript — for a turn
@@ -180,6 +183,13 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
             ("rm", "delete a rule"),
             ("test", "try a rule against sample text"),
         ]),
+    },
+    SlashSpec {
+        name: "/resume",
+        aliases: &["/trails"],
+        description: "pick up an earlier trail in this project",
+        build: Command::Resume,
+        completer: ArgCompleter::None,
     },
     SlashSpec {
         name: "/retry",
@@ -427,6 +437,16 @@ mod tests {
         assert_eq!(
             parse_command("/auth sk-abc123"),
             Command::Auth(Some("sk-abc123".into()))
+        );
+    }
+
+    #[test]
+    fn resume_with_and_without_an_id_prefix() {
+        assert_eq!(parse_command("/resume"), Command::Resume(None));
+        assert_eq!(parse_command("/trails"), Command::Resume(None));
+        assert_eq!(
+            parse_command("/resume 8f3c"),
+            Command::Resume(Some("8f3c".into()))
         );
     }
 

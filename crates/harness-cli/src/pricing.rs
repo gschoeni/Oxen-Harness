@@ -62,6 +62,17 @@ fn cached(model: &str) -> Option<Option<ModelPricing>> {
     guard.as_ref().and_then(|c| c.get(model).copied())
 }
 
+/// Whether a catalog fetch has landed at all — a lock read, never a request.
+///
+/// Startup surfaces (the banner's all-time spend) price whatever is on record
+/// from this cache instead of awaiting the network: `false` means "not priced
+/// *yet*", and the figure fills in on the next usage update rather than
+/// holding the first prompt back.
+pub(crate) fn is_warm() -> bool {
+    let guard = CACHE.lock().expect("pricing cache poisoned");
+    guard.as_ref().is_some_and(|c| !c.is_empty())
+}
+
 /// The dollar cost of `prompt_tokens` + `completion_tokens` at `model`'s cached
 /// rate, or `None` when the model isn't priced (unfetched, or absent from the
 /// catalog) — in which case the trailer omits the cost segment.
@@ -184,6 +195,39 @@ mod tests {
             output_cost_per_token: 0.0,
         });
         assert_eq!(label, None);
+    }
+
+    #[test]
+    fn cold_cache_still_renders_the_context_trailer_without_a_rate() {
+        // The REPL no longer awaits a catalog fetch before its first prompt, so
+        // the trailer has to read a cold cache without losing a line — the rate
+        // and the cost simply aren't shown until a fetch lands.
+        let ui =
+            crate::theme::Ui::with(false, std::sync::Arc::new(harness_theme::Theme::default()));
+        let lines = crate::turn::context_usage_lines_from(&ui, "cold-cache-model", 10, 100, 8, 2);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("cold-cache-model"), "{lines:?}");
+        assert!(
+            !lines[0].contains("/M"),
+            "no rate on a cold cache: {lines:?}"
+        );
+        assert!(
+            !lines[1].contains('$'),
+            "no cost on a cold cache: {lines:?}"
+        );
+
+        // Once the rate lands (the background warm-up, or the next turn's
+        // `warm_for`), the same call shows it.
+        seed(
+            "cold-cache-model",
+            Some(ModelPricing {
+                input_cost_per_token: 0.000_003,
+                output_cost_per_token: 0.000_015,
+            }),
+        );
+        let warm = crate::turn::context_usage_lines_from(&ui, "cold-cache-model", 10, 100, 8, 2);
+        assert!(warm[0].contains("$3/M in · $15/M out"), "{warm:?}");
+        assert!(is_warm(), "a seeded cache reads as warm");
     }
 
     #[test]

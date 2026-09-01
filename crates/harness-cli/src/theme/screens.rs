@@ -1,28 +1,85 @@
 //! Full-screen themed compositions: the startup banner (ASCII scene + block
-//! wordmark + trail journal), the `/help` menu, and the tombstone exit screen.
+//! wordmark + trail journal + recent trails), the `/help` menu, and the
+//! tombstone exit screen.
 
-use crate::almanac::{pick, today, weather};
+use crate::almanac::{pick, today};
 
 use super::{flourish, Ui};
 
+/// A previous session for this workspace, as the banner and the `/resume`
+/// picker both show it. Built by [`crate::commands::resume::recent_trails`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentTrail {
+    /// The session id `/resume` takes (matched by prefix).
+    pub id: String,
+    /// The session's first user message.
+    pub title: String,
+    /// How long ago it started, already humanized ("2h ago").
+    pub age: String,
+    /// Journal entries (messages) on record.
+    pub entries: i64,
+}
+
+/// The live figures the banner shows alongside the theme's static flavor.
+/// Bundled so the banner keeps one argument per *concern* rather than a
+/// growing positional list.
+#[derive(Default)]
+pub struct BannerFacts<'a> {
+    /// Cumulative all-time token count; replaces the "Total tokens used" row.
+    pub tokens_used: usize,
+    /// Estimated all-time Oxen cloud spend across every model and project.
+    /// `None` when pricing hasn't landed yet — rendered as "—".
+    pub cost_usd: Option<f64>,
+    /// Today's reading for the "Weather" row; `None` renders "—", so a banner
+    /// never waits on a reading that isn't ready.
+    pub weather: Option<&'a str>,
+    /// The last few sessions for this workspace, newest first. Empty hides the
+    /// "Recent trails" block entirely.
+    pub recent: &'a [RecentTrail],
+}
+
+/// One recent-session row: `2h ago · "fix the flaky watch test" · 41 entries`.
+/// The banner and the `/resume` picker share it so the two can't drift.
+pub fn trail_summary(trail: &RecentTrail) -> String {
+    let title = crate::render::truncate(trail.title.trim(), 56);
+    let unit = if trail.entries == 1 {
+        "entry"
+    } else {
+        "entries"
+    };
+    format!("{} · \"{title}\" · {} {unit}", trail.age, trail.entries)
+}
+
+/// A coarse "how long ago" label for `secs` seconds in the past, from "just
+/// now" up to years. Deliberately one unit wide — the banner wants a glanceable
+/// age, not a duration.
+pub fn relative_age(secs: i64) -> String {
+    const MINUTE: i64 = 60;
+    const HOUR: i64 = 60 * MINUTE;
+    const DAY: i64 = 24 * HOUR;
+    const MONTH: i64 = 30 * DAY;
+    const YEAR: i64 = 365 * DAY;
+    match secs.max(0) {
+        s if s < MINUTE => "just now".to_string(),
+        s if s < HOUR => format!("{}m ago", s / MINUTE),
+        s if s < DAY => format!("{}h ago", s / HOUR),
+        s if s < MONTH => format!("{}d ago", s / DAY),
+        s if s < YEAR => format!("{}mo ago", s / MONTH),
+        s => format!("{}y ago", s / YEAR),
+    }
+}
+
 /// Build the full startup banner from the active theme.
 ///
-/// `tokens_used` is the cumulative token count for the live session; it
-/// replaces the value of any `flavor_bottom` row labelled "Total tokens used"
-/// so the banner reflects real usage rather than static flavor text.
-///
-/// `cost_usd` is estimated all-time Oxen cloud spend across every model and
-/// project (recorded input/output tokens at current catalog rates), rendered as
-/// a "Total dollars spent" row in place of the old landmark row. `None` when
-/// pricing is unavailable, shown as "—".
+/// The live figures — token count, spend, weather, and the recent trails for
+/// this workspace — come in as [`BannerFacts`]; everything else is theme voice.
 pub fn banner(
     ui: &Ui,
     base_url: &str,
     model: &str,
     workspace: &str,
     session: &str,
-    tokens_used: usize,
-    cost_usd: Option<f64>,
+    facts: &BannerFacts<'_>,
 ) -> String {
     let v = &ui.theme().voice;
     let mut out = String::new();
@@ -67,7 +124,7 @@ pub fn banner(
         // replaced in place; a fallback spend row is added below for custom
         // themes without either slot. "Date" always opens on today.
         if label == "Next landmark" || label == "Total dollars spent" {
-            let spent = cost_usd.map(format_usd).unwrap_or_else(|| "—".into());
+            let spent = facts.cost_usd.map(format_usd).unwrap_or_else(|| "—".into());
             out.push_str(&journal_row(ui, "Total dollars spent", &spent));
             spend_rendered = true;
         } else if label == "Total tokens used" {
@@ -75,7 +132,9 @@ pub fn banner(
         } else if label == "Date" {
             out.push_str(&journal_row(ui, label, &today()));
         } else if label == "Weather" {
-            out.push_str(&journal_row(ui, label, weather()));
+            // A reading that isn't in hand yet is "—": the banner never blocks
+            // on one.
+            out.push_str(&journal_row(ui, label, facts.weather.unwrap_or("—")));
         } else {
             out.push_str(&journal_row(ui, label, value));
         }
@@ -86,15 +145,34 @@ pub fn banner(
     out.push_str(&journal_row(
         ui,
         "Total tokens used",
-        &format!("{tokens_used} tokens"),
+        &format!("{} tokens", facts.tokens_used),
     ));
     if !spend_rendered {
-        let spent = cost_usd.map(format_usd).unwrap_or_else(|| "—".into());
+        let spent = facts.cost_usd.map(format_usd).unwrap_or_else(|| "—".into());
         out.push_str(&journal_row(ui, "Total dollars spent", &spent));
     }
 
+    // The trails already blazed in this workspace — one keystroke from being
+    // picked back up. Nothing to show on a first visit, so the block is
+    // omitted entirely rather than printing an empty heading.
+    if !facts.recent.is_empty() {
+        out.push('\n');
+        out.push_str(&format!("  {}\n", ui.brown("Recent trails")));
+        for trail in facts.recent {
+            out.push_str(&format!(
+                "  {} {}\n",
+                ui.green("↺"),
+                ui.cream(&trail_summary(trail)),
+            ));
+        }
+    }
+
     out.push('\n');
-    out.push_str(&format!("  {}\n", ui.dim(&v.bottom_hint)));
+    out.push_str(&format!(
+        "  {} {}\n",
+        ui.dim(&v.bottom_hint),
+        ui.dim("· /resume to pick up a trail"),
+    ));
     out
 }
 
@@ -236,6 +314,24 @@ mod tests {
         Ui::with(true, Arc::new(Theme::default()))
     }
 
+    /// Banner facts carrying only the live figures a test cares about.
+    fn facts<'a>(tokens_used: usize, cost_usd: Option<f64>) -> BannerFacts<'a> {
+        BannerFacts {
+            tokens_used,
+            cost_usd,
+            ..BannerFacts::default()
+        }
+    }
+
+    fn trail(id: &str, title: &str, age: &str, entries: i64) -> RecentTrail {
+        RecentTrail {
+            id: id.into(),
+            title: title.into(),
+            age: age.into(),
+            entries,
+        }
+    }
+
     #[test]
     fn wordmark_rows_are_aligned() {
         let rows = wordmark("OXEN TRAIL");
@@ -251,14 +347,14 @@ mod tests {
     fn no_color_screens_are_plain() {
         let ui = Ui::plain();
         assert!(!help(&ui).contains("\x1b["));
-        assert!(!banner(&ui, "u", "m", "w", "s", 0, None).contains("\x1b["));
+        assert!(!banner(&ui, "u", "m", "w", "s", &BannerFacts::default()).contains("\x1b["));
         assert!(!death_screen(&ui, "abc123").contains("\x1b["));
     }
 
     #[test]
     fn banner_shows_a_live_date_not_the_static_flavor() {
         let ui = colored();
-        let out = banner(&ui, "u", "m", "w", "s", 0, None);
+        let out = banner(&ui, "u", "m", "w", "s", &BannerFacts::default());
         // The static flavor year (1848) must be replaced by today's real date.
         assert!(out.contains(&today()));
         assert!(!out.contains("March 21, 1848"));
@@ -275,13 +371,14 @@ mod tests {
         assert_eq!(returned, "Departing");
         assert_eq!(ui.departing(), Some(("Departing", "Fort Laramie, Wyoming")));
         // The banner reflects the new location.
-        assert!(banner(&ui, "u", "m", "w", "s", 0, None).contains("Fort Laramie, Wyoming"));
+        assert!(banner(&ui, "u", "m", "w", "s", &BannerFacts::default())
+            .contains("Fort Laramie, Wyoming"));
     }
 
     #[test]
     fn banner_shows_live_token_count() {
         let ui = Ui::plain();
-        let b = banner(&ui, "u", "m", "w", "s", 1234, None);
+        let b = banner(&ui, "u", "m", "w", "s", &facts(1234, None));
         // The live cumulative count replaces the static flavor value.
         assert!(b.contains("Total tokens used"));
         assert!(b.contains("1234 tokens"));
@@ -294,7 +391,7 @@ mod tests {
         let mut theme = Theme::default();
         theme.voice.flavor_bottom.clear();
         let ui = Ui::with(false, Arc::new(theme));
-        let b = banner(&ui, "u", "m", "w", "s", 555, Some(1.25));
+        let b = banner(&ui, "u", "m", "w", "s", &facts(555, Some(1.25)));
         assert!(b.contains("Total tokens used"));
         assert!(b.contains("555 tokens"));
         assert!(b.contains("Total dollars spent"));
@@ -308,16 +405,16 @@ mod tests {
     fn banner_shows_dollars_spent() {
         let ui = Ui::plain();
         // A known cost renders as a currency row; unavailable renders as "—".
-        let priced = banner(&ui, "u", "m", "w", "s", 1234, Some(0.42));
+        let priced = banner(&ui, "u", "m", "w", "s", &facts(1234, Some(0.42)));
         assert!(priced.contains("Total dollars spent"));
         assert!(priced.contains("$0.42"));
-        let unavailable = banner(&ui, "u", "m", "w", "s", 0, None);
+        let unavailable = banner(&ui, "u", "m", "w", "s", &BannerFacts::default());
         assert!(unavailable.contains("Total dollars spent"));
     }
 
     #[test]
     fn banner_replaces_next_landmark_with_dollars_spent() {
-        let b = banner(&Ui::plain(), "u", "m", "w", "s", 1234, Some(0.42));
+        let b = banner(&Ui::plain(), "u", "m", "w", "s", &facts(1234, Some(0.42)));
         assert!(!b.contains("Next landmark"));
         assert_eq!(b.matches("Total dollars spent").count(), 1);
     }
@@ -337,9 +434,93 @@ mod tests {
     #[test]
     fn banner_includes_active_theme_name() {
         let ui = Ui::plain();
-        let b = banner(&ui, "host", "model", "ws", "sess", 0, None);
+        let b = banner(&ui, "host", "model", "ws", "sess", &BannerFacts::default());
         assert!(b.contains("Oregon Trail"));
         assert!(b.contains("model"));
+    }
+
+    #[test]
+    fn banner_renders_without_a_weather_reading() {
+        // Time-to-first-prompt never waits on a reading: the banner takes one
+        // (from a theme with a Weather row) and prints "—" when it has none.
+        let mut theme = Theme::default();
+        theme.voice.flavor_bottom = vec![["Weather".to_string(), "Fair".to_string()]];
+        let ui = Ui::with(false, Arc::new(theme));
+
+        let cold = banner(&ui, "u", "m", "w", "s", &BannerFacts::default());
+        let row = cold
+            .lines()
+            .find(|l| l.contains("Weather"))
+            .expect("the theme has a Weather row");
+        assert!(row.contains('—'), "absent weather renders a dash: {row}");
+        assert!(!row.contains("Fair"), "static flavor is replaced: {row}");
+
+        let warm = banner(
+            &ui,
+            "u",
+            "m",
+            "w",
+            "s",
+            &BannerFacts {
+                weather: Some("blizzard"),
+                ..BannerFacts::default()
+            },
+        );
+        assert!(warm.contains("blizzard"), "{warm}");
+    }
+
+    #[test]
+    fn banner_lists_recent_trails_and_hints_resume() {
+        let ui = Ui::plain();
+        let recent = [
+            trail("abc12345", "fix the flaky watch test", "2h ago", 41),
+            trail("def67890", "port the picker", "3d ago", 1),
+        ];
+        let b = banner(
+            &ui,
+            "u",
+            "m",
+            "w",
+            "s",
+            &BannerFacts {
+                recent: &recent,
+                ..BannerFacts::default()
+            },
+        );
+        assert!(b.contains("Recent trails"), "{b}");
+        assert!(
+            b.contains("↺ 2h ago · \"fix the flaky watch test\" · 41 entries"),
+            "{b}"
+        );
+        // A one-message trail reads "1 entry", not "1 entries".
+        assert!(b.contains("· 1 entry"), "{b}");
+        assert!(b.contains("/resume"), "the hint mentions /resume: {b}");
+
+        // No history for this workspace: no heading, no empty block.
+        let empty = banner(&ui, "u", "m", "w", "s", &BannerFacts::default());
+        assert!(!empty.contains("Recent trails"), "{empty}");
+    }
+
+    #[test]
+    fn relative_age_picks_one_coarse_unit() {
+        assert_eq!(relative_age(0), "just now");
+        assert_eq!(relative_age(-5), "just now");
+        assert_eq!(relative_age(59), "just now");
+        assert_eq!(relative_age(60), "1m ago");
+        assert_eq!(relative_age(90 * 60), "1h ago");
+        assert_eq!(relative_age(2 * 3600), "2h ago");
+        assert_eq!(relative_age(3 * 86_400), "3d ago");
+        assert_eq!(relative_age(45 * 86_400), "1mo ago");
+        assert_eq!(relative_age(400 * 86_400), "1y ago");
+    }
+
+    #[test]
+    fn trail_summary_clips_a_long_title() {
+        let long = trail("id", &"x".repeat(200), "5m ago", 7);
+        let row = trail_summary(&long);
+        assert!(row.starts_with("5m ago · \""), "{row}");
+        assert!(row.contains('…'), "long titles are clipped: {row}");
+        assert!(row.ends_with("· 7 entries"), "{row}");
     }
 
     #[test]

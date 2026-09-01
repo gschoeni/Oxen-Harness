@@ -38,7 +38,9 @@ mod spinner;
 
 pub use models::{models_table, progress_bar, ModelRow};
 pub(crate) use screens::format_usd;
-pub use screens::{banner, death_screen, help};
+pub use screens::{
+    banner, death_screen, help, relative_age, trail_summary, BannerFacts, RecentTrail,
+};
 pub(crate) use spinner::LiveSpinner;
 pub use spinner::Spinner;
 
@@ -205,6 +207,14 @@ impl Ui {
     /// Whether in-place animations (spinners, progress bars) should run. They
     /// rely on ANSI control codes, so they're tied to color support.
     pub fn animates(&self) -> bool {
+        self.color
+    }
+
+    /// Whether the terminal takes *decorations* — the window title (OSC 0) and
+    /// the bell. Same capability check as color (a TTY, no `NO_COLOR`, not
+    /// `TERM=dumb`): a pipe or a dumb terminal would take an escape sequence as
+    /// literal bytes, and a bell into a log file is just noise.
+    pub fn decorates(&self) -> bool {
         self.color
     }
 
