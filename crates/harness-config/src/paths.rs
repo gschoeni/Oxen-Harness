@@ -140,6 +140,11 @@ pub fn last_crash_file() -> Result<PathBuf, ConfigError> {
 }
 
 /// `~/.oxen-harness/themes/` — custom + exported themes.
+/// Global custom slash commands: `~/.oxen-harness/commands/<name>.md`.
+pub fn commands_dir() -> Result<PathBuf, ConfigError> {
+    Ok(base_dir()?.join("commands"))
+}
+
 pub fn themes_dir() -> Result<PathBuf, ConfigError> {
     let dir = under("themes")?;
     std::fs::create_dir_all(&dir).map_err(|source| ConfigError::Io {

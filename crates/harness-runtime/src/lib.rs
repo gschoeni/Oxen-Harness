@@ -23,6 +23,7 @@
 //!   (`AGENTS.md`, `CLAUDE.md`, Cursor/Cline rules), discovered and rendered
 //!   into the system prompt.
 
+pub mod commands;
 pub mod compression;
 mod config;
 pub mod config_repo;
