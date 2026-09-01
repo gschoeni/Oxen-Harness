@@ -14,6 +14,7 @@ mod attach;
 mod brave;
 mod canvas;
 mod commands;
+mod custom_commands;
 mod diff;
 mod endpoint;
 mod event_lines;
@@ -402,6 +403,10 @@ async fn main() -> Result<()> {
         }
         println!();
     }
+
+    // Custom slash commands (Markdown templates under .oxen-harness/commands
+    // and friends) are discovered once per workspace.
+    custom_commands::install_for(workspace.root());
 
     // Shared per-run context (store, session, resume factory) used by both the
     // one-shot loop path and the interactive REPL.

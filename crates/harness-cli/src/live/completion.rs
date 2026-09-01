@@ -217,12 +217,21 @@ impl Live {
             .find(|spec| spec.matches(cmd))
             .map(|spec| &spec.completer);
         match parts.next() {
-            // Still typing the command word — match against the command list.
+            // Still typing the command word — match against the command list,
+            // built-ins first, then the workspace's custom commands.
             None => (
                 SLASH_COMMANDS
                     .iter()
                     .filter(|spec| spec.name.starts_with(cmd))
                     .map(|spec| CompletionItem::new(spec.name, spec.name, spec.description))
+                    .chain(
+                        crate::custom_commands::entries()
+                            .into_iter()
+                            .filter(|(name, _)| name.starts_with(cmd))
+                            .map(|(name, description)| {
+                                CompletionItem::new(&name, &name, &description)
+                            }),
+                    )
                     .collect(),
                 false,
             ),

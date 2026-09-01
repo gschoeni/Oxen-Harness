@@ -290,14 +290,42 @@ pub fn parse_command(line: &str) -> Command {
 
     match SLASH_COMMANDS.iter().find(|spec| spec.matches(cmd)) {
         Some(spec) => (spec.build)(rest),
-        // Unknown slash command: treat the whole line as a prompt so users can
-        // still send text that happens to start with a slash.
-        None => Command::Prompt(trimmed.to_string()),
+        None => {
+            // A custom command (a Markdown template) expands to its prompt.
+            if let Some(prompt) =
+                crate::custom_commands::expand(&cmd[1..], rest.as_deref().unwrap_or(""))
+            {
+                return Command::Prompt(prompt);
+            }
+            // Unknown slash command: treat the whole line as a prompt so users
+            // can still send text that happens to start with a slash.
+            Command::Prompt(trimmed.to_string())
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_custom_command_expands_to_its_prompt_and_unknown_ones_fall_through() {
+        crate::custom_commands::install(vec![harness_runtime::commands::CustomCommand {
+            name: "ship".into(),
+            description: "ship it".into(),
+            body: "Ship $ARGUMENTS now.".into(),
+            source: harness_runtime::commands::CommandSource::Project,
+            path: std::path::PathBuf::new(),
+        }]);
+        assert_eq!(
+            parse_command("/ship the fix"),
+            Command::Prompt("Ship the fix now.".into())
+        );
+        assert_eq!(
+            parse_command("/frobnicate now"),
+            Command::Prompt("/frobnicate now".into())
+        );
+        crate::custom_commands::install(Vec::new());
+    }
+
     use super::*;
 
     #[test]
