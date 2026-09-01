@@ -12,6 +12,7 @@
 mod call;
 mod compaction;
 mod compression;
+mod fork;
 mod repair;
 mod tools;
 mod turn;

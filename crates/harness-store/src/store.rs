@@ -167,6 +167,14 @@ fn migrations() -> Migrations<'static> {
                  PRIMARY KEY (session_id, key)
              );",
         ),
+        // M11 — forks. A fork copies a session's transcript up to a point
+        // into a new session and records where it came from, so a rewind
+        // ("go back to before that message") never rewrites history: the
+        // original stays complete and the fork carries on from the cut.
+        M::up(
+            "ALTER TABLE sessions ADD COLUMN forked_from TEXT;
+             ALTER TABLE sessions ADD COLUMN forked_at_seq INTEGER;",
+        ),
     ])
 }
 
@@ -396,6 +404,95 @@ impl HistoryStore {
             ],
         )?;
         Ok(id)
+    }
+
+    /// Copy `source` into a new session, keeping every message with
+    /// `seq <= through_seq` (all of them when `None`) with their sequence
+    /// numbers, plus the context snapshot when it predates the cut and every
+    /// session-state projection. Returns the new session's id. The source is
+    /// untouched — a fork is how a rewind keeps history complete.
+    pub fn fork_session(
+        &self,
+        source: &str,
+        through_seq: Option<i64>,
+    ) -> Result<String, HistoryError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let cut = through_seq.unwrap_or(i64::MAX);
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let copied = tx.execute(
+            "INSERT INTO sessions
+                 (id, workspace, model, provider, base_url, mode, context_window,
+                  system_prompt_version, theme, created_at, review_status, source,
+                  source_ref, forked_from, forked_at_seq)
+             SELECT ?1, workspace, model, provider, base_url, mode, context_window,
+                    system_prompt_version, theme, ?2, '', '', '', id, ?3
+             FROM sessions WHERE id = ?4",
+            rusqlite::params![id, now(), through_seq, source],
+        )?;
+        if copied == 0 {
+            return Err(HistoryError::SessionNotFound(source.to_string()));
+        }
+        tx.execute(
+            "INSERT INTO messages (session_id, seq, role, content, raw_json, created_at)
+             SELECT ?1, seq, role, content, raw_json, created_at
+             FROM messages WHERE session_id = ?2 AND seq <= ?3 ORDER BY seq",
+            rusqlite::params![id, source, cut],
+        )?;
+        tx.execute(
+            "INSERT INTO context_snapshots (session_id, through_seq, raw_json)
+             SELECT ?1, through_seq, raw_json FROM context_snapshots
+             WHERE session_id = ?2 AND through_seq <= ?3",
+            rusqlite::params![id, source, cut],
+        )?;
+        tx.execute(
+            "INSERT INTO session_state (session_id, key, raw_json)
+             SELECT ?1, key, raw_json FROM session_state WHERE session_id = ?2",
+            rusqlite::params![id, source],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// The session a fork was cut from, and the last sequence number it
+    /// kept, when this session is a fork.
+    pub fn forked_from(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<(String, Option<i64>)>, HistoryError> {
+        use rusqlite::OptionalExtension;
+        let conn = self.lock();
+        let row = conn
+            .query_row(
+                "SELECT forked_from, forked_at_seq FROM sessions WHERE id = ?1",
+                [session_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(row.and_then(|(from, seq)| from.map(|f| (f, seq))))
+    }
+
+    /// Every user message in a session as `(seq, preview)`, oldest first —
+    /// the points a rewind can go back to.
+    pub fn user_turns(&self, session_id: &str) -> Result<Vec<(i64, String)>, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT seq, COALESCE(content, '') FROM messages
+             WHERE session_id = ?1 AND role = 'user' ORDER BY seq",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -2000,6 +2097,58 @@ mod tests {
     }
 
     #[test]
+    fn a_fork_copies_the_transcript_up_to_the_cut_and_remembers_its_source() {
+        let store = store();
+        let src = store
+            .create_session(&SessionMeta {
+                workspace: "/w".into(),
+                model: "m".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        for (role, text) in [
+            ("user", "first"),
+            ("assistant", "a1"),
+            ("user", "second"),
+            ("assistant", "a2"),
+        ] {
+            store
+                .append_message(&src, &serde_json::json!({"role": role, "content": text}))
+                .unwrap();
+        }
+        store
+            .save_session_state(&src, "plan", &serde_json::json!({"x": 1}))
+            .unwrap();
+        // Rewind to before "second": keep seq 0..=1.
+        let fork = store.fork_session(&src, Some(1)).unwrap();
+        let kept = store.messages(&fork).unwrap();
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[1]["content"], "a1");
+        assert_eq!(store.messages(&src).unwrap().len(), 4, "source untouched");
+        assert_eq!(
+            store.forked_from(&fork).unwrap(),
+            Some((src.clone(), Some(1)))
+        );
+        assert_eq!(store.forked_from(&src).unwrap(), None);
+        // Appending continues the numbering from the cut.
+        let seq = store
+            .append_message(
+                &fork,
+                &serde_json::json!({"role": "user", "content": "third"}),
+            )
+            .unwrap();
+        assert_eq!(seq, 2);
+        // Projections rode along; user turns list the rewind points.
+        let state: Option<serde_json::Value> = store.session_state(&fork, "plan").unwrap();
+        assert_eq!(state, Some(serde_json::json!({"x": 1})));
+        assert_eq!(
+            store.user_turns(&src).unwrap(),
+            vec![(0, "first".to_string()), (2, "second".to_string())]
+        );
+        assert!(store.fork_session("nope", None).is_err());
+    }
+
+    #[test]
     fn migrations_are_valid_and_reach_latest_version() {
         // rusqlite_migration checks the chain round-trips and the final
         // user_version matches the migration count.
@@ -2009,7 +2158,7 @@ mod tests {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(user_version, 10);
+        assert_eq!(user_version, 11);
     }
 
     #[test]
