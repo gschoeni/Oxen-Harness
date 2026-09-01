@@ -7,7 +7,9 @@
 //! model's context.
 //!
 //! Successive commands share a working directory and environment — see
-//! [`session`] for why that isn't a long-lived shell process.
+//! [`session`] for why that isn't a long-lived shell process. Every command
+//! also runs with the non-interactive defaults in [`non_interactive_env`], and
+//! shapes a dedicated tool does better are redirected by [`intercept`].
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -18,17 +20,55 @@ use serde::Deserialize;
 use crate::sandbox::Workspace;
 use crate::{ToolError, TypedTool};
 
+pub mod intercept;
 pub mod session;
 
+use crate::steer::SteerSignal;
 use session::ShellSession;
 
 /// Tool name for [`ShellTool`].
 pub const RUN_SHELL_TOOL: &str = "run_shell";
 
-/// Default command timeout (2 minutes), matching common agent shells.
-const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+/// How long a foreground command is waited on before it is handed to the
+/// background (1 minute). Not a kill switch and not a guess at how long work
+/// takes: past a minute the agent is more useful doing something else, and the
+/// task's final output is delivered when it lands.
+const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 /// Hard cap on how much stdout/stderr (each) is returned to the model.
 const MAX_STREAM_CHARS: usize = 30_000;
+
+/// The environment every agent-run command starts from.
+///
+/// A command that opens a pager or waits for a tty does not fail — it *hangs*,
+/// burning the whole timeout and returning a screenful of escape codes for its
+/// trouble. `git log` paging into `less`, a package manager asking to confirm,
+/// a build printing color codes into the model's context: all of it is noise
+/// the agent can neither see nor answer. These say "nobody is watching".
+///
+/// They are defaults, not overrides: the caller layers the session's
+/// environment on top, so a user's own `export PAGER=less` still wins.
+pub fn non_interactive_env() -> Vec<(&'static str, &'static str)> {
+    vec![
+        // Pagers block on a tty that will never arrive.
+        ("PAGER", "cat"),
+        ("GIT_PAGER", "cat"),
+        ("LESS", "FRX"),
+        // Git's own prompts: an editor for a commit message, a credential
+        // prompt for a push. Both wait forever.
+        ("GIT_EDITOR", "true"),
+        ("GIT_TERMINAL_PROMPT", "0"),
+        // Escape codes are tokens the model pays for and cannot read.
+        ("NO_COLOR", "1"),
+        ("TERM", "dumb"),
+        // The flag half the ecosystem already checks for "don't be chatty,
+        // don't be interactive".
+        ("CI", "true"),
+        ("DEBIAN_FRONTEND", "noninteractive"),
+        ("HOMEBREW_NO_AUTO_UPDATE", "1"),
+        ("PIP_NO_INPUT", "1"),
+        ("npm_config_yes", "true"),
+    ]
+}
 
 /// Run a shell command inside the workspace root.
 pub struct ShellTool {
@@ -41,6 +81,12 @@ pub struct ShellTool {
     /// the same reason the fs tools share their state: fleet lanes run against
     /// one registry, so they see one shell.
     session: Arc<Mutex<ShellSession>>,
+    /// Whether to redirect commands that have a dedicated tool (see
+    /// [`intercept`]). Off unless the host also registered those tools.
+    intercepting: bool,
+    /// Fires when the user says something mid-turn; a foreground wait races
+    /// against it so an interruption isn't stuck behind a slow command.
+    steer: Option<SteerSignal>,
 }
 
 impl ShellTool {
@@ -50,6 +96,8 @@ impl ShellTool {
             workspace,
             tasks: None,
             session,
+            intercepting: false,
+            steer: None,
         }
     }
 
@@ -69,7 +117,26 @@ impl ShellTool {
             workspace,
             tasks: Some(tasks),
             session,
+            intercepting: false,
+            steer: None,
         }
+    }
+
+    /// Redirect `grep`/`find`/`cat`-shaped commands to the dedicated tools
+    /// (see [`intercept`]). Only turn this on in a registry that actually
+    /// registers `search_files`/`find_files`/`read_file` — otherwise the model
+    /// is pointed at a tool it doesn't have.
+    pub fn intercepting(mut self, enabled: bool) -> Self {
+        self.intercepting = enabled;
+        self
+    }
+
+    /// Watch `signal` while waiting on a foreground command: when the user
+    /// steers mid-command, hand it to the background immediately instead of
+    /// making them wait out the timeout.
+    pub fn with_steer(mut self, signal: SteerSignal) -> Self {
+        self.steer = Some(signal);
+        self
     }
 
     /// The directory the next command will run in.
@@ -96,6 +163,32 @@ impl ShellTool {
             .expect("shell session")
             .absorb(&report, self.workspace.root())
     }
+
+    /// Wait for a foreground command, cutting the wait short if the user
+    /// steers. Without a steer signal this is just the timeout.
+    async fn wait_or_steer(
+        &self,
+        tasks: &crate::tasks::BackgroundTasks,
+        id: u64,
+        timeout: Duration,
+    ) -> Waited {
+        fn settle(exit: Option<crate::tasks::TaskExit>) -> Waited {
+            match exit {
+                Some(_) => Waited::Exited,
+                None => Waited::TimedOut,
+            }
+        }
+        match self.steer.clone() {
+            // Biased so a command that finished in the same instant the user
+            // steered still reports its real result.
+            Some(mut steer) => tokio::select! {
+                biased;
+                exit = tasks.wait(id, timeout) => settle(exit),
+                _ = steer.wait() => Waited::Steered,
+            },
+            None => settle(tasks.wait(id, timeout).await),
+        }
+    }
 }
 
 /// Arguments to `run_shell`.
@@ -103,10 +196,10 @@ impl ShellTool {
 pub struct ShellArgs {
     /// Command line to execute via the shell.
     pub command: String,
-    /// Timeout in milliseconds (default 120000).
+    /// Foreground wait before it is backgrounded, in ms (default 60000).
     pub timeout_ms: Option<u64>,
-    /// Run detached: returns a task id immediately instead of waiting. Use
-    /// for servers and long builds; check on it with `task_output`.
+    /// Run detached: returns a task id immediately instead of waiting. Use for
+    /// servers and long builds; its final output reaches you automatically.
     pub is_background: Option<bool>,
 }
 
@@ -122,15 +215,24 @@ impl TypedTool for ShellTool {
     fn description(&self) -> &str {
         "Run a shell command. Returns exit code, stdout, and stderr. The working directory \
          and exported variables persist between calls (starting at the project root), so \
-         `cd` and `export` stick and need not be repeated. Times out after 2 minutes \
-         (`timeout_ms`); a timed-out command continues as a background task \
-         (`task_output`). Start servers and long builds with `is_background: true`. Prefer \
-         the dedicated tools for file work: `find_files`/`search_files`/`read_file` over \
-         `find`/`grep`/`cat`, and `write_file`/`edit_file` over redirects/`sed`."
+         `cd` and `export` stick and need not be repeated. Waits 60 seconds (`timeout_ms`); \
+         a command still running then continues as a background task whose final output is \
+         delivered to you automatically when it finishes — never poll for it, get on with \
+         other work. `is_background: true` starts servers and long builds detached, \
+         delivered the same way. Prefer the dedicated tools for file work: \
+         `find_files`/`search_files`/`read_file` over `find`/`grep`/`cat`, and \
+         `write_file`/`edit_file` over redirects/`sed`."
     }
 
     async fn run(&self, args: ShellArgs) -> Result<String, ToolError> {
         let command = &args.command;
+        // A redirect is a *result*, not an error: an error reads as a
+        // malfunction and gets retried, a result gets acted on.
+        if self.intercepting {
+            if let Some(redirect) = intercept::intercept(command) {
+                return Ok(redirect);
+            }
+        }
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
         let background = args.is_background.unwrap_or(false);
         let (cwd, env) = (self.cwd(), self.env());
@@ -148,12 +250,16 @@ impl TypedTool for ShellTool {
             if background {
                 return Ok(format!(
                     "started background task {id}: {command}\n\
-                     Check on it with task_output (task_id: {id}); stop it with kill_task. \
-                     Do not poll in a sleep loop — do other useful work between checks."
+                     Its final output will be delivered to you automatically when it \
+                     finishes — keep working on other things, do not poll. Stop it early \
+                     with kill_task."
                 ));
             }
-            return match tasks.wait(id, Duration::from_millis(timeout_ms)).await {
-                Some(_) => {
+            let outcome = self
+                .wait_or_steer(tasks, id, Duration::from_millis(timeout_ms))
+                .await;
+            return match outcome {
+                Waited::Exited => {
                     let (exit, stdout, stderr, overflow) = tasks
                         .take_streams(id)
                         .await
@@ -175,7 +281,10 @@ impl TypedTool for ShellTool {
                 // and accidentally-foregrounded servers are never lost work.
                 // Bounded, though — past the cap of live tasks, revert to the
                 // classic kill so runaway commands can't accumulate forever.
-                None => {
+                // Only for the timeout: a steered command is one the user is
+                // engaged with right now, and killing it would discard work
+                // they may well still want.
+                Waited::TimedOut | Waited::Steered => {
                     // The command's trailer may create this file only when the
                     // now-background task eventually exits. Keep its RAII owner
                     // alive until then so the final environment (including
@@ -183,7 +292,9 @@ impl TypedTool for ShellTool {
                     if let (Some(carrier), Some(done)) = (carrier, tasks.completion(id).await) {
                         carrier.remove_when_done(done);
                     }
-                    if tasks.running_count().await > crate::tasks::MAX_AUTO_BACKGROUND_TASKS {
+                    if outcome == Waited::TimedOut
+                        && tasks.running_count().await > crate::tasks::MAX_AUTO_BACKGROUND_TASKS
+                    {
                         let _ = tasks.kill(id).await;
                         return Ok(format!(
                             "exit_code: timeout\ncommand exceeded {timeout_ms} ms and was \
@@ -195,19 +306,21 @@ impl TypedTool for ShellTool {
                     // Show what it was doing, so the model can judge whether
                     // to keep it or kill_task it.
                     let tail = tasks.peek_tail(id, 2_000).await;
-                    Ok(format!(
-                        "exit_code: still-running\ncommand exceeded {timeout_ms} ms and now \
-                         continues as background task {id}: {command}\n\
-                         Check on it with task_output (task_id: {id}); stop it with kill_task.\n\
-                         --- output so far ---\n{tail}"
-                    ))
+                    let headline = match outcome {
+                        Waited::Steered => STEERED_EARLY.to_string(),
+                        _ => format!("command exceeded {timeout_ms} ms: {command}"),
+                    };
+                    Ok(backgrounded(id, &headline, &tail))
                 }
             };
         }
 
         // Legacy path (no task registry): bounded capture, kill on timeout.
         let output = crate::process::run_bounded(
-            shell_command(&to_run).current_dir(&cwd).envs(&env),
+            shell_command(&to_run)
+                .current_dir(&cwd)
+                .envs(non_interactive_env())
+                .envs(&env),
             Duration::from_millis(timeout_ms),
             MAX_STREAM_CHARS,
         )
@@ -224,6 +337,31 @@ impl TypedTool for ShellTool {
         }
         Ok(out)
     }
+}
+
+/// How a foreground wait ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Waited {
+    Exited,
+    TimedOut,
+    Steered,
+}
+
+/// The first line of a steer-triggered background: the user's message is the
+/// point, not the command's timing.
+const STEERED_EARLY: &str =
+    "Backgrounded early to handle an incoming message; the command keeps running.";
+
+/// The result for a command that outlived the foreground wait, in either
+/// direction. The promise of automatic delivery is the whole point: without
+/// it the model burns calls polling `task_output`.
+fn backgrounded(id: u64, headline: &str, tail: &str) -> String {
+    format!(
+        "exit_code: still-running\n{headline}\n\
+         Backgrounded as task {id}; its final output will be delivered to you \
+         automatically when it finishes — keep working on other things, do not poll.\n\
+         --- output so far ---\n{tail}"
+    )
 }
 
 /// The temp file one command writes its final directory and environment to,
@@ -374,7 +512,8 @@ mod tests {
             .await
             .unwrap();
         // Not killed: converted, with the id to follow up on.
-        assert!(out.contains("continues as background task 1"), "{out}");
+        assert!(out.contains("Backgrounded as task 1"), "{out}");
+        assert!(out.contains("do not poll"), "{out}");
         let report = tasks.output(1).await.unwrap();
         assert!(report.contains("running"), "{report}");
         // Clean up so the sleep doesn't outlive the test.
@@ -399,7 +538,7 @@ mod tests {
             .invoke(serde_json::json!({"command": command, "timeout_ms": 10}))
             .await
             .unwrap();
-        assert!(out.contains("continues as background task 1"), "{out}");
+        assert!(out.contains("Backgrounded as task 1"), "{out}");
         tasks
             .wait(1, Duration::from_secs(10))
             .await
@@ -581,6 +720,121 @@ mod tests {
         let full = store.get(&hash).expect("full output kept");
         // The middle — the part the model could never otherwise see again.
         assert!(full.contains("line 2000 of the build log"), "middle lost");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn commands_run_with_the_non_interactive_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tool, _tasks) = task_shell(dir.path());
+        let out = tool
+            .invoke(serde_json::json!({"command": "echo $PAGER $GIT_TERMINAL_PROMPT $CI"}))
+            .await
+            .unwrap();
+        assert!(out.contains("cat 0 true"), "{out}");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn the_legacy_path_gets_the_non_interactive_defaults_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = ShellTool::new(Workspace::new(dir.path()).unwrap());
+        let out = tool
+            .invoke(serde_json::json!({"command": "echo [$PAGER]"}))
+            .await
+            .unwrap();
+        assert!(out.contains("[cat]"), "{out}");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn a_session_export_overrides_the_non_interactive_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tool, _tasks) = task_shell(dir.path());
+        tool.invoke(serde_json::json!({"command": "export PAGER=less"}))
+            .await
+            .unwrap();
+        let out = tool
+            .invoke(serde_json::json!({"command": "echo [$PAGER]"}))
+            .await
+            .unwrap();
+        assert!(out.contains("[less]"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn an_intercepting_shell_redirects_instead_of_running() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hay.txt"), "needle\n").unwrap();
+        let tool = ShellTool::new(Workspace::new(dir.path()).unwrap()).intercepting(true);
+        let out = tool
+            .invoke(serde_json::json!({"command": "grep -rn needle ."}))
+            .await
+            .unwrap();
+        assert!(out.starts_with("Blocked: use search_files"), "{out}");
+        // It really didn't run: no exit code, no match.
+        assert!(!out.contains("exit_code"), "{out}");
+        assert!(!out.contains("hay.txt"), "{out}");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn a_leading_space_still_reaches_the_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hay.txt"), "needle\n").unwrap();
+        let tool = ShellTool::new(Workspace::new(dir.path()).unwrap()).intercepting(true);
+        let out = tool
+            .invoke(serde_json::json!({"command": " grep -rn needle ."}))
+            .await
+            .unwrap();
+        assert!(out.contains("hay.txt"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn interception_is_off_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = ShellTool::new(Workspace::new(dir.path()).unwrap());
+        let out = tool
+            .invoke(serde_json::json!({"command": "find ."}))
+            .await
+            .unwrap();
+        assert!(out.contains("exit_code"), "{out}");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn a_steer_backgrounds_a_slow_command_early() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let tasks = crate::tasks::BackgroundTasks::new(dir.path().join(".task-logs"));
+        let (notifier, signal) = crate::steer::steer_channel();
+        let tool = Arc::new(ShellTool::with_tasks(ws, tasks.clone()).with_steer(signal));
+
+        let running = {
+            let tool = tool.clone();
+            tokio::spawn(async move {
+                tool.invoke(serde_json::json!({"command": "sleep 5"}))
+                    .await
+                    .unwrap()
+            })
+        };
+        // Let the command get going, then interrupt it.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let steered_at = std::time::Instant::now();
+        notifier.notify();
+        let out = tokio::time::timeout(Duration::from_secs(5), running)
+            .await
+            .expect("the steered wait should end promptly")
+            .unwrap();
+
+        // The whole point: the user isn't stuck behind the default minute.
+        assert!(
+            steered_at.elapsed() < Duration::from_millis(500),
+            "took {:?} to react to the steer",
+            steered_at.elapsed()
+        );
+        assert!(out.contains("Backgrounded early"), "{out}");
+        assert!(out.contains("Backgrounded as task 1"), "{out}");
+        tasks.kill(1).await.unwrap();
     }
 
     #[tokio::test]

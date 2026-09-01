@@ -192,7 +192,9 @@ impl TypedTool for PlanTool {
          subtask), never abandon the checklist silently: update the plan to \
          reflect reality — annotate or drop the blocked step — then continue \
          with the remaining steps that don't depend on it, and tell the user \
-         what's blocked and why."
+         what's blocked and why.\n\
+         Never make this the only tool call in a turn — batch it with real \
+         work; a plan-only turn wastes a round trip."
     }
 
     async fn run(&self, args: PlanArgs) -> Result<String, ToolError> {

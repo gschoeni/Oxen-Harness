@@ -140,9 +140,13 @@ impl TypedTool for AskUserTool {
          ambiguous product, design, or implementation decision before acting. \
          Use this instead of guessing when there are several reasonable \
          approaches with real trade-offs. The host renders an interactive \
-         picker and always lets the user type their own answer, so do not add \
-         an 'Other' option. Keep options distinct and concise; prefer asking \
-         early rather than building the wrong thing."
+         picker and always lets the user type their own answer. Keep options \
+         distinct and concise; prefer asking early rather than building the \
+         wrong thing.\n\
+         Default to action: resolve ambiguity from repo conventions and \
+         reasonable defaults, and ask only when the options have materially \
+         different tradeoffs the user must decide. Do not add an 'Other' \
+         option; the UI adds free text automatically."
     }
 
     async fn run(&self, args: AskArgs) -> Result<String, ToolError> {

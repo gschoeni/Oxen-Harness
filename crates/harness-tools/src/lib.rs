@@ -43,6 +43,7 @@ pub mod retrieve;
 pub mod sandbox;
 pub mod shell;
 pub mod skill;
+pub mod steer;
 pub mod tasks;
 pub mod trail;
 pub mod viewer;
@@ -65,6 +66,8 @@ pub use retrieve::{RetrieveOriginalTool, RETRIEVE_ORIGINAL_TOOL};
 pub use sandbox::Workspace;
 pub use shell::RUN_SHELL_TOOL;
 pub use skill::{Skill, SkillScope, SkillTool, SKILL_TOOL};
+pub use steer::{steer_channel, SteerNotifier, SteerSignal};
+pub use tasks::{BackgroundTasks, SettledTask, TaskExit, KILL_TASK_TOOL, TASK_OUTPUT_TOOL};
 pub use trail::{
     merge_trail, parse_trail_arguments, TrailSnapshot, TrailTool, Waypoint, WaypointStatus,
     TRAIL_TOOL,
@@ -469,6 +472,12 @@ pub struct ToolRegistry {
     /// `retrieve_original`. The agent reuses it for compression, so both kinds
     /// of `<<ccr:HASH>>` marker resolve through one store.
     overflow: Option<Arc<harness_compress::CcrStore>>,
+    /// The background tasks `run_shell` spawns, kept so the host can drain
+    /// finished-but-unannounced ones between turns (the delivery `run_shell`
+    /// promises the model).
+    tasks: Option<Arc<tasks::BackgroundTasks>>,
+    /// The host's end of the steer signal the shell tools wait on.
+    steer: Option<steer::SteerNotifier>,
 }
 
 impl ToolRegistry {
@@ -490,6 +499,20 @@ impl ToolRegistry {
     /// registry was built with one.
     pub fn overflow_store(&self) -> Option<&Arc<harness_compress::CcrStore>> {
         self.overflow.as_ref()
+    }
+
+    /// The background-task registry behind `run_shell`, when this registry was
+    /// built with one. Drain [`tasks::BackgroundTasks::take_settled_unannounced`]
+    /// from it between turns to deliver finished tasks' output.
+    pub fn background_tasks(&self) -> Option<&Arc<tasks::BackgroundTasks>> {
+        self.tasks.as_ref()
+    }
+
+    /// The handle to bump when the user sends a message mid-turn, so a tool
+    /// blocked on a slow command stops waiting. `None` unless this registry
+    /// was built with the default tool set.
+    pub fn steer_notifier(&self) -> Option<steer::SteerNotifier> {
+        self.steer.clone()
     }
 
     /// Register a tool, returning the registry for chaining.
@@ -646,12 +669,20 @@ impl ToolRegistry {
         // log is one `retrieve_original` away instead of gone.
         let overflow = Arc::new(harness_compress::CcrStore::default());
         let tasks = tasks::BackgroundTasks::in_temp_with_overflow(Some(overflow.clone()));
-        registry.register_typed(shell::ShellTool::with_tasks(
-            workspace.clone(),
-            tasks.clone(),
-        ));
-        registry.register_typed(tasks::TaskOutputTool::new(tasks.clone()));
-        registry.register_typed(tasks::KillTaskTool::new(tasks));
+        // The shell waits on the user, too: whoever holds this registry bumps
+        // the notifier when a message arrives mid-turn, and a blocked
+        // `run_shell`/`task_output` gives up its wait instead of stalling the
+        // reply behind a slow command.
+        let (notifier, signal) = steer::steer_channel();
+        registry.register_typed(
+            shell::ShellTool::with_tasks(workspace.clone(), tasks.clone())
+                // This registry always has the fs tools, so pointing the model
+                // at them is always a promise it can keep.
+                .intercepting(true)
+                .with_steer(signal.clone()),
+        );
+        registry.register_typed(tasks::TaskOutputTool::new(tasks.clone()).with_steer(signal));
+        registry.register_typed(tasks::KillTaskTool::new(tasks.clone()));
 
         // Always register web search so the model can use it; when no Brave key
         // is configured the call fails with a recognizable error that the UIs
@@ -663,6 +694,8 @@ impl ToolRegistry {
         registry.files = Some(files);
         registry.workspace = Some(workspace);
         registry.overflow = Some(overflow);
+        registry.tasks = Some(tasks);
+        registry.steer = Some(notifier);
         registry
     }
 }
@@ -800,6 +833,15 @@ mod tests {
         // stages the MODEL must verify (pushed, pr-reviewed, merged) — this
         // is the tool that verifies them and opens the PR, so it earns its
         // permanent seat next to `git`.
+        //
+        // The shell-patience contract (~0.4K, 14.5K → 15.2K): `run_shell`'s
+        // sixty-second wait, the promise that a backgrounded task's final
+        // output arrives on its own, `task_output`'s `wait_ms`, and the
+        // `update_plan`/`ask_user` hygiene lines. Unusually, this spend buys
+        // *fewer* calls rather than more capability: it deletes poll loops,
+        // plan-only turns, and questions the model could have answered from
+        // the repo — each of which costs a whole round trip (system prompt,
+        // tools, transcript) every time it happens.
         let workspace = Workspace::new(".").unwrap();
         let registry = ToolRegistry::default_for_workspace(workspace);
         let chars: usize = registry
@@ -808,8 +850,8 @@ mod tests {
             .map(|d| d.to_string().len())
             .sum();
         assert!(
-            chars < 14_500,
-            "default tool definitions grew to {chars} chars (budget 14500)"
+            chars < 15_200,
+            "default tool definitions grew to {chars} chars (budget 15200)"
         );
     }
 }

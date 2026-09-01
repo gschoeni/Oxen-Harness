@@ -75,6 +75,19 @@ struct TaskEntry {
     /// Bounded tails per stream, for foreground-completion formatting.
     stdout_tail: Arc<StdMutex<Option<BoundedText>>>,
     stderr_tail: Arc<StdMutex<Option<BoundedText>>>,
+    /// Whether the model has already been told this task finished — set by
+    /// [`BackgroundTasks::take_settled_unannounced`] and by any `task_output`
+    /// that reported the exit, so the news is delivered exactly once.
+    announced: bool,
+}
+
+/// A background task that finished without anyone waiting on it — the unit
+/// the host announces to the model.
+#[derive(Debug, Clone)]
+pub struct SettledTask {
+    pub id: u64,
+    pub command: String,
+    pub exit: TaskExit,
 }
 
 /// The shared task registry: one per tool set (i.e. per session's registry),
@@ -162,6 +175,9 @@ impl BackgroundTasks {
 
         let mut cmd = crate::shell::shell_command(command);
         cmd.current_dir(root)
+            // Defaults first, the caller's environment second: a session that
+            // exported its own PAGER (or CI, or TERM) keeps it.
+            .envs(crate::shell::non_interactive_env())
             .envs(env)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -224,6 +240,7 @@ impl BackgroundTasks {
                 reaped,
                 stdout_tail,
                 stderr_tail,
+                announced: false,
             },
         );
         Ok(id)
@@ -374,6 +391,9 @@ impl BackgroundTasks {
             } else if let Some(entry) = tasks.get_mut(&id) {
                 // Concurrent checks race benignly: the cursor only advances.
                 entry.cursor = entry.cursor.max(new_cursor);
+                // This call just told the model the task ended; announcing it
+                // again between turns would be an echo.
+                entry.announced |= exit.is_some();
             }
         }
         if retire {
@@ -401,6 +421,35 @@ impl BackgroundTasks {
         Ok(format!(
             "task {id} ({command}): {status}{retired_note}\n--- new output since last check ---{skipped_note}\n{body}"
         ))
+    }
+
+    /// Tasks that have finished since the last call, marking them announced.
+    ///
+    /// This is what closes the loop on "its final output will be delivered to
+    /// you automatically": the host drains this between turns and injects the
+    /// news, so the model never has to poll `task_output` to learn a build
+    /// finished. Each task is reported once — a second call returns nothing
+    /// for it — and a task whose output a foreground `run_shell` already
+    /// returned ([`Self::take_streams`]) never appears at all, because that
+    /// call removed its entry.
+    pub async fn take_settled_unannounced(&self) -> Vec<SettledTask> {
+        let mut settled = Vec::new();
+        for (id, entry) in self.tasks.lock().await.iter_mut() {
+            let Some(exit) = *entry.done.borrow() else {
+                continue;
+            };
+            if entry.announced {
+                continue;
+            }
+            entry.announced = true;
+            settled.push(SettledTask {
+                id: *id,
+                command: entry.command.clone(),
+                exit,
+            });
+        }
+        settled.sort_by_key(|task| task.id);
+        settled
     }
 
     /// Kill task `id`'s whole process group. The entry stays queryable so a
@@ -547,16 +596,32 @@ async fn read_since(path: &Path, cursor: u64, final_read: bool) -> (String, u64,
 pub struct TaskOutputArgs {
     /// The id `run_shell` returned when the task started (or auto-backgrounded).
     pub task_id: u64,
+    /// Block up to this many ms for it to finish (default 0, max 600000).
+    /// Use only when you have nothing else to do until it finishes.
+    pub wait_ms: Option<u64>,
 }
+
+/// The longest a `task_output` call will block. Past ten minutes the model has
+/// stopped waiting for a task and started hiding from the user.
+const MAX_TASK_WAIT_MS: u64 = 600_000;
 
 /// Check on a background task: status + output since the last check.
 pub struct TaskOutputTool {
     tasks: Arc<BackgroundTasks>,
+    /// Cuts a `wait_ms` block short when the user steers, for the same reason
+    /// `run_shell` races its foreground wait.
+    steer: Option<crate::steer::SteerSignal>,
 }
 
 impl TaskOutputTool {
     pub fn new(tasks: Arc<BackgroundTasks>) -> Self {
-        Self { tasks }
+        Self { tasks, steer: None }
+    }
+
+    /// Abandon a `wait_ms` block as soon as the user says something.
+    pub fn with_steer(mut self, signal: crate::steer::SteerSignal) -> Self {
+        self.steer = Some(signal);
+        self
     }
 }
 
@@ -567,11 +632,29 @@ impl TypedTool for TaskOutputTool {
 
     fn description(&self) -> &str {
         "Check a background task started by run_shell: its status (running/exited) and the \
-         output produced since the last check. Do not poll in a sleep loop — check between \
-         other useful work."
+         output since the last check. A finished task's output reaches you on its own — use \
+         this only to look in on one mid-run, never in a poll loop."
     }
 
     async fn run(&self, args: TaskOutputArgs) -> Result<String, ToolError> {
+        let wait_ms = args.wait_ms.unwrap_or(0).min(MAX_TASK_WAIT_MS);
+        if wait_ms > 0 {
+            let wait = self
+                .tasks
+                .wait(args.task_id, Duration::from_millis(wait_ms));
+            match self.steer.clone() {
+                Some(mut steer) => {
+                    tokio::select! {
+                        biased;
+                        _ = wait => {}
+                        _ = steer.wait() => {}
+                    };
+                }
+                None => {
+                    wait.await;
+                }
+            }
+        }
         self.tasks.output(args.task_id).await
     }
 }
@@ -656,6 +739,153 @@ mod tests {
         assert_eq!(exit.code, None, "killed → signal exit");
         let report = tasks.output(id).await.unwrap();
         assert!(report.contains("exited on a signal"), "{report}");
+    }
+
+    #[tokio::test]
+    async fn a_finished_task_is_announced_exactly_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = temp_registry(dir.path());
+        let id = tasks
+            .spawn("echo hi", dir.path(), 1000, &Default::default())
+            .await
+            .unwrap();
+        tasks.wait(id, Duration::from_secs(10)).await.unwrap();
+
+        let settled = tasks.take_settled_unannounced().await;
+        assert_eq!(settled.len(), 1, "{settled:?}");
+        assert_eq!(settled[0].id, id);
+        assert_eq!(settled[0].command, "echo hi");
+        assert_eq!(settled[0].exit.code, Some(0));
+        // Announced once: a second drain has nothing to say.
+        assert!(tasks.take_settled_unannounced().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_running_task_is_not_announced() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = temp_registry(dir.path());
+        let id = tasks
+            .spawn("sleep 30", dir.path(), 1000, &Default::default())
+            .await
+            .unwrap();
+        assert!(tasks.take_settled_unannounced().await.is_empty());
+        tasks.kill(id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn output_already_returned_in_the_foreground_is_not_announced() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = temp_registry(dir.path());
+        let id = tasks
+            .spawn("echo foreground", dir.path(), 1000, &Default::default())
+            .await
+            .unwrap();
+        tasks.wait(id, Duration::from_secs(10)).await.unwrap();
+        // The foreground path consumed it; announcing it would be a duplicate.
+        tasks.take_streams(id).await.expect("streams");
+        assert!(tasks.take_settled_unannounced().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn task_output_can_wait_for_the_task_to_finish() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = temp_registry(dir.path());
+        let tool = TaskOutputTool::new(tasks.clone());
+
+        let slow = tasks
+            .spawn(
+                "sleep 0.2; echo done-waiting",
+                dir.path(),
+                1000,
+                &Default::default(),
+            )
+            .await
+            .unwrap();
+        let out = tool
+            .invoke(serde_json::json!({"task_id": slow, "wait_ms": 10_000}))
+            .await
+            .unwrap();
+        assert!(out.contains("exited with code 0"), "{out}");
+        assert!(out.contains("done-waiting"), "{out}");
+
+        // Without a wait, the same check reports it as still running.
+        let long = tasks
+            .spawn("sleep 30", dir.path(), 1000, &Default::default())
+            .await
+            .unwrap();
+        let out = tool
+            .invoke(serde_json::json!({"task_id": long}))
+            .await
+            .unwrap();
+        assert!(out.contains("running"), "{out}");
+        tasks.kill(long).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_steer_cuts_a_task_output_wait_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = temp_registry(dir.path());
+        let (notifier, signal) = crate::steer::steer_channel();
+        let tool = Arc::new(TaskOutputTool::new(tasks.clone()).with_steer(signal));
+        let id = tasks
+            .spawn("sleep 30", dir.path(), 1000, &Default::default())
+            .await
+            .unwrap();
+
+        let waiting = {
+            let tool = tool.clone();
+            tokio::spawn(async move {
+                tool.invoke(serde_json::json!({"task_id": id, "wait_ms": 600_000}))
+                    .await
+                    .unwrap()
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let steered_at = std::time::Instant::now();
+        notifier.notify();
+        let out = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("the steered wait should end promptly")
+            .unwrap();
+
+        assert!(
+            steered_at.elapsed() < Duration::from_millis(500),
+            "took {:?} to react to the steer",
+            steered_at.elapsed()
+        );
+        assert!(out.contains("running"), "{out}");
+        tasks.kill(id).await.unwrap();
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn spawned_tasks_get_the_non_interactive_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = temp_registry(dir.path());
+        let id = tasks
+            .spawn("echo [$PAGER]", dir.path(), 1000, &Default::default())
+            .await
+            .unwrap();
+        tasks.wait(id, Duration::from_secs(10)).await.unwrap();
+        let report = tasks.output(id).await.unwrap();
+        assert!(report.contains("[cat]"), "{report}");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn an_explicit_env_overrides_the_non_interactive_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = temp_registry(dir.path());
+        let env = [("PAGER".to_string(), "less".to_string())]
+            .into_iter()
+            .collect();
+        let id = tasks
+            .spawn("echo [$PAGER]", dir.path(), 1000, &env)
+            .await
+            .unwrap();
+        tasks.wait(id, Duration::from_secs(10)).await.unwrap();
+        let report = tasks.output(id).await.unwrap();
+        assert!(report.contains("[less]"), "{report}");
     }
 
     #[tokio::test]
