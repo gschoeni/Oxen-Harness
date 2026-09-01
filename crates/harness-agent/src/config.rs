@@ -180,6 +180,31 @@ pub struct AgentConfig {
     ///
     /// [`for_subagent`]: harness_permissions::PermissionGate::for_subagent
     pub permissions: Option<Arc<PermissionGate>>,
+    /// A cap on model rounds per turn (see [`RoundBudget`]). `None` (the
+    /// default for the interactive session) runs until the model stops on
+    /// its own; subagents get one so a lane that never converges can't run
+    /// away with the fleet.
+    pub round_budget: Option<RoundBudget>,
+}
+
+/// A soft cap on how many model rounds one turn may take.
+///
+/// At `wrap_up_at` rounds the model is told to finish the current step and
+/// report; at `stop_at` the turn ends with whatever it has, the same way
+/// the loop guard ends an unproductive turn. Both are counts of model
+/// calls, which is what a runaway lane actually spends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoundBudget {
+    pub wrap_up_at: u32,
+    pub stop_at: u32,
+}
+
+impl RoundBudget {
+    /// The budget every side agent (fleet lane, review step) runs under.
+    pub const SUBAGENT: RoundBudget = RoundBudget {
+        wrap_up_at: 40,
+        stop_at: 60,
+    };
 }
 
 impl AgentConfig {
@@ -216,6 +241,7 @@ impl Default for AgentConfig {
             retry: RetryPolicy::default(),
             error_log: None,
             permissions: None,
+            round_budget: None,
         }
     }
 }

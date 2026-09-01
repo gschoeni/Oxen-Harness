@@ -57,6 +57,8 @@ struct TurnState {
     loop_guard: crate::loopguard::LoopGuard,
     /// The soft spend warning is logged once per turn, not per round.
     budget_warned: bool,
+    /// Model rounds so far this turn, for the round budget.
+    rounds: u32,
 }
 
 impl Agent {
@@ -193,6 +195,21 @@ impl Agent {
                 return Ok(message);
             }
 
+            // Likewise the turn's round budget: a wrap-up reminder first,
+            // then a stop — a lane that never converges must not spend the
+            // fleet's whole allowance.
+            turn.rounds += 1;
+            if let Some(budget) = self.config.round_budget {
+                if turn.rounds > budget.stop_at {
+                    let message = self.round_budget_stop_message(budget.stop_at);
+                    self.push(ChatMessage::assistant(message.clone()))?;
+                    return Ok(message);
+                }
+                if turn.rounds == budget.wrap_up_at {
+                    turn.nudge = Some(ChatMessage::user(prompt::WRAP_UP_NUDGE.to_string()));
+                }
+            }
+
             // Reflect this call's prompt cost the moment it's sent (the transcript
             // is `prompt_tokens` of context), so a live meter accounts for it now
             // rather than jumping when the reply finishes. The reply then streams
@@ -310,6 +327,15 @@ impl Agent {
                 return Ok(message);
             }
         }
+    }
+
+    /// The closing message when a turn hits its round budget.
+    fn round_budget_stop_message(&self, stop_at: u32) -> String {
+        format!(
+            "Stopped: this task reached its budget of {stop_at} model rounds without \
+             finishing. The work so far is in the transcript above; narrow the task or \
+             run it again with a more specific brief."
+        )
     }
 
     /// Fold matched stream rules into the turn: arm their reminder for the
@@ -750,6 +776,39 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+
+    #[tokio::test]
+    async fn a_round_budget_nudges_then_stops_a_turn_that_never_converges() {
+        let mut server = mockito::Server::new_async().await;
+        // Every round calls the same tool; nothing ever converges.
+        let calls = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_snap_call())
+            .expect(3)
+            .create_async()
+            .await;
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            round_budget: Some(crate::config::RoundBudget {
+                wrap_up_at: 2,
+                stop_at: 3,
+            }),
+            ..AgentConfig::default()
+        };
+        // No `snap` tool is registered: every round gets an "unknown tool"
+        // result and the model calls again.
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+        let text = agent.run_turn("go", |_| {}).await.unwrap();
+        calls.assert_async().await;
+        assert!(text.contains("budget of 3 model rounds"), "{text}");
+        // The loop guard would also have caught this eventually, but the
+        // budget got there first: three rounds, not six.
+    }
 
     /// A rule that fires on `.unwrap()` anywhere in the reply.
     fn no_unwrap_rule(interrupt: bool) -> crate::rules::RuleSet {

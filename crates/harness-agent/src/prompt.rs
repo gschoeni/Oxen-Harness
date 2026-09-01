@@ -310,6 +310,11 @@ pub(crate) const TRAIL_STALL_NUDGE: &str =
 /// identical arguments *and* an identical result several times in a row (see
 /// [`crate::loopguard`]). Each repeat re-bills the whole context for zero new
 /// information. Sent only on the next request and never persisted.
+/// Sent when a turn reaches its round budget's wrap-up line.
+pub(crate) const WRAP_UP_NUDGE: &str = "<system-reminder>You are near this task's round budget. \
+Wrap up now: finish the current step, then give your final report with what you did, \
+what you verified, and what is left. Do not start new work.</system-reminder>";
+
 pub(crate) const LOOP_NUDGE: &str =
     "You have made the same tool call with identical arguments several times in a row, \
      and it returned the identical result each time — repeating it again will not produce \

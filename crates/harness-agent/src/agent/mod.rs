@@ -659,6 +659,9 @@ impl Agent {
         // A side agent can't drive the host's approval prompt any more than it
         // can drive the question picker: demote its gate to auto-deny.
         config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
+        // A lane that never converges is stopped, not left to spend the
+        // fleet's whole allowance.
+        config.round_budget = Some(crate::config::RoundBudget::SUBAGENT);
         // The registry drops `update_trail` (see `subagent_tools`), so the
         // inherited prompt must not mandate a tool the registry would reject.
         config.system_prompt = config
