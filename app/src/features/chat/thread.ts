@@ -64,6 +64,9 @@ export type Item =
       id: string;
       kind: "tool";
       name: string;
+      /** The model's id for the call, when the event carried one. Calls in one
+       *  reply may run concurrently, so the end is paired to its start by id. */
+      callId?: string;
       /** Raw JSON arguments the model called the tool with. */
       args: string;
       /** The tool's output (filled in when it finishes). */
@@ -142,7 +145,13 @@ export function appendToken(prev: Item[], token: string): Item[] {
 /** Begin a tool chip with the call's arguments. Retire an empty "thinking"
  *  bubble it supersedes, or finalize a non-empty preamble bubble (e.g. "I'll
  *  build that…") so its activity indicator hands off to the tool chip. */
-export function toolStart(prev: Item[], name: string, args: string, startedAt: number): Item[] {
+export function toolStart(
+  prev: Item[],
+  name: string,
+  args: string,
+  startedAt: number,
+  callId?: string,
+): Item[] {
   let next = [...prev];
   const last = next[next.length - 1];
   if (last && last.kind === "assistant" && last.streaming) {
@@ -152,22 +161,45 @@ export function toolStart(prev: Item[], name: string, args: string, startedAt: n
       next[next.length - 1] = { ...last, streaming: false };
     }
   }
-  next.push({ id: uid(), kind: "tool", name, args: displayArgs(name, args), result: "", running: true, startedAt });
+  next.push({
+    id: uid(),
+    kind: "tool",
+    name,
+    callId,
+    args: displayArgs(name, args),
+    result: "",
+    running: true,
+    startedAt,
+  });
   return capThread(next);
 }
 
 /** Finish the matching running tool chip (recording its result) and open a
- *  fresh bubble for any text the model emits next. */
-export function toolEnd(prev: Item[], name: string, result: string, endedAt: number): Item[] {
+ *  fresh bubble for any text the model emits next. The match is by call id
+ *  when the event carries one (concurrent calls of the same tool end in any
+ *  order), else the most recent running chip of that name. */
+export function toolEnd(
+  prev: Item[],
+  name: string,
+  result: string,
+  endedAt: number,
+  callId?: string,
+): Item[] {
   const next = [...prev];
   for (let i = next.length - 1; i >= 0; i--) {
     const it = next[i];
-    if (it.kind === "tool" && it.running && it.name === name) {
+    if (it.kind !== "tool" || !it.running) continue;
+    const matches = callId && it.callId ? it.callId === callId : it.name === name;
+    if (matches) {
       next[i] = { ...it, running: false, result: displayText(result || it.result, MAX_TOOL_RESULT_CHARS), endedAt };
       break;
     }
   }
-  next.push({ id: uid(), kind: "assistant", text: "", streaming: true });
+  // One fresh bubble is enough while several calls are finishing.
+  const last = next[next.length - 1];
+  if (!(last && last.kind === "assistant" && last.streaming && last.text === "")) {
+    next.push({ id: uid(), kind: "assistant", text: "", streaming: true });
+  }
   return capThread(next);
 }
 

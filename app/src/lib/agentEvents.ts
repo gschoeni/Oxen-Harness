@@ -35,6 +35,7 @@ import {
   onUsage,
   onCompacted,
   onCompression,
+  onNotice,
   onRetry,
 } from "./ipc";
 
@@ -60,6 +61,7 @@ export function startAgentEventBridge(): void {
     onToolDelta((e) => s().ingestToolDelta(e)),
     onUsage((e) => s().ingestUsage(e)),
     onCompacted((e) => s().ingestCompacted(e)),
+    onNotice((e) => s().ingestNotice(e)),
     onCompression((e) => s().ingestCompression(e)),
     onRetry((e) => s().ingestRetry(e)),
     onCanvas((e) => s().ingestCanvas(e)),

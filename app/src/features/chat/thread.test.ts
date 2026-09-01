@@ -270,3 +270,28 @@ describe("thread: resident memory bounds", () => {
     expect(tool.result.length).toBeLessThan(8_000);
   });
 });
+
+describe("concurrent tool calls", () => {
+  it("pairs each end with its start by call id, in any order", () => {
+    let items: Item[] = [];
+    items = toolStart(items, "read_file", '{"path":"a"}', 1, "call_a");
+    items = toolStart(items, "read_file", '{"path":"b"}', 2, "call_b");
+    items = toolEnd(items, "read_file", "B", 3, "call_b");
+    items = toolEnd(items, "read_file", "A", 4, "call_a");
+    const tools = items.filter((i) => i.kind === "tool");
+    expect(tools.map((t) => t.kind === "tool" && [t.callId, t.running, t.result])).toEqual([
+      ["call_a", false, "A"],
+      ["call_b", false, "B"],
+    ]);
+    // Two ends opened one fresh bubble, not two.
+    expect(items.filter((i) => i.kind === "assistant").length).toBe(1);
+  });
+
+  it("falls back to the newest running chip of that name without ids", () => {
+    let items: Item[] = [];
+    items = toolStart(items, "read_file", "", 1);
+    items = toolEnd(items, "read_file", "done", 2);
+    const tool = items.find((i) => i.kind === "tool");
+    expect(tool && tool.kind === "tool" && tool.result).toBe("done");
+  });
+});

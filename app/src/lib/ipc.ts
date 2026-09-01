@@ -53,6 +53,7 @@ import type {
   UsageBreakdown,
   DailyUsageRow,
   CompactedEvent,
+  NoticeEvent,
   CompressionEvent,
   CompressionMode,
   PatternCheck,
@@ -421,6 +422,11 @@ export const onToolDelta = (handler: (e: ToolDeltaEvent) => void) =>
 /** Fires at the end of each turn with the session's cumulative token count. */
 export const onUsage = (handler: (e: UsageEvent) => void) =>
   listen<UsageEvent>("agent://usage", (e) => handler(e.payload));
+
+/** Fires when the agent did something on its own worth a line in the thread
+ *  (a background task finished and its output went to the model). */
+export const onNotice = (handler: (e: NoticeEvent) => void) =>
+  listen<NoticeEvent>("agent://notice", (e) => handler(e.payload));
 
 /** Fires when the transcript was compacted mid-turn to fit the context window. */
 export const onCompacted = (handler: (e: CompactedEvent) => void) =>

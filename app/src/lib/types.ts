@@ -555,6 +555,15 @@ export interface CompactedEvent {
   detail: string;
 }
 
+/** `agent://notice` payload — a one-line notice about something the agent did
+ *  on its own; `kind` is `background_task` when a finished task's output was
+ *  delivered to the model. */
+export interface NoticeEvent {
+  session: string;
+  kind: string;
+  text: string;
+}
+
 /** `agent://retry` payload — a model call hit a transient provider/network
  *  error and is being retried with backoff; shown as a thread notice so the
  *  pause reads as a hiccup (with the error for debugging), not a hang. */

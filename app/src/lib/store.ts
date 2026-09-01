@@ -89,6 +89,7 @@ import type {
   StartupModelChoice,
   Theme,
   ToolEvent,
+  NoticeEvent,
   ToolDeltaEvent,
   UsageEvent,
   CompactedEvent,
@@ -513,6 +514,9 @@ interface AppState {
   ingestUsage: (e: UsageEvent) => void;
   /** Add a notice to a session's thread when its context was compacted. */
   ingestCompacted: (e: CompactedEvent) => void;
+  /** A one-line notice about something the agent did on its own (a
+   *  background task's output delivered to the model). */
+  ingestNotice: (e: NoticeEvent) => void;
   /** Add a notice when a model call hit a transient error and is retrying. */
   ingestRetry: (e: RetryEvent) => void;
   /** Update a session's compression savings counters. Fires per model call —
@@ -1527,8 +1531,8 @@ export const useStore = create<AppState>((set, get) => {
             ...s.threads,
             [e.session]:
               e.phase === "start"
-                ? toolStart(s.threads[e.session], e.name, e.detail, Date.now())
-                : toolEnd(s.threads[e.session], e.name, e.detail, Date.now()),
+                ? toolStart(s.threads[e.session], e.name, e.detail, Date.now(), e.call_id)
+                : toolEnd(s.threads[e.session], e.name, e.detail, Date.now(), e.call_id),
           };
           update.streamingTool = { ...s.streamingTool, [e.session]: undefined };
         }
@@ -1592,6 +1596,14 @@ export const useStore = create<AppState>((set, get) => {
             ...s.threads,
             [e.session]: appendNotice(s.threads[e.session], `Compacted context — ${e.detail}`),
           },
+        };
+      }),
+
+    ingestNotice: (e) =>
+      set((s) => {
+        if (s.threads[e.session] === undefined) return {};
+        return {
+          threads: { ...s.threads, [e.session]: appendNotice(s.threads[e.session], e.text) },
         };
       }),
 
