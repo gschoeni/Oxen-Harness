@@ -1,6 +1,12 @@
 //! The `/model` command: show, switch, or add a model — plus the shared
 //! model-row catalog the interactive picker and the composer's completion
 //! list both render from, so the two surfaces can't drift.
+//!
+//! `/model roles` is the same catalog pointed at the *other* models a session
+//! uses: the summary model compaction runs on, the smol model fleet and review
+//! lanes ride, and the fallback chain a failing provider hands off to. They
+//! live in `~/.oxen-harness/limits.json` (see [`harness_runtime::limits`]) and
+//! were hand-edited JSON until now.
 
 use anyhow::Result;
 use harness_agent::Agent;
@@ -111,6 +117,12 @@ async fn pricing_catalog() -> Option<std::collections::HashMap<String, ModelPric
 /// from then on — here and in the desktop. The choice is persisted as the
 /// default for future sessions.
 pub(crate) async fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> Result<()> {
+    // `/model roles …` routes here rather than to a command of its own: the
+    // registry already sends every `/model <anything>` this way, and roles are
+    // picked from the same catalog as the session model.
+    if let Some(cmd) = rest.as_deref().and_then(parse_roles) {
+        return handle_roles(cmd, agent, ui);
+    }
     // The current-model readout, with its cached per-million rate when known
     // (warmed at startup/turn boundaries) — price stays visible even when the
     // user just asks what they're riding.
@@ -240,6 +252,379 @@ pub(crate) async fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui
     Ok(())
 }
 
+// ===========================================================================
+// `/model roles` — the models a session routes work to (limits.json)
+// ===========================================================================
+
+/// The row label that clears a role back to the session model.
+const SESSION_ROW: &str = "session model (default)";
+
+/// Words that clear a role rather than name a model.
+const CLEAR_WORDS: &[&str] = &["clear", "none", "default", "off"];
+
+/// A routed model role, as persisted in `limits.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Summary,
+    Smol,
+    Fallback,
+}
+
+impl Role {
+    fn parse(word: &str) -> Option<Self> {
+        match word.to_ascii_lowercase().as_str() {
+            "summary" | "summaries" => Some(Self::Summary),
+            "smol" | "small" => Some(Self::Smol),
+            "fallback" | "fallbacks" => Some(Self::Fallback),
+            _ => None,
+        }
+    }
+
+    /// The role's name in the table and in confirmations.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Summary => "summary",
+            Self::Smol => "smol",
+            Self::Fallback => "fallbacks",
+        }
+    }
+
+    /// What the role is for, one line, shown beside its assignment.
+    fn blurb(self) -> &'static str {
+        match self {
+            Self::Summary => "compaction summaries",
+            Self::Smol => "fleet lanes and review passes",
+            Self::Fallback => "tried in order when the session model keeps failing",
+        }
+    }
+
+    /// How a confirmation names the role's assignment.
+    fn assignment(self) -> &'static str {
+        match self {
+            Self::Summary => "summary model",
+            Self::Smol => "smol model",
+            Self::Fallback => "fallback chain",
+        }
+    }
+
+    /// The question the picker asks for this role.
+    fn question(self) -> &'static str {
+        match self {
+            Self::Summary => "Which model should write compaction summaries?",
+            Self::Smol => "Which model should run fleet lanes and review passes?",
+            Self::Fallback => {
+                "Pick the fallback models, in the order they should be tried \
+                 (space checks, enter confirms)."
+            }
+        }
+    }
+}
+
+/// The parsed form of `/model roles …`.
+#[derive(Debug, PartialEq, Eq)]
+enum RolesCmd {
+    /// `/model roles` — print the current assignments.
+    Show,
+    /// `/model roles <role>` — choose from the picker.
+    Pick(Role),
+    /// `/model roles <role> <model-id>…` — assign directly. `fallback` takes
+    /// the whole list, in the order given; the single-model roles take one.
+    Set(Role, Vec<String>),
+    /// `/model roles <role> clear` — drop the assignment.
+    Clear(Role),
+    /// `/model roles <word>` — not a role we know.
+    Unknown(String),
+}
+
+/// Parse `/model`'s argument as a roles command, or `None` when it's an
+/// ordinary `/model <id>` switch.
+fn parse_roles(rest: &str) -> Option<RolesCmd> {
+    let mut parts = rest.split_whitespace();
+    let head = parts.next()?;
+    if !head.eq_ignore_ascii_case("roles") && !head.eq_ignore_ascii_case("role") {
+        return None;
+    }
+    let Some(word) = parts.next() else {
+        return Some(RolesCmd::Show);
+    };
+    let Some(role) = Role::parse(word) else {
+        return Some(RolesCmd::Unknown(word.to_string()));
+    };
+    let ids: Vec<String> = parts.map(str::to_string).collect();
+    Some(match ids.first() {
+        None => RolesCmd::Pick(role),
+        Some(v) if CLEAR_WORDS.contains(&v.to_ascii_lowercase().as_str()) => RolesCmd::Clear(role),
+        _ => RolesCmd::Set(role, ids),
+    })
+}
+
+/// What a typed model id resolved to against the candidate list.
+#[derive(Debug, PartialEq, Eq)]
+enum Resolved {
+    /// Exactly one candidate matched.
+    Id(String),
+    /// A prefix that several candidates share.
+    Ambiguous(Vec<String>),
+    /// Nothing in the catalog matches.
+    Unknown,
+}
+
+/// Resolve a typed model id against the pickable candidates: an exact id
+/// (case-insensitive) wins outright, otherwise a *unique* prefix does, so
+/// `/model roles smol qwen3` lands without typing the quantization suffix.
+fn resolve_model_id(ids: &[&str], input: &str) -> Resolved {
+    let needle = input.trim().to_lowercase();
+    if needle.is_empty() {
+        return Resolved::Unknown;
+    }
+    if let Some(hit) = ids.iter().find(|id| id.to_lowercase() == needle) {
+        return Resolved::Id((*hit).to_string());
+    }
+    let hits: Vec<String> = ids
+        .iter()
+        .filter(|id| id.to_lowercase().starts_with(&needle))
+        .map(|id| (*id).to_string())
+        .collect();
+    match hits.len() {
+        0 => Resolved::Unknown,
+        1 => Resolved::Id(hits.into_iter().next().unwrap_or_default()),
+        _ => Resolved::Ambiguous(hits),
+    }
+}
+
+/// `/model roles [summary|smol|fallback [model-id|clear]]` — show or change
+/// the models a session routes work to. Roles are persisted, not live: like
+/// the desktop's settings pages, they apply to new and resumed chats.
+fn handle_roles(cmd: RolesCmd, agent: &Agent, ui: &Ui) -> Result<()> {
+    match cmd {
+        RolesCmd::Show => {
+            print_roles(agent, ui);
+            Ok(())
+        }
+        RolesCmd::Unknown(word) => {
+            println!(
+                "  {} {}",
+                ui.red("✗"),
+                ui.dim(&format!(
+                    "unknown role `{word}` — expected summary, smol, or fallback"
+                )),
+            );
+            Ok(())
+        }
+        RolesCmd::Clear(role) => assign(role, Vec::new(), ui),
+        RolesCmd::Set(role, wanted) => {
+            if role != Role::Fallback && wanted.len() > 1 {
+                println!(
+                    "  {} {}",
+                    ui.red("✗"),
+                    ui.dim(&format!(
+                        "the {} role takes one model — only `fallback` is a list",
+                        role.label()
+                    )),
+                );
+                return Ok(());
+            }
+            let rows = model_rows();
+            let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+            let mut chosen = Vec::with_capacity(wanted.len());
+            for want in &wanted {
+                match resolve_model_id(&ids, want) {
+                    Resolved::Id(id) => chosen.push(id),
+                    // Half-applying a chain would be worse than not applying
+                    // it: say what went wrong and leave the config alone.
+                    Resolved::Ambiguous(hits) => {
+                        println!(
+                            "  {} {}",
+                            ui.red("✗"),
+                            ui.dim(&format!(
+                                "`{want}` matches {} — be more specific",
+                                hits.join(", ")
+                            )),
+                        );
+                        return Ok(());
+                    }
+                    Resolved::Unknown => {
+                        println!(
+                            "  {} {}",
+                            ui.red("✗"),
+                            ui.dim(&format!(
+                                "no model matches `{want}` — `/model {want}` adds it to the \
+                                 catalog first"
+                            )),
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+            assign(role, chosen, ui)
+        }
+        RolesCmd::Pick(role) => pick_role(role, ui),
+    }
+}
+
+/// The current assignments as a small aligned table, with the spend ceiling
+/// (the other thing `limits.json` holds) so one command reads the whole file.
+fn print_roles(agent: &Agent, ui: &Ui) {
+    let limits = harness_runtime::limits::load();
+    let dash = "—".to_string();
+    let fallbacks = if limits.fallback_models.is_empty() {
+        dash.clone()
+    } else {
+        limits.fallback_models.join(" → ")
+    };
+    let ceiling = limits
+        .max_session_tokens
+        .map(|t| format!("{} tokens", crate::turn::human_tokens(t)))
+        .unwrap_or_else(|| dash.clone());
+    let rows = [
+        ("session", agent.model().to_string(), "this chat's model"),
+        (
+            Role::Summary.label(),
+            limits.summary_model.clone().unwrap_or_else(|| dash.clone()),
+            Role::Summary.blurb(),
+        ),
+        (
+            Role::Smol.label(),
+            limits.smol_model.clone().unwrap_or_else(|| dash.clone()),
+            Role::Smol.blurb(),
+        ),
+        (Role::Fallback.label(), fallbacks, Role::Fallback.blurb()),
+        ("spend cap", ceiling, "per-session token ceiling"),
+    ];
+    let value_width = rows
+        .iter()
+        .map(|(_, value, _)| crate::width::str_width(value))
+        .max()
+        .unwrap_or(0);
+    println!("  {}", ui.brown("🐂 model roles"));
+    for (name, value, blurb) in rows {
+        // Pad the raw text, then color: a colored string carries escape bytes
+        // that a `{:<10}` fill would count as visible columns.
+        let pad = " ".repeat(value_width.saturating_sub(crate::width::str_width(&value)));
+        println!(
+            "    {} {}{pad}  {}",
+            ui.dim(&format!("{name:<10}")),
+            ui.cream(&value),
+            ui.dim(blurb),
+        );
+    }
+    println!(
+        "  {}",
+        ui.dim(
+            "/model roles summary|smol|fallback [model-id] to change \
+             · fallback clear to empty it · applies to new and resumed chats"
+        )
+    );
+}
+
+/// Open the picker for a role over the same candidates as `/model` — plus, for
+/// the single-model roles, a row that clears the override. `fallback` is
+/// multi-select and keeps the order the rows were checked in.
+fn pick_role(role: Role, ui: &Ui) -> Result<()> {
+    let rows = model_rows();
+    if rows.is_empty() {
+        println!(
+            "  {}",
+            ui.dim("no models in the catalog yet — `/model <id>` adds one, then set a role")
+        );
+        return Ok(());
+    }
+    let limits = harness_runtime::limits::load();
+    let assigned: Vec<String> = match role {
+        Role::Summary => limits.summary_model.clone().into_iter().collect(),
+        Role::Smol => limits.smol_model.clone().into_iter().collect(),
+        Role::Fallback => limits.fallback_models.clone(),
+    };
+    let mark = |id: &str| match assigned.iter().position(|a| a == id) {
+        Some(_) if role != Role::Fallback => " ← current".to_string(),
+        Some(i) => format!(" ← #{}", i + 1),
+        None => String::new(),
+    };
+    let mut options: Vec<Choice> = Vec::new();
+    if role != Role::Fallback {
+        let mark = if assigned.is_empty() {
+            " ← current"
+        } else {
+            ""
+        };
+        options.push(Choice::new(
+            SESSION_ROW,
+            format!("run this work on the session model{mark}"),
+        ));
+    }
+    options.extend(
+        rows.iter()
+            .map(|r| Choice::new(r.id.clone(), format!("{}{}", r.describe(), mark(&r.id)))),
+    );
+    let picked = picker::select(
+        ui,
+        "Model roles",
+        role.question(),
+        &options,
+        role == Role::Fallback,
+    )?;
+    let Some(picked) = picked else {
+        // Cancelled, or no interactive terminal (piped input) — show what's
+        // set rather than changing anything.
+        println!("  {}", ui.dim("nothing changed."));
+        return Ok(());
+    };
+    let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+    let mut chosen: Vec<String> = Vec::new();
+    for label in picked {
+        if label == SESSION_ROW {
+            continue;
+        }
+        match resolve_model_id(&ids, &label) {
+            Resolved::Id(id) => chosen.push(id),
+            // A typed answer that names nothing we know: refuse the whole
+            // change rather than silently routing to a model that isn't there.
+            _ => {
+                println!(
+                    "  {} {}",
+                    ui.red("✗"),
+                    ui.dim(&format!("no model matches `{label}` — nothing changed")),
+                );
+                return Ok(());
+            }
+        }
+    }
+    assign(role, chosen, ui)
+}
+
+/// Persist a role's new assignment and say what it means. An empty `chosen`
+/// clears the role.
+fn assign(role: Role, chosen: Vec<String>, ui: &Ui) -> Result<()> {
+    let mut limits = harness_runtime::limits::load();
+    match role {
+        Role::Summary => limits.summary_model = chosen.first().cloned(),
+        Role::Smol => limits.smol_model = chosen.first().cloned(),
+        Role::Fallback => limits.fallback_models = chosen.clone(),
+    }
+    if let Err(e) = harness_runtime::limits::save(&limits) {
+        println!("  {} {e}", ui.dim("couldn't save the role:"));
+        return Ok(());
+    }
+    let value = match (chosen.is_empty(), role) {
+        (false, _) => chosen.join(" → "),
+        (true, Role::Fallback) => "none — a failing model ends the turn".to_string(),
+        (true, _) => "the session model".to_string(),
+    };
+    println!(
+        "  {} {}",
+        ui.brown(&format!("🐂 {}:", role.assignment())),
+        ui.accent(&value),
+    );
+    println!(
+        "  {}",
+        ui.dim(&format!(
+            "{} · applies to new and resumed chats",
+            role.blurb()
+        ))
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +662,90 @@ mod tests {
         );
         let tag = price_tag(&row("muse-spark-1", false), Some(&catalog));
         assert_eq!(tag.as_deref(), Some("$3/M in · $15/M out"));
+    }
+
+    #[test]
+    fn roles_argument_parses_into_show_pick_set_and_clear() {
+        // Anything that isn't the `roles` keyword stays an ordinary switch.
+        assert_eq!(parse_roles("claude-opus-4-8"), None);
+        assert_eq!(parse_roles(""), None);
+
+        assert_eq!(parse_roles("roles"), Some(RolesCmd::Show));
+        assert_eq!(parse_roles("  ROLES  "), Some(RolesCmd::Show));
+        assert_eq!(
+            parse_roles("roles summary"),
+            Some(RolesCmd::Pick(Role::Summary))
+        );
+        assert_eq!(parse_roles("role smol"), Some(RolesCmd::Pick(Role::Smol)));
+        assert_eq!(
+            parse_roles("roles fallbacks"),
+            Some(RolesCmd::Pick(Role::Fallback))
+        );
+        assert_eq!(
+            parse_roles("roles summary gemini-2-5-flash"),
+            Some(RolesCmd::Set(
+                Role::Summary,
+                vec!["gemini-2-5-flash".into()]
+            ))
+        );
+        // A fallback chain can be given in one line, in order.
+        assert_eq!(
+            parse_roles("roles fallback claude-sonnet-5 gemini-2-5-flash"),
+            Some(RolesCmd::Set(
+                Role::Fallback,
+                vec!["claude-sonnet-5".into(), "gemini-2-5-flash".into()]
+            ))
+        );
+        assert_eq!(
+            parse_roles("roles fallback clear"),
+            Some(RolesCmd::Clear(Role::Fallback))
+        );
+        // `none`/`default` clear a single-model role the same way.
+        assert_eq!(
+            parse_roles("roles smol none"),
+            Some(RolesCmd::Clear(Role::Smol))
+        );
+        assert_eq!(
+            parse_roles("roles wagon"),
+            Some(RolesCmd::Unknown("wagon".into()))
+        );
+    }
+
+    #[test]
+    fn model_ids_resolve_by_exact_match_or_unique_prefix() {
+        let ids = ["claude-opus-4-8", "claude-sonnet-5", "qwen3-8b-q4-k-m"];
+        assert_eq!(
+            resolve_model_id(&ids, "claude-sonnet-5"),
+            Resolved::Id("claude-sonnet-5".into())
+        );
+        // Case-insensitive, and whitespace-tolerant.
+        assert_eq!(
+            resolve_model_id(&ids, "  CLAUDE-SONNET-5 "),
+            Resolved::Id("claude-sonnet-5".into())
+        );
+        // A unique prefix is enough.
+        assert_eq!(
+            resolve_model_id(&ids, "qwen3"),
+            Resolved::Id("qwen3-8b-q4-k-m".into())
+        );
+        // A shared prefix names both rather than guessing.
+        assert_eq!(
+            resolve_model_id(&ids, "claude-"),
+            Resolved::Ambiguous(vec!["claude-opus-4-8".into(), "claude-sonnet-5".into()])
+        );
+        assert_eq!(resolve_model_id(&ids, "gpt"), Resolved::Unknown);
+        assert_eq!(resolve_model_id(&ids, "   "), Resolved::Unknown);
+    }
+
+    #[test]
+    fn an_exact_id_beats_a_longer_id_it_prefixes() {
+        // `claude-opus-4-8` is also a prefix of the dated alias — the exact
+        // match must still win instead of reading as ambiguous.
+        let ids = ["claude-opus-4-8", "claude-opus-4-8-20260101"];
+        assert_eq!(
+            resolve_model_id(&ids, "claude-opus-4-8"),
+            Resolved::Id("claude-opus-4-8".into())
+        );
     }
 
     #[test]

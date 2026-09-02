@@ -96,7 +96,12 @@ fn render(ui: &Ui, q: &Question, s: &State, width: usize) -> Vec<String> {
         let active = i == s.cursor;
         let pointer = if active { ui.accent("❯") } else { " ".into() };
         let marker_text = if q.multi {
-            if s.checked[i] { "◉" } else { "◯" }.to_string()
+            // A checked row carries its position in the answer, so an ordered
+            // multi-select (a fallback chain) shows the order being built.
+            match s.order.iter().position(|&j| j == i) {
+                Some(n) => format!("◉{}", n + 1),
+                None => "◯".to_string(),
+            }
         } else {
             format!("{}.", i + 1)
         };
@@ -368,10 +373,12 @@ mod tests {
         let q = question("Storage", "Which?", &opts, true);
         let mut s = State::new(opts.len());
         s.cursor = 1;
-        s.checked[0] = true;
+        s.toggle(0);
         let lines = render(&ui, &q, &s, 80);
         let joined = lines.join("\n");
-        assert!(joined.contains('◉'));
+        // A checked row shows its position in the answer, so an ordered
+        // multi-select reads back the chain being built.
+        assert!(joined.contains("◉1"));
         assert!(joined.contains('◯'));
         assert!(joined.contains("space toggle"));
     }

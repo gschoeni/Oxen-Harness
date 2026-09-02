@@ -275,13 +275,16 @@ async fn main() -> Result<()> {
 
     // Resolve which model to run and how to reach it (cloud or a local
     // llama-server). The server guard is kept alive for the whole session —
-    // dropping it shuts the background process down.
+    // dropping it shuts the background process down. A first run with nothing
+    // persisted gets one model pick on the way through, but never in the runs
+    // nobody is watching: headless `-p` and a one-shot `loop run`.
+    let interactive = args.print.is_none() && pending_loop.is_none();
     let Endpoint {
         client,
         model,
         context_window,
         local_server: _local_server,
-    } = resolve_endpoint(&args, resume_meta.as_ref(), &ui).await;
+    } = resolve_endpoint(&args, resume_meta.as_ref(), interactive, &ui).await;
 
     // Everything that needs the network gets kicked off here, the moment the
     // model is known, and is *never* awaited on the way to the first prompt:

@@ -39,6 +39,10 @@ pub(super) struct Question<'a> {
 pub(super) struct State {
     pub(super) cursor: usize,
     pub(super) checked: Vec<bool>,
+    /// The checked rows in the order the user checked them — multi-select
+    /// answers are ordered lists (`/model roles fallback` builds a fallback
+    /// chain), so the sequence is part of the answer, not an artifact.
+    pub(super) order: Vec<usize>,
     pub(super) input: String,
 }
 
@@ -47,7 +51,18 @@ impl State {
         Self {
             cursor: 0,
             checked: vec![false; options],
+            order: Vec::new(),
             input: String::new(),
+        }
+    }
+
+    /// Check or uncheck row `i`, keeping the pick order in step.
+    pub(super) fn toggle(&mut self, i: usize) {
+        self.checked[i] = !self.checked[i];
+        if self.checked[i] {
+            self.order.push(i);
+        } else {
+            self.order.retain(|&j| j != i);
         }
     }
 }
@@ -121,7 +136,7 @@ pub(super) fn on_key(q: &Question, s: &mut State, key: KeyEvent) -> Outcome {
         KeyCode::Enter => {
             if s.cursor != custom_row {
                 return Outcome::Submit(if q.multi {
-                    let mut sel = checked_labels(q.options, &s.checked);
+                    let mut sel = checked_labels(q.options, &s.order);
                     if sel.is_empty() {
                         sel.push(q.options[s.cursor].label.clone());
                     }
@@ -135,7 +150,7 @@ pub(super) fn on_key(q: &Question, s: &mut State, key: KeyEvent) -> Outcome {
                 return Outcome::Continue; // nothing drafted yet
             }
             let mut sel = if q.multi {
-                checked_labels(q.options, &s.checked)
+                checked_labels(q.options, &s.order)
             } else {
                 Vec::new()
             };
@@ -150,14 +165,14 @@ pub(super) fn on_key(q: &Question, s: &mut State, key: KeyEvent) -> Outcome {
                     if (1..=q.options.len()).contains(&n) {
                         s.cursor = n - 1;
                         if q.multi {
-                            s.checked[n - 1] = !s.checked[n - 1];
+                            s.toggle(n - 1);
                             return Outcome::Continue;
                         }
                         return Outcome::Submit(vec![q.options[n - 1].label.clone()]);
                     }
                 }
                 if c == ' ' && q.multi {
-                    s.checked[s.cursor] = !s.checked[s.cursor];
+                    s.toggle(s.cursor);
                     return Outcome::Continue;
                 }
             }
@@ -169,12 +184,11 @@ pub(super) fn on_key(q: &Question, s: &mut State, key: KeyEvent) -> Outcome {
     }
 }
 
-pub(super) fn checked_labels(options: &[Choice], checked: &[bool]) -> Vec<String> {
-    options
+/// The labels of the checked rows, in the order they were checked.
+pub(super) fn checked_labels(options: &[Choice], order: &[usize]) -> Vec<String> {
+    order
         .iter()
-        .zip(checked)
-        .filter(|(_, &on)| on)
-        .map(|(o, _)| o.label.clone())
+        .filter_map(|&i| options.get(i).map(|o| o.label.clone()))
         .collect()
 }
 
@@ -393,10 +407,31 @@ mod tests {
     }
 
     #[test]
-    fn checked_labels_collects_only_selected() {
+    fn checked_labels_collects_selections_in_pick_order() {
         let opts = options();
-        assert_eq!(checked_labels(&opts, &[false, true]), vec!["Postgres"]);
-        assert!(checked_labels(&opts, &[false, false]).is_empty());
+        assert_eq!(checked_labels(&opts, &[1]), vec!["Postgres"]);
+        assert_eq!(checked_labels(&opts, &[1, 0]), vec!["Postgres", "SQLite"]);
+        assert!(checked_labels(&opts, &[]).is_empty());
+    }
+
+    #[test]
+    fn multi_select_answers_in_the_order_they_were_checked() {
+        let opts = options();
+        let q = question("Fallbacks", "Which, in order?", &opts, true);
+        let mut s = State::new(opts.len());
+        // Check the second row first: the answer must lead with it.
+        on_key(&q, &mut s, key(KeyCode::Char('2')));
+        on_key(&q, &mut s, key(KeyCode::Char('1')));
+        match on_key(&q, &mut s, key(KeyCode::Enter)) {
+            Outcome::Submit(sel) => assert_eq!(sel, vec!["Postgres", "SQLite"]),
+            _ => panic!("enter should submit both, in pick order"),
+        }
+        // Unchecking drops it from the order rather than leaving a hole.
+        let mut s = State::new(opts.len());
+        on_key(&q, &mut s, key(KeyCode::Char('1')));
+        on_key(&q, &mut s, key(KeyCode::Char('2')));
+        on_key(&q, &mut s, key(KeyCode::Char('1')));
+        assert_eq!(checked_labels(&opts, &s.order), vec!["Postgres"]);
     }
 
     #[test]
