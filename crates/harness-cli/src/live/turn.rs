@@ -213,6 +213,9 @@ pub(crate) async fn read_idle(
     // Staged Ctrl-C (armed by a Ctrl-C on an empty composer; any other key
     // disarms it) — the same guard the classic REPL uses.
     let mut guard = ExitGuard::default();
+    // Esc twice within half a second on an empty composer opens the rewind
+    // picker — the one thing Esc does at idle.
+    let mut last_esc: Option<std::time::Instant> = None;
     let result = loop {
         // The idle loop has no ticker; when a key-event-burst media check is
         // pending, wake at its settle deadline so a dropped path with no
@@ -253,8 +256,16 @@ pub(crate) async fn read_idle(
                     }
                     Some(Residual::Exit) => break Idle::Exit,
                     // Esc at idle has no turn to cancel — and must never touch
-                    // the draft, so it is deliberately inert.
-                    Some(Residual::CancelTurn) => {}
+                    // the draft. A double-Esc on an empty composer runs
+                    // `/rewind` (the picker); anything else is inert.
+                    Some(Residual::CancelTurn) => {
+                        let empty = state.borrow().composer_draft().is_empty();
+                        let double = last_esc.is_some_and(|at| at.elapsed() < DOUBLE_ESC_WINDOW);
+                        last_esc = Some(std::time::Instant::now());
+                        if empty && double {
+                            break Idle::Submit("/rewind".to_string());
+                        }
+                    }
                     Some(Residual::Interrupt) => {
                         // Staged Ctrl-C: clear the draft first, then confirm,
                         // then exit — never a surprise quit mid-thought.
@@ -331,6 +342,9 @@ pub(crate) fn tool_target(arguments: &str) -> Option<String> {
     let one_line = raw.split(['\n', '\r']).next().unwrap_or(raw).trim();
     Some(truncate(one_line, 60))
 }
+
+/// Two Escapes closer together than this, at idle, open the rewind picker.
+const DOUBLE_ESC_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// What happened to a single turn in the live loop.
 /// A message pushed in the instant after the turn's final drain (or during a

@@ -7,6 +7,18 @@
 //! models directory by hand — starts without touching the network. Only a
 //! catalog model with nothing on disk triggers a download.
 
+/// Startup narration goes to stdout on a terminal and to stderr when stdout
+/// is a pipe (`-p` print mode), so a captured reply is only the reply.
+macro_rules! say {
+    ($($arg:tt)*) => {
+        if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            println!($($arg)*);
+        } else {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -181,7 +193,7 @@ fn remove(store: &ModelStore, id: &str, ui: &Ui) -> Result<()> {
 async fn pull(store: &ModelStore, id: &str, ui: &Ui) -> Result<(ModelRef, std::path::PathBuf)> {
     let (spec_display, model) = match resolve(store, id)? {
         Runnable::Installed { model, path } => {
-            println!(
+            say!(
                 "  {} {}",
                 ui.green("Already in the wagon:"),
                 ui.cream(&format!(
@@ -199,7 +211,7 @@ async fn pull(store: &ModelStore, id: &str, ui: &Ui) -> Result<(ModelRef, std::p
         harness_local::Origin::HuggingFace { repo, .. }
         | harness_local::Origin::Oxen { repo, .. } => (repo.clone(), model.size_bytes),
     };
-    println!(
+    say!(
         "  {} {}",
         ui.brown("Loading the wagon:"),
         ui.cream(&format!(
@@ -236,10 +248,10 @@ async fn pull(store: &ModelStore, id: &str, ui: &Ui) -> Result<(ModelRef, std::p
         .await;
 
     if animate {
-        println!();
+        say!();
     }
     let path = result.with_context(|| format!("downloading {id}"))?;
-    println!(
+    say!(
         "  {} {}",
         ui.green("🏞  Arrived:"),
         ui.cream(&format!(
@@ -267,7 +279,7 @@ pub async fn start_for(id: &str, ui: &Ui) -> Result<(LocalServer, String)> {
         Runnable::Downloadable { .. } => pull(&store, id, ui).await?,
     };
 
-    println!(
+    say!(
         "  {} {}",
         ui.brown("Hitching the oxen:"),
         ui.dim(&format!("starting llama-server for {id} (loading model…)")),
@@ -281,7 +293,7 @@ pub async fn start_for(id: &str, ui: &Ui) -> Result<(LocalServer, String)> {
     let server = LocalServer::start_with_context(&path, id, context, |_| {})
         .await
         .with_context(|| format!("starting llama-server for {id}"))?;
-    println!(
+    say!(
         "  {} {}",
         ui.green("Trail is clear:"),
         ui.cream(&format!("{id} serving at {}", server.base_url())),

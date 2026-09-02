@@ -11,6 +11,19 @@ use std::sync::RwLock;
 use harness_runtime::commands::CustomCommand;
 
 static COMMANDS: RwLock<Vec<CustomCommand>> = RwLock::new(Vec::new());
+/// The workspace the session serves, recorded alongside its commands so
+/// path completion and the git meter read the right tree.
+static WORKSPACE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// The session's workspace root (falls back to the process directory before
+/// `install_for` ran).
+pub(crate) fn workspace_root() -> std::path::PathBuf {
+    WORKSPACE
+        .get()
+        .cloned()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default()
+}
 
 /// Replace the installed set (discovery runs once per workspace).
 pub(crate) fn install(commands: Vec<CustomCommand>) {
@@ -20,6 +33,7 @@ pub(crate) fn install(commands: Vec<CustomCommand>) {
 /// Discover the commands visible from `workspace_root` and install them,
 /// returning how many were found.
 pub(crate) fn install_for(workspace_root: &std::path::Path) -> usize {
+    let _ = WORKSPACE.set(workspace_root.to_path_buf());
     let found = harness_runtime::commands::discover(workspace_root);
     let count = found.len();
     install(found);

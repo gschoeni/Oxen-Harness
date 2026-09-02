@@ -205,6 +205,28 @@ impl Live {
     /// completion. Empty when the text isn't a completable `/command`.
     fn compute_candidates(&mut self) -> (Vec<CompletionItem>, bool) {
         let text = self.composer.text();
+        if let Some((start, end, needle)) = at_token(self.composer.chars(), self.composer.cursor())
+        {
+            let paths = self.path_candidates();
+            let items = rank_paths(&paths, &needle)
+                .into_iter()
+                .map(|path| {
+                    let mut line: Vec<char> = self.composer.chars().to_vec();
+                    let mut mention: Vec<char> = format!("@{path}").chars().collect();
+                    if !path.ends_with('/') {
+                        mention.push(' ');
+                    }
+                    line.splice(start..end, mention);
+                    let detail = if path.ends_with('/') {
+                        "directory"
+                    } else {
+                        "file"
+                    };
+                    CompletionItem::new(line.into_iter().collect::<String>(), path, detail)
+                })
+                .collect();
+            return (items, true);
+        }
         if !text.starts_with('/') {
             return (Vec::new(), false);
         }
@@ -351,6 +373,25 @@ impl Live {
         self.model_items.clone().unwrap_or_default()
     }
 
+    /// The workspace's paths for `@` completion, rebuilt at most every couple
+    /// of seconds so a file the agent just wrote shows up without a restart.
+    fn path_candidates(&mut self) -> Vec<String> {
+        const REFRESH: std::time::Duration = std::time::Duration::from_secs(2);
+        let fresh = self
+            .path_items
+            .as_ref()
+            .is_some_and(|(at, _)| at.elapsed() < REFRESH);
+        if !fresh {
+            let root = crate::custom_commands::workspace_root();
+            let paths = harness_tools::fs::workspace_paths(&root, MAX_PATH_CANDIDATES);
+            self.path_items = Some((std::time::Instant::now(), paths));
+        }
+        self.path_items
+            .as_ref()
+            .map(|(_, p)| p.clone())
+            .unwrap_or_default()
+    }
+
     /// On Enter, fold the **visible** completion into the submission so Enter
     /// both completes and runs in one stroke:
     ///
@@ -469,6 +510,73 @@ impl Live {
     pub(super) fn comp_navigated(&self) -> bool {
         self.completion.as_ref().is_some_and(|st| st.navigated)
     }
+}
+
+/// The most workspace paths scanned for `@` completion.
+const MAX_PATH_CANDIDATES: usize = 20_000;
+/// Rows an `@` completion offers.
+const MAX_PATH_ROWS: usize = 8;
+
+/// The `@token` the caret is in: `(start, end, needle)` as char indices into
+/// `chars`, with the needle being the text after the `@`. `None` when the
+/// caret isn't inside a word that starts with `@` (an email-like `a@b` does
+/// not count — the `@` must open the word).
+pub(super) fn at_token(chars: &[char], cursor: usize) -> Option<(usize, usize, String)> {
+    let cursor = cursor.min(chars.len());
+    let start = chars[..cursor]
+        .iter()
+        .rposition(|c| c.is_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let end = chars[cursor..]
+        .iter()
+        .position(|c| c.is_whitespace())
+        .map(|i| cursor + i)
+        .unwrap_or(chars.len());
+    if chars.get(start) != Some(&'@') {
+        return None;
+    }
+    let needle: String = chars[start + 1..cursor].iter().collect();
+    Some((start, end, needle))
+}
+
+/// Rank workspace paths against what was typed after the `@`: a basename
+/// prefix beats a path prefix beats a substring beats a subsequence, and
+/// shorter paths win ties so `src/lib.rs` outranks `src/legacy/lib.rs`.
+pub(super) fn rank_paths(paths: &[String], needle: &str) -> Vec<String> {
+    let needle = needle.to_lowercase();
+    let mut scored: Vec<(u8, usize, &String)> = paths
+        .iter()
+        .filter_map(|path| {
+            let lower = path.to_lowercase();
+            let base = lower.rsplit('/').find(|s| !s.is_empty()).unwrap_or("");
+            let score = if needle.is_empty() {
+                4
+            } else if base.starts_with(&needle) {
+                0
+            } else if lower.starts_with(&needle) {
+                1
+            } else if lower.contains(&needle) {
+                2
+            } else if is_subsequence(&needle, &lower) {
+                3
+            } else {
+                return None;
+            };
+            Some((score, path.len(), path))
+        })
+        .collect();
+    scored.sort();
+    scored
+        .into_iter()
+        .take(MAX_PATH_ROWS)
+        .map(|(_, _, p)| p.clone())
+        .collect()
+}
+
+fn is_subsequence(needle: &str, hay: &str) -> bool {
+    let mut it = hay.chars();
+    needle.chars().all(|n| it.any(|h| h == n))
 }
 
 #[cfg(test)]
@@ -757,5 +865,42 @@ mod tests {
         assert_eq!(l.comp_index(), Some(1));
         let expected = l.completion_items()[1].replacement.clone();
         assert_eq!(submit(&mut l), expected);
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    fn chars(s: &str) -> Vec<char> {
+        s.chars().collect()
+    }
+
+    #[test]
+    fn the_at_token_under_the_caret_is_found_and_emails_are_not() {
+        let c = chars("look at @src/ma please");
+        assert_eq!(at_token(&c, 15), Some((8, 15, "src/ma".into())));
+        assert_eq!(at_token(&c, 3), None);
+        assert_eq!(at_token(&chars("mail a@b.c"), 8), None);
+        assert_eq!(at_token(&chars("@"), 1), Some((0, 1, String::new())));
+    }
+
+    #[test]
+    fn paths_rank_basename_prefix_first_then_shorter() {
+        let paths: Vec<String> = [
+            "src/legacy/lib.rs",
+            "src/lib.rs",
+            "docs/library.md",
+            "Cargo.lock",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            rank_paths(&paths, "lib"),
+            vec!["src/lib.rs", "docs/library.md", "src/legacy/lib.rs"]
+        );
+        assert_eq!(rank_paths(&paths, "clk"), vec!["Cargo.lock"]);
+        assert!(rank_paths(&paths, "zzz").is_empty());
     }
 }

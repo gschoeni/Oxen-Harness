@@ -268,6 +268,42 @@ fn grep_blocking(opts: GrepOpts<'_>) -> Result<Vec<String>, ToolError> {
     Ok(out)
 }
 
+/// Every path under `root` that a gitignore-aware walk reaches, relative to
+/// `root` with `/` separators, directories suffixed `/`, at most `limit`
+/// entries in walk order. For a host's path completion — cheap enough to
+/// rebuild every couple of seconds on a normal repo.
+pub fn workspace_paths(root: &std::path::Path, limit: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    // `.gitignore` applies even outside a git checkout: a scratch directory
+    // with a `target/` is still better off without it in the list.
+    let walk = ignore::WalkBuilder::new(root)
+        .require_git(false)
+        .sort_by_file_name(|a, b| a.cmp(b))
+        .build();
+    for entry in walk.flatten() {
+        if out.len() >= limit {
+            break;
+        }
+        let path = entry.path();
+        if path == root {
+            continue;
+        }
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        let mut text = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        if entry.file_type().is_some_and(|t| t.is_dir()) {
+            text.push('/');
+        }
+        out.push(text);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -353,5 +389,20 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("c.rs:1:"));
+    }
+
+    #[test]
+    fn workspace_paths_are_relative_gitignore_aware_and_mark_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join("target")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+        std::fs::write(dir.path().join("target/out.o"), "").unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+        let paths = workspace_paths(dir.path(), 100);
+        assert!(paths.contains(&"src/".to_string()), "{paths:?}");
+        assert!(paths.contains(&"src/lib.rs".to_string()), "{paths:?}");
+        assert!(!paths.iter().any(|p| p.starts_with("target")), "{paths:?}");
+        assert_eq!(workspace_paths(dir.path(), 1).len(), 1);
     }
 }

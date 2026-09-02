@@ -19,7 +19,7 @@ pub mod syntax;
 mod write;
 
 pub use edit::{EditFileArgs, EditFileTool, Replacement};
-pub use find::{FindFilesArgs, FindFilesTool, OutputMode, SearchArgs, SearchTool};
+pub use find::{workspace_paths, FindFilesArgs, FindFilesTool, OutputMode, SearchArgs, SearchTool};
 pub use read::{ReadFileArgs, ReadFileTool};
 pub use state::{FileState, Freshness, PathRule};
 pub use write::{WriteFileArgs, WriteFileTool};
