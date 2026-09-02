@@ -40,6 +40,22 @@ pub(super) struct LiveTerminal {
     restored: bool,
 }
 
+/// Whether the terminal speaks the kitty keyboard protocol, probed **once
+/// per process**. The probe writes a query and waits up to two seconds for
+/// the reply; a terminal that never answers (Apple Terminal, a plain pty)
+/// would otherwise cost that wait every time the composer starts — every
+/// prompt, every command. Terminals known not to answer skip the probe.
+fn keyboard_enhancement_supported() -> bool {
+    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+        if program == "Apple_Terminal" {
+            return false;
+        }
+        terminal::supports_keyboard_enhancement().unwrap_or(false)
+    })
+}
+
 impl LiveTerminal {
     pub(super) fn new(decorates: bool) -> Result<Self> {
         terminal::enable_raw_mode()?;
@@ -47,7 +63,7 @@ impl LiveTerminal {
         // Ask the terminal to disambiguate modified keys (the kitty keyboard
         // protocol) so Shift+Enter is reported distinctly from Enter. Harmless
         // and skipped where unsupported — Alt+Enter / Ctrl-J still add a newline.
-        let kbd_enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
+        let kbd_enhanced = keyboard_enhancement_supported();
         if kbd_enhanced {
             let _ = execute!(
                 io::stdout(),
