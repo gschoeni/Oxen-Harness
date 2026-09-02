@@ -714,14 +714,17 @@ impl SessionService {
                 .with_workspace(workspace_root)
                 .with_usage_store(usage_store),
         );
-        tools.register_typed(harness_agent::FleetTool::new(
-            spawner.clone(),
-            Arc::new(HostFleetSink::new(
-                self.sink.clone(),
-                session.to_string(),
-                harness_protocol::FleetSource::Turn,
-            )),
-        ));
+        tools.register_typed(
+            harness_agent::FleetTool::new(
+                spawner.clone(),
+                Arc::new(HostFleetSink::new(
+                    self.sink.clone(),
+                    session.to_string(),
+                    harness_protocol::FleetSource::Turn,
+                )),
+            )
+            .with_asides(tools.asides()),
+        );
         self.fleet_spawners
             .lock()
             .expect("fleet spawners poisoned")

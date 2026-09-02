@@ -67,6 +67,9 @@ pub enum AgentEvent {
         /// The exit code, or `None` when the task died on a signal.
         exit_code: Option<i32>,
     },
+    /// A result that finished on its own (a `wait: false` fleet) was just
+    /// delivered to the model as a message; `title` is the one-line notice.
+    AsideDelivered { kind: String, title: String },
     /// The transcript was compacted to fit the context window — older history
     /// was pruned and/or summarized so the session can continue instead of
     /// hitting a hard limit. Carries a short human-readable note for the UI.

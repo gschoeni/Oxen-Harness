@@ -132,6 +132,14 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
             )],
             then: NextSpinner::Thinking,
         },
+        AgentEvent::AsideDelivered { title, .. } => Cue::Block {
+            lines: vec![format!(
+                "  {} {}",
+                ui.green("⚙"),
+                ui.dim(&format!("{title} — delivered to the model"))
+            )],
+            then: NextSpinner::Thinking,
+        },
         // A background command finished and its output went to the model:
         // one quiet line so the model's next move has a visible cause.
         AgentEvent::BackgroundTaskDone {

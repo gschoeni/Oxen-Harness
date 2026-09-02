@@ -118,6 +118,37 @@ pub struct ToolProgress {
     pub chunk: String,
 }
 
+/// Something that finished on its own and should reach the model at its next
+/// step: a fleet started with `wait: false`, say. Tools push these; the agent
+/// drains them between rounds and delivers each as a framed message, the
+/// way a finished background task is delivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Aside {
+    /// What produced it (`fleet`, …), for the UI's one-line notice.
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+}
+
+/// The shared queue of pending [`Aside`]s, cloneable into any tool.
+#[derive(Debug, Clone, Default)]
+pub struct Asides(Arc<std::sync::Mutex<std::collections::VecDeque<Aside>>>);
+
+impl Asides {
+    pub fn push(&self, aside: Aside) {
+        self.0.lock().expect("asides lock").push_back(aside);
+    }
+
+    /// Everything queued, in arrival order, leaving the queue empty.
+    pub fn take_all(&self) -> Vec<Aside> {
+        self.0.lock().expect("asides lock").drain(..).collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.lock().expect("asides lock").is_empty()
+    }
+}
+
 /// A capability the agent can invoke during the loop — the raw, dyn-dispatched
 /// form the registry stores.
 ///
@@ -490,6 +521,8 @@ pub struct ToolRegistry {
     tasks: Option<Arc<tasks::BackgroundTasks>>,
     /// The host's end of the steer signal the shell tools wait on.
     steer: Option<steer::SteerNotifier>,
+    /// Results that finished on their own, awaiting delivery to the model.
+    asides: Asides,
 }
 
 impl ToolRegistry {
@@ -525,6 +558,12 @@ impl ToolRegistry {
     /// was built with the default tool set.
     pub fn steer_notifier(&self) -> Option<steer::SteerNotifier> {
         self.steer.clone()
+    }
+
+    /// The queue tools push finished-on-their-own results into (see
+    /// [`Aside`]); the agent drains it between rounds.
+    pub fn asides(&self) -> Asides {
+        self.asides.clone()
     }
 
     /// Subscribe to live output from running tools (see [`ToolProgress`]).

@@ -345,6 +345,11 @@ pub struct FleetArgs {
     /// parallel edits can't collide. Leave false for read-only work.
     #[serde(default)]
     pub isolate_edits: Option<bool>,
+    /// Default true: wait for every agent and return their results. Set
+    /// false to return at once and keep working; the results are delivered
+    /// to you automatically when the fleet finishes — never poll for them.
+    #[serde(default)]
+    pub wait: Option<bool>,
 }
 
 /// The `spawn_agents` tool. Register it *after* snapshotting the registry into
@@ -352,11 +357,25 @@ pub struct FleetArgs {
 pub struct FleetTool {
     spawner: Arc<FleetSpawner>,
     sink: Arc<dyn FleetSink>,
+    /// Where a `wait: false` fleet leaves its results for the agent to
+    /// deliver. Without one, every fleet waits.
+    asides: Option<harness_tools::Asides>,
 }
 
 impl FleetTool {
     pub fn new(spawner: Arc<FleetSpawner>, sink: Arc<dyn FleetSink>) -> Self {
-        Self { spawner, sink }
+        Self {
+            spawner,
+            sink,
+            asides: None,
+        }
+    }
+
+    /// Let `wait: false` fleets hand their results to `asides` (the
+    /// registry's queue, see `ToolRegistry::asides`).
+    pub fn with_asides(mut self, asides: harness_tools::Asides) -> Self {
+        self.asides = Some(asides);
+        self
     }
 }
 
@@ -411,6 +430,46 @@ impl TypedTool for FleetTool {
                 args.agents.len()
             )));
         }
+        let labels: Vec<String> = args.agents.iter().map(|a| a.name.clone()).collect();
+        // A fleet the model doesn't wait for runs on its own task and leaves
+        // its report in the registry's aside queue; the agent delivers it at
+        // the next step boundary, exactly like a finished background task.
+        if args.wait == Some(false) {
+            if let Some(asides) = self.asides.clone() {
+                let spawner = self.spawner.clone();
+                let sink = self.sink.clone();
+                let count = labels.len();
+                let names = labels.join(", ");
+                let started = format!(
+                    "Fleet started: {count} agent(s) ({names}) running in the background. \
+                     Their results will be delivered to you automatically when they finish — \
+                     keep working on other things, do not poll."
+                );
+                tokio::spawn(async move {
+                    let body = match Self::execute(spawner, sink, args).await {
+                        Ok(text) => text,
+                        Err(e) => format!("the fleet failed: {e}"),
+                    };
+                    asides.push(harness_tools::Aside {
+                        kind: "fleet".into(),
+                        title: format!("fleet of {count} finished ({names})"),
+                        body,
+                    });
+                });
+                return Ok(started);
+            }
+        }
+        Self::execute(self.spawner.clone(), self.sink.clone(), args).await
+    }
+}
+
+impl FleetTool {
+    /// Run a fleet to completion and render its combined report.
+    async fn execute(
+        spawner: Arc<FleetSpawner>,
+        sink: Arc<dyn FleetSink>,
+        args: FleetArgs,
+    ) -> Result<String, ToolError> {
         let concurrency = args
             .max_parallel
             .unwrap_or(DEFAULT_FLEET_PARALLEL)
@@ -428,17 +487,13 @@ impl TypedTool for FleetTool {
         // the note below says which way it went — silently sharing when the
         // model asked for isolation would be the dangerous outcome.
         let isolated = args.isolate_edits.unwrap_or(false);
-        let lanes = isolated
-            .then(|| self.spawner.open_lanes(labels.len()))
-            .flatten();
-        let lane_guard = lanes.as_ref().map(|_| LaneGuard(self.spawner.clone()));
+        let lanes = isolated.then(|| spawner.open_lanes(labels.len())).flatten();
+        let lane_guard = lanes.as_ref().map(|_| LaneGuard(spawner.clone()));
 
-        let cancel = self.spawner.run_token();
-        self.sink.started(&labels, cancel.clone());
-        let guard = SinkGuard(self.sink.clone());
+        let cancel = spawner.run_token();
+        sink.started(&labels, cancel.clone());
+        let guard = SinkGuard(sink.clone());
 
-        let sink = self.sink.clone();
-        let spawner = self.spawner.clone();
         let outcomes = run_fleet(
             move |index| spawner.build_agent(index),
             tasks,
@@ -762,6 +817,57 @@ mod tests {
         assert_eq!(calls.last().unwrap(), "finished");
         assert!(calls.contains(&"completed:left:true".to_string()));
         assert!(calls.contains(&"completed:right:true".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_fleet_the_model_does_not_wait_for_reports_through_the_aside_queue() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("scout says hi"))
+            .create_async()
+            .await;
+        let asides = harness_tools::Asides::default();
+        let sink = Arc::new(RecordingSink::default());
+        let tool = FleetTool::new(spawner(&server.url()), sink.clone()).with_asides(asides.clone());
+        let out = tool
+            .invoke(serde_json::json!({
+                "agents": [{ "name": "scout", "prompt": "look" }],
+                "wait": false
+            }))
+            .await
+            .unwrap();
+        assert!(out.contains("delivered to you automatically"), "{out}");
+        // The report lands in the queue once the fleet finishes.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while asides.is_empty() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let delivered = asides.take_all();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].kind, "fleet");
+        assert!(
+            delivered[0].title.contains("scout"),
+            "{}",
+            delivered[0].title
+        );
+        assert!(
+            delivered[0].body.contains("scout says hi"),
+            "{}",
+            delivered[0].body
+        );
+        // Without an aside queue, `wait: false` still waits.
+        let waiting = FleetTool::new(spawner(&server.url()), sink);
+        let out = waiting
+            .invoke(serde_json::json!({
+                "agents": [{ "name": "scout", "prompt": "look" }],
+                "wait": false
+            }))
+            .await
+            .unwrap();
+        assert!(out.contains("scout says hi"), "{out}");
     }
 
     #[tokio::test]

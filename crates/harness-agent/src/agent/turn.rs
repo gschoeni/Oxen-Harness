@@ -72,6 +72,18 @@ impl TurnState {
     }
 }
 
+/// Frame a result that finished on its own (a fleet the model didn't wait
+/// for) as the message that delivers it — marked automatic, like a task.
+fn aside_delivery(kind: &str, title: &str, body: &str) -> String {
+    let body = harness_core::text::truncate_with_marker(body, 48_000, "\n… [delivery truncated]");
+    format!(
+        "<background-result kind=\"{kind}\">\n\
+         This is the automatic delivery of work that finished in the background ({title}) — \
+         not a message from the user. Act on it and continue your work.\n{body}\n\
+         </background-result>"
+    )
+}
+
 impl Agent {
     /// Run one user turn to completion, returning the assistant's final text.
     ///
@@ -751,12 +763,25 @@ impl Agent {
     where
         F: FnMut(&AgentEvent),
     {
+        let mut delivered = false;
+        for aside in self.tools.asides().take_all() {
+            self.push(ChatMessage::user(aside_delivery(
+                &aside.kind,
+                &aside.title,
+                &aside.body,
+            )))?;
+            on_event(&AgentEvent::AsideDelivered {
+                kind: aside.kind,
+                title: aside.title,
+            });
+            delivered = true;
+        }
         let Some(tasks) = self.tools.background_tasks().cloned() else {
-            return Ok(false);
+            return Ok(delivered);
         };
         let settled = tasks.take_settled_unannounced().await;
         if settled.is_empty() {
-            return Ok(false);
+            return Ok(delivered);
         }
         for task in settled {
             let output = match tasks.output(task.id).await {

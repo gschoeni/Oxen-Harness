@@ -86,6 +86,11 @@ pub fn agent_event(
             kind: "nudge".into(),
             text: format!("nudged the model: {reason}"),
         },
+        AgentEvent::AsideDelivered { kind, title } => ProtocolEvent::Notice {
+            session,
+            kind: kind.clone(),
+            text: format!("{title} — delivered to the model"),
+        },
         AgentEvent::BackgroundTaskDone {
             task_id,
             command,
