@@ -275,9 +275,39 @@ pub fn help(ui: &Ui) -> String {
             ui.dim(&item.hint),
         ));
     }
+    out.push_str(&format!("\n  {}\n", ui.title("Keys on the trail")));
+    for (key, what) in KEY_HELP {
+        out.push_str(&format!(
+            "    {}  {}\n",
+            ui.accent(&format!("{key:<12}")),
+            ui.dim(what)
+        ));
+    }
     out.push_str(&format!("\n  {}\n", ui.brown(&v.help_footer)));
     out
 }
+
+/// The composer's keys and the trail-keeping commands, the same in every
+/// theme (a theme changes the voice, not the controls).
+const KEY_HELP: &[(&str, &str)] = &[
+    ("Enter", "send · mid-turn: steer the running turn"),
+    (
+        "Ctrl+Q",
+        "queue as a follow-up (runs after this turn) · Alt+↑ pulls it back",
+    ),
+    (
+        "Esc",
+        "cancel the running turn · Esc Esc at idle: rewind picker",
+    ),
+    ("Ctrl+O", "expand the last tool result in full"),
+    ("@path", "complete a workspace path to mention it"),
+    ("Tab", "complete a /command or its argument"),
+    (
+        "/resume",
+        "pick up an earlier trail · /fork copies · /rewind goes back",
+    ),
+    ("Ctrl-C", "clear the draft, then confirm, then exit"),
+];
 
 /// A tombstone "game over" screen shown when the user ends the session — a
 /// random cause of death from the theme, engraved alongside the resume command
