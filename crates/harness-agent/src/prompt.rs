@@ -393,6 +393,58 @@ pub fn background_task_delivery(
     )
 }
 
+/// Pushed into the conversation when the user turns plan mode on, so the model
+/// reads the constraint as part of the thread rather than as a system rule it
+/// might weigh against the request. The sections are fixed on purpose: a plan
+/// the user has to finish deciding is not a plan, so there is nowhere to park
+/// unresolved options.
+pub const PLAN_MODE_ENTER: &str = "\
+<plan-mode>
+Plan mode is on. The working tree is read-only: file writes and edits, git and gh operations that change anything, background-task kills, and any shell command that is not provably read-only will all be refused until the user leaves plan mode. Do not test the limits, and do not ask to have them lifted.
+
+Do this instead:
+
+1. Explore. Read files, search the codebase, run read-only commands until you understand the real code — not the code you assume is there.
+2. Ask only when it matters. Use `ask_user_question` for a decision where the options lead to materially different work; never to confirm something you could have read, and never to hand a choice back that you are equipped to make.
+3. Write the plan to `.oxen-harness/plans/<slug>.md` — a short kebab-case slug naming the work. That directory is the only path you can write. Use exactly these sections, in this order:
+
+   ## Context — what is true today, in this repository, that the plan must fit.
+   ## Approach — the decided plan, in order. Say what changes and why.
+   ## Critical files — at most five paths, each with the anchor to change (function, type, section) and one line on the edit.
+   ## Verification — the commands and observations that will prove it worked.
+   ## Assumptions & contingencies — what you assumed, and what you will do instead if an assumption turns out to be wrong.
+
+   No other sections. In particular: no Non-Goals, no Alternatives, no Risks. Decision-complete beats brief — a plan that leaves a choice open has failed. Fold anything you would have put under Alternatives or Risks into Approach (as the decision you made) or Assumptions & contingencies (as the fallback).
+
+4. Stop and tell the user the plan is ready, in one or two sentences, naming the file you wrote. Do not start the work.
+</plan-mode>";
+
+/// Pushed when the user leaves plan mode *without* approving — the tree is
+/// writable again, but that is not permission to start.
+pub const PLAN_MODE_EXIT: &str = "\
+<plan-mode>
+Plan mode is off; the tree is writable again. This is not an approval of any plan you wrote: do not start work until the user asks for it. If you were mid-exploration, summarize what you found and wait.
+</plan-mode>";
+
+/// The execution brief sent when the user approves a plan: the file becomes
+/// the authoritative statement of the work, outranking anything earlier in the
+/// thread (including ideas the user talked the model out of while planning).
+pub fn plan_approved_prompt(plan_path: &str, plan_text: &str) -> String {
+    format!(
+        "<approved-plan path=\"{plan_path}\">\n\
+         The user approved this plan. Execute it exactly as written. It is \
+         authoritative over anything earlier in this conversation — where they \
+         disagree, the plan wins. Do not re-plan, do not redesign it, and do not \
+         ask for approval again; the approval is this message. If you hit \
+         something the plan genuinely did not anticipate, follow its \
+         contingencies, and if none apply, stop and say so rather than \
+         improvising a different plan. When you are done, report what you \
+         verified — the commands you ran and what they showed — not just what \
+         you changed.\n\
+         \n{plan_text}\n</approved-plan>"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

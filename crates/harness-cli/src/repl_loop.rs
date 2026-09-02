@@ -290,6 +290,19 @@ async fn handle_line(
         Command::Auth(rest) => commands::auth::handle_repl(rest, agent, ui)?,
         Command::Compression(rest) => commands::compression::handle_repl(rest, agent, ui)?,
         Command::Permissions(rest) => commands::permissions::handle_repl(rest, agent, ui)?,
+        Command::Plan(rest) => {
+            // An approved plan comes back as the prompt to run, so execution
+            // takes exactly the path a typed message would.
+            if let Some(prompt) = commands::plan::handle_repl(rest, agent, ui, ctx.workspace_root)?
+            {
+                if run_turn_and_drain(agent, TurnRequest::Prompt(prompt), ui, queue, carryover)
+                    .await?
+                {
+                    print!("{}", theme::death_screen(ui, &ctx.session()));
+                    return Ok(true);
+                }
+            }
+        }
         Command::Usage => commands::usage::handle_repl(ctx.store, ui).await,
         Command::Resume(rest) => commands::resume::handle_repl(rest, agent, ui, ctx).await?,
         Command::Fork => commands::rewind::fork_repl(agent, ui, ctx)?,

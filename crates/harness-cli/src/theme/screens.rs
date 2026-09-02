@@ -306,6 +306,10 @@ const KEY_HELP: &[(&str, &str)] = &[
         "/resume",
         "pick up an earlier trail · /fork copies · /rewind goes back",
     ),
+    (
+        "/plan",
+        "read-only planning; /plan approve executes the plan file",
+    ),
     ("Ctrl-C", "clear the draft, then confirm, then exit"),
 ];
 

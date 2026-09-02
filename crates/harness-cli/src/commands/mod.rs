@@ -28,6 +28,7 @@ pub(crate) mod loops;
 pub(crate) mod model;
 pub(crate) mod oxen;
 pub(crate) mod permissions;
+pub(crate) mod plan;
 pub(crate) mod preview;
 pub(crate) mod print;
 pub(crate) mod queue;

@@ -18,6 +18,12 @@
 //! 5. **Audit** ([`audit`]) — every decision and its source is one JSON line
 //!    in `~/.oxen-harness/permissions.jsonl`.
 //!
+//! Orthogonal to the modes, [`plan_mode`] is a live latch the host flips while
+//! the model researches and writes an execution plan: the tree goes read-only
+//! (only `.oxen-harness/plans/` stays writable) in *every* mode, bypass
+//! included. It is never persisted.
+//!
+//! [`plan_mode`]: PermissionGate::plan_mode
 //! The gate hooks `Agent::run_tool` (one choke point covers the main agent,
 //! fleet lanes, and review side-agents). Subagents get [`for_subagent`]: same
 //! policy, but gated actions auto-decline with report-back instructions —
@@ -25,7 +31,8 @@
 //!
 //! [`for_subagent`]: PermissionGate::for_subagent
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 pub mod approve;
@@ -107,12 +114,17 @@ pub struct PermissionGate {
     audit_path: Option<PathBuf>,
     /// True for the interactive session agent; false for subagent gates.
     subagent: bool,
+    /// Plan mode: a live, never-persisted read-only latch that composes with
+    /// (and outranks) the mode. Shared with subagent gates so a lane can't
+    /// write while the user is still reading the plan.
+    plan_mode: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for PermissionGate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PermissionGate")
             .field("mode", &self.mode().label())
+            .field("plan_mode", &self.plan_mode())
             .field("subagent", &self.subagent)
             .finish_non_exhaustive()
     }
@@ -130,6 +142,7 @@ impl PermissionGate {
             approver,
             audit_path: harness_config::paths::permissions_log().ok(),
             subagent: false,
+            plan_mode: Arc::new(AtomicBool::new(false)),
             workspace,
         }
     }
@@ -146,12 +159,26 @@ impl PermissionGate {
             approver: Arc::new(AutoDenyApprover),
             audit_path: self.audit_path.clone(),
             subagent: true,
+            plan_mode: self.plan_mode.clone(),
         }
     }
 
     /// The active permission mode.
     pub fn mode(&self) -> PermissionMode {
         self.policy.read().expect("policy poisoned").mode
+    }
+
+    /// Whether plan mode is on: the working tree is read-only while the model
+    /// explores and writes an execution plan.
+    pub fn plan_mode(&self) -> bool {
+        self.plan_mode.load(Ordering::Relaxed)
+    }
+
+    /// Turn plan mode on or off for the live session (and its subagent gates).
+    /// Deliberately not persisted — a plan is a moment in one conversation, so
+    /// a new session never starts with the tree silently locked.
+    pub fn set_plan_mode(&self, on: bool) {
+        self.plan_mode.store(on, Ordering::Relaxed);
     }
 
     /// The workspace this gate scopes (where project grants persist).
@@ -189,6 +216,9 @@ impl PermissionGate {
     /// First stage: classify + apply policy, no user interaction. `args` are
     /// the tool call's parsed JSON arguments.
     pub fn review(&self, tool: &str, args: &serde_json::Value) -> GateReview {
+        if let Some(denial) = self.plan_review(tool, args) {
+            return denial;
+        }
         match tool {
             "run_shell" => self.review_shell(args),
             "write_file" | "edit_file" => self.review_file_edit(tool, args),
@@ -197,6 +227,58 @@ impl PermissionGate {
             "kill_task" => self.review_kill_task(args),
             _ => GateReview::Allow,
         }
+    }
+
+    /// Plan mode's read-only verdict, or `None` when the call may proceed to
+    /// the normal policy path. Consulted *before* the mode machinery so the
+    /// latch composes with every mode — bypass included. A malformed argument
+    /// shape falls through, exactly as the mode reviews do, so the tool's own
+    /// parsing produces the error.
+    fn plan_review(&self, tool: &str, args: &serde_json::Value) -> Option<GateReview> {
+        if !self.plan_mode() {
+            return None;
+        }
+        let refused = match tool {
+            "write_file" | "edit_file" => {
+                let path = args.get("path").and_then(|p| p.as_str())?;
+                if plan_writable(Path::new(path), &self.workspace) {
+                    return None;
+                }
+                format!("writing {path}")
+            }
+            "git" => match args.get("operation").and_then(|o| o.as_str())? {
+                "status" | "diff" | "log" => return None,
+                op => format!("git {op}"),
+            },
+            "gh" => match args.get("operation").and_then(|o| o.as_str())? {
+                "pr_view" | "pr_checks" => return None,
+                op => format!("gh {op}"),
+            },
+            "kill_task" => "terminating a background task".to_string(),
+            "run_shell" => {
+                let command = args.get("command").and_then(|c| c.as_str())?;
+                let analysis = classify(command, dirs::home_dir().as_deref());
+                // A tripped breaker outranks plan mode: `rm -rf ~` is refused
+                // for a reason approving the plan would not change, and saying
+                // so is more useful than "you're planning".
+                if analysis.breaker.is_some() {
+                    return None;
+                }
+                // Only commands the classifier can prove read-only survive;
+                // everything it can't see through stays out of the tree. A
+                // redirect writes a file even from an otherwise-safe line.
+                if analysis.risk <= Risk::Safe && !analysis.writes_a_file {
+                    return None;
+                }
+                format!("running `{command}`")
+            }
+            _ => return None,
+        };
+        let policy = self.policy.read().expect("policy poisoned").clone();
+        self.audit(tool, &refused, "deny", "plan_mode", &policy);
+        Some(GateReview::Deny {
+            message: plan_denial(&refused),
+        })
     }
 
     fn review_shell(&self, args: &serde_json::Value) -> GateReview {
@@ -672,6 +754,38 @@ impl PermissionGate {
     }
 }
 
+/// Plan mode's single writable location: `<workspace>/.oxen-harness/plans/…`.
+/// Checked lexically on the tool-supplied (workspace-relative or absolute)
+/// path; anything with a `..` in it, or outside the workspace, is not writable.
+fn plan_writable(path: &Path, workspace: &Path) -> bool {
+    let relative = path.strip_prefix(workspace).unwrap_or(path);
+    let mut parts: Vec<&str> = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::CurDir => continue,
+            Component::Normal(name) => match name.to_str() {
+                Some(name) => parts.push(name),
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+    matches!(parts.as_slice(), [".oxen-harness", "plans", _, ..])
+}
+
+/// What the model reads when plan mode refuses an action. Says the mode is on,
+/// what is still possible, and how the *user* leaves it — so the model reports
+/// back instead of hunting for a route around the latch.
+fn plan_denial(refused: &str) -> String {
+    format!(
+        "tool error: plan mode is on — the working tree is read-only, so {refused} was refused. \
+         Keep exploring with read-only tools and write your plan to \
+         `.oxen-harness/plans/<slug>.md`, the only path you can write. Only the user can leave \
+         plan mode: `/plan approve` to execute the plan, `/plan off` to drop it. Do not retry \
+         this or reach the same effect another way."
+    )
+}
+
 /// Why a written path is protected, if it is. Checked lexically on the
 /// tool-supplied (workspace-relative or absolute) path.
 fn protected_path_reason(path: &str) -> Option<&'static str> {
@@ -1089,6 +1203,140 @@ mod tests {
         ));
         assert!(matches!(
             gate.review("gh", &serde_json::json!({"operation": "pr_create"})),
+            GateReview::Allow
+        ));
+    }
+
+    /// Plan mode composes with the mode rather than replacing it: even in
+    /// bypass, everything that could change the tree is refused, and only the
+    /// plans directory stays writable.
+    #[test]
+    fn plan_mode_locks_the_tree_in_every_mode() {
+        let _env = testutil::env_guard();
+        let (_home, ws, gate) = gate(None);
+        gate.set_mode(PermissionMode::Bypass);
+        gate.set_plan_mode(true);
+        assert!(gate.plan_mode());
+
+        let denied = |review: GateReview, what: &str| match review {
+            GateReview::Deny { message } => assert!(
+                message.contains("plan mode is on") && message.contains("/plan approve"),
+                "{what}: {message}"
+            ),
+            other => panic!("{what} should be refused in plan mode, got {other:?}"),
+        };
+
+        // Writes: only the plans directory survives, relative or absolute.
+        for path in ["src/main.rs", ".oxen-harness/plans/../../src/main.rs"] {
+            denied(
+                gate.review("write_file", &serde_json::json!({ "path": path })),
+                path,
+            );
+        }
+        for path in [
+            ".oxen-harness/plans/rewrite-the-gate.md".to_string(),
+            ws.path()
+                .join(".oxen-harness/plans/rewrite-the-gate.md")
+                .display()
+                .to_string(),
+        ] {
+            assert!(
+                matches!(
+                    gate.review("edit_file", &serde_json::json!({ "path": path })),
+                    GateReview::Allow
+                ),
+                "the plan file must stay writable: {path}"
+            );
+        }
+
+        // git/gh: reads flow, everything else is refused.
+        for op in ["status", "diff", "log"] {
+            assert!(matches!(
+                gate.review("git", &serde_json::json!({ "operation": op })),
+                GateReview::Allow
+            ));
+        }
+        for op in ["pr_view", "pr_checks"] {
+            assert!(matches!(
+                gate.review("gh", &serde_json::json!({ "operation": op })),
+                GateReview::Allow
+            ));
+        }
+        for op in ["commit", "push", "rebase"] {
+            denied(
+                gate.review("git", &serde_json::json!({ "operation": op })),
+                op,
+            );
+        }
+        for op in ["pr_create", "release_create"] {
+            denied(
+                gate.review("gh", &serde_json::json!({ "operation": op })),
+                op,
+            );
+        }
+
+        // Background-task kills are process control, not research.
+        denied(
+            gate.review("kill_task", &serde_json::json!({ "task_id": 7 })),
+            "kill_task",
+        );
+
+        // Shell: only provably read-only commands run.
+        for command in ["git status", "ls -la", "rg needle src"] {
+            assert!(
+                matches!(
+                    gate.review("run_shell", &shell_args(command)),
+                    GateReview::Allow
+                ),
+                "`{command}` is read-only and should run while planning"
+            );
+        }
+        for command in ["cargo build", "rm -rf ./build", "echo hi > out.txt"] {
+            denied(gate.review("run_shell", &shell_args(command)), command);
+        }
+
+        // Subagent lanes inherit the latch, live.
+        let sub = gate.for_subagent();
+        assert!(sub.plan_mode());
+        denied(
+            sub.review("write_file", &serde_json::json!({ "path": "src/x.rs" })),
+            "subagent write",
+        );
+
+        // Never persisted: a fresh gate on the same workspace starts unlatched.
+        assert!(!PermissionGate::new(ws.path(), Arc::new(Scripted(None))).plan_mode());
+
+        // Turning it off restores the underlying mode for both gates.
+        gate.set_plan_mode(false);
+        assert!(!sub.plan_mode());
+        assert!(matches!(
+            gate.review("write_file", &serde_json::json!({ "path": "src/main.rs" })),
+            GateReview::Allow
+        ));
+    }
+
+    /// Plan mode never *loosens* anything: hard limits still refuse, and the
+    /// malformed-arguments fall-through still defers to the tool's own parsing.
+    #[test]
+    fn plan_mode_keeps_breakers_and_ignores_malformed_arguments() {
+        let _env = testutil::env_guard();
+        let (_home, _ws, gate) = gate(None);
+        gate.set_plan_mode(true);
+        match gate.review("run_shell", &shell_args("rm -rf ~")) {
+            GateReview::Deny { message } => assert!(message.contains("hard safety limit")),
+            other => panic!("expected breaker deny, got {other:?}"),
+        }
+        assert!(matches!(
+            gate.review("write_file", &serde_json::json!({ "no": "path" })),
+            GateReview::Allow
+        ));
+        assert!(matches!(
+            gate.review("git", &serde_json::json!({})),
+            GateReview::Allow
+        ));
+        // An ungated tool is unaffected.
+        assert!(matches!(
+            gate.review("read_file", &serde_json::json!({ "path": "src/main.rs" })),
             GateReview::Allow
         ));
     }

@@ -560,15 +560,20 @@ fn read_branch(start: &std::path::Path) -> Option<String> {
 /// path reads it back. The mode can only change between turns (`/permissions`),
 /// so the remembered value is never stale on screen.
 fn remember_permission_mode(agent: &Agent) {
-    let mode = agent
-        .permission_gate()
-        .map(|g| g.mode())
-        .unwrap_or_else(|| {
-            harness_permissions::policy::load_global()
-                .mode
-                .unwrap_or_default()
-        })
-        .label();
+    // Plan mode outranks the mode on the meter, as it does at the gate.
+    let mode = if agent.permission_gate().is_some_and(|g| g.plan_mode()) {
+        "plan"
+    } else {
+        agent
+            .permission_gate()
+            .map(|g| g.mode())
+            .unwrap_or_else(|| {
+                harness_permissions::policy::load_global()
+                    .mode
+                    .unwrap_or_default()
+            })
+            .label()
+    };
     *MODE.lock().expect("permission mode poisoned") = Some(mode);
 }
 

@@ -72,6 +72,11 @@ pub struct Analysis {
     pub commands: Vec<String>,
     /// Set when the deletion can be offered as a move-to-trash instead.
     pub trash_plan: Option<TrashPlan>,
+    /// The line redirects output into a file (`>`/`>>` at something that isn't
+    /// `/dev/null` or a file descriptor). Risk-neutral on its own — plenty of
+    /// safe commands write a scratch file — but it means the line *mutates the
+    /// tree*, which is what plan mode has to refuse.
+    pub writes_a_file: bool,
 }
 
 /// Commands that are read-only regardless of arguments.
@@ -160,6 +165,7 @@ struct Acc {
     /// dynamic arg, raw arg texts). Used for the trash plan.
     simples: Vec<SimpleCommand>,
     home: Option<String>,
+    writes_a_file: bool,
 }
 
 struct SimpleCommand {
@@ -180,6 +186,7 @@ impl Acc {
             prefixes: Vec::new(),
             simples: Vec::new(),
             home: home.map(|h| h.to_string_lossy().into_owned()),
+            writes_a_file: false,
         }
     }
 
@@ -250,6 +257,10 @@ impl Acc {
                             Risk::Dangerous,
                             format!("redirects output to a raw device ({text})"),
                         );
+                    } else if !matches!(text.as_str(), "/dev/null" | "/dev/stdout" | "/dev/stderr")
+                        && !text.chars().all(|c| c.is_ascii_digit())
+                    {
+                        self.writes_a_file = true;
                     }
                 }
             }
@@ -679,6 +690,7 @@ impl Acc {
             grant_prefixes: self.prefixes,
             commands,
             trash_plan,
+            writes_a_file: self.writes_a_file,
         }
     }
 }
@@ -912,6 +924,19 @@ mod tests {
             .is_none());
         assert!(classify("rm -rf $DIR", None).trash_plan.is_none());
         assert!(classify("rm -rf /", None).trash_plan.is_none());
+    }
+
+    #[test]
+    fn a_file_redirect_is_flagged_without_changing_the_risk() {
+        // `echo` stays read-only as far as the *risk* ladder is concerned —
+        // relaxed/cautious behavior must not shift — but the line does write.
+        let a = classify("echo hi > out.txt", None);
+        assert_eq!(a.risk, Risk::Safe);
+        assert!(a.writes_a_file);
+        assert!(classify("cat log >> notes.md", None).writes_a_file);
+        // Discarding output or duplicating a descriptor writes nothing.
+        assert!(!classify("ls -la > /dev/null 2>&1", None).writes_a_file);
+        assert!(!classify("git status", None).writes_a_file);
     }
 
     #[test]

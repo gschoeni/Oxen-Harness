@@ -58,6 +58,10 @@ pub enum Command {
     /// force and opens a picker; `/permissions relaxed|cautious|bypass`
     /// switches directly.
     Permissions(Option<String>),
+    /// Plan mode: `/plan` (or `/plan on`) holds the tree read-only while the
+    /// model researches and writes a plan; `/plan approve [path]` executes it,
+    /// `/plan show [path]` prints it, `/plan off` drops it.
+    Plan(Option<String>),
     /// Show all-time input/output tokens and estimated spend by model.
     Usage,
     /// Pick up an earlier trail in this workspace: `/resume` opens a picker
@@ -257,6 +261,18 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
             ("relaxed", "only dangerous commands ask first"),
             ("cautious", "only read-only commands run unprompted"),
             ("bypass", "never ask (circuit breakers still refuse)"),
+        ]),
+    },
+    SlashSpec {
+        name: "/plan",
+        aliases: &["/plans"],
+        description: "read-only research mode, then approve the plan to run it",
+        build: Command::Plan,
+        completer: ArgCompleter::Static(&[
+            ("on", "hold the tree read-only and research a plan"),
+            ("off", "leave plan mode without approving anything"),
+            ("approve", "execute the newest plan (or a given path)"),
+            ("show", "print the newest plan (or a given path)"),
         ]),
     },
     SlashSpec {
@@ -502,6 +518,16 @@ mod tests {
     fn retry_aliases() {
         assert_eq!(parse_command("/retry"), Command::Retry);
         assert_eq!(parse_command("/continue"), Command::Retry);
+    }
+
+    #[test]
+    fn plan_keeps_raw_remainder() {
+        assert_eq!(parse_command("/plan"), Command::Plan(None));
+        assert_eq!(parse_command("/plans"), Command::Plan(None));
+        assert_eq!(
+            parse_command("/plan approve .oxen-harness/plans/my plan.md"),
+            Command::Plan(Some("approve .oxen-harness/plans/my plan.md".into()))
+        );
     }
 
     #[test]

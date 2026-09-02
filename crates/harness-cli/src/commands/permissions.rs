@@ -107,6 +107,15 @@ fn print_summary(
         ui.brown("🛡 permissions:"),
         ui.cream(current.label()),
     );
+    // Plan mode outranks the mode while it is on, so saying only "bypass"
+    // here would be a lie about what the agent can currently do.
+    if gate.is_some_and(|g| g.plan_mode()) {
+        println!(
+            "    {} {}",
+            ui.accent(&format!("{:<11}", "plan mode")),
+            ui.cream("on — the tree is read-only until /plan approve or /plan off"),
+        );
+    }
     let global = policy::load_global();
     let project = gate.map(|g| policy::load_project(g.workspace()));
     let mut printed = false;

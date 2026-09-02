@@ -56,6 +56,6 @@ pub use event::AgentEvent;
 pub use fleet_tool::{FleetSpawner, FleetTool, FLEET_TOOL};
 pub use interject::Interjections;
 pub use prompt::{
-    default_system_prompt, environment_section, system_prompt_with, system_prompt_with_env,
-    OptionalTools,
+    default_system_prompt, environment_section, plan_approved_prompt, system_prompt_with,
+    system_prompt_with_env, OptionalTools, PLAN_MODE_ENTER, PLAN_MODE_EXIT,
 };
