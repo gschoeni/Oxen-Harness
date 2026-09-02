@@ -210,6 +210,17 @@ impl FileState {
         }
     }
 
+    /// Every path with a recorded read or edit, oldest first — what the
+    /// session has actually looked at, for carrying through a compaction.
+    pub fn tracked_paths(&self) -> Vec<PathBuf> {
+        self.snapshots
+            .lock()
+            .expect("snapshot lock")
+            .iter()
+            .map(|(p, _)| p.clone())
+            .collect()
+    }
+
     /// The line ranges recorded for `path`, if any.
     pub fn seen_ranges(&self, path: &Path) -> Vec<(usize, usize)> {
         let key = canonical(path);

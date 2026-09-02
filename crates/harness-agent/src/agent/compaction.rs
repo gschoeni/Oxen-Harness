@@ -213,7 +213,11 @@ impl Agent {
         F: FnMut(&AgentEvent),
     {
         let start = self.transcript_start();
-        let note = ChatMessage::user(format!("{}\n{}", compact::SUMMARY_MARKER, summary));
+        // The files the session touched survive the summary verbatim: a
+        // summary that forgets a path sends the model back to grep for what
+        // it already found.
+        let files = compact::files_block(&self.tools);
+        let note = ChatMessage::user(format!("{}\n{}{}", compact::SUMMARY_MARKER, summary, files));
         self.messages.splice(start..cut, std::iter::once(note));
         self.invalidate_prefire();
         self.save_context_snapshot();

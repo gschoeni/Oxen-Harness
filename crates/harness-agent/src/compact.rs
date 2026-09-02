@@ -128,6 +128,50 @@ pub fn render_for_summary(messages: &[ChatMessage]) -> String {
 /// transcript (and in the UI) from an ordinary user turn.
 pub const SUMMARY_MARKER: &str = "[Earlier conversation summarized to free context]";
 
+/// The most paths the files block lists; past this the tail is elided.
+const FILES_BLOCK_MAX: usize = 40;
+
+/// A `<files>` block naming every path the session has read or edited
+/// (workspace-relative), or an empty string when there are none. Appended
+/// to a compaction summary so the model keeps its map of the codebase even
+/// when the summary forgets a path.
+pub fn files_block(tools: &harness_tools::ToolRegistry) -> String {
+    let Some(state) = tools.files() else {
+        return String::new();
+    };
+    let root = tools.workspace().map(|w| w.root().to_path_buf());
+    let paths: Vec<String> = state
+        .tracked_paths()
+        .iter()
+        .map(|p| {
+            root.as_ref()
+                .and_then(|r| p.strip_prefix(r).ok())
+                .unwrap_or(p)
+                .display()
+                .to_string()
+        })
+        .collect();
+    if paths.is_empty() {
+        return String::new();
+    }
+    let shown = paths.len().min(FILES_BLOCK_MAX);
+    let mut block = String::from(
+        "\n\n<files>\nRead or edited so far (still on disk; re-read before editing):\n",
+    );
+    for path in &paths[paths.len() - shown..] {
+        block.push_str(path);
+        block.push('\n');
+    }
+    if paths.len() > shown {
+        block.push_str(&format!(
+            "[… {} earlier paths elided]\n",
+            paths.len() - shown
+        ));
+    }
+    block.push_str("</files>");
+    block
+}
+
 /// The instruction handed to the model when summarizing the elided span.
 ///
 /// The structure matters: successive compactions feed each summary back
@@ -178,6 +222,22 @@ mod tests {
         assert!(freed > 4000);
         assert!(msgs[2].content_text().unwrap().contains("elided"));
         assert_eq!(msgs[5].content_text().unwrap(), big); // recent kept verbatim
+    }
+
+    #[test]
+    fn the_files_block_lists_touched_paths_relative_to_the_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = harness_tools::Workspace::new(dir.path()).unwrap();
+        let tools = harness_tools::ToolRegistry::default_for_workspace(ws);
+        assert_eq!(files_block(&tools), "");
+        let state = tools.files().unwrap();
+        state.record(&dir.path().join("src/lib.rs"), "fn main() {}");
+        state.record(&dir.path().join("README.md"), "# hi");
+        let block = files_block(&tools);
+        assert!(block.starts_with("\n\n<files>"), "{block}");
+        assert!(block.contains("src/lib.rs\n"), "{block}");
+        assert!(block.contains("README.md\n"), "{block}");
+        assert!(block.ends_with("</files>"), "{block}");
     }
 
     #[test]
