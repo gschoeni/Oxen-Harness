@@ -76,7 +76,7 @@ See [`app/README.md`](app/README.md) for the npm-based alternative (`npm install
 | API key | `OXEN_API_KEY` env, or `~/.config/oxen/auth_config.toml` (`$OXEN_CONFIG_DIR` to override) | — (required) |
 | Base URL | `--base-url` flag, `OXEN_BASE_URL` env, or `--host`/`OXEN_HOST` (expanded) | `https://hub.oxen.ai/api/ai` |
 | Model | `--model` flag | `claude-opus-4-8` |
-| Resume | `--resume <SESSION_ID>` flag (id printed on the death screen) | new session |
+| Resume | `--resume <SESSION_ID>` flag (id printed on the death screen), or bare `--resume` for a picker | new session |
 | Web search | `BRAVE_API_KEY` env (or `BRAVE_SEARCH_API_KEY`), or `~/.oxen-harness/.env` | always offered; key enables results |
 | Local model | `--local <MODEL_ID>` flag (runs llama.cpp instead of a remote endpoint) | remote Oxen.ai |
 | Theme | `/theme` in the REPL or `oxen-harness theme use <name>` (persists to `~/.oxen-harness/config.toml`) | Oregon Trail |
@@ -260,7 +260,7 @@ You may:
   1. Travel the trail        — just type what you want done
   2. Learn about the trail   — /help
   3. See the Oregon Top Ten  — /export [path]  (save the journey as JSONL)
-  4. Trade your oxen         — /model [name]
+  4. Trade your oxen         — /model [name]  (/model roles: summary, smol, fallbacks)
   5. Change your colors      — /theme  (select, create, import, export)
   6. Pack the wagon          — /queue add <msg> … then /queue run
   7. Set the wagon rolling   — /loop run [name]  (work until the gate is green)
@@ -283,9 +283,12 @@ live. What you type goes one of two ways:
   edits one inline, **d** removes it, and **Alt+↑** pulls the newest one back
   into the composer.
 
-**Esc** cancels the running turn and never touches your draft; **Ctrl-C** is
-the staged clear → confirm → exit. Multi-line pastes keep their lines, and a
-big paste collapses to a `[Paste #1, +240 lines]` chip that expands on send.
+**Esc** cancels the running turn and never touches your draft (and **Esc Esc**
+on an empty idle composer opens the rewind picker); **Ctrl-C** is the staged
+clear → confirm → exit. Multi-line pastes keep their lines, and a big paste
+collapses to a `[Paste #1, +240 lines]` chip that expands on send. Type `@`
+and a few letters to complete a workspace path (`look at @src/ma` → `@src/main.rs`),
+and `/help` lists every key.
 
 While a shell command runs, its last few lines of output stream in a card
 under the conversation, so a build or a test run is visibly working instead
@@ -306,7 +309,19 @@ tool chips.
 
 Independent tool calls in one reply run at the same time (reads, searches,
 fetches); anything that changes the workspace or runs a process waits its
-turn and runs alone.
+turn and runs alone. A `spawn_agents` fleet started with `wait: false` runs
+in the background too, and its report is delivered to the model when it
+finishes.
+
+### Plan mode
+
+`/plan` holds the working tree read-only — no edits, writes, state-changing
+git, or shell commands that change anything, in every permission mode — and
+asks the model to explore and write a decision-complete plan (Context,
+Approach, Critical files, Verification, Assumptions) to
+`.oxen-harness/plans/<slug>.md`, the one writable place. `/plan show` prints
+it, `/plan approve` unlatches the tree and runs the plan as an authoritative
+brief, and `/plan off` just unlatches. The meter reads `plan` while it is on.
 
 Piped / non-interactive sessions fall back to explicit commands: `/queue add
 <msg>`, `/queue` to list, `/queue edit|up|down|rm <n>`, and `/queue run`.

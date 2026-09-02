@@ -33,6 +33,7 @@ oxen-harness/
                                  shell/session.rs carries cwd + env between commands; shell/intercept.rs redirects bare grep/find/cat to the dedicated tools; every command runs
                                  under the non-interactive env (PAGER=cat, CI=true…). tasks.rs: background tasks with settled-task announcements + live output broadcast; steer.rs: the
                                  host's "user spoke mid-turn" signal a foreground wait races against.
+    harness-permissions/     — The tool-call gate: tree-sitter shell classification, relaxed/cautious/bypass modes, circuit breakers, trash + snapshots, and the plan-mode latch that holds the tree read-only in every mode.
     harness-store/           — SQLite history (verbatim) + JSONL export; rusqlite_migration schema versioning; rich session metadata; session forks (fork_session/forked_from/user_turns).
     harness-oxen/            — Version config/data + export/share traces via the `oxen` CLI (testable Runner shell-out; no liboxen).
     harness-local/           — Local models: extensible GGUF catalog (Qwen3 + Bonsai), downloads + disk tracking, llama-server launcher.
@@ -50,7 +51,7 @@ oxen-harness/
                                  commands.rs (custom slash commands from Markdown templates: .oxen-harness/commands + .claude/commands, $ARGUMENTS expansion).
     harness-loop/            — Goal-driven, self-verifying loops (discover→verify→iterate): LoopSpec/Verify, runner, journal, shareable store + built-ins.
     harness-review/          — Configurable code-review pipeline: ordered prompt steps (find→verify→report default), diff targets (uncommitted / vs base branch), isolated side-agent runner (fan-out steps run as a parallel fleet), structured findings.
-    harness-cli/             — The `oxen-harness` interactive REPL binary. Slash-command handlers live in commands/ (auth, compression, loops, model, oxen, queue, resume, rewind [/fork, /rewind], review, rules, theme, trace, print [-p headless]);
+    harness-cli/             — The `oxen-harness` interactive REPL binary. Slash-command handlers live in commands/ (auth, compression, location, loops, model [+ /model roles], oxen, permissions, plan [/plan read-only mode], preview, queue, resume, rewind [/fork, /rewind], review, rules, theme, trace, ui, usage, print [-p headless]);
                                  custom_commands.rs holds the workspace's Markdown commands; the live sticky-bottom composer in live/ (card.rs: the streaming command-output card + Ctrl+O results;
                                  keys: Esc cancels, Ctrl+Q/Ctrl+Enter queue, Alt+↑ un-queue, Ctrl+O expand); the meters (branch, mode, timer) in turn.rs; the fleet lanes display in fleet_ui.rs/fleet_sink.rs.
                                  Top-level subcommands: theme, loop, trace, oxen.

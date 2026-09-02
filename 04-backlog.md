@@ -8,7 +8,7 @@
 ## Ideas
 
 - **MCP support** — let the harness consume Model Context Protocol servers as additional tools.
-- ~~**Sub-agents / parallel tasks**~~ — ✅ shipped as the fleet (2026-07-08): `harness_agent::fleet::run_fleet` + the `spawn_agents` tool, review find fan-out, live lanes in both front ends. Remaining ideas: persistent subagent transcripts (a `kind` column on sessions), depth budgets if recursion is ever wanted.
+- ~~**Sub-agents / parallel tasks**~~ — ✅ shipped as the fleet (2026-07-08): `harness_agent::fleet::run_fleet` + the `spawn_agents` tool, review find fan-out, live lanes in both front ends. Remaining ideas: persistent subagent transcripts (a `kind` column on sessions), depth budgets if recursion is ever wanted. (`wait: false` background fleets with automatic delivery shipped 2026-09-01.)
 - **Permission modes** — optional "ask before edit/shell/commit" mode for cautious use, even though edits are allowed by default.
 - **Checkpoints / undo** — snapshot the working dir per turn so a bad edit can be rolled back. (Conversation-level undo shipped 2026-09-01 as `/rewind`/`/fork` on session forks; this item is the *working-tree* half.)
 - **Session replay** — re-run a recorded JSONL transcript against a different model to compare behavior.

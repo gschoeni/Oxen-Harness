@@ -452,6 +452,16 @@ fmt/clippy/nextest (1107 tests) and verified at the pty surface:
 - **Store/app** — session forks (migration 11); the desktop app pairs tool
   chips by `call_id`, appends live output, and shows `agent.notice` lines.
 
+Second round (same day): `@path` completion, double-Esc rewind, `/help` key
+table, `spawn_agents wait: false` with aside delivery (registry `Asides`),
+loop guard catches interleaved repeats, compaction summaries carry a
+`<files>` block, plan mode (gate latch + `/plan on|off|approve|show`),
+`/model roles` + a first-run model pick, quiet `-p` when local models
+narrate, and a real bug: the kitty-keyboard probe cost 2 s on every prompt
+on terminals that never answer (Apple Terminal, ptys) — now once per
+process. pty-verified: plan mode refuses a write with a clear message; a
+background fleet's report is delivered on the next round.
+
 Deliberately not copied: sixty providers, yolo-by-default approvals, magic
 keywords, vibe/goal modes, IRC between subagents, in-process TS extensions.
 
