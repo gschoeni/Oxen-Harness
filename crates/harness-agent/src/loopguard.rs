@@ -10,7 +10,9 @@
 //!
 //! Legitimate repetition survives this: polling a background task yields
 //! changing results (the cursor advances), and a retried command after a fix
-//! has an edit call in between, which resets the run.
+//! produces a different result. Repeats are counted within a recent window,
+//! not only back-to-back, so alternating between two fruitless calls is
+//! caught as surely as hammering one.
 
 use std::hash::{Hash, Hasher};
 
@@ -30,12 +32,17 @@ pub enum LoopVerdict {
     Stop { name: String, repeats: u32 },
 }
 
-/// Per-turn tracker of consecutive identical (tool, arguments, result) calls.
+/// How many recent calls the guard remembers. Wide enough that an A/B/A/B
+/// oscillation (two calls alternating, each learning nothing) reaches the
+/// stop line, narrow enough that a legitimately repeated check a dozen
+/// calls apart doesn't count against the model.
+const WINDOW: usize = 12;
+
+/// Per-turn tracker of identical (tool, arguments, result) calls in the
+/// recent window — consecutive or interleaved with other calls.
 #[derive(Debug, Default)]
 pub struct LoopGuard {
-    last: Option<u64>,
-    last_name: String,
-    consecutive: u32,
+    recent: std::collections::VecDeque<(u64, String)>,
 }
 
 impl LoopGuard {
@@ -44,19 +51,17 @@ impl LoopGuard {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         (name, canonical_arguments(arguments), result).hash(&mut hasher);
         let key = hasher.finish();
-        if self.last == Some(key) {
-            self.consecutive += 1;
-        } else {
-            self.last = Some(key);
-            self.last_name = name.to_string();
-            self.consecutive = 1;
+        if self.recent.len() == WINDOW {
+            self.recent.pop_front();
         }
-        if self.consecutive >= STOP_AFTER {
+        self.recent.push_back((key, name.to_string()));
+        let repeats = self.recent.iter().filter(|(k, _)| *k == key).count() as u32;
+        if repeats >= STOP_AFTER {
             LoopVerdict::Stop {
-                name: self.last_name.clone(),
-                repeats: self.consecutive,
+                name: name.to_string(),
+                repeats,
             }
-        } else if self.consecutive == NUDGE_AFTER {
+        } else if repeats == NUDGE_AFTER {
             LoopVerdict::Nudge
         } else {
             LoopVerdict::Fine
@@ -122,6 +127,26 @@ mod tests {
     }
 
     #[test]
+    fn an_oscillation_between_two_calls_is_caught() {
+        let mut guard = LoopGuard::default();
+        let mut verdicts = Vec::new();
+        for i in 0..12 {
+            let (name, result) = if i % 2 == 0 {
+                ("read", "same")
+            } else {
+                ("grep", "nothing")
+            };
+            verdicts.push(guard.observe(name, "{}", result));
+        }
+        // The 5th call is the 3rd `read`: a nudge. The 11th is the 6th: stop.
+        assert_eq!(verdicts[4], LoopVerdict::Nudge);
+        assert!(
+            matches!(verdicts[10], LoopVerdict::Stop { ref name, repeats: 6 } if name == "read")
+        );
+        assert!(verdicts[..4].iter().all(|v| *v == LoopVerdict::Fine));
+    }
+
+    #[test]
     fn identical_repeats_nudge_then_stop() {
         let mut guard = LoopGuard::default();
         assert_eq!(
@@ -167,8 +192,8 @@ mod tests {
                 LoopVerdict::Fine
             );
         }
-        // Two identical calls, then a different one, then identical again:
-        // the interleaving resets the count.
+        // Read, read, edit, read: the edit changes what the read returns, so
+        // the third read is a different (tool, args, result) and no repeat.
         guard.observe("read_file", "{\"path\":\"a\"}", "x");
         guard.observe("read_file", "{\"path\":\"a\"}", "x");
         assert_eq!(
@@ -176,8 +201,14 @@ mod tests {
             LoopVerdict::Fine
         );
         assert_eq!(
-            guard.observe("read_file", "{\"path\":\"a\"}", "x"),
+            guard.observe("read_file", "{\"path\":\"a\"}", "y"),
             LoopVerdict::Fine
+        );
+        // …whereas a third read returning the very same bytes is a repeat,
+        // interleaving or not.
+        assert_eq!(
+            guard.observe("read_file", "{\"path\":\"a\"}", "x"),
+            LoopVerdict::Nudge
         );
     }
 }
