@@ -86,6 +86,11 @@ pub fn agent_event(
             kind: "nudge".into(),
             text: format!("nudged the model: {reason}"),
         },
+        AgentEvent::ImageAttached { path } => ProtocolEvent::Notice {
+            session,
+            kind: "image".into(),
+            text: format!("image attached: {path}"),
+        },
         AgentEvent::AsideDelivered { kind, title } => ProtocolEvent::Notice {
             session,
             kind: kind.clone(),

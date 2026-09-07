@@ -131,6 +131,22 @@ impl Live {
                 self.request_paint();
             }
             Cue::ToolProgress { call_id, chunk } => self.on_tool_progress(&call_id, &chunk),
+            Cue::Image { line, path } => {
+                self.stop_spinner();
+                self.end_markdown();
+                self.write_region(&format!("{line}\n"));
+                let placed = crate::graphics::place(
+                    std::path::Path::new(&path),
+                    crate::graphics::Protocol::detect(),
+                    crate::graphics::MAX_COLS.min(self.cols.saturating_sub(4) as usize),
+                    crate::graphics::MAX_ROWS,
+                );
+                if let Some(placed) = placed {
+                    self.print_image(&placed);
+                }
+                self.begin_thinking();
+                self.request_paint();
+            }
             Cue::Ignore => {}
         }
         // The one paint per (non-token) event: handlers above only mark the
@@ -271,6 +287,17 @@ impl Live {
     /// notices) can never land on the spinner's line.
     fn write_region(&mut self, text: &str) {
         self.region.write(text);
+    }
+
+    /// Draw an inline picture into the region and move the cursor past the
+    /// rows it covers, indented like a tool line.
+    pub(super) fn print_image(&mut self, placed: &crate::graphics::Placed) {
+        self.write_region(&format!(
+            "  {}{}",
+            placed.sequence,
+            "\n".repeat(placed.rows)
+        ));
+        self.request_paint();
     }
 
     /// Print a complete status line into the region, then redraw the composer.

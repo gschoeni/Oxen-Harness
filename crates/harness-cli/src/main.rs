@@ -20,6 +20,7 @@ mod endpoint;
 mod event_lines;
 mod fleet_sink;
 mod fleet_ui;
+mod graphics;
 mod highlight;
 mod interrupt;
 mod live;

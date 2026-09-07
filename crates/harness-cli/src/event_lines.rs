@@ -69,6 +69,12 @@ pub(crate) enum Cue {
         scroll_line: String,
     },
     /// Nothing to show on this surface.
+    /// A tool attached an image for the model; the live surface draws it
+    /// inline where the terminal can, after `line`.
+    Image {
+        line: String,
+        path: String,
+    },
     /// A chunk of a running command's live output; the live surface shows a
     /// tail of it in a pinned card, the classic renderer waits for the end.
     ToolProgress {
@@ -131,6 +137,20 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
                 ui.dim(&format!("nudge: {reason}"))
             )],
             then: NextSpinner::Thinking,
+        },
+        AgentEvent::ImageAttached { path } => Cue::Image {
+            line: format!(
+                "  {} {}",
+                ui.green("🖼"),
+                ui.dim(&format!(
+                    "image attached for the model: {}",
+                    std::path::Path::new(path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.clone())
+                ))
+            ),
+            path: path.clone(),
         },
         AgentEvent::AsideDelivered { title, .. } => Cue::Block {
             lines: vec![format!(

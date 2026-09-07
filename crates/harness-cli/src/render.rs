@@ -127,6 +127,10 @@ impl TurnRenderer {
                 println!("{scroll_line}");
                 self.begin_thinking();
             }
+            Cue::Image { line, .. } => {
+                self.stop_spinner();
+                println!("{line}");
+            }
             Cue::Ignore | Cue::ToolProgress { .. } => {}
         }
     }

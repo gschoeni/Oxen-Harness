@@ -343,6 +343,10 @@ pub(crate) fn tool_target(arguments: &str) -> Option<String> {
     Some(truncate(one_line, 60))
 }
 
+/// The box an attached image's thumbnail is drawn into at submit, in cells.
+const THUMBNAIL_COLS: usize = 32;
+const THUMBNAIL_ROWS: usize = 8;
+
 /// Two Escapes closer together than this, at idle, open the rewind picker.
 const DOUBLE_ESC_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -408,6 +412,22 @@ async fn run_one_turn(
                     ui.green("📎 attached:"),
                     ui.cream(&names.join(", "))
                 ));
+                // A picture of what was attached, where the terminal can draw
+                // one — so "what's in [Image #2]?" shows the image it means.
+                let protocol = crate::graphics::Protocol::detect();
+                for attachment in attachments
+                    .iter()
+                    .filter(|a| a.kind == harness_llm::AttachmentKind::Image)
+                {
+                    if let Some(placed) = crate::graphics::place_bytes(
+                        &attachment.bytes,
+                        protocol,
+                        THUMBNAIL_COLS.min(st.cols.saturating_sub(4) as usize),
+                        THUMBNAIL_ROWS,
+                    ) {
+                        st.print_image(&placed);
+                    }
+                }
             }
             (text, attachments)
         }

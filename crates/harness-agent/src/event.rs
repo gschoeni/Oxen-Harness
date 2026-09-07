@@ -70,6 +70,10 @@ pub enum AgentEvent {
     /// A result that finished on its own (a `wait: false` fleet) was just
     /// delivered to the model as a message; `title` is the one-line notice.
     AsideDelivered { kind: String, title: String },
+    /// A tool produced an image (a preview screenshot, a rendered chart) that
+    /// was attached to the transcript for the model to see; `path` is where
+    /// it lives on disk, so a UI can show it too.
+    ImageAttached { path: String },
     /// The transcript was compacted to fit the context window — older history
     /// was pruned and/or summarized so the session can continue instead of
     /// hitting a hard limit. Carries a short human-readable note for the UI.

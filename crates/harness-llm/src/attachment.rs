@@ -30,6 +30,11 @@ pub const MAX_TEXT_CHARS: usize = 100_000;
 /// screenshot becomes a few hundred kilobytes.
 pub const MAX_IMAGE_EDGE: u32 = 1568;
 
+/// The shortest edge an image is sent at. Several providers reject images
+/// smaller than a vision patch outright (a 1×1 tracking pixel, a 16 px
+/// favicon), so tiny pictures are scaled *up* to this before sending.
+pub const MIN_IMAGE_EDGE: u32 = 200;
+
 /// Errors from reading or validating an attachment.
 #[derive(Debug, thiserror::Error)]
 pub enum AttachmentError {
@@ -209,17 +214,30 @@ impl Attachment {
             return;
         };
         self.dimensions = Some((width, height));
-        if width.max(height) <= MAX_IMAGE_EDGE {
+        let too_big = width.max(height) > MAX_IMAGE_EDGE;
+        let too_small = width.min(height) < MIN_IMAGE_EDGE;
+        if !too_big && !too_small {
             return;
         }
         let Ok(decoded) = image::load_from_memory(&self.bytes) else {
             return;
         };
-        let scaled = decoded.resize(
-            MAX_IMAGE_EDGE,
-            MAX_IMAGE_EDGE,
-            image::imageops::FilterType::Triangle,
-        );
+        let scaled = if too_big {
+            decoded.resize(
+                MAX_IMAGE_EDGE,
+                MAX_IMAGE_EDGE,
+                image::imageops::FilterType::Triangle,
+            )
+        } else {
+            // Grow so the short edge reaches the floor; nearest-neighbour
+            // keeps a pixel-art icon crisp instead of blurring it.
+            let factor = (MIN_IMAGE_EDGE as f64 / width.min(height) as f64).ceil() as u32;
+            decoded.resize(
+                width * factor,
+                height * factor,
+                image::imageops::FilterType::Nearest,
+            )
+        };
         // Only a picture that actually uses transparency stays PNG; a
         // screenshot with an opaque alpha channel is a photo for our purposes.
         let keep_alpha =
@@ -467,5 +485,12 @@ mod tests {
             Attachment::from_bytes("empty.png", vec![]),
             Err(AttachmentError::Empty(_))
         ));
+    }
+
+    #[test]
+    fn tiny_images_are_grown_to_the_short_edge_floor() {
+        let a = Attachment::from_bytes("dot.png", png(16, 16)).unwrap();
+        assert_eq!(a.original_dimensions, Some((16, 16)));
+        assert_eq!(a.dimensions, Some((208, 208)));
     }
 }

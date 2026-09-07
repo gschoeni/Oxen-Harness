@@ -746,6 +746,9 @@ impl Agent {
             match harness_core::attach::extract_image_markers(&result, "(image attached below)") {
                 Some((cleaned, paths)) => {
                     self.push(ChatMessage::tool_result(call.id.clone(), cleaned))?;
+                    for path in &paths {
+                        on_event(&AgentEvent::ImageAttached { path: path.clone() });
+                    }
                     self.push_tool_images(&paths)?;
                 }
                 None => self.push(ChatMessage::tool_result(call.id.clone(), result))?,
