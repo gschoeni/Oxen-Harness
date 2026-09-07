@@ -52,7 +52,7 @@ oxen-harness/
     harness-loop/            — Goal-driven, self-verifying loops (discover→verify→iterate): LoopSpec/Verify, runner, journal, shareable store + built-ins.
     harness-review/          — Configurable code-review pipeline: ordered prompt steps (find→verify→report default), diff targets (uncommitted / vs base branch), isolated side-agent runner (fan-out steps run as a parallel fleet), structured findings.
     harness-cli/             — The `oxen-harness` interactive REPL binary. Slash-command handlers live in commands/ (auth, compression, location, loops, model [+ /model roles], oxen, permissions, plan [/plan read-only mode], preview, queue, resume, rewind [/fork, /rewind], review, rules, theme, trace, ui, usage, print [-p headless]);
-                                 custom_commands.rs holds the workspace's Markdown commands; the live sticky-bottom composer in live/ (card.rs: the streaming command-output card + Ctrl+O results;
+                                 custom_commands.rs holds the workspace's Markdown commands; graphics.rs draws inline images (kitty / iTerm2, env-detected) and OSC 8 links; the live sticky-bottom composer in live/ (card.rs: the streaming command-output card + Ctrl+O results;
                                  keys: Esc cancels, Ctrl+Q/Ctrl+Enter queue, Alt+↑ un-queue, Ctrl+O expand); the meters (branch, mode, timer) in turn.rs; the fleet lanes display in fleet_ui.rs/fleet_sink.rs.
                                  Top-level subcommands: theme, loop, trace, oxen.
   app/                       — Tauri v2 desktop app (separate project, excluded

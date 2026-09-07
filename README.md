@@ -313,6 +313,22 @@ turn and runs alone. A `spawn_agents` fleet started with `wait: false` runs
 in the background too, and its report is delivered to the model when it
 finishes.
 
+### Images
+
+Drop a screenshot onto the terminal, paste one with **Ctrl+V**, or type
+`@shot.png`, and it becomes an `[Image #1]` chip in the composer (Backspace
+removes the whole chip). At send time the image is shrunk to a 1568 px
+longest edge (tiny icons are grown to 200 px, which some providers insist
+on), the echo says what went — `shot.png (1568×882, from 4000×2250)` — and on
+a terminal that draws pictures (kitty, Ghostty, WezTerm, iTerm2) a thumbnail
+appears under it. The same goes for images the agent produces or reads:
+`read_file` on a PNG hands the model the picture instead of bytes, and the
+terminal shows it inline after `🖼 image attached for the model`. Set
+`OXEN_HARNESS_IMAGES=off` to keep pictures out of the transcript. Copying a
+file in Finder and pasting attaches the file, not Finder's icon. Links in
+replies are clickable where the terminal supports it, and **Ctrl+G** opens the
+draft in `$EDITOR`.
+
 ### Plan mode
 
 `/plan` holds the working tree read-only — no edits, writes, state-changing

@@ -213,11 +213,16 @@ impl Agent {
     where
         F: FnMut(&AgentEvent),
     {
+        // An attach-image marker is plumbing between the tool and the loop;
+        // the UI sees the note the model will see in its place.
+        let shown = harness_core::attach::extract_image_markers(result, "(image attached below)")
+            .map(|(cleaned, _)| cleaned)
+            .unwrap_or_else(|| result.to_string());
         on_event(&AgentEvent::ToolEnd {
             call_id: call_id.to_string(),
             name: name.to_string(),
             result: harness_core::text::truncate_with_marker(
-                result,
+                &shown,
                 TOOL_RESULT_EVENT_CHARS,
                 "\n… [full result retained in history]",
             ),

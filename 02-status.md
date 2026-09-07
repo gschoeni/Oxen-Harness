@@ -462,6 +462,14 @@ on terminals that never answer (Apple Terminal, ptys) — now once per
 process. pty-verified: plan mode refuses a write with a clear message; a
 background fleet's report is delivered on the next round.
 
+Images (2026-09-07, from omp's composer/transcript image handling):
+downscale to 1568 px / upscale under 200 px before send with dimensions on
+the attachment, Finder file-list before bitmap on paste, atomic chip
+deletion, `@image.png` mentions attach, `-p` attaches, inline thumbnails on
+attach and for tool-produced images (`graphics.rs`: kitty + iTerm2 by env,
+`OXEN_HARNESS_IMAGES=off`), `read_file` on an image attaches it for the
+model (marker + size line), OSC 8 links, Ctrl+G external editor.
+
 Deliberately not copied: sixty providers, yolo-by-default approvals, magic
 keywords, vibe/goal modes, IRC between subagents, in-process TS extensions.
 

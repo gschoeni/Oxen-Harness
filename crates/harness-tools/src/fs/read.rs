@@ -174,7 +174,7 @@ async fn image_summary(path: &Path, display: &str) -> Option<String> {
         None => format!("{size}, dimensions unknown"),
     };
     Some(format!(
-        "{}\n[image {name} — {shape}; it is attached below so you can look at it]",
+        "[image {name} — {shape}; it is attached below so you can look at it]\n{}",
         harness_core::attach::image_marker(&path.display().to_string())
     ))
 }
