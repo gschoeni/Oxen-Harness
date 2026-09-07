@@ -40,7 +40,7 @@ pub fn extract_attachments(input: &str) -> (String, Vec<Attachment>, Vec<String>
     for tok in tokenize(input) {
         match classify(&tok) {
             Candidate::PromptText => text_tokens.push(tok),
-            Candidate::Media => match Attachment::from_path(&tok) {
+            Candidate::Media => match Attachment::from_path(tok.trim_start_matches('@')) {
                 Ok(a) => attachments.push(a),
                 Err(e) => warnings.push(e.to_string()),
             },
@@ -63,6 +63,18 @@ pub fn extract_attachments(input: &str) -> (String, Vec<Attachment>, Vec<String>
     (text_tokens.join(" "), attachments, warnings)
 }
 
+/// How an attachment reads in the "attached:" echo: the file name, plus an
+/// image's pixel size (and the size it was shrunk from, when it was).
+pub(crate) fn describe(attachment: &Attachment) -> String {
+    match (attachment.dimensions, attachment.original_dimensions) {
+        (Some((w, h)), Some((ow, oh))) => {
+            format!("{} ({w}×{h}, from {ow}×{oh})", attachment.filename)
+        }
+        (Some((w, h)), None) => format!("{} ({w}×{h})", attachment.filename),
+        _ => attachment.filename.clone(),
+    }
+}
+
 /// Decide how a single token should be handled.
 ///
 /// Media files are attached however they're referenced (you don't ask the agent
@@ -71,6 +83,11 @@ pub fn extract_attachments(input: &str) -> (String, Vec<Attachment>, Vec<String>
 /// references like `README.md` or `src/main.rs` stay in the prompt for the
 /// agent's file tools instead of being vacuumed up as attachments.
 fn classify(tok: &str) -> Candidate {
+    // `@shot.png` — the completion's mention form — attaches like a bare path.
+    let tok = tok
+        .strip_prefix('@')
+        .filter(|t| !t.is_empty())
+        .unwrap_or(tok);
     let p = Path::new(tok);
     if !p.is_file() {
         return Candidate::PromptText;

@@ -21,6 +21,7 @@ futures-util = "0.3"
 reqwest = { workspace = true, features = ["stream"] }
 toml = "0.8"
 dirs = "5"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
 ts-rs = { version = "10", optional = true, features = ["serde-compat"] }
 
 [features]

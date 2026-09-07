@@ -24,6 +24,12 @@ pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 /// and flag that it was cut.
 pub const MAX_TEXT_CHARS: usize = 100_000;
 
+/// The longest edge an image is sent at. Vision models downsample anything
+/// larger themselves (Anthropic's documented ceiling is 1568 px), so bytes
+/// past this are upload time and request size for no extra detail — a 12 MP
+/// screenshot becomes a few hundred kilobytes.
+pub const MAX_IMAGE_EDGE: u32 = 1568;
+
 /// Errors from reading or validating an attachment.
 #[derive(Debug, thiserror::Error)]
 pub enum AttachmentError {
@@ -112,6 +118,12 @@ pub struct Attachment {
     pub kind: AttachmentKind,
     pub mime: String,
     pub bytes: Vec<u8>,
+    /// Pixel size of an image as it will be sent (after any downscale), for
+    /// UIs to show next to the chip. `None` for non-images and undecodable
+    /// formats (HEIC).
+    pub dimensions: Option<(u32, u32)>,
+    /// The image's size before downscaling, when it was shrunk.
+    pub original_dimensions: Option<(u32, u32)>,
 }
 
 impl Attachment {
@@ -169,12 +181,71 @@ impl Attachment {
             AttachmentKind::Other if looks_like_text(&bytes) => AttachmentKind::Text,
             kind => kind,
         };
-        Ok(Self {
+        let mut attachment = Self {
             mime: kind.mime(ext).to_string(),
             kind,
             bytes,
             filename,
-        })
+            dimensions: None,
+            original_dimensions: None,
+        };
+        if kind == AttachmentKind::Image {
+            attachment.fit_image();
+        }
+        Ok(attachment)
+    }
+
+    /// Record an image's dimensions and shrink it to [`MAX_IMAGE_EDGE`] when
+    /// it is larger, re-encoding as PNG (sources with transparency) or JPEG.
+    /// Undecodable images (HEIC, corrupt files) are sent as they are.
+    fn fit_image(&mut self) {
+        let reader = match image::ImageReader::new(std::io::Cursor::new(&self.bytes))
+            .with_guessed_format()
+        {
+            Ok(reader) => reader,
+            Err(_) => return,
+        };
+        let Ok((width, height)) = reader.into_dimensions() else {
+            return;
+        };
+        self.dimensions = Some((width, height));
+        if width.max(height) <= MAX_IMAGE_EDGE {
+            return;
+        }
+        let Ok(decoded) = image::load_from_memory(&self.bytes) else {
+            return;
+        };
+        let scaled = decoded.resize(
+            MAX_IMAGE_EDGE,
+            MAX_IMAGE_EDGE,
+            image::imageops::FilterType::Triangle,
+        );
+        // Only a picture that actually uses transparency stays PNG; a
+        // screenshot with an opaque alpha channel is a photo for our purposes.
+        let keep_alpha =
+            scaled.color().has_alpha() && scaled.to_rgba8().pixels().any(|px| px[3] < u8::MAX);
+        let mut out = std::io::Cursor::new(Vec::new());
+        let encoded = if keep_alpha {
+            scaled
+                .write_to(&mut out, image::ImageFormat::Png)
+                .map(|_| "image/png")
+        } else {
+            scaled
+                .to_rgb8()
+                .write_to(&mut out, image::ImageFormat::Jpeg)
+                .map(|_| "image/jpeg")
+        };
+        if let Ok(mime) = encoded {
+            self.original_dimensions = Some((width, height));
+            self.dimensions = Some((scaled.width(), scaled.height()));
+            self.mime = mime.to_string();
+            self.bytes = out.into_inner();
+        }
+    }
+
+    /// `1024×768`, when the attachment is an image with known dimensions.
+    pub fn dimensions_label(&self) -> Option<String> {
+        self.dimensions.map(|(w, h)| format!("{w}×{h}"))
     }
 
     /// A `data:<mime>;base64,<...>` URI carrying the file's bytes.
@@ -249,6 +320,43 @@ fn truncate_text(text: &str) -> (String, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(width, height, image::Rgba([10, 20, 30, 255]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn small_images_keep_their_bytes_and_report_dimensions() {
+        let bytes = png(640, 480);
+        let a = Attachment::from_bytes("shot.png", bytes.clone()).unwrap();
+        assert_eq!(a.dimensions, Some((640, 480)));
+        assert_eq!(a.original_dimensions, None);
+        assert_eq!(a.bytes, bytes);
+        assert_eq!(a.dimensions_label().as_deref(), Some("640×480"));
+    }
+
+    #[test]
+    fn oversized_images_are_shrunk_to_the_edge_limit() {
+        let a = Attachment::from_bytes("big.png", png(4000, 2000)).unwrap();
+        assert_eq!(a.original_dimensions, Some((4000, 2000)));
+        assert_eq!(a.dimensions, Some((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE / 2)));
+        // Opaque pixels: re-encoded as JPEG, far smaller than the source.
+        assert_eq!(a.mime, "image/jpeg");
+        assert!(a.data_uri().starts_with("data:image/jpeg;base64,"));
+    }
+
+    #[test]
+    fn an_undecodable_image_is_sent_as_is() {
+        let a = Attachment::from_bytes("photo.heic", vec![0, 1, 2, 3, 4]).unwrap();
+        assert_eq!(a.kind, AttachmentKind::Image);
+        assert_eq!(a.dimensions, None);
+        assert_eq!(a.bytes, vec![0, 1, 2, 3, 4]);
+    }
 
     #[test]
     fn classifies_by_extension() {

@@ -158,6 +158,21 @@ pub(crate) fn paste_from_clipboard() -> ClipboardPaste {
     let Ok(mut clipboard) = arboard::Clipboard::new() else {
         return ClipboardPaste::None;
     };
+    // A copied file (e.g. Finder ⌘C) pastes as its path — escaped like a
+    // drag-drop, so `insert_paste`'s rewrite turns media paths into chips.
+    // Checked *before* the bitmap: Finder advertises a rendered file icon as
+    // an image alongside the file URL, and pasting that 1024×1024 icon in
+    // place of the file is the classic wrong result.
+    if let Ok(files) = clipboard.get().file_list() {
+        let joined = files
+            .iter()
+            .map(|p| p.display().to_string().replace(' ', "\\ "))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !joined.is_empty() {
+            return ClipboardPaste::Text(joined);
+        }
+    }
     if let Ok(image) = clipboard.get_image() {
         if let Ok(label) = stage_clipboard_image(&image) {
             return ClipboardPaste::Image(label);
@@ -169,18 +184,6 @@ pub(crate) fn paste_from_clipboard() -> ClipboardPaste {
     if let Some(bytes) = clipboard_png_via_osascript() {
         if let Ok(label) = stage_png_bytes(&bytes) {
             return ClipboardPaste::Image(label);
-        }
-    }
-    // A copied file (e.g. Finder ⌘C) pastes as its path — escaped like a
-    // drag-drop, so `insert_paste`'s rewrite turns media paths into chips.
-    if let Ok(files) = clipboard.get().file_list() {
-        let joined = files
-            .iter()
-            .map(|p| p.display().to_string().replace(' ', "\\ "))
-            .collect::<Vec<_>>()
-            .join(" ");
-        if !joined.is_empty() {
-            return ClipboardPaste::Text(joined);
         }
     }
     match clipboard.get_text() {

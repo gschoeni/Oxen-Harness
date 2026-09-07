@@ -55,6 +55,31 @@ pub(super) fn expand_pastes(text: &str) -> String {
     out
 }
 
+/// The `[start, end)` char span of the chip token covering position `at`, if
+/// `at` lies inside one. A chip is `[Image #N]`, `[PDF #N]`, `[Video #N]`,
+/// or `[Paste #N, …]`.
+fn chip_span(buf: &[char], at: usize) -> Option<(usize, usize)> {
+    let start = buf[..=at.min(buf.len().saturating_sub(1))]
+        .iter()
+        .rposition(|c| *c == '[')?;
+    let end = buf[start..].iter().position(|c| *c == ']')? + start + 1;
+    if at >= end {
+        return None;
+    }
+    let token: String = buf[start..end].iter().collect();
+    let inner = &token[1..token.len() - 1];
+    let (word, rest) = inner.split_once(" #")?;
+    if !matches!(word, "Image" | "PDF" | "Video" | "Paste") {
+        return None;
+    }
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    let tail = &rest[digits..];
+    (tail.is_empty() || (word == "Paste" && tail.starts_with(", "))).then_some((start, end))
+}
+
 /// The composer's edit buffer: text (which may contain `\n` for multi-line
 /// input) and a caret position. Pure and terminal-free so the editing rules can
 /// be unit-tested in isolation. The caret is a character index in `0..=buf.len()`.
@@ -154,19 +179,35 @@ impl Composer {
         self.insert_char('\n');
     }
 
-    /// Delete the character before the caret (Backspace).
+    /// Delete the character before the caret (Backspace). A chip
+    /// (`[Image #2]`, `[Paste #1, +40 lines]`) is one token: deleting into it
+    /// removes the whole chip rather than leaving a corrupted label that no
+    /// longer resolves to its file.
     pub(super) fn backspace(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-            self.buf.remove(self.cursor);
+        if self.cursor == 0 {
+            return;
         }
+        if let Some((start, end)) = chip_span(&self.buf, self.cursor - 1) {
+            self.buf.drain(start..end);
+            self.cursor = start;
+            return;
+        }
+        self.cursor -= 1;
+        self.buf.remove(self.cursor);
     }
 
-    /// Delete the character at the caret (Delete / forward-delete).
+    /// Delete the character at the caret (Delete / forward-delete); a chip
+    /// under the caret goes as a whole.
     pub(super) fn delete(&mut self) {
-        if self.cursor < self.buf.len() {
-            self.buf.remove(self.cursor);
+        if self.cursor >= self.buf.len() {
+            return;
         }
+        if let Some((start, end)) = chip_span(&self.buf, self.cursor) {
+            self.buf.drain(start..end);
+            self.cursor = start;
+            return;
+        }
+        self.buf.remove(self.cursor);
     }
 
     pub(super) fn move_left(&mut self) {
@@ -633,5 +674,38 @@ mod tests {
         assert_eq!(c.take(), "hell");
         // Seeding an empty string is a no-op editor.
         assert!(Composer::seeded("").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod chip_tests {
+    use super::*;
+
+    #[test]
+    fn backspace_and_delete_remove_a_whole_chip() {
+        let mut c = Composer::seeded("see [Image #2] now");
+        // Caret right after the chip's closing bracket.
+        c.cursor = "see [Image #2]".chars().count();
+        c.backspace();
+        assert_eq!(c.text(), "see  now");
+        assert_eq!(c.cursor, 4);
+
+        let mut c = Composer::seeded("[Paste #1, +40 lines] x");
+        c.cursor = 3; // inside the chip
+        c.delete();
+        assert_eq!(c.text(), " x");
+        assert_eq!(c.cursor, 0);
+    }
+
+    #[test]
+    fn ordinary_brackets_are_edited_one_character_at_a_time() {
+        let mut c = Composer::seeded("arr[3] and [Note #x]");
+        c.cursor = 6;
+        c.backspace();
+        assert_eq!(c.text(), "arr[3 and [Note #x]");
+        let mut c = Composer::seeded("[Note #x]");
+        c.cursor = 9;
+        c.backspace();
+        assert_eq!(c.text(), "[Note #x");
     }
 }

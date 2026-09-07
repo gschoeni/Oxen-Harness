@@ -402,7 +402,7 @@ async fn run_one_turn(
                 st.print_line(&format!("  {} {}", ui.red("⚠"), ui.dim(w)));
             }
             if !attachments.is_empty() {
-                let names: Vec<&str> = attachments.iter().map(|a| a.filename.as_str()).collect();
+                let names: Vec<String> = attachments.iter().map(crate::attach::describe).collect();
                 st.print_line(&format!(
                     "  {} {}",
                     ui.green("📎 attached:"),

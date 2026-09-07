@@ -38,10 +38,17 @@ pub(crate) fn resolve_prompt(arg: &str) -> Option<String> {
 /// finished, `1` when it failed (the error goes to stderr — stdout stays the
 /// model's answer alone).
 pub(crate) async fn run(agent: &mut Agent, ui: &Ui, prompt: String) -> i32 {
+    // `-p "describe @shot.png"` (or a dropped absolute path) attaches the file
+    // exactly as it would in the composer; warnings go to stderr so a piped
+    // reply stays clean.
+    let (text, attachments, warnings) = crate::attach::extract_attachments(&prompt);
+    for warning in &warnings {
+        eprintln!("{warning}");
+    }
     let mut renderer = TurnRenderer::new(ui.clone());
     renderer.begin_thinking();
     let result = agent
-        .run_turn(prompt, |event: &harness_agent::AgentEvent| {
+        .run_turn_with_attachments(text, attachments, |event: &harness_agent::AgentEvent| {
             renderer.on_event(event)
         })
         .await;
