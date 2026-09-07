@@ -474,6 +474,7 @@ impl Live {
             KeyIntent::PullQueued if self.composer.is_empty() => KeyAction::PullQueued,
             KeyIntent::PullQueued => KeyAction::None,
             KeyIntent::ExpandLast => KeyAction::ExpandLast,
+            KeyIntent::ExternalEditor => KeyAction::ExternalEditor,
             KeyIntent::Compose(op) => {
                 let inserted = match op {
                     keys::BufOp::Insert(c) => Some(c),

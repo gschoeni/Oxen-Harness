@@ -26,6 +26,9 @@ pub(super) enum Residual {
     CancelTurn,
     /// Ctrl-D on an empty composer — end the session.
     Exit,
+    /// Ctrl+G — edit the draft in `$EDITOR` (the idle loop hands the terminal
+    /// over; mid-turn it is ignored).
+    ExternalEditor(String),
 }
 
 /// Apply the loop-independent effects of `action` against the live state and
@@ -84,6 +87,7 @@ pub(super) fn apply_action(
             live.expand_last_result();
             None
         }
+        KeyAction::ExternalEditor => Some(Residual::ExternalEditor(live.composer_draft())),
         KeyAction::PullQueued => {
             // The newest item comes back out for another pass; queue positions
             // are 1-based, so the last one is at `len`.

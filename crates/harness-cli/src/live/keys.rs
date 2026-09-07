@@ -42,6 +42,8 @@ pub(super) enum KeyAction {
     PullQueued,
     /// Ctrl+O: print the newest sealed tool result in full.
     ExpandLast,
+    /// Ctrl+G: hand the draft to `$EDITOR` (idle only).
+    ExternalEditor,
     /// Ctrl-D on an empty composer — exit.
     Exit,
 }
@@ -103,6 +105,8 @@ pub(super) enum KeyIntent {
     PullQueued,
     /// Ctrl+O: print the newest tool result in full.
     ExpandLast,
+    /// Ctrl+G: open the draft in `$EDITOR`.
+    ExternalEditor,
     Exit,
     Compose(BufOp),
     /// Insert a hard line break in the composer (Alt/Shift+Enter, Ctrl+J).
@@ -162,6 +166,7 @@ pub(super) fn classify_key(
                 // which don't distinguish Shift/Alt+Enter.
                 KeyCode::Char('j') if ctrl => return KeyIntent::ComposeNewline,
                 KeyCode::Char('o') if ctrl && !alt => return KeyIntent::ExpandLast,
+                KeyCode::Char('g') if ctrl && !alt => return KeyIntent::ExternalEditor,
                 // Alt/Shift+Enter add a line; plain Enter sends (or queues).
                 KeyCode::Enter if alt || mods.contains(KeyModifiers::SHIFT) => {
                     return KeyIntent::ComposeNewline

@@ -209,6 +209,33 @@ pub(crate) fn iterm2_sequence(bytes: &[u8], cols: usize, rows: usize) -> String 
     )
 }
 
+/// Whether the terminal turns OSC 8 into clickable links. Env-only, like
+/// image detection: the terminals that draw pictures all do, plus VS Code,
+/// Alacritty and Hyper; multiplexers older than tmux 3.4 don't pass it.
+pub(crate) fn hyperlinks_supported() -> bool {
+    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        let var = |k: &str| std::env::var(k).unwrap_or_default();
+        if !var("TMUX").is_empty() || var("TERM").starts_with("screen") {
+            return false;
+        }
+        if Protocol::detect() != Protocol::None {
+            return true;
+        }
+        let program = var("TERM_PROGRAM").to_ascii_lowercase();
+        matches!(
+            program.as_str(),
+            "vscode" | "hyper" | "alacritty" | "rio" | "tabby"
+        ) || !var("ALACRITTY_WINDOW_ID").is_empty()
+            || !var("VSCODE_PID").is_empty()
+    })
+}
+
+/// Wrap already-styled `text` in an OSC 8 hyperlink to `url`.
+pub(crate) fn hyperlink(text: &str, url: &str) -> String {
+    format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -72,6 +72,13 @@ impl TypedTool for ReadFileTool {
     async fn run(&self, args: ReadFileArgs) -> Result<String, ToolError> {
         let path = self.workspace.resolve(&args.path)?;
 
+        // A picture is shown, not dumped: the result carries an attach marker
+        // the agent turns into an image part right after it, so a model that
+        // can see gets the pixels and one that can't still learns the size.
+        if let Some(summary) = image_summary(&path, &args.path).await {
+            return Ok(summary);
+        }
+
         // A whole-file read of a big source file gets its shape rather than
         // every line. An explicit window is never outlined: the model asked
         // for those lines, so it gets exactly those lines.
@@ -138,6 +145,38 @@ struct ReadStats {
     /// 1-based inclusive range displayed; `None` when the read rendered no
     /// lines at all (an offset past the end of the file).
     shown: Option<(usize, usize)>,
+}
+
+/// Image extensions `read_file` shows rather than reads as text.
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif"];
+
+/// For an image file: the attach marker plus a one-line description. `None`
+/// for anything that isn't an image by extension, so text reads are
+/// untouched. An unreadable or undecodable image still returns its size
+/// rather than a garbled text dump.
+async fn image_summary(path: &Path, display: &str) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if !IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+        return None;
+    }
+    let bytes = tokio::fs::read(path).await.ok()?;
+    let size = harness_core::fmt::format_bytes(bytes.len() as u64);
+    let dims = image::ImageReader::new(std::io::Cursor::new(&bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|r| r.into_dimensions().ok());
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| display.to_string());
+    let shape = match dims {
+        Some((w, h)) => format!("{w}×{h}, {size}"),
+        None => format!("{size}, dimensions unknown"),
+    };
+    Some(format!(
+        "{}\n[image {name} — {shape}; it is attached below so you can look at it]",
+        harness_core::attach::image_marker(&path.display().to_string())
+    ))
 }
 
 async fn read_numbered(
@@ -447,5 +486,23 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("no default exports"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn reading_an_image_attaches_it_instead_of_dumping_bytes() {
+        let (_dir, ws) = workspace();
+        let img = image::RgbaImage::from_pixel(120, 40, image::Rgba([9, 9, 9, 255]));
+        let path = ws.root().join("logo.png");
+        image::DynamicImage::ImageRgba8(img).save(&path).unwrap();
+        let out = ReadFileTool::new(ws.clone())
+            .invoke(serde_json::json!({"path": "logo.png"}))
+            .await
+            .unwrap();
+        let (cleaned, paths) =
+            harness_core::attach::extract_image_markers(&out, "(image attached below)").unwrap();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].ends_with("logo.png"), "{paths:?}");
+        assert!(cleaned.contains("120×40"), "{cleaned}");
+        assert!(!cleaned.contains("\u{fffd}"), "no garbled bytes: {cleaned}");
     }
 }

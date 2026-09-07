@@ -523,7 +523,7 @@ fn parse_link(ui: &Ui, chars: &[char], start: usize) -> Option<(String, usize)> 
     let close_paren = find(chars, ')', close_bracket + 2)?;
     let text: String = chars[start + 1..close_bracket].iter().collect();
     let url: String = chars[close_bracket + 2..close_paren].iter().collect();
-    let rendered = format!("{} {}", ui.link(&text), ui.dim(&format!("({url})")));
+    let rendered = ui.markdown_link(&text, &url);
     Some((rendered, close_paren + 1))
 }
 
@@ -742,5 +742,21 @@ mod tests {
     fn lone_pipe_line_is_not_treated_as_a_table() {
         // A pipe in prose, with no delimiter row, renders literally.
         assert_eq!(render("a | b\n"), "a | b\n");
+    }
+
+    #[test]
+    fn links_become_osc8_hyperlinks_when_the_terminal_takes_them() {
+        let ui = Ui::plain().with_hyperlinks(true);
+        let (rendered, _) =
+            parse_link(&ui, &"[docs](https://x.y/z)".chars().collect::<Vec<_>>(), 0).unwrap();
+        assert_eq!(rendered, "\x1b]8;;https://x.y/z\x1b\\docs\x1b]8;;\x1b\\");
+        let plain = Ui::plain();
+        let (rendered, _) = parse_link(
+            &plain,
+            &"[docs](https://x.y/z)".chars().collect::<Vec<_>>(),
+            0,
+        )
+        .unwrap();
+        assert_eq!(rendered, "docs (https://x.y/z)");
     }
 }

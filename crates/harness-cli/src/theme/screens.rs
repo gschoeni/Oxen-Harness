@@ -300,6 +300,7 @@ const KEY_HELP: &[(&str, &str)] = &[
         "cancel the running turn · Esc Esc at idle: rewind picker",
     ),
     ("Ctrl+O", "expand the last tool result in full"),
+    ("Ctrl+G", "edit the draft in $EDITOR"),
     ("@path", "complete a workspace path to mention it"),
     ("Tab", "complete a /command or its argument"),
     (

@@ -52,6 +52,9 @@ pub(crate) type Rgb = (u8, u8, u8);
 #[derive(Clone)]
 pub struct Ui {
     color: bool,
+    /// Whether links are emitted as OSC 8 hyperlinks (clickable) rather than
+    /// `text (url)`.
+    hyperlinks: bool,
     theme: Arc<Theme>,
     /// `false` when the theme paints its own background (the desktop app), so
     /// palette colors render as authored. `true` when the terminal's own
@@ -134,6 +137,7 @@ impl Ui {
     pub fn with(color: bool, theme: Arc<Theme>) -> Self {
         Ui {
             color,
+            hyperlinks: false,
             theme,
             cli_background: true,
         }
@@ -143,8 +147,10 @@ impl Ui {
     pub fn detect(theme: Arc<Theme>) -> Self {
         let no_color = std::env::var_os("NO_COLOR").is_some();
         let dumb = std::env::var("TERM").map(|t| t == "dumb").unwrap_or(false);
+        let color = io::stdout().is_terminal() && !no_color && !dumb;
         Ui {
-            color: io::stdout().is_terminal() && !no_color && !dumb,
+            color,
+            hyperlinks: color && crate::graphics::hyperlinks_supported(),
             theme,
             cli_background: true,
         }
@@ -155,8 +161,27 @@ impl Ui {
     pub fn plain() -> Self {
         Ui {
             color: false,
+            hyperlinks: false,
             theme: Arc::new(Theme::default()),
             cli_background: true,
+        }
+    }
+
+    /// Force hyperlink support on or off.
+    #[cfg(test)]
+    pub fn with_hyperlinks(mut self, on: bool) -> Self {
+        self.hyperlinks = on;
+        self
+    }
+
+    /// A Markdown link: clickable OSC 8 text where the terminal supports it,
+    /// otherwise the styled text followed by the address in parentheses so
+    /// the destination is never lost.
+    pub fn markdown_link(&self, text: &str, url: &str) -> String {
+        if self.hyperlinks {
+            crate::graphics::hyperlink(&self.link(text), url)
+        } else {
+            format!("{} {}", self.link(text), self.dim(&format!("({url})")))
         }
     }
 
@@ -169,6 +194,7 @@ impl Ui {
     pub fn with_theme(&self, theme: Arc<Theme>) -> Ui {
         Ui {
             color: self.color,
+            hyperlinks: self.hyperlinks,
             theme,
             cli_background: self.cli_background,
         }

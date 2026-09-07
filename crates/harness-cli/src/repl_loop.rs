@@ -219,6 +219,16 @@ pub(crate) async fn run_box_repl(
                 print!("{}", theme::death_screen(ui, &ctx.session()));
                 break;
             }
+            live::Idle::EditExternally(draft) => {
+                seed = match external_edit(&draft) {
+                    Ok(edited) => edited,
+                    Err(e) => {
+                        println!("  {} {}", ui.red("⚠"), ui.dim(&format!("editor: {e}")));
+                        draft
+                    }
+                };
+                continue;
+            }
             live::Idle::Submit(line) => {
                 let mut carryover = String::new();
                 let exit = handle_line(&line, agent, ui, &mut queue, &mut carryover, ctx).await?;
@@ -513,6 +523,35 @@ fn unescape_history_entry(line: &str) -> String {
         }
     }
     out
+}
+
+/// Hand `draft` to `$VISUAL`/`$EDITOR` (default `vi`) as a Markdown file and
+/// return what the editor saved. The terminal is in cooked mode here, between
+/// two composer sessions, so the editor gets it whole.
+fn external_edit(draft: &str) -> Result<String> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+    let dir = std::env::temp_dir().join(format!("oxen-harness-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("draft.md");
+    std::fs::write(&path, draft)?;
+    // `$EDITOR` may carry flags (`code --wait`): split like a shell would.
+    let mut parts = editor.split_whitespace();
+    let program = parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("EDITOR is empty"))?;
+    let status = std::process::Command::new(program)
+        .args(parts)
+        .arg(&path)
+        .status()
+        .map_err(|e| anyhow::anyhow!("could not run `{editor}`: {e}"))?;
+    if !status.success() {
+        anyhow::bail!("`{editor}` exited with {status}");
+    }
+    let edited = std::fs::read_to_string(&path)?;
+    let _ = std::fs::remove_file(&path);
+    Ok(edited.trim_end().to_string())
 }
 
 #[cfg(test)]

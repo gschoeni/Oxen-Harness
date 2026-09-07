@@ -170,6 +170,9 @@ pub(crate) async fn run_prompt(
 pub(crate) enum Idle {
     /// The user submitted this (a prompt to run or a `/command`).
     Submit(String),
+    /// Ctrl+G: open this draft in `$EDITOR`, then come back with the result
+    /// seeded into the composer.
+    EditExternally(String),
     /// Ctrl-D on an empty box, or a confirmed double Ctrl-C — end the session.
     Exit,
 }
@@ -255,6 +258,7 @@ pub(crate) async fn read_idle(
                         }
                     }
                     Some(Residual::Exit) => break Idle::Exit,
+                    Some(Residual::ExternalEditor(draft)) => break Idle::EditExternally(draft),
                     // Esc at idle has no turn to cancel — and must never touch
                     // the draft. A double-Esc on an empty composer runs
                     // `/rewind` (the picker); anything else is inert.
@@ -322,6 +326,8 @@ pub(crate) async fn read_idle(
     // caller gets the real text those chips stand for.
     Ok(match result {
         Idle::Submit(text) => Idle::Submit(expand_pastes(&text)),
+        // The editor gets the real text too; chips would mean nothing to it.
+        Idle::EditExternally(draft) => Idle::EditExternally(expand_pastes(&draft)),
         Idle::Exit => Idle::Exit,
     })
 }
@@ -536,6 +542,9 @@ async fn run_one_turn(
                                 recover_interjections(&interject, queue);
                                 return TurnOutcome::Interrupted;
                             }
+                            // The editor needs the whole terminal; mid-turn
+                            // the transcript is streaming into it.
+                            Some(Residual::ExternalEditor(_)) => {}
                             Some(Residual::Exit) => {
                                 let mut s = state.borrow_mut();
                                 s.finish();
