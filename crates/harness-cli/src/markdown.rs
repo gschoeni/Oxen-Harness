@@ -50,6 +50,17 @@ pub struct MarkdownStream<W: Write> {
     pending_row: Option<String>,
     /// The table currently being accumulated, flushed when it ends.
     table: Option<Table>,
+    /// Blank lines seen since the last rendered content, held back until
+    /// content follows. Leading blanks (a model that opens with newlines)
+    /// and trailing blanks (one that closes with them) never render, and a
+    /// run of blanks collapses to one — a paragraph break is one row.
+    pending_blanks: usize,
+    /// Whether any content has rendered yet (leading blanks are dropped).
+    emitted: bool,
+    /// Emit one blank row before the first content (and only if there is
+    /// any) — the break that sets streamed text off from the line above it.
+    /// Deferred so a reply that turns out to be whitespace-only costs no row.
+    leading_break: bool,
 }
 
 impl<W: Write> MarkdownStream<W> {
@@ -62,7 +73,22 @@ impl<W: Write> MarkdownStream<W> {
             hl: None,
             pending_row: None,
             table: None,
+            pending_blanks: 0,
+            emitted: false,
+            leading_break: false,
         }
+    }
+
+    /// Ask for a blank row ahead of the first rendered content (none if the
+    /// stream never renders anything).
+    pub fn with_leading_break(mut self, lead: bool) -> Self {
+        self.leading_break = lead;
+        self
+    }
+
+    /// Whether any content has rendered so far.
+    pub fn emitted(&self) -> bool {
+        self.emitted
     }
 
     /// Feed a chunk of streamed text; complete lines render immediately.
@@ -85,16 +111,26 @@ impl<W: Write> MarkdownStream<W> {
             self.render_line(&line);
         }
         // A header candidate that never got its delimiter row is just text.
-        if let Some(header) = self.pending_row.take() {
-            let _ = writeln!(self.out, "{}", render_block_line(&self.ui, &header));
-        }
+        self.flush_pending_text();
         self.flush_table();
         if self.in_code {
             let _ = writeln!(self.out, "{}", code_close_rule(&self.ui));
             self.in_code = false;
             self.hl = None;
         }
+        // Trailing blank lines never render.
+        self.pending_blanks = 0;
         let _ = self.out.flush();
+    }
+
+    /// Content is about to render: emit the paragraph break the held-back
+    /// blank lines stand for (at most one row, none before the first content).
+    fn emit_break(&mut self) {
+        if (self.emitted && self.pending_blanks > 0) || (!self.emitted && self.leading_break) {
+            let _ = writeln!(self.out);
+        }
+        self.pending_blanks = 0;
+        self.emitted = true;
     }
 
     fn render_line(&mut self, line: &str) {
@@ -111,6 +147,7 @@ impl<W: Write> MarkdownStream<W> {
             } else {
                 let lang = after_fence.trim();
                 let label = if lang.is_empty() { "code" } else { lang };
+                self.emit_break();
                 let _ = writeln!(self.out, "{}", code_open_rule(&self.ui, label));
                 self.in_code = true;
                 self.hl = self
@@ -159,6 +196,7 @@ impl<W: Write> MarkdownStream<W> {
                 return;
             }
             // Not a table after all — render the held line, then continue.
+            self.emit_break();
             let _ = writeln!(self.out, "{}", render_block_line(&self.ui, &header));
         }
 
@@ -168,12 +206,20 @@ impl<W: Write> MarkdownStream<W> {
             return;
         }
 
+        // A blank line is a paragraph break, rendered only once content
+        // follows it (see `pending_blanks`).
+        if trimmed.is_empty() {
+            self.pending_blanks += 1;
+            return;
+        }
+        self.emit_break();
         let _ = writeln!(self.out, "{}", render_block_line(&self.ui, line));
     }
 
     /// Render a pending header candidate as plain text (it wasn't a table).
     fn flush_pending_text(&mut self) {
         if let Some(header) = self.pending_row.take() {
+            self.emit_break();
             let _ = writeln!(self.out, "{}", render_block_line(&self.ui, &header));
         }
     }
@@ -181,6 +227,7 @@ impl<W: Write> MarkdownStream<W> {
     /// Render and clear the buffered table, if any.
     fn flush_table(&mut self) {
         if let Some(table) = self.table.take() {
+            self.emit_break();
             let _ = write!(self.out, "{}", render_table(&self.ui, &table));
         }
     }
@@ -672,6 +719,62 @@ mod tests {
     fn partial_line_flushes_on_finish() {
         // No trailing newline — must still appear after finish().
         assert_eq!(render("final words"), "final words\n");
+    }
+
+    #[test]
+    fn leading_and_trailing_blank_lines_never_render() {
+        // A model that opens or closes its reply with newlines must not put
+        // empty rows into the transcript — the renderer around the stream
+        // owns the spacing between blocks.
+        assert_eq!(render("\n\n\nhello\n\n\n"), "hello\n");
+        assert_eq!(render("\n"), "");
+    }
+
+    #[test]
+    fn a_leading_break_renders_only_ahead_of_real_content() {
+        let render_lead = |input: &str| {
+            let mut buf: Vec<u8> = Vec::new();
+            let mut md = MarkdownStream::new(ui(), &mut buf).with_leading_break(true);
+            md.push(input);
+            md.finish();
+            String::from_utf8(buf).unwrap()
+        };
+        assert_eq!(render_lead("\n\nhello\n"), "\nhello\n");
+        assert_eq!(render_lead("\n\n"), "");
+        assert_eq!(render_lead(""), "");
+    }
+
+    #[test]
+    fn runs_of_blank_lines_collapse_to_one_paragraph_break() {
+        assert_eq!(render("one\n\n\n\ntwo\n"), "one\n\ntwo\n");
+        // Blank lines arriving one token at a time behave the same.
+        let mut buf: Vec<u8> = Vec::new();
+        let mut md = MarkdownStream::new(ui(), &mut buf);
+        for t in ["\n", "one", "\n", "\n", "\n", "two", "\n", "\n"] {
+            md.push(t);
+        }
+        md.finish();
+        assert_eq!(String::from_utf8(buf).unwrap(), "one\n\ntwo\n");
+    }
+
+    #[test]
+    fn blank_lines_inside_code_blocks_are_kept_verbatim() {
+        let out = render("```\na\n\n\nb\n```\n");
+        let lines: Vec<&str> = out.lines().collect();
+        // open rule, a, blank, blank, b, close rule
+        assert_eq!(lines.len(), 6, "got:\n{out}");
+        assert_eq!(lines[1], "a");
+        assert_eq!(lines[2], "");
+        assert_eq!(lines[3], "");
+        assert_eq!(lines[4], "b");
+    }
+
+    #[test]
+    fn a_blank_line_before_a_table_or_code_block_still_breaks_the_paragraph() {
+        let out = render("intro\n\n```\nx\n```\n");
+        assert!(out.starts_with("intro\n\n"), "got:\n{out}");
+        let out = render("intro\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");
+        assert!(out.starts_with("intro\n\n"), "got:\n{out}");
     }
 
     #[test]

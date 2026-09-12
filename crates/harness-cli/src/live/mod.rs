@@ -11,7 +11,8 @@
 //!
 //! How it stays out of the output's way: we put the terminal in raw mode, pin the
 //! box to the bottom rows, keep a blank spacer + a faint divider just above it
-//! (so output never butts against the input — see [`SPACER_ROWS`]/[`DIVIDER_ROWS`]),
+//! (so output never butts against the input — see [`DIVIDER_ROWS`]; the output
+//! cursor's own blank row is the spacer, see [`SPACER_ROWS`]),
 //! and set a DECSTBM scroll region over the rows *above* that. All turn output
 //! (streamed Markdown, tool lines, the spinner) is written into that region —
 //! where it scrolls naturally — through a small adapter that turns `\n` into
@@ -86,8 +87,11 @@ use sink::Sink;
 use terminal::{region_bottom, title_sequence, CrlfWriter, TitleState, BELL};
 
 /// Blank rows kept between the agent's scrolling output and the pinned input
-/// area, so the prompt always has at least one full line of breathing room.
-const SPACER_ROWS: usize = 1;
+/// area. Zero: every region write ends in a newline, so the output cursor's
+/// own row (where the spinner rides during a turn) is always a blank line
+/// directly above the pinned area — that row is the breathing room. A spacer
+/// on top of it showed as two empty rows under every reply.
+const SPACER_ROWS: usize = 0;
 
 /// Rows for the faint divider rule drawn just above the input area (matching the
 /// idle prompt's separator).
@@ -162,12 +166,6 @@ struct Live {
     /// The pending repaint level — handlers request, the loops flush (see
     /// [`paint::Repaint`]).
     repaint: paint::Repaint,
-    /// Set until the first paint carves the real region. On that first paint the
-    /// rows the pinned area claims may still hold conversation output (most
-    /// visibly the tail of the opening banner), so we scroll it up to preserve
-    /// it — but only once, since later shrinks are just the blank composer area
-    /// growing and must not nudge the conversation.
-    first_paint: bool,
     /// Set when a `web_search` call failed for a missing Brave API key, so the
     /// caller can prompt for one once the composer hands back to cooked mode.
     needs_brave_key: bool,
@@ -225,6 +223,10 @@ struct Live {
     results: std::collections::VecDeque<card::KeptResult>,
     /// Workspace paths for `@` completion, with when they were scanned.
     path_items: Option<(std::time::Instant, Vec<String>)>,
+    /// What the region's last write was, so the renderer can keep exactly one
+    /// blank row between a run of streamed text and the tool/notice lines
+    /// around it (see [`events::LastWrite`]).
+    last_write: events::LastWrite,
 }
 
 impl Live {
@@ -249,7 +251,6 @@ impl Live {
             previews: Vec::new(),
             region_bottom: region_bottom(rows),
             repaint: paint::Repaint::default(),
-            first_paint: true,
             needs_brave_key: false,
             status_lines: Vec::new(),
             model: String::new(),
@@ -265,6 +266,7 @@ impl Live {
             tool_card: None,
             results: std::collections::VecDeque::new(),
             path_items: None,
+            last_write: events::LastWrite::Blank,
         }
     }
 
@@ -711,11 +713,11 @@ impl Live {
     /// show the cursor, leave raw mode, and pause input forwarding — one call,
     /// no flags to keep in sync.
     ///
-    /// Crucially the cursor is left on a *fresh bottom line* before handing
-    /// off. Resetting the scroll region (`\x1b[r`) homes the cursor to the top
-    /// of the screen, so without repositioning the picker would draw its first
-    /// frame at the top — out of view from where the user is looking — and
-    /// only become visible once a keypress forced a redraw.
+    /// Crucially the cursor is left right after the last line of conversation
+    /// before handing off. Resetting the scroll region (`\x1b[r`) homes the
+    /// cursor to the top of the screen, so without restoring it the picker
+    /// would draw its first frame at the top — out of view from where the user
+    /// is looking — and only become visible once a keypress forced a redraw.
     pub(super) fn hand_off_screen(&mut self, paused: &Arc<AtomicBool>) {
         if self.suspension.is_some() {
             return;
@@ -736,8 +738,8 @@ impl Live {
 
     /// Reclaim the terminal after the interactive tool finishes: restore raw
     /// mode + input forwarding, restart the thinking spinner, and force a full
-    /// repaint (the picker drew over the screen, and the reclaim carved only a
-    /// composer-only region until this repaint re-fits the real layout).
+    /// repaint (the picker drew over the screen; the forced re-carve reserves
+    /// the pinned rows under wherever it left the cursor).
     pub(super) fn reclaim_screen(&mut self) {
         let Some(lease) = self.suspension.take() else {
             return;
@@ -745,8 +747,8 @@ impl Live {
         lease.reclaim();
         self.region.set_muted(false);
         self.refresh_title();
-        // The reclaim carved a composer-only region; record it so the forced
-        // repaint below re-carves to fit the queue list.
+        // The picker reset the scroll region; start from the full-height
+        // bottom so the forced repaint below clears every row it reserves.
         self.region_bottom = region_bottom(self.rows);
         self.begin_thinking();
         self.render_forcing_region();

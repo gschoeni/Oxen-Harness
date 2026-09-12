@@ -18,14 +18,37 @@ use crate::theme::LiveSpinner;
 use super::terminal::CrlfWriter;
 use super::Live;
 
+/// The kind of the last write into the scroll region, for block spacing.
+///
+/// The transcript keeps exactly one blank row between a run of streamed
+/// Markdown and whatever line comes before or after it (a tool line, a
+/// notice, the echoed prompt), while tool lines stack directly on each other
+/// (a call and its `└─` result, parallel calls). The model's own leading and
+/// trailing newlines never render (see [`crate::markdown::MarkdownStream`]),
+/// so this state — not the model — decides where the breaks go.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum LastWrite {
+    /// The cursor row sits under a blank row (turn start, or a write that
+    /// ended with an empty line): the next block needs no break above it.
+    Blank,
+    /// Streamed Markdown text: anything else that follows gets a break first.
+    Text,
+    /// A tool/notice line: streamed text that follows gets a break first;
+    /// another line stacks directly.
+    Line,
+}
+
 impl Live {
     // --- turn lifecycle ----------------------------------------------------
 
     /// Reset render state, snapshot the queue, and start the thinking spinner
-    /// for a fresh turn.
+    /// for a fresh turn. One blank row goes under the echoed prompt (or the
+    /// drain/retry notice) so the turn's first block never butts against it.
     pub(super) fn begin_turn(&mut self, items: &[String]) {
         self.sync_queue(items);
         self.md = None;
+        self.write_region("\n");
+        self.last_write = LastWrite::Blank;
         self.begin_thinking();
         self.render();
     }
@@ -214,11 +237,16 @@ impl Live {
     fn on_token(&mut self, t: &str) {
         if self.md.is_none() {
             self.stop_spinner();
-            self.write_region("\n");
-            self.md = Some(MarkdownStream::new(
-                self.ui.clone(),
-                CrlfWriter::over(self.out.clone()),
-            ));
+            // Set the text off from the line above it — unless the row above
+            // is already blank (turn start, a notice that ended with one).
+            // The stream emits that break itself, ahead of its first real
+            // content, so whitespace-only text (a model that sends newlines
+            // before a tool call) costs no row at all.
+            let lead = self.last_write != LastWrite::Blank;
+            self.md = Some(
+                MarkdownStream::new(self.ui.clone(), CrlfWriter::over(self.out.clone()))
+                    .with_leading_break(lead),
+            );
             // Keep a live indicator going *below* the streamed text so a pause
             // mid-response (or a long, not-yet-complete line such as a code block)
             // never looks frozen.
@@ -231,6 +259,9 @@ impl Live {
         self.region.lift_tail();
         if let Some(md) = self.md.as_mut() {
             md.push(t);
+            if md.emitted() {
+                self.last_write = LastWrite::Text;
+            }
         }
         self.region.redraw_tail();
         self.request_paint();
@@ -286,7 +317,16 @@ impl Live {
     /// write and redrawn below, so mid-turn announcements (steering, retry
     /// notices) can never land on the spinner's line.
     fn write_region(&mut self, text: &str) {
+        // A line landing right under streamed text gets one blank row first.
+        if self.last_write == LastWrite::Text && text != "\n" {
+            self.region.write("\n");
+        }
         self.region.write(text);
+        self.last_write = if text.ends_with("\n\n") || text == "\n" {
+            LastWrite::Blank
+        } else {
+            LastWrite::Line
+        };
     }
 
     /// Draw an inline picture into the region and move the cursor past the

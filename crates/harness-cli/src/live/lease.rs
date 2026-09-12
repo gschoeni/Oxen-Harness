@@ -29,7 +29,6 @@ use super::terminal::{resume_sequence, suspend_sequence};
 pub(super) struct ScreenSuspension {
     paused: Arc<AtomicBool>,
     out: Sink,
-    rows: u16,
     reclaimed: bool,
 }
 
@@ -51,14 +50,13 @@ impl ScreenSuspension {
         Self {
             paused: paused.clone(),
             out,
-            rows,
             reclaimed: false,
         }
     }
 
     /// Reclaim the screen after the tool finishes: re-enter raw mode, resume
-    /// input forwarding, and re-carve a composer-only region (the caller
-    /// follows with a forced full repaint to restore the real layout).
+    /// input forwarding, and hide the cursor again (the caller follows with a
+    /// forced full repaint that carves the region under the tool's output).
     pub(super) fn reclaim(mut self) {
         self.reclaimed = true;
         self.restore();
@@ -68,7 +66,7 @@ impl ScreenSuspension {
         let _ = crossterm::terminal::enable_raw_mode();
         self.paused.store(false, Ordering::Relaxed);
         let mut w = self.out.clone();
-        let _ = write!(w, "{}", resume_sequence(self.rows));
+        let _ = write!(w, "{}", resume_sequence());
         let _ = w.flush();
     }
 }

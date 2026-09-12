@@ -127,17 +127,16 @@ fn composer_growth_never_nudges_the_conversation() {
         live.handle_key(key(KeyCode::Char(ch)), 0);
         live.render();
     }
-    // A conversation line written in the rows the first paint claims: it is
-    // lifted once (first paint), then must hold still as the composer wraps.
-    // (It sits above the region-bottom cursor row — that row is always a fresh
-    // blank line in practice, and growth is allowed to claim it.)
-    let parser = screen(&handle, 30, 12, "\x1b[8;1Hconvo line");
+    // A conversation line with the output cursor on the blank row under it,
+    // well above the rows the composer will claim as it wraps: nothing is in
+    // the way, so no keystroke may scroll it (the transition only lifts the
+    // conversation when the cursor row itself would be claimed — see the
+    // `region_transition` tests).
+    let parser = screen(&handle, 30, 12, "\x1b[3;1Hconvo line\r\n");
     let rows = rows_text(&parser);
-    // Initial region bottom 11 → first-paint bottom 9 lifts it two rows to 6
-    // (index 5); the later composer growth re-carves without scrolling.
     assert_eq!(
         rows.iter().position(|r| r == "convo line"),
-        Some(5),
+        Some(2),
         "conversation must not move as the composer grows:\n{}",
         rows.join("\n")
     );
@@ -251,7 +250,7 @@ fn teardown_erases_all_chrome_from_the_screen() {
     live.render();
     let bottom = live.region_bottom;
 
-    let mut parser = screen(&handle, 60, 20, "\x1b[12;1Hlast reply line");
+    let mut parser = screen(&handle, 60, 20, "\x1b[12;1Hlast reply line\r\n");
     let before = rows_text(&parser).join("\n");
     assert!(
         before.contains("usage meter line") && before.contains("compression savings line"),
@@ -278,12 +277,22 @@ fn teardown_erases_all_chrome_from_the_screen() {
             "chrome must not survive into the scrollback ({chrome:?}):\n{all}"
         );
     }
-    // The cursor is parked on the first freed row, right below the
-    // conversation, so the next cooked print continues without a void.
+    // The cursor stays right below the conversation (the reply's newline left
+    // it there; the tall completion hint had scrolled both up to fit inside
+    // the region) — never dragged down to the freed rows — so the next cooked
+    // print continues without a void.
+    let reply_row = rows
+        .iter()
+        .position(|r| r.contains("last reply line"))
+        .expect("reply row") as u16;
     assert_eq!(
-        parser.screen().cursor_position().0,
-        bottom,
-        "cursor must park just below the conversation:\n{all}"
+        parser.screen().cursor_position(),
+        (reply_row + 1, 0),
+        "cursor must stay just below the conversation:\n{all}"
+    );
+    assert!(
+        reply_row + 1 < bottom,
+        "the conversation must have been kept inside the region ({bottom}):\n{all}"
     );
 }
 

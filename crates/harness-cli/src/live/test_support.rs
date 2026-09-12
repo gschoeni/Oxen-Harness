@@ -10,7 +10,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::theme::Ui;
 
 use super::sink::{CaptureHandle, Sink};
-use super::terminal::region_bottom;
 use super::Live;
 
 /// A [`Live`] with color enabled, for behavior tests.
@@ -46,16 +45,14 @@ pub(super) fn capture_live(cols: u16, rows: u16) -> (Live, CaptureHandle) {
     (live, handle)
 }
 
-/// Replay everything the captured [`Live`] painted through a terminal emulator,
-/// preceded by the same setup `LiveTerminal::new` performs (carve the scroll
-/// region over rows `1..=H-1`, park the cursor at its bottom), and return the
-/// resulting screen. `prelude` is written before the setup — use it to seed
-/// banner-style scrollback that predates live mode.
+/// Replay everything the captured [`Live`] painted through a terminal emulator
+/// and return the resulting screen. `prelude` is written first, with the
+/// cursor left wherever it ends — exactly what `LiveTerminal::new` does (it
+/// carves no region; the first paint reserves the pinned rows from the cursor)
+/// — so use it to seed banner-style scrollback that predates live mode.
 pub(super) fn screen(handle: &CaptureHandle, cols: u16, rows: u16, prelude: &str) -> vt100::Parser {
     let mut parser = vt100::Parser::new(rows, cols, 0);
     parser.process(prelude.as_bytes());
-    let bottom = region_bottom(rows);
-    parser.process(format!("\x1b[1;{bottom}r\x1b[{bottom};1H").as_bytes());
     parser.process(&handle.bytes());
     parser
 }

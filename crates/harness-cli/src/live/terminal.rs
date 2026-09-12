@@ -20,7 +20,8 @@ use crossterm::{execute, terminal};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 /// Owns the terminal for the lifetime of a live session: raw mode, a hidden
-/// cursor, and a scroll region over every row but the last.
+/// cursor, and bracketed paste. The scroll region itself is carved by the
+/// first paint (`paint::region_transition`), relative to where the cursor is.
 ///
 /// End a session with [`LiveTerminal::restore`], which erases the whole
 /// pinned area so none of the session's chrome (meters, divider, completion
@@ -71,12 +72,16 @@ impl LiveTerminal {
             );
         }
         let mut out = io::stdout();
-        let bottom = region_bottom(rows);
-        // Hide the cursor, enable bracketed paste (so a drag-dropped path arrives
-        // as one atomic `Event::Paste` instead of a fragile burst of keystrokes),
-        // carve a scroll region over rows 1..=H-1, and park the output cursor at
-        // the bottom of that region so output scrolls upward.
-        let _ = write!(out, "\x1b[?25l\x1b[?2004h\x1b[1;{bottom}r\x1b[{bottom};1H");
+        // Hide the cursor and enable bracketed paste (so a drag-dropped path
+        // arrives as one atomic `Event::Paste` instead of a fragile burst of
+        // keystrokes). The scroll region is *not* carved here: the cursor is
+        // left exactly where cooked mode put it (right under the banner, the
+        // echoed prompt, or a command's output), and the first paint reserves
+        // the pinned rows relative to that spot — scrolling the conversation
+        // only as far as it must (see `paint::region_transition`). Parking the
+        // cursor at the bottom here used to open a void of blank rows between
+        // the conversation and the pinned area after every turn.
+        let _ = write!(out, "\x1b[?25l\x1b[?2004h");
         let _ = out.flush();
         Ok(Self {
             cols,
@@ -140,7 +145,7 @@ impl Drop for LiveTerminal {
 /// then hand the screen back exactly the way the picker hand-off does —
 /// reset the scroll region, **erase every reserved row** (so the meters,
 /// divider, completion hint, and composer never enter the scrollback), and
-/// park the shown cursor just below the conversation.
+/// leave the shown cursor where the conversation ended.
 pub(super) fn teardown_sequence(region_bottom: u16, rows: u16) -> String {
     format!("\x1b[?2004l{}", suspend_sequence(region_bottom, rows))
 }
@@ -231,23 +236,24 @@ impl Write for CrlfWriter {
 /// no stale input UI lingers above the tool's output. The cursor is parked just
 /// below the conversation (and shown) so the tool draws in natural reading order.
 pub(super) fn suspend_sequence(region_bottom: u16, rows: u16) -> String {
-    // `\x1b[r` resets (and may home) the cursor, so we reposition explicitly.
-    let mut seq = String::from("\x1b[r");
+    // The output cursor sits inside the region, right after the last line of
+    // conversation — that is exactly where the next cooked-mode print (the
+    // echoed prompt, a picker's first frame) belongs, so it is saved across
+    // the reset (`\x1b[r` homes the cursor) and the row clears, then restored.
+    let mut seq = String::from("\x1b7\x1b[r");
     for r in region_bottom.saturating_add(1)..=rows {
         seq.push_str(&format!("\x1b[{r};1H\x1b[2K"));
     }
-    // Park on the first freed row, right after the conversation, cursor shown.
-    let start = region_bottom.saturating_add(1).min(rows);
-    seq.push_str(&format!("\x1b[{start};1H\x1b[?25h"));
+    seq.push_str("\x1b8\x1b[?25h");
     seq
 }
 
-/// Escape sequence that re-establishes the live layout after an interactive tool
-/// finishes: hide the cursor, re-carve the scroll region, and park the output
-/// cursor at the bottom of it.
-pub(super) fn resume_sequence(rows: u16) -> String {
-    let bottom = region_bottom(rows);
-    format!("\x1b[?25l\x1b[1;{bottom}r\x1b[{bottom};1H")
+/// Escape sequence that takes the screen back after an interactive tool
+/// finishes: hide the cursor again. The scroll region is re-carved by the
+/// forced repaint that follows, relative to wherever the tool left the cursor
+/// (its last line of output), so the layout resumes right under it.
+pub(super) fn resume_sequence() -> String {
+    "\x1b[?25l".to_string()
 }
 
 /// Spawn a thread that polls for terminal events and forwards them. It never
@@ -296,8 +302,8 @@ mod tests {
         // The scroll region must be reset before anything else so the picker
         // isn't confined to the old region.
         assert!(
-            seq.starts_with("\x1b[r"),
-            "region reset must come first: {seq:?}"
+            seq.starts_with("\x1b7\x1b[r"),
+            "region reset must come first (after saving the cursor): {seq:?}"
         );
         // Every reserved row below region_bottom is cleared (not just one), so a
         // stale multi-row input box can't linger above the tool's output.
@@ -307,31 +313,46 @@ mod tests {
                 "must clear reserved row {r}: {seq:?}"
             );
         }
-        // The cursor is shown, parked just below the conversation.
+        // The cursor is shown, back where the conversation ended: saved before
+        // the reset (which homes it) and the row clears, restored after them.
         assert!(seq.contains("\x1b[?25h"), "must show the cursor: {seq:?}");
         assert!(
-            seq.contains("\x1b[21;1H"),
-            "must park on the first freed row: {seq:?}"
+            seq.starts_with("\x1b7\x1b[r"),
+            "must save the cursor before the reset: {seq:?}"
         );
-        assert!(seq.find("\x1b[r").unwrap() < seq.find("\x1b[24;1H").unwrap());
+        assert!(
+            seq.ends_with("\x1b8\x1b[?25h"),
+            "must restore the cursor after the clears: {seq:?}"
+        );
     }
 
     #[test]
-    fn resume_sequence_reestablishes_the_live_layout() {
-        let seq = resume_sequence(24);
+    fn suspend_leaves_the_cursor_right_after_the_conversation() {
+        // A short conversation on a tall screen: the cursor sits at row 6,
+        // well above the pinned area. Suspending must not drag it down to the
+        // freed rows — the next cooked print belongs right under the output.
+        let mut parser = vt100::Parser::new(24, 40, 0);
+        parser.process(b"\x1b[1;20r\x1b[5;1Hlast line\r\n");
+        // Pinned rows are painted under save/restore, as `paint` does.
+        parser.process(b"\x1b7\x1b[21;1Hchrome row\x1b[24;1Hcomposer\x1b8");
+        parser.process(suspend_sequence(20, 24).as_bytes());
+        assert_eq!(parser.screen().cursor_position(), (5, 0));
+        let text: Vec<String> = (0..24)
+            .map(|r| parser.screen().contents_between(r, 0, r, 40))
+            .collect();
+        assert!(text[4].starts_with("last line"), "{text:?}");
         assert!(
-            seq.contains("\x1b[?25l"),
-            "must hide the cursor again: {seq:?}"
+            text[20].trim().is_empty() && text[23].trim().is_empty(),
+            "{text:?}"
         );
-        // Region carved over every row but the composer row (24 -> bottom 23).
-        assert!(
-            seq.contains("\x1b[1;23r"),
-            "must re-carve the scroll region: {seq:?}"
-        );
-        assert!(
-            seq.contains("\x1b[23;1H"),
-            "must park at the region bottom: {seq:?}"
-        );
+    }
+
+    #[test]
+    fn resume_sequence_hides_the_cursor_and_moves_nothing() {
+        // The forced repaint after a reclaim carves the region relative to
+        // where the tool left the cursor; resuming must not move it.
+        let seq = resume_sequence();
+        assert_eq!(seq, "\x1b[?25l");
     }
 
     #[test]
@@ -349,6 +370,5 @@ mod tests {
     fn suspend_sequence_handles_a_tiny_terminal() {
         // A 1-row terminal must not underflow when computing the region bottom.
         let _ = suspend_sequence(0, 1);
-        assert!(resume_sequence(1).contains("\x1b[1;1r"));
     }
 }

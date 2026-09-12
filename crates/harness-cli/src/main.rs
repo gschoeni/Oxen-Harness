@@ -400,12 +400,13 @@ async fn main() -> Result<()> {
             },
         )
     );
-    println!();
+    // No blank line after the banner: the idle prompt sets itself off with
+    // one, and the cursor's own row is the spacer above the pinned meters.
     if let Some(n) = resumed_entries {
+        println!();
         for line in commands::resume::restored_lines(&ui, n, ends_mid_turn(agent.messages())) {
             println!("{line}");
         }
-        println!();
     }
 
     // Custom slash commands (Markdown templates under .oxen-harness/commands

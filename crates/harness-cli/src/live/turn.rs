@@ -317,10 +317,13 @@ pub(crate) async fn read_idle(
 
     // Echo the submission into the scrollback (cooked mode) so it stays above
     // whatever output the turn/command prints next — mirroring how a typed
-    // prompt used to remain on screen.
+    // prompt used to remain on screen. The teardown left the cursor *on* the
+    // blank row under the last line of output (the spinner's old row), so one
+    // newline first keeps that row blank and the prompt one row clear of the
+    // reply — the same single blank row that separates every block.
     if let Idle::Submit(text) = &result {
         let (_, styled) = composer_prompt(ui, queue.len());
-        println!("{styled}{}", ui.cream(text));
+        println!("\n{styled}{}", ui.cream(text));
     }
     // The echo above shows what the composer showed (paste chips and all); the
     // caller gets the real text those chips stand for.

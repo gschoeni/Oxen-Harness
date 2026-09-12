@@ -18,41 +18,40 @@ use super::pinned::{PinnedPlan, Section, SectionKind};
 use super::text::{composer_prompt, render_buffer, render_text_line, wrap_line};
 use super::{Live, DIVIDER_ROWS, MAX_INPUT_ROWS, SPACER_ROWS};
 
-/// The escape sequence to move the DECSTBM scroll region from `old_bottom` to
-/// `new_bottom` (rows `1..=bottom`), preserving already-printed output.
+/// The escape sequence to (re)carve the DECSTBM scroll region so its bottom is
+/// `new_bottom` (rows `1..=new_bottom`), reserving `rows - new_bottom` pinned
+/// rows below it, while keeping the output cursor right after the last line of
+/// conversation.
 ///
-/// On the *first* paint the rows the pinned area is about to claim may still
-/// hold real conversation output — most visibly the tail of the opening banner,
-/// before anything has scrolled. When the region shrinks then, scroll it up by
-/// the rows it's losing so that content is pushed up into the rows we keep,
-/// instead of being painted over. A line feed at the region's bottom scrolls
-/// only *within* the region, so this stays bounded to the output area. Only on
-/// the first paint: later shrinks are the blank composer/queue area growing,
-/// where scrolling would wrongly nudge the conversation up.
+/// The cursor may be anywhere on screen when this runs: under a short banner
+/// on the first paint, at the bottom of a full region mid-stream, wherever a
+/// picker or a resize left it. Rather than parking it at the new bottom
+/// (which opened a void of blank rows under a short conversation, and painted
+/// the pinned area over the last lines of a full one), the sequence makes
+/// room *from the cursor*: with the region reset so the whole screen scrolls,
+/// it feeds `reserved` line feeds and steps back up by the same count. When
+/// the cursor sits above `new_bottom` the terminal clamps the walk at the
+/// bottom row and nothing scrolls; when it sits below, the screen scrolls by
+/// exactly the overshoot, so the conversation lands with its last line on
+/// `new_bottom` and not a row higher. The cursor is saved around the region
+/// changes (DECSTBM homes it) and restored inside the new region.
 ///
-/// On an incremental change (not a forced re-carve) the rows that move between
-/// the output region and the reserved area are cleared so no stale text lingers.
-fn region_transition(
-    first_paint: bool,
-    force_region: bool,
-    old_bottom: u16,
-    new_bottom: u16,
-    rows: u16,
-) -> String {
-    let mut buf = String::new();
-    if first_paint && new_bottom < old_bottom {
-        let lift = old_bottom - new_bottom;
-        buf.push_str(&format!("\x1b[{old_bottom};1H"));
-        buf.push_str(&"\n".repeat(lift as usize));
+/// Rows that leave the region (`min(old, new) + 1..=rows`) are cleared so no
+/// stale chrome lingers in either area; the pinned paint that follows
+/// rewrites every reserved row anyway.
+fn region_transition(old_bottom: u16, new_bottom: u16, rows: u16) -> String {
+    let reserved = rows.saturating_sub(new_bottom);
+    let mut buf = String::from("\x1b7\x1b[r\x1b8");
+    if reserved > 0 {
+        buf.push_str(&"\n".repeat(reserved as usize));
+        buf.push_str(&format!("\x1b[{reserved}A"));
     }
-    if !force_region {
-        let lo = old_bottom.min(new_bottom) + 1;
-        for r in lo..=rows {
-            buf.push_str(&format!("\x1b[{r};1H\x1b[2K"));
-        }
+    buf.push_str(&format!("\x1b7\x1b[1;{new_bottom}r"));
+    let lo = old_bottom.min(new_bottom) + 1;
+    for r in lo..=rows {
+        buf.push_str(&format!("\x1b[{r};1H\x1b[2K"));
     }
-    // Re-carve the region and park the output cursor at its new bottom.
-    buf.push_str(&format!("\x1b[1;{new_bottom}r\x1b[{new_bottom};1H"));
+    buf.push_str("\x1b8");
     buf
 }
 
@@ -175,15 +174,12 @@ impl Live {
         let mut buf = String::new();
         if force_region || new_bottom != self.region_bottom {
             buf.push_str(&region_transition(
-                self.first_paint,
-                force_region,
                 self.region_bottom,
                 new_bottom,
                 self.rows,
             ));
             self.region_bottom = new_bottom;
         }
-        self.first_paint = false;
 
         // Paint every pinned row below the region, bracketed by save/restore so
         // the output cursor inside the region is left undisturbed. The walk is
@@ -430,67 +426,93 @@ mod tests {
     use super::super::test_support::plain_live;
     use super::*;
 
-    #[test]
-    fn first_paint_scrolls_output_up_to_preserve_the_banner() {
-        // On the first paint the region shrinks from the terminal's initial
-        // rows-1 (23) down to the real output bottom (say 18, reserving a
-        // 6-row pinned area on a 24-row screen). The banner tail sits in the
-        // rows being claimed, so the region must scroll up by the lost rows
-        // (23 - 18 = 5) before re-carving — otherwise the pinned area paints
-        // over it.
-        let seq = region_transition(true, false, 23, 18, 24);
-        // Cursor to the old region bottom, then 5 line feeds to scroll.
-        assert!(
-            seq.contains("\x1b[23;1H"),
-            "must park at old bottom: {seq:?}"
-        );
-        assert!(
-            seq.contains(&"\n".repeat(5)),
-            "must scroll up by the lost rows: {seq:?}"
-        );
-        // The scroll must precede the re-carve so it happens under the old region.
-        let scroll_at = seq.find('\n').unwrap();
-        let recarve_at = seq.find("\x1b[1;18r").unwrap();
-        assert!(scroll_at < recarve_at, "scroll before re-carve: {seq:?}");
-        // And the region is re-carved to the new bottom, cursor parked there.
-        assert!(seq.contains("\x1b[1;18r\x1b[18;1H"), "re-carve: {seq:?}");
+    /// Replay `prelude` then a region transition through a terminal emulator.
+    fn transition_screen(prelude: &str, old: u16, new: u16, rows: u16) -> vt100::Parser {
+        let mut parser = vt100::Parser::new(rows, 40, 0);
+        parser.process(prelude.as_bytes());
+        parser.process(region_transition(old, new, rows).as_bytes());
+        parser
+    }
+
+    fn row(parser: &vt100::Parser, r: u16) -> String {
+        parser
+            .screen()
+            .contents_between(r, 0, r, 40)
+            .trim_end()
+            .to_string()
     }
 
     #[test]
-    fn later_shrinks_do_not_scroll_the_conversation() {
-        // A later shrink (composer grew a line: 18 -> 17) must NOT scroll the
-        // output — those claimed rows are the blank spacer/composer area, and
-        // scrolling would nudge the conversation up on every keystroke.
-        let seq = region_transition(false, false, 18, 17, 24);
-        assert!(
-            !seq.contains('\n'),
-            "must not scroll on a later shrink: {seq:?}"
-        );
-        // It still clears the row that moved out of the region and re-carves.
+    fn a_transition_under_a_short_conversation_moves_nothing() {
+        // Banner on rows 1-3, cursor on row 4: the region shrinks from the
+        // initial rows-1 (23) to 18 (a 6-row pinned area on 24 rows). Nothing
+        // is in the way, so nothing scrolls and the cursor stays put — the
+        // next output lands right under the banner, not at the bottom.
+        let p = transition_screen("one\r\ntwo\r\nthree\r\n", 23, 18, 24);
+        assert_eq!(row(&p, 0), "one");
+        assert_eq!(row(&p, 2), "three");
+        assert_eq!(p.screen().cursor_position(), (3, 0));
+        assert!(p.screen().contents().trim().lines().count() == 3);
+    }
+
+    #[test]
+    fn a_transition_scrolls_exactly_the_rows_in_the_way() {
+        // The conversation runs down to row 22 with the cursor on 23 (the
+        // initial full-height region's bottom): reserving 6 rows (bottom 18)
+        // must lift the whole thing by 5 — the last line ends on row 17, the
+        // cursor on 18 — losing nothing and leaving no blank rows below it.
+        let mut prelude = String::new();
+        for i in 1..=22 {
+            prelude.push_str(&format!("line {i}\r\n"));
+        }
+        let p = transition_screen(&prelude, 23, 18, 24);
+        assert_eq!(row(&p, 16), "line 22");
+        assert_eq!(row(&p, 0), "line 6");
+        assert_eq!(p.screen().cursor_position(), (17, 0));
+        for r in 17..24 {
+            assert_eq!(row(&p, r), "", "row {r} must be clear");
+        }
+    }
+
+    #[test]
+    fn later_shrinks_do_not_nudge_a_conversation_that_fits() {
+        // The composer grew a line (18 -> 17) while the output sits on rows
+        // 1-5. A keystroke must never scroll the conversation.
+        let p = transition_screen("\x1b[1;18ra\r\nb\r\nc\r\n", 18, 17, 24);
+        assert_eq!(row(&p, 0), "a");
+        assert_eq!(row(&p, 2), "c");
+        assert_eq!(p.screen().cursor_position(), (3, 0));
+        // The row that left the region is cleared and the region re-carved.
+        let seq = region_transition(18, 17, 24);
         assert!(
             seq.contains("\x1b[18;1H\x1b[2K"),
             "clears moved row: {seq:?}"
         );
-        assert!(seq.contains("\x1b[1;17r\x1b[17;1H"), "re-carve: {seq:?}");
+        assert!(seq.contains("\x1b[1;17r"), "re-carve: {seq:?}");
     }
 
     #[test]
-    fn a_growing_region_never_scrolls() {
-        // When the reserved area shrinks (region grows back, 17 -> 18), there is
-        // nothing to preserve by scrolling — just clear and re-carve.
-        let seq = region_transition(true, false, 17, 18, 24);
-        assert!(!seq.contains('\n'), "no scroll when growing: {seq:?}");
-        assert!(seq.contains("\x1b[1;18r"), "re-carve: {seq:?}");
+    fn later_shrinks_lift_a_full_region_instead_of_painting_over_it() {
+        // Same shrink, but the region is full: the last line sits on the row
+        // being claimed. It must move up one, not vanish under the composer.
+        let mut prelude = String::from("\x1b[1;18r\x1b[18;1H");
+        for i in 1..=18 {
+            prelude.push_str(&format!("line {i}\r\n"));
+        }
+        let p = transition_screen(&prelude, 18, 17, 24);
+        assert_eq!(row(&p, 15), "line 18");
+        assert_eq!(row(&p, 16), "");
+        assert_eq!(p.screen().cursor_position(), (16, 0));
     }
 
     #[test]
-    fn forced_region_only_recarves() {
-        // A forced re-issue (after resize/picker) clears nothing and doesn't
-        // scroll — it just re-establishes the region.
-        let seq = region_transition(false, true, 18, 18, 24);
-        assert!(!seq.contains("\x1b[2K"), "no clears when forced: {seq:?}");
-        assert!(!seq.contains('\n'), "no scroll when forced: {seq:?}");
-        assert!(seq.contains("\x1b[1;18r\x1b[18;1H"), "re-carve: {seq:?}");
+    fn a_growing_region_clears_the_rows_it_takes_back() {
+        // The reserved area shrinks (region grows back, 17 -> 18): the row that
+        // rejoins the region held chrome and must come back blank.
+        let p = transition_screen("\x1b[1;17r\x1b[18;1Hchrome\x1b[3;1H", 17, 18, 24);
+        assert_eq!(row(&p, 17), "");
+        assert_eq!(p.screen().cursor_position(), (2, 0));
+        assert!(region_transition(17, 18, 24).contains("\x1b[1;18r"));
     }
 
     #[test]
@@ -501,10 +523,10 @@ mod tests {
         l.compression_line = Some("comp".into());
 
         let plan = l.pinned_plan();
-        // spacer(1) + fleet(0) + compression(1) + status(2) + divider(1) +
-        // queue(3 items + 2 frame) + composer(1) = 11 reserved rows.
-        assert_eq!(plan.rows(), 11);
-        assert_eq!(plan.region_bottom(24), 13);
+        // spacer(0) + fleet(0) + compression(1) + status(2) + divider(1) +
+        // queue(3 items + 2 frame) + composer(1) = 10 reserved rows.
+        assert_eq!(plan.rows(), 10);
+        assert_eq!(plan.region_bottom(24), 14);
 
         // The layout order is fixed; every section is present (possibly empty).
         let kinds: Vec<_> = plan.sections.iter().map(|s| s.kind).collect();
