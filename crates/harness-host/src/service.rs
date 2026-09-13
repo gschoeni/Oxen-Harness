@@ -354,6 +354,7 @@ impl SessionServiceBuilder {
             interjections: Mutex::new(HashMap::new()),
             fleet_spawners: StdMutex::new(HashMap::new()),
             fleet_cancels: Default::default(),
+            session_tasks: StdMutex::new(HashMap::new()),
             session_asides: StdMutex::new(HashMap::new()),
             dev_servers: harness_preview::DevServerManager::new(),
             crash_announced: StdMutex::new(HashMap::new()),
@@ -440,6 +441,10 @@ pub struct SessionService {
     /// client can stop one fleet without ending the turn around it (see
     /// [`Self::cancel_fleet`]). Registered by each session's `HostFleetSink`.
     fleet_cancels: crate::bridges::FleetCancels,
+    /// Each session's background-task registry, so a client can list and
+    /// kill tasks without the agent lock a running turn holds (see
+    /// [`Self::list_tasks`]). Mirrors `agents`; evicted in lockstep.
+    session_tasks: StdMutex<HashMap<String, Arc<harness_tools::tasks::BackgroundTasks>>>,
     /// Each session's aside queue (results that finish on their own — a
     /// `wait: false` fleet's report), kept across agent rebuilds. A resumed
     /// or model-switched session gets a fresh registry, and a background
@@ -608,7 +613,65 @@ impl SessionService {
             pending: self.pending_questions.clone(),
         })));
         tools.set_asides(self.asides_for(session, tools.asides()));
+        if let Some(tasks) = tools.background_tasks().cloned() {
+            self.watch_tasks(session, tasks);
+        }
         Ok((tools, self.store()?))
+    }
+
+    /// Keep a session's task registry reachable for [`Self::list_tasks`] and
+    /// forward every change as a `tasks.changed` event. The forwarder holds
+    /// only a weak handle, so it ends with the registry.
+    fn watch_tasks(&self, session: &str, tasks: Arc<harness_tools::tasks::BackgroundTasks>) {
+        self.session_tasks
+            .lock()
+            .expect("session tasks poisoned")
+            .insert(session.to_string(), tasks.clone());
+        let mut changes = tasks.changes();
+        let weak = Arc::downgrade(&tasks);
+        let sink = self.sink.clone();
+        let session = session.to_string();
+        tokio::spawn(async move {
+            while changes.changed().await.is_ok() {
+                let Some(tasks) = weak.upgrade() else { break };
+                let list = tasks.snapshot().await;
+                sink.emit(ProtocolEvent::TasksChanged {
+                    session: session.clone(),
+                    tasks: list.into_iter().map(translate::task_summary).collect(),
+                });
+            }
+        });
+    }
+
+    /// The session's background shell tasks, running and ended, oldest first.
+    pub async fn list_tasks(&self, session: &str) -> Vec<harness_protocol::TaskSummary> {
+        let tasks = self
+            .session_tasks
+            .lock()
+            .expect("session tasks poisoned")
+            .get(session)
+            .cloned();
+        match tasks {
+            Some(tasks) => tasks
+                .snapshot()
+                .await
+                .into_iter()
+                .map(translate::task_summary)
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Kill one of the session's background tasks (the whole process group).
+    pub async fn kill_task(&self, session: &str, id: u64) -> Result<String, String> {
+        let tasks = self
+            .session_tasks
+            .lock()
+            .expect("session tasks poisoned")
+            .get(session)
+            .cloned()
+            .ok_or_else(|| format!("no background tasks for session {session}"))?;
+        tasks.kill(id).await.map_err(|e| e.to_string())
     }
 
     /// The session's aside queue, registering `fresh` as it on first sight.
@@ -809,10 +872,10 @@ impl SessionService {
             harness_agent::FleetTool::new(spawner.clone(), sink.clone())
                 .with_asides(tools.asides()),
         );
-        tools.register_typed(harness_agent::MapAgentsTool::new(
-            spawner.clone(),
-            sink.clone(),
-        ));
+        tools.register_typed(
+            harness_agent::MapAgentsTool::new(spawner.clone(), sink.clone())
+                .with_asides(tools.asides()),
+        );
         tools.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
         tools.register_typed(harness_agent::ReadAgentTool::new(spawner.clone()));
         tools.register_typed(harness_agent::AskModelTool::new(spawner.clone()));
@@ -995,6 +1058,10 @@ impl SessionService {
             .lock()
             .expect("fleet spawners poisoned")
             .retain(|id, _| kept.contains(id));
+        self.session_tasks
+            .lock()
+            .expect("session tasks poisoned")
+            .retain(|id, _| kept.contains(id));
     }
 
     /// Register an agent under its session id, make it the current chat, then
@@ -1171,6 +1238,10 @@ impl SessionService {
         self.fleet_spawners
             .lock()
             .expect("fleet spawners poisoned")
+            .remove(id);
+        self.session_tasks
+            .lock()
+            .expect("session tasks poisoned")
             .remove(id);
         let mut current = self.current.lock().await;
         if current.as_deref() == Some(id) {
