@@ -21,6 +21,7 @@
 //! and themed output through [`crate::theme::Ui`] — a command module should
 //! read as orchestration, not escape codes.
 
+pub(crate) mod agents;
 pub(crate) mod auth;
 pub(crate) mod compression;
 pub(crate) mod location;

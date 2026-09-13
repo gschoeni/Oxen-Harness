@@ -169,6 +169,45 @@ describe("FleetPanel", () => {
     expect(ipc.cancelAgent).toHaveBeenCalledWith("s1", "lane-1");
   });
 
+  it("finished agents are listed in a collapsed hub once a fleet ends", async () => {
+    ipc.listAgents.mockResolvedValue([
+      {
+        id: "lane-1",
+        label: "diff-scan",
+        fleet: "f1",
+        status: "done",
+        summary: "4 candidates",
+        tokens: 12_300,
+        rounds: 3,
+        elapsed_secs: 0,
+        created_at: 1,
+      },
+      {
+        id: "lane-2",
+        label: "callers",
+        fleet: "f1",
+        status: "failed",
+        summary: "rate limited",
+        tokens: 0,
+        rounds: 0,
+        elapsed_secs: 0,
+        created_at: 2,
+      },
+    ]);
+    render(<FleetPanel />);
+    started("f1");
+    act(() => useStore.getState().ingestFleetCompleted("s1", "f1"));
+    await vi.waitFor(() => {
+      expect(screen.getByText("2 finished agents")).toBeInTheDocument();
+    });
+    expect(ipc.listAgents).toHaveBeenCalledWith("s1");
+    // Collapsed until opened; then one row per lane with its verdict.
+    expect(screen.queryByText("4 candidates")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /finished agents/ }));
+    expect(screen.getByText("4 candidates")).toBeInTheDocument();
+    expect(screen.getByText(/failed — rate limited/)).toBeInTheDocument();
+  });
+
   it("stop asks the backend to cancel just that fleet", async () => {
     render(<FleetPanel />);
     started("f1");

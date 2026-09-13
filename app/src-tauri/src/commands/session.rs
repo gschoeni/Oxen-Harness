@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use harness_llm::{Attachment, ChatMessage};
-use harness_protocol::{SessionInfo, SessionView};
+use harness_protocol::{AgentSummary, SessionInfo, SessionView};
 use harness_store::{DailyUsage, HistoryStore, ModelUsage, SessionSummary};
 use serde::Serialize;
 use tauri::State;
@@ -28,6 +28,16 @@ pub(crate) async fn list_sessions(
     state: State<'_, AppState>,
 ) -> Result<Vec<SessionSummary>, String> {
     state.list_sessions()
+}
+
+/// Every subagent lane of a chat, running and finished, oldest first — the
+/// agents hub.
+#[tauri::command]
+pub(crate) fn list_agents(
+    state: State<'_, AppState>,
+    session: String,
+) -> Result<Vec<AgentSummary>, String> {
+    state.list_agents(&session)
 }
 
 /// Read a session's raw, persisted transcript (every message, verbatim — system

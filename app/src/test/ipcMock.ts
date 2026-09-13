@@ -28,6 +28,7 @@ import type {
   SessionView,
   Theme,
   ThemeSummary,
+  AgentSummary,
 } from "../lib/types";
 
 // ---- event plumbing --------------------------------------------------------
@@ -230,6 +231,7 @@ export const loadUiState = vi.fn(async () => null as Record<string, unknown> | n
 export const saveUiState = vi.fn(async (_state: Record<string, unknown>) => {});
 export const sessionInfo = vi.fn(async () => sampleSession);
 export const listSessions = vi.fn(async () => []);
+export const listAgents = vi.fn(async (): Promise<AgentSummary[]> => []);
 export const totalTokensUsed = vi.fn(async () => 0);
 export const totalCostUsd = vi.fn(async () => null as number | null);
 export const modelUsageBreakdown = vi.fn(async () => ({
@@ -526,6 +528,7 @@ export function resetIpc() {
   for (const k of Object.keys(handlers)) delete handlers[k];
   sessionInfo.mockReset().mockResolvedValue(sampleSession);
   listSessions.mockReset().mockResolvedValue([]);
+  listAgents.mockReset().mockResolvedValue([]);
   newSession.mockReset().mockResolvedValue({ ...sampleSession, session_id: "new-session-id" });
   resumeSession.mockReset().mockResolvedValue(emptyView);
   deleteSession.mockReset().mockResolvedValue(undefined);

@@ -352,6 +352,15 @@ pub(crate) fn set_fleet_session(session: &str) {
     }
 }
 
+/// The lanes running right now in this session's fleets (empty when the
+/// fleet tool isn't registered).
+pub(crate) fn live_lanes() -> Vec<harness_agent::LiveLaneInfo> {
+    FLEET_SPAWNER
+        .get()
+        .map(|spawner| spawner.tree().live())
+        .unwrap_or_default()
+}
+
 /// Let `fork: true` lanes start from this agent's conversation (see
 /// `Agent::set_fork_slot`). A no-op when the fleet tool isn't registered.
 pub(crate) fn install_fork_slot(agent: &mut harness_agent::Agent) {

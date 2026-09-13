@@ -64,6 +64,9 @@ pub enum Command {
     Plan(Option<String>),
     /// Show all-time input/output tokens and estimated spend by model.
     Usage,
+    /// The agents hub: `/agents` lists this chat's subagent lanes, running
+    /// and finished; `/agents read <n|id>` prints one's full reply.
+    Agents(Option<String>),
     /// Pick up an earlier trail in this workspace: `/resume` opens a picker
     /// over the recent sessions, `/resume <id-prefix>` jumps straight to one.
     Resume(Option<String>),
@@ -283,6 +286,13 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
         completer: ArgCompleter::None,
     },
     SlashSpec {
+        name: "/agents",
+        aliases: &["/lanes"],
+        description: "list this chat's subagents; `read <n>` prints one's reply",
+        build: Command::Agents,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
         name: "/preview",
         aliases: &["/browser"],
         description: "open the running app in your browser",
@@ -394,6 +404,11 @@ mod tests {
     #[test]
     fn usage_command() {
         assert_eq!(parse_command("/usage"), Command::Usage);
+        assert_eq!(parse_command("/agents"), Command::Agents(None));
+        assert_eq!(
+            parse_command("/lanes read 2"),
+            Command::Agents(Some("read 2".into()))
+        );
     }
 
     #[test]

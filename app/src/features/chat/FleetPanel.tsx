@@ -8,24 +8,82 @@
 // in the thread. A background (`wait: false`) fleet can overlap a later one,
 // so a chat may show more than one panel, oldest first.
 
-import { useEffect, useRef } from "react";
-import { Check, CircleDashed, Square, Users, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, ChevronRight, CircleDashed, Square, Users, X } from "lucide-react";
 import { compactTokens } from "../../lib/format";
 import { fleetsFor, useStore, type FleetLane, type FleetView } from "../../lib/store";
+import type { AgentSummary } from "../../lib/types";
 
 export function FleetPanel() {
   const sessionId = useStore((s) => s.session?.session_id);
   const fleets = useStore((s) => s.fleets);
+  const agents = useStore((s) => (s.session ? s.agents[s.session.session_id] : undefined));
+  const refreshAgents = useStore((s) => s.refreshAgents);
+  useEffect(() => {
+    if (sessionId) void refreshAgents(sessionId);
+  }, [sessionId, refreshAgents]);
   if (!sessionId) return null;
   const mine = fleetsFor(fleets, sessionId);
-  if (mine.length === 0) return null;
+  const finished = (agents ?? []).filter((a) => a.status !== "running");
+  if (mine.length === 0 && finished.length === 0) return null;
   return (
     <>
       {mine.map(([id, fleet]) => (
         <OneFleet key={id} id={id} fleet={fleet} />
       ))}
+      {finished.length > 0 && <AgentsHub agents={finished} />}
     </>
   );
+}
+
+/** The finished lanes of this chat: what each did, in a line, collapsed by
+ *  default so a chat with many agents stays readable. */
+function AgentsHub({ agents }: { agents: AgentSummary[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="fleet-panel agents-hub" role="region" aria-label="Finished agents">
+      <button
+        type="button"
+        className="fleet-panel-head agents-hub-toggle"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        <ChevronRight size={13} className={`agents-hub-chevron ${open ? "open" : ""}`} />
+        <span className="fleet-panel-title">
+          {agents.length} finished agent{agents.length === 1 ? "" : "s"}
+        </span>
+        <span className="fleet-panel-hint">{open ? "click to collapse" : "click to list"}</span>
+      </button>
+      {open && (
+        <div className="fleet-lanes">
+          {agents.map((agent) => (
+            <div key={agent.id} className="fleet-lane agents-hub-row" title={agent.id}>
+              <AgentGlyph status={agent.status} />
+              <span className="fleet-lane-name">{agent.label}</span>
+              <span className="fleet-lane-activity">
+                {agent.status === "failed" ? "failed — " : ""}
+                {agent.summary}
+              </span>
+              {agent.tokens > 0 && (
+                <span className="fleet-lane-tokens">{compactTokens(agent.tokens)}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentGlyph({ status }: { status: string }) {
+  switch (status) {
+    case "done":
+      return <Check size={12} className="fleet-glyph done" />;
+    case "failed":
+      return <X size={12} className="fleet-glyph failed" />;
+    default:
+      return <CircleDashed size={12} className="fleet-glyph queued" />;
+  }
 }
 
 function OneFleet({ id, fleet }: { id: string; fleet: FleetView }) {

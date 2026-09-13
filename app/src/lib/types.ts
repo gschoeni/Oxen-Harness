@@ -806,6 +806,22 @@ export interface CodeReviewProgressEvent {
   agents: string[];
 }
 
+/** One subagent lane of a chat, running or finished (the agents hub). */
+export interface AgentSummary {
+  /** The lane's id (its session id). */
+  id: string;
+  label: string;
+  fleet: string;
+  /** `running`, `done`, `partial`, `failed`, or `unknown`. */
+  status: string;
+  /** The reply's head, or the error, once finished. */
+  summary: string;
+  tokens: number;
+  rounds: number;
+  elapsed_secs: number;
+  created_at: number;
+}
+
 // ---- fleets (N parallel subagents: review fan-out or spawn_agents) ----------
 
 /** `fleet://started` — a fleet of parallel subagents is spinning up. `fleet`

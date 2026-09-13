@@ -29,6 +29,7 @@ import {
   cancelAgent,
   cancelFleet,
   cancelTurn,
+  listAgents,
   cancelDownload as cancelDownloadIpc,
   downloadModel as downloadModelIpc,
   configureOxenKey,
@@ -105,6 +106,7 @@ import type {
   PreviewEvent,
   PreviewStatus,
   RetryEvent,
+  AgentSummary,
 } from "./types";
 
 /** One model download the store is tracking — in flight (or failed), keyed by
@@ -371,6 +373,9 @@ interface AppState {
    *  background (`wait: false`) fleet can overlap a later one in one chat and
    *  the two must not share lanes. `fleetsFor` picks a chat's, in start order. */
   fleets: Record<string, FleetView | undefined>;
+  /** The agents hub: a chat's subagent lanes, running and finished, as last
+   *  fetched (refreshed when a fleet ends and when the panel mounts). */
+  agents: Record<string, AgentSummary[] | undefined>;
   /** Prompts queued while a session is mid-turn, sent in order as it frees up. */
   queues: Record<string, QueuedPrompt[]>;
   /** Documents the agent showed in the canvas, per session (ordered, by id). */
@@ -536,6 +541,8 @@ interface AppState {
   stopFleet: (session: string, fleet: string) => void;
   /** Stop one lane of a fleet; the rest of the fleet carries on. */
   stopLane: (session: string, lane: string) => void;
+  /** Re-fetch a chat's agents hub. */
+  refreshAgents: (session: string) => Promise<void>;
   /** Stop the current chat's in-flight turn, killing the model stream. */
   stop: () => void;
   /** Save the Oxen API key entered in a chat's inline auth prompt, then retry the
@@ -797,6 +804,7 @@ export const useStore = create<AppState>((set, get) => {
     runStatus: {},
     codeReview: {},
     fleets: {},
+    agents: {},
     queues: {},
     canvases: {},
     activeCanvas: {},
@@ -1474,13 +1482,25 @@ export const useStore = create<AppState>((set, get) => {
         return { fleets: { ...s.fleets, [e.fleet]: { ...fleet, lanes } } };
       }),
 
-    ingestFleetCompleted: (_session, id) =>
+    ingestFleetCompleted: (session, id) => {
       set((s) => {
         if (!s.fleets[id]) return {};
         const fleets = { ...s.fleets };
         delete fleets[id];
         return { fleets };
-      }),
+      });
+      // The lanes just settled: their records are the hub's rows now.
+      void get().refreshAgents(session);
+    },
+
+    refreshAgents: async (session) => {
+      try {
+        const rows = await listAgents(session);
+        set((s) => ({ agents: { ...s.agents, [session]: rows } }));
+      } catch {
+        // A hub that fails to load keeps whatever it showed.
+      }
+    },
 
     setFleetFocus: (id, index) =>
       set((s) => {

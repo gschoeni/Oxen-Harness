@@ -1243,6 +1243,25 @@
   flex: 1;
   min-width: 0;
 }
+/* The agents hub: finished lanes, collapsed under the live panel. */
+.agents-hub-toggle {
+  width: 100%;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.agents-hub-toggle:hover {
+  background: var(--surface-2);
+}
+.agents-hub-chevron {
+  transition: transform 120ms ease;
+}
+.agents-hub-chevron.open {
+  transform: rotate(90deg);
+}
+.agents-hub-row {
+  cursor: default;
+}
 /* Stop one lane; the rest of the fleet keeps going. */
 .fleet-lane-stop {
   flex-shrink: 0;

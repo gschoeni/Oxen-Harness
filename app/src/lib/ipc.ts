@@ -86,12 +86,16 @@ import type {
   PreviewEvent,
   PreviewPrefs,
   PreviewStatus,
+  AgentSummary,
 } from "./types";
 
 // ---- session / agent -------------------------------------------------------
 
 export const sessionInfo = () => invoke<SessionInfo>("session_info");
 export const listSessions = () => invoke<SessionSummary[]>("list_sessions");
+/** Every subagent lane of a chat, running and finished (the agents hub). */
+export const listAgents = (session: string) =>
+  invoke<AgentSummary[]>("list_agents", { session });
 /** All-time total tokens used across every stored session (a running grand total). */
 export const totalTokensUsed = () => invoke<number>("total_tokens_used");
 /** Estimated all-time Oxen cloud spend from recorded per-model usage and the

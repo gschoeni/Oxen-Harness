@@ -153,6 +153,7 @@ pub fn run() {
             commands::loops::run_loop,
             commands::session::session_info,
             commands::session::list_sessions,
+            commands::session::list_agents,
             commands::session::session_messages,
             commands::session::set_review_status,
             commands::session::set_review_status_many,
