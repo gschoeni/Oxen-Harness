@@ -16,6 +16,7 @@
 //!   (hosts refresh it per turn), so stopping the turn stops the fleet; the
 //!   child token also goes to the sink, so a host can stop *just the fleet*.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
@@ -52,9 +53,6 @@ pub struct FleetSpawner {
     /// The project root, so a fleet can cut worktrees from it. `None` (a
     /// spawner built without one) simply never isolates.
     workspace_root: StdMutex<Option<std::path::PathBuf>>,
-    /// Per-lane checkouts for the fleet currently running, indexed by lane.
-    /// Installed by the tool before `run_fleet` and cleared after.
-    lanes: StdMutex<Vec<std::sync::Arc<crate::worktree::LaneWorktree>>>,
     /// The client + config subagents are built from, updated in lockstep with
     /// the live agent via [`FleetSpawner::set_client`] / [`set_model`].
     endpoint: StdMutex<Endpoint>,
@@ -78,7 +76,6 @@ impl FleetSpawner {
         Self {
             tools,
             workspace_root: StdMutex::new(None),
-            lanes: StdMutex::new(Vec::new()),
             endpoint: StdMutex::new(Endpoint { client, config }),
             cancel: StdMutex::new(CancellationToken::new()),
             usage_store: None,
@@ -96,7 +93,10 @@ impl FleetSpawner {
     }
 
     /// Cut one detached worktree per lane, or `None` when the project isn't a
-    /// git repository (isolation is an upgrade, not a precondition).
+    /// git repository (isolation is an upgrade, not a precondition). The
+    /// lanes belong to the fleet run that opened them — the spawner keeps no
+    /// slot of its own, so two fleets in flight at once (a `wait: false`
+    /// fleet plus a foreground one) can't tear down each other's checkouts.
     fn open_lanes(
         &self,
         count: usize,
@@ -110,7 +110,6 @@ impl FleetSpawner {
             .into_iter()
             .map(std::sync::Arc::new)
             .collect();
-        *self.lanes.lock().expect("fleet lanes poisoned") = lanes.clone();
         Some(lanes)
     }
 
@@ -120,12 +119,6 @@ impl FleetSpawner {
             .lock()
             .expect("fleet workspace poisoned")
             .clone()
-    }
-
-    /// Release the current fleet's worktrees (removing any the caller didn't
-    /// keep a handle to).
-    fn close_lanes(&self) {
-        self.lanes.lock().expect("fleet lanes poisoned").clear();
     }
 
     /// Attach the host's persistent usage ledger to future fleet agents.
@@ -172,7 +165,12 @@ impl FleetSpawner {
 
     /// One detached subagent: in-memory store, the current client/config, and
     /// the subagent-narrowed tool set (no recursion, no interactive tools).
-    fn build_agent(&self, index: usize) -> Result<Agent, AgentError> {
+    /// `lane` is the isolated checkout this subagent works in, when the fleet
+    /// opened one for it.
+    fn build_agent(
+        &self,
+        lane: Option<std::sync::Arc<crate::worktree::LaneWorktree>>,
+    ) -> Result<Agent, AgentError> {
         let (client, mut config) = {
             let endpoint = self.endpoint.lock().expect("fleet endpoint poisoned");
             (endpoint.client.clone(), endpoint.config.clone())
@@ -194,12 +192,6 @@ impl FleetSpawner {
             .to_string();
         // An isolated lane works in its own checkout, so its file and shell
         // tools must point there rather than at the shared project.
-        let lane = self
-            .lanes
-            .lock()
-            .expect("fleet lanes poisoned")
-            .get(index)
-            .cloned();
         let tools = match (&lane, self.root()) {
             // An isolated lane works in its own checkout, so its file and
             // shell tools point there, with file state of its own (nothing
@@ -357,6 +349,10 @@ pub struct FleetArgs {
 pub struct FleetTool {
     spawner: Arc<FleetSpawner>,
     sink: Arc<dyn FleetSink>,
+    /// How many fleets this tool has in flight right now — a `wait: false`
+    /// fleet can overlap a later call. The sink's lanes display is torn down
+    /// when the *last* of them ends, not when the first does.
+    live: Arc<AtomicUsize>,
     /// Where a `wait: false` fleet leaves its results for the agent to
     /// deliver. Without one, every fleet waits.
     asides: Option<harness_tools::Asides>,
@@ -367,6 +363,7 @@ impl FleetTool {
         Self {
             spawner,
             sink,
+            live: Arc::new(AtomicUsize::new(0)),
             asides: None,
         }
     }
@@ -379,23 +376,35 @@ impl FleetTool {
     }
 }
 
-/// Calls `finished` exactly once — on drop — so the host's lanes display is
-/// torn down even when the turn's future is dropped mid-fleet (CLI Ctrl-C).
-struct SinkGuard(Arc<dyn FleetSink>);
+/// One fleet's hold on the host's lanes display. Created around `started`,
+/// it counts the fleet as live; dropping it — on every exit path, including a
+/// turn future dropped mid-fleet (CLI Ctrl-C) — counts it out and calls
+/// `finished` only when no other fleet of this tool is still running, so a
+/// background fleet finishing first can't close the panel under a foreground
+/// one (or vice versa).
+struct SinkGuard {
+    sink: Arc<dyn FleetSink>,
+    live: Arc<AtomicUsize>,
+}
 
-impl Drop for SinkGuard {
-    fn drop(&mut self) {
-        self.0.finished();
+impl SinkGuard {
+    fn open(
+        sink: Arc<dyn FleetSink>,
+        live: Arc<AtomicUsize>,
+        labels: &[String],
+        cancel: CancellationToken,
+    ) -> Self {
+        live.fetch_add(1, Ordering::SeqCst);
+        sink.started(labels, cancel);
+        Self { sink, live }
     }
 }
 
-/// Releases the spawner's owning references to isolated lane worktrees on
-/// every exit path, including cancellation that drops the tool future.
-struct LaneGuard(Arc<FleetSpawner>);
-
-impl Drop for LaneGuard {
+impl Drop for SinkGuard {
     fn drop(&mut self) {
-        self.0.close_lanes();
+        if self.live.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.sink.finished();
+        }
     }
 }
 
@@ -438,6 +447,7 @@ impl TypedTool for FleetTool {
             if let Some(asides) = self.asides.clone() {
                 let spawner = self.spawner.clone();
                 let sink = self.sink.clone();
+                let live = self.live.clone();
                 let count = labels.len();
                 let names = labels.join(", ");
                 let started = format!(
@@ -446,7 +456,7 @@ impl TypedTool for FleetTool {
                      keep working on other things, do not poll."
                 );
                 tokio::spawn(async move {
-                    let body = match Self::execute(spawner, sink, args).await {
+                    let body = match Self::execute(spawner, sink, live, args).await {
                         Ok(text) => text,
                         Err(e) => format!("the fleet failed: {e}"),
                     };
@@ -459,7 +469,13 @@ impl TypedTool for FleetTool {
                 return Ok(started);
             }
         }
-        Self::execute(self.spawner.clone(), self.sink.clone(), args).await
+        Self::execute(
+            self.spawner.clone(),
+            self.sink.clone(),
+            self.live.clone(),
+            args,
+        )
+        .await
     }
 }
 
@@ -468,6 +484,7 @@ impl FleetTool {
     async fn execute(
         spawner: Arc<FleetSpawner>,
         sink: Arc<dyn FleetSink>,
+        live: Arc<AtomicUsize>,
         args: FleetArgs,
     ) -> Result<String, ToolError> {
         let concurrency = args
@@ -485,17 +502,19 @@ impl FleetTool {
         // Editing lanes each get their own checkout. Falling back to the
         // shared workspace when git can't oblige keeps the fleet working, so
         // the note below says which way it went — silently sharing when the
-        // model asked for isolation would be the dangerous outcome.
+        // model asked for isolation would be the dangerous outcome. This run
+        // owns its lanes: dropping `lanes` (normal return or a cancelled,
+        // dropped future) removes the worktrees, and no other fleet can reach
+        // them.
         let isolated = args.isolate_edits.unwrap_or(false);
         let lanes = isolated.then(|| spawner.open_lanes(labels.len())).flatten();
-        let lane_guard = lanes.as_ref().map(|_| LaneGuard(spawner.clone()));
 
         let cancel = spawner.run_token();
-        sink.started(&labels, cancel.clone());
-        let guard = SinkGuard(sink.clone());
+        let guard = SinkGuard::open(sink.clone(), live, &labels, cancel.clone());
 
+        let lane_for_build = lanes.clone().unwrap_or_default();
         let outcomes = run_fleet(
-            move |index| spawner.build_agent(index),
+            move |index| spawner.build_agent(lane_for_build.get(index).cloned()),
             tasks,
             concurrency,
             cancel.clone(),
@@ -522,7 +541,7 @@ impl FleetTool {
         if let Some(lanes) = &lanes {
             out.push_str(&patches_section(lanes, &labels));
         }
-        drop(lane_guard);
+        drop(lanes);
         Ok(out.trim_end().to_string())
     }
 }
@@ -599,7 +618,7 @@ mod tests {
                 ..AgentConfig::default()
             },
         );
-        let sub = sp.build_agent(0).unwrap();
+        let sub = sp.build_agent(None).unwrap();
         let names: Vec<_> = sub
             .tool_definitions()
             .iter()
@@ -709,7 +728,12 @@ mod tests {
         assert!(section.contains("from lane 0"), "{section}");
         assert!(section.contains("from lane 1"), "{section}");
         assert!(section.contains("NOT in the project"), "{section}");
-        spawner.close_lanes();
+        let paths: Vec<_> = lanes.iter().map(|l| l.path().to_path_buf()).collect();
+        drop(lanes);
+        assert!(
+            paths.iter().all(|p| !p.exists()),
+            "dropping the lanes removes them"
+        );
     }
 
     #[test]
@@ -728,7 +752,10 @@ mod tests {
     }
 
     #[test]
-    fn lane_guard_releases_worktrees_when_a_run_is_dropped() {
+    fn each_fleet_run_owns_its_own_lanes() {
+        // Two fleets in flight at once (a `wait: false` fleet overlapping a
+        // foreground one) open lanes independently; finishing one must leave
+        // the other's checkouts standing.
         let project = git_project();
         let spawner = Arc::new(
             FleetSpawner::new(
@@ -738,18 +765,55 @@ mod tests {
             )
             .with_workspace(project.path()),
         );
-        let lanes = spawner.open_lanes(1).expect("worktree");
-        let path = lanes[0].path().to_path_buf();
-        let guard = LaneGuard(spawner.clone());
+        let first = spawner.open_lanes(1).expect("worktree");
+        let second = spawner.open_lanes(1).expect("worktree");
+        let first_path = first[0].path().to_path_buf();
+        let second_path = second[0].path().to_path_buf();
+        assert_ne!(first_path, second_path);
 
-        drop(lanes);
+        drop(first);
+        assert!(!first_path.exists(), "a finished run releases its own lane");
         assert!(
-            path.exists(),
-            "the spawner still owns the lane until the run guard drops"
+            second_path.exists(),
+            "…without touching the lanes of a fleet still running"
         );
-        drop(guard);
+        drop(second);
+        assert!(!second_path.exists());
+    }
 
-        assert!(!path.exists(), "dropping the run must release its lane");
+    #[test]
+    fn the_lanes_display_closes_when_the_last_live_fleet_ends() {
+        let sink = Arc::new(RecordingSink::default());
+        let live = Arc::new(AtomicUsize::new(0));
+        let labels_a = vec!["a".to_string()];
+        let labels_b = vec!["b".to_string()];
+
+        let first = SinkGuard::open(
+            sink.clone(),
+            live.clone(),
+            &labels_a,
+            CancellationToken::new(),
+        );
+        let second = SinkGuard::open(
+            sink.clone(),
+            live.clone(),
+            &labels_b,
+            CancellationToken::new(),
+        );
+        assert_eq!(live.load(Ordering::SeqCst), 2);
+
+        // The background fleet finishing first must not tear the panel down
+        // under the fleet still running.
+        drop(first);
+        assert!(
+            !sink.calls.lock().unwrap().contains(&"finished".to_string()),
+            "{:?}",
+            sink.calls.lock().unwrap()
+        );
+        drop(second);
+        let calls = sink.calls.lock().unwrap();
+        assert_eq!(calls.iter().filter(|c| *c == "finished").count(), 1);
+        assert_eq!(calls.last().unwrap(), "finished");
     }
 
     #[tokio::test]

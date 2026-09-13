@@ -593,6 +593,15 @@ impl ToolRegistry {
         self.asides.clone()
     }
 
+    /// Install a shared aside queue — a host that rebuilds a session's
+    /// registry (resuming it, switching its model) passes the session's
+    /// existing queue in, so a `wait: false` fleet started on the old
+    /// registry still reaches the model instead of pushing into a queue
+    /// nothing drains.
+    pub fn set_asides(&mut self, asides: Asides) {
+        self.asides = asides;
+    }
+
     /// Subscribe to live output from running tools (see [`ToolProgress`]).
     /// `None` unless this registry was built with the default tool set.
     pub fn progress(&self) -> Option<tokio::sync::broadcast::Receiver<ToolProgress>> {

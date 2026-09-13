@@ -385,6 +385,13 @@ pub struct SessionService {
     /// Each session agent's `spawn_agents` spawner, so a turn can hand it the
     /// turn's stop signal. Std mutex: touched briefly, from sync builders too.
     pub fleet_spawners: StdMutex<HashMap<String, Arc<harness_agent::FleetSpawner>>>,
+    /// Each session's aside queue (results that finish on their own — a
+    /// `wait: false` fleet's report), kept across agent rebuilds. A resumed
+    /// or model-switched session gets a fresh registry, and a background
+    /// fleet started on the old one keeps pushing into the queue it was
+    /// built with; sharing the queue per session is what lets that report
+    /// still reach the model.
+    session_asides: StdMutex<HashMap<String, harness_tools::Asides>>,
     /// Dev servers the agent started for live preview, at most one per
     /// session. NOT evicted with the agents map — a background chat's server
     /// keeps serving until stopped or the host exits.
@@ -545,7 +552,18 @@ impl SessionService {
             session: session.to_string(),
             pending: self.pending_questions.clone(),
         })));
+        tools.set_asides(self.asides_for(session, tools.asides()));
         Ok((tools, self.store()?))
+    }
+
+    /// The session's aside queue, registering `fresh` as it on first sight.
+    fn asides_for(&self, session: &str, fresh: harness_tools::Asides) -> harness_tools::Asides {
+        self.session_asides
+            .lock()
+            .expect("session asides poisoned")
+            .entry(session.to_string())
+            .or_insert(fresh)
+            .clone()
     }
 
     /// Complete a session's tool registry and derive its run config: the
