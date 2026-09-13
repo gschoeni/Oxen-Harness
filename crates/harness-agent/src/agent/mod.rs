@@ -58,6 +58,7 @@ use self::compression::setup_compression;
 /// fleet spawner can't drift on the policy.
 pub(crate) fn subagent_tools(mut tools: ToolRegistry) -> ToolRegistry {
     tools.remove(crate::fleet_tool::FLEET_TOOL);
+    tools.remove(crate::map_tool::MAP_AGENTS_TOOL);
     tools.remove(crate::lane_tools::SEND_TO_AGENT_TOOL);
     tools.remove(crate::lane_tools::READ_AGENT_TOOL);
     tools.remove(crate::ask_tool::ASK_MODEL_TOOL);
@@ -90,6 +91,10 @@ pub struct Agent {
     /// Whether the most recent turn ended because a budget (session or
     /// tree) was spent rather than because the model finished.
     stopped_by_budget: bool,
+    /// Where a snapshot of the transcript goes right before a
+    /// `spawn_agents` call runs, so a `fork: true` lane can inherit it
+    /// (see [`Agent::set_fork_slot`]).
+    fork_slot: Option<crate::fleet_tool::ForkSlot>,
     /// Where attachments are persisted + resolved, derived from
     /// [`AgentConfig::attachment_root`]. `None` inlines attachments instead.
     attachments: Option<AttachmentStore>,
@@ -223,6 +228,7 @@ impl Agent {
             usage_session: None,
             rounds_last_turn: 0,
             stopped_by_budget: false,
+            fork_slot: None,
             attachments,
             tokens_used: 0,
             prompt_tokens_used: 0,
@@ -285,6 +291,7 @@ impl Agent {
             usage_session: None,
             rounds_last_turn: 0,
             stopped_by_budget: false,
+            fork_slot: None,
             attachments,
             tokens_used,
             // The split input/output counters price only tokens we actually
@@ -631,6 +638,27 @@ impl Agent {
     /// Whether the most recent turn was cut short by a spent budget.
     pub fn stopped_by_budget(&self) -> bool {
         self.stopped_by_budget
+    }
+
+    /// Share the session's fork slot (from its `FleetSpawner`) so lanes
+    /// spawned with `fork: true` start from this conversation.
+    pub fn set_fork_slot(&mut self, slot: crate::fleet_tool::ForkSlot) {
+        self.fork_slot = Some(slot);
+    }
+
+    /// Publish the transcript for a fork if a spawn is about to run. One
+    /// clone per fleet call, never per tool wave.
+    pub(crate) fn publish_fork_source(&self, calls: &[harness_llm::types::ToolCall]) {
+        let Some(slot) = &self.fork_slot else {
+            return;
+        };
+        if !calls.iter().any(|call| {
+            call.function.name == crate::fleet_tool::FLEET_TOOL
+                && call.function.arguments.contains("\"fork\"")
+        }) {
+            return;
+        }
+        *slot.lock().expect("fork slot poisoned") = Some(Arc::new(self.messages.clone()));
     }
 
     pub(crate) fn disable_transcript_persistence(&mut self) {

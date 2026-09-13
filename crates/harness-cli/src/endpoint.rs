@@ -332,6 +332,10 @@ pub(crate) fn register_fleet_tool(
             // A `wait: false` fleet leaves its report here for the next round.
             .with_asides(tools.asides()),
     );
+    tools.register_typed(harness_agent::MapAgentsTool::new(
+        spawner.clone(),
+        sink.clone(),
+    ));
     tools.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
     tools.register_typed(harness_agent::ReadAgentTool::new(spawner.clone()));
     tools.register_typed(harness_agent::AskModelTool::new(spawner));
@@ -345,6 +349,14 @@ pub(crate) fn register_fleet_tool(
 pub(crate) fn set_fleet_session(session: &str) {
     if let Some(spawner) = FLEET_SPAWNER.get() {
         spawner.set_session(session);
+    }
+}
+
+/// Let `fork: true` lanes start from this agent's conversation (see
+/// `Agent::set_fork_slot`). A no-op when the fleet tool isn't registered.
+pub(crate) fn install_fork_slot(agent: &mut harness_agent::Agent) {
+    if let Some(spawner) = FLEET_SPAWNER.get() {
+        agent.set_fork_slot(spawner.fork_slot());
     }
 }
 

@@ -334,6 +334,7 @@ async fn main() -> Result<()> {
             )?;
             agent.set_rules(endpoint::stream_rules(&root));
             endpoint::set_fleet_session(session_id);
+            endpoint::install_fork_slot(&mut agent);
             Ok(agent)
         }
     };
@@ -362,8 +363,10 @@ async fn main() -> Result<()> {
         }
     };
     // The fleet tool registered before the session existed; now that lanes
-    // have a session to charge, tell the spawner which.
+    // have a session to charge, tell the spawner which — and let forked
+    // lanes start from this agent's conversation.
     endpoint::set_fleet_session(&session);
+    endpoint::install_fork_slot(&mut agent);
 
     // `-p/--print`: one turn, straight to stdout, then out — before the banner,
     // the store scans, and the exit review, none of which a script wants.

@@ -32,6 +32,7 @@ use crate::config::AgentConfig;
 use crate::error::AgentError;
 use crate::fleet::{run_fleet, FleetLimits, FleetSink, SpawnAgent, SubagentTask};
 use crate::lane::{lane_budget, render_results, AgentTree, LiveLane, SubagentResult};
+use harness_llm::types::ChatMessage;
 
 /// Stable identifier the model uses to call the fleet tool.
 pub const FLEET_TOOL: &str = "spawn_agents";
@@ -91,7 +92,19 @@ pub struct FleetSpawner {
     /// The host's lanes display, once a `FleetTool` is built on this
     /// spawner; a lane that may spawn its own fleet renders through it too.
     sink: StdMutex<Option<Arc<dyn FleetSink>>>,
+    /// `map_agents` rows already answered this session, by
+    /// (item, task, schema) — a stopped run re-issued only runs what's left.
+    memo: StdMutex<std::collections::HashMap<u64, SubagentResult>>,
+    /// The parent's transcript as of its latest `spawn_agents` call, for
+    /// lanes spawned with `fork: true` (see [`ForkSlot`]).
+    fork: ForkSlot,
 }
+
+/// Where a session's agent publishes its transcript right before a
+/// `spawn_agents` call, so a `fork: true` lane can start from it: a fork
+/// inherits everything the parent has read and decided so far, which a
+/// fresh lane would have to be told. Shared by the agent and its spawner.
+pub type ForkSlot = Arc<StdMutex<Option<Arc<Vec<ChatMessage>>>>>;
 
 /// The mutable half of a [`FleetSpawner`]: what subagents inherit that can
 /// change over a session's life.
@@ -117,7 +130,35 @@ impl FleetSpawner {
             tree: Arc::default(),
             live: Arc::default(),
             sink: StdMutex::new(None),
+            memo: StdMutex::new(std::collections::HashMap::new()),
+            fork: Arc::default(),
         }
+    }
+
+    /// The slot the session's agent publishes fork snapshots into.
+    pub fn fork_slot(&self) -> ForkSlot {
+        self.fork.clone()
+    }
+
+    /// The transcript a fork starts from, if the parent has published one.
+    fn fork_source(&self) -> Option<Arc<Vec<ChatMessage>>> {
+        self.fork.lock().expect("fork slot poisoned").clone()
+    }
+
+    /// A finished `map_agents` row under this key, if one was memoized.
+    pub(crate) fn memo_get(&self, key: u64) -> Option<SubagentResult> {
+        self.memo
+            .lock()
+            .expect("fleet memo poisoned")
+            .get(&key)
+            .cloned()
+    }
+
+    pub(crate) fn memo_put(&self, key: u64, result: SubagentResult) {
+        self.memo
+            .lock()
+            .expect("fleet memo poisoned")
+            .insert(key, result);
     }
 
     /// The registry's overflow store — where parked content lives.
@@ -206,6 +247,10 @@ impl FleetSpawner {
         tools.register_typed(
             FleetTool::new(child.clone(), sink.clone()).with_asides(tools.asides()),
         );
+        tools.register_typed(crate::map_tool::MapAgentsTool::new(
+            child.clone(),
+            sink.clone(),
+        ));
         tools.register_typed(crate::lane_tools::SendToAgentTool::new(child.clone(), sink));
         tools.register_typed(crate::lane_tools::ReadAgentTool::new(child));
     }
@@ -354,6 +399,21 @@ impl FleetSpawner {
         lane: Option<std::sync::Arc<crate::worktree::LaneWorktree>>,
         cancel: CancellationToken,
     ) -> Result<Agent, AgentError> {
+        self.build_agent_with(label, fleet, lane, cancel, false)
+    }
+
+    /// [`Self::build_agent`], optionally as a fork: the lane starts from the
+    /// parent's published transcript (its system prompt made a lane's, the
+    /// trail mandate gone and the lane appendix added) instead of a fresh
+    /// context.
+    pub(crate) fn build_agent_with(
+        &self,
+        label: &str,
+        fleet: &str,
+        lane: Option<std::sync::Arc<crate::worktree::LaneWorktree>>,
+        cancel: CancellationToken,
+        fork: bool,
+    ) -> Result<Agent, AgentError> {
         // Everything a lane inherits differently from its parent — model
         // role, gate, round budget, attachments, prompt — is decided in one
         // place, shared with `Agent::side_agent`.
@@ -407,10 +467,39 @@ impl FleetSpawner {
             (Some(store), Some(_)) => (store.clone(), true),
             _ => (Arc::new(HistoryStore::open_in_memory()?), false),
         };
+        // A fork with nothing to fork from is refused before any session row
+        // exists for it.
+        let source = match fork {
+            true => Some(self.fork_source().ok_or_else(|| {
+                AgentError::Tool(ToolError::Execution(
+                    "fork: true needs a conversation to fork from, and none was published for \
+                     this call"
+                        .into(),
+                ))
+            })?),
+            false => None,
+        };
         let session = store.create_session(&meta)?;
         let mut tools = crate::agent::subagent_tools(tools);
         self.add_nested_tools(&mut tools, &config, &session, &cancel);
-        let mut agent = Agent::new(client, tools, store, session, config)?;
+        let mut agent = if let Some(source) = source {
+            // The parent's messages become the lane's transcript, with the
+            // parent's system prompt rewritten the way `for_subagent` does.
+            for (index, message) in source.iter().enumerate() {
+                if index == 0 && message.role == "system" {
+                    let prompt = config
+                        .system_prompt
+                        .clone()
+                        .unwrap_or_else(|| message.content_text().unwrap_or_default());
+                    store.append_message(&session, &ChatMessage::system(prompt))?;
+                } else {
+                    store.append_message(&session, message)?;
+                }
+            }
+            Agent::resume_from_store(client, tools, store, session, config)?
+        } else {
+            Agent::new(client, tools, store, session, config)?
+        };
         if !persisted {
             agent.disable_transcript_persistence();
             if let Some(store) = &self.store {
@@ -505,6 +594,19 @@ impl FleetSpawner {
     ) -> Result<(Vec<SubagentResult>, bool), ToolError> {
         let labels: Vec<String> = tasks.iter().map(|t| t.label.clone()).collect();
         let cancel = self.run_token();
+        let (_, config) = self.endpoint_snapshot();
+        crate::errlog::record(
+            config.error_log.as_deref(),
+            "fleet_started",
+            serde_json::json!({
+                "session": self.session(),
+                "fleet": fleet,
+                "depth": config.depth,
+                "lanes": labels,
+                "tree": self.tree_budget().usage(),
+            }),
+        );
+        let started = std::time::Instant::now();
         let guard = SinkGuard::open(
             sink.clone(),
             self.live.clone(),
@@ -525,10 +627,34 @@ impl FleetSpawner {
         // `retrieve_original` (or `read_agent`) can still fetch it.
         let budget = lane_budget(outcomes.len());
         let spill = self.tools.overflow_store();
-        let results = outcomes
+        let results: Vec<SubagentResult> = outcomes
             .iter()
             .map(|o| SubagentResult::from_outcome(o, fleet, budget, spill.map(Arc::as_ref)))
             .collect();
+        // The trajectory: one line per fleet with every lane's verdict and
+        // spend, beside the turn's other developer-log events, so a tree
+        // can be reconstructed after the fact (`jq 'select(.fleet == …)'`).
+        crate::errlog::record(
+            config.error_log.as_deref(),
+            "fleet_finished",
+            serde_json::json!({
+                "session": self.session(),
+                "fleet": fleet,
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "cancelled": cancel.is_cancelled(),
+                "lanes": results.iter().map(|r| serde_json::json!({
+                    "id": r.id,
+                    "label": r.label,
+                    "status": r.status,
+                    "failure": r.failure,
+                    "stop": r.stop,
+                    "tokens": r.tokens,
+                    "rounds": r.rounds,
+                    "denied": r.denied.len(),
+                })).collect::<Vec<_>>(),
+                "tree": self.tree_budget().usage(),
+            }),
+        );
         Ok((results, cancel.is_cancelled()))
     }
 
@@ -706,6 +832,13 @@ pub struct FleetAgentSpec {
     /// never paste it.
     #[serde(default)]
     pub inputs: Option<Vec<String>>,
+    /// Set true to start this agent from a copy of THIS conversation instead
+    /// of a fresh context: it knows everything read and decided so far, so
+    /// the prompt can be short ("try the other approach", "continue this
+    /// investigation in src/"). Costs a full copy of the context per agent —
+    /// use for work that depends on the conversation, not for reading.
+    #[serde(default)]
+    pub fork: Option<bool>,
 }
 
 /// Arguments for `spawn_agents`.
@@ -815,7 +948,9 @@ impl TypedTool for FleetTool {
          searching so your own context stays for decisions; the agents of one turn share a \
          budget, so prefer a few substantial tasks over many tiny ones. Parked content (a \
          <<ccr:HASH>> handle from an oversized result or a retrieve_original chunks listing) \
-         goes in an agent's `inputs`, never pasted into its prompt."
+         goes in an agent's `inputs`, never pasted into its prompt. An agent with `fork: \
+         true` starts from a copy of this conversation instead — for work that depends on \
+         what has been read and decided here."
     }
 
     /// A fleet edits, runs commands, and returns patches: it runs alone in
@@ -885,6 +1020,11 @@ impl FleetTool {
             .clamp(1, MAX_FLEET_AGENTS);
 
         let labels: Vec<String> = args.agents.iter().map(|a| a.name.clone()).collect();
+        let forks: Vec<bool> = args
+            .agents
+            .iter()
+            .map(|a| a.fork.unwrap_or(false))
+            .collect();
         let spill = spawner.tools.overflow_store().cloned();
         let tasks: Vec<SubagentTask> = args
             .agents
@@ -925,11 +1065,12 @@ impl FleetTool {
                     let spawner = spawner.clone();
                     let fleet = fleet.clone();
                     move |index: usize, cancel: CancellationToken| {
-                        spawner.build_agent(
+                        spawner.build_agent_with(
                             &labels[index],
                             &fleet,
                             lane_for_build.get(index).cloned(),
                             cancel,
+                            forks[index],
                         )
                     }
                 },
@@ -1673,6 +1814,101 @@ mod tests {
             "{section}"
         );
         assert!(section.chars().count() < 800, "{}", section.chars().count());
+    }
+
+    #[tokio::test]
+    async fn a_forked_lane_starts_from_the_parents_conversation() {
+        let mut server = mockito::Server::new_async().await;
+        // The lane's request carries what the parent already discussed.
+        let forked = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("PARENT-CONTEXT-MARKER".into()),
+                mockito::Matcher::Regex("try the other approach".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("continued from where you were"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let parent = store.create_session(&SessionMeta::default()).unwrap();
+        let sp = Arc::new(
+            FleetSpawner::new(
+                OxenClient::new(server.url(), "k", "claude-opus-4-8"),
+                ToolRegistry::new(),
+                AgentConfig {
+                    system_prompt: Some(crate::prompt::default_system_prompt(false)),
+                    ..AgentConfig::default()
+                },
+            )
+            .with_store(store.clone())
+            .with_session(parent.clone()),
+        );
+        let tool = FleetTool::new(sp.clone(), Arc::new(RecordingSink::default()));
+
+        // Without a published conversation a fork is refused, not silently fresh.
+        let err = tool
+            .invoke(serde_json::json!({
+                "agents": [{ "name": "twin", "prompt": "try the other approach", "fork": true }]
+            }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("fork: true needs a conversation"),
+            "{err}"
+        );
+
+        // The parent publishes its transcript as the call runs (the agent
+        // does this itself right before a spawn_agents wave).
+        let mut parent_agent = Agent::new(
+            OxenClient::new(server.url(), "k", "claude-opus-4-8"),
+            ToolRegistry::new(),
+            store.clone(),
+            parent.clone(),
+            AgentConfig {
+                system_prompt: Some(crate::prompt::default_system_prompt(false)),
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        parent_agent.set_fork_slot(sp.fork_slot());
+        parent_agent
+            .inject_exchange("we settled on PARENT-CONTEXT-MARKER", "noted")
+            .unwrap();
+        parent_agent.publish_fork_source(&[harness_llm::types::ToolCall {
+            id: "c".into(),
+            kind: "function".into(),
+            function: harness_llm::types::FunctionCall {
+                name: FLEET_TOOL.into(),
+                arguments: r#"{"agents":[],"fork":true}"#.into(),
+            },
+        }]);
+
+        let out = tool
+            .invoke(serde_json::json!({
+                "agents": [{ "name": "twin", "prompt": "try the other approach", "fork": true }]
+            }))
+            .await
+            .unwrap();
+        forked.assert_async().await;
+        assert!(out.contains("continued from where you were"), "{out}");
+
+        // The fork's transcript is the parent's, with a lane's system prompt.
+        let lanes = store.lanes_of(&parent).unwrap();
+        assert_eq!(lanes.len(), 1);
+        let rows = store.messages(&lanes[0].id).unwrap();
+        let system = rows[0]["content"].as_str().unwrap_or_default();
+        assert!(
+            !system.contains("update_trail"),
+            "no trail mandate in a lane"
+        );
+        assert!(system.contains("You are a subagent"));
+        assert!(rows.iter().any(|r| r["content"]
+            .as_str()
+            .is_some_and(|c| c.contains("PARENT-CONTEXT-MARKER"))));
     }
 
     #[tokio::test]

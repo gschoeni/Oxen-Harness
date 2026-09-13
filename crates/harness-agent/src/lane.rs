@@ -160,6 +160,45 @@ impl SubagentResult {
         }
     }
 
+    /// A row for a tool-less leaf call (`map_agents` with `leaf`): no lane
+    /// session, one round, the answer as the summary.
+    pub fn leaf(label: String, text: String) -> Self {
+        Self {
+            id: String::new(),
+            fleet: String::new(),
+            label,
+            status: LaneStatus::Done,
+            failure: None,
+            stop: None,
+            summary: text.trim().to_string(),
+            output: None,
+            structured: None,
+            patch: None,
+            tokens: 0,
+            rounds: 1,
+            denied: Vec::new(),
+        }
+    }
+
+    /// A failed row with no lane behind it.
+    pub fn failed(label: String, error: String) -> Self {
+        Self {
+            id: String::new(),
+            fleet: String::new(),
+            label,
+            status: LaneStatus::Failed,
+            failure: Some(FailureKind::Provider),
+            stop: None,
+            summary: error,
+            output: None,
+            structured: None,
+            patch: None,
+            tokens: 0,
+            rounds: 0,
+            denied: Vec::new(),
+        }
+    }
+
     /// The summary as one short line, for lists and hubs.
     pub fn brief(&self) -> String {
         harness_core::text::ellipsize(&harness_core::text::collapse_ws(&self.summary), 200)

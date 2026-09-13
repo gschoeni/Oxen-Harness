@@ -729,6 +729,7 @@ impl Agent {
             );
         }
 
+        self.publish_fork_source(calls);
         let waves = super::tools::plan_waves(calls, |name| self.concurrency_of(name));
         let mut results: Vec<Option<String>> = (0..calls.len()).map(|_| None).collect();
         let mut prepared: Vec<Option<super::tools::PreparedCall>> =

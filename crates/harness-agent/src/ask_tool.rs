@@ -26,7 +26,7 @@ pub const ASK_MODEL_TOOL: &str = "ask_model";
 pub const MAX_ASK_PROMPTS: usize = 32;
 
 /// Prompts answered at once.
-const ASK_CONCURRENCY: usize = 6;
+pub(crate) const ASK_CONCURRENCY: usize = 6;
 
 /// Most characters of one answer that come back.
 const ANSWER_CHARS: usize = 8_000;
@@ -59,8 +59,8 @@ impl AskModelTool {
     }
 }
 
-const DEFAULT_SYSTEM: &str = "Answer directly and concisely from the material given. If the \
-    material does not contain the answer, say so in one line.";
+pub(crate) const DEFAULT_SYSTEM: &str = "Answer directly and concisely from the material given. \
+    If the material does not contain the answer, say so in one line.";
 
 #[async_trait]
 impl TypedTool for AskModelTool {

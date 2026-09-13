@@ -809,6 +809,10 @@ impl SessionService {
             harness_agent::FleetTool::new(spawner.clone(), sink.clone())
                 .with_asides(tools.asides()),
         );
+        tools.register_typed(harness_agent::MapAgentsTool::new(
+            spawner.clone(),
+            sink.clone(),
+        ));
         tools.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
         tools.register_typed(harness_agent::ReadAgentTool::new(spawner.clone()));
         tools.register_typed(harness_agent::AskModelTool::new(spawner.clone()));
@@ -856,7 +860,17 @@ impl SessionService {
         let mut agent =
             Agent::new(client, tools, store, session, config).map_err(|e| e.to_string())?;
         agent.set_rules(stream_rules(workspace_root));
+        self.install_fork_slot(&mut agent);
         Ok(agent)
+    }
+
+    /// Let a `fork: true` lane inherit this agent's conversation: the agent
+    /// publishes a snapshot of its transcript to the session's spawner right
+    /// before a `spawn_agents` call runs.
+    fn install_fork_slot(&self, agent: &mut Agent) {
+        if let Some(spawner) = self.fleet_spawner_for(agent.session_id()) {
+            agent.set_fork_slot(spawner.fork_slot());
+        }
     }
 
     /// Build an agent bound to an *existing* session, loading its transcript —
@@ -890,6 +904,7 @@ impl SessionService {
             .map_err(|e| e.to_string())?;
         // A resumed session is held to the same rules as a fresh one.
         agent.set_rules(stream_rules(workspace_root));
+        self.install_fork_slot(&mut agent);
         Ok(agent)
     }
 
@@ -1888,6 +1903,10 @@ impl SessionService {
         ));
         let sink: Arc<dyn harness_agent::fleet::FleetSink> = Arc::new(NullFleetSink);
         registry.register_typed(harness_agent::FleetTool::new(spawner.clone(), sink.clone()));
+        registry.register_typed(harness_agent::MapAgentsTool::new(
+            spawner.clone(),
+            sink.clone(),
+        ));
         registry.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
         registry.register_typed(harness_agent::ReadAgentTool::new(spawner.clone()));
         registry.register_typed(harness_agent::AskModelTool::new(spawner));
