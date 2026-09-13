@@ -538,7 +538,11 @@ impl Agent {
                     });
                 }
                 let (outcome, decision) = gate.resolve(*request).await;
-                if interactive {
+                // A human's answer always shows; a headless gate's refusal
+                // (a lane's auto-deny) shows too, or the lane just looks
+                // quiet while it works around a command it couldn't run.
+                let refused = matches!(outcome, harness_permissions::GateOutcome::Deny { .. });
+                if interactive || refused {
                     on_event(&AgentEvent::ApprovalResolved {
                         name: name.to_string(),
                         command,
@@ -764,6 +768,57 @@ mod tests {
         let gate = harness_permissions::PermissionGate::new("/tmp/proj", Arc::new(NeverAsk));
         gate.set_plan_mode(true);
         Arc::new(gate)
+    }
+
+    /// A lane's gate never asks — it auto-denies — and hosts turn the
+    /// resolved-as-denied event into the lane's "could not run … (needs
+    /// approval)" note. That event has to fire for a headless gate too, or
+    /// a lane refused a command just looks idle while it works around it.
+    #[tokio::test]
+    async fn a_headless_gate_s_refusal_still_reports_the_decision() {
+        let _env = env_guard();
+        let home = tempfile::tempdir().unwrap();
+        let (server, mocks) =
+            scripted_server(&[("c1", "run_shell", r#"{"command":"rm -rf build"}"#)]).await;
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let tools = ToolRegistry::new().with_typed(RecordingShell(ran.clone()));
+        // The gate a fleet lane gets: the session's (relaxed) policy, where a
+        // dangerous command asks — resolved by the headless auto-deny.
+        std::env::set_var("OXEN_HARNESS_DIR", home.path());
+        let gate = harness_permissions::PermissionGate::new("/tmp/proj", Arc::new(NeverAsk));
+        let gate = Arc::new(gate.for_subagent());
+        assert!(!gate.is_interactive());
+        let (mut agent, store, session) = agent_with(server.url(), tools, Some(gate));
+        let mut resolved = Vec::new();
+        let mut pending = 0;
+        agent
+            .run_turn("go", |e| match e {
+                AgentEvent::ApprovalResolved {
+                    command, decision, ..
+                } => resolved.push((command.clone(), decision.clone())),
+                AgentEvent::ApprovalPending { .. } => pending += 1,
+                _ => {}
+            })
+            .await
+            .unwrap();
+        for m in mocks {
+            m.assert_async().await;
+        }
+        assert!(
+            ran.lock().unwrap().is_empty(),
+            "the refused command must not run"
+        );
+        assert_eq!(pending, 0, "a headless gate never announces a prompt");
+        assert_eq!(
+            resolved,
+            vec![("rm -rf build".to_string(), "denied".to_string())]
+        );
+        let results = tool_results(&store, &session);
+        assert!(
+            results[0].starts_with(harness_permissions::SUBAGENT_DENIAL),
+            "{}",
+            results[0]
+        );
     }
 
     /// Arguments one brace short of valid are healed *before* the gate

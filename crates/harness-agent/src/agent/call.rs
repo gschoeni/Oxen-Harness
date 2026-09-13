@@ -19,6 +19,31 @@ use crate::{budget, cache};
 
 use super::{Agent, CallOutcome};
 
+/// Why a reply that streamed to a clean end is unusable anyway: the name of a
+/// tool call whose arguments end mid-value. Only a genuine cut-off counts —
+/// arguments that ended at the reply's own token limit are the model's to fix
+/// (see `reply_truncated` in the turn), and arguments one bracket short are
+/// healed there without a retry.
+fn cut_off_call(assembled: &AssembledMessage) -> Option<String> {
+    if matches!(
+        assembled.finish_reason.as_deref(),
+        Some("length" | "max_tokens")
+    ) {
+        return None;
+    }
+    assembled.tool_calls.iter().find_map(|call| {
+        let err = call.function.parsed_arguments().err()?;
+        let unfinished = err.classify() == serde_json::error::Category::Eof
+            && super::repair::heal_json(&call.function.arguments).is_none();
+        unfinished.then(|| {
+            format!(
+                "the reply ended before the `{}` call's arguments finished streaming",
+                call.function.name
+            )
+        })
+    })
+}
+
 fn emit_stream_event<F>(buffered: &mut Option<Vec<AgentEvent>>, event: AgentEvent, on_event: &mut F)
 where
     F: FnMut(&AgentEvent),
@@ -116,6 +141,20 @@ impl Agent {
                     on_event(&event);
                 }
             }
+            // A reply the stream called finished can still be cut off: a proxy
+            // that hits its upstream timeout mid tool call ends the stream
+            // cleanly (finish reason, `[DONE]`, no usage), leaving a call whose
+            // arguments stop mid-value. That's the same transient failure as a
+            // dropped connection — retry it rather than bounce the fragment
+            // to the model, which costs a whole round and reads as its own
+            // mistake. A stop (user or rule) keeps whatever assembled.
+            let result = match result {
+                Ok(assembled) if !rule_stop.is_cancelled() => match cut_off_call(&assembled) {
+                    Some(reason) => Err(harness_llm::LlmError::Stream(reason)),
+                    None => Ok(assembled),
+                },
+                other => other,
+            };
 
             match result {
                 Ok(assembled) => {
@@ -322,6 +361,7 @@ impl Agent {
                 "tools_changed": tools_changed,
                 "latency_ms": outcome.latency_ms,
                 "retries": outcome.retries,
+                "finish_reason": assembled.finish_reason,
                 "usage": usage.map(|u| serde_json::json!({
                     "prompt_tokens": u.prompt_tokens,
                     "completion_tokens": u.completion_tokens,
@@ -630,6 +670,97 @@ mod tests {
         );
         cut.assert_async().await;
         good.assert_async().await;
+    }
+
+    /// A proxy that hits its upstream timeout mid tool call can end the
+    /// stream *cleanly* — finish reason, `[DONE]`, no usage — with the call's
+    /// arguments stopped mid-value (`{"agents": ` was the field case). That
+    /// is a cut-off reply, not a malformed call: retry the request instead
+    /// of handing the model a fragment it then apologises for.
+    #[tokio::test]
+    async fn a_tool_call_cut_off_mid_arguments_is_retried_even_when_the_stream_ends_cleanly() {
+        let mut server = mockito::Server::new_async().await;
+        let cut = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(concat!(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,",
+                "\"id\":\"call_1\",\"function\":{\"name\":\"spawn_agents\",",
+                "\"arguments\":\"{\\\"agents\\\": \"}}]}}]}\n\n",
+                "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+        let good = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("recovered"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(4));
+        let mut retries = Vec::new();
+        let out = agent
+            .run_turn("hello", |e| {
+                if let AgentEvent::Retrying { error, .. } = e {
+                    retries.push(error.clone());
+                }
+            })
+            .await
+            .expect("the turn should retry the cut-off call and finish");
+
+        assert_eq!(out, "recovered");
+        assert_eq!(retries.len(), 1, "{retries:?}");
+        assert!(
+            retries[0].contains("spawn_agents") && retries[0].contains("before"),
+            "event should name the cut-off call: {}",
+            retries[0]
+        );
+        cut.assert_async().await;
+        good.assert_async().await;
+        // Nothing of the fragment reached the transcript: the model never
+        // sees a half call it has to explain away.
+        assert!(
+            agent
+                .messages()
+                .iter()
+                .all(|m| serde_json::to_string(m).unwrap().contains("spawn_agents") == false),
+            "the cut-off call must not reach the transcript"
+        );
+    }
+
+    #[test]
+    fn cut_off_call_spares_the_model_s_own_limits_and_healable_calls() {
+        use super::cut_off_call;
+        use harness_llm::stream::AssembledMessage;
+        use harness_llm::types::{FunctionCall, ToolCall};
+        let call = |args: &str| ToolCall {
+            id: "c".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "spawn_agents".into(),
+                arguments: args.into(),
+            },
+        };
+        let reply = |args: &str, finish: &str| AssembledMessage {
+            tool_calls: vec![call(args)],
+            finish_reason: Some(finish.into()),
+            ..AssembledMessage::default()
+        };
+        assert!(cut_off_call(&reply("{\"agents\": ", "stop")).is_some());
+        assert!(cut_off_call(&reply("{\"agents\": ", "tool_calls")).is_some());
+        // The reply's own token limit: the turn tells the model to emit less.
+        assert!(cut_off_call(&reply("{\"agents\": ", "length")).is_none());
+        // One bracket short heals in place — no round trip either way.
+        assert!(cut_off_call(&reply("{\"agents\": []", "stop")).is_none());
+        // Malformed but finished is the model's mistake, bounced as usual.
+        assert!(cut_off_call(&reply("{\"agents\": [],}", "stop")).is_none());
+        assert!(cut_off_call(&reply("{\"agents\": []}", "stop")).is_none());
     }
 
     #[tokio::test]

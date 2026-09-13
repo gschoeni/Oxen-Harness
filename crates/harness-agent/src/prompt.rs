@@ -21,6 +21,10 @@ pub struct OptionalTools {
     pub gh: bool,
     /// `update_trail` — same: registered by default, disableable in Settings.
     pub trail: bool,
+    /// The agent tools (`spawn_agents`, `map_agents`, `ask_model`, …) — the
+    /// fleet is registered after the prompt is built, so hosts set this from
+    /// the same preference that decides whether it registers.
+    pub agents: bool,
 }
 
 impl OptionalTools {
@@ -33,6 +37,7 @@ impl OptionalTools {
             open_file: tools.get(harness_tools::OPEN_FILE_TOOL).is_some(),
             gh: tools.get(harness_tools::GH_TOOL).is_some(),
             trail: tools.get(harness_tools::TRAIL_TOOL).is_some(),
+            agents: tools.get(crate::fleet_tool::FLEET_TOOL).is_some(),
         }
     }
 
@@ -159,6 +164,25 @@ const TRAIL_GUIDELINE_NO_GH: &str =
      merged can't be auto-verified in this session, so leave them for the \
      user to confirm rather than marking them done on faith.";
 
+const AGENTS_TOOL_LIST_ENTRY: &str = ", `spawn_agents` / `map_agents` / `ask_model` (delegate to \
+    parallel subagents)";
+
+/// When to delegate, and to which tool — the effort-scaling rule the
+/// multi-agent studies converged on, in one guideline. Only in the prompt
+/// when the agent tools are registered, and stripped from a leaf's.
+pub const DELEGATION_GUIDELINE: &str = "\n- Delegate reading, not deciding. Your context is \
+    for decisions; when a task means reading or searching more than a handful of files, or \
+    trying several approaches, hand that out and keep the results: `spawn_agents` for 2-6 \
+    distinct, self-contained tasks (a whole subsystem each — not one file each), `map_agents` \
+    for the same task over a list of items (every item is guaranteed a result), `ask_model` \
+    for cheap questions over parked content with no tools needed. Don't delegate what you can \
+    do in a few tool calls yourself, and don't spawn an agent to spawn agents. An agent sees \
+    only its prompt: say what to read, what to decide, and the shape of answer you want back \
+    (an `output_schema` when you'll act on it mechanically). Parked content goes in `inputs` \
+    as handles, never pasted. Use `wait: false` when you have other work meanwhile — results \
+    arrive on their own, never poll — and `send_to_agent` to continue an agent instead of \
+    briefing a new one.";
+
 /// Remove the trail sections from a finished system prompt, for detached
 /// subagents (side agents, fleet lanes). Their registries drop `update_trail`
 /// (see `subagent_tools`): a lane's transcript lives in a throwaway in-memory
@@ -171,6 +195,14 @@ pub(crate) fn strip_trail_sections(prompt: &str) -> String {
         .replace(TRAIL_TOOL_LIST_ENTRY, "")
         .replace(TRAIL_GUIDELINE_WITH_GH, "")
         .replace(TRAIL_GUIDELINE_NO_GH, "")
+}
+
+/// Remove the delegation sections from a finished system prompt, for a leaf
+/// lane that has no agent tools to delegate with.
+pub(crate) fn strip_delegation_sections(prompt: &str) -> String {
+    prompt
+        .replace(AGENTS_TOOL_LIST_ENTRY, "")
+        .replace(DELEGATION_GUIDELINE, "")
 }
 
 /// The system prompt, advertising the host-optional tools (`web_search`,
@@ -210,6 +242,16 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
         ""
     };
     let gh_tool = if tools.gh { ", `gh` (GitHub PRs)" } else { "" };
+    let agents_tool = if tools.agents {
+        AGENTS_TOOL_LIST_ENTRY
+    } else {
+        ""
+    };
+    let delegation_guideline = if tools.agents {
+        DELEGATION_GUIDELINE
+    } else {
+        ""
+    };
     let trail_tool = if tools.trail {
         TRAIL_TOOL_LIST_ENTRY
     } else {
@@ -238,7 +280,7 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
          `search_files` (regex content search), `read_file` (line-numbered, supports \
          offset/limit), `write_file`, `edit_file` (exact-string patch), `run_shell`, \
          `git`{gh_tool}, `update_plan` (maintain a task checklist){trail_tool}, \
-         `ask_user_question` (interview the user){web_tool}{canvas_tool}{open_file_tool}.\n\n\
+         `ask_user_question` (interview the user){web_tool}{canvas_tool}{open_file_tool}{agents_tool}.\n\n\
          Guidelines:\n\
          - Prefer the dedicated tools over shell equivalents: use `find_files` not \
            `find`/`ls`, `search_files` not `grep`, `read_file` not `cat`, and \
@@ -266,7 +308,7 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
            fails or is blocked (a tool error, missing auth, an impossible subtask), \
            never abandon the checklist silently: update the plan to reflect it — \
            annotate or drop the blocked step — continue with the steps that don't \
-           depend on it, and tell the user what's blocked and why.\n\
+           depend on it, and tell the user what's blocked and why.{delegation_guideline}\n\
          - When a product/design/implementation decision is genuinely ambiguous and \
            has multiple reasonable approaches with real trade-offs, call \
            `ask_user_question` to interview the user instead of guessing. Keep \
@@ -523,6 +565,7 @@ mod tests {
             open_file: true,
             gh: true,
             trail: true,
+            agents: false,
         });
         assert!(full.contains("`web_search` (Brave web search)"));
         assert!(full.contains("`canvas` (show a document in a side panel)"));
@@ -576,6 +619,22 @@ mod tests {
     /// Subagents inherit the parent's finished prompt but drop `update_trail`
     /// from their registry — stripping must remove every trail section (tool
     /// list entry + guideline, both gh variants) and nothing else.
+    #[test]
+    fn the_delegation_guideline_rides_with_the_agent_tools_and_leaves_lose_it() {
+        let with = system_prompt_with(OptionalTools {
+            agents: true,
+            ..OptionalTools::default()
+        });
+        assert!(with.contains("`spawn_agents` / `map_agents` / `ask_model`"));
+        assert!(with.contains("Delegate reading, not deciding."));
+        let without = system_prompt_with(OptionalTools::default());
+        assert!(!without.contains("spawn_agents"));
+        let leaf = strip_delegation_sections(&with);
+        assert!(!leaf.contains("spawn_agents"), "{leaf}");
+        assert!(!leaf.contains("Delegate reading"));
+        assert_eq!(leaf, without);
+    }
+
     #[test]
     fn strip_trail_sections_removes_the_mandate_from_any_variant() {
         for gh in [false, true] {

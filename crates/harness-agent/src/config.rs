@@ -250,8 +250,14 @@ impl AgentConfig {
         config.round_budget = Some(RoundBudget::SUBAGENT);
         config.depth = self.depth.saturating_add(1);
         let appendix = crate::prompt::subagent_appendix(config.depth, config.max_depth);
+        let leaf = !config.may_spawn();
         config.system_prompt = config.system_prompt.map(|p| {
             let mut prompt = crate::prompt::strip_trail_sections(&p);
+            // A leaf has no agent tools; the delegation guideline would
+            // order it to use tools its registry rejects.
+            if leaf {
+                prompt = crate::prompt::strip_delegation_sections(&prompt);
+            }
             prompt.push_str(appendix);
             prompt
         });
