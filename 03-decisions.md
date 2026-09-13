@@ -496,6 +496,22 @@ re-drives a transcript that ends mid-turn via `Agent::continue_turn` (no user
 message re-appended, so history and fine-tuning exports stay clean), and
 `--continue` reopens the newest session.
 
+**A tool call cut off mid-arguments is a stream failure, not a model mistake** (2026-09-13)
+A proxy that hits its upstream timeout can end the stream *cleanly* — a
+finish reason, `[DONE]`, no usage chunk — with a tool call's arguments
+stopped mid-value (`{"agents": ` in the field). `is_complete` can't see
+it, so the reply was accepted and the model spent two rounds apologising
+for "its" malformed call. `cut_off_call` (in `call.rs`) now classifies
+such a reply as `LlmError::Stream` — retried with backoff, nothing
+persisted — but only when the arguments fail with serde's EOF class,
+`heal_json` can't close them (one bracket short still heals in place, no
+round trip), and the finish reason isn't the reply's own token limit
+(`length` — that one is the model's to fix by emitting less). A finished
+but malformed call (`{"a":1,}`) is still bounced to the model as a tool
+error; a user stop keeps whatever assembled. `finish_reason` joins the
+`requests.jsonl` line so the next such case is visible without a
+transcript dump.
+
 **Loop gates are named and conditional (`run_when`)** (2026-07-06)
 A loop's `verify` became a list of *named* gates, each with `run_when`:
 `always`, or `on_change` with glob patterns checked against a git content

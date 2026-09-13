@@ -202,6 +202,9 @@ struct Live {
     fleet: Arc<FleetHub>,
     /// Advances the fleet block's spinner glyphs on the turn ticker.
     fleet_frame: usize,
+    /// Whether the last tick found a fleet on the hub: the tick after the
+    /// last fleet leaves repaints once more, so the pinned block clears.
+    fleet_shown: bool,
     /// When a deferred media-path check is due (see
     /// [`Live::tick_media_check`]): set on every non-delimiter insert so a
     /// key-event-burst drop only collapses to a chip once input settles —
@@ -262,6 +265,7 @@ impl Live {
             model_items: None,
             fleet: FleetHub::global(),
             fleet_frame: 0,
+            fleet_shown: false,
             media_check: None,
             turn_started: None,
             title: None,
@@ -376,15 +380,36 @@ impl Live {
     /// the block static, so the composer stops rewriting it 9×/second for a
     /// picture that no longer changes; a fresh lane event repaints on its own.
     pub(super) fn tick_fleet(&mut self) -> bool {
-        let animating = self
-            .fleet
-            .lock()
-            .primary()
-            .is_some_and(|s| s.has_running_lane());
+        let (present, animating) = {
+            let board = self.fleet.lock();
+            let primary = board.primary();
+            (
+                primary.is_some(),
+                primary.is_some_and(|s| s.has_running_lane()),
+            )
+        };
+        let changed = std::mem::replace(&mut self.fleet_shown, present) != present;
         if animating {
             self.fleet_frame = self.fleet_frame.wrapping_add(1);
         }
-        animating
+        // A fleet that finished while the composer owned the terminal left
+        // its wrap-up line on the hub; print it where the block was.
+        let notices = self.fleet.take_notices();
+        let announced = !notices.is_empty();
+        for line in notices {
+            self.print_line(&line);
+        }
+        animating || changed || announced
+    }
+
+    /// When the idle composer (which has no ticker) should wake to advance
+    /// the fleet block: while a fleet is on the hub, and once more after the
+    /// last one leaves so the block clears. `None` when there's nothing to
+    /// animate, so a quiet prompt stays fully event-driven.
+    pub(super) fn fleet_tick_due(&self) -> Option<std::time::Instant> {
+        let present = self.fleet.lock().primary().is_some();
+        (present || self.fleet_shown)
+            .then(|| std::time::Instant::now() + std::time::Duration::from_millis(110))
     }
 
     /// Fleet lane switching through the shared reducer ([`crate::fleet_ui::
@@ -778,6 +803,44 @@ mod tests {
     use super::*;
 
     // --- Fleet lane switching (alt+digits act only while a fleet runs) -----
+
+    /// The idle composer has no ticker: it wakes for the fleet block only
+    /// while a fleet is on the hub, plus one tick after the last one leaves
+    /// (to clear the block), and the wrap-up line the sink left on the hub
+    /// is printed on that same tick.
+    #[test]
+    fn the_fleet_tick_covers_the_block_clearing_and_the_wrap_up_line() {
+        use crate::fleet_ui::{FleetHub, FleetState};
+
+        let mut l = live(80, 24);
+        let hub = std::sync::Arc::new(FleetHub::default());
+        l.fleet = hub.clone();
+        // Nothing on the hub, nothing shown: a quiet prompt stays event-driven.
+        assert!(l.fleet_tick_due().is_none());
+        assert!(!l.tick_fleet());
+
+        hub.install("t", FleetState::new(&["scan".into()], None));
+        assert!(l.fleet_tick_due().is_some());
+        // The first tick after a fleet appears repaints (the block is new)
+        // even though its lane is still queued (no spinner to advance).
+        assert!(l.tick_fleet());
+        assert!(!l.tick_fleet(), "a static block isn't repainted every tick");
+        hub.lock().primary_mut().unwrap().lane_started(0, "lane-1");
+        assert!(l.tick_fleet(), "a running lane animates");
+
+        // The fleet finishes: the sink posts its wrap-up and removes it. The
+        // very next tick still fires (to clear the block) and prints the line.
+        hub.post_notice("  🐂 agents finished: scan ✓ 3s".into());
+        hub.remove("t");
+        assert!(
+            l.fleet_tick_due().is_some(),
+            "one more tick clears the block"
+        );
+        assert!(l.tick_fleet());
+        assert!(hub.take_notices().is_empty(), "the tick drained the notice");
+        assert!(l.fleet_tick_due().is_none());
+        assert!(!l.tick_fleet());
+    }
 
     #[test]
     fn alt_digits_switch_fleet_lanes_only_while_a_fleet_runs() {

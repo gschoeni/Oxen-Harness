@@ -577,8 +577,28 @@ pane a third of the terminal tall; `map_agents` runs in the background with
 steers the watched lane from a one-line box, and lists background commands
 with a stop each.
 
-Still open: a real-model smoke run (everything is proven against canned
-SSE) and an offline TUI scenario for the lane block.
+**Field-failure pass, same day.** The first real run (a Qwen model
+through the Oxen hub, asked to research NFL games) exposed three gaps.
+A proxy that hit its upstream timeout mid `spawn_agents` ended the stream
+*cleanly* — finish reason, `[DONE]`, no usage — with the call's arguments
+stopped at `{"agents": `; the client took that as a finished reply and the
+model burned two rounds apologising for "its" malformed call. A tool call
+whose arguments end mid-value (serde's EOF class, not healable, not the
+reply's own token limit) is now a transient stream failure: the request is
+retried like a dropped connection and nothing of the fragment reaches the
+transcript (`cut_off_call` in `call.rs`; `finish_reason` joins the
+`requests.jsonl` line). A lane's auto-denied command now emits the
+resolved-as-denied event, so hosts show "could not run … (needs
+approval)" on the lane instead of a quiet lane. And the root model had no
+guidance on *when* to delegate — only tool descriptions — so the system
+prompt carries a delegation guideline when the agent tools are registered
+(`OptionalTools.agents`; stripped for leaves), and the CLI's idle prompt
+now keeps painting a background fleet's block, prints a one-line wrap-up
+when it finishes (`agents finished: cowboys ✓ 72s · …`), steers a watched
+lane on Enter, and notes commands still running in the background.
+
+Still open: an offline TUI scenario for the lane block, and a second
+real-model run now that the first one's failures are fixed.
 
 ## What's left / next
 

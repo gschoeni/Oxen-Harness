@@ -77,11 +77,33 @@ impl FleetSink for CliFleetSink {
     }
 
     fn finished(&self, fleet: &str) {
+        // Leave one line saying how it ended once the block is gone. A fleet
+        // the turn waited for is followed by its result card; one that ran
+        // in the background (`wait: false`) would otherwise vanish without
+        // a trace — and its results only reach the model with the next
+        // round. Posted *before* the fleet leaves the hub: the composer's
+        // last tick for this fleet is the one that clears its block, and
+        // it drains the notices as it goes.
+        let summary = self.hub.lock().get_mut(fleet).map(|s| s.finish_summary());
+        let line = summary.map(|summary| {
+            format!(
+                "  {} {}",
+                self.ui.green("🐂"),
+                self.ui.dim(&format!("agents finished: {summary}"))
+            )
+        });
+        let live = self.hub.is_live();
+        if let (Some(line), true) = (&line, live) {
+            self.hub.post_notice(line.clone());
+        }
         self.hub.remove(fleet);
         if self.hub.lock().is_empty() {
             if let Some(painter) = self.painter.lock().expect("fleet painter poisoned").take() {
                 painter.finish();
             }
+        }
+        if let (Some(line), false) = (line, live) {
+            println!("{line}");
         }
     }
 }

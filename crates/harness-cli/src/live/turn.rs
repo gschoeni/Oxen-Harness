@@ -200,6 +200,12 @@ pub(crate) async fn read_idle(
     let stop = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
     let (mut rx, input) = spawn_input(&stop, &paused);
+    // The composer owns the terminal at idle too: a fleet the last turn left
+    // running in the background keeps painting in the pinned block (never a
+    // cooked-mode painter under raw mode), and its wrap-up lands here.
+    let fleet_hub = crate::fleet_ui::FleetHub::global();
+    let _live = fleet_hub.mark_live();
+    let background = background_hint(ui).await;
 
     let state = Rc::new(RefCell::new(Live::new(ui.clone(), cols, rows)));
     {
@@ -208,6 +214,8 @@ pub(crate) async fn read_idle(
         if !seed.is_empty() {
             s.composer = Composer::seeded(seed);
         }
+        let mut status = status;
+        status.extend(background);
         s.status_lines = status;
         s.compression_line = compression;
         s.sync_queue(queue.items());
@@ -222,17 +230,28 @@ pub(crate) async fn read_idle(
     // picker — the one thing Esc does at idle.
     let mut last_esc: Option<std::time::Instant> = None;
     let result = loop {
-        // The idle loop has no ticker; when a key-event-burst media check is
-        // pending, wake at its settle deadline so a dropped path with no
-        // trailing delimiter still collapses to a chip. (Bound first: a
-        // scrutinee temporary would hold the borrow across the whole match.)
-        let media_due = state.borrow().media_check_due();
-        let event = match media_due {
+        // The idle loop has no ticker; it wakes on a deadline only when
+        // something needs one: a pending key-event-burst media check (so a
+        // dropped path with no trailing delimiter still collapses to a
+        // chip), or a background fleet whose block animates in the pinned
+        // area. (Bound first: a scrutinee temporary would hold the borrow
+        // across the whole match.)
+        let due = {
+            let s = state.borrow();
+            match (s.media_check_due(), s.fleet_tick_due()) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        };
+        let event = match due {
             Some(due) => tokio::select! {
                 ev = rx.recv() => ev,
                 _ = tokio::time::sleep_until(due.into()) => {
                     let mut s = state.borrow_mut();
                     if s.tick_media_check() {
+                        s.request_paint();
+                    }
+                    if s.tick_fleet() {
                         s.request_paint();
                     }
                     s.flush_paint();
@@ -260,10 +279,26 @@ pub(crate) async fn read_idle(
                 match residual {
                     None => {}
                     Some(Residual::Submit(line)) => {
-                        // At idle, Enter sends (vs. queueing during a turn).
+                        // At idle, Enter sends (vs. queueing during a turn) —
+                        // unless a background lane is being watched
+                        // (alt+digit), in which case it steers that lane,
+                        // exactly as it does mid-turn.
                         let trimmed = line.trim().to_string();
                         if trimmed.is_empty() {
                             state.borrow_mut().request_paint();
+                        } else if let Some(label) = steer_watched_lane(&trimmed) {
+                            let mut s = state.borrow_mut();
+                            let ui = s.ui.clone();
+                            s.print_line(&format!(
+                                "  {} {}",
+                                ui.brown(&format!("🗣 steering {label}:")),
+                                ui.cream(&truncate(
+                                    trimmed.split('\n').next().unwrap_or(&trimmed),
+                                    cols.saturating_sub(24) as usize
+                                ))
+                            ));
+                            s.composer.set_text("");
+                            s.request_paint();
                         } else {
                             break Idle::Submit(trimmed);
                         }
@@ -388,6 +423,33 @@ fn recover_interjections(
 /// Whether a mid-turn submission can be sent to the model as chat (steered
 /// into a running turn, or queued): only plain prompts — a recognized
 /// `/command` would reach the LLM as literal chat text instead of running.
+/// Deliver `text` to the watched, running fleet lane, returning its label
+/// when it took the message. `None` when nothing is watched (or the lane
+/// already finished), so the caller sends the text where it normally would.
+fn steer_watched_lane(text: &str) -> Option<String> {
+    if !stackable(text) {
+        return None;
+    }
+    let (id, label) = crate::fleet_ui::FleetHub::global()
+        .lock()
+        .primary()
+        .and_then(|f| f.focused_running_lane())?;
+    crate::endpoint::interject_lane(&id, expand_pastes(text)).then_some(label)
+}
+
+/// The idle status line for commands still running in the background, so a
+/// quiet prompt says what's still going and where to look.
+async fn background_hint(ui: &Ui) -> Option<String> {
+    let tasks = crate::endpoint::background_tasks()?;
+    let running = tasks.running_count().await;
+    (running > 0).then(|| {
+        ui.dim(&format!(
+            "⚙ {running} command{} still running in the background · /tasks",
+            if running == 1 { "" } else { "s" }
+        ))
+    })
+}
+
 pub(super) fn stackable(text: &str) -> bool {
     matches!(
         crate::repl::parse_command(text),

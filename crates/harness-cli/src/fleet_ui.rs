@@ -136,6 +136,29 @@ impl FleetState {
         }
     }
 
+    /// The one-line wrap-up printed when the fleet finishes — every lane with
+    /// its outcome glyph and clock, so a fleet that ran in the background
+    /// leaves a trace in the transcript once its block is gone:
+    /// `cowboys ✓ 72s · giants ✓ 58s · odds ✗ 121s`.
+    pub(crate) fn finish_summary(&self) -> String {
+        let now = Instant::now();
+        self.lanes
+            .iter()
+            .map(|lane| {
+                let glyph = match lane.status {
+                    LaneStatus::Done => "✓",
+                    LaneStatus::Failed => "✗",
+                    LaneStatus::Running | LaneStatus::Queued => "·",
+                };
+                match lane.clock(now) {
+                    Some(d) => format!("{} {glyph} {}s", lane.label, d.as_secs()),
+                    None => format!("{} {glyph}", lane.label),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+
     /// The tree budget readout for the hint line, once known:
     /// `tree 42k/1.5M tok · 3/24 agents`.
     fn budget_readout(&self) -> Option<String> {
@@ -332,6 +355,11 @@ pub(crate) fn apply_fleet_event(
 pub(crate) struct FleetHub {
     fleets: StdMutex<Vec<(String, FleetState)>>,
     live: AtomicBool,
+    /// One-line announcements for the live composer to print into the
+    /// transcript (a fleet finishing while the composer owns the terminal,
+    /// where the sink can't write). Drained on the composer's tick, at idle
+    /// and mid-turn alike.
+    notices: StdMutex<Vec<String>>,
 }
 
 /// The hub's fleets under lock: the primary for painting and keys, any fleet
@@ -386,6 +414,15 @@ impl FleetHub {
 
     pub(crate) fn clear(&self) {
         self.fleets.lock().expect("fleet hub poisoned").clear();
+    }
+
+    /// Queue a line for the live composer to print (see `notices`).
+    pub(crate) fn post_notice(&self, line: String) {
+        self.notices.lock().expect("fleet hub poisoned").push(line);
+    }
+
+    pub(crate) fn take_notices(&self) -> Vec<String> {
+        std::mem::take(&mut *self.notices.lock().expect("fleet hub poisoned"))
     }
 
     pub(crate) fn lock(&self) -> FleetBoard<'_> {
@@ -1048,6 +1085,20 @@ mod tests {
         assert_eq!(s.lanes[0].status, LaneStatus::Done);
         assert_eq!(s.lanes[0].activity, "3 candidates");
         assert_eq!(s.lanes[0].tokens, 2000);
+    }
+
+    #[test]
+    fn finish_summary_names_every_lane_with_its_outcome() {
+        let mut s = FleetState::new(&["scan".into(), "trace".into(), "late".into()], None);
+        s.lane_started(0, "a");
+        s.lane_completed(0, true, 10, "ok");
+        s.lane_started(1, "b");
+        s.lane_completed(1, false, 10, "boom");
+        let summary = s.finish_summary();
+        assert!(summary.starts_with("scan ✓ "), "{summary}");
+        assert!(summary.contains(" · trace ✗ "), "{summary}");
+        // A lane that never started has no clock, only its glyph.
+        assert!(summary.ends_with(" · late ·"), "{summary}");
     }
 
     #[test]
