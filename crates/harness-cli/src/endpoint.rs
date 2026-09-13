@@ -414,6 +414,17 @@ pub(crate) fn agent_config(
         budget: limits
             .max_session_tokens
             .map(harness_agent::SessionBudget::new),
+        // One wallet for every subagent of a turn, shared with the fleet
+        // spawner built from this config.
+        tree: Some(Arc::new(harness_agent::TreeBudget::new(
+            harness_agent::TreeLimits {
+                max_tokens: limits
+                    .max_tree_tokens
+                    .map(|n| n as u64)
+                    .unwrap_or(harness_agent::TreeLimits::default().max_tokens),
+                ..Default::default()
+            },
+        ))),
         // Route the work that doesn't need the session model: compaction
         // summaries and fleet/review lanes.
         roles: harness_agent::ModelRoles {

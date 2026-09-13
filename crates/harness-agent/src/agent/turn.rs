@@ -184,6 +184,13 @@ impl Agent {
 
         let mut turn = TurnState::default();
         self.rounds_last_turn = 0;
+        self.stopped_by_budget = false;
+        // A root turn starts its tree's wallet over; lanes spend from it.
+        if self.config.depth == 0 {
+            if let Some(tree) = &self.config.tree {
+                tree.reset();
+            }
+        }
 
         // The stop signal for this turn (a clone, so cancelling it from the host
         // doesn't require the agent lock the turn is holding).
@@ -215,6 +222,14 @@ impl Agent {
             // Stop gracefully at the session's spend ceiling rather than
             // silently running past it.
             if let Some(message) = self.session_budget_stop(prompt_tokens, &mut turn) {
+                self.stopped_by_budget = true;
+                self.push(ChatMessage::assistant(message.clone()))?;
+                return Ok(message);
+            }
+            // Likewise the tree's shared wallet: a lane stops with what it
+            // has (best-so-far) once the turn's agents have spent it.
+            if let Some(message) = self.tree_budget_stop() {
+                self.stopped_by_budget = true;
                 self.push(ChatMessage::assistant(message.clone()))?;
                 return Ok(message);
             }
@@ -361,6 +376,28 @@ impl Agent {
     }
 
     /// The closing message when a turn hits its round budget.
+    /// Whether the tree budget stops this lane here (never the root, whose
+    /// own spend the session budget bounds), and the message to end on.
+    fn tree_budget_stop(&self) -> Option<String> {
+        if self.config.depth == 0 {
+            return None;
+        }
+        let reason = self.config.tree.as_ref()?.exhausted()?;
+        crate::errlog::record(
+            self.config.error_log.as_deref(),
+            "tree_budget_exhausted",
+            serde_json::json!({
+                "session": self.session_id(),
+                "depth": self.config.depth,
+                "reason": reason,
+            }),
+        );
+        Some(format!(
+            "Stopped: {reason}. The work so far is in the transcript above; report what you \
+             have."
+        ))
+    }
+
     fn round_budget_stop_message(&self, stop_at: u32) -> String {
         format!(
             "Stopped: this task reached its budget of {stop_at} model rounds without \

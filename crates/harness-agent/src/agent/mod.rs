@@ -86,6 +86,9 @@ pub struct Agent {
     usage_session: Option<String>,
     /// Model rounds the most recent turn took (see [`Agent::rounds_last_turn`]).
     rounds_last_turn: u32,
+    /// Whether the most recent turn ended because a budget (session or
+    /// tree) was spent rather than because the model finished.
+    stopped_by_budget: bool,
     /// Where attachments are persisted + resolved, derived from
     /// [`AgentConfig::attachment_root`]. `None` inlines attachments instead.
     attachments: Option<AttachmentStore>,
@@ -218,6 +221,7 @@ impl Agent {
             persist_transcript: true,
             usage_session: None,
             rounds_last_turn: 0,
+            stopped_by_budget: false,
             attachments,
             tokens_used: 0,
             prompt_tokens_used: 0,
@@ -279,6 +283,7 @@ impl Agent {
             persist_transcript: true,
             usage_session: None,
             rounds_last_turn: 0,
+            stopped_by_budget: false,
             attachments,
             tokens_used,
             // The split input/output counters price only tokens we actually
@@ -622,6 +627,11 @@ impl Agent {
         self.rounds_last_turn
     }
 
+    /// Whether the most recent turn was cut short by a spent budget.
+    pub fn stopped_by_budget(&self) -> bool {
+        self.stopped_by_budget
+    }
+
     pub(crate) fn disable_transcript_persistence(&mut self) {
         self.persist_transcript = false;
     }
@@ -736,6 +746,13 @@ impl Agent {
             let _ = self
                 .usage_store
                 .meta_add_i64("total_tokens_used", total as i64);
+        }
+        // A lane's call comes out of the tree's shared wallet; the root's
+        // own calls are the session budget's business.
+        if self.config.depth > 0 {
+            if let Some(tree) = &self.config.tree {
+                tree.charge(total as u64);
+            }
         }
     }
 

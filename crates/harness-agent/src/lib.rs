@@ -46,6 +46,7 @@ pub mod fleet_tool;
 pub mod lane;
 pub mod lane_tools;
 pub mod loopguard;
+pub mod tree;
 
 #[cfg(test)]
 mod test_support;
@@ -59,7 +60,9 @@ pub use fleet_tool::{FleetSpawner, FleetTool, FLEET_TOOL};
 pub use interject::Interjections;
 pub use lane::{AgentTree, LaneStatus, LiveLaneInfo, SubagentResult};
 pub use lane_tools::{ReadAgentTool, SendToAgentTool, READ_AGENT_TOOL, SEND_TO_AGENT_TOOL};
+pub use prompt::subagent_appendix;
 pub use prompt::{
     default_system_prompt, environment_section, plan_approved_prompt, system_prompt_with,
     system_prompt_with_env, OptionalTools, PLAN_MODE_ENTER, PLAN_MODE_EXIT,
 };
+pub use tree::{TreeBudget, TreeLimits, TreeUsage};

@@ -55,6 +55,25 @@ pub(crate) fn retry_test_agent(url: String, retry: RetryPolicy) -> Agent {
 }
 
 /// SSE for a reply that calls a tool named `snap` with empty args.
+/// One streamed reply that calls `name` with `arguments` (a JSON value).
+pub(crate) fn sse_tool_call(id: &str, name: &str, arguments: serde_json::Value) -> String {
+    let chunk = serde_json::json!({
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "content": "",
+                "tool_calls": [{
+                    "index": 0,
+                    "id": id,
+                    "function": { "name": name, "arguments": arguments.to_string() }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }]
+    });
+    format!("data: {chunk}\n\ndata: [DONE]\n\n")
+}
+
 pub(crate) fn sse_snap_call() -> String {
     let chunk = serde_json::json!({
         "choices": [{

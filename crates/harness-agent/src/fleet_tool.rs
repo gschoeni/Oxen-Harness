@@ -88,6 +88,9 @@ pub struct FleetSpawner {
     /// How many fleets are in flight — a `wait: false` fleet can overlap a
     /// later call, and a session holds at most [`MAX_LIVE_FLEETS`].
     live: Arc<AtomicUsize>,
+    /// The host's lanes display, once a `FleetTool` is built on this
+    /// spawner; a lane that may spawn its own fleet renders through it too.
+    sink: StdMutex<Option<Arc<dyn FleetSink>>>,
 }
 
 /// The mutable half of a [`FleetSpawner`]: what subagents inherit that can
@@ -98,7 +101,12 @@ struct Endpoint {
 }
 
 impl FleetSpawner {
-    pub fn new(client: OxenClient, tools: ToolRegistry, config: AgentConfig) -> Self {
+    pub fn new(client: OxenClient, tools: ToolRegistry, mut config: AgentConfig) -> Self {
+        // Every lane of a turn spends from one wallet; a host that didn't
+        // hand one in gets the defaults.
+        config
+            .tree
+            .get_or_insert_with(|| Arc::new(crate::tree::TreeBudget::default()));
         Self {
             tools,
             workspace_root: StdMutex::new(None),
@@ -108,7 +116,85 @@ impl FleetSpawner {
             session: StdMutex::new(None),
             tree: Arc::default(),
             live: Arc::default(),
+            sink: StdMutex::new(None),
         }
+    }
+
+    /// The wallet every lane of this session's turn spends from.
+    pub fn tree_budget(&self) -> Arc<crate::tree::TreeBudget> {
+        self.endpoint
+            .lock()
+            .expect("fleet endpoint poisoned")
+            .config
+            .tree
+            .clone()
+            .expect("a spawner always carries a tree budget")
+    }
+
+    /// Where lanes render; set when a `FleetTool` is built on this spawner.
+    pub(crate) fn set_sink(&self, sink: Arc<dyn FleetSink>) {
+        *self.sink.lock().expect("fleet sink slot poisoned") = Some(sink);
+    }
+
+    fn sink(&self) -> Option<Arc<dyn FleetSink>> {
+        self.sink.lock().expect("fleet sink slot poisoned").clone()
+    }
+
+    /// A spawner for a lane that may spawn lanes of its own: the same tools
+    /// snapshot, store, display, and live registry, but the lane's config
+    /// (one level deeper, same tree budget), the lane as the parent of what
+    /// it spawns, and the lane's own stop token — stopping the lane stops
+    /// its children.
+    fn child(
+        &self,
+        lane_config: &AgentConfig,
+        lane_session: &str,
+        cancel: &CancellationToken,
+    ) -> Arc<FleetSpawner> {
+        let client = self
+            .endpoint
+            .lock()
+            .expect("fleet endpoint poisoned")
+            .client
+            .clone();
+        let mut child = FleetSpawner::new(client, self.tools.clone(), lane_config.clone());
+        *child
+            .workspace_root
+            .get_mut()
+            .expect("fleet workspace poisoned") = self.root();
+        child.store = self.store.clone();
+        child.tree = self.tree.clone();
+        *child
+            .session
+            .get_mut()
+            .expect("fleet session slot poisoned") = Some(lane_session.to_string());
+        *child.cancel.get_mut().expect("fleet cancel slot poisoned") = cancel.clone();
+        *child.sink.get_mut().expect("fleet sink slot poisoned") = self.sink();
+        Arc::new(child)
+    }
+
+    /// Give a lane below the depth cap its own fleet tools, on a child
+    /// spawner. Leaves (at the cap) get none: `subagent_tools` already
+    /// stripped the parent's.
+    fn add_nested_tools(
+        &self,
+        tools: &mut ToolRegistry,
+        lane_config: &AgentConfig,
+        lane_session: &str,
+        cancel: &CancellationToken,
+    ) {
+        if !lane_config.may_spawn() {
+            return;
+        }
+        let Some(sink) = self.sink() else {
+            return;
+        };
+        let child = self.child(lane_config, lane_session, cancel);
+        tools.register_typed(
+            FleetTool::new(child.clone(), sink.clone()).with_asides(tools.asides()),
+        );
+        tools.register_typed(crate::lane_tools::SendToAgentTool::new(child.clone(), sink));
+        tools.register_typed(crate::lane_tools::ReadAgentTool::new(child));
     }
 
     /// The lanes running right now (see [`AgentTree`]).
@@ -129,16 +215,19 @@ impl FleetSpawner {
             .clone()
     }
 
-    /// Refuse a new fleet when the session already has [`MAX_LIVE_FLEETS`]
-    /// in flight.
-    pub(crate) fn admit_fleet(&self) -> Result<(), ToolError> {
+    /// Refuse a new fleet of `lanes` when the session already has
+    /// [`MAX_LIVE_FLEETS`] in flight, or the tree budget has no room for
+    /// more lanes.
+    pub(crate) fn admit_fleet(&self, lanes: u32) -> Result<(), ToolError> {
         if self.live.load(Ordering::SeqCst) >= MAX_LIVE_FLEETS {
             return Err(ToolError::Execution(format!(
                 "{MAX_LIVE_FLEETS} fleets are already running in this session; their results \
                  arrive automatically — wait for them before starting another"
             )));
         }
-        Ok(())
+        self.tree_budget()
+            .admit_spawn(lanes)
+            .map_err(ToolError::Execution)
     }
 
     /// Tell the spawner which project it is working in, enabling `isolation:
@@ -306,13 +395,9 @@ impl FleetSpawner {
             _ => (Arc::new(HistoryStore::open_in_memory()?), false),
         };
         let session = store.create_session(&meta)?;
-        let mut agent = Agent::new(
-            client,
-            crate::agent::subagent_tools(tools),
-            store,
-            session,
-            config,
-        )?;
+        let mut tools = crate::agent::subagent_tools(tools);
+        self.add_nested_tools(&mut tools, &config, &session, &cancel);
+        let mut agent = Agent::new(client, tools, store, session, config)?;
         if !persisted {
             agent.disable_transcript_persistence();
             if let Some(store) = &self.store {
@@ -348,13 +433,9 @@ impl FleetSpawner {
             }
             None => self.tools.clone(),
         };
-        let mut agent = Agent::resume_from_store(
-            client,
-            crate::agent::subagent_tools(tools),
-            store,
-            id.to_string(),
-            config,
-        )?;
+        let mut tools = crate::agent::subagent_tools(tools);
+        self.add_nested_tools(&mut tools, &config, id, &cancel);
+        let mut agent = Agent::resume_from_store(client, tools, store, id.to_string(), config)?;
         self.adopt(&mut agent, label, fleet, cancel);
         Ok(agent)
     }
@@ -597,6 +678,7 @@ pub struct FleetTool {
 
 impl FleetTool {
     pub fn new(spawner: Arc<FleetSpawner>, sink: Arc<dyn FleetSink>) -> Self {
+        spawner.set_sink(sink.clone());
         Self {
             spawner,
             sink,
@@ -666,7 +748,9 @@ impl TypedTool for FleetTool {
          files, set isolate_edits: each then works in its own copy of the project and returns a \
          patch for you to review and apply, instead of several agents writing over each other. \
          Every result carries an agent id: send_to_agent continues that agent with a follow-up \
-         (it keeps its context), read_agent reads its full reply."
+         (it keeps its context), read_agent reads its full reply. Delegate reading and \
+         searching so your own context stays for decisions; the agents of one turn share a \
+         budget, so prefer a few substantial tasks over many tiny ones."
     }
 
     /// A fleet edits, runs commands, and returns patches: it runs alone in
@@ -687,7 +771,7 @@ impl TypedTool for FleetTool {
                 args.agents.len()
             )));
         }
-        self.spawner.admit_fleet()?;
+        self.spawner.admit_fleet(args.agents.len() as u32)?;
         let labels: Vec<String> = args.agents.iter().map(|a| a.name.clone()).collect();
         let fleet = next_fleet_id();
         // A fleet the model doesn't wait for runs on its own task and leaves
@@ -1254,6 +1338,234 @@ mod tests {
         );
         first.assert_async().await;
         follow.assert_async().await;
+    }
+
+    #[test]
+    fn a_lane_below_the_depth_cap_can_spawn_and_a_leaf_cannot() {
+        let sp = Arc::new(FleetSpawner::new(
+            OxenClient::new("http://localhost/api/ai", "k", "m"),
+            ToolRegistry::new(),
+            AgentConfig {
+                system_prompt: Some("base prompt".into()),
+                max_depth: 2,
+                ..AgentConfig::default()
+            },
+        ));
+        // Building the tool is what tells the spawner where lanes render;
+        // without a display a lane could not show its own fleet.
+        let _tool = FleetTool::new(sp.clone(), Arc::new(RecordingSink::default()));
+        let names = |agent: &Agent| -> Vec<String> {
+            agent
+                .tool_definitions()
+                .iter()
+                .filter_map(|d| d["function"]["name"].as_str().map(str::to_string))
+                .collect()
+        };
+
+        let lane = sp
+            .build_agent("lane", "fleet-t", None, CancellationToken::new())
+            .unwrap();
+        assert_eq!(lane.config().depth, 1);
+        for tool in [
+            FLEET_TOOL,
+            crate::lane_tools::SEND_TO_AGENT_TOOL,
+            crate::lane_tools::READ_AGENT_TOOL,
+        ] {
+            assert!(
+                names(&lane).contains(&tool.to_string()),
+                "a lane may {tool}"
+            );
+        }
+        let prompt = lane.messages()[0].content_text().unwrap_or_default();
+        assert!(prompt.starts_with("base prompt"));
+        assert!(prompt.contains("You may spawn agents of your own"));
+
+        let child = sp.child(lane.config(), "lane-session", &CancellationToken::new());
+        let leaf = child
+            .build_agent("leaf", "fleet-u", None, CancellationToken::new())
+            .unwrap();
+        assert_eq!(leaf.config().depth, 2);
+        assert!(!leaf.config().may_spawn());
+        for tool in [
+            FLEET_TOOL,
+            crate::lane_tools::SEND_TO_AGENT_TOOL,
+            crate::lane_tools::READ_AGENT_TOOL,
+        ] {
+            assert!(
+                !names(&leaf).contains(&tool.to_string()),
+                "a leaf may not {tool}"
+            );
+        }
+        let prompt = leaf.messages()[0].content_text().unwrap_or_default();
+        assert!(prompt.contains("there are no further agents to delegate to"));
+        // Both share the turn's wallet.
+        assert!(Arc::ptr_eq(&sp.tree_budget(), &child.tree_budget()));
+        assert!(Arc::ptr_eq(
+            &sp.tree_budget(),
+            leaf.config().tree.as_ref().unwrap()
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_tree_budget_refuses_lanes_past_its_spawn_cap() {
+        let sp = Arc::new(FleetSpawner::new(
+            OxenClient::new("http://127.0.0.1:1/api/ai", "k", "m"),
+            ToolRegistry::new(),
+            AgentConfig {
+                tree: Some(Arc::new(crate::tree::TreeBudget::new(
+                    crate::tree::TreeLimits {
+                        max_spawns: 2,
+                        ..Default::default()
+                    },
+                ))),
+                ..AgentConfig::default()
+            },
+        ));
+        let tool = FleetTool::new(sp, Arc::new(RecordingSink::default()));
+        let err = tool
+            .invoke(serde_json::json!({
+                "agents": [
+                    { "name": "a", "prompt": "go" },
+                    { "name": "b", "prompt": "go" },
+                    { "name": "c", "prompt": "go" }
+                ]
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("allows 2 agents"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_lane_stops_with_what_it_has_when_the_tree_wallet_is_spent() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("first lane's answer"))
+            .expect(1)
+            .create_async()
+            .await;
+        // A one-token wallet: the first lane's single call spends it, so the
+        // second lane (one slot, so it runs after) stops before calling.
+        let sp = Arc::new(FleetSpawner::new(
+            OxenClient::new(server.url(), "k", "claude-opus-4-8"),
+            ToolRegistry::new(),
+            AgentConfig {
+                system_prompt: None,
+                tree: Some(Arc::new(crate::tree::TreeBudget::new(
+                    crate::tree::TreeLimits {
+                        max_tokens: 1,
+                        ..Default::default()
+                    },
+                ))),
+                ..AgentConfig::default()
+            },
+        ));
+        let out = FleetTool::new(sp.clone(), Arc::new(RecordingSink::default()))
+            .invoke(serde_json::json!({
+                "agents": [
+                    { "name": "first", "prompt": "go" },
+                    { "name": "second", "prompt": "go" }
+                ],
+                "max_parallel": 1
+            }))
+            .await
+            .unwrap();
+        assert!(out.contains("### first — done"), "{out}");
+        assert!(out.contains("first lane's answer"), "{out}");
+        assert!(
+            out.contains(
+                "### second — partial — stopped early (the agents' shared budget is spent)"
+            ),
+            "{out}"
+        );
+        assert!(sp.tree_budget().usage().tokens > 0);
+    }
+
+    #[tokio::test]
+    async fn a_lane_can_spawn_its_own_fleet_one_level_down() {
+        use crate::test_support::sse_tool_call;
+
+        let mut server = mockito::Server::new_async().await;
+        // Mockito serves the first matching mock that hasn't met its expected
+        // count, so the three calls are told apart by what their bodies carry.
+        let outer_first = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("OUTER-TASK".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_tool_call(
+                "call_inner",
+                FLEET_TOOL,
+                serde_json::json!({ "agents": [{ "name": "inner", "prompt": "INNER-TASK go" }] }),
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+        let inner = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("INNER-TASK".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("inner answer 42"))
+            .expect(1)
+            .create_async()
+            .await;
+        let outer_second = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("inner answer 42".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("outer done with 42"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let parent = store.create_session(&SessionMeta::default()).unwrap();
+        let sp = Arc::new(
+            FleetSpawner::new(
+                OxenClient::new(server.url(), "k", "claude-opus-4-8"),
+                ToolRegistry::new(),
+                AgentConfig {
+                    system_prompt: None,
+                    ..AgentConfig::default()
+                },
+            )
+            .with_store(store.clone())
+            .with_session(parent.clone()),
+        );
+        let sink = Arc::new(RecordingSink::default());
+        let out = FleetTool::new(sp.clone(), sink.clone())
+            .invoke(serde_json::json!({
+                "agents": [{ "name": "outer", "prompt": "OUTER-TASK go" }]
+            }))
+            .await
+            .unwrap();
+        outer_first.assert_async().await;
+        inner.assert_async().await;
+        outer_second.assert_async().await;
+
+        assert!(out.contains("outer done with 42"), "{out}");
+        // The outer lane lives under the parent; the inner one under the outer.
+        let outer_lanes = store.lanes_of(&parent).unwrap();
+        assert_eq!(outer_lanes.len(), 1);
+        let inner_lanes = store.lanes_of(&outer_lanes[0].id).unwrap();
+        assert_eq!(inner_lanes.len(), 1);
+        assert_eq!(inner_lanes[0].record.as_ref().unwrap()["label"], "inner");
+        assert_eq!(
+            sp.tree_budget().usage().spawns,
+            2,
+            "both levels spend the one wallet"
+        );
+        // Both fleets rendered on the one display, each under its own id.
+        let calls = sink.calls.lock().unwrap();
+        assert_eq!(
+            calls.iter().filter(|c| c.starts_with("started:")).count(),
+            2
+        );
+        assert!(sp.tree().live().is_empty());
     }
 
     #[tokio::test]

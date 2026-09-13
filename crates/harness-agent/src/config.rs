@@ -185,6 +185,18 @@ pub struct AgentConfig {
     /// its own; subagents get one so a lane that never converges can't run
     /// away with the fleet.
     pub round_budget: Option<RoundBudget>,
+    /// How far down the tree this agent sits: 0 is the session's own agent,
+    /// 1 a lane it spawned, 2 a lane of that lane. Set by
+    /// [`AgentConfig::for_subagent`].
+    pub depth: u8,
+    /// The deepest level allowed. A lane at `depth < max_depth` may spawn
+    /// its own fleet; one at the cap is a leaf with no spawn tools. Two is
+    /// root → orchestrating lanes → leaves; deeper mostly buys cost variance.
+    pub max_depth: u8,
+    /// The wallet every lane of a root turn shares (see [`crate::tree`]).
+    /// `None` on a root that never spawns; the fleet spawner creates one
+    /// when the host didn't.
+    pub tree: Option<Arc<crate::tree::TreeBudget>>,
 }
 
 /// A soft cap on how many model rounds one turn may take.
@@ -222,17 +234,28 @@ impl AgentConfig {
     /// - a round budget is installed, so a lane that never converges is
     ///   stopped instead of spending the fleet's whole allowance;
     /// - the system prompt loses the trail mandate, since `subagent_tools`
-    ///   removes the tool it mandates.
+    ///   removes the tool it mandates, and gains the lane or leaf appendix
+    ///   for its depth (see [`crate::prompt::subagent_appendix`]);
+    /// - it sits one level deeper in the tree and shares the tree budget.
     pub fn for_subagent(&self) -> AgentConfig {
         let mut config = self.clone();
         config.model = config.roles.resolve(Role::Smol, &config.model).to_owned();
         config.initial_attachments.clear();
         config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
         config.round_budget = Some(RoundBudget::SUBAGENT);
-        config.system_prompt = config
-            .system_prompt
-            .map(|p| crate::prompt::strip_trail_sections(&p));
+        config.depth = self.depth.saturating_add(1);
+        let appendix = crate::prompt::subagent_appendix(config.depth, config.max_depth);
+        config.system_prompt = config.system_prompt.map(|p| {
+            let mut prompt = crate::prompt::strip_trail_sections(&p);
+            prompt.push_str(appendix);
+            prompt
+        });
         config
+    }
+
+    /// Whether an agent at this depth may spawn lanes of its own.
+    pub fn may_spawn(&self) -> bool {
+        self.depth < self.max_depth
     }
 
     /// The reply-size cap actually used for requests and prompt budgeting:
@@ -269,6 +292,9 @@ impl Default for AgentConfig {
             error_log: None,
             permissions: None,
             round_budget: None,
+            depth: 0,
+            max_depth: 2,
+            tree: None,
         }
     }
 }

@@ -89,6 +89,35 @@ pub fn system_prompt_with_env(tools: OptionalTools, workspace: &std::path::Path)
 /// [`strip_trail_sections`] can remove exactly what was added.
 const TRAIL_TOOL_LIST_ENTRY: &str = ", `update_trail` (chart the session's journey)";
 
+/// Appended to a lane's system prompt when it may still spawn lanes of its
+/// own: delegate reading, never sub-call everything.
+pub const LANE_APPENDIX: &str = "\n\n## You are a subagent\n\
+You were spawned by another agent for one task and it will read only your final reply, \
+so make that reply the deliverable: specific, complete, and as short as the task allows \
+(paths, names, numbers, verdicts — not a narrative of what you did). You may spawn agents of \
+your own for large or parallel reading, but batch: give each a substantial, self-contained \
+chunk rather than one agent per item, and do the small work yourself. You cannot ask the \
+user anything; if you are blocked (a command needs approval, something is ambiguous), say \
+exactly what and why in your reply.";
+
+/// Appended to a leaf's system prompt: it answers from what it is given.
+pub const LEAF_APPENDIX: &str = "\n\n## You are a subagent\n\
+You were spawned by another agent for one task and it will read only your final reply, \
+so make that reply the deliverable: specific, complete, and as short as the task allows \
+(paths, names, numbers, verdicts — not a narrative of what you did). Answer from what you \
+are given and what you can read yourself; there are no further agents to delegate to. You \
+cannot ask the user anything; if you are blocked (a command needs approval, something is \
+ambiguous), say exactly what and why in your reply.";
+
+/// The prompt appendix for a subagent at `depth` under a `max_depth` cap.
+pub fn subagent_appendix(depth: u8, max_depth: u8) -> &'static str {
+    if depth < max_depth {
+        LANE_APPENDIX
+    } else {
+        LEAF_APPENDIX
+    }
+}
+
 /// The trail guideline when `gh` is registered: the shipping stages are
 /// verifiable in-session, so the model is ordered to verify them.
 ///

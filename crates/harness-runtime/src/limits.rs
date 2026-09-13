@@ -34,6 +34,10 @@ pub struct Limits {
     /// ends the turn, which is the old behavior.
     #[serde(default)]
     pub fallback_models: Vec<String>,
+    /// Tokens every subagent of one turn may spend together (the tree
+    /// budget; see `harness_agent::TreeLimits`). `None` uses the default.
+    #[serde(default)]
+    pub max_tree_tokens: Option<usize>,
 }
 
 /// Read the saved limits (defaults to no limits on a fresh install or an
@@ -71,6 +75,7 @@ mod tests {
                 summary_model: Some("gemini-2-5-flash".into()),
                 smol_model: Some("claude-haiku-4-5".into()),
                 fallback_models: vec!["claude-sonnet-5".into()],
+                max_tree_tokens: Some(500_000),
             })
             .unwrap();
             let loaded = load();

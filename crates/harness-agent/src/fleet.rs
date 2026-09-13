@@ -123,6 +123,9 @@ pub enum LaneStop {
     Deadline(Duration),
     /// The fleet's token was cancelled (the user stopped the turn or the fleet).
     Cancelled,
+    /// A spent budget (the tree's shared wallet, or the session's) ended
+    /// the lane's turn before the model finished.
+    Budget,
 }
 
 impl std::fmt::Display for LaneStop {
@@ -137,6 +140,7 @@ impl std::fmt::Display for LaneStop {
                 after.as_secs()
             ),
             LaneStop::Cancelled => write!(f, "stopped early (cancelled)"),
+            LaneStop::Budget => write!(f, "stopped early (the agents' shared budget is spent)"),
         }
     }
 }
@@ -460,6 +464,8 @@ where
                 Some(LaneStop::Deadline(limits.deadline))
             } else if fleet_cancel.is_cancelled() {
                 Some(LaneStop::Cancelled)
+            } else if agent.stopped_by_budget() {
+                Some(LaneStop::Budget)
             } else {
                 None
             };
