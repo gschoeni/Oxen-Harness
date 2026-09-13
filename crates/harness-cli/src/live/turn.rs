@@ -513,15 +513,34 @@ async fn run_one_turn(
                                 if trimmed.is_empty() {
                                     // Nothing to send.
                                 } else if stackable(trimmed) {
-                                    // Steer the running turn: the message is
-                                    // delivered into it at the next safe point
-                                    // (not queued for after). Ctrl+Enter /
-                                    // Ctrl+Q stack a follow-up for later.
-                                    interject.push(expand_pastes(trimmed));
+                                    // Steer the running turn — or, while a
+                                    // fleet lane is being watched (alt+digit),
+                                    // that lane: the message is delivered at
+                                    // its next safe point (not queued for
+                                    // after). Ctrl+Enter / Ctrl+Q stack a
+                                    // follow-up for later.
+                                    let watched = crate::fleet_ui::FleetHub::global()
+                                        .lock()
+                                        .primary()
+                                        .and_then(|f| f.focused_running_lane());
+                                    let target = match watched {
+                                        Some((id, label))
+                                            if crate::endpoint::interject_lane(
+                                                &id,
+                                                expand_pastes(trimmed),
+                                            ) =>
+                                        {
+                                            format!("🗣 steering {label}:")
+                                        }
+                                        _ => {
+                                            interject.push(expand_pastes(trimmed));
+                                            "🗣 steering:".to_string()
+                                        }
+                                    };
                                     let ui = s.ui.clone();
                                     s.print_line(&format!(
                                         "  {} {}",
-                                        ui.brown("🗣 steering:"),
+                                        ui.brown(&target),
                                         ui.cream(&truncate(
                                             trimmed.split('\n').next().unwrap_or(trimmed),
                                             80

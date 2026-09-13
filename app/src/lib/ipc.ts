@@ -76,6 +76,7 @@ import type {
   CodeReviewTokenEvent,
   CodeReviewToolEvent,
   FleetActivityEvent,
+  FleetBudgetEvent,
   FleetAgentEvent,
   FleetStartedEvent,
   LoopRunResult,
@@ -559,6 +560,10 @@ export const onFleetAgent = (handler: (e: FleetAgentEvent) => void) =>
 /** Live activity from one fleet lane (streamed text, a tool, token counts). */
 export const onFleetActivity = (handler: (e: FleetActivityEvent) => void) =>
   listen<FleetActivityEvent>("fleet://agent-activity", (e) => handler(e.payload));
+
+/** Where the turn's tree budget stands, after a lane's spend changed. */
+export const onFleetBudget = (handler: (e: FleetBudgetEvent) => void) =>
+  listen<FleetBudgetEvent>("fleet://budget", (e) => handler(e.payload));
 
 /** The fleet finished; its lanes panel closes. */
 export const onFleetCompleted = (handler: (e: { session: string; fleet: string }) => void) =>

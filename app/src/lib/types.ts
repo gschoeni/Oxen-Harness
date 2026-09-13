@@ -848,6 +848,19 @@ export interface FleetAgentEvent {
   summary: string;
 }
 
+/** `fleet://budget` — where the turn's tree budget stands (every lane of a
+ *  root turn spends from one wallet), sent whenever a lane's spend changes. */
+export interface FleetBudgetEvent {
+  session: string;
+  fleet: string;
+  tokens: number;
+  max_tokens: number;
+  requests: number;
+  max_requests: number;
+  spawns: number;
+  max_spawns: number;
+}
+
 /** `fleet://agent-activity` — what one lane is doing right now. */
 export interface FleetActivityEvent {
   session: string;

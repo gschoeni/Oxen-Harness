@@ -40,6 +40,7 @@ export function FleetPanel() {
  *  default so a chat with many agents stays readable. */
 function AgentsHub({ agents }: { agents: AgentSummary[] }) {
   const [open, setOpen] = useState(false);
+  const openInspector = useStore((s) => s.openInspector);
   return (
     <div className="fleet-panel agents-hub" role="region" aria-label="Finished agents">
       <button
@@ -57,7 +58,13 @@ function AgentsHub({ agents }: { agents: AgentSummary[] }) {
       {open && (
         <div className="fleet-lanes">
           {agents.map((agent) => (
-            <div key={agent.id} className="fleet-lane agents-hub-row" title={agent.id}>
+            <button
+              key={agent.id}
+              type="button"
+              className="fleet-lane agents-hub-row"
+              title={`Open ${agent.label}'s transcript`}
+              onClick={() => openInspector(agent.id)}
+            >
               <AgentGlyph status={agent.status} />
               <span className="fleet-lane-name">{agent.label}</span>
               <span className="fleet-lane-activity">
@@ -67,7 +74,7 @@ function AgentsHub({ agents }: { agents: AgentSummary[] }) {
               {agent.tokens > 0 && (
                 <span className="fleet-lane-tokens">{compactTokens(agent.tokens)}</span>
               )}
-            </div>
+            </button>
           ))}
         </div>
       )}
@@ -102,6 +109,15 @@ function OneFleet({ id, fleet }: { id: string; fleet: FleetView }) {
           {fleet.source === "review" ? "Review agents" : "Agents"} — {running} of{" "}
           {fleet.lanes.length} running
         </span>
+        {fleet.budget && (
+          <span
+            className="fleet-panel-budget"
+            title="What every agent of this turn has spent of their shared budget"
+          >
+            tree {compactTokens(fleet.budget.tokens)} / {compactTokens(fleet.budget.max_tokens)} ·{" "}
+            {fleet.budget.spawns}/{fleet.budget.max_spawns} agents
+          </span>
+        )}
         <span className="fleet-panel-hint">
           {focused ? "click again to collapse" : "click a lane to watch it"}
         </span>

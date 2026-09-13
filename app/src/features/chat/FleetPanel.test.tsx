@@ -90,6 +90,25 @@ describe("FleetPanel", () => {
     expect(screen.getByText("4 candidates")).toBeInTheDocument();
   });
 
+  it("shows where the turn's tree budget stands once a fleet reports it", () => {
+    render(<FleetPanel />);
+    started();
+    expect(screen.queryByText(/tree /)).not.toBeInTheDocument();
+    act(() =>
+      useStore.getState().ingestFleetBudget({
+        session: "s1",
+        fleet: "f1",
+        tokens: 42_000,
+        max_tokens: 1_500_000,
+        requests: 7,
+        max_requests: 200,
+        spawns: 3,
+        max_spawns: 24,
+      }),
+    );
+    expect(screen.getByText(/tree 42\.0k \/ 1\.5M · 3\/24 agents/)).toBeInTheDocument();
+  });
+
   it("clicking a lane expands its live output tail; clicking again collapses", async () => {
     render(<FleetPanel />);
     started();
@@ -206,6 +225,9 @@ describe("FleetPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: /finished agents/ }));
     expect(screen.getByText("4 candidates")).toBeInTheDocument();
     expect(screen.getByText(/failed — rate limited/)).toBeInTheDocument();
+    // A row opens that lane's transcript in the inspector.
+    await userEvent.click(screen.getByTitle("Open diff-scan's transcript"));
+    expect(useStore.getState().inspector?.sessionId).toBe("lane-1");
   });
 
   it("stop asks the backend to cancel just that fleet", async () => {

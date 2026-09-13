@@ -114,6 +114,8 @@ pub(crate) struct FleetState {
     pub(crate) focused: Option<usize>,
     pub(crate) cancel: Option<CancellationToken>,
     cancel_lane: Option<LaneStopper>,
+    /// Where the turn's tree budget stands, when the fleet reports it.
+    budget: Option<(harness_agent::TreeUsage, harness_agent::TreeLimits)>,
 }
 
 impl FleetState {
@@ -123,7 +125,21 @@ impl FleetState {
             focused: None,
             cancel,
             cancel_lane: None,
+            budget: None,
         }
+    }
+
+    /// The tree budget readout for the hint line, once known:
+    /// `tree 42k/1.5M tok · 3/24 agents`.
+    fn budget_readout(&self) -> Option<String> {
+        let (usage, limits) = self.budget?;
+        Some(format!(
+            "tree {}/{} tok · {}/{} agents",
+            human_tokens(usage.tokens as usize),
+            human_tokens(limits.max_tokens as usize),
+            usage.spawns,
+            limits.max_spawns
+        ))
     }
 
     /// Let the keys stop a single lane by id (see [`Self::stop_focused_lane`]).
@@ -138,6 +154,14 @@ impl FleetState {
             lane.id = id.to_string();
             lane.started = Some(Instant::now());
         }
+    }
+
+    /// The watched lane, when it is running and known by id: where a
+    /// mid-turn message goes instead of the parent turn.
+    pub(crate) fn focused_running_lane(&self) -> Option<(String, String)> {
+        let lane = self.focused.and_then(|i| self.lanes.get(i))?;
+        (lane.status == LaneStatus::Running && !lane.id.is_empty())
+            .then(|| (lane.id.clone(), lane.label.clone()))
     }
 
     /// Stop just the focused lane (the `x` / alt+x action); `false` when
@@ -280,6 +304,11 @@ pub(crate) fn apply_fleet_event(
             }
             if plain {
                 print_lane_completed(ui, label, *ok, *tokens_used, summary);
+            }
+        }
+        FleetEvent::Budget { usage, limits } => {
+            if let Some(state) = hub.lock().get_mut(fleet) {
+                state.budget = Some((*usage, *limits));
             }
         }
     }
@@ -522,16 +551,22 @@ fn hint_line(state: &FleetState, keys: FleetKeys) -> String {
         FleetKeys::Owned => (format!("1-{n}"), "esc".to_string()),
         FleetKeys::Shared => (format!("alt+1-{n}"), "alt+0".to_string()),
     };
-    match (state.focused, keys, state.cancel_lane.is_some()) {
+    let keys_hint = match (state.focused, keys, state.cancel_lane.is_some()) {
         (Some(_), FleetKeys::Owned, true) => {
             format!("{digits} switch lanes · {esc} overview · x stop this lane · ctrl-c stop all")
         }
         (Some(_), FleetKeys::Shared, true) => {
-            format!("{digits} switch lanes · {esc} overview · alt+x stop this lane")
+            format!(
+                "{digits} switch lanes · {esc} overview · alt+x stop this lane · enter steers it"
+            )
         }
         (Some(_), _, false) => format!("{digits} switch lanes · {esc} overview · ctrl-c stop"),
         (None, FleetKeys::Owned, _) => format!("{digits} watch a lane · ctrl-c stop"),
         (None, FleetKeys::Shared, _) => format!("{digits} watch a lane"),
+    };
+    match state.budget_readout() {
+        Some(budget) => format!("{keys_hint} · {budget}"),
+        None => keys_hint,
     }
 }
 

@@ -74,6 +74,7 @@ import type {
   CloudModel,
   CodeReviewProgressEvent,
   FleetActivityEvent,
+  FleetBudgetEvent,
   FleetAgentEvent,
   FleetStartedEvent,
   FsChangedEvent,
@@ -166,6 +167,8 @@ export interface FleetView {
   source: "review" | "turn";
   lanes: FleetLane[];
   focused: number | null;
+  /** Where the turn's tree budget stands, once the fleet has reported it. */
+  budget?: { tokens: number; max_tokens: number; spawns: number; max_spawns: number };
 }
 
 /** A chat's fleets in flight, oldest first (the order they were keyed in). */
@@ -532,6 +535,8 @@ interface AppState {
   ingestFleetAgent: (e: FleetAgentEvent) => void;
   /** Live activity from one lane (text, a tool, or a token-count update). */
   ingestFleetActivity: (e: FleetActivityEvent) => void;
+  /** The turn's tree budget moved. */
+  ingestFleetBudget: (e: FleetBudgetEvent) => void;
   /** The fleet finished: close its panel. */
   ingestFleetCompleted: (session: string, fleet: string) => void;
   /** Expand one lane of `fleet` to watch its output (null collapses back). */
@@ -1480,6 +1485,19 @@ export const useStore = create<AppState>((set, get) => {
         }
         const lanes = fleet.lanes.map((l, i) => (i === e.agent ? updated : l));
         return { fleets: { ...s.fleets, [e.fleet]: { ...fleet, lanes } } };
+      }),
+
+    ingestFleetBudget: (e) =>
+      set((s) => {
+        const fleet = s.fleets[e.fleet];
+        if (!fleet) return {};
+        const budget = {
+          tokens: e.tokens,
+          max_tokens: e.max_tokens,
+          spawns: e.spawns,
+          max_spawns: e.max_spawns,
+        };
+        return { fleets: { ...s.fleets, [e.fleet]: { ...fleet, budget } } };
       }),
 
     ingestFleetCompleted: (session, id) => {

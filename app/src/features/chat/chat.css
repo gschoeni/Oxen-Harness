@@ -1206,6 +1206,11 @@
   font-weight: 600;
   flex-shrink: 0;
 }
+.fleet-panel-budget {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
 .fleet-panel-hint {
   margin-left: auto;
   color: var(--text-tertiary);
@@ -1260,7 +1265,7 @@
   transform: rotate(90deg);
 }
 .agents-hub-row {
-  cursor: default;
+  cursor: pointer;
 }
 /* Stop one lane; the rest of the fleet keeps going. */
 .fleet-lane-stop {

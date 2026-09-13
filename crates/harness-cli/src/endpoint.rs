@@ -361,6 +361,14 @@ pub(crate) fn live_lanes() -> Vec<harness_agent::LiveLaneInfo> {
         .unwrap_or_default()
 }
 
+/// Hand a running lane a message for its next round; `false` when no such
+/// lane is running.
+pub(crate) fn interject_lane(id: &str, text: impl Into<String>) -> bool {
+    FLEET_SPAWNER
+        .get()
+        .is_some_and(|spawner| spawner.tree().interject(id, text))
+}
+
 /// Let `fork: true` lanes start from this agent's conversation (see
 /// `Agent::set_fork_slot`). A no-op when the fleet tool isn't registered.
 pub(crate) fn install_fork_slot(agent: &mut harness_agent::Agent) {
