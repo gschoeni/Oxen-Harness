@@ -339,6 +339,11 @@ export const cancelTurn = (session: string) => invoke<void>("cancel_turn", { ses
 export const cancelFleet = (session: string, fleet: string) =>
   invoke<boolean>("cancel_fleet", { session, fleet });
 
+/** Stop one running lane (one agent of a fleet); the rest of its fleet
+ *  carries on. Resolves false once the lane has already ended. */
+export const cancelAgent = (session: string, lane: string) =>
+  invoke<boolean>("cancel_agent", { session, lane });
+
 // ---- verification loops ---------------------------------------------------
 
 export const listLoops = () => invoke<LoopSummary[]>("list_loops");

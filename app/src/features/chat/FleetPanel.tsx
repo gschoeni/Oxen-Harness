@@ -31,6 +31,7 @@ export function FleetPanel() {
 function OneFleet({ id, fleet }: { id: string; fleet: FleetView }) {
   const setFocus = useStore((s) => s.setFleetFocus);
   const stopFleet = useStore((s) => s.stopFleet);
+  const stopLane = useStore((s) => s.stopLane);
   const running = fleet.lanes.filter((l) => l.status === "running").length;
   const settled = fleet.lanes.every((l) => l.status === "done" || l.status === "failed");
   const focused = fleet.focused !== null ? fleet.lanes[fleet.focused] : null;
@@ -61,20 +62,32 @@ function OneFleet({ id, fleet }: { id: string; fleet: FleetView }) {
       </div>
       <div className="fleet-lanes">
         {fleet.lanes.map((lane, i) => (
-          <button
-            key={`${lane.name}-${i}`}
-            className={`fleet-lane ${fleet.focused === i ? "focused" : ""}`}
-            onClick={() => setFocus(id, fleet.focused === i ? null : i)}
-            aria-pressed={fleet.focused === i}
-            title={`Watch ${lane.name}`}
-          >
-            <LaneGlyph lane={lane} />
-            <span className="fleet-lane-name">{lane.name}</span>
-            <span className="fleet-lane-activity">{lane.activity}</span>
-            {lane.tokens > 0 && (
-              <span className="fleet-lane-tokens">{compactTokens(lane.tokens)}</span>
+          <div key={`${lane.name}-${i}`} className="fleet-lane-row">
+            <button
+              className={`fleet-lane ${fleet.focused === i ? "focused" : ""}`}
+              onClick={() => setFocus(id, fleet.focused === i ? null : i)}
+              aria-pressed={fleet.focused === i}
+              title={`Watch ${lane.name}`}
+            >
+              <LaneGlyph lane={lane} />
+              <span className="fleet-lane-name">{lane.name}</span>
+              <span className="fleet-lane-activity">{lane.activity}</span>
+              {lane.tokens > 0 && (
+                <span className="fleet-lane-tokens">{compactTokens(lane.tokens)}</span>
+              )}
+            </button>
+            {lane.status === "running" && lane.id && (
+              <button
+                type="button"
+                className="fleet-lane-stop"
+                onClick={() => stopLane(fleet.session, lane.id)}
+                title={`Stop ${lane.name} (the other agents keep going)`}
+                aria-label={`Stop ${lane.name}`}
+              >
+                <X size={11} />
+              </button>
             )}
-          </button>
+          </div>
         ))}
       </div>
       {focused && <LaneTail tail={focused.tail} />}

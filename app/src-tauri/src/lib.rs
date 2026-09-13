@@ -138,6 +138,7 @@ pub fn run() {
             commands::turn::run_turn,
             commands::turn::cancel_turn,
             commands::turn::cancel_fleet,
+            commands::turn::cancel_agent,
             commands::review::run_code_review,
             commands::review::get_code_review_config,
             commands::review::save_code_review_config,

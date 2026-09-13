@@ -819,11 +819,13 @@ export interface FleetStartedEvent {
   source: "review" | "turn";
 }
 
-/** `fleet://agent` — one lane changed state. */
+/** `fleet://agent` — one lane changed state. `lane` is the lane's own id,
+ *  what a per-lane stop or steer takes. */
 export interface FleetAgentEvent {
   session: string;
   fleet: string;
   agent: number;
+  lane: string;
   name: string;
   phase: "started" | "done" | "failed";
   tokens: number;
@@ -835,7 +837,8 @@ export interface FleetActivityEvent {
   session: string;
   fleet: string;
   agent: number;
-  kind: "token" | "tool" | "tokens";
+  /** `note`: a one-line notice (a refused command, a nudge, a retry). */
+  kind: "token" | "tool" | "tokens" | "note";
   text: string;
   tokens: number | null;
 }

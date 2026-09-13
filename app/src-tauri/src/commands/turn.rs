@@ -53,6 +53,17 @@ pub(crate) fn cancel_fleet(
     Ok(state.cancel_fleet(&session, &fleet))
 }
 
+/// Stop one lane of a fleet (its id rides on `fleet://agent`); the rest of
+/// the fleet carries on. `false` once the lane has already ended.
+#[tauri::command]
+pub(crate) fn cancel_agent(
+    state: State<'_, AppState>,
+    session: String,
+    lane: String,
+) -> Result<bool, String> {
+    Ok(state.cancel_lane(&session, &lane))
+}
+
 /// Deliver the user's answer to a pending `ask_user_question`, unblocking the
 /// agent. Unknown ids are ignored (the question may have been cancelled).
 #[tauri::command]

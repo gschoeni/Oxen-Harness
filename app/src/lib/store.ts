@@ -26,6 +26,7 @@ import {
   runTurn,
   runLoop,
   retryTurn,
+  cancelAgent,
   cancelFleet,
   cancelTurn,
   cancelDownload as cancelDownloadIpc,
@@ -146,6 +147,8 @@ export type RightTabId = "preview" | "canvas" | "browser" | "editor";
 /** One parallel subagent as shown in the chat's fleet panel. */
 export interface FleetLane {
   name: string;
+  /** The lane's id once it is running (what a per-lane stop takes). */
+  id: string;
   status: "queued" | "running" | "done" | "failed";
   /** One-line rolling readout (tool name or the freshest streamed words). */
   activity: string;
@@ -531,6 +534,8 @@ interface AppState {
   /** Stop one fleet without ending the turn; its panel closes on the
    *  backend's `fleet://completed` once the lanes settle. */
   stopFleet: (session: string, fleet: string) => void;
+  /** Stop one lane of a fleet; the rest of the fleet carries on. */
+  stopLane: (session: string, lane: string) => void;
   /** Stop the current chat's in-flight turn, killing the model stream. */
   stop: () => void;
   /** Save the Oxen API key entered in a chat's inline auth prompt, then retry the
@@ -1410,6 +1415,7 @@ export const useStore = create<AppState>((set, get) => {
             focused: null,
             lanes: e.agents.map((name) => ({
               name,
+              id: "",
               status: "queued" as const,
               activity: "",
               tail: "",
@@ -1426,7 +1432,7 @@ export const useStore = create<AppState>((set, get) => {
         if (!fleet || !lane) return {};
         const updated: FleetLane =
           e.phase === "started"
-            ? { ...lane, status: "running" }
+            ? { ...lane, status: "running", id: e.lane }
             : {
                 ...lane,
                 status: e.phase,
@@ -1455,6 +1461,12 @@ export const useStore = create<AppState>((set, get) => {
             activity: `⚙ ${e.text}…`,
             tail: tailChars(`${lane.tail}\n◆ ${e.text}…\n`, LANE_TAIL_CAP),
           };
+        } else if (e.kind === "note") {
+          updated = {
+            ...lane,
+            activity: `ℹ ${e.text}`,
+            tail: tailChars(`${lane.tail}\nℹ ${e.text}\n`, LANE_TAIL_CAP),
+          };
         } else {
           updated = { ...lane, tokens: e.tokens ?? lane.tokens };
         }
@@ -1482,6 +1494,10 @@ export const useStore = create<AppState>((set, get) => {
       // Best effort: a fleet that already ended (false) or an IPC hiccup
       // leaves the panel to the backend's completion event either way.
       void cancelFleet(session, fleet).catch(() => {});
+    },
+
+    stopLane: (session, lane) => {
+      void cancelAgent(session, lane).catch(() => {});
     },
 
     submitApiKey: async (session, itemId, key) => {

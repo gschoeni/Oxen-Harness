@@ -24,9 +24,9 @@ describe("TitleBar running work indicator", () => {
           source: "turn",
           focused: null,
           lanes: [
-            { name: "one", status: "running", activity: "", tail: "", tokens: 0 },
-            { name: "two", status: "queued", activity: "", tail: "", tokens: 0 },
-            { name: "three", status: "done", activity: "", tail: "", tokens: 10 },
+            { name: "one", id: "l1", status: "running", activity: "", tail: "", tokens: 0 },
+            { name: "two", id: "", status: "queued", activity: "", tail: "", tokens: 0 },
+            { name: "three", id: "l3", status: "done", activity: "", tail: "", tokens: 10 },
           ],
         },
         // A second fleet in the same chat adds its lanes, not a second session.
@@ -34,7 +34,7 @@ describe("TitleBar running work indicator", () => {
           session: "parent",
           source: "turn",
           focused: null,
-          lanes: [{ name: "four", status: "running", activity: "", tail: "", tokens: 0 }],
+          lanes: [{ name: "four", id: "l4", status: "running", activity: "", tail: "", tokens: 0 }],
         },
       },
     });

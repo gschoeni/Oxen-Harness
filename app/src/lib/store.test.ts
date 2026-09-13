@@ -466,7 +466,7 @@ describe("store: code review", () => {
 describe("store: fleet retention", () => {
   it("keeps a fleet as long as the chat it runs in is cached", async () => {
     const { retainFleets, fleetsFor } = await import("./store");
-    const lane = { name: "a", status: "running" as const, activity: "", tail: "", tokens: 0 };
+    const lane = { name: "a", id: "l", status: "running" as const, activity: "", tail: "", tokens: 0 };
     const fleets = {
       "fleet-1": { session: "kept", source: "turn" as const, focused: null, lanes: [lane] },
       "fleet-2": { session: "gone", source: "turn" as const, focused: null, lanes: [lane] },

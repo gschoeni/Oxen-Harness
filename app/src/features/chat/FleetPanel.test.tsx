@@ -47,6 +47,7 @@ describe("FleetPanel", () => {
         session: "s1",
         fleet: "f1",
         agent: 0,
+        lane: "lane-0",
         name: "diff-scan",
         phase: "started",
         tokens: 0,
@@ -78,6 +79,7 @@ describe("FleetPanel", () => {
         session: "s1",
         fleet: "f1",
         agent: 0,
+        lane: "lane-0",
         name: "diff-scan",
         phase: "done",
         tokens: 15_000,
@@ -146,6 +148,27 @@ describe("FleetPanel", () => {
     expect(screen.getByText("explore")).toBeInTheDocument();
   });
 
+  it("a running lane can be stopped on its own", async () => {
+    render(<FleetPanel />);
+    started("f1");
+    act(() =>
+      useStore.getState().ingestFleetAgent({
+        session: "s1",
+        fleet: "f1",
+        agent: 1,
+        lane: "lane-1",
+        name: "callers",
+        phase: "started",
+        tokens: 0,
+        summary: "",
+      }),
+    );
+    // Only the running lane (which has an id) offers a stop.
+    expect(screen.queryByRole("button", { name: "Stop diff-scan" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Stop callers" }));
+    expect(ipc.cancelAgent).toHaveBeenCalledWith("s1", "lane-1");
+  });
+
   it("stop asks the backend to cancel just that fleet", async () => {
     render(<FleetPanel />);
     started("f1");
@@ -164,6 +187,7 @@ describe("FleetPanel", () => {
           session: "s1",
           fleet: "f1",
           agent,
+          lane: `lane-${agent}`,
           name,
           phase: "done",
           tokens: 10,

@@ -1235,6 +1235,28 @@
   display: flex;
   flex-direction: column;
 }
+.fleet-lane-row {
+  display: flex;
+  align-items: stretch;
+}
+.fleet-lane-row > .fleet-lane {
+  flex: 1;
+  min-width: 0;
+}
+/* Stop one lane; the rest of the fleet keeps going. */
+.fleet-lane-stop {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-3);
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.fleet-lane-stop:hover {
+  color: var(--danger, #c0392b);
+}
 .fleet-lane {
   display: flex;
   align-items: center;
