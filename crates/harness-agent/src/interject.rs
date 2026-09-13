@@ -39,23 +39,38 @@ impl Interjections {
 
     /// Queue a message for delivery at the turn's next safe point. Callable
     /// from any thread while the turn runs.
+    ///
+    /// The steer is *held*, not just bumped: a tool that starts waiting
+    /// later in the same round (the model was still streaming its `run_shell`
+    /// call when the user spoke) still backgrounds at once, instead of
+    /// blocking the full timeout on a baseline taken after the message
+    /// arrived. [`take_all`] releases it.
+    ///
+    /// [`take_all`]: Self::take_all
     pub fn push(&self, text: impl Into<String>) {
         self.inner
             .lock()
             .expect("interjection lock")
             .push_back(text.into());
         if let Some(notifier) = &self.notifier {
-            notifier.notify();
+            notifier.hold();
         }
     }
 
-    /// Drain everything queued, in arrival order.
+    /// Drain everything queued, in arrival order. Releases the held steer:
+    /// the messages are on their way to the model, so a tool's next wait
+    /// runs its course unless the user speaks again.
     pub fn take_all(&self) -> Vec<String> {
-        self.inner
+        let drained: Vec<String> = self
+            .inner
             .lock()
             .expect("interjection lock")
             .drain(..)
-            .collect()
+            .collect();
+        if let Some(notifier) = &self.notifier {
+            notifier.release();
+        }
+        drained
     }
 
     /// How many messages are waiting.
@@ -77,6 +92,24 @@ mod tests {
         assert_eq!(ij.take_all(), vec!["first", "second"]);
         assert_eq!(ij.pending(), 0);
         assert!(ij.take_all().is_empty());
+    }
+
+    /// The bug this guards against: the user speaks while the model is still
+    /// streaming its `run_shell` call, so no tool is waiting yet. The wait
+    /// that starts afterwards must still be cut short — and, once the
+    /// message has been drained for delivery, a later wait must not be.
+    #[tokio::test]
+    async fn a_message_that_arrives_before_the_tool_waits_still_cuts_the_wait_short() {
+        use std::time::Duration;
+        let (notifier, mut signal) = harness_tools::steer_channel();
+        let ij = Interjections::with_notifier(Some(notifier));
+        ij.push("stop, wrong directory");
+        tokio::time::timeout(Duration::from_millis(200), signal.wait())
+            .await
+            .expect("a pending interjection must cut a later wait short");
+        assert_eq!(ij.take_all(), vec!["stop, wrong directory"]);
+        let after = tokio::time::timeout(Duration::from_millis(50), signal.wait()).await;
+        assert!(after.is_err(), "drained: the wait runs its course again");
     }
 
     #[test]

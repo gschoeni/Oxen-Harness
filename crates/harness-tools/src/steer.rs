@@ -13,6 +13,7 @@
 //! only needs to know that *something* arrived, and the host still delivers
 //! the message itself through its normal path.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::watch;
@@ -22,16 +23,32 @@ use tokio::sync::watch;
 /// Cloneable so every host surface (a REPL reader, an HTTP handler) can hold
 /// one; they all feed the same counter.
 #[derive(Clone)]
-pub struct SteerNotifier(Arc<watch::Sender<u64>>);
+pub struct SteerNotifier {
+    counter: Arc<watch::Sender<u64>>,
+    pending: Arc<AtomicBool>,
+}
 
 /// The tool end: a handle that resolves once the counter moves.
 #[derive(Clone)]
-pub struct SteerSignal(watch::Receiver<u64>);
+pub struct SteerSignal {
+    counter: watch::Receiver<u64>,
+    pending: Arc<AtomicBool>,
+}
 
 /// Create a linked notifier/signal pair.
 pub fn steer_channel() -> (SteerNotifier, SteerSignal) {
     let (tx, rx) = watch::channel(0);
-    (SteerNotifier(Arc::new(tx)), SteerSignal(rx))
+    let pending = Arc::new(AtomicBool::new(false));
+    (
+        SteerNotifier {
+            counter: Arc::new(tx),
+            pending: pending.clone(),
+        },
+        SteerSignal {
+            counter: rx,
+            pending,
+        },
+    )
 }
 
 impl SteerNotifier {
@@ -39,21 +56,44 @@ impl SteerNotifier {
     /// tool currently waiting the bump is simply the value the next
     /// [`SteerSignal::wait`] starts from.
     pub fn notify(&self) {
-        self.0.send_modify(|n| *n = n.wrapping_add(1));
+        self.counter.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    /// Record a steer the agent has *not yet acted on*: wakes any current
+    /// wait like [`notify`], and makes every later wait resolve at once until
+    /// [`release`] — so a message that arrived while the model was still
+    /// streaming the tool call (before any tool was waiting) still cuts the
+    /// wait short instead of being lost to the baseline.
+    ///
+    /// [`notify`]: Self::notify
+    /// [`release`]: Self::release
+    pub fn hold(&self) {
+        self.pending.store(true, Ordering::SeqCst);
+        self.notify();
+    }
+
+    /// The held steer has been delivered to the model; waits go back to
+    /// resolving only on a fresh bump.
+    pub fn release(&self) {
+        self.pending.store(false, Ordering::SeqCst);
     }
 }
 
 impl SteerSignal {
-    /// Resolve as soon as the counter differs from the value it holds now.
+    /// Resolve as soon as the counter differs from the value it holds now,
+    /// or immediately while a steer is held (see [`SteerNotifier::hold`]).
     ///
-    /// A steer that arrived *before* this call does not count: the baseline is
-    /// read at the start of the wait, so a tool never trips over the previous
-    /// turn's interruption. If the notifier is gone the future simply never
-    /// resolves, leaving whatever it was raced against to decide.
+    /// A plain bump that arrived *before* this call does not count: the
+    /// baseline is read at the start of the wait, so a tool never trips over
+    /// the previous turn's interruption. If the notifier is gone the future
+    /// simply never resolves, leaving whatever it was raced against to decide.
     pub async fn wait(&mut self) {
-        let start = *self.0.borrow_and_update();
-        while self.0.changed().await.is_ok() {
-            if *self.0.borrow_and_update() != start {
+        if self.pending.load(Ordering::SeqCst) {
+            return;
+        }
+        let start = *self.counter.borrow_and_update();
+        while self.counter.changed().await.is_ok() {
+            if *self.counter.borrow_and_update() != start {
                 return;
             }
         }
@@ -93,6 +133,23 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), signal.wait())
             .await
             .expect("a fresh steer should fire");
+    }
+
+    #[tokio::test]
+    async fn a_held_steer_satisfies_a_later_wait_until_released() {
+        let (notifier, mut signal) = steer_channel();
+        // Held before any wait started: the wait must still see it.
+        notifier.hold();
+        tokio::time::timeout(Duration::from_millis(200), signal.wait())
+            .await
+            .expect("a held steer fires a wait that starts after it");
+        // And keeps firing until the agent has delivered the message.
+        tokio::time::timeout(Duration::from_millis(200), signal.wait())
+            .await
+            .expect("still held");
+        notifier.release();
+        let after = tokio::time::timeout(Duration::from_millis(50), signal.wait()).await;
+        assert!(after.is_err(), "released: only a fresh bump may fire");
     }
 
     #[tokio::test]
