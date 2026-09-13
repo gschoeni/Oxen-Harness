@@ -427,7 +427,8 @@ pub(crate) fn agent_config(
     let system_prompt = format!(
         "{}{}{}",
         harness_agent::system_prompt_with_env(
-            harness_agent::OptionalTools::from_registry(tools),
+            harness_agent::OptionalTools::from_registry(tools)
+                .with_agents(harness_runtime::tools::load().is_enabled(harness_agent::FLEET_TOOL),),
             workspace.root(),
         ),
         // The repository's own conventions (AGENTS.md and friends) before the

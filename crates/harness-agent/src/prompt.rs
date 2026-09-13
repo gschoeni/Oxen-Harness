@@ -41,6 +41,15 @@ impl OptionalTools {
         }
     }
 
+    /// Whether the agent tools will be registered. Both hosts register the
+    /// fleet *after* the prompt is built (the spawner snapshots the registry
+    /// without itself), so `from_registry` can't see it — they pass the
+    /// preference that decides the registration here.
+    pub fn with_agents(mut self, agents: bool) -> Self {
+        self.agents = agents;
+        self
+    }
+
     /// The default registry's optional set: `gh` and `update_trail` are
     /// registered unless the user disables them, the host-injected tools are
     /// not. Used where a prompt is built without a finished registry in hand

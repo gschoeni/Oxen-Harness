@@ -729,7 +729,7 @@ mod tests {
             agent
                 .messages()
                 .iter()
-                .all(|m| serde_json::to_string(m).unwrap().contains("spawn_agents") == false),
+                .all(|m| !serde_json::to_string(m).unwrap().contains("spawn_agents")),
             "the cut-off call must not reach the transcript"
         );
     }
