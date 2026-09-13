@@ -17,6 +17,8 @@
 //! escape hatch, and the same convention shells use for "don't record this")
 //! all mean the model wants the shell specifically, and it gets it.
 
+use crate::fs::{FIND_FILES_TOOL, READ_FILE_TOOL, SEARCH_FILES_TOOL};
+
 /// How every redirect ends: the model needs to know the door isn't locked.
 const ESCAPE: &str = "If you really need the shell form, prefix the command with a space.";
 
@@ -27,9 +29,14 @@ const PLUMBING: &[char] = &['|', '&', ';', '>', '<', '`', '\n', '\r', '(', ')'];
 /// If `command` is one of the bare shapes a dedicated tool does better,
 /// return the message to hand back in place of running it.
 ///
+/// `available` says whether the tool a redirect would point at is actually
+/// registered right now: a user can switch `search_files` off after the
+/// registry was built, and a redirect to a tool the model doesn't have is a
+/// dead end (blocked `grep` on one side, unknown tool on the other).
+///
 /// Pure and total: no I/O, and anything it doesn't recognize returns `None`
 /// so the shell runs it unchanged.
-pub fn intercept(command: &str) -> Option<String> {
+pub fn intercept(command: &str, available: impl Fn(&str) -> bool) -> Option<String> {
     // Checked before trimming — the leading space *is* the bypass.
     if command.starts_with([' ', '\t']) {
         return None;
@@ -43,25 +50,31 @@ pub fn intercept(command: &str) -> Option<String> {
     let program = tokens.next()?;
     let args: Vec<&str> = tokens.collect();
 
-    let redirect = match program {
-        "grep" | "egrep" | "rg" => {
+    let (target, redirect) = match program {
+        "grep" | "egrep" | "rg" => (
+            SEARCH_FILES_TOOL,
             "use search_files for content search (in-process, gitignore-aware, \
-             returns matches you can act on)"
-        }
+             returns matches you can act on)",
+        ),
         // `-exec`/`-delete` make it an action, not a search; `find_files` only
         // lists paths, so those keep going to the shell.
-        "find" if !args.iter().any(|a| ACTION_PREDICATES.contains(a)) => {
+        "find" if !args.iter().any(|a| ACTION_PREDICATES.contains(a)) => (
+            FIND_FILES_TOOL,
             "use find_files for file discovery (glob-based, gitignore-aware, \
-             returns paths you can act on)"
-        }
+             returns paths you can act on)",
+        ),
         // Only the plain "show me this file" form: any flag means the model
         // wants something `read_file` may not do (`tail -f`, `head -c`).
-        "cat" | "head" | "tail" if is_single_file(&args) => {
+        "cat" | "head" | "tail" if is_single_file(&args) => (
+            READ_FILE_TOOL,
             "use read_file to read a file (numbered lines, and the read is \
-             recorded so a later edit_file isn't rejected as stale)"
-        }
+             recorded so a later edit_file isn't rejected as stale)",
+        ),
         _ => return None,
     };
+    if !available(target) {
+        return None;
+    }
     Some(format!("Blocked: {redirect}. {ESCAPE}"))
 }
 
@@ -80,7 +93,8 @@ mod tests {
     #[test]
     fn content_search_goes_to_search_files() {
         for command in ["grep -rn needle .", "rg needle", "egrep needle src"] {
-            let out = intercept(command).unwrap_or_else(|| panic!("{command} should be blocked"));
+            let out = intercept(command, |_| true)
+                .unwrap_or_else(|| panic!("{command} should be blocked"));
             assert!(out.starts_with("Blocked: use search_files"), "{out}");
             assert!(out.contains("prefix the command with a space"), "{out}");
         }
@@ -88,20 +102,21 @@ mod tests {
 
     #[test]
     fn file_discovery_goes_to_find_files() {
-        let out = intercept("find . -name '*.rs'").expect("blocked");
+        let out = intercept("find . -name '*.rs'", |_| true).expect("blocked");
         assert!(out.contains("find_files"), "{out}");
     }
 
     #[test]
     fn a_find_that_acts_is_left_alone() {
-        assert!(intercept("find . -name '*.tmp' -delete").is_none());
-        assert!(intercept("find . -name '*.rs' -exec wc -l {} +").is_none());
+        assert!(intercept("find . -name '*.tmp' -delete", |_| true).is_none());
+        assert!(intercept("find . -name '*.rs' -exec wc -l {} +", |_| true).is_none());
     }
 
     #[test]
     fn reading_one_file_goes_to_read_file() {
         for command in ["cat src/lib.rs", "head README.md", "tail notes.txt"] {
-            let out = intercept(command).unwrap_or_else(|| panic!("{command} should be blocked"));
+            let out = intercept(command, |_| true)
+                .unwrap_or_else(|| panic!("{command} should be blocked"));
             assert!(out.contains("read_file"), "{out}");
         }
     }
@@ -109,31 +124,41 @@ mod tests {
     #[test]
     fn a_flagged_or_multi_file_read_is_left_alone() {
         // `read_file` has its own windowing; these ask for something else.
-        assert!(intercept("head -n 5 file.txt").is_none());
-        assert!(intercept("tail -f server.log").is_none());
-        assert!(intercept("cat a.txt b.txt").is_none());
-        assert!(intercept("cat").is_none());
+        assert!(intercept("head -n 5 file.txt", |_| true).is_none());
+        assert!(intercept("tail -f server.log", |_| true).is_none());
+        assert!(intercept("cat a.txt b.txt", |_| true).is_none());
+        assert!(intercept("cat", |_| true).is_none());
     }
 
     #[test]
     fn a_leading_space_bypasses_the_interceptor() {
-        assert!(intercept(" grep -rn needle .").is_none());
-        assert!(intercept("\tcat file.txt").is_none());
+        assert!(intercept(" grep -rn needle .", |_| true).is_none());
+        assert!(intercept("\tcat file.txt", |_| true).is_none());
     }
 
     #[test]
     fn plumbing_bypasses_the_interceptor() {
-        assert!(intercept("grep needle . | head -20").is_none());
-        assert!(intercept("cat file.txt > copy.txt").is_none());
-        assert!(intercept("cd src && grep -rn needle .").is_none());
-        assert!(intercept("grep -rn needle . ; echo done").is_none());
-        assert!(intercept("echo $(grep -c needle file)").is_none());
+        assert!(intercept("grep needle . | head -20", |_| true).is_none());
+        assert!(intercept("cat file.txt > copy.txt", |_| true).is_none());
+        assert!(intercept("cd src && grep -rn needle .", |_| true).is_none());
+        assert!(intercept("grep -rn needle . ; echo done", |_| true).is_none());
+        assert!(intercept("echo $(grep -c needle file)", |_| true).is_none());
+    }
+
+    #[test]
+    fn a_redirect_to_a_missing_tool_is_not_made() {
+        // The user switched `search_files` off: `grep` must reach the shell
+        // rather than bounce between a blocked command and an unknown tool.
+        let only_read = |tool: &str| tool == READ_FILE_TOOL;
+        assert!(intercept("grep -rn needle .", only_read).is_none());
+        assert!(intercept("find . -name '*.rs'", only_read).is_none());
+        assert!(intercept("cat src/lib.rs", only_read).is_some());
     }
 
     #[test]
     fn ordinary_commands_are_untouched() {
         for command in ["cargo test", "ls -la", "git status", ""] {
-            assert!(intercept(command).is_none(), "{command}");
+            assert!(intercept(command, |_| true).is_none(), "{command}");
         }
     }
 }

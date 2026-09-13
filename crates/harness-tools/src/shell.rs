@@ -84,6 +84,9 @@ pub struct ShellTool {
     /// Whether to redirect commands that have a dedicated tool (see
     /// [`intercept`]). Off unless the host also registered those tools.
     intercepting: bool,
+    /// Which tools are registered right now, so a redirect is only made to
+    /// one the model can actually call. `None` assumes they all are.
+    roster: Option<crate::Roster>,
     /// Fires when the user says something mid-turn; a foreground wait races
     /// against it so an interruption isn't stuck behind a slow command.
     steer: Option<SteerSignal>,
@@ -97,6 +100,7 @@ impl ShellTool {
             tasks: None,
             session,
             intercepting: false,
+            roster: None,
             steer: None,
         }
     }
@@ -118,6 +122,7 @@ impl ShellTool {
             tasks: Some(tasks),
             session,
             intercepting: false,
+            roster: None,
             steer: None,
         }
     }
@@ -128,6 +133,15 @@ impl ShellTool {
     /// is pointed at a tool it doesn't have.
     pub fn intercepting(mut self, enabled: bool) -> Self {
         self.intercepting = enabled;
+        self
+    }
+
+    /// Redirect like [`Self::intercepting`], but only to tools still present
+    /// in `roster` — the registry's live list, which shrinks when the user
+    /// disables a tool after the registry was built.
+    pub fn intercepting_for(mut self, roster: crate::Roster) -> Self {
+        self.intercepting = true;
+        self.roster = Some(roster);
         self
     }
 
@@ -229,7 +243,8 @@ impl TypedTool for ShellTool {
         // A redirect is a *result*, not an error: an error reads as a
         // malfunction and gets retried, a result gets acted on.
         if self.intercepting {
-            if let Some(redirect) = intercept::intercept(command) {
+            let available = |tool: &str| self.roster.as_ref().is_none_or(|r| r.contains(tool));
+            if let Some(redirect) = intercept::intercept(command, available) {
                 return Ok(redirect);
             }
         }

@@ -130,6 +130,31 @@ pub struct Aside {
     pub body: String,
 }
 
+/// The names of the tools a registry holds right now, shared with tools that
+/// point the model at other tools (the shell's `grep` → `search_files`
+/// redirect) so a promise is only made about a tool that is still there.
+/// Tracks the registry it came from: registering or removing a tool updates
+/// every clone.
+#[derive(Debug, Clone, Default)]
+pub struct Roster(Arc<std::sync::RwLock<std::collections::BTreeSet<String>>>);
+
+impl Roster {
+    pub fn contains(&self, name: &str) -> bool {
+        self.0.read().expect("roster poisoned").contains(name)
+    }
+
+    fn insert(&self, name: &str) {
+        self.0
+            .write()
+            .expect("roster poisoned")
+            .insert(name.to_string());
+    }
+
+    fn remove(&self, name: &str) {
+        self.0.write().expect("roster poisoned").remove(name);
+    }
+}
+
 /// The shared queue of pending [`Aside`]s, cloneable into any tool.
 #[derive(Debug, Clone, Default)]
 pub struct Asides(Arc<std::sync::Mutex<std::collections::VecDeque<Aside>>>);
@@ -523,6 +548,8 @@ pub struct ToolRegistry {
     steer: Option<steer::SteerNotifier>,
     /// Results that finished on their own, awaiting delivery to the model.
     asides: Asides,
+    /// The live list of registered names (see [`Roster`]).
+    roster: Roster,
 }
 
 impl ToolRegistry {
@@ -574,12 +601,19 @@ impl ToolRegistry {
 
     /// Register a tool, returning the registry for chaining.
     pub fn with(mut self, tool: Arc<dyn Tool>) -> Self {
-        self.tools.insert(tool.name().to_string(), tool);
+        self.register(tool);
         self
     }
 
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
+        self.roster.insert(tool.name());
         self.tools.insert(tool.name().to_string(), tool);
+    }
+
+    /// The live list of registered tool names, for a tool that needs to know
+    /// which of its peers the model can still call.
+    pub fn roster(&self) -> Roster {
+        self.roster.clone()
     }
 
     /// Register a [`TypedTool`], returning the registry for chaining.
@@ -601,6 +635,7 @@ impl ToolRegistry {
     /// preference). Returns the removed tool, if any.
     pub fn remove(&mut self, name: &str) -> Option<Arc<dyn Tool>> {
         self.description_overrides.remove(name);
+        self.roster.remove(name);
         self.tools.remove(name)
     }
 
@@ -733,9 +768,10 @@ impl ToolRegistry {
         let (notifier, signal) = steer::steer_channel();
         registry.register_typed(
             shell::ShellTool::with_tasks(workspace.clone(), tasks.clone())
-                // This registry always has the fs tools, so pointing the model
-                // at them is always a promise it can keep.
-                .intercepting(true)
+                // This registry starts with the fs tools, but the user's
+                // preferences may remove some later: redirect only to the
+                // ones still registered, so the promise can always be kept.
+                .intercepting_for(registry.roster())
                 .with_steer(signal.clone()),
         );
         registry.register_typed(tasks::TaskOutputTool::new(tasks.clone()).with_steer(signal));
@@ -829,6 +865,45 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::UnknownTool(_)));
+    }
+
+    #[tokio::test]
+    async fn the_shell_stops_redirecting_to_a_tool_that_was_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hay.txt"), "needle\n").unwrap();
+        let mut registry = ToolRegistry::default_for_workspace(Workspace::new(dir.path()).unwrap());
+        let blocked = registry
+            .invoke(
+                shell::RUN_SHELL_TOOL,
+                serde_json::json!({"command": "grep -c needle hay.txt"}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            blocked.starts_with("Blocked: use search_files"),
+            "{blocked}"
+        );
+
+        // The user switched `search_files` off (ToolPrefs::apply → remove).
+        registry.remove(SEARCH_FILES_TOOL).expect("was registered");
+        let ran = registry
+            .invoke(
+                shell::RUN_SHELL_TOOL,
+                serde_json::json!({"command": "grep -c needle hay.txt"}),
+            )
+            .await
+            .unwrap();
+        assert!(!ran.starts_with("Blocked"), "{ran}");
+        assert!(ran.contains("exit_code"), "{ran}");
+        // Redirects to tools still present are unaffected.
+        let still = registry
+            .invoke(
+                shell::RUN_SHELL_TOOL,
+                serde_json::json!({"command": "cat hay.txt"}),
+            )
+            .await
+            .unwrap();
+        assert!(still.starts_with("Blocked: use read_file"), "{still}");
     }
 
     #[test]
