@@ -253,8 +253,9 @@ impl LineEndings {
 struct EditOutcome {
     text: String,
     summary: String,
-    /// 1-based inclusive line ranges of the original that each hunk covered,
-    /// for checking them against what the model was actually shown.
+    /// 1-based inclusive line ranges of the original each hunk needs the
+    /// model to have seen (what it replaced, or the line it inserted after),
+    /// for checking them against what it was actually shown.
     touched_lines: Vec<(usize, usize)>,
     /// The same hunks with their replacement sizes, for moving the recorded
     /// seen-ranges into the edited file's coordinates.
@@ -283,14 +284,31 @@ fn line_offsets(text: &str) -> Vec<usize> {
     offsets
 }
 
+/// A line-addressed hunk resolved to `original`'s coordinates.
+struct LineHunk {
+    /// Byte span replaced; zero-width for an insertion.
+    start: usize,
+    end: usize,
+    text: String,
+    note: String,
+    /// For an insertion, the line it goes after — the only line the model
+    /// is pointing at, so the only one the read-gate asks it to have seen.
+    insert_after: Option<usize>,
+    /// Lines the hunk adds, for moving seen-ranges (an insertion's leading
+    /// newline that terminates an unterminated last line is not a line).
+    new_lines: usize,
+}
+
 /// Resolve a line-addressed hunk to a byte span of `original` and the text
-/// that goes there. Insertions become a replacement of the neighbouring
-/// line with itself plus the new text, so every hunk is a plain splice.
+/// that goes there. An insertion is a zero-width span at the start of the
+/// following line (or the end of the file), never a rewrite of a neighbour
+/// the model did not ask to touch — so it needs no sight of that neighbour
+/// and never collides with an edit that does replace it.
 fn line_hunk(
     original: &str,
     edit: &Replacement,
     label: &dyn Fn(String) -> ToolError,
-) -> Result<(usize, usize, String, String), ToolError> {
+) -> Result<LineHunk, ToolError> {
     if !edit.old_string.is_empty() {
         return Err(label(
             "anchor a hunk by `old_string` or by line number, not both".into(),
@@ -317,26 +335,24 @@ fn line_hunk(
             )));
         }
         let inserted = ensure_newline(&edit.new_string);
-        return Ok(if after == line_count {
+        let new_lines = inserted.lines().count();
+        let (at, text) = if after == line_count {
             let lead = if original.is_empty() || original.ends_with('\n') {
                 ""
             } else {
                 "\n"
             };
-            (
-                original.len(),
-                original.len(),
-                format!("{lead}{inserted}"),
-                format!("inserted after line {after}"),
-            )
+            (original.len(), format!("{lead}{inserted}"))
         } else {
-            let (start, end) = (offsets[after], offsets[after + 1]);
-            (
-                start,
-                end,
-                format!("{inserted}{}", &original[start..end]),
-                format!("inserted after line {after}"),
-            )
+            (offsets[after], inserted)
+        };
+        return Ok(LineHunk {
+            start: at,
+            end: at,
+            text,
+            note: format!("inserted after line {after}"),
+            insert_after: Some(after),
+            new_lines,
         });
     }
     let first = edit.line_start.expect("by_line");
@@ -380,12 +396,15 @@ fn line_hunk(
     } else {
         format!("lines {first}-{last}")
     };
-    Ok((
+    let new_lines = replacement.lines().count();
+    Ok(LineHunk {
         start,
         end,
-        replacement,
-        format!("{what} {range} (was: {echo})"),
-    ))
+        text: replacement,
+        note: format!("{what} {range} (was: {echo})"),
+        insert_after: None,
+        new_lines,
+    })
 }
 
 /// The 1-based line range a byte span covers in `text`.
@@ -406,20 +425,32 @@ fn line_span(text: &str, start: usize, end: usize) -> (usize, usize) {
     (line_of(start), line_of(end.saturating_sub(1).max(start)))
 }
 
+/// One resolved hunk over the original text, ready to splice.
+struct Span<'a> {
+    start: usize,
+    end: usize,
+    text: &'a str,
+    /// Index into the caller's `edits`, for error messages.
+    idx: usize,
+    /// Original lines the model must have seen for this hunk — the replaced
+    /// range, or an insertion's anchor line (none at the top of the file).
+    touched: Option<(usize, usize)>,
+    applied: state::AppliedEdit,
+}
+
 /// Apply every replacement against the *original* text, atomically: each match
 /// is resolved before anything is written, so a batch with one bad hunk leaves
 /// the file untouched rather than half-edited.
 fn apply_edits(original: &str, edits: &[Replacement]) -> Result<EditOutcome, ToolError> {
     let many = edits.len() > 1;
-    // (start, end, replacement, edit index) over the original text.
-    let mut spans: Vec<(usize, usize, &str, usize)> = Vec::new();
+    let mut spans: Vec<Span<'_>> = Vec::new();
     let mut replaced_lines = 0usize;
     let mut inserted_lines = 0usize;
 
     let mut notes = Vec::new();
-    // Replacement text for line-addressed hunks lives here so the spans can
-    // borrow it like they borrow `edit.new_string`.
-    let mut line_texts: Vec<(usize, usize, String, usize)> = Vec::new();
+    // Line-addressed hunks, resolved up front; their replacement text lives
+    // here so the spans can borrow it like they borrow `edit.new_string`.
+    let mut line_hunks: Vec<(LineHunk, usize)> = Vec::new();
     for (i, edit) in edits.iter().enumerate() {
         let label = |msg: String| {
             if many {
@@ -429,11 +460,10 @@ fn apply_edits(original: &str, edits: &[Replacement]) -> Result<EditOutcome, Too
             }
         };
         if edit.by_line() {
-            let (start, end, text, note) = line_hunk(original, edit, &label)?;
-            replaced_lines += original[start..end].lines().count();
-            inserted_lines += text.lines().count();
-            notes.push(note);
-            line_texts.push((start, end, text, i));
+            let hunk = line_hunk(original, edit, &label)?;
+            replaced_lines += original[hunk.start..hunk.end].lines().count();
+            inserted_lines += hunk.new_lines;
+            line_hunks.push((hunk, i));
             continue;
         }
         if edit.old_string == edit.new_string {
@@ -466,51 +496,90 @@ fn apply_edits(original: &str, edits: &[Replacement]) -> Result<EditOutcome, Too
             }
         }
         for at in hits {
-            spans.push((at, at + edit.old_string.len(), &edit.new_string, i));
+            let end = at + edit.old_string.len();
+            let (first_line, last_line) = line_span(original, at, end);
+            spans.push(Span {
+                start: at,
+                end,
+                text: &edit.new_string,
+                idx: i,
+                touched: Some((first_line, last_line)),
+                applied: state::AppliedEdit {
+                    first_line,
+                    last_line,
+                    new_lines: edit.new_string.lines().count().max(1),
+                },
+            });
             replaced_lines += edit.old_string.lines().count();
             inserted_lines += edit.new_string.lines().count();
         }
     }
 
-    for (start, end, text, i) in &line_texts {
-        spans.push((*start, *end, text.as_str(), *i));
+    let line_count = line_offsets(original).len().saturating_sub(1);
+    for (hunk, i) in &line_hunks {
+        notes.push(hunk.note.clone());
+        let (touched, applied) = match hunk.insert_after {
+            // An insertion touches nothing; the gate only asks that the model
+            // has seen the line it is anchoring on (none, at the top of the
+            // file). For seen-range bookkeeping it reads as "the following
+            // line became itself plus the new lines" — or, past the last
+            // line, as brand-new lines the model wrote.
+            Some(after) => (
+                (after >= 1).then_some((after, after)),
+                state::AppliedEdit {
+                    first_line: after + 1,
+                    last_line: after + 1,
+                    new_lines: hunk.new_lines + usize::from(after < line_count),
+                },
+            ),
+            None => {
+                let lines = line_span(original, hunk.start, hunk.end);
+                (
+                    Some(lines),
+                    state::AppliedEdit {
+                        first_line: lines.0,
+                        last_line: lines.1,
+                        new_lines: hunk.new_lines.max(1),
+                    },
+                )
+            }
+        };
+        spans.push(Span {
+            start: hunk.start,
+            end: hunk.end,
+            text: &hunk.text,
+            idx: *i,
+            touched,
+            applied,
+        });
     }
 
     // Overlapping hunks are the classic way a batch corrupts a file: two edits
-    // both "succeed" and the second one's context is already gone.
-    spans.sort_by_key(|(start, ..)| *start);
+    // both "succeed" and the second one's context is already gone. A
+    // zero-width insertion at a boundary is disjoint from a replacement that
+    // starts (or ends) there; two insertions at the same point are not,
+    // since their order in the file would be a guess.
+    spans.sort_by_key(|span| (span.start, span.end));
     for pair in spans.windows(2) {
-        let (_, first_end, _, first_idx) = pair[0];
-        let (second_start, _, _, second_idx) = pair[1];
-        if second_start < first_end {
+        let (first, second) = (&pair[0], &pair[1]);
+        let same_insertion_point =
+            first.start == first.end && second.start == second.end && first.start == second.start;
+        if second.start < first.end || same_insertion_point {
             return Err(ToolError::InvalidArguments(format!(
                 "edits {} and {} overlap in the file; merge them into one edit",
-                first_idx + 1,
-                second_idx + 1
+                first.idx + 1,
+                second.idx + 1
             )));
         }
     }
 
-    let touched_lines: Vec<(usize, usize)> = spans
-        .iter()
-        .map(|&(start, end, ..)| line_span(original, start, end))
-        .collect();
-    let applied: Vec<state::AppliedEdit> = spans
-        .iter()
-        .zip(&touched_lines)
-        .map(
-            |(&(.., replacement, _), &(first_line, last_line))| state::AppliedEdit {
-                first_line,
-                last_line,
-                new_lines: replacement.lines().count().max(1),
-            },
-        )
-        .collect();
+    let touched_lines: Vec<(usize, usize)> = spans.iter().filter_map(|span| span.touched).collect();
+    let applied: Vec<state::AppliedEdit> = spans.iter().map(|span| span.applied).collect();
 
     // Back to front, so earlier offsets stay valid as later ones are spliced.
     let mut text = original.to_string();
-    for &(start, end, replacement, _) in spans.iter().rev() {
-        text.replace_range(start..end, replacement);
+    for span in spans.iter().rev() {
+        text.replace_range(span.start..span.end, span.text);
     }
 
     let summary = if many {
@@ -638,6 +707,95 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(read_raw(&ws, "f.txt").await, "a\nB\nc\nd\ne\n");
+    }
+
+    #[tokio::test]
+    async fn appending_after_a_fully_read_file_needs_no_sight_past_its_end() {
+        // The insertion goes after line 5 of a 5-line file that was read in
+        // full. The model has seen everything there is; asking it to read a
+        // "line 6" that does not exist would be a dead end.
+        let (_dir, ws) = workspace();
+        write(&ws, "f.txt", "a\nb\nc\nd\ne\n").await;
+        let state = FileState::gated();
+        state.record_parts(
+            &ws.resolve("f.txt").unwrap(),
+            state::fingerprint(b"a\nb\nc\nd\ne\n"),
+            5,
+            vec![(1, 5)],
+        );
+        let tool = EditFileTool::with_state(ws.clone(), state.clone());
+        tool.invoke(serde_json::json!({"path": "f.txt", "edits": [
+            {"insert_after_line": 5, "new_string": "x"}
+        ]}))
+        .await
+        .unwrap();
+        assert_eq!(read_raw(&ws, "f.txt").await, "a\nb\nc\nd\ne\nx\n");
+        // The new line counts as seen (the model wrote it), so a follow-up
+        // edit there is not refused.
+        tool.invoke(serde_json::json!({"path": "f.txt", "edits": [
+            {"line_start": 6, "new_string": "X"}
+        ]}))
+        .await
+        .unwrap();
+        assert_eq!(read_raw(&ws, "f.txt").await, "a\nb\nc\nd\ne\nX\n");
+    }
+
+    #[tokio::test]
+    async fn an_insertion_only_needs_its_anchor_line_seen() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.txt", "a\nb\nc\nd\ne\n").await;
+        let state = FileState::gated();
+        // Lines 1-2 shown; line 3 (the neighbour an insertion after 2 lands
+        // before) was elided. Inserting after 2 touches no line 3 text.
+        state.record_parts(
+            &ws.resolve("f.txt").unwrap(),
+            state::fingerprint(b"a\nb\nc\nd\ne\n"),
+            5,
+            vec![(1, 2)],
+        );
+        let tool = EditFileTool::with_state(ws.clone(), state.clone());
+        tool.invoke(serde_json::json!({"path": "f.txt", "edits": [
+            {"insert_after_line": 2, "new_string": "x"}
+        ]}))
+        .await
+        .unwrap();
+        assert_eq!(read_raw(&ws, "f.txt").await, "a\nb\nx\nc\nd\ne\n");
+        // But anchoring on a line the model never saw is still refused.
+        let err = tool
+            .invoke(serde_json::json!({"path": "f.txt", "edits": [
+                {"insert_after_line": 5, "new_string": "y"}
+            ]}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("elided in your read"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_insertion_batches_with_an_edit_of_the_line_it_lands_before() {
+        let (_dir, ws) = workspace();
+        write(&ws, "f.txt", "a\nb\nc\nd\n").await;
+        let result = EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({"path": "f.txt", "edits": [
+                {"insert_after_line": 2, "new_string": "x"},
+                {"line_start": 3, "new_string": "C"},
+                {"insert_after_line": 3, "new_string": "y"}
+            ]}))
+            .await
+            .unwrap();
+        assert_eq!(
+            read_raw(&ws, "f.txt").await,
+            "a\nb\nx\nC\ny\nd\n",
+            "{result}"
+        );
+        // Two insertions at the same point have no defined order.
+        let err = EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({"path": "f.txt", "edits": [
+                {"insert_after_line": 1, "new_string": "p"},
+                {"insert_after_line": 1, "new_string": "q"}
+            ]}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("overlap"), "{err}");
     }
 
     #[tokio::test]
