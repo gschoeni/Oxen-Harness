@@ -679,8 +679,7 @@ impl Agent {
         for (call, result) in calls.iter().zip(results) {
             // A call whose task vanished (a panicking tool) still owes the
             // model a result, or the provider rejects the unpaired call.
-            let result = result
-                .unwrap_or_else(|| "tool error: the tool crashed before producing a result".into());
+            let result = result.unwrap_or_else(|| super::tools::CRASHED_RESULT.to_string());
             // The work that obliges a charted trail, per the prompt guideline
             // ("at the latest, right before your first file edit or shell
             // command"). Attempts count — a refused edit is still work.

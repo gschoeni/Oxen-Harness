@@ -21,7 +21,8 @@
 //! Orthogonal to the modes, [`plan_mode`] is a live latch the host flips while
 //! the model researches and writes an execution plan: the tree goes read-only
 //! (only `.oxen-harness/plans/` stays writable) in *every* mode, bypass
-//! included. It is never persisted.
+//! included. It is never persisted. Tools without an argument-level rule are
+//! judged by their declared [`ToolEffect`] — mutating ones are refused.
 //!
 //! [`plan_mode`]: PermissionGate::plan_mode
 //! The gate hooks `Agent::run_tool` (one choke point covers the main agent,
@@ -92,6 +93,28 @@ pub enum GateOutcome {
         message: String,
     },
 }
+
+/// What a tool declares about its side effects, as the caller knows it from
+/// the tool's own scheduling class: a tool that may run concurrently with
+/// other calls reads, searches, or fetches; one that must run alone mutates
+/// the workspace or runs a process. Plan mode's read-only latch uses this to
+/// refuse any mutating tool it has no finer-grained rule for, so a tool added
+/// later (or a user-defined HTTP tool) fails closed rather than slipping
+/// through a name list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolEffect {
+    /// Reads, searches, fetches: safe while the tree is read-only.
+    ReadOnly,
+    /// Writes, runs a process, or has effects the harness can't see.
+    Mutating,
+}
+
+/// The `git` tool operations that only read the repository, so they run
+/// while plan mode holds the tree read-only and never ask in cautious mode.
+const GIT_READ_ONLY_OPS: &[&str] = &["status", "diff", "log"];
+/// The `gh` tool operations that only read from GitHub (see
+/// [`GIT_READ_ONLY_OPS`]).
+const GH_READ_ONLY_OPS: &[&str] = &["pr_view", "pr_checks"];
 
 /// Shell rc files a tool must never write: they execute on the user's next
 /// shell start, making them a self-privilege-escalation vector.
@@ -214,9 +237,15 @@ impl PermissionGate {
     }
 
     /// First stage: classify + apply policy, no user interaction. `args` are
-    /// the tool call's parsed JSON arguments.
-    pub fn review(&self, tool: &str, args: &serde_json::Value) -> GateReview {
-        if let Some(denial) = self.plan_review(tool, args) {
+    /// the tool call's parsed JSON arguments; `effect` is what the tool
+    /// declares about its side effects (see [`ToolEffect`]), which plan mode
+    /// uses for every tool it has no finer-grained rule for.
+    ///
+    /// The caller must review the arguments that will actually run: if it
+    /// repairs or rewrites them after this returns, it consults the gate
+    /// again with the repaired arguments.
+    pub fn review(&self, tool: &str, args: &serde_json::Value, effect: ToolEffect) -> GateReview {
+        if let Some(denial) = self.plan_review(tool, args, effect) {
             return denial;
         }
         match tool {
@@ -234,7 +263,21 @@ impl PermissionGate {
     /// latch composes with every mode — bypass included. A malformed argument
     /// shape falls through, exactly as the mode reviews do, so the tool's own
     /// parsing produces the error.
-    fn plan_review(&self, tool: &str, args: &serde_json::Value) -> Option<GateReview> {
+    ///
+    /// Deny by default: the tools with an argument-level rule are matched by
+    /// name; every other tool is judged by its declared [`ToolEffect`], so a
+    /// mutating tool the gate has never heard of (a user-defined HTTP tool, a
+    /// dev-server starter, a tool added next month) is refused rather than
+    /// waved through. `ask_user_question` is the one exclusive tool that is
+    /// not a mutation — plan mode's prompt tells the model to use it — and
+    /// `spawn_agents` may run because its lanes share this gate's latch
+    /// (see [`Self::for_subagent`]), so nothing they do escapes it either.
+    fn plan_review(
+        &self,
+        tool: &str,
+        args: &serde_json::Value,
+        effect: ToolEffect,
+    ) -> Option<GateReview> {
         if !self.plan_mode() {
             return None;
         }
@@ -247,11 +290,11 @@ impl PermissionGate {
                 format!("writing {path}")
             }
             "git" => match args.get("operation").and_then(|o| o.as_str())? {
-                "status" | "diff" | "log" => return None,
+                op if GIT_READ_ONLY_OPS.contains(&op) => return None,
                 op => format!("git {op}"),
             },
             "gh" => match args.get("operation").and_then(|o| o.as_str())? {
-                "pr_view" | "pr_checks" => return None,
+                op if GH_READ_ONLY_OPS.contains(&op) => return None,
                 op => format!("gh {op}"),
             },
             "kill_task" => "terminating a background task".to_string(),
@@ -272,7 +315,11 @@ impl PermissionGate {
                 }
                 format!("running `{command}`")
             }
-            _ => return None,
+            "ask_user_question" => return None,
+            _ => match effect {
+                ToolEffect::ReadOnly => return None,
+                ToolEffect::Mutating => format!("calling `{tool}` (it is not a read-only tool)"),
+            },
         };
         let policy = self.policy.read().expect("policy poisoned").clone();
         self.audit(tool, &refused, "deny", "plan_mode", &policy);
@@ -424,7 +471,7 @@ impl PermissionGate {
         match args.get("operation").and_then(|o| o.as_str()) {
             // Malformed arguments: let the tool's own parsing produce the error.
             None => GateReview::Allow,
-            Some("status" | "diff" | "log") => GateReview::Allow,
+            Some(op) if GIT_READ_ONLY_OPS.contains(&op) => GateReview::Allow,
             Some("commit") => {
                 let policy = self.policy.read().expect("policy poisoned").clone();
                 let approved = self.grants.read().expect("grants poisoned").commits;
@@ -454,7 +501,7 @@ impl PermissionGate {
     fn review_gh(&self, args: &serde_json::Value) -> GateReview {
         match args.get("operation").and_then(|o| o.as_str()) {
             None => GateReview::Allow,
-            Some("pr_view" | "pr_checks") => GateReview::Allow,
+            Some(op) if GH_READ_ONLY_OPS.contains(&op) => GateReview::Allow,
             Some(op) => {
                 let what = match args.get("title").and_then(|t| t.as_str()) {
                     Some(title) if !title.trim().is_empty() => {
@@ -856,21 +903,43 @@ mod tests {
         serde_json::json!({ "command": command })
     }
 
+    /// What the real tools declare (mirrors their `Concurrency`): the
+    /// mutating built-ins are exclusive, everything else is shared.
+    fn effect_of(tool: &str) -> ToolEffect {
+        match tool {
+            "run_shell" | "write_file" | "edit_file" | "git" | "gh" | "kill_task"
+            | "ask_user_question" | "custom_post" => ToolEffect::Mutating,
+            _ => ToolEffect::ReadOnly,
+        }
+    }
+
     #[test]
     fn safe_commands_pass_without_asking() {
         let _env = testutil::env_guard();
         let (_home, _ws, gate) = gate(None);
         assert!(matches!(
-            gate.review("run_shell", &shell_args("git status")),
+            gate.review(
+                "run_shell",
+                &shell_args("git status"),
+                effect_of("run_shell")
+            ),
             GateReview::Allow
         ));
         assert!(matches!(
-            gate.review("run_shell", &shell_args("cargo build")),
+            gate.review(
+                "run_shell",
+                &shell_args("cargo build"),
+                effect_of("run_shell")
+            ),
             GateReview::Allow
         ));
         // Non-shell tools pass through in relaxed mode.
         assert!(matches!(
-            gate.review("write_file", &serde_json::json!({"path": "src/main.rs"})),
+            gate.review(
+                "write_file",
+                &serde_json::json!({"path": "src/main.rs"}),
+                effect_of("write_file")
+            ),
             GateReview::Allow
         ));
     }
@@ -880,10 +949,14 @@ mod tests {
         let _env = testutil::env_guard();
         let (_home, _ws, gate) = gate(None);
         assert!(matches!(
-            gate.review("run_shell", &shell_args("rm -rf ./build")),
+            gate.review(
+                "run_shell",
+                &shell_args("rm -rf ./build"),
+                effect_of("run_shell")
+            ),
             GateReview::Ask(_)
         ));
-        let review = gate.review("run_shell", &shell_args("rm -rf ~"));
+        let review = gate.review("run_shell", &shell_args("rm -rf ~"), effect_of("run_shell"));
         match review {
             GateReview::Deny { message } => assert!(message.contains("hard safety limit")),
             other => panic!("expected breaker deny, got {other:?}"),
@@ -899,7 +972,11 @@ mod tests {
             "../.bashrc",
             ".oxen-harness/permissions.json",
         ] {
-            let review = gate.review("write_file", &serde_json::json!({"path": path}));
+            let review = gate.review(
+                "write_file",
+                &serde_json::json!({"path": path}),
+                effect_of("write_file"),
+            );
             assert!(
                 matches!(review, GateReview::Deny { .. }),
                 "expected protected-path deny for {path}"
@@ -914,8 +991,11 @@ mod tests {
         std::env::set_var("OXEN_HARNESS_DIR", home.path());
         let (_home, _ws, gate) = gate(Some(ApprovalDecision::AllowSession));
 
-        let GateReview::Ask(request) = gate.review("run_shell", &shell_args("rm -rf ./build"))
-        else {
+        let GateReview::Ask(request) = gate.review(
+            "run_shell",
+            &shell_args("rm -rf ./build"),
+            effect_of("run_shell"),
+        ) else {
             panic!("expected ask");
         };
         let (outcome, decision) = gate.resolve(*request).await;
@@ -923,11 +1003,19 @@ mod tests {
         assert_eq!(decision, ApprovalDecision::AllowSession);
         // Dangerous grant is exact: the same command passes, a different rm asks.
         assert!(matches!(
-            gate.review("run_shell", &shell_args("rm -rf ./build")),
+            gate.review(
+                "run_shell",
+                &shell_args("rm -rf ./build"),
+                effect_of("run_shell")
+            ),
             GateReview::Allow
         ));
         assert!(matches!(
-            gate.review("run_shell", &shell_args("rm -rf ./dist")),
+            gate.review(
+                "run_shell",
+                &shell_args("rm -rf ./dist"),
+                effect_of("run_shell")
+            ),
             GateReview::Ask(_)
         ));
         std::env::remove_var("OXEN_HARNESS_DIR");
@@ -940,8 +1028,11 @@ mod tests {
         std::env::set_var("OXEN_HARNESS_DIR", home.path());
         let (_home, ws, gate) = gate(Some(ApprovalDecision::AllowProject));
 
-        let GateReview::Ask(request) = gate.review("run_shell", &shell_args("rm -rf ./build"))
-        else {
+        let GateReview::Ask(request) = gate.review(
+            "run_shell",
+            &shell_args("rm -rf ./build"),
+            effect_of("run_shell"),
+        ) else {
             panic!("expected ask");
         };
         let (outcome, _) = gate.resolve(*request).await;
@@ -949,7 +1040,11 @@ mod tests {
         // Persisted: a *fresh* gate for the same workspace allows it.
         let fresh = PermissionGate::new(ws.path(), Arc::new(Scripted(None)));
         assert!(matches!(
-            fresh.review("run_shell", &shell_args("rm -rf ./build")),
+            fresh.review(
+                "run_shell",
+                &shell_args("rm -rf ./build"),
+                effect_of("run_shell")
+            ),
             GateReview::Allow
         ));
         std::env::remove_var("OXEN_HARNESS_DIR");
@@ -961,7 +1056,11 @@ mod tests {
         let (_home, _ws, gate) = gate(Some(ApprovalDecision::AllowOnce));
         let sub = gate.for_subagent();
         assert!(!sub.is_interactive());
-        let GateReview::Ask(request) = sub.review("run_shell", &shell_args("kill -9 42")) else {
+        let GateReview::Ask(request) = sub.review(
+            "run_shell",
+            &shell_args("kill -9 42"),
+            effect_of("run_shell"),
+        ) else {
             panic!("expected ask");
         };
         let (outcome, _) = sub.resolve(*request).await;
@@ -979,7 +1078,11 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("OXEN_HARNESS_DIR", home.path());
         let (_home, _ws, gate) = gate(Some(ApprovalDecision::MoveToTrash));
-        let GateReview::Ask(request) = gate.review("run_shell", &shell_args("rm -rf build")) else {
+        let GateReview::Ask(request) = gate.review(
+            "run_shell",
+            &shell_args("rm -rf build"),
+            effect_of("run_shell"),
+        ) else {
             panic!("expected ask");
         };
         assert!(request.offer_trash);
@@ -1000,8 +1103,11 @@ mod tests {
         let _env = testutil::env_guard();
         let (_home, _ws, gate) = gate(Some(ApprovalDecision::AllowAllBypass));
 
-        let GateReview::Ask(request) = gate.review("run_shell", &shell_args("rm -rf ./build"))
-        else {
+        let GateReview::Ask(request) = gate.review(
+            "run_shell",
+            &shell_args("rm -rf ./build"),
+            effect_of("run_shell"),
+        ) else {
             panic!("expected ask");
         };
         let (outcome, decision) = gate.resolve(*request).await;
@@ -1012,14 +1118,18 @@ mod tests {
         // dangerous commands run without asking…
         assert_eq!(gate.mode(), PermissionMode::Bypass);
         assert!(matches!(
-            gate.review("run_shell", &shell_args("git push --force")),
+            gate.review(
+                "run_shell",
+                &shell_args("git push --force"),
+                effect_of("run_shell")
+            ),
             GateReview::Allow
         ));
         assert_eq!(gate.for_subagent().mode(), PermissionMode::Bypass);
         // …but circuit breakers still refuse, and nothing was persisted (a
         // fresh gate for the same workspace starts back at the default).
         assert!(matches!(
-            gate.review("run_shell", &shell_args("rm -rf ~")),
+            gate.review("run_shell", &shell_args("rm -rf ~"), effect_of("run_shell")),
             GateReview::Deny { .. }
         ));
         assert_eq!(policy::load_global().mode, None);
@@ -1044,11 +1154,19 @@ mod tests {
         let gate = PermissionGate::new(ws.path(), Arc::new(Scripted(None)));
         assert_eq!(gate.mode(), PermissionMode::Bypass);
         assert!(matches!(
-            gate.review("run_shell", &shell_args("rm -rf ./build")),
+            gate.review(
+                "run_shell",
+                &shell_args("rm -rf ./build"),
+                effect_of("run_shell")
+            ),
             GateReview::Allow
         ));
         assert!(matches!(
-            gate.review("run_shell", &shell_args("sudo rm -rf /")),
+            gate.review(
+                "run_shell",
+                &shell_args("sudo rm -rf /"),
+                effect_of("run_shell")
+            ),
             GateReview::Deny { .. }
         ));
         std::env::remove_var("OXEN_HARNESS_DIR");
@@ -1072,28 +1190,45 @@ mod tests {
         let gate = PermissionGate::new(ws.path(), Arc::new(Scripted(None)));
         // Safe still flows; unknown now asks; edits and commits ask.
         assert!(matches!(
-            gate.review("run_shell", &shell_args("git status")),
+            gate.review(
+                "run_shell",
+                &shell_args("git status"),
+                effect_of("run_shell")
+            ),
             GateReview::Allow
         ));
         assert!(matches!(
-            gate.review("run_shell", &shell_args("cargo build")),
+            gate.review(
+                "run_shell",
+                &shell_args("cargo build"),
+                effect_of("run_shell")
+            ),
             GateReview::Ask(_)
         ));
         assert!(matches!(
-            gate.review("write_file", &serde_json::json!({"path": "src/x.rs"})),
+            gate.review(
+                "write_file",
+                &serde_json::json!({"path": "src/x.rs"}),
+                effect_of("write_file")
+            ),
             GateReview::Ask(_)
         ));
         assert!(matches!(
             gate.review(
                 "git",
-                &serde_json::json!({"operation": "commit", "message": "wip"})
+                &serde_json::json!({"operation": "commit", "message": "wip"}),
+                effect_of("git")
             ),
             GateReview::Ask(_)
         ));
         // Killing a background task is process termination: it must not slip
         // past the gate on tool name while `run_shell kill` would ask.
         assert!(matches!(
-            gate.review("kill_task", &serde_json::json!({"task_id": 3})),
+            gate.review(
+                "kill_task",
+                &serde_json::json!({"task_id": 3}),
+                effect_of("kill_task")
+            ),
             GateReview::Ask(_)
         ));
         std::env::remove_var("OXEN_HARNESS_DIR");
@@ -1132,23 +1267,26 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    gate.review(tool, &serde_json::json!({"operation": op})),
+                    gate.review(tool, &serde_json::json!({"operation": op}), effect_of(tool)),
                     GateReview::Allow
                 ),
                 "{tool} {op} should flow"
             );
         }
         // Publishing asks…
-        let GateReview::Ask(request) =
-            gate.review("git", &serde_json::json!({"operation": "push"}))
-        else {
+        let GateReview::Ask(request) = gate.review(
+            "git",
+            &serde_json::json!({"operation": "push"}),
+            effect_of("git"),
+        ) else {
             panic!("expected git push to ask in cautious mode");
         };
         assert_eq!(request.kind, ApprovalKind::Ship);
         assert!(matches!(
             gate.review(
                 "gh",
-                &serde_json::json!({"operation": "pr_create", "title": "Fix the bug"})
+                &serde_json::json!({"operation": "pr_create", "title": "Fix the bug"}),
+                effect_of("gh")
             ),
             GateReview::Ask(_)
         ));
@@ -1156,7 +1294,11 @@ mod tests {
         let (outcome, _) = gate.resolve(*request).await;
         assert!(matches!(outcome, GateOutcome::Allow));
         assert!(matches!(
-            gate.review("gh", &serde_json::json!({"operation": "pr_create"})),
+            gate.review(
+                "gh",
+                &serde_json::json!({"operation": "pr_create"}),
+                effect_of("gh")
+            ),
             GateReview::Allow
         ));
         std::env::remove_var("OXEN_HARNESS_DIR");
@@ -1181,11 +1323,19 @@ mod tests {
         .unwrap();
         let gate = PermissionGate::new(ws.path(), Arc::new(Scripted(None)));
         assert!(matches!(
-            gate.review("git", &serde_json::json!({"operation": "rebase"})),
+            gate.review(
+                "git",
+                &serde_json::json!({"operation": "rebase"}),
+                effect_of("git")
+            ),
             GateReview::Ask(_)
         ));
         assert!(matches!(
-            gate.review("gh", &serde_json::json!({"operation": "release_create"})),
+            gate.review(
+                "gh",
+                &serde_json::json!({"operation": "release_create"}),
+                effect_of("gh")
+            ),
             GateReview::Ask(_)
         ));
         std::env::remove_var("OXEN_HARNESS_DIR");
@@ -1198,11 +1348,19 @@ mod tests {
         let _env = testutil::env_guard();
         let (_home, _ws, gate) = gate(None);
         assert!(matches!(
-            gate.review("git", &serde_json::json!({"operation": "push"})),
+            gate.review(
+                "git",
+                &serde_json::json!({"operation": "push"}),
+                effect_of("git")
+            ),
             GateReview::Allow
         ));
         assert!(matches!(
-            gate.review("gh", &serde_json::json!({"operation": "pr_create"})),
+            gate.review(
+                "gh",
+                &serde_json::json!({"operation": "pr_create"}),
+                effect_of("gh")
+            ),
             GateReview::Allow
         ));
     }
@@ -1229,7 +1387,11 @@ mod tests {
         // Writes: only the plans directory survives, relative or absolute.
         for path in ["src/main.rs", ".oxen-harness/plans/../../src/main.rs"] {
             denied(
-                gate.review("write_file", &serde_json::json!({ "path": path })),
+                gate.review(
+                    "write_file",
+                    &serde_json::json!({ "path": path }),
+                    effect_of("write_file"),
+                ),
                 path,
             );
         }
@@ -1242,7 +1404,11 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    gate.review("edit_file", &serde_json::json!({ "path": path })),
+                    gate.review(
+                        "edit_file",
+                        &serde_json::json!({ "path": path }),
+                        effect_of("edit_file")
+                    ),
                     GateReview::Allow
                 ),
                 "the plan file must stay writable: {path}"
@@ -1252,32 +1418,52 @@ mod tests {
         // git/gh: reads flow, everything else is refused.
         for op in ["status", "diff", "log"] {
             assert!(matches!(
-                gate.review("git", &serde_json::json!({ "operation": op })),
+                gate.review(
+                    "git",
+                    &serde_json::json!({ "operation": op }),
+                    effect_of("git")
+                ),
                 GateReview::Allow
             ));
         }
         for op in ["pr_view", "pr_checks"] {
             assert!(matches!(
-                gate.review("gh", &serde_json::json!({ "operation": op })),
+                gate.review(
+                    "gh",
+                    &serde_json::json!({ "operation": op }),
+                    effect_of("gh")
+                ),
                 GateReview::Allow
             ));
         }
         for op in ["commit", "push", "rebase"] {
             denied(
-                gate.review("git", &serde_json::json!({ "operation": op })),
+                gate.review(
+                    "git",
+                    &serde_json::json!({ "operation": op }),
+                    effect_of("git"),
+                ),
                 op,
             );
         }
         for op in ["pr_create", "release_create"] {
             denied(
-                gate.review("gh", &serde_json::json!({ "operation": op })),
+                gate.review(
+                    "gh",
+                    &serde_json::json!({ "operation": op }),
+                    effect_of("gh"),
+                ),
                 op,
             );
         }
 
         // Background-task kills are process control, not research.
         denied(
-            gate.review("kill_task", &serde_json::json!({ "task_id": 7 })),
+            gate.review(
+                "kill_task",
+                &serde_json::json!({ "task_id": 7 }),
+                effect_of("kill_task"),
+            ),
             "kill_task",
         );
 
@@ -1285,21 +1471,28 @@ mod tests {
         for command in ["git status", "ls -la", "rg needle src"] {
             assert!(
                 matches!(
-                    gate.review("run_shell", &shell_args(command)),
+                    gate.review("run_shell", &shell_args(command), effect_of("run_shell")),
                     GateReview::Allow
                 ),
                 "`{command}` is read-only and should run while planning"
             );
         }
         for command in ["cargo build", "rm -rf ./build", "echo hi > out.txt"] {
-            denied(gate.review("run_shell", &shell_args(command)), command);
+            denied(
+                gate.review("run_shell", &shell_args(command), effect_of("run_shell")),
+                command,
+            );
         }
 
         // Subagent lanes inherit the latch, live.
         let sub = gate.for_subagent();
         assert!(sub.plan_mode());
         denied(
-            sub.review("write_file", &serde_json::json!({ "path": "src/x.rs" })),
+            sub.review(
+                "write_file",
+                &serde_json::json!({ "path": "src/x.rs" }),
+                effect_of("write_file"),
+            ),
             "subagent write",
         );
 
@@ -1310,7 +1503,11 @@ mod tests {
         gate.set_plan_mode(false);
         assert!(!sub.plan_mode());
         assert!(matches!(
-            gate.review("write_file", &serde_json::json!({ "path": "src/main.rs" })),
+            gate.review(
+                "write_file",
+                &serde_json::json!({ "path": "src/main.rs" }),
+                effect_of("write_file")
+            ),
             GateReview::Allow
         ));
     }
@@ -1322,21 +1519,68 @@ mod tests {
         let _env = testutil::env_guard();
         let (_home, _ws, gate) = gate(None);
         gate.set_plan_mode(true);
-        match gate.review("run_shell", &shell_args("rm -rf ~")) {
+        match gate.review("run_shell", &shell_args("rm -rf ~"), effect_of("run_shell")) {
             GateReview::Deny { message } => assert!(message.contains("hard safety limit")),
             other => panic!("expected breaker deny, got {other:?}"),
         }
         assert!(matches!(
-            gate.review("write_file", &serde_json::json!({ "no": "path" })),
+            gate.review(
+                "write_file",
+                &serde_json::json!({ "no": "path" }),
+                effect_of("write_file")
+            ),
             GateReview::Allow
         ));
         assert!(matches!(
-            gate.review("git", &serde_json::json!({})),
+            gate.review("git", &serde_json::json!({}), effect_of("git")),
             GateReview::Allow
         ));
-        // An ungated tool is unaffected.
+        // An ungated read-only tool is unaffected.
         assert!(matches!(
-            gate.review("read_file", &serde_json::json!({ "path": "src/main.rs" })),
+            gate.review(
+                "read_file",
+                &serde_json::json!({ "path": "src/main.rs" }),
+                effect_of("read_file")
+            ),
+            GateReview::Allow
+        ));
+    }
+
+    /// Plan mode fails closed: a tool the gate has no rule for is judged by
+    /// what it declares, so a mutating custom tool is refused while a
+    /// read-only one (and `ask_user_question`, which the plan prompt asks
+    /// the model to use) still runs.
+    #[test]
+    fn plan_mode_denies_unlisted_mutating_tools_by_default() {
+        let _env = testutil::env_guard();
+        let (_home, _ws, gate) = gate(None);
+        gate.set_mode(PermissionMode::Bypass);
+        gate.set_plan_mode(true);
+        let args = serde_json::json!({ "body": "x" });
+        match gate.review("custom_post", &args, ToolEffect::Mutating) {
+            GateReview::Deny { message } => {
+                assert!(message.contains("plan mode is on"), "{message}");
+                assert!(message.contains("custom_post"), "{message}");
+            }
+            other => panic!("a mutating custom tool must be refused in plan mode, got {other:?}"),
+        }
+        for tool in ["web_fetch", "search_files", "spawn_agents", "canvas"] {
+            assert!(
+                matches!(
+                    gate.review(tool, &args, ToolEffect::ReadOnly),
+                    GateReview::Allow
+                ),
+                "{tool} declares itself read-only and should run while planning"
+            );
+        }
+        assert!(matches!(
+            gate.review("ask_user_question", &args, ToolEffect::Mutating),
+            GateReview::Allow
+        ));
+        // Off again: the declaration no longer matters.
+        gate.set_plan_mode(false);
+        assert!(matches!(
+            gate.review("custom_post", &args, ToolEffect::Mutating),
             GateReview::Allow
         ));
     }
@@ -1349,7 +1593,11 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let gate = PermissionGate::new(ws.path(), Arc::new(Scripted(None)));
         assert!(matches!(
-            gate.review("kill_task", &serde_json::json!({"task_id": 1})),
+            gate.review(
+                "kill_task",
+                &serde_json::json!({"task_id": 1}),
+                effect_of("kill_task")
+            ),
             GateReview::Allow
         ));
         std::env::remove_var("OXEN_HARNESS_DIR");

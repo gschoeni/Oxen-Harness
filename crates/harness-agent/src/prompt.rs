@@ -400,7 +400,7 @@ pub fn background_task_delivery(
 /// unresolved options.
 pub const PLAN_MODE_ENTER: &str = "\
 <plan-mode>
-Plan mode is on. The working tree is read-only: file writes and edits, git and gh operations that change anything, background-task kills, and any shell command that is not provably read-only will all be refused until the user leaves plan mode. Do not test the limits, and do not ask to have them lifted.
+Plan mode is on. The working tree is read-only: file writes and edits, git and gh operations that change anything, background-task kills, any shell command that is not provably read-only, and any other tool that is not read-only (custom tools, dev servers) will all be refused until the user leaves plan mode. Do not test the limits, and do not ask to have them lifted.
 
 Do this instead:
 
