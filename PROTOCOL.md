@@ -66,7 +66,7 @@ The catalog (see `harness-protocol/src/event.rs` for the exact fields):
 | `agent.approval_request` | permission gate — answer via `POST /v1/approvals/{id}/answer` |
 | `agent.approval` | pending/resolved thread markers for gated calls |
 | `agent.canvas` / `agent.canvas_writing` / `agent.open_file` | host-surface documents/files |
-| `fleet.started` / `fleet.agent` / `fleet.agent_activity` / `fleet.completed` | parallel subagent lanes |
+| `fleet.started` / `fleet.agent` / `fleet.agent_activity` / `fleet.completed` | parallel subagent lanes; every event names its `fleet` (a `wait: false` fleet can overlap another in one session) |
 | `review.progress` / `review.token` / `review.tool` | code-review pipeline progress |
 | `preview.status` / `preview.console` | dev-server lifecycle + page errors |
 | `local.status` / `models.progress` | local-model loading / downloads (app-wide, no `session`) |
@@ -85,6 +85,7 @@ POST   /v1/sessions/{id}/turns          {prompt, attachments?} → {text}
 POST   /v1/sessions/{id}/turns/retry    re-drive the trailing user turn → {text}
 POST   /v1/sessions/{id}/interject      {text} → {accepted} — steer the running turn
 POST   /v1/sessions/{id}/cancel         stop the in-flight turn (no-op when idle)
+POST   /v1/sessions/{id}/fleets/{fleet}/cancel   stop one `spawn_agents` fleet (named on its `fleet.started`) without ending the turn; 404 once it has ended
 POST   /v1/sessions/{id}/refresh-client rebuild the agent's client (after saving a key)
 ```
 

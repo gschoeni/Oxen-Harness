@@ -150,6 +150,10 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/v1/sessions/{id}/turns/retry", post(retry_turn))
         .route("/v1/sessions/{id}/interject", post(interject))
         .route("/v1/sessions/{id}/cancel", post(cancel_turn))
+        .route(
+            "/v1/sessions/{id}/fleets/{fleet}/cancel",
+            post(cancel_fleet),
+        )
         .route("/v1/sessions/{id}/refresh-client", post(refresh_client))
         .route("/v1/sessions/{id}/review", post(run_review))
         .route("/v1/sessions/{id}/loop", post(run_loop))
@@ -464,6 +468,24 @@ async fn cancel_turn(
     authorize(&state, &headers, None)?;
     state.service.cancel_turn(&id).await;
     Ok(StatusCode::OK)
+}
+
+/// Stop one `spawn_agents` fleet (named on its `fleet.started` event) without
+/// ending the turn; 404 once it has ended.
+async fn cancel_fleet(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((id, fleet)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    authorize(&state, &headers, None)?;
+    if state.service.cancel_fleet(&id, &fleet) {
+        Ok(StatusCode::OK)
+    } else {
+        Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("no fleet {fleet} is running in session {id}"),
+        ))
+    }
 }
 
 async fn refresh_client(

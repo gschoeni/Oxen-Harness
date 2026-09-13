@@ -137,7 +137,9 @@ impl harness_tools::ViewerSink for HostViewerSink {
 pub(crate) struct FleetActivityBatch {
     sink: Arc<dyn EventSink>,
     session: String,
-    lanes: StdMutex<HashMap<usize, LaneRun>>,
+    /// Buffers keyed by (fleet, lane): two fleets overlapping in one session
+    /// must not merge their lane-0 streams.
+    lanes: StdMutex<HashMap<(String, usize), LaneRun>>,
 }
 
 /// One lane's buffered tokens, stamped with when the run started.
@@ -155,62 +157,77 @@ impl FleetActivityBatch {
         }
     }
 
-    /// Route one lane event: tokens coalesce, everything else flushes its lane
-    /// and forwards through the usual translation.
-    pub(crate) fn forward(&self, event: &FleetEvent) {
+    /// Route one lane event of `fleet`: tokens coalesce, everything else
+    /// flushes its lane and forwards through the usual translation.
+    pub(crate) fn forward(&self, fleet: &str, event: &FleetEvent) {
         match event {
             FleetEvent::Agent {
                 index,
                 event: agent_event,
             } => {
                 if let AgentEvent::Token(t) = agent_event.as_ref() {
+                    let key = (fleet.to_string(), *index);
                     let ready = {
                         let mut lanes = self.lanes.lock().expect("fleet batch poisoned");
-                        let run = lanes.entry(*index).or_insert_with(|| LaneRun {
+                        let run = lanes.entry(key.clone()).or_insert_with(|| LaneRun {
                             text: String::new(),
                             since: std::time::Instant::now(),
                         });
                         run.text.push_str(t);
                         (run.text.len() >= crate::service::STREAM_BATCH_BYTES
                             || run.since.elapsed() >= crate::service::STREAM_BATCH_MAX_AGE)
-                            .then(|| lanes.remove(index))
+                            .then(|| lanes.remove(&key))
                             .flatten()
                     };
                     if let Some(run) = ready {
-                        self.emit(*index, run.text);
+                        self.emit(fleet, *index, run.text);
                     }
                     return;
                 }
-                self.flush_lane(*index);
+                self.flush_lane(fleet, *index);
             }
             FleetEvent::TaskStarted { index, .. } | FleetEvent::TaskCompleted { index, .. } => {
-                self.flush_lane(*index);
+                self.flush_lane(fleet, *index);
             }
         }
-        if let Some(event) = translate::fleet_event(&self.session, event) {
+        if let Some(event) = translate::fleet_event(&self.session, fleet, event) {
             self.sink.emit(event);
         }
     }
 
-    fn flush_lane(&self, index: usize) {
+    fn flush_lane(&self, fleet: &str, index: usize) {
         let buffered = self
             .lanes
             .lock()
             .expect("fleet batch poisoned")
-            .remove(&index);
+            .remove(&(fleet.to_string(), index));
         if let Some(run) = buffered {
-            self.emit(index, run.text);
+            self.emit(fleet, index, run.text);
+        }
+    }
+
+    /// Ship every buffered run of `fleet` (its lanes are settling).
+    pub(crate) fn flush_fleet(&self, fleet: &str) {
+        let runs: Vec<(usize, LaneRun)> = {
+            let mut lanes = self.lanes.lock().expect("fleet batch poisoned");
+            let keys: Vec<_> = lanes.keys().filter(|(f, _)| f == fleet).cloned().collect();
+            keys.into_iter()
+                .filter_map(|key| lanes.remove(&key).map(|run| (key.1, run)))
+                .collect()
+        };
+        for (index, run) in runs {
+            self.emit(fleet, index, run.text);
         }
     }
 
     pub(crate) fn flush_all(&self) {
         let lanes = std::mem::take(&mut *self.lanes.lock().expect("fleet batch poisoned"));
-        for (index, run) in lanes {
-            self.emit(index, run.text);
+        for ((fleet, index), run) in lanes {
+            self.emit(&fleet, index, run.text);
         }
     }
 
-    fn emit(&self, index: usize, text: String) {
+    fn emit(&self, fleet: &str, index: usize, text: String) {
         if text.is_empty() {
             return;
         }
@@ -221,11 +238,17 @@ impl FleetActivityBatch {
             index,
             event: Arc::new(AgentEvent::Token(text)),
         };
-        if let Some(event) = translate::fleet_event(&self.session, &event) {
+        if let Some(event) = translate::fleet_event(&self.session, fleet, &event) {
             self.sink.emit(event);
         }
     }
 }
+
+/// The stop signals of every fleet in flight, keyed by (session, fleet id) —
+/// what `SessionService::cancel_fleet` fires. Shared between the service and
+/// each session's `HostFleetSink`, which registers a fleet's token when it
+/// starts and drops it when it ends.
+pub type FleetCancels = Arc<StdMutex<HashMap<(String, String), CancellationToken>>>;
 
 /// Bridges a `spawn_agents` fleet (run by the model from inside a turn) to the
 /// client's lanes panel, emitting the same `fleet.*` events review fan-out
@@ -235,6 +258,8 @@ pub struct HostFleetSink {
     session: String,
     source: harness_protocol::FleetSource,
     batch: FleetActivityBatch,
+    /// Where a running fleet's stop signal is kept for `cancel_fleet`.
+    cancels: FleetCancels,
 }
 
 impl HostFleetSink {
@@ -242,33 +267,49 @@ impl HostFleetSink {
         sink: Arc<dyn EventSink>,
         session: String,
         source: harness_protocol::FleetSource,
+        cancels: FleetCancels,
     ) -> Self {
         Self {
             batch: FleetActivityBatch::new(sink.clone(), session.clone()),
             sink,
             session,
             source,
+            cancels,
         }
+    }
+
+    fn key(&self, fleet: &str) -> (String, String) {
+        (self.session.clone(), fleet.to_string())
     }
 }
 
 impl harness_agent::fleet::FleetSink for HostFleetSink {
-    fn started(&self, labels: &[String], _cancel: CancellationToken) {
+    fn started(&self, fleet: &str, labels: &[String], cancel: CancellationToken) {
+        self.cancels
+            .lock()
+            .expect("fleet cancels poisoned")
+            .insert(self.key(fleet), cancel);
         self.sink.emit(ProtocolEvent::FleetStarted {
             session: self.session.clone(),
+            fleet: fleet.to_string(),
             agents: labels.to_vec(),
             source: self.source,
         });
     }
 
-    fn event(&self, event: &harness_agent::fleet::FleetEvent) {
-        self.batch.forward(event);
+    fn event(&self, fleet: &str, event: &harness_agent::fleet::FleetEvent) {
+        self.batch.forward(fleet, event);
     }
 
-    fn finished(&self) {
-        self.batch.flush_all();
+    fn finished(&self, fleet: &str) {
+        self.cancels
+            .lock()
+            .expect("fleet cancels poisoned")
+            .remove(&self.key(fleet));
+        self.batch.flush_fleet(fleet);
         self.sink.emit(ProtocolEvent::FleetCompleted {
             session: self.session.clone(),
+            fleet: fleet.to_string(),
         });
     }
 }
@@ -343,9 +384,9 @@ impl harness_tools::ViewerSink for NullViewerSink {
 pub struct NullFleetSink;
 
 impl harness_agent::fleet::FleetSink for NullFleetSink {
-    fn started(&self, _labels: &[String], _cancel: CancellationToken) {}
-    fn event(&self, _event: &harness_agent::fleet::FleetEvent) {}
-    fn finished(&self) {}
+    fn started(&self, _fleet: &str, _labels: &[String], _cancel: CancellationToken) {}
+    fn event(&self, _fleet: &str, _event: &harness_agent::fleet::FleetEvent) {}
+    fn finished(&self, _fleet: &str) {}
 }
 
 /// An inert preview sink — never invoked.
@@ -393,41 +434,72 @@ mod tests {
         let sink = Arc::new(RecordingSink::default());
         let batch = FleetActivityBatch::new(sink.clone(), "s1".into());
 
-        // Interleaved lanes buffer independently — no cross-lane flushing.
-        batch.forward(&lane_token(0, "alpha "));
-        batch.forward(&lane_token(1, "beta "));
-        batch.forward(&lane_token(0, "one"));
-        batch.forward(&lane_token(1, "two"));
+        // Interleaved lanes buffer independently — no cross-lane flushing —
+        // and so do two fleets' lanes of the same index.
+        batch.forward("f1", &lane_token(0, "alpha "));
+        batch.forward("f1", &lane_token(1, "beta "));
+        batch.forward("f2", &lane_token(0, "other fleet "));
+        batch.forward("f1", &lane_token(0, "one"));
+        batch.forward("f1", &lane_token(1, "two"));
         assert!(sink.0.lock().unwrap().is_empty());
 
         // A lane's completion flushes that lane's tokens first, in order.
-        batch.forward(&FleetEvent::TaskCompleted {
-            index: 0,
-            label: "a".into(),
-            ok: true,
-            tokens_used: 10,
-            summary: "done".into(),
-        });
+        batch.forward(
+            "f1",
+            &FleetEvent::TaskCompleted {
+                index: 0,
+                label: "a".into(),
+                ok: true,
+                tokens_used: 10,
+                summary: "done".into(),
+            },
+        );
         {
             let events = sink.0.lock().unwrap();
             match &events[..] {
-                [ProtocolEvent::FleetActivity { agent, text, .. }, ProtocolEvent::FleetAgent { agent: done, .. }] =>
-                {
-                    assert_eq!((*agent, text.as_str()), (0, "alpha one"));
-                    assert_eq!(*done, 0);
+                [ProtocolEvent::FleetActivity {
+                    fleet, agent, text, ..
+                }, ProtocolEvent::FleetAgent {
+                    agent: done,
+                    fleet: done_fleet,
+                    ..
+                }] => {
+                    assert_eq!(
+                        (fleet.as_str(), *agent, text.as_str()),
+                        ("f1", 0, "alpha one")
+                    );
+                    assert_eq!((done_fleet.as_str(), *done), ("f1", 0));
                 }
                 other => panic!("expected lane-0 flush then completion, got {other:?}"),
             }
         }
 
-        // The other lane's buffer survives until the final flush.
+        // Settling one fleet ships only its buffers; the other fleet's lane
+        // survives until its own flush.
+        batch.flush_fleet("f1");
+        match sink.0.lock().unwrap().last() {
+            Some(ProtocolEvent::FleetActivity {
+                fleet, agent, text, ..
+            }) => {
+                assert_eq!(
+                    (fleet.as_str(), *agent, text.as_str()),
+                    ("f1", 1, "beta two")
+                );
+            }
+            other => panic!("expected lane-1 tail, got {other:?}"),
+        }
         batch.flush_all();
         let events = sink.0.lock().unwrap();
         match events.last() {
-            Some(ProtocolEvent::FleetActivity { agent, text, .. }) => {
-                assert_eq!((*agent, text.as_str()), (1, "beta two"));
+            Some(ProtocolEvent::FleetActivity {
+                fleet, agent, text, ..
+            }) => {
+                assert_eq!(
+                    (fleet.as_str(), *agent, text.as_str()),
+                    ("f2", 0, "other fleet ")
+                );
             }
-            other => panic!("expected lane-1 tail, got {other:?}"),
+            other => panic!("expected the other fleet's lane, got {other:?}"),
         }
     }
 
@@ -436,13 +508,13 @@ mod tests {
         let sink = Arc::new(RecordingSink::default());
         let batch = FleetActivityBatch::new(sink.clone(), "s1".into());
 
-        batch.forward(&lane_token(0, "slow "));
+        batch.forward("f", &lane_token(0, "slow "));
         std::thread::sleep(
             crate::service::STREAM_BATCH_MAX_AGE + std::time::Duration::from_millis(10),
         );
         // Under the byte threshold, but the run is old — the next token ships
         // it so a trickling lane's ticker keeps moving.
-        batch.forward(&lane_token(0, "drip"));
+        batch.forward("f", &lane_token(0, "drip"));
         let events = sink.0.lock().unwrap();
         match &events[..] {
             [ProtocolEvent::FleetActivity { agent, text, .. }] => {

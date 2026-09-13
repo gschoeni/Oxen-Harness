@@ -243,10 +243,13 @@ pub enum ProtocolEvent {
 
     // --- Fleet lanes ----------------------------------------------------------
     /// A fleet of parallel subagents is spinning up; `agents` is the lane
-    /// labels, in order.
+    /// labels, in order. `fleet` names it on every later event and in
+    /// `POST /v1/sessions/{id}/fleets/{fleet}/cancel` — a `wait: false` fleet
+    /// can overlap another in the same session.
     #[serde(rename = "fleet.started")]
     FleetStarted {
         session: String,
+        fleet: String,
         agents: Vec<String>,
         source: FleetSource,
     },
@@ -254,6 +257,7 @@ pub enum ProtocolEvent {
     #[serde(rename = "fleet.agent")]
     FleetAgent {
         session: String,
+        fleet: String,
         agent: usize,
         name: String,
         phase: FleetAgentPhase,
@@ -265,14 +269,15 @@ pub enum ProtocolEvent {
     #[serde(rename = "fleet.agent_activity")]
     FleetActivity {
         session: String,
+        fleet: String,
         agent: usize,
         kind: FleetActivityKind,
         text: String,
         tokens: Option<usize>,
     },
-    /// Every lane settled.
+    /// Every lane of `fleet` settled.
     #[serde(rename = "fleet.completed")]
-    FleetCompleted { session: String },
+    FleetCompleted { session: String, fleet: String },
 
     // --- Code review -----------------------------------------------------------
     /// Which pipeline step a running code review is on (and, for a fan-out
@@ -392,7 +397,7 @@ impl ProtocolEvent {
             | Self::FleetStarted { session, .. }
             | Self::FleetAgent { session, .. }
             | Self::FleetActivity { session, .. }
-            | Self::FleetCompleted { session }
+            | Self::FleetCompleted { session, .. }
             | Self::ReviewProgress { session, .. }
             | Self::ReviewToken { session, .. }
             | Self::ReviewTool { session, .. }

@@ -353,6 +353,7 @@ impl SessionServiceBuilder {
             cancels: Mutex::new(HashMap::new()),
             interjections: Mutex::new(HashMap::new()),
             fleet_spawners: StdMutex::new(HashMap::new()),
+            fleet_cancels: Default::default(),
             session_asides: StdMutex::new(HashMap::new()),
             dev_servers: harness_preview::DevServerManager::new(),
             crash_announced: StdMutex::new(HashMap::new()),
@@ -435,6 +436,10 @@ pub struct SessionService {
     /// Each session agent's `spawn_agents` spawner, so a turn can hand it the
     /// turn's stop signal. Std mutex: touched briefly, from sync builders too.
     pub fleet_spawners: StdMutex<HashMap<String, Arc<harness_agent::FleetSpawner>>>,
+    /// The stop signal of every fleet in flight, by (session, fleet id), so a
+    /// client can stop one fleet without ending the turn around it (see
+    /// [`Self::cancel_fleet`]). Registered by each session's `HostFleetSink`.
+    fleet_cancels: crate::bridges::FleetCancels,
     /// Each session's aside queue (results that finish on their own — a
     /// `wait: false` fleet's report), kept across agent rebuilds. A resumed
     /// or model-switched session gets a fresh registry, and a background
@@ -790,6 +795,7 @@ impl SessionService {
                     self.sink.clone(),
                     session.to_string(),
                     harness_protocol::FleetSource::Turn,
+                    self.fleet_cancels.clone(),
                 )),
             )
             .with_asides(tools.asides()),
@@ -1345,6 +1351,25 @@ impl SessionService {
         }
     }
 
+    /// Stop one running fleet (a `spawn_agents` call) in `session` without
+    /// ending the turn: its lanes settle with whatever they had, the tool
+    /// returns the partial report, and the turn carries on. Returns whether
+    /// such a fleet was in flight (`false` once it has ended, or ever was).
+    pub fn cancel_fleet(&self, session: &str, fleet: &str) -> bool {
+        match self
+            .fleet_cancels
+            .lock()
+            .expect("fleet cancels poisoned")
+            .get(&(session.to_string(), fleet.to_string()))
+        {
+            Some(token) => {
+                token.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Deliver a user message into `session`'s *running* turn (mid-turn
     /// steering): it enters the transcript at the turn loop's next safe point,
     /// so the model sees it during the work rather than after. Returns whether
@@ -1430,6 +1455,8 @@ impl SessionService {
             // like a spawn_agents fleet does.
             let fleet_batch =
                 crate::bridges::FleetActivityBatch::new(self.sink.clone(), sid.clone());
+            // A fan-out step's lanes are one fleet on the wire, named by step.
+            let mut review_fleet = String::new();
             let mut pipeline_tokens = 0usize;
             let run = runner
                 .run(&agent, |event| match event {
@@ -1448,8 +1475,10 @@ impl SessionService {
                         });
                         // A fan-out step opens a lanes panel like spawn_agents.
                         if agents.len() > 1 {
+                            review_fleet = format!("review-{index}");
                             sink.emit(ProtocolEvent::FleetStarted {
                                 session: sid.clone(),
+                                fleet: review_fleet.clone(),
                                 agents: agents.clone(),
                                 source: harness_protocol::FleetSource::Review,
                             });
@@ -1470,12 +1499,15 @@ impl SessionService {
                     // A fan-out step's lanes ARE a fleet; the review forwards
                     // the FleetEvent verbatim, so it rides the exact same
                     // translation (and wire format) as a spawn_agents fleet.
-                    ReviewEvent::Fleet(event) => fleet_batch.forward(event),
+                    ReviewEvent::Fleet(event) => fleet_batch.forward(&review_fleet, event),
                     ReviewEvent::StepCompleted { .. } => {
                         fleet_batch.flush_all();
-                        sink.emit(ProtocolEvent::FleetCompleted {
-                            session: sid.clone(),
-                        });
+                        if !review_fleet.is_empty() {
+                            sink.emit(ProtocolEvent::FleetCompleted {
+                                session: sid.clone(),
+                                fleet: std::mem::take(&mut review_fleet),
+                            });
+                        }
                     }
                     ReviewEvent::Completed { tokens_used, .. } => pipeline_tokens = *tokens_used,
                     _ => {}

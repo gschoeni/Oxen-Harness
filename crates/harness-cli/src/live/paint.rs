@@ -572,7 +572,7 @@ mod tests {
         // A private hub so this test can't race others over the global one.
         let hub = std::sync::Arc::new(FleetHub::default());
         let labels: Vec<String> = (0..6).map(|i| format!("lane {i}")).collect();
-        hub.install(FleetState::new(&labels, None));
+        hub.install("t", FleetState::new(&labels, None));
         l.fleet = hub;
 
         let plan = l.pinned_plan();

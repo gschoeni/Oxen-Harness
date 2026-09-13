@@ -158,11 +158,13 @@ pub fn agent_event(
 
 /// One fleet lane event as its protocol shape. `None` for lane agent events
 /// with no lane-activity slice (deltas, compaction notices, …).
-pub fn fleet_event(session: &str, event: &FleetEvent) -> Option<ProtocolEvent> {
+pub fn fleet_event(session: &str, fleet: &str, event: &FleetEvent) -> Option<ProtocolEvent> {
     let session = session.to_string();
+    let fleet = fleet.to_string();
     Some(match event {
         FleetEvent::TaskStarted { index, label } => ProtocolEvent::FleetAgent {
             session,
+            fleet,
             agent: *index,
             name: label.clone(),
             phase: harness_protocol::FleetAgentPhase::Started,
@@ -188,6 +190,7 @@ pub fn fleet_event(session: &str, event: &FleetEvent) -> Option<ProtocolEvent> {
             };
             ProtocolEvent::FleetActivity {
                 session,
+                fleet,
                 agent: *index,
                 kind,
                 text,
@@ -202,6 +205,7 @@ pub fn fleet_event(session: &str, event: &FleetEvent) -> Option<ProtocolEvent> {
             summary,
         } => ProtocolEvent::FleetAgent {
             session,
+            fleet,
             agent: *index,
             name: label.clone(),
             phase: if *ok {

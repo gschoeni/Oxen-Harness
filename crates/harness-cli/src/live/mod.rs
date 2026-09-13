@@ -357,8 +357,8 @@ impl Live {
     }
 
     fn fleet_lines(&self) -> Vec<String> {
-        let guard = self.fleet.lock();
-        match guard.as_ref() {
+        let board = self.fleet.lock();
+        match board.primary() {
             Some(state) => {
                 crate::fleet_ui::pinned_lines(&self.ui, state, self.cols as usize, self.fleet_frame)
             }
@@ -375,7 +375,7 @@ impl Live {
         let animating = self
             .fleet
             .lock()
-            .as_ref()
+            .primary()
             .is_some_and(|s| s.has_running_lane());
         if animating {
             self.fleet_frame = self.fleet_frame.wrapping_add(1);
@@ -388,8 +388,8 @@ impl Live {
     /// lane, alt+0 the overview — bare digits keep typing into the composer.
     /// Only consumes the key while a fleet is actually running.
     fn handle_fleet_key(&mut self, key: &KeyEvent) -> bool {
-        let mut guard = self.fleet.lock();
-        let Some(state) = guard.as_mut() else {
+        let mut board = self.fleet.lock();
+        let Some(state) = board.primary_mut() else {
             return false;
         };
         crate::fleet_ui::apply_fleet_key(
@@ -787,14 +787,14 @@ mod tests {
         // With a fleet on the hub, alt+digits focus lanes and alt+0 clears —
         // while an unmodified digit stays ordinary composer input.
         let hub = FleetHub::global();
-        hub.install(FleetState::new(&["scan".into(), "trace".into()], None));
+        hub.install("t", FleetState::new(&["scan".into(), "trace".into()], None));
         assert!(l.handle_fleet_key(&alt(KeyCode::Char('2'))));
-        assert_eq!(hub.lock().as_ref().unwrap().focused, Some(1));
+        assert_eq!(hub.lock().primary().unwrap().focused, Some(1));
         assert!(l.handle_fleet_key(&alt(KeyCode::Char('9')))); // out of range clears
-        assert_eq!(hub.lock().as_ref().unwrap().focused, None);
+        assert_eq!(hub.lock().primary().unwrap().focused, None);
         assert!(l.handle_fleet_key(&alt(KeyCode::Char('1'))));
         assert!(l.handle_fleet_key(&alt(KeyCode::Char('0'))));
-        assert_eq!(hub.lock().as_ref().unwrap().focused, None);
+        assert_eq!(hub.lock().primary().unwrap().focused, None);
         assert!(!l.handle_fleet_key(&key(KeyCode::Char('1'))));
         hub.clear();
 

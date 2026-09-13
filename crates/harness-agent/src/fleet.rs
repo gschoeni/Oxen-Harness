@@ -81,17 +81,20 @@ pub enum FleetEvent {
 /// `QuestionAsker` pattern — the host injects an implementation at registry
 /// build time.
 ///
-/// `finished` MUST be idempotent: the tool calls it through a drop guard so a
-/// cancelled (dropped) turn still tears the display down.
+/// Every call names its fleet: a `wait: false` fleet can overlap a later one
+/// in the same session, and the host keeps their lanes (and their stop
+/// buttons) apart by id. `finished` MUST be idempotent per fleet: the tool
+/// calls it through a drop guard so a cancelled (dropped) turn still tears
+/// the display down.
 pub trait FleetSink: Send + Sync {
     /// A fleet is starting: lane labels in order, plus the token that cancels
-    /// just this fleet (a child of the turn's token — hosts may wire it to a
-    /// key or button).
-    fn started(&self, labels: &[String], cancel: CancellationToken);
-    /// One multiplexed progress event.
-    fn event(&self, event: &FleetEvent);
-    /// The fleet is done (or was abandoned); tear down the lanes display.
-    fn finished(&self);
+    /// just this fleet (a child of the turn's token — hosts wire it to a key
+    /// or button).
+    fn started(&self, fleet: &str, labels: &[String], cancel: CancellationToken);
+    /// One multiplexed progress event from `fleet`.
+    fn event(&self, fleet: &str, event: &FleetEvent);
+    /// `fleet` is done (or was abandoned); tear down its lanes display.
+    fn finished(&self, fleet: &str);
 }
 
 /// Why a lane was stopped before its turn ended on its own. The lane's

@@ -41,6 +41,19 @@ pub const MAX_FLEET_AGENTS: usize = 6;
 /// Default (and ceiling) for how many subagents run at once.
 pub const DEFAULT_FLEET_PARALLEL: usize = 3;
 
+/// Most fleets one session may have in flight at once. `wait: false` lets a
+/// call return before its fleet ends, so without a ceiling N calls would be
+/// N × `max_parallel` lanes, unbounded.
+pub const MAX_LIVE_FLEETS: usize = 3;
+
+/// A fresh fleet id, unique for the life of this process. Hosts key lanes
+/// panels and stop buttons by it, so two fleets overlapping in one session
+/// never collide.
+fn next_fleet_id() -> String {
+    static NEXT: AtomicUsize = AtomicUsize::new(1);
+    format!("fleet-{}", NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
 /// Builds the detached agents a fleet runs on, from the session agent's
 /// client, tools, and config. The tool registry is snapshotted at build time
 /// (taken *before* `spawn_agents` registers, so subagents can't recurse), but
@@ -394,33 +407,37 @@ impl FleetTool {
 
 /// One fleet's hold on the host's lanes display. Created around `started`,
 /// it counts the fleet as live; dropping it — on every exit path, including a
-/// turn future dropped mid-fleet (CLI Ctrl-C) — counts it out and calls
-/// `finished` only when no other fleet of this tool is still running, so a
-/// background fleet finishing first can't close the panel under a foreground
-/// one (or vice versa).
+/// turn future dropped mid-fleet (CLI Ctrl-C) — counts it out and tells the
+/// sink *this* fleet is finished. Fleets are named, so a background fleet
+/// finishing first closes its own lanes and nothing else's.
 struct SinkGuard {
     sink: Arc<dyn FleetSink>,
     live: Arc<AtomicUsize>,
+    fleet: String,
 }
 
 impl SinkGuard {
     fn open(
         sink: Arc<dyn FleetSink>,
         live: Arc<AtomicUsize>,
+        fleet: &str,
         labels: &[String],
         cancel: CancellationToken,
     ) -> Self {
         live.fetch_add(1, Ordering::SeqCst);
-        sink.started(labels, cancel);
-        Self { sink, live }
+        sink.started(fleet, labels, cancel);
+        Self {
+            sink,
+            live,
+            fleet: fleet.to_string(),
+        }
     }
 }
 
 impl Drop for SinkGuard {
     fn drop(&mut self) {
-        if self.live.fetch_sub(1, Ordering::SeqCst) == 1 {
-            self.sink.finished();
-        }
+        self.live.fetch_sub(1, Ordering::SeqCst);
+        self.sink.finished(&self.fleet);
     }
 }
 
@@ -443,6 +460,12 @@ impl TypedTool for FleetTool {
          patch for you to review and apply, instead of several agents writing over each other."
     }
 
+    /// A fleet edits, runs commands, and returns patches: it runs alone in
+    /// its wave, and the permission gate treats the call as mutating.
+    fn concurrency(&self) -> harness_tools::Concurrency {
+        harness_tools::Concurrency::Exclusive
+    }
+
     async fn run(&self, args: FleetArgs) -> Result<String, ToolError> {
         if args.agents.is_empty() {
             return Err(ToolError::InvalidArguments(
@@ -455,7 +478,14 @@ impl TypedTool for FleetTool {
                 args.agents.len()
             )));
         }
+        if self.live.load(Ordering::SeqCst) >= MAX_LIVE_FLEETS {
+            return Err(ToolError::Execution(format!(
+                "{MAX_LIVE_FLEETS} fleets are already running in this session; their results \
+                 arrive automatically — wait for them before starting another"
+            )));
+        }
         let labels: Vec<String> = args.agents.iter().map(|a| a.name.clone()).collect();
+        let fleet = next_fleet_id();
         // A fleet the model doesn't wait for runs on its own task and leaves
         // its report in the registry's aside queue; the agent delivers it at
         // the next step boundary, exactly like a finished background task.
@@ -467,12 +497,12 @@ impl TypedTool for FleetTool {
                 let count = labels.len();
                 let names = labels.join(", ");
                 let started = format!(
-                    "Fleet started: {count} agent(s) ({names}) running in the background. \
-                     Their results will be delivered to you automatically when they finish — \
-                     keep working on other things, do not poll."
+                    "Fleet {fleet} started: {count} agent(s) ({names}) running in the \
+                     background. Their results will be delivered to you automatically when \
+                     they finish — keep working on other things, do not poll."
                 );
                 tokio::spawn(async move {
-                    let body = match Self::execute(spawner, sink, live, args).await {
+                    let body = match Self::execute(spawner, sink, live, fleet, args).await {
                         Ok(text) => text,
                         Err(e) => format!("the fleet failed: {e}"),
                     };
@@ -489,6 +519,7 @@ impl TypedTool for FleetTool {
             self.spawner.clone(),
             self.sink.clone(),
             self.live.clone(),
+            fleet,
             args,
         )
         .await
@@ -501,6 +532,7 @@ impl FleetTool {
         spawner: Arc<FleetSpawner>,
         sink: Arc<dyn FleetSink>,
         live: Arc<AtomicUsize>,
+        fleet: String,
         args: FleetArgs,
     ) -> Result<String, ToolError> {
         let concurrency = args
@@ -526,7 +558,7 @@ impl FleetTool {
         let lanes = isolated.then(|| spawner.open_lanes(labels.len())).flatten();
 
         let cancel = spawner.run_token();
-        let guard = SinkGuard::open(sink.clone(), live, &labels, cancel.clone());
+        let guard = SinkGuard::open(sink.clone(), live, &fleet, &labels, cancel.clone());
 
         let lane_for_build = lanes.clone().unwrap_or_default();
         let outcomes = run_fleet(
@@ -537,7 +569,7 @@ impl FleetTool {
             tasks,
             FleetLimits::with_concurrency(concurrency),
             cancel.clone(),
-            |event| sink.event(event),
+            |event| sink.event(&fleet, event),
         )
         .await
         .map_err(|e| ToolError::Execution(e.to_string()))?;
@@ -598,13 +630,13 @@ mod tests {
     }
 
     impl FleetSink for RecordingSink {
-        fn started(&self, labels: &[String], _cancel: CancellationToken) {
+        fn started(&self, fleet: &str, labels: &[String], _cancel: CancellationToken) {
             self.calls
                 .lock()
                 .unwrap()
-                .push(format!("started:{}", labels.join(",")));
+                .push(format!("started:{fleet}:{}", labels.join(",")));
         }
-        fn event(&self, event: &FleetEvent) {
+        fn event(&self, _fleet: &str, event: &FleetEvent) {
             if let FleetEvent::TaskCompleted { label, ok, .. } = event {
                 self.calls
                     .lock()
@@ -612,8 +644,8 @@ mod tests {
                     .push(format!("completed:{label}:{ok}"));
             }
         }
-        fn finished(&self) {
-            self.calls.lock().unwrap().push("finished".into());
+        fn finished(&self, fleet: &str) {
+            self.calls.lock().unwrap().push(format!("finished:{fleet}"));
         }
     }
 
@@ -852,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn the_lanes_display_closes_when_the_last_live_fleet_ends() {
+    fn each_fleet_opens_and_closes_its_own_lanes() {
         let sink = Arc::new(RecordingSink::default());
         let live = Arc::new(AtomicUsize::new(0));
         let labels_a = vec!["a".to_string()];
@@ -861,29 +893,53 @@ mod tests {
         let first = SinkGuard::open(
             sink.clone(),
             live.clone(),
+            "fleet-x",
             &labels_a,
             CancellationToken::new(),
         );
         let second = SinkGuard::open(
             sink.clone(),
             live.clone(),
+            "fleet-y",
             &labels_b,
             CancellationToken::new(),
         );
         assert_eq!(live.load(Ordering::SeqCst), 2);
 
-        // The background fleet finishing first must not tear the panel down
-        // under the fleet still running.
+        // The background fleet finishing first closes only its own lanes; the
+        // fleet still running keeps its display and its live slot.
         drop(first);
-        assert!(
-            !sink.calls.lock().unwrap().contains(&"finished".to_string()),
-            "{:?}",
-            sink.calls.lock().unwrap()
+        assert_eq!(live.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            sink.calls.lock().unwrap().as_slice(),
+            ["started:fleet-x:a", "started:fleet-y:b", "finished:fleet-x"]
         );
         drop(second);
-        let calls = sink.calls.lock().unwrap();
-        assert_eq!(calls.iter().filter(|c| *c == "finished").count(), 1);
-        assert_eq!(calls.last().unwrap(), "finished");
+        assert_eq!(live.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            sink.calls.lock().unwrap().last().unwrap(),
+            "finished:fleet-y"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_cannot_pile_up_fleets_without_bound() {
+        let sink = Arc::new(RecordingSink::default());
+        let tool = FleetTool::new(spawner("http://127.0.0.1:1/api/ai"), sink);
+        // Three fleets already in flight (as `wait: false` calls leave them).
+        tool.live.store(MAX_LIVE_FLEETS, Ordering::SeqCst);
+        let err = tool
+            .invoke(serde_json::json!({
+                "agents": [{ "name": "a", "prompt": "go" }],
+                "wait": false
+            }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("already running"),
+            "a fourth fleet is refused, not queued: {err}"
+        );
+        assert_eq!(tool.live.load(Ordering::SeqCst), MAX_LIVE_FLEETS);
     }
 
     #[tokio::test]
@@ -945,10 +1001,20 @@ mod tests {
         assert!(out.contains("### left\n\nleft says hi"));
         assert!(out.contains("### right\n\nright says hi"));
 
-        // The sink saw the full bracket: started → completions → finished.
+        // The sink saw the full bracket: started → completions → finished,
+        // every call naming the same fleet.
         let calls = sink.calls.lock().unwrap();
-        assert_eq!(calls.first().unwrap(), "started:left,right");
-        assert_eq!(calls.last().unwrap(), "finished");
+        let fleet = calls
+            .first()
+            .and_then(|c| c.strip_prefix("started:"))
+            .and_then(|rest| rest.split(':').next())
+            .expect("a started call naming the fleet");
+        assert!(fleet.starts_with("fleet-"), "{fleet}");
+        assert_eq!(
+            calls.first().unwrap(),
+            &format!("started:{fleet}:left,right")
+        );
+        assert_eq!(calls.last().unwrap(), &format!("finished:{fleet}"));
         assert!(calls.contains(&"completed:left:true".to_string()));
         assert!(calls.contains(&"completed:right:true".to_string()));
     }
@@ -1043,6 +1109,12 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("stopped before finishing"));
-        assert_eq!(sink.calls.lock().unwrap().last().unwrap(), "finished");
+        assert!(sink
+            .calls
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .starts_with("finished:fleet-"));
     }
 }

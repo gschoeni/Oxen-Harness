@@ -336,6 +336,18 @@ async fn session_lifecycle_and_replay() {
         .unwrap();
     assert_eq!(response.status(), 200);
 
+    // Stopping a fleet that isn't running (or never was) is a 404, not a
+    // silent no-op: a client's stop button learns the fleet already ended.
+    let response = client()
+        .post(format!(
+            "{base}/v1/sessions/{session}/fleets/fleet-9/cancel"
+        ))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
+
     // Delete removes it.
     let response = client()
         .delete(format!("{base}/v1/sessions/{session}"))

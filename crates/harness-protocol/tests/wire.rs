@@ -212,16 +212,19 @@ fn approval_answer_decision_keywords() {
 fn fleet_event_wire_shapes() {
     let started = ProtocolEvent::FleetStarted {
         session: "s1".into(),
+        fleet: "fleet-7".into(),
         agents: vec!["lane a".into(), "lane b".into()],
         source: FleetSource::Turn,
     };
     let value = json(&started);
     assert_eq!(value["type"], "fleet.started");
     assert_eq!(value["source"], "turn");
+    assert_eq!(value["fleet"], "fleet-7");
     round_trips(started);
 
     let agent = ProtocolEvent::FleetAgent {
         session: "s1".into(),
+        fleet: "fleet-7".into(),
         agent: 1,
         name: "lane b".into(),
         phase: FleetAgentPhase::Done,
@@ -233,6 +236,7 @@ fn fleet_event_wire_shapes() {
 
     let activity = ProtocolEvent::FleetActivity {
         session: "s1".into(),
+        fleet: "fleet-7".into(),
         agent: 0,
         kind: FleetActivityKind::Token,
         text: "thinking".into(),
@@ -243,6 +247,7 @@ fn fleet_event_wire_shapes() {
 
     round_trips(ProtocolEvent::FleetCompleted {
         session: "s1".into(),
+        fleet: "fleet-7".into(),
     });
 }
 
@@ -491,6 +496,7 @@ fn legacy_channel_names() {
         (
             ProtocolEvent::FleetStarted {
                 session: "s".into(),
+                fleet: "f".into(),
                 agents: vec![],
                 source: FleetSource::Review,
             },
@@ -499,6 +505,7 @@ fn legacy_channel_names() {
         (
             ProtocolEvent::FleetAgent {
                 session: "s".into(),
+                fleet: "f".into(),
                 agent: 0,
                 name: "n".into(),
                 phase: FleetAgentPhase::Started,
@@ -510,6 +517,7 @@ fn legacy_channel_names() {
         (
             ProtocolEvent::FleetActivity {
                 session: "s".into(),
+                fleet: "f".into(),
                 agent: 0,
                 kind: FleetActivityKind::Tool,
                 text: "".into(),
@@ -520,6 +528,7 @@ fn legacy_channel_names() {
         (
             ProtocolEvent::FleetCompleted {
                 session: "s".into(),
+                fleet: "f".into(),
             },
             "fleet://completed",
         ),

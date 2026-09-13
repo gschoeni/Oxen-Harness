@@ -208,16 +208,23 @@ impl FleetState {
     }
 }
 
-/// Apply one [`FleetEvent`] to the shared hub: advance the lane's state, and in
-/// a plain (non-animating) terminal print the matching milestone line. This is
-/// the single place a fleet event drives the CLI display — both the
-/// `spawn_agents` sink and the review fan-out step route their events through
-/// it, so the two surfaces can't drift on lane bookkeeping. `plain` is passed
-/// in (rather than read from `ui`) so the caller decides once per fleet.
-pub(crate) fn apply_fleet_event(hub: &FleetHub, ui: &Ui, plain: bool, event: &FleetEvent) {
+/// Apply one [`FleetEvent`] of `fleet` to the shared hub: advance the lane's
+/// state, and in a plain (non-animating) terminal print the matching
+/// milestone line. This is the single place a fleet event drives the CLI
+/// display — both the `spawn_agents` sink and the review fan-out step route
+/// their events through it, so the two surfaces can't drift on lane
+/// bookkeeping. `plain` is passed in (rather than read from `ui`) so the
+/// caller decides once per fleet.
+pub(crate) fn apply_fleet_event(
+    hub: &FleetHub,
+    ui: &Ui,
+    plain: bool,
+    fleet: &str,
+    event: &FleetEvent,
+) {
     match event {
         FleetEvent::TaskStarted { index, label } => {
-            if let Some(state) = hub.lock().as_mut() {
+            if let Some(state) = hub.lock().get_mut(fleet) {
                 state.lane_started(*index);
             }
             if plain {
@@ -225,7 +232,7 @@ pub(crate) fn apply_fleet_event(hub: &FleetHub, ui: &Ui, plain: bool, event: &Fl
             }
         }
         FleetEvent::Agent { index, event } => {
-            if let Some(state) = hub.lock().as_mut() {
+            if let Some(state) = hub.lock().get_mut(fleet) {
                 state.lane_event(*index, event.as_ref(), ui);
             }
         }
@@ -236,7 +243,7 @@ pub(crate) fn apply_fleet_event(hub: &FleetHub, ui: &Ui, plain: bool, event: &Fl
             tokens_used,
             summary,
         } => {
-            if let Some(state) = hub.lock().as_mut() {
+            if let Some(state) = hub.lock().get_mut(fleet) {
                 state.lane_completed(*index, *ok, *tokens_used, summary);
             }
             if plain {
@@ -247,13 +254,42 @@ pub(crate) fn apply_fleet_event(hub: &FleetHub, ui: &Ui, plain: bool, event: &Fl
 }
 
 /// The process-wide slot the `spawn_agents` sink publishes into, shared with
-/// whichever display is active. `live` is set while the live composer owns the
-/// terminal — the sink must then *not* start its own painter (the composer
-/// paints the block in its pinned area instead).
+/// whichever display is active. It holds every fleet in flight, by id, in
+/// start order: the oldest is the one on screen (the *primary*), and the
+/// rest keep their lane state up to date off-screen so they paint correctly
+/// the moment they become primary. `live` is set while the live composer
+/// owns the terminal — the sink must then *not* start its own painter (the
+/// composer paints the block in its pinned area instead).
 #[derive(Default)]
 pub(crate) struct FleetHub {
-    state: StdMutex<Option<FleetState>>,
+    fleets: StdMutex<Vec<(String, FleetState)>>,
     live: AtomicBool,
+}
+
+/// The hub's fleets under lock: the primary for painting and keys, any fleet
+/// by id for event bookkeeping.
+pub(crate) struct FleetBoard<'a>(MutexGuard<'a, Vec<(String, FleetState)>>);
+
+impl FleetBoard<'_> {
+    /// The fleet on display (the oldest still in flight).
+    pub(crate) fn primary(&self) -> Option<&FleetState> {
+        self.0.first().map(|(_, state)| state)
+    }
+
+    pub(crate) fn primary_mut(&mut self) -> Option<&mut FleetState> {
+        self.0.first_mut().map(|(_, state)| state)
+    }
+
+    pub(crate) fn get_mut(&mut self, fleet: &str) -> Option<&mut FleetState> {
+        self.0
+            .iter_mut()
+            .find(|(id, _)| id == fleet)
+            .map(|(_, state)| state)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl FleetHub {
@@ -265,16 +301,27 @@ impl FleetHub {
         HUB.get_or_init(|| Arc::new(FleetHub::default())).clone()
     }
 
-    pub(crate) fn install(&self, state: FleetState) {
-        *self.state.lock().expect("fleet hub poisoned") = Some(state);
+    /// Add `fleet` (replacing a same-named one, which a restarted fleet is).
+    pub(crate) fn install(&self, fleet: &str, state: FleetState) {
+        let mut fleets = self.fleets.lock().expect("fleet hub poisoned");
+        fleets.retain(|(id, _)| id != fleet);
+        fleets.push((fleet.to_string(), state));
+    }
+
+    /// Drop `fleet`; the next-oldest fleet, if any, becomes the primary.
+    pub(crate) fn remove(&self, fleet: &str) {
+        self.fleets
+            .lock()
+            .expect("fleet hub poisoned")
+            .retain(|(id, _)| id != fleet);
     }
 
     pub(crate) fn clear(&self) {
-        *self.state.lock().expect("fleet hub poisoned") = None;
+        self.fleets.lock().expect("fleet hub poisoned").clear();
     }
 
-    pub(crate) fn lock(&self) -> MutexGuard<'_, Option<FleetState>> {
-        self.state.lock().expect("fleet hub poisoned")
+    pub(crate) fn lock(&self) -> FleetBoard<'_> {
+        FleetBoard(self.fleets.lock().expect("fleet hub poisoned"))
     }
 
     /// Mark the live composer as owning the terminal for as long as the
@@ -678,9 +725,9 @@ fn run_painter(stop: &AtomicBool, hub: &FleetHub, style: &FleetStyle) {
             .map(|(w, _)| w as usize)
             .unwrap_or(100);
         let lines = {
-            let state = hub.lock();
-            state
-                .as_ref()
+            let board = hub.lock();
+            board
+                .primary()
                 .map(|s| block_lines(s, style, width, frame, FleetKeys::Owned))
         };
         if let Some(lines) = lines {
@@ -712,8 +759,8 @@ fn poll_keys(hub: &FleetHub) {
         if key.kind != KeyEventKind::Press {
             continue;
         }
-        let mut state = hub.lock();
-        let Some(state) = state.as_mut() else {
+        let mut board = hub.lock();
+        let Some(state) = board.primary_mut() else {
             continue;
         };
         apply_fleet_key(state, key.code, key.modifiers, FleetKeys::Owned);

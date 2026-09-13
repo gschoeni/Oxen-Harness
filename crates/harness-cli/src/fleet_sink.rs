@@ -42,8 +42,9 @@ impl CliFleetSink {
 }
 
 impl FleetSink for CliFleetSink {
-    fn started(&self, labels: &[String], cancel: CancellationToken) {
-        self.hub.install(FleetState::new(labels, Some(cancel)));
+    fn started(&self, fleet: &str, labels: &[String], cancel: CancellationToken) {
+        self.hub
+            .install(fleet, FleetState::new(labels, Some(cancel)));
         if self.plain() {
             println!(
                 "  {} {}",
@@ -55,20 +56,25 @@ impl FleetSink for CliFleetSink {
                 )),
             );
         } else if !self.hub.is_live() {
-            // Cooked-mode context: nobody else paints, so we do.
-            *self.painter.lock().expect("fleet painter poisoned") =
-                Some(BlockPainter::start(&self.ui, self.hub.clone()));
+            // Cooked-mode context: nobody else paints, so we do — one painter
+            // for however many fleets overlap; it shows the oldest.
+            let mut painter = self.painter.lock().expect("fleet painter poisoned");
+            if painter.is_none() {
+                *painter = Some(BlockPainter::start(&self.ui, self.hub.clone()));
+            }
         }
     }
 
-    fn event(&self, event: &FleetEvent) {
-        crate::fleet_ui::apply_fleet_event(&self.hub, &self.ui, self.plain(), event);
+    fn event(&self, fleet: &str, event: &FleetEvent) {
+        crate::fleet_ui::apply_fleet_event(&self.hub, &self.ui, self.plain(), fleet, event);
     }
 
-    fn finished(&self) {
-        if let Some(painter) = self.painter.lock().expect("fleet painter poisoned").take() {
-            painter.finish();
+    fn finished(&self, fleet: &str) {
+        self.hub.remove(fleet);
+        if self.hub.lock().is_empty() {
+            if let Some(painter) = self.painter.lock().expect("fleet painter poisoned").take() {
+                painter.finish();
+            }
         }
-        self.hub.clear();
     }
 }

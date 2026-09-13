@@ -240,7 +240,7 @@ impl ReviewDisplay {
                         )),
                     );
                     self.hub
-                        .install(FleetState::new(agents, Some(self.cancel.clone())));
+                        .install("review", FleetState::new(agents, Some(self.cancel.clone())));
                     if !self.plain {
                         self.painter = Some(BlockPainter::start(&self.ui, self.hub.clone()));
                     }
@@ -258,7 +258,7 @@ impl ReviewDisplay {
             // logic the spawn_agents sink uses, so review lanes and turn lanes
             // behave identically.
             ReviewEvent::Fleet(event) => {
-                crate::fleet_ui::apply_fleet_event(&self.hub, &self.ui, self.plain, event)
+                crate::fleet_ui::apply_fleet_event(&self.hub, &self.ui, self.plain, "review", event)
             }
             ReviewEvent::StepCompleted { .. } => self.settle(),
             ReviewEvent::Completed { tokens_used, .. } => self.tokens_used = *tokens_used,

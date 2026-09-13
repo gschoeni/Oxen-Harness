@@ -315,7 +315,9 @@ impl PermissionGate {
                 }
                 format!("running `{command}`")
             }
-            "ask_user_question" => return None,
+            // Declared mutating (a fleet edits and runs commands), but every
+            // lane's own calls pass through a gate sharing this latch.
+            "ask_user_question" | "spawn_agents" => return None,
             _ => match effect {
                 ToolEffect::ReadOnly => return None,
                 ToolEffect::Mutating => format!("calling `{tool}` (it is not a read-only tool)"),
@@ -1564,7 +1566,7 @@ mod tests {
             }
             other => panic!("a mutating custom tool must be refused in plan mode, got {other:?}"),
         }
-        for tool in ["web_fetch", "search_files", "spawn_agents", "canvas"] {
+        for tool in ["web_fetch", "search_files", "canvas"] {
             assert!(
                 matches!(
                     gate.review(tool, &args, ToolEffect::ReadOnly),
@@ -1573,10 +1575,18 @@ mod tests {
                 "{tool} declares itself read-only and should run while planning"
             );
         }
-        assert!(matches!(
-            gate.review("ask_user_question", &args, ToolEffect::Mutating),
-            GateReview::Allow
-        ));
+        // Two exclusive (mutating-classed) tools plan mode lets through by
+        // name: the question picker the plan prompt relies on, and the fleet,
+        // whose lanes are gated under this same latch.
+        for tool in ["ask_user_question", "spawn_agents"] {
+            assert!(
+                matches!(
+                    gate.review(tool, &args, ToolEffect::Mutating),
+                    GateReview::Allow
+                ),
+                "{tool} must run while planning"
+            );
+        }
         // Off again: the declaration no longer matters.
         gate.set_plan_mode(false);
         assert!(matches!(
