@@ -568,9 +568,17 @@ its reset while a background fleet is in flight; `fleet.budget` events
 show the tree's spend live in both hosts; Enter steers the watched lane in
 the CLI; a finished lane opens in the desktop inspector from the hub.
 
+**Background and navigation pass, same day.** The task registry
+snapshots itself and bumps a change feed; the host forwards `tasks.changed`
+and serves list/kill routes without the agent lock; the CLI has `/tasks`
+(`kill <n>`), `/agents show <n>` (a lane's whole transcript), and a watch
+pane a third of the terminal tall; `map_agents` runs in the background with
+`wait: false`. The desktop follows a running lane live in the inspector,
+steers the watched lane from a one-line box, and lists background commands
+with a stop each.
+
 Still open: a real-model smoke run (everything is proven against canned
-SSE), an offline TUI scenario for the lane block, and a desktop control to
-steer a running lane.
+SSE) and an offline TUI scenario for the lane block.
 
 ## What's left / next
 
