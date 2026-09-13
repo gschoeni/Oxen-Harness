@@ -9,11 +9,12 @@ import { useStore } from "../../lib/store";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
 
-const started = () =>
+const started = (fleet = "f1", agents = ["diff-scan", "callers"]) =>
   act(() =>
     useStore.getState().ingestFleetStarted({
       session: "s1",
-      agents: ["diff-scan", "callers"],
+      fleet,
+      agents,
       source: "review",
     }),
   );
@@ -44,6 +45,7 @@ describe("FleetPanel", () => {
       const s = useStore.getState();
       s.ingestFleetAgent({
         session: "s1",
+        fleet: "f1",
         agent: 0,
         name: "diff-scan",
         phase: "started",
@@ -52,6 +54,7 @@ describe("FleetPanel", () => {
       });
       s.ingestFleetActivity({
         session: "s1",
+        fleet: "f1",
         agent: 0,
         kind: "token",
         text: "reading the parser",
@@ -59,6 +62,7 @@ describe("FleetPanel", () => {
       });
       s.ingestFleetActivity({
         session: "s1",
+        fleet: "f1",
         agent: 0,
         kind: "tokens",
         text: "",
@@ -72,6 +76,7 @@ describe("FleetPanel", () => {
     act(() =>
       useStore.getState().ingestFleetAgent({
         session: "s1",
+        fleet: "f1",
         agent: 0,
         name: "diff-scan",
         phase: "done",
@@ -89,6 +94,7 @@ describe("FleetPanel", () => {
     act(() =>
       useStore.getState().ingestFleetActivity({
         session: "s1",
+        fleet: "f1",
         agent: 1,
         kind: "token",
         text: "tracing call sites across the repo",
@@ -110,7 +116,61 @@ describe("FleetPanel", () => {
     const { container } = render(<FleetPanel />);
     started();
     expect(screen.getByText("diff-scan")).toBeInTheDocument();
-    act(() => useStore.getState().ingestFleetCompleted("s1"));
+    act(() => useStore.getState().ingestFleetCompleted("s1", "f1"));
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("two fleets overlapping in one chat keep separate lanes and panels", () => {
+    render(<FleetPanel />);
+    started("f1", ["diff-scan", "callers"]);
+    started("f2", ["explore"]);
+    // Lane 0 of the second fleet is not lane 0 of the first.
+    act(() =>
+      useStore.getState().ingestFleetActivity({
+        session: "s1",
+        fleet: "f2",
+        agent: 0,
+        kind: "token",
+        text: "walking the crate tree",
+        tokens: null,
+      }),
+    );
+    expect(screen.getAllByRole("status")).toHaveLength(2);
+    expect(screen.getByText("walking the crate tree")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /diff-scan/ })).not.toHaveTextContent(
+      "walking the crate tree",
+    );
+    // The first finishing closes only its own panel.
+    act(() => useStore.getState().ingestFleetCompleted("s1", "f1"));
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.getByText("explore")).toBeInTheDocument();
+  });
+
+  it("stop asks the backend to cancel just that fleet", async () => {
+    render(<FleetPanel />);
+    started("f1");
+    await userEvent.click(screen.getByRole("button", { name: "Stop agents" }));
+    expect(ipc.cancelFleet).toHaveBeenCalledWith("s1", "f1");
+    // The panel stays until the lanes settle and the backend says so.
+    expect(screen.getByText("diff-scan")).toBeInTheDocument();
+    // Once every lane has settled there is nothing left to stop.
+    act(() => {
+      const s = useStore.getState();
+      for (const [agent, name] of [
+        [0, "diff-scan"],
+        [1, "callers"],
+      ] as const) {
+        s.ingestFleetAgent({
+          session: "s1",
+          fleet: "f1",
+          agent,
+          name,
+          phase: "done",
+          tokens: 10,
+          summary: "ok",
+        });
+      }
+    });
+    expect(screen.queryByRole("button", { name: "Stop agents" })).not.toBeInTheDocument();
   });
 });

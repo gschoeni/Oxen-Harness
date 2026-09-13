@@ -26,6 +26,7 @@ import {
   runTurn,
   runLoop,
   retryTurn,
+  cancelFleet,
   cancelTurn,
   cancelDownload as cancelDownloadIpc,
   downloadModel as downloadModelIpc,
@@ -155,9 +156,28 @@ export interface FleetLane {
 
 /** A running fleet: its lanes plus which one is expanded for watching. */
 export interface FleetView {
+  /** The chat it runs in (fleets are keyed by their own id, see `fleets`). */
+  session: string;
   source: "review" | "turn";
   lanes: FleetLane[];
   focused: number | null;
+}
+
+/** A chat's fleets in flight, oldest first (the order they were keyed in). */
+export function fleetsFor(
+  fleets: Record<string, FleetView | undefined>,
+  session: string,
+): Array<[string, FleetView]> {
+  return Object.entries(fleets).filter(
+    (entry): entry is [string, FleetView] => entry[1]?.session === session,
+  );
+}
+
+function withoutFleetsOf(
+  fleets: Record<string, FleetView | undefined>,
+  session: string,
+): Record<string, FleetView | undefined> {
+  return Object.fromEntries(Object.entries(fleets).filter(([, f]) => f?.session !== session));
 }
 
 /** Cap on a lane's one-line activity readout — matches the CLI's
@@ -333,6 +353,9 @@ interface AppState {
    *  parallel subagent, driving the chat's fleet panel. Click a lane to watch
    *  its live output tail. Fed by review fan-out steps and `spawn_agents`
    *  alike. */
+  /** Every fleet in flight, keyed by fleet id — not by session, because a
+   *  background (`wait: false`) fleet can overlap a later one in one chat and
+   *  the two must not share lanes. `fleetsFor` picks a chat's, in start order. */
   fleets: Record<string, FleetView | undefined>;
   /** Prompts queued while a session is mid-turn, sent in order as it frees up. */
   queues: Record<string, QueuedPrompt[]>;
@@ -490,10 +513,13 @@ interface AppState {
   ingestFleetAgent: (e: FleetAgentEvent) => void;
   /** Live activity from one lane (text, a tool, or a token-count update). */
   ingestFleetActivity: (e: FleetActivityEvent) => void;
-  /** The fleet finished: close the session's panel. */
-  ingestFleetCompleted: (session: string) => void;
-  /** Expand one lane to watch its output (null collapses back to the list). */
-  setFleetFocus: (session: string, index: number | null) => void;
+  /** The fleet finished: close its panel. */
+  ingestFleetCompleted: (session: string, fleet: string) => void;
+  /** Expand one lane of `fleet` to watch its output (null collapses back). */
+  setFleetFocus: (fleet: string, index: number | null) => void;
+  /** Stop one fleet without ending the turn; its panel closes on the
+   *  backend's `fleet://completed` once the lanes settle. */
+  stopFleet: (session: string, fleet: string) => void;
   /** Stop the current chat's in-flight turn, killing the model stream. */
   stop: () => void;
   /** Save the Oxen API key entered in a chat's inline auth prompt, then retry the
@@ -1278,8 +1304,7 @@ export const useStore = create<AppState>((set, get) => {
           set((s) => {
             const codeReview = { ...s.codeReview };
             delete codeReview[id];
-            const fleets = { ...s.fleets };
-            delete fleets[id];
+            const fleets = withoutFleetsOf(s.fleets, id);
             return { codeReview, fleets };
           });
           get().refreshHistory();
@@ -1368,7 +1393,8 @@ export const useStore = create<AppState>((set, get) => {
       set((s) => ({
         fleets: {
           ...s.fleets,
-          [e.session]: {
+          [e.fleet]: {
+            session: e.session,
             source: e.source,
             focused: null,
             lanes: e.agents.map((name) => ({
@@ -1384,7 +1410,7 @@ export const useStore = create<AppState>((set, get) => {
 
     ingestFleetAgent: (e) =>
       set((s) => {
-        const fleet = s.fleets[e.session];
+        const fleet = s.fleets[e.fleet];
         const lane = fleet?.lanes[e.agent];
         if (!fleet || !lane) return {};
         const updated: FleetLane =
@@ -1397,12 +1423,12 @@ export const useStore = create<AppState>((set, get) => {
                 activity: e.summary || lane.activity,
               };
         const lanes = fleet.lanes.map((l, i) => (i === e.agent ? updated : l));
-        return { fleets: { ...s.fleets, [e.session]: { ...fleet, lanes } } };
+        return { fleets: { ...s.fleets, [e.fleet]: { ...fleet, lanes } } };
       }),
 
     ingestFleetActivity: (e) =>
       set((s) => {
-        const fleet = s.fleets[e.session];
+        const fleet = s.fleets[e.fleet];
         const lane = fleet?.lanes[e.agent];
         if (!fleet || !lane) return {};
         let updated: FleetLane;
@@ -1422,24 +1448,30 @@ export const useStore = create<AppState>((set, get) => {
           updated = { ...lane, tokens: e.tokens ?? lane.tokens };
         }
         const lanes = fleet.lanes.map((l, i) => (i === e.agent ? updated : l));
-        return { fleets: { ...s.fleets, [e.session]: { ...fleet, lanes } } };
+        return { fleets: { ...s.fleets, [e.fleet]: { ...fleet, lanes } } };
       }),
 
-    ingestFleetCompleted: (session) =>
+    ingestFleetCompleted: (_session, id) =>
       set((s) => {
-        if (!s.fleets[session]) return {};
+        if (!s.fleets[id]) return {};
         const fleets = { ...s.fleets };
-        delete fleets[session];
+        delete fleets[id];
         return { fleets };
       }),
 
-    setFleetFocus: (session, index) =>
+    setFleetFocus: (id, index) =>
       set((s) => {
-        const fleet = s.fleets[session];
+        const fleet = s.fleets[id];
         if (!fleet) return {};
         const focused = index !== null && index < fleet.lanes.length ? index : null;
-        return { fleets: { ...s.fleets, [session]: { ...fleet, focused } } };
+        return { fleets: { ...s.fleets, [id]: { ...fleet, focused } } };
       }),
+
+    stopFleet: (session, fleet) => {
+      // Best effort: a fleet that already ended (false) or an IPC hiccup
+      // leaves the panel to the backend's completion event either way.
+      void cancelFleet(session, fleet).catch(() => {});
+    },
 
     submitApiKey: async (session, itemId, key) => {
       // Don't drive a retry into a chat that's already busy. A code review

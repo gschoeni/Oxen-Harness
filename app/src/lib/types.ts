@@ -415,7 +415,7 @@ export interface ThemeStyle {
   shadow: string; // "pixel" | "soft" | "glow" | "none"
   hero: string; // "pixel" | "newspaper" | "minimal"
   scene: string; // "trail" | "grid" | "none" — the pixel hero's fallback artwork
-  game?: string; // "tumbleweed" | "oregon" | "none" — the pixel hero's default game
+  game?: string; // "tumbleweed" | "oregon" | "hunt" | "none" — the pixel hero's default game
   // (the player can switch cabinets at runtime; "none" opts into a static scene)
 }
 
@@ -808,9 +808,12 @@ export interface CodeReviewProgressEvent {
 
 // ---- fleets (N parallel subagents: review fan-out or spawn_agents) ----------
 
-/** `fleet://started` — a fleet of parallel subagents is spinning up. */
+/** `fleet://started` — a fleet of parallel subagents is spinning up. `fleet`
+ *  names it on every later event and on the stop request: a background
+ *  (`wait: false`) fleet can overlap another in the same chat. */
 export interface FleetStartedEvent {
   session: string;
+  fleet: string;
   agents: string[];
   /** `"review"` (a pipeline step) or `"turn"` (the model's spawn_agents). */
   source: "review" | "turn";
@@ -819,6 +822,7 @@ export interface FleetStartedEvent {
 /** `fleet://agent` — one lane changed state. */
 export interface FleetAgentEvent {
   session: string;
+  fleet: string;
   agent: number;
   name: string;
   phase: "started" | "done" | "failed";
@@ -829,6 +833,7 @@ export interface FleetAgentEvent {
 /** `fleet://agent-activity` — what one lane is doing right now. */
 export interface FleetActivityEvent {
   session: string;
+  fleet: string;
   agent: number;
   kind: "token" | "tool" | "tokens";
   text: string;

@@ -1213,6 +1213,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Stop just this fleet; the turn around it keeps going. */
+.fleet-panel-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 1px 8px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  cursor: pointer;
+}
+.fleet-panel-stop:hover {
+  color: var(--danger, #c0392b);
+  border-color: var(--danger, #c0392b);
+}
 .fleet-lanes {
   display: flex;
   flex-direction: column;

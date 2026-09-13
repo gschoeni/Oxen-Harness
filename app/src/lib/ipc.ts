@@ -333,6 +333,12 @@ export const runTurn = (session: string, prompt: string, attachments: string[] =
  *  remote). The `runTurn` promise then resolves with whatever streamed so far. */
 export const cancelTurn = (session: string) => invoke<void>("cancel_turn", { session });
 
+/** Stop one `spawn_agents` fleet (named on its `fleet://started`) without
+ *  ending the turn: its lanes settle with what they have and the model gets
+ *  the partial report. Resolves false once the fleet has already ended. */
+export const cancelFleet = (session: string, fleet: string) =>
+  invoke<boolean>("cancel_fleet", { session, fleet });
+
 // ---- verification loops ---------------------------------------------------
 
 export const listLoops = () => invoke<LoopSummary[]>("list_loops");
@@ -546,8 +552,8 @@ export const onFleetActivity = (handler: (e: FleetActivityEvent) => void) =>
   listen<FleetActivityEvent>("fleet://agent-activity", (e) => handler(e.payload));
 
 /** The fleet finished; its lanes panel closes. */
-export const onFleetCompleted = (handler: (session: string) => void) =>
-  listen<{ session: string }>("fleet://completed", (e) => handler(e.payload.session));
+export const onFleetCompleted = (handler: (e: { session: string; fleet: string }) => void) =>
+  listen<{ session: string; fleet: string }>("fleet://completed", (e) => handler(e.payload));
 
 // ---- live preview (dev servers) ---------------------------------------------
 

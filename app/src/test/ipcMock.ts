@@ -392,6 +392,7 @@ export const themeLocation = vi.fn(async () => null as string | null);
 export const setThemeLocation = vi.fn(async () => {});
 export const retryTurn = vi.fn(async () => "Done.");
 export const cancelTurn = vi.fn(async () => {});
+export const cancelFleet = vi.fn(async () => true);
 export const configureOxenKey = vi.fn(async () => {});
 export const onToken = listener("token");
 export const onTool = listener("tool");
@@ -587,6 +588,7 @@ export function resetIpc() {
   setThemeLocation.mockReset().mockResolvedValue(undefined);
   retryTurn.mockReset().mockResolvedValue("Done.");
   cancelTurn.mockReset().mockResolvedValue(undefined);
+  cancelFleet.mockReset().mockResolvedValue(true);
   configureOxenKey.mockReset().mockResolvedValue(undefined);
   pickAttachments.mockReset().mockResolvedValue([]);
   answerQuestion.mockReset().mockResolvedValue(undefined);

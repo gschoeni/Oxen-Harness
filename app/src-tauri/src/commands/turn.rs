@@ -42,6 +42,17 @@ pub(crate) async fn cancel_turn(state: State<'_, AppState>, session: String) -> 
     Ok(())
 }
 
+/// Stop one `spawn_agents` fleet (named on its `fleet://started`) without
+/// ending the turn; `false` once it has already ended.
+#[tauri::command]
+pub(crate) fn cancel_fleet(
+    state: State<'_, AppState>,
+    session: String,
+    fleet: String,
+) -> Result<bool, String> {
+    Ok(state.cancel_fleet(&session, &fleet))
+}
+
 /// Deliver the user's answer to a pending `ask_user_question`, unblocking the
 /// agent. Unknown ids are ignored (the question may have been cancelled).
 #[tauri::command]

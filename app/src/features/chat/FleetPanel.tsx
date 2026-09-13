@@ -2,21 +2,37 @@
 // a review fan-out step or a `spawn_agents` call the model made mid-turn.
 // Each lane shows its status, name, a one-line activity readout, and token
 // spend; clicking a lane expands it to watch that agent's live output tail
-// (click again, or another lane, to switch). The panel appears when a fleet
-// starts and disappears when it finishes — results land in the thread.
+// (click again, or another lane, to switch). A fleet can be stopped on its
+// own — the turn around it carries on with the partial report. The panel
+// appears when a fleet starts and disappears when it finishes — results land
+// in the thread. A background (`wait: false`) fleet can overlap a later one,
+// so a chat may show more than one panel, oldest first.
 
 import { useEffect, useRef } from "react";
-import { Check, CircleDashed, Users, X } from "lucide-react";
+import { Check, CircleDashed, Square, Users, X } from "lucide-react";
 import { compactTokens } from "../../lib/format";
-import { useStore, type FleetLane } from "../../lib/store";
+import { fleetsFor, useStore, type FleetLane, type FleetView } from "../../lib/store";
 
 export function FleetPanel() {
   const sessionId = useStore((s) => s.session?.session_id);
-  const fleet = useStore((s) => (s.session ? s.fleets[s.session.session_id] : undefined));
-  const setFocus = useStore((s) => s.setFleetFocus);
+  const fleets = useStore((s) => s.fleets);
+  if (!sessionId) return null;
+  const mine = fleetsFor(fleets, sessionId);
+  if (mine.length === 0) return null;
+  return (
+    <>
+      {mine.map(([id, fleet]) => (
+        <OneFleet key={id} id={id} fleet={fleet} />
+      ))}
+    </>
+  );
+}
 
-  if (!sessionId || !fleet) return null;
+function OneFleet({ id, fleet }: { id: string; fleet: FleetView }) {
+  const setFocus = useStore((s) => s.setFleetFocus);
+  const stopFleet = useStore((s) => s.stopFleet);
   const running = fleet.lanes.filter((l) => l.status === "running").length;
+  const settled = fleet.lanes.every((l) => l.status === "done" || l.status === "failed");
   const focused = fleet.focused !== null ? fleet.lanes[fleet.focused] : null;
 
   return (
@@ -30,13 +46,25 @@ export function FleetPanel() {
         <span className="fleet-panel-hint">
           {focused ? "click again to collapse" : "click a lane to watch it"}
         </span>
+        {!settled && (
+          <button
+            type="button"
+            className="fleet-panel-stop"
+            onClick={() => stopFleet(fleet.session, id)}
+            title="Stop these agents (the chat keeps going with what they have)"
+            aria-label="Stop agents"
+          >
+            <Square size={10} />
+            Stop
+          </button>
+        )}
       </div>
       <div className="fleet-lanes">
         {fleet.lanes.map((lane, i) => (
           <button
             key={`${lane.name}-${i}`}
             className={`fleet-lane ${fleet.focused === i ? "focused" : ""}`}
-            onClick={() => setFocus(sessionId, fleet.focused === i ? null : i)}
+            onClick={() => setFocus(id, fleet.focused === i ? null : i)}
             aria-pressed={fleet.focused === i}
             title={`Watch ${lane.name}`}
           >
@@ -80,4 +108,3 @@ function LaneTail({ tail }: { tail: string }) {
     </pre>
   );
 }
-

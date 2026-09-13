@@ -19,7 +19,8 @@ describe("TitleBar running work indicator", () => {
       ledger: { entries: [], running: ["persisted"], last_seen: 0 },
       runStatus: { parent: "running", solo: "running", finished: "unread" },
       fleets: {
-        parent: {
+        "fleet-1": {
+          session: "parent",
           source: "turn",
           focused: null,
           lanes: [
@@ -28,13 +29,20 @@ describe("TitleBar running work indicator", () => {
             { name: "three", status: "done", activity: "", tail: "", tokens: 10 },
           ],
         },
+        // A second fleet in the same chat adds its lanes, not a second session.
+        "fleet-2": {
+          session: "parent",
+          source: "turn",
+          focused: null,
+          lanes: [{ name: "four", status: "running", activity: "", tail: "", tokens: 0 }],
+        },
       },
     });
 
     render(<TitleBar />);
 
-    // Two active fleet lanes + one solo live session + one backend-known session.
-    expect(screen.getByRole("button", { name: "4 running — open the Ledger" })).toBeTruthy();
+    // Three active fleet lanes + one solo live session + one backend-known session.
+    expect(screen.getByRole("button", { name: "5 running — open the Ledger" })).toBeTruthy();
   });
 
   it("lets locally completed work override an older Ledger snapshot", () => {

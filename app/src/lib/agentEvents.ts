@@ -83,7 +83,7 @@ export function startAgentEventBridge(): void {
     onFleetStarted((e) => s().ingestFleetStarted(e)),
     onFleetAgent((e) => s().ingestFleetAgent(e)),
     onFleetActivity((e) => s().ingestFleetActivity(e)),
-    onFleetCompleted((session) => s().ingestFleetCompleted(session)),
+    onFleetCompleted((e) => s().ingestFleetCompleted(e.session, e.fleet)),
   ];
   Promise.all(pending).then((fns) => {
     unlisteners = fns;

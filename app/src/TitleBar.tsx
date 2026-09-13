@@ -30,17 +30,22 @@ export function TitleBar() {
       if (status === "running") sessions.add(id);
       else sessions.delete(id);
     }
-    for (const [id, fleet] of Object.entries(s.fleets)) {
-      if (fleet?.lanes.some((lane) => lane.status === "queued" || lane.status === "running")) {
-        sessions.add(id);
+    // Fleets are keyed by fleet id and a chat can run more than one at once:
+    // its active lanes add up across them.
+    const activeLanes = new Map<string, number>();
+    for (const fleet of Object.values(s.fleets)) {
+      if (!fleet) continue;
+      const active = fleet.lanes.filter(
+        (lane) => lane.status === "queued" || lane.status === "running",
+      ).length;
+      if (active > 0) {
+        sessions.add(fleet.session);
+        activeLanes.set(fleet.session, (activeLanes.get(fleet.session) ?? 0) + active);
       }
     }
     let count = 0;
     for (const id of sessions) {
-      const activeLanes = s.fleets[id]?.lanes.filter(
-        (lane) => lane.status === "queued" || lane.status === "running",
-      ).length;
-      count += activeLanes || 1;
+      count += activeLanes.get(id) || 1;
     }
     return count;
   });
