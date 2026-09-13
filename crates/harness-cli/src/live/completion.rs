@@ -8,6 +8,8 @@
 //!
 //! [`Live::accept_completion_on_submit`]: Live#method.accept_completion_on_submit
 
+use std::sync::Arc;
+
 use crate::repl::{parse_command, ArgCompleter, Command, SLASH_COMMANDS};
 
 use super::layout::Focus;
@@ -370,23 +372,12 @@ impl Live {
         self.model_items.clone().unwrap_or_default()
     }
 
-    /// The workspace's paths for `@` completion, rebuilt at most every couple
-    /// of seconds so a file the agent just wrote shows up without a restart.
-    fn path_candidates(&mut self) -> Vec<String> {
-        const REFRESH: std::time::Duration = std::time::Duration::from_secs(2);
-        let fresh = self
-            .path_items
-            .as_ref()
-            .is_some_and(|(at, _)| at.elapsed() < REFRESH);
-        if !fresh {
-            let root = crate::custom_commands::workspace_root();
-            let paths = harness_tools::fs::workspace_paths(&root, MAX_PATH_CANDIDATES);
-            self.path_items = Some((std::time::Instant::now(), paths));
-        }
-        self.path_items
-            .as_ref()
-            .map(|(_, p)| p.clone())
-            .unwrap_or_default()
+    /// The workspace's paths for `@` completion: a shared, cheaply cloned
+    /// snapshot of the process-wide [`PathIndex`], which rescans off the UI
+    /// thread at most every couple of seconds so a file the agent just wrote
+    /// shows up without a restart.
+    fn path_candidates(&self) -> Arc<Vec<PathEntry>> {
+        path_index().snapshot(&crate::custom_commands::workspace_root())
     }
 
     /// On Enter, fold the **visible** completion into the submission so Enter
@@ -530,22 +521,135 @@ pub(super) fn at_token(chars: &[char], cursor: usize) -> Option<(usize, usize, S
         .position(|c| c.is_whitespace())
         .map(|i| cursor + i)
         .unwrap_or(chars.len());
-    if chars.get(start) != Some(&'@') {
+    // The caret sitting *on* the `@` (start == cursor) is not inside the
+    // token: there is nothing typed after the `@` to complete, and slicing
+    // `start + 1..cursor` would panic.
+    if start >= cursor || chars.get(start) != Some(&'@') {
         return None;
     }
     let needle: String = chars[start + 1..cursor].iter().collect();
     Some((start, end, needle))
 }
 
+/// One workspace path for `@` completion, with its lowercase form computed
+/// once at scan time so ranking on every keystroke only borrows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PathEntry {
+    pub(super) path: String,
+    lower: String,
+}
+
+impl PathEntry {
+    pub(super) fn new(path: impl Into<String>) -> Self {
+        let path = path.into();
+        let lower = path.to_lowercase();
+        Self { path, lower }
+    }
+}
+
+/// How long a scan stays fresh before the next `@` keystroke kicks off another.
+const PATH_REFRESH: std::time::Duration = std::time::Duration::from_secs(2);
+/// The one time the UI waits on a scan: the very first `@` of the process,
+/// and only this long, so a normal repo completes on the first keystroke
+/// while a huge tree never stalls the composer for more than a blink.
+const PATH_COLD_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The process-wide `@` path index. Scans run on a helper thread and land
+/// in [`PathIndexState::entries`]; readers clone the `Arc`, never the list.
+pub(super) struct PathIndex {
+    state: std::sync::Mutex<PathIndexState>,
+    /// Signalled when a scan lands, for the cold-start wait.
+    landed: std::sync::Condvar,
+}
+
+#[derive(Default)]
+struct PathIndexState {
+    /// The root the entries were scanned under; a different root drops them.
+    root: std::path::PathBuf,
+    entries: Arc<Vec<PathEntry>>,
+    scanned_at: Option<std::time::Instant>,
+    /// A scan thread is running; don't start another.
+    in_flight: bool,
+}
+
+impl PathIndex {
+    fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(PathIndexState::default()),
+            landed: std::sync::Condvar::new(),
+        }
+    }
+
+    /// The current entries for `root`, starting a background rescan when
+    /// they are missing or older than [`PATH_REFRESH`].
+    pub(super) fn snapshot(&'static self, root: &std::path::Path) -> Arc<Vec<PathEntry>> {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if st.root != root {
+            *st = PathIndexState {
+                root: root.to_path_buf(),
+                ..PathIndexState::default()
+            };
+        }
+        let stale = st.scanned_at.is_none_or(|at| at.elapsed() >= PATH_REFRESH);
+        if stale && !st.in_flight {
+            st.in_flight = true;
+            let root = root.to_path_buf();
+            let spawned = std::thread::Builder::new()
+                .name("path-index".into())
+                .spawn({
+                    let root = root.clone();
+                    move || self.scan(root)
+                });
+            if spawned.is_err() {
+                // Could not spawn: scan inline rather than never at all.
+                drop(st);
+                self.scan(root);
+                st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            }
+        }
+        if st.scanned_at.is_none() {
+            // Cold start: give the first scan a moment to land.
+            let (guard, _) = self
+                .landed
+                .wait_timeout_while(st, PATH_COLD_WAIT, |st| st.scanned_at.is_none())
+                .unwrap_or_else(|e| e.into_inner());
+            st = guard;
+        }
+        Arc::clone(&st.entries)
+    }
+
+    fn scan(&self, root: std::path::PathBuf) {
+        let entries: Vec<PathEntry> =
+            harness_tools::fs::workspace_paths(&root, MAX_PATH_CANDIDATES)
+                .into_iter()
+                .map(PathEntry::new)
+                .collect();
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        st.in_flight = false;
+        // The root moved while we walked: this scan is for nobody.
+        if st.root == root {
+            st.entries = Arc::new(entries);
+            st.scanned_at = Some(std::time::Instant::now());
+        }
+        drop(st);
+        self.landed.notify_all();
+    }
+}
+
+fn path_index() -> &'static PathIndex {
+    static INDEX: std::sync::OnceLock<PathIndex> = std::sync::OnceLock::new();
+    INDEX.get_or_init(PathIndex::new)
+}
+
 /// Rank workspace paths against what was typed after the `@`: a basename
 /// prefix beats a path prefix beats a substring beats a subsequence, and
 /// shorter paths win ties so `src/lib.rs` outranks `src/legacy/lib.rs`.
-pub(super) fn rank_paths(paths: &[String], needle: &str) -> Vec<String> {
+pub(super) fn rank_paths(paths: &[PathEntry], needle: &str) -> Vec<String> {
     let needle = needle.to_lowercase();
-    let mut scored: Vec<(u8, usize, &String)> = paths
+    let mut scored: Vec<(u8, usize, &str)> = paths
         .iter()
-        .filter_map(|path| {
-            let lower = path.to_lowercase();
+        .filter_map(|entry| {
+            let lower = entry.lower.as_str();
             let base = lower.rsplit('/').find(|s| !s.is_empty()).unwrap_or("");
             let score = if needle.is_empty() {
                 4
@@ -555,19 +659,19 @@ pub(super) fn rank_paths(paths: &[String], needle: &str) -> Vec<String> {
                 1
             } else if lower.contains(&needle) {
                 2
-            } else if is_subsequence(&needle, &lower) {
+            } else if is_subsequence(&needle, lower) {
                 3
             } else {
                 return None;
             };
-            Some((score, path.len(), path))
+            Some((score, entry.path.len(), entry.path.as_str()))
         })
         .collect();
     scored.sort();
     scored
         .into_iter()
         .take(MAX_PATH_ROWS)
-        .map(|(_, _, p)| p.clone())
+        .map(|(_, _, p)| p.to_string())
         .collect()
 }
 
@@ -883,15 +987,24 @@ mod path_tests {
     }
 
     #[test]
+    fn a_caret_sitting_on_the_at_sign_is_not_inside_the_token() {
+        // `see @lib` with the caret just before the `@` (Left ×4): start ==
+        // cursor, which used to slice `chars[5..4]` and panic.
+        assert_eq!(at_token(&chars("see @lib"), 4), None);
+        assert_eq!(at_token(&chars("@x"), 0), None);
+        assert_eq!(at_token(&chars("@x"), 1), Some((0, 2, String::new())));
+    }
+
+    #[test]
     fn paths_rank_basename_prefix_first_then_shorter() {
-        let paths: Vec<String> = [
+        let paths: Vec<PathEntry> = [
             "src/legacy/lib.rs",
             "src/lib.rs",
             "docs/library.md",
             "Cargo.lock",
         ]
         .iter()
-        .map(|s| s.to_string())
+        .map(|p| PathEntry::new(*p))
         .collect();
         assert_eq!(
             rank_paths(&paths, "lib"),

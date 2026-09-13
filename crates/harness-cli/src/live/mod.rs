@@ -221,8 +221,6 @@ struct Live {
     tool_card: Option<card::ToolCard>,
     /// The last few sealed tool results, newest last, for Ctrl+O.
     results: std::collections::VecDeque<card::KeptResult>,
-    /// Workspace paths for `@` completion, with when they were scanned.
-    path_items: Option<(std::time::Instant, Vec<String>)>,
     /// What the region's last write was, so the renderer can keep exactly one
     /// blank row between a run of streamed text and the tool/notice lines
     /// around it (see [`events::LastWrite`]).
@@ -265,7 +263,6 @@ impl Live {
             title: None,
             tool_card: None,
             results: std::collections::VecDeque::new(),
-            path_items: None,
             last_write: events::LastWrite::Blank,
         }
     }
