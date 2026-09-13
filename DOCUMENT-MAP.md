@@ -38,7 +38,9 @@ oxen-harness/
     harness-oxen/            — Version config/data + export/share traces via the `oxen` CLI (testable Runner shell-out; no liboxen).
     harness-local/           — Local models: extensible GGUF catalog (Qwen3 + Bonsai), downloads + disk tracking, llama-server launcher.
     harness-theme/           — Configurable themes (palette + voice): built-ins, TOML/JSON load/save with partial overrides, active-theme store.
-    harness-agent/           — The agent (Ralph) loop (llm + tools + store); the fleet (run_fleet: N parallel detached subagents) + the model-facing spawn_agents tool (FleetSpawner/FleetSink);
+    harness-agent/           — The agent (Ralph) loop (llm + tools + store); the fleet (run_fleet: N parallel detached subagents, FleetLimits clocks) + the model-facing spawn_agents tool (FleetSpawner/FleetSink);
+                                 lane.rs (a lane's typed SubagentResult + the AgentTree of running lanes), lane_tools.rs (send_to_agent / read_agent), tree.rs (the TreeBudget every lane of a turn shares),
+                                 ask_tool.rs (ask_model: batched tool-less leaf calls), map_tool.rs (map_agents: one lane per item, memoized);
                                  worktree.rs (per-lane git checkouts for editing fleets); config.rs ModelRoles (route work to cheaper models) + RetryPolicy fallback chains;
                                  rules.rs (stream rules: regex corrections that watch the reply and fire only on a match, plus DRAFT_SYSTEM/DraftedRule — model-written rules, self-verified). agent/ splits the loop: turn (the cycle),
                                  call (one model call), tools (gate → waves: shared calls together, exclusive alone; live ToolProgress), repair (heal cut-off JSON, coerce args to the schema), fork (session forks), compaction.

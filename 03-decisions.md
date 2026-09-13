@@ -575,7 +575,8 @@ shared domain types.
 The SQLite connection is wrapped in a `Mutex` so the store can be shared via `Arc`
 across threads (the agent loop today, the Tauri app later).
 
-**Subagents are one fan-out level deep** (2026-07-08)
+**Subagents are one fan-out level deep** (2026-07-08) — *superseded 2026-09-13
+by "Depth two, and one wallet for every agent of a turn" below.*
 `spawn_agents` lets the model run 2-6 parallel subagents, but a subagent can
 never spawn its own fleet: the `FleetSpawner` snapshots the tool registry
 *before* the fleet tool registers, and `Agent::side_agent` strips it again.
@@ -583,7 +584,8 @@ Recursion would turn one prompt into an unbounded tree of model calls — a cost
 and debugging hazard with no compelling use we could name. Revisit only with a
 depth budget and per-tree token accounting.
 
-**Fleet transcripts are ephemeral; the display is the record** (2026-07-08)
+**Fleet transcripts are ephemeral; the display is the record** (2026-07-08) —
+*superseded 2026-09-13 by "A lane is a session under its parent" below.*
 Subagents run on in-memory stores: you watch their lanes live (TUI focus keys,
 desktop panel) and only their *results* land in the session — as labeled tool
 output or the injected review exchange. Persisting every subagent transcript
@@ -619,6 +621,62 @@ A `wait: false` fleet can overlap a later one in the same session, so every
 stop buttons by it, and a fleet can be stopped on its own
 (`POST /v1/sessions/{id}/fleets/{fleet}/cancel`) without ending the turn. A
 session holds at most three fleets in flight.
+
+**A lane is a session under its parent** (2026-09-13)
+Subagent transcripts persist after all — as sessions whose `parent_session`
+names the chat that spawned them, kept out of every chat listing and deleted
+with the parent. The July worry (history bloat, sidebar clutter) is answered
+by the column, not by discarding the record: a persisted lane can be read
+back (`read_agent`), resumed with its whole context (`send_to_agent`), and
+listed in a hub, none of which an in-memory lane could offer, and all of
+which every surveyed harness had converged on. Review side agents stay in
+memory: nobody resumes a verifier.
+
+**A lane's result is typed, and short by construction** (2026-09-13)
+The parent reads a `SubagentResult` — status, failure kind, the reply's head,
+handles for the rest — not prose. A failure is a kind the model can act on
+(auth needs the user, a rate limit a retry, a context overflow a smaller
+task); commands the lane's gate refused come back as a list, found in the
+lane's transcript by one shared denial constant. An optional `output_schema`
+asks for a JSON object with given keys and re-asks up to twice; after that
+the prose stands rather than failing the lane.
+
+**Depth two, and one wallet for every agent of a turn** (2026-09-13)
+A lane may spawn one level down (`max_depth` 2) because a depth cap alone
+does not bound cost: every lane of a root turn spends from a `TreeBudget`
+of tokens, model calls, and spawns, shared through the config, reset at the
+root turn, charged by lanes only (the root's spend is the session budget's).
+Exhaustion returns best-so-far — the lane stops with what it has, reported
+partial — never an error. There is no tree-wide concurrency semaphore: a
+lane holding a slot while it waits for its children would deadlock the
+tree; `max_spawns` bounds it instead. Depth three was declined: the RLM
+paper's results are all depth one, and deeper mostly buys cost variance.
+
+**Big tool results are parked, not pasted** (2026-09-13)
+A tool result over `tool_result_cap` (30k chars) lands in the overflow store
+and the model sees its head and a handle. This is the recursive-language-
+model move: the context stays for decisions, and the parked thing is read
+through `retrieve_original` as a slice, a grep, or chunks handed to agents.
+The cap is deliberately high — a whole file or build log still reads inline;
+only listings and dumps park — because the RLM follow-ups measured a
+regression when short tasks were forced through the recursive shape.
+
+**Fan-out over items is a program, not a request** (2026-09-13)
+`map_agents` makes exactly one lane per item from a template, so coverage
+is guaranteed by construction and a failed item is a typed row rather than
+a missing one; rows are memoized so a stopped run re-issued only runs what
+is left. The declarative tool shipped first; a script sandbox (loops,
+conditionals) waits until a real workload shows the declarative form is not
+enough, since it would be a week of work and a permanent attack surface.
+
+**Forks are for decisions, fresh lanes for reading** (2026-09-13)
+`fork: true` starts a lane from a copy of the parent's conversation; the
+agent publishes the snapshot only when a `spawn_agents` call actually asks
+for a fork (one clone per such call, never per tool wave). It exists for
+work that depends on what has been read and decided — "try the other
+approach" — and is documented as the wrong tool for reading, where a fresh
+lane with handles is cheaper. A fork's tools are the lane set, so it does
+not share the parent's prompt cache; the value is the inherited decisions.
 
 **Usage is a timestamped call ledger; spend is a catalog-rate estimate** (2026-07-11)
 Usage is captured inside `Agent`, immediately after a model call has a settled

@@ -510,6 +510,55 @@ typed result; depth 2 with a shared tree budget; context-as-variable
 (handles for big tool outputs, batched tool-less leaf calls); a declarative
 `map_agents`; fork mode; an agent hub.
 
+## Recent — recursive fleets, phases 1–6 of the plan (2026-09-13)
+
+The rest of the Recursive Fleet Plan, same day. A subagent is now an object
+with a name, a typed result, a transcript, and a budget, and the tree can
+go one level deeper without losing its wallet.
+
+- **A lane is a persisted, resumable object.** A lane is a session under
+  `sessions.parent_session` (M13): transcript kept, hidden from every chat
+  list, deleted with its parent. Its id is what everything addresses it by:
+  `send_to_agent` resumes it with its context for a follow-up, `read_agent`
+  reads its full reply (lines / grep), `GET …/agents` lists a session's
+  lanes, `…/agents/{agent}/cancel|interject` reach one running lane (the
+  live registry, `AgentTree`). `SubagentResult` replaces the prose document:
+  done / partial / failed with a coarse failure kind, the reply within the
+  cap and the whole reply behind a handle, an optional parsed JSON reply
+  (`output_schema`, re-asked twice), the patch handle, spend, rounds, and
+  the commands the lane's gate refused. Lane notes (a refusal, a nudge, a
+  compaction, a retry) reach hosts; `x` stops the watched lane in the CLI,
+  ✕ in the desktop.
+- **Depth two, one wallet.** `max_depth` 2: root → orchestrating lanes →
+  leaves. A lane below the cap gets its own fleet tools on a child spawner
+  (spawns under the lane, stops with it); leaves get none. Every lane of a
+  root turn spends from one `TreeBudget` (tokens / calls / spawns; spawns
+  admitted against it, calls charged to it), and a lane whose turn hits it
+  stops with what it has — a partial result, never an error the root can't
+  use. Lane and leaf prompt appendices say what each may do.
+- **Context as a variable.** Tool results over 30k chars are parked behind
+  a `<<ccr:HASH>>` handle (head shown); `retrieve_original` reads a slice
+  (`lines`), a grep, or splits into parked `chunks`; `spawn_agents.inputs`
+  hands lanes handles, never content; `ask_model` answers up to 32
+  tool-less prompts in parallel on the smol role over named inputs (the
+  RLM `llm_query_batched`); siblings stagger 3 s so one request warms the
+  prompt cache for the rest.
+- **`map_agents`.** One lane (or one cheap call, `leaf`) per item from a
+  template, coverage guaranteed by construction, one typed row per item,
+  rows memoized by (item, task, schema) so a stopped run re-issued only
+  runs what's left; `reduce: "agent"` folds the rows.
+- **`fork: true`.** A lane that starts from a copy of the parent's
+  conversation (the agent publishes a snapshot right before a forking
+  spawn), for work that depends on what was read and decided.
+- **The hub.** `fleet_started` / `fleet_finished` trajectory lines in the
+  developer log; `/agents` (+ `read <n|id>`) in the CLI; a collapsed
+  "finished agents" list under the desktop's fleet panel.
+
+Deliberately not built: an IRC bus between lanes, role-split orchestrators,
+a script sandbox before the declarative tool proves insufficient, and a
+tree-wide semaphore (a lane holding a slot while waiting on its children
+would deadlock — `max_spawns` bounds the tree instead).
+
 ## What's left / next
 
 - [ ] Run-time GUI smoke test of the desktop app (`cargo tauri dev`), incl. live

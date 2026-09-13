@@ -59,9 +59,12 @@ own:
 - **`harness-agent`** — the turn loop that wires an LLM client, a tool registry,
   and a store together, plus token budgeting and context compaction. Also home
   to the **fleet**: `fleet::run_fleet` runs N detached subagents in parallel
-  (semaphore-capped, one multiplexed event stream, per-task outcomes), and the
-  `spawn_agents` tool exposes that to the model from any turn — hosts inject a
-  `FleetSink` to render the lanes.
+  (semaphore-capped, clocked, one multiplexed event stream, per-task outcomes),
+  and the `spawn_agents` / `map_agents` / `send_to_agent` / `read_agent` /
+  `ask_model` tools expose that to the model from any turn — hosts inject a
+  `FleetSink` to render the lanes. A lane is a session under its parent
+  (`lane.rs`: typed results, the live `AgentTree`), may spawn one level down,
+  and spends from the turn's shared `TreeBudget` (`tree.rs`).
 - **`harness-loop`** / **`harness-review`** / **`harness-runtime`** — the
   goal/verify iteration loop on top of the agent; the configurable code-review
   pipeline (ordered prompt steps — a parallel three-lens find, then verify →
