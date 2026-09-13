@@ -12,9 +12,17 @@
 //! changing results (the cursor advances), and a retried command after a fix
 //! produces a different result. Repeats are counted within a recent window,
 //! not only back-to-back, so alternating between two fruitless calls is
-//! caught as surely as hammering one.
+//! caught as surely as hammering one — except for the polling tools (`POLLING_TOOLS`), whose
+//! identical results between unrelated work are the normal shape of
+//! checking on a quiet task; those count only when consecutive.
 
 use std::hash::{Hash, Hasher};
+
+/// Tools whose job is to be called again with the same arguments while
+/// something else happens (a task that has produced no new output returns
+/// byte-identical "running" results). Interleaved with other work, their
+/// repeats carry no loop signal, so only back-to-back repeats count.
+const POLLING_TOOLS: &[&str] = &[harness_tools::TASK_OUTPUT_TOOL];
 
 /// Identical repeats after which the model gets one corrective nudge.
 pub const NUDGE_AFTER: u32 = 3;
@@ -55,7 +63,17 @@ impl LoopGuard {
             self.recent.pop_front();
         }
         self.recent.push_back((key, name.to_string()));
-        let repeats = self.recent.iter().filter(|(k, _)| *k == key).count() as u32;
+        let repeats = if POLLING_TOOLS.contains(&name) {
+            // Only the trailing run: a poll between two unrelated edits is
+            // purposeful even when the task has been quiet the whole time.
+            self.recent
+                .iter()
+                .rev()
+                .take_while(|(k, _)| *k == key)
+                .count() as u32
+        } else {
+            self.recent.iter().filter(|(k, _)| *k == key).count() as u32
+        };
         if repeats >= STOP_AFTER {
             LoopVerdict::Stop {
                 name: name.to_string(),
@@ -179,6 +197,31 @@ mod tests {
                 repeats: 6
             }
         );
+    }
+
+    /// Watching a quiet build: `task_output` returns the same "running,
+    /// nothing new" result each time, interleaved with real edits. Six such
+    /// polls inside the window used to stop the turn; now only hammering
+    /// the poll back-to-back does.
+    #[test]
+    fn interleaved_polls_of_a_quiet_task_are_not_a_loop() {
+        let mut guard = LoopGuard::default();
+        let poll = |g: &mut LoopGuard| g.observe("task_output", r#"{"task_id":1}"#, "running");
+        for i in 0..8 {
+            assert_eq!(poll(&mut guard), LoopVerdict::Fine, "poll {i}");
+            assert_eq!(
+                guard.observe("edit_file", &format!(r#"{{"path":"f{i}"}}"#), "ok"),
+                LoopVerdict::Fine
+            );
+        }
+        // Back-to-back identical polls are still the classic loop.
+        let mut guard = LoopGuard::default();
+        let mut verdicts = Vec::new();
+        for _ in 0..6 {
+            verdicts.push(poll(&mut guard));
+        }
+        assert_eq!(verdicts[2], LoopVerdict::Nudge);
+        assert!(matches!(verdicts[5], LoopVerdict::Stop { repeats: 6, .. }));
     }
 
     #[test]
