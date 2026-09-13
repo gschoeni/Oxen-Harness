@@ -124,6 +124,25 @@ pub struct AgentSummary {
     pub created_at: i64,
 }
 
+/// One background shell task of a session (`GET /v1/sessions/{id}/tasks`,
+/// and the `tasks.changed` event): running or ended, for how long, and the
+/// last line it printed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskSummary {
+    pub id: u64,
+    pub command: String,
+    pub running: bool,
+    /// The exit code once ended; absent while running or when it died on a
+    /// signal.
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub killed: bool,
+    pub elapsed_secs: u64,
+    #[serde(default)]
+    pub last_line: String,
+}
+
 /// Whether a running turn accepted the interjection. `accepted: false` means
 /// no turn was in flight — send the text as an ordinary prompt instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

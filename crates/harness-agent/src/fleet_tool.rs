@@ -287,10 +287,10 @@ impl FleetSpawner {
         tools.register_typed(
             FleetTool::new(child.clone(), sink.clone()).with_asides(tools.asides()),
         );
-        tools.register_typed(crate::map_tool::MapAgentsTool::new(
-            child.clone(),
-            sink.clone(),
-        ));
+        tools.register_typed(
+            crate::map_tool::MapAgentsTool::new(child.clone(), sink.clone())
+                .with_asides(tools.asides()),
+        );
         tools.register_typed(crate::lane_tools::SendToAgentTool::new(child.clone(), sink));
         tools.register_typed(crate::lane_tools::ReadAgentTool::new(child));
     }

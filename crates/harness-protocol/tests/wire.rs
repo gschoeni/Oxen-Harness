@@ -250,6 +250,21 @@ fn fleet_event_wire_shapes() {
         session: "s1".into(),
         fleet: "fleet-7".into(),
     });
+    let tasks = ProtocolEvent::TasksChanged {
+        session: "s1".into(),
+        tasks: vec![harness_protocol::TaskSummary {
+            id: 3,
+            command: "npm run dev".into(),
+            running: true,
+            exit_code: None,
+            killed: false,
+            elapsed_secs: 42,
+            last_line: "ready on :5173".into(),
+        }],
+    };
+    assert_eq!(json(&tasks)["type"], "tasks.changed");
+    round_trips(tasks);
+
     let budget = ProtocolEvent::FleetBudget {
         session: "s1".into(),
         fleet: "fleet-7".into(),
@@ -558,6 +573,13 @@ fn legacy_channel_names() {
                 max_spawns: 1,
             },
             "fleet://budget",
+        ),
+        (
+            ProtocolEvent::TasksChanged {
+                session: "s".into(),
+                tasks: vec![],
+            },
+            "tasks://changed",
         ),
         (
             ProtocolEvent::ReviewProgress {

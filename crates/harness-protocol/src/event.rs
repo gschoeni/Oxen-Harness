@@ -299,6 +299,15 @@ pub enum ProtocolEvent {
     #[serde(rename = "fleet.completed")]
     FleetCompleted { session: String, fleet: String },
 
+    // --- Background shell tasks ------------------------------------------------
+    /// The session's background tasks changed (one started, ended, or was
+    /// killed); `tasks` is the whole list, so a client never has to merge.
+    #[serde(rename = "tasks.changed")]
+    TasksChanged {
+        session: String,
+        tasks: Vec<crate::dto::TaskSummary>,
+    },
+
     // --- Code review -----------------------------------------------------------
     /// Which pipeline step a running code review is on (and, for a fan-out
     /// step, its parallel lanes).
@@ -375,6 +384,7 @@ impl ProtocolEvent {
             Self::FleetActivity { .. } => "fleet.agent_activity",
             Self::FleetBudget { .. } => "fleet.budget",
             Self::FleetCompleted { .. } => "fleet.completed",
+            Self::TasksChanged { .. } => "tasks.changed",
             Self::ReviewProgress { .. } => "review.progress",
             Self::ReviewToken { .. } => "review.token",
             Self::ReviewTool { .. } => "review.tool",
@@ -420,6 +430,7 @@ impl ProtocolEvent {
             | Self::FleetActivity { session, .. }
             | Self::FleetBudget { session, .. }
             | Self::FleetCompleted { session, .. }
+            | Self::TasksChanged { session, .. }
             | Self::ReviewProgress { session, .. }
             | Self::ReviewToken { session, .. }
             | Self::ReviewTool { session, .. }

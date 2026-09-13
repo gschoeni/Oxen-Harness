@@ -367,6 +367,25 @@ async fn session_lifecycle_and_replay() {
         .unwrap();
     assert!(agents.is_empty());
 
+    // Background tasks: none yet, and killing an unknown one is a 404.
+    let tasks: Vec<Value> = client()
+        .get(format!("{base}/v1/sessions/{session}/tasks"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(tasks.is_empty());
+    let response = client()
+        .post(format!("{base}/v1/sessions/{session}/tasks/99/kill"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
+
     // Delete removes it.
     let response = client()
         .delete(format!("{base}/v1/sessions/{session}"))

@@ -74,6 +74,53 @@ pub(crate) async fn handle_repl(
     let rows = rows(store, session);
     let mut words = rest.as_deref().unwrap_or("").split_whitespace();
     match (words.next(), words.next()) {
+        (Some("show"), Some(which)) => {
+            let row = which
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| rows.get(n.checked_sub(1)?))
+                .or_else(|| rows.iter().find(|r| r.id.starts_with(which)));
+            let Some(row) = row else {
+                println!("  {}", ui.red(&format!("no agent {which} in this chat")));
+                return;
+            };
+            println!(
+                "  {}",
+                ui.title(&format!(
+                    "─── {} ({}) — transcript ───",
+                    row.label, row.status
+                ))
+            );
+            for message in store.messages(&row.id).unwrap_or_default() {
+                let role = message["role"].as_str().unwrap_or("?");
+                let text = message["content"].as_str().unwrap_or("").trim().to_string();
+                let calls: Vec<String> = message["tool_calls"]
+                    .as_array()
+                    .map(|calls| {
+                        calls
+                            .iter()
+                            .filter_map(|c| c["function"]["name"].as_str())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let head = match role {
+                    "user" => ui.green("▸ user"),
+                    "assistant" => ui.title("◂ agent"),
+                    "tool" => ui.dim("  ⚙ result"),
+                    other => ui.dim(other),
+                };
+                let calls = if calls.is_empty() {
+                    String::new()
+                } else {
+                    format!(" → {}", calls.join(", "))
+                };
+                println!("  {head}{}", ui.dim(&calls));
+                for line in crate::render::truncate(&text, 1_200).lines() {
+                    println!("    {}", ui.cream(line));
+                }
+            }
+        }
         (Some("read"), Some(which)) => {
             // `read 3` by position, or `read <id-prefix>`.
             let row = which
@@ -124,7 +171,7 @@ pub(crate) async fn handle_repl(
             }
             println!(
                 "  {}",
-                ui.dim("/agents read <n> prints one's full reply · x stops the watched lane while a fleet runs")
+                ui.dim("/agents read <n> prints one's reply · show <n> its whole transcript · alt+x stops the watched lane")
             );
         }
     }

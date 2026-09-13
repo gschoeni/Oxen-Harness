@@ -155,6 +155,8 @@ pub fn build_router(config: ServerConfig) -> Router {
             post(cancel_fleet),
         )
         .route("/v1/sessions/{id}/agents", get(list_agents))
+        .route("/v1/sessions/{id}/tasks", get(list_tasks))
+        .route("/v1/sessions/{id}/tasks/{task}/kill", post(kill_task))
         .route(
             "/v1/sessions/{id}/agents/{agent}/cancel",
             post(cancel_agent),
@@ -495,6 +497,31 @@ async fn cancel_fleet(
             format!("no fleet {fleet} is running in session {id}"),
         ))
     }
+}
+
+/// The session's background shell tasks, running and ended.
+async fn list_tasks(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<harness_protocol::TaskSummary>>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(state.service.list_tasks(&id).await))
+}
+
+/// Kill one background task (its whole process group); 404 when unknown.
+async fn kill_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((id, task)): Path<(String, u64)>,
+) -> ApiResult<StatusCode> {
+    authorize(&state, &headers, None)?;
+    state
+        .service
+        .kill_task(&id, task)
+        .await
+        .map(|_| StatusCode::OK)
+        .map_err(|e| ApiError(StatusCode::NOT_FOUND, e))
 }
 
 /// Every subagent lane of a session, running and finished.

@@ -79,6 +79,10 @@ struct TaskEntry {
     /// [`BackgroundTasks::take_settled_unannounced`] and by any `task_output`
     /// that reported the exit, so the news is delivered exactly once.
     announced: bool,
+    started: std::time::Instant,
+    /// Whether `kill` was sent, so a signal death reads as a kill and not as
+    /// a crash.
+    killed: bool,
 }
 
 /// A background task that finished without anyone waiting on it — the unit
@@ -88,6 +92,22 @@ pub struct SettledTask {
     pub id: u64,
     pub command: String,
     pub exit: TaskExit,
+}
+
+/// One task as a host lists it: what is running, for how long, and how it
+/// ended if it has.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TaskSummary {
+    pub id: u64,
+    pub command: String,
+    pub running: bool,
+    /// The exit code once ended; `None` while running or when it died on a
+    /// signal (a kill).
+    pub exit_code: Option<i32>,
+    pub killed: bool,
+    pub elapsed_secs: u64,
+    /// The last line of output so far, for a one-line readout.
+    pub last_line: String,
 }
 
 /// The shared task registry: one per tool set (i.e. per session's registry),
@@ -108,6 +128,9 @@ pub struct BackgroundTasks {
     /// still ask for it. Without this, everything past the cap is destroyed
     /// with the log file and the only recourse is re-running the command.
     overflow: Option<Arc<harness_compress::CcrStore>>,
+    /// Bumped whenever the set of tasks or a task's state changes (a spawn,
+    /// an exit, a kill), so a host can keep a list live without polling.
+    changed: watch::Sender<u64>,
 }
 
 /// The most of one command's full output kept for retrieval. Past this the
@@ -127,6 +150,7 @@ impl BackgroundTasks {
             foreground_shared: Arc::new(StdMutex::new(None)),
             progress: tokio::sync::broadcast::channel(PROGRESS_CHANNEL_CAPACITY).0,
             overflow: None,
+            changed: watch::channel(0).0,
         })
     }
 
@@ -140,6 +164,7 @@ impl BackgroundTasks {
             foreground_shared: Arc::new(StdMutex::new(None)),
             progress: tokio::sync::broadcast::channel(PROGRESS_CHANNEL_CAPACITY).0,
             overflow: Some(store),
+            changed: watch::channel(0).0,
         })
     }
 
@@ -248,6 +273,7 @@ impl BackgroundTasks {
         let (done_tx, done_rx) = watch::channel(None);
         let reaped = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let reaped_flag = reaped.clone();
+        let changed = self.changed.clone();
         tokio::spawn(async move {
             let status = child.wait().await;
             // The child is reaped: once the last group member is gone the OS
@@ -266,6 +292,7 @@ impl BackgroundTasks {
             let _ = done_tx.send(Some(TaskExit {
                 code: status.ok().and_then(|s| s.code()),
             }));
+            changed.send_modify(|n| *n = n.wrapping_add(1));
         });
 
         self.tasks.lock().await.insert(
@@ -280,9 +307,66 @@ impl BackgroundTasks {
                 stdout_tail,
                 stderr_tail,
                 announced: false,
+                started: std::time::Instant::now(),
+                killed: false,
             },
         );
+        self.bump();
         Ok(id)
+    }
+
+    /// A receiver that wakes whenever a task starts, ends, or is killed;
+    /// read [`Self::snapshot`] after each wake. Ends when the registry is
+    /// dropped.
+    pub fn changes(&self) -> watch::Receiver<u64> {
+        self.changed.subscribe()
+    }
+
+    fn bump(&self) {
+        self.changed.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    /// Every task the registry still holds, oldest first, each with the
+    /// last line it printed.
+    pub async fn snapshot(&self) -> Vec<TaskSummary> {
+        let mut rows: Vec<(TaskSummary, PathBuf)> = {
+            let tasks = self.tasks.lock().await;
+            tasks
+                .iter()
+                .map(|(id, entry)| {
+                    let exit = *entry.done.borrow();
+                    (
+                        TaskSummary {
+                            id: *id,
+                            command: entry.command.clone(),
+                            running: exit.is_none(),
+                            exit_code: exit.and_then(|e| e.code),
+                            killed: entry.killed,
+                            elapsed_secs: entry.started.elapsed().as_secs(),
+                            last_line: String::new(),
+                        },
+                        entry.log_path.clone(),
+                    )
+                })
+                .collect()
+        };
+        rows.sort_by_key(|(t, _)| t.id);
+        let mut out = Vec::with_capacity(rows.len());
+        for (mut summary, log_path) in rows {
+            let len = tokio::fs::metadata(&log_path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
+            let (tail, _, _) = read_since(&log_path, len.saturating_sub(512), false).await;
+            summary.last_line = tail
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .map(|l| harness_core::text::ellipsize(l.trim(), 120))
+                .unwrap_or_default();
+            out.push(summary);
+        }
+        out
     }
 
     /// How many tasks are still running.
@@ -518,7 +602,11 @@ impl BackgroundTasks {
                     libc::kill(-pid, libc::SIGKILL)
                 };
                 entry.announced = true;
-                return Ok(format!("kill signal sent to task {id} ({})", entry.command));
+                entry.killed = true;
+                let command = entry.command.clone();
+                drop(tasks);
+                self.bump();
+                return Ok(format!("kill signal sent to task {id} ({command})"));
             }
         }
         Err(ToolError::Execution(format!(
@@ -759,6 +847,46 @@ impl TypedTool for KillTaskTool {
 
     async fn run(&self, args: KillTaskArgs) -> Result<String, ToolError> {
         self.tasks.kill(args.task_id).await
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_snapshot_lists_tasks_and_changes_wake_a_watcher() {
+        let tasks = BackgroundTasks::in_temp();
+        let mut changes = tasks.changes();
+        let root = std::env::temp_dir();
+        let id = tasks
+            .spawn("echo one; sleep 30", &root, 4_000, &Default::default())
+            .await
+            .unwrap();
+        // The spawn woke the watcher; the snapshot shows it running.
+        assert!(changes.changed().await.is_ok());
+        let listed = tasks.snapshot().await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, id);
+        assert!(listed[0].running);
+        assert!(listed[0].command.starts_with("echo one"));
+        // Let the shell get its first line out before the kill lands.
+        for _ in 0..50 {
+            if !tasks.peek_tail(id, 64).await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // A kill wakes it again and reads as a kill, not a crash.
+        tasks.kill(id).await.unwrap();
+        assert!(changes.changed().await.is_ok());
+        let _ = tasks.wait(id, Duration::from_secs(5)).await;
+        let listed = tasks.snapshot().await;
+        assert!(!listed[0].running);
+        assert!(listed[0].killed);
+        assert_eq!(listed[0].exit_code, None);
+        assert_eq!(listed[0].last_line, "one");
     }
 }
 

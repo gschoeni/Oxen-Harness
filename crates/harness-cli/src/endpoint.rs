@@ -332,10 +332,14 @@ pub(crate) fn register_fleet_tool(
             // A `wait: false` fleet leaves its report here for the next round.
             .with_asides(tools.asides()),
     );
-    tools.register_typed(harness_agent::MapAgentsTool::new(
-        spawner.clone(),
-        sink.clone(),
-    ));
+    tools.register_typed(
+        harness_agent::MapAgentsTool::new(spawner.clone(), sink.clone())
+            .with_asides(tools.asides()),
+    );
+    // The session's task registry, for `/tasks`.
+    if let Some(tasks) = tools.background_tasks().cloned() {
+        let _ = TASKS.set(tasks);
+    }
     tools.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
     tools.register_typed(harness_agent::ReadAgentTool::new(spawner.clone()));
     tools.register_typed(harness_agent::AskModelTool::new(spawner));
@@ -350,6 +354,15 @@ pub(crate) fn set_fleet_session(session: &str) {
     if let Some(spawner) = FLEET_SPAWNER.get() {
         spawner.set_session(session);
     }
+}
+
+/// The session's background-task registry (the CLI runs one session), for
+/// `/tasks`.
+static TASKS: std::sync::OnceLock<Arc<harness_tools::tasks::BackgroundTasks>> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn background_tasks() -> Option<Arc<harness_tools::tasks::BackgroundTasks>> {
+    TASKS.get().cloned()
 }
 
 /// The lanes running right now in this session's fleets (empty when the

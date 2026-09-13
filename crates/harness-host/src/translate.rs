@@ -260,6 +260,19 @@ pub fn fleet_event(session: &str, fleet: &str, event: &FleetEvent) -> Option<Pro
     })
 }
 
+/// A background task as its protocol shape.
+pub fn task_summary(task: harness_tools::tasks::TaskSummary) -> harness_protocol::TaskSummary {
+    harness_protocol::TaskSummary {
+        id: task.id,
+        command: task.command,
+        running: task.running,
+        exit_code: task.exit_code,
+        killed: task.killed,
+        elapsed_secs: task.elapsed_secs,
+        last_line: task.last_line,
+    }
+}
+
 /// A model-facing question as its protocol shape.
 pub fn question(q: &harness_tools::Question) -> harness_protocol::Question {
     harness_protocol::Question {

@@ -359,9 +359,13 @@ impl Live {
     fn fleet_lines(&self) -> Vec<String> {
         let board = self.fleet.lock();
         match board.primary() {
-            Some(state) => {
-                crate::fleet_ui::pinned_lines(&self.ui, state, self.cols as usize, self.fleet_frame)
-            }
+            Some(state) => crate::fleet_ui::pinned_lines(
+                &self.ui,
+                state,
+                self.cols as usize,
+                self.rows as usize,
+                self.fleet_frame,
+            ),
             None => Vec::new(),
         }
     }

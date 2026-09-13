@@ -37,6 +37,7 @@ pub(crate) mod resume;
 pub(crate) mod review;
 pub(crate) mod rewind;
 pub(crate) mod rules;
+pub(crate) mod tasks;
 pub(crate) mod theme;
 pub(crate) mod trace;
 pub(crate) mod ui;

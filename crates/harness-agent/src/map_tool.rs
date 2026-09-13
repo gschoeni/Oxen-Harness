@@ -66,18 +66,37 @@ pub struct MapAgentsArgs {
     /// (like ask_model) instead of an agent.
     #[serde(default)]
     pub leaf: Option<bool>,
+    /// Default true: wait for every item and return the rows. Set false to
+    /// return at once and keep working; the rows are delivered to you
+    /// automatically when the run finishes — never poll for them.
+    #[serde(default)]
+    pub wait: Option<bool>,
 }
 
 /// The `map_agents` tool.
 pub struct MapAgentsTool {
     spawner: Arc<FleetSpawner>,
     sink: Arc<dyn FleetSink>,
+    /// Where a `wait: false` run leaves its rows for the agent to deliver.
+    /// Without one, every run waits.
+    asides: Option<harness_tools::Asides>,
 }
 
 impl MapAgentsTool {
     pub fn new(spawner: Arc<FleetSpawner>, sink: Arc<dyn FleetSink>) -> Self {
         spawner.set_sink(sink.clone());
-        Self { spawner, sink }
+        Self {
+            spawner,
+            sink,
+            asides: None,
+        }
+    }
+
+    /// Let `wait: false` runs hand their rows to `asides` (the registry's
+    /// queue, see `ToolRegistry::asides`).
+    pub fn with_asides(mut self, asides: harness_tools::Asides) -> Self {
+        self.asides = Some(asides);
+        self
     }
 }
 
@@ -138,6 +157,35 @@ impl TypedTool for MapAgentsTool {
     }
 
     async fn run(&self, args: MapAgentsArgs) -> Result<String, ToolError> {
+        // A run the model doesn't wait for goes to its own task and reports
+        // through the aside queue, exactly like a `wait: false` fleet.
+        if args.wait == Some(false) {
+            if let Some(asides) = self.asides.clone() {
+                let count = args.items.len();
+                let me = Self {
+                    spawner: self.spawner.clone(),
+                    sink: self.sink.clone(),
+                    asides: None,
+                };
+                let args = MapAgentsArgs { wait: None, ..args };
+                tokio::spawn(async move {
+                    let body = match me.run(args).await {
+                        Ok(text) => text,
+                        Err(e) => format!("the map run failed: {e}"),
+                    };
+                    asides.push(harness_tools::Aside {
+                        kind: "map".into(),
+                        title: format!("map_agents over {count} items finished"),
+                        body,
+                    });
+                });
+                return Ok(format!(
+                    "map_agents started over {count} items in the background. The rows will be \
+                     delivered to you automatically when the run finishes — keep working on \
+                     other things, do not poll."
+                ));
+            }
+        }
         let items: Vec<String> = args
             .items
             .into_iter()

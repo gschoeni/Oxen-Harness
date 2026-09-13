@@ -52,8 +52,15 @@ const ACTIVITY_TAIL: usize = 120;
 /// pane without hoarding a whole transcript.
 const OUTPUT_TAIL: usize = 4_000;
 
-/// Rows of the focused lane's tail shown under the lanes block.
-const FOCUS_ROWS: usize = 8;
+/// Rows of the focused lane's tail shown under the lanes block: a third of
+/// the terminal, never fewer than this many nor more than [`FOCUS_ROWS_MAX`].
+const FOCUS_ROWS_MIN: usize = 8;
+const FOCUS_ROWS_MAX: usize = 24;
+
+/// How many tail rows a terminal `rows` high gets.
+fn focus_rows(rows: usize) -> usize {
+    (rows / 3).clamp(FOCUS_ROWS_MIN, FOCUS_ROWS_MAX)
+}
 
 /// Where one lane's subagent is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,6 +459,7 @@ pub(crate) fn block_lines(
     state: &FleetState,
     style: &FleetStyle,
     width: usize,
+    rows: usize,
     frame: usize,
     hint_keys: FleetKeys,
 ) -> Vec<String> {
@@ -476,7 +484,7 @@ pub(crate) fn block_lines(
             "  {}",
             paint(&format!("{title}{}", "─".repeat(fill)), style.dim_rgb),
         ));
-        for row in tail_rows(&focused.tail, width.saturating_sub(6), FOCUS_ROWS) {
+        for row in tail_rows(&focused.tail, width.saturating_sub(6), focus_rows(rows)) {
             out.push(format!("    {}", paint(&row, style.text_rgb)));
         }
     }
@@ -799,14 +807,14 @@ fn run_painter(stop: &AtomicBool, hub: &FleetHub, style: &FleetStyle) {
         // Compose under the lock, then release it before touching stdout — a
         // slow terminal flush must not stall the fleet's event ingestion,
         // which contends on this same lock per token.
-        let width = crossterm::terminal::size()
-            .map(|(w, _)| w as usize)
-            .unwrap_or(100);
+        let (width, rows) = crossterm::terminal::size()
+            .map(|(w, h)| (w as usize, h as usize))
+            .unwrap_or((100, 30));
         let lines = {
             let board = hub.lock();
             board
                 .primary()
-                .map(|s| block_lines(s, style, width, frame, FleetKeys::Owned))
+                .map(|s| block_lines(s, style, width, rows, frame, FleetKeys::Owned))
         };
         if let Some(lines) = lines {
             if lines != last {
@@ -902,9 +910,15 @@ pub(crate) fn print_lane_completed(ui: &Ui, label: &str, ok: bool, tokens: usize
 
 /// The fleet block composed for the live composer's pinned area (which paints
 /// and drives keys itself — alt+digits — so this is just the lines).
-pub(crate) fn pinned_lines(ui: &Ui, state: &FleetState, width: usize, frame: usize) -> Vec<String> {
+pub(crate) fn pinned_lines(
+    ui: &Ui,
+    state: &FleetState,
+    width: usize,
+    rows: usize,
+    frame: usize,
+) -> Vec<String> {
     match FleetStyle::for_ui(ui) {
-        Some(style) => block_lines(state, &style, width, frame, FleetKeys::Shared),
+        Some(style) => block_lines(state, &style, width, rows, frame, FleetKeys::Shared),
         None => Vec::new(),
     }
 }
@@ -1059,14 +1073,14 @@ mod tests {
         s.lane_event(0, &AgentEvent::Token("digging into the parser".into()), &ui);
 
         // Overview: one line per lane + the hint.
-        let lines = block_lines(&s, &style(), 80, 0, FleetKeys::Owned);
+        let lines = block_lines(&s, &style(), 80, 30, 0, FleetKeys::Owned);
         assert_eq!(lines.len(), 3);
         assert!(plain(&lines[0]).contains("scan"));
         assert!(plain(&lines[2]).contains("1-2 watch a lane"));
 
         // Focused: lanes + rule + tail rows + hint, alt vocabulary for live.
         s.focus(Some(0));
-        let lines = block_lines(&s, &style(), 80, 0, FleetKeys::Shared);
+        let lines = block_lines(&s, &style(), 80, 30, 0, FleetKeys::Shared);
         let text = lines
             .iter()
             .map(|l| plain(l))
