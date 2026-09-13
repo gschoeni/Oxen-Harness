@@ -178,21 +178,21 @@ pub(crate) async fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui
     }
 
     // A local model can't be swapped into a live cloud session (it needs its
-    // own llama-server, started at launch). Persist it as the active local
-    // model — the same switch the desktop dropdown makes — and say how to
-    // ride it, instead of pointing the cloud client at a GGUF id.
+    // own llama-server, started at launch). Remember it as the user's local
+    // pick and say how to ride it; no launch ever starts a local model on
+    // its own, so the explicit `--local` flag is the way.
     if rows.iter().any(|r| r.local && r.id == id) {
         match harness_runtime::models::set_active_local(id) {
             Ok(()) => {
                 println!(
                     "  {} {}",
                     ui.brown("🐂 local oxen picked:"),
-                    ui.cream(&format!("{id} — saved as your local model")),
+                    ui.cream(&format!("{id} — remembered as your local model")),
                 );
                 println!(
                     "  {}",
                     ui.dim(&format!(
-                        "restart to ride it: oxen-harness (or oxen-harness --local {id})"
+                        "ride it next time with: oxen-harness --local {id}"
                     )),
                 );
             }

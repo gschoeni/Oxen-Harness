@@ -344,19 +344,16 @@ impl Live {
     /// Model rows for `/model` completion: the shared catalog + installed-local
     /// rows (see [`crate::commands::model::model_rows`]), loaded once and cached, with
     /// the *persisted* selection marked — the composer's completion list isn't
-    /// session-scoped, so it marks what the next launch would ride.
+    /// session-scoped, so it marks what the next launch would ride. That is
+    /// always the selected cloud model: a local model only runs on an explicit
+    /// `--local`, never from the remembered pick.
     fn model_candidates(&mut self) -> Vec<CompletionItem> {
         if self.model_items.is_none() {
             let selected = harness_runtime::models::selected();
-            let active_local = harness_runtime::models::active_local();
             let items = crate::commands::model::model_rows()
                 .into_iter()
                 .map(|row| {
-                    let current = if row.local {
-                        active_local.as_deref() == Some(row.id.as_str())
-                    } else {
-                        active_local.is_none() && row.id == selected
-                    };
+                    let current = !row.local && row.id == selected;
                     let marker = if current { " ← current" } else { "" };
                     // Local models run on your own hardware — free, and never
                     // in the endpoint catalog, so the tag is static.

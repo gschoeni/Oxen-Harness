@@ -29,12 +29,12 @@ pub(crate) struct Endpoint {
 
 /// Resolve which model to run and how to reach it.
 ///
-/// `--local <id>` runs a model on this machine via llama.cpp; absent any
-/// explicit choice we restore the last local model the user activated (in the
-/// desktop dropdown or a prior `--local` run). Anything else connects to a
-/// remote Oxen.ai-style endpoint. A *restored* (non-explicit) local model that
-/// can't start here falls back to the cloud, while an explicit `--local` failure
-/// — or an unreachable cloud endpoint — prints the death screen and exits.
+/// `--local <id>` runs a model on this machine via llama.cpp. Nothing else
+/// starts one: the last local model the user picked is remembered, never
+/// auto-loaded, so a plain launch can't commit a model's worth of memory
+/// unasked. Anything else connects to a remote Oxen.ai-style endpoint. A
+/// `--local` that can't start — or an unreachable cloud endpoint — prints the
+/// death screen and exits.
 ///
 /// `interactive` is false for the runs nobody is watching (`-p`, `loop run`):
 /// they never get the first-run model pick, however empty the config is.
@@ -45,8 +45,7 @@ pub(crate) async fn resolve_endpoint(
     ui: &Ui,
 ) -> Endpoint {
     // A cloud client + model, honoring the persisted dropdown selection when
-    // nothing is given on the CLI. Used directly, and as the fallback when a
-    // restored local model can't start.
+    // nothing is given on the CLI.
     let cloud = |ui: &Ui| -> Endpoint {
         let model = args
             .model
@@ -98,15 +97,11 @@ pub(crate) async fn resolve_endpoint(
         }
     };
 
-    let explicit_local = args.local.clone();
-    let local_id = explicit_local.clone().or_else(|| {
-        if args.model.is_none() && args.resume.is_none() {
-            harness_runtime::models::active_local()
-        } else {
-            None
-        }
-    });
-    let Some(local_id) = local_id else {
+    // A local model runs only on an explicit `--local <id>`. The persisted
+    // `active_local` (what `/model` last picked) is never auto-started: a
+    // cold launch must not commit a model's worth of memory the user didn't
+    // ask for this time.
+    let Some(local_id) = args.local.clone() else {
         return first_run_pick(cloud(ui), args, interactive, ui).await;
     };
 
@@ -122,21 +117,10 @@ pub(crate) async fn resolve_endpoint(
                 local_server: Some(server),
             }
         }
-        // An explicit `--local` failure is fatal; a *restored* local model that
-        // can't start (e.g. runtime not installed here) falls back to cloud.
-        Err(e) if explicit_local.is_some() => {
+        Err(e) => {
             eprintln!("\n{}", ui.red(&ui.death()));
             eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
             std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!(
-                "  {}",
-                ui.dim(&format!(
-                    "Local model {local_id} unavailable ({e}); using the cloud model."
-                ))
-            );
-            first_run_pick(cloud(ui), args, interactive, ui).await
         }
     }
 }

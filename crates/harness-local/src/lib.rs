@@ -38,7 +38,8 @@ pub use hardware::{detect as detect_hardware, Accelerator, HardwareProfile};
 pub use resolve::{resolve_runnable, Runnable};
 pub use runtime::{RuntimeInstallEvent, RuntimeSource, RuntimeStatus};
 pub use server::{
-    can_auto_install, install_hint, install_llama_server, llama_server_path, LoadPhase, LocalServer,
+    can_auto_install, install_hint, install_llama_server, llama_server_path, reap_stale_servers,
+    LoadPhase, LocalServer,
 };
 pub use source::{HfHit, ModelRef, Origin};
 pub use store::{disk_space, DownloadProgress, ModelStore};

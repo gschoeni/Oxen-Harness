@@ -41,9 +41,10 @@ pub struct ModelsConfig {
     pub selected: String,
     #[serde(default)]
     pub custom: Vec<ModelEntry>,
-    /// The local model the user last activated, when local is their current
-    /// choice. Empty means a cloud model is active. Persisted so a chosen local
-    /// model is restored on the next launch (desktop and CLI alike).
+    /// The local model the user last picked (cleared when a cloud model is
+    /// chosen). A remembered choice only: no host starts it at launch, since
+    /// that would commit a model's worth of memory before the user asked.
+    /// The desktop picker and `oxen-harness --local <id>` are how it runs.
     #[serde(default)]
     pub active_local: String,
 }
@@ -135,14 +136,15 @@ pub fn set_selected(id: &str) -> Result<(), RuntimeError> {
     write(&cfg)
 }
 
-/// The local model the user last activated, if local is their current choice.
+/// The local model the user last picked, if any. Informational — see
+/// [`ModelsConfig::active_local`]; never a reason to start a server.
 pub fn active_local() -> Option<String> {
     let v = load().active_local.trim().to_string();
     (!v.is_empty()).then_some(v)
 }
 
-/// Record the active local model so it's restored next launch (empty clears it,
-/// reverting to the selected cloud model).
+/// Remember the local model the user picked (empty clears it). Remembered,
+/// not restored: the next launch still boots on the selected cloud model.
 pub fn set_active_local(id: &str) -> Result<(), RuntimeError> {
     let mut cfg = load();
     cfg.active_local = id.trim().to_string();

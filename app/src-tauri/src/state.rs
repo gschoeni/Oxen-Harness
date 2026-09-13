@@ -49,7 +49,6 @@ impl AppState {
         app: AppHandle,
         initial_project: PathBuf,
         initial_model: String,
-        initial_local: Option<String>,
     ) -> Self {
         let sink = Arc::new(TauriSink { app: app.clone() });
         let preview_app = app.clone();
@@ -75,7 +74,6 @@ impl AppState {
         let service = Arc::new(
             SessionService::builder(sink)
                 .cloud_model(initial_model)
-                .local_model(initial_local)
                 .active_project(initial_project)
                 .hooks(hooks)
                 .build(),

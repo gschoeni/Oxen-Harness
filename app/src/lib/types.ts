@@ -338,8 +338,8 @@ export interface HfHit {
 }
 
 /** `local://status` payload — a phase of bringing a local model online, so the
- *  UI can show progress while switching to it (or while a restored selection
- *  starts lazily after an app relaunch). */
+ *  UI can show progress while switching to it (or while the active local
+ *  model's server is restarted after it died). Nothing loads at launch. */
 export interface LocalStatus {
   model: string;
   /** `"starting"` (runtime/GPU init), `"loading"` (reading weights), `"ready"`,

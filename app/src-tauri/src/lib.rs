@@ -72,11 +72,16 @@ pub fn run() {
         .map(PathBuf::from)
         .or_else(|| read_projects_config().active.map(PathBuf::from))
         .unwrap_or_else(launch_dir);
-    // Start on the model the user last chose: the selected cloud model, plus any
-    // persisted local model (its server is started lazily on first use). Both are
-    // restored so the dropdown choice survives a restart.
+    // Start on the selected cloud model. A previously picked local model is
+    // deliberately NOT restored: loading one commits a model's worth of memory
+    // (17 GB for a 30B Q4) the moment the window opens, before the user has
+    // asked for anything. Local models load only when picked in this run.
     let initial_model = harness_runtime::models::selected();
-    let initial_local = harness_runtime::models::active_local();
+    // A previous run that was killed (rather than quit) left its llama-server
+    // behind, still holding that memory. Reap any such orphan before we
+    // could add to it. Ours from this run is not started yet, so this only
+    // ever touches servers whose owning host is gone.
+    let _ = harness_local::reap_stale_servers();
     tauri::Builder::default()
         // First, so no other plugin runs in a doomed second instance: when the
         // app is already open, a new launch (`oxen-harness ui <dir>`) forwards
@@ -125,7 +130,6 @@ pub fn run() {
                 app.handle().clone(),
                 initial_project,
                 initial_model,
-                initial_local,
             ));
             app.manage(commands::watch::FsWatchState::default());
             Ok(())

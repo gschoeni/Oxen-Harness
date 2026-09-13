@@ -6,6 +6,14 @@
 //! [`LocalServer`] picks a free port, starts the process against a GGUF file,
 //! waits for the model to load (polling `/health`), and kills the process when
 //! dropped so a session never leaks a background server.
+//!
+//! Dropping only helps when the host exits cleanly. A host that is killed
+//! (`kill`, a crash, a force-quit) never runs destructors, and the server —
+//! holding a model's worth of memory — is reparented to init and lives on.
+//! So every spawn is also recorded in a small registry file
+//! (`~/.oxen-harness/runtime/llama-server.pids`) tagged with the owning host's
+//! pid, and [`reap_stale_servers`] kills any entry whose owner is gone. Hosts
+//! call it at boot and before every new spawn.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -214,6 +222,9 @@ pub enum LoadPhase {
 /// A running `llama-server` instance bound to one model.
 pub struct LocalServer {
     child: Child,
+    /// The child's pid, kept so `Drop` can remove its registry entry even
+    /// after the process has exited and `Child::id` has gone `None`.
+    pid: u32,
     base_url: String,
     port: u16,
     context: u32,
@@ -243,6 +254,10 @@ impl LocalServer {
         let port = find_free_port()?;
         let context = context.max(512);
 
+        // Free the memory of any server a dead host left behind before
+        // committing this model's worth on top of it.
+        let _ = reap_stale_servers();
+
         on_status(LoadPhase::Starting);
         let mut child = Command::new(&binary)
             .arg("-m")
@@ -267,9 +282,14 @@ impl LocalServer {
         if let Some(err) = child.stderr.take() {
             spawn_line_reader(err, tx);
         }
+        // Register before waiting on health: a host killed mid-load must
+        // still leave a trail to the half-loaded server.
+        let pid = child.id().unwrap_or(0);
+        registry::register(pid, port);
 
         let mut server = Self {
             child,
+            pid,
             base_url: format!("http://127.0.0.1:{port}/v1"),
             port,
             context,
@@ -354,9 +374,184 @@ impl LocalServer {
 
 impl Drop for LocalServer {
     fn drop(&mut self) {
-        // Best-effort: stop the background server when the session ends.
+        // Best-effort: stop the background server when the session ends, and
+        // strike it from the registry so a later boot doesn't chase its pid.
         let _ = self.child.start_kill();
+        registry::unregister(self.pid);
     }
+}
+
+/// Kill `llama-server` processes started by a harness host that has since
+/// died without cleaning up (see the module docs). Returns the pids killed.
+/// Servers whose owning host is still running — this process, or another
+/// host sharing the machine — are left alone. Never fails: a missing or
+/// unreadable registry just means there is nothing to reap.
+pub fn reap_stale_servers() -> Vec<u32> {
+    let Some(path) = registry::path() else {
+        return Vec::new();
+    };
+    registry::reap_at(&path, std::process::id(), process::is_alive, |pid| {
+        process::command_name(pid)
+            .map(|name| name.contains("llama-server"))
+            .unwrap_or(false)
+    })
+}
+
+/// The on-disk registry of spawned servers: one `<pid> <owner pid> <port>`
+/// line each. Every access is best-effort — the registry is a safety net,
+/// never a reason a model fails to start.
+mod registry {
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+
+    pub(super) fn path() -> Option<PathBuf> {
+        Some(
+            harness_config::paths::base_dir_unchecked()?
+                .join("runtime")
+                .join("llama-server.pids"),
+        )
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) struct Entry {
+        pub pid: u32,
+        pub owner: u32,
+        pub port: u16,
+    }
+
+    pub(super) fn parse(contents: &str) -> Vec<Entry> {
+        contents
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split_whitespace();
+                Some(Entry {
+                    pid: parts.next()?.parse().ok()?,
+                    owner: parts.next()?.parse().ok()?,
+                    port: parts.next()?.parse().ok()?,
+                })
+            })
+            .collect()
+    }
+
+    fn read(path: &Path) -> Vec<Entry> {
+        std::fs::read_to_string(path)
+            .map(|s| parse(&s))
+            .unwrap_or_default()
+    }
+
+    fn write(path: &Path, entries: &[Entry]) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let body: String = entries
+            .iter()
+            .map(|e| format!("{} {} {}\n", e.pid, e.owner, e.port))
+            .collect();
+        let _ = std::fs::write(path, body);
+    }
+
+    pub(super) fn register(pid: u32, port: u16) {
+        let Some(path) = path() else { return };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = writeln!(f, "{pid} {} {port}", std::process::id());
+        }
+    }
+
+    pub(super) fn unregister(pid: u32) {
+        let Some(path) = path() else { return };
+        let entries = read(&path);
+        let kept: Vec<Entry> = entries.iter().copied().filter(|e| e.pid != pid).collect();
+        if kept.len() != entries.len() {
+            write(&path, &kept);
+        }
+    }
+
+    /// The reaping rule, with the process probes injected so it can be
+    /// tested without spawning real servers. An entry is stale when its
+    /// owner is neither `self_pid` nor alive; it is killed only if the pid is
+    /// alive *and* still a llama-server (pids get reused). Stale entries are
+    /// dropped from the file either way; live ones are kept.
+    pub(super) fn reap_at(
+        path: &Path,
+        self_pid: u32,
+        is_alive: impl Fn(u32) -> bool,
+        is_server: impl Fn(u32) -> bool,
+    ) -> Vec<u32> {
+        let entries = read(path);
+        if entries.is_empty() {
+            return Vec::new();
+        }
+        let mut killed = Vec::new();
+        let mut kept = Vec::new();
+        for e in entries {
+            let owned = e.owner == self_pid || is_alive(e.owner);
+            if owned {
+                kept.push(e);
+                continue;
+            }
+            if is_alive(e.pid) && is_server(e.pid) {
+                super::process::terminate(e.pid);
+                killed.push(e.pid);
+            }
+        }
+        write(path, &kept);
+        killed
+    }
+}
+
+/// Minimal process probes for the reaper, via the platform `kill`/`ps`
+/// commands so no unsafe FFI is needed. Unix only; elsewhere every process
+/// reads as alive and unknown, so nothing is ever killed.
+mod process {
+    #[cfg(unix)]
+    fn kill(pid: u32, signal: &str) -> Option<bool> {
+        std::process::Command::new("kill")
+            .args([signal, &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()
+            .map(|s| s.success())
+    }
+
+    /// `kill -0`: succeeds while the process exists (or exists but belongs to
+    /// someone else — the shell reports that as failure, which errs toward
+    /// leaving other users' processes alone).
+    #[cfg(unix)]
+    pub(super) fn is_alive(pid: u32) -> bool {
+        pid != 0 && kill(pid, "-0").unwrap_or(false)
+    }
+
+    #[cfg(not(unix))]
+    pub(super) fn is_alive(_pid: u32) -> bool {
+        true
+    }
+
+    /// The process's executable name (`ps -o comm=`), if it can be read.
+    pub(super) fn command_name(pid: u32) -> Option<String> {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "comm=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// Plain SIGTERM to a pid the caller has just verified is a llama-server.
+    #[cfg(unix)]
+    pub(super) fn terminate(pid: u32) {
+        let _ = kill(pid, "-TERM");
+    }
+
+    #[cfg(not(unix))]
+    pub(super) fn terminate(_pid: u32) {}
 }
 
 fn find_free_port() -> Result<u16, LocalError> {
@@ -425,6 +620,9 @@ mod tests {
     /// spawn/health-check path, to test the liveness/identity accessors.
     fn fake_server(child: Child, model: &str) -> LocalServer {
         LocalServer {
+            // 0 never matches a registry entry, so dropping a fake server
+            // can't touch the real registry file.
+            pid: 0,
             child,
             base_url: "http://127.0.0.1:1/v1".to_string(),
             port: 1,
@@ -449,5 +647,92 @@ mod tests {
         server.child.start_kill().unwrap();
         let _ = server.child.wait().await;
         assert!(!server.is_alive());
+    }
+
+    #[test]
+    fn registry_parses_and_skips_garbage_lines() {
+        let entries = registry::parse("101 7 5000\nnot a line\n202 7\n303 9 6000 extra\n");
+        // The short line is dropped; the long one parses its leading fields.
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].pid, 101);
+        assert_eq!(entries[0].owner, 7);
+        assert_eq!(entries[0].port, 5000);
+        assert_eq!(entries[1].pid, 303);
+    }
+
+    /// A pid whose owner is dead is killed and dropped; one owned by us or by
+    /// a live host is kept untouched; a stale entry whose pid was reused by
+    /// some other program is dropped but not killed.
+    #[test]
+    fn reap_kills_only_orphaned_llama_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("llama-server.pids");
+        std::fs::write(
+            &path,
+            "100 1000 5000\n\
+             200 9999 5001\n\
+             300 2000 5002\n\
+             400 9998 5003\n\
+             500 9997 5004\n",
+        )
+        .unwrap();
+        let alive = |pid: u32| matches!(pid, 100 | 200 | 300 | 400 | 2000);
+        // 500's pid is dead already; 400's pid now belongs to something else.
+        let is_server = |pid: u32| matches!(pid, 100 | 200 | 300);
+        let killed = registry::reap_at(&path, 1000, alive, is_server);
+        assert_eq!(killed, vec![200]);
+        let left = registry::parse(&std::fs::read_to_string(&path).unwrap());
+        let pids: Vec<u32> = left.iter().map(|e| e.pid).collect();
+        assert_eq!(pids, vec![100, 300], "own + live-owner entries survive");
+    }
+
+    #[test]
+    fn reap_with_no_registry_is_a_no_op() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.pids");
+        let killed = registry::reap_at(&path, 1, |_| true, |_| true);
+        assert!(killed.is_empty());
+        assert!(!path.exists(), "an empty reap must not create the file");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reap_terminates_a_real_orphan_and_spares_a_live_owner() {
+        // Two throwaway processes stand in for servers; the probes treat both
+        // as llama-servers. One is owned by a pid that certainly exited
+        // (a finished `true`), the other by this test process.
+        let mut done = std::process::Command::new("true").spawn().unwrap();
+        let dead_owner_pid = done.id();
+        done.wait().unwrap();
+
+        let mut orphan = Command::new("sleep").arg("30").spawn().unwrap();
+        let mut owned = Command::new("sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("llama-server.pids");
+        std::fs::write(
+            &path,
+            format!(
+                "{} {} 5000\n{} {} 5001\n",
+                orphan.id().unwrap(),
+                dead_owner_pid,
+                owned.id().unwrap(),
+                std::process::id()
+            ),
+        )
+        .unwrap();
+
+        let killed = registry::reap_at(&path, std::process::id(), process::is_alive, |_| true);
+        assert_eq!(killed, vec![orphan.id().unwrap()]);
+        // SIGTERM lands: the orphan exits, the owned one keeps running.
+        let status = tokio::time::timeout(Duration::from_secs(5), orphan.wait())
+            .await
+            .expect("orphan should exit after SIGTERM")
+            .unwrap();
+        assert!(!status.success());
+        assert!(matches!(owned.try_wait(), Ok(None)));
     }
 }

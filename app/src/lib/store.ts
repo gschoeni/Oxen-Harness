@@ -1183,9 +1183,10 @@ export const useStore = create<AppState>((set, get) => {
         // "ready"/"error" means the load is over — clear the inline state.
         if (s.phase === "ready" || s.phase === "error")
           return st.localSwitch ? { localSwitch: null } : {};
-        // Create-or-update: a load that wasn't user-initiated (a persisted
-        // local model starting lazily on the first call after an app relaunch)
-        // must surface the same way an explicit switch does.
+        // Create-or-update: a load the picker didn't start (the active local
+        // model's server died and is being restarted for a new chat) must
+        // surface the same way an explicit switch does. Nothing loads at
+        // launch — a local model runs only once picked in this run.
         return {
           localSwitch: st.localSwitch
             ? { ...st.localSwitch, model: s.model, phase: s.phase }

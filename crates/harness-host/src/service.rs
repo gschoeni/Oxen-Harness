@@ -279,7 +279,6 @@ enum TurnKind {
 pub struct SessionServiceBuilder {
     sink: Arc<dyn EventSink>,
     cloud_model: Option<String>,
-    local_model: Option<String>,
     active_project: Option<PathBuf>,
     store: Option<Arc<HistoryStore>>,
     client_factory: Option<ClientFactory>,
@@ -290,13 +289,6 @@ impl SessionServiceBuilder {
     /// The cloud model new sessions start on. Default: the persisted selection.
     pub fn cloud_model(mut self, model: impl Into<String>) -> Self {
         self.cloud_model = Some(model.into());
-        self
-    }
-
-    /// A persisted local-model selection to restore (its server starts
-    /// lazily on first use). Default: none.
-    pub fn local_model(mut self, model: Option<String>) -> Self {
-        self.local_model = model;
         self
     }
 
@@ -350,13 +342,18 @@ impl SessionServiceBuilder {
             hooks: self.hooks,
             agents: Mutex::new(HashMap::new()),
             current: Mutex::new(None),
+            // Every host boots on the cloud model. A local model — and the
+            // memory its server takes — is only ever loaded when the user
+            // picks one in this run (`use_local_model`); the persisted
+            // `active_local` is a remembered choice, never an auto-start.
             local_server: Mutex::new(None),
-            local_model: Mutex::new(self.local_model),
+            local_model: Mutex::new(None),
             pending_questions: PendingQuestions::default(),
             pending_approvals: PendingApprovals::default(),
             cancels: Mutex::new(HashMap::new()),
             interjections: Mutex::new(HashMap::new()),
             fleet_spawners: StdMutex::new(HashMap::new()),
+            session_asides: StdMutex::new(HashMap::new()),
             dev_servers: harness_preview::DevServerManager::new(),
             crash_announced: StdMutex::new(HashMap::new()),
         }
@@ -458,7 +455,6 @@ impl SessionService {
         SessionServiceBuilder {
             sink,
             cloud_model: None,
-            local_model: None,
             active_project: None,
             store: None,
             client_factory: None,
@@ -474,11 +470,12 @@ impl SessionService {
     // --- Client & model selection -------------------------------------------
 
     /// The client, model label, and context window for a new agent: the
-    /// selected local model + server if one is active, otherwise the
-    /// configured cloud client.
+    /// local model the user picked in this run (its server restarted if it
+    /// died), otherwise the configured cloud client.
     pub async fn client_for(&self) -> Result<(OxenClient, String, Option<usize>), String> {
-        // If a local model is selected (including one restored from a previous
-        // run), make sure its server is running and use it.
+        // A local model is only ever active because the user picked it since
+        // launch — nothing is restored from a previous run — so re-ensuring
+        // its server here never loads a model the user didn't ask for.
         let local_id = self.local_model.lock().await.clone();
         if let Some(id) = local_id {
             match self.ensure_local_server(&id).await {

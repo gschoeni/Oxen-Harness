@@ -71,7 +71,7 @@ struct Args {
     #[arg(long)]
     base_url: Option<String>,
 
-    /// API host\[:port\], e.g. localhost:3001. Expanded to a base URL
+    /// API host with optional port, e.g. localhost:3001. Expanded to a base URL
     /// (http for local hosts, https otherwise, with an /api/ai path).
     #[arg(long)]
     host: Option<String>,
@@ -170,6 +170,11 @@ async fn main() -> Result<()> {
             );
         }
     }
+
+    // A previous run that was killed rather than quit leaves its llama-server
+    // behind, still holding a model's worth of memory. Reap any such orphan
+    // before this run could add to it.
+    let _ = harness_local::reap_stale_servers();
 
     let theme = harness_theme::Store::open()
         .map(|s| s.load_active())
