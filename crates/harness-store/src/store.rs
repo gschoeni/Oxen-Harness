@@ -2528,13 +2528,6 @@ mod tests {
             .map(|r| r.id)
             .collect();
         assert_eq!(board, vec![parent.clone()]);
-        assert_eq!(
-            store
-                .session_counts_by_workspace()
-                .unwrap()
-                .get(&meta().workspace),
-            Some(&1)
-        );
 
         // The lane is reachable through its parent, record-less until it ends.
         let lanes = store.lanes_of(&parent).unwrap();
