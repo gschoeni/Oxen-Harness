@@ -26,6 +26,11 @@ pub enum AgentError {
     #[error("attachments total {size} bytes, over the {max}-byte per-turn limit")]
     AttachmentsTooLarge { size: usize, max: usize },
     #[error(
+        "the subagent ran past its {}s time limit and did not stop when asked",
+        after.as_secs()
+    )]
+    TimedOut { after: std::time::Duration },
+    #[error(
         "the conversation grew past the model's context window \
          (~{used} prompt tokens, limit ~{window}); start a fresh session, \
          or switch to a model with a larger context window"

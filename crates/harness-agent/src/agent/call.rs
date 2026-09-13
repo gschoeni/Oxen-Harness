@@ -348,6 +348,7 @@ pub(super) fn error_kind(e: &AgentError) -> &'static str {
         AgentError::AttachmentsTooLarge { .. } => "attachments_too_large",
         AgentError::ContextWindowExceeded { .. } => "context_window_exceeded",
         AgentError::RetriesExhausted { .. } => "retries_exhausted",
+        AgentError::TimedOut { .. } => "timed_out",
     }
 }
 

@@ -30,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::Agent;
 use crate::config::AgentConfig;
 use crate::error::AgentError;
-use crate::fleet::{run_fleet, FleetSink, SubagentTask};
+use crate::fleet::{run_fleet, FleetLimits, FleetSink, LaneStop, ResultCap, SubagentTask};
 
 /// Stable identifier the model uses to call the fleet tool.
 pub const FLEET_TOOL: &str = "spawn_agents";
@@ -530,9 +530,12 @@ impl FleetTool {
 
         let lane_for_build = lanes.clone().unwrap_or_default();
         let outcomes = run_fleet(
-            move |index| spawner.build_agent(lane_for_build.get(index).cloned()),
+            {
+                let spawner = spawner.clone();
+                move |index| spawner.build_agent(lane_for_build.get(index).cloned())
+            },
             tasks,
-            concurrency,
+            FleetLimits::with_concurrency(concurrency),
             cancel.clone(),
             |event| sink.event(event),
         )
@@ -541,7 +544,15 @@ impl FleetTool {
         drop(guard); // normal teardown; the guard covers the abnormal paths
 
         let mut out = String::new();
-        if cancel.is_cancelled() {
+        let past_deadline = outcomes
+            .iter()
+            .any(|o| matches!(o.stopped, Some(LaneStop::Deadline(_))));
+        if past_deadline {
+            out.push_str(
+                "NOTE: the fleet ran past its deadline and was stopped; results below are \
+                 partial. Smaller, better-scoped tasks finish in time.\n\n",
+            );
+        } else if cancel.is_cancelled() {
             out.push_str(
                 "NOTE: the fleet was stopped before finishing; results below may be partial.\n\n",
             );
@@ -553,7 +564,15 @@ impl FleetTool {
                  have collided). Check the result before trusting it.\n\n",
             );
         }
-        out.push_str(&crate::fleet::combine_outcomes(&outcomes, "agent"));
+        // What the parent reads is bounded; a lane that pasted a whole file
+        // is cut, with the rest parked in the registry's overflow store so
+        // `retrieve_original` can still fetch it.
+        let spill = spawner.tools.overflow_store().cloned();
+        out.push_str(&crate::fleet::combine_outcomes_capped(
+            &outcomes,
+            "agent",
+            ResultCap::default_with(spill.as_deref()),
+        ));
         if let Some(lanes) = &lanes {
             out.push_str(&patches_section(lanes, &labels));
         }

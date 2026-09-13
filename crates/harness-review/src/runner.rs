@@ -208,7 +208,7 @@ impl ReviewRunner {
         let outcomes = fleet::run_fleet(
             |_| agent.side_agent(),
             tasks,
-            self.config.max_parallel,
+            fleet::FleetLimits::with_concurrency(self.config.max_parallel),
             self.cancel.clone(),
             // A fan-out step's lanes are a fleet; forward each event verbatim so
             // hosts render it through their existing fleet-lane path.
