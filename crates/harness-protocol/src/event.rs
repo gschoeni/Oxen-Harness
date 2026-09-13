@@ -282,6 +282,19 @@ pub enum ProtocolEvent {
         text: String,
         tokens: Option<usize>,
     },
+    /// Where the turn's tree budget stands (every lane of a root turn
+    /// spends from one wallet), sent whenever a lane's spend changes.
+    #[serde(rename = "fleet.budget")]
+    FleetBudget {
+        session: String,
+        fleet: String,
+        tokens: u64,
+        max_tokens: u64,
+        requests: u32,
+        max_requests: u32,
+        spawns: u32,
+        max_spawns: u32,
+    },
     /// Every lane of `fleet` settled.
     #[serde(rename = "fleet.completed")]
     FleetCompleted { session: String, fleet: String },
@@ -360,6 +373,7 @@ impl ProtocolEvent {
             Self::FleetStarted { .. } => "fleet.started",
             Self::FleetAgent { .. } => "fleet.agent",
             Self::FleetActivity { .. } => "fleet.agent_activity",
+            Self::FleetBudget { .. } => "fleet.budget",
             Self::FleetCompleted { .. } => "fleet.completed",
             Self::ReviewProgress { .. } => "review.progress",
             Self::ReviewToken { .. } => "review.token",
@@ -404,6 +418,7 @@ impl ProtocolEvent {
             | Self::FleetStarted { session, .. }
             | Self::FleetAgent { session, .. }
             | Self::FleetActivity { session, .. }
+            | Self::FleetBudget { session, .. }
             | Self::FleetCompleted { session, .. }
             | Self::ReviewProgress { session, .. }
             | Self::ReviewToken { session, .. }

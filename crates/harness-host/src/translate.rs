@@ -191,7 +191,7 @@ pub fn fleet_event(session: &str, fleet: &str, event: &FleetEvent) -> Option<Pro
                 // a command, nudged, compacted, or waiting out a retry.
                 AgentEvent::ApprovalResolved {
                     command, decision, ..
-                } if decision.contains("deny") => (
+                } if decision == "denied" => (
                     harness_protocol::FleetActivityKind::Note,
                     format!("could not run `{command}` (needs approval)"),
                     None,
@@ -226,6 +226,16 @@ pub fn fleet_event(session: &str, fleet: &str, event: &FleetEvent) -> Option<Pro
                 tokens,
             }
         }
+        FleetEvent::Budget { usage, limits } => ProtocolEvent::FleetBudget {
+            session,
+            fleet,
+            tokens: usage.tokens,
+            max_tokens: limits.max_tokens,
+            requests: usage.requests,
+            max_requests: limits.max_requests,
+            spawns: usage.spawns,
+            max_spawns: limits.max_spawns,
+        },
         FleetEvent::TaskCompleted {
             index,
             label,

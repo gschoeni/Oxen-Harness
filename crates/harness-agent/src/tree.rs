@@ -9,7 +9,7 @@
 //! budget resets when a root turn starts, so a tree is one turn's worth of
 //! delegated work.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use serde::Serialize;
 
@@ -50,6 +50,11 @@ pub struct TreeBudget {
     tokens: AtomicU64,
     requests: AtomicU32,
     spawns: AtomicU32,
+    /// Fleets running right now. A `wait: false` fleet outlives the turn
+    /// that spawned it, and a reset landing mid-flight would hand it a fresh
+    /// wallet; the reset waits until the last fleet ends.
+    inflight: AtomicU32,
+    pending_reset: AtomicBool,
 }
 
 impl Default for TreeBudget {
@@ -65,6 +70,8 @@ impl TreeBudget {
             tokens: AtomicU64::new(0),
             requests: AtomicU32::new(0),
             spawns: AtomicU32::new(0),
+            inflight: AtomicU32::new(0),
+            pending_reset: AtomicBool::new(false),
         }
     }
 
@@ -72,11 +79,36 @@ impl TreeBudget {
         self.limits
     }
 
-    /// A new root turn: the tree starts over.
+    /// A new root turn: the tree starts over — once no fleet is in flight.
     pub fn reset(&self) {
+        if self.inflight.load(Ordering::SeqCst) > 0 {
+            self.pending_reset.store(true, Ordering::SeqCst);
+            return;
+        }
+        self.clear();
+    }
+
+    fn clear(&self) {
         self.tokens.store(0, Ordering::Relaxed);
         self.requests.store(0, Ordering::Relaxed);
         self.spawns.store(0, Ordering::Relaxed);
+        self.pending_reset.store(false, Ordering::SeqCst);
+    }
+
+    /// A fleet is starting; the wallet stays as it is until it ends.
+    pub fn begin_fleet(&self) {
+        self.inflight.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A fleet ended; a reset a root turn asked for meanwhile lands now.
+    pub fn end_fleet(&self) {
+        let remaining = self
+            .inflight
+            .fetch_sub(1, Ordering::SeqCst)
+            .saturating_sub(1);
+        if remaining == 0 && self.pending_reset.load(Ordering::SeqCst) {
+            self.clear();
+        }
     }
 
     /// Count one model call of `tokens` by a lane.
@@ -163,6 +195,15 @@ mod tests {
 
         budget.reset();
         assert!(budget.exhausted().is_none());
+
+        // A reset while a fleet is in flight waits for the fleet to end.
+        budget.begin_fleet();
+        budget.charge(50);
+        budget.reset();
+        assert_eq!(budget.usage().tokens, 50, "not yet");
+        budget.end_fleet();
+        assert_eq!(budget.usage().tokens, 0, "landed once the fleet ended");
+
         for _ in 0..3 {
             budget.charge(1);
         }

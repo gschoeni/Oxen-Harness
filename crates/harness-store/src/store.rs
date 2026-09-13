@@ -200,6 +200,11 @@ fn migrations() -> Migrations<'static> {
 /// Shape is `harness_agent`'s `SubagentResult`; the store only relays it.
 pub const LANE_STATE: &str = "lane";
 
+/// `session_state` key for a session's `map_agents` memo: finished rows by
+/// (item, task, schema) hash, so a run re-issued after a restart only runs
+/// what's left. Shape is a map of hash → `SubagentResult`.
+pub const MAP_MEMO_STATE: &str = "map_memo";
+
 /// `session_state` key for the latest plan snapshot (written by the agent on
 /// every successful `update_plan` call; shape is `harness_tools`'
 /// `Option<PlanSnapshot>`, where a stored `null` means "checked, no plan").

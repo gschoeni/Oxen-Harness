@@ -30,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::Agent;
 use crate::config::AgentConfig;
 use crate::error::AgentError;
-use crate::fleet::{run_fleet, FleetLimits, FleetSink, SpawnAgent, SubagentTask};
+use crate::fleet::{run_fleet, FleetEvent, FleetLimits, FleetSink, SpawnAgent, SubagentTask};
 use crate::lane::{lane_budget, render_results, AgentTree, LiveLane, SubagentResult};
 use harness_llm::types::ChatMessage;
 
@@ -94,7 +94,9 @@ pub struct FleetSpawner {
     sink: StdMutex<Option<Arc<dyn FleetSink>>>,
     /// `map_agents` rows already answered this session, by
     /// (item, task, schema) — a stopped run re-issued only runs what's left.
+    /// Mirrored to the session's state so it survives a restart.
     memo: StdMutex<std::collections::HashMap<u64, SubagentResult>>,
+    memo_loaded: std::sync::atomic::AtomicBool,
     /// The parent's transcript as of its latest `spawn_agents` call, for
     /// lanes spawned with `fork: true` (see [`ForkSlot`]).
     fork: ForkSlot,
@@ -131,6 +133,7 @@ impl FleetSpawner {
             live: Arc::default(),
             sink: StdMutex::new(None),
             memo: StdMutex::new(std::collections::HashMap::new()),
+            memo_loaded: std::sync::atomic::AtomicBool::new(false),
             fork: Arc::default(),
         }
     }
@@ -145,8 +148,12 @@ impl FleetSpawner {
         self.fork.lock().expect("fork slot poisoned").clone()
     }
 
-    /// A finished `map_agents` row under this key, if one was memoized.
+    /// A finished `map_agents` row under this key, if one was memoized —
+    /// in this spawner, or by an earlier spawner of the same session (the
+    /// memo persists beside the session, so a restart doesn't re-run
+    /// answered items).
     pub(crate) fn memo_get(&self, key: u64) -> Option<SubagentResult> {
+        self.load_memo();
         self.memo
             .lock()
             .expect("fleet memo poisoned")
@@ -155,10 +162,43 @@ impl FleetSpawner {
     }
 
     pub(crate) fn memo_put(&self, key: u64, result: SubagentResult) {
-        self.memo
-            .lock()
-            .expect("fleet memo poisoned")
-            .insert(key, result);
+        self.load_memo();
+        let snapshot = {
+            let mut memo = self.memo.lock().expect("fleet memo poisoned");
+            memo.insert(key, result);
+            memo.clone()
+        };
+        if let (Some(store), Some(session)) = (&self.store, self.session()) {
+            let rows: std::collections::HashMap<String, SubagentResult> = snapshot
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+            let _ = store.save_session_state(&session, harness_store::MAP_MEMO_STATE, &rows);
+        }
+    }
+
+    /// Pull the session's persisted memo in once, the first time it's needed.
+    fn load_memo(&self) {
+        if self.memo_loaded.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (Some(store), Some(session)) = (&self.store, self.session()) else {
+            return;
+        };
+        let Ok(Some(rows)) = store
+            .session_state::<std::collections::HashMap<String, SubagentResult>>(
+                &session,
+                harness_store::MAP_MEMO_STATE,
+            )
+        else {
+            return;
+        };
+        let mut memo = self.memo.lock().expect("fleet memo poisoned");
+        for (key, result) in rows {
+            if let Ok(key) = key.parse::<u64>() {
+                memo.entry(key).or_insert(result);
+            }
+        }
     }
 
     /// The registry's overflow store — where parked content lives.
@@ -483,22 +523,27 @@ impl FleetSpawner {
         let mut tools = crate::agent::subagent_tools(tools);
         self.add_nested_tools(&mut tools, &config, &session, &cancel);
         let mut agent = if let Some(source) = source {
-            // The parent's messages become the lane's transcript, with the
-            // parent's system prompt rewritten the way `for_subagent` does.
-            for (index, message) in source.iter().enumerate() {
-                if index == 0 && message.role == "system" {
-                    let prompt = config
-                        .system_prompt
-                        .clone()
-                        .unwrap_or_else(|| message.content_text().unwrap_or_default());
-                    store.append_message(&session, &ChatMessage::system(prompt))?;
-                } else {
-                    store.append_message(&session, message)?;
+            // The parent's messages become the lane's starting context as one
+            // snapshot row (not a message row each: a long conversation forked
+            // twice must not double the store), with the parent's system
+            // prompt rewritten the way `for_subagent` does.
+            let mut inherited: Vec<ChatMessage> = source.as_ref().clone();
+            match inherited.first_mut() {
+                Some(first) if first.role == "system" => {
+                    if let Some(prompt) = &config.system_prompt {
+                        *first = ChatMessage::system(prompt.clone());
+                    }
+                }
+                _ => {
+                    if let Some(prompt) = &config.system_prompt {
+                        inherited.insert(0, ChatMessage::system(prompt.clone()));
+                    }
                 }
             }
+            store.save_context_snapshot(&session, -1, &inherited)?;
             Agent::resume_from_store(client, tools, store, session, config)?
         } else {
-            Agent::new(client, tools, store, session, config)?
+            Agent::new_with(client, tools, store, session, config, false)?
         };
         if !persisted {
             agent.disable_transcript_persistence();
@@ -622,8 +667,27 @@ impl FleetSpawner {
             &labels,
             cancel.clone(),
         );
+        let tree = self.tree_budget();
+        let _inflight = InFlight::begin(tree.clone());
         let outcomes = run_fleet(spawn, tasks, limits, cancel.clone(), |event| {
-            sink.event(fleet, event)
+            sink.event(fleet, event);
+            // Spend changed: let the host show where the tree stands.
+            let spend_changed = match event {
+                FleetEvent::Agent { event, .. } => {
+                    matches!(event.as_ref(), crate::event::AgentEvent::Usage { .. })
+                }
+                FleetEvent::TaskCompleted { .. } => true,
+                _ => false,
+            };
+            if spend_changed {
+                sink.event(
+                    fleet,
+                    &FleetEvent::Budget {
+                        usage: tree.usage(),
+                        limits: tree.limits(),
+                    },
+                );
+            }
         })
         .await
         .map_err(|e| ToolError::Execution(e.to_string()))?;
@@ -895,6 +959,23 @@ impl FleetTool {
     pub fn with_asides(mut self, asides: harness_tools::Asides) -> Self {
         self.asides = Some(asides);
         self
+    }
+}
+
+/// A fleet's hold on the tree budget: while it lives, a root turn's reset
+/// waits (see `TreeBudget::reset`). Dropped on every exit path.
+struct InFlight(Arc<crate::tree::TreeBudget>);
+
+impl InFlight {
+    fn begin(tree: Arc<crate::tree::TreeBudget>) -> Self {
+        tree.begin_fleet();
+        Self(tree)
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.end_fleet();
     }
 }
 
@@ -1519,7 +1600,11 @@ mod tests {
         assert_eq!(record["label"], "scan");
         assert_eq!(record["status"], "done");
         assert!(out.contains(&format!("agent id: {id}")), "{out}");
-        assert_eq!(store.messages(&id).unwrap().len(), 2, "user + assistant");
+        assert_eq!(
+            store.messages(&id).unwrap().len(),
+            2,
+            "user + assistant; the system prompt is not written per lane"
+        );
         assert!(
             sp.tree().live().is_empty(),
             "a settled lane leaves the registry"
@@ -1920,18 +2005,28 @@ mod tests {
         forked.assert_async().await;
         assert!(out.contains("continued from where you were"), "{out}");
 
-        // The fork's transcript is the parent's, with a lane's system prompt.
+        // The fork starts from one snapshot of the parent's transcript (not a
+        // row per message), with a lane's system prompt; its own turn is the
+        // only thing written as rows.
         let lanes = store.lanes_of(&parent).unwrap();
         assert_eq!(lanes.len(), 1);
-        let rows = store.messages(&lanes[0].id).unwrap();
-        let system = rows[0]["content"].as_str().unwrap_or_default();
+        let (_, inherited) = store
+            .context_snapshot::<Vec<harness_llm::types::ChatMessage>>(&lanes[0].id)
+            .unwrap()
+            .expect("the inherited context is one snapshot");
+        let system = inherited[0].content_text().unwrap_or_default();
         assert!(
             !system.contains("update_trail"),
             "no trail mandate in a lane"
         );
         assert!(system.contains("You are a subagent"));
-        assert!(rows.iter().any(|r| r["content"]
-            .as_str()
+        assert_eq!(
+            store.messages(&lanes[0].id).unwrap().len(),
+            2,
+            "its own user + reply"
+        );
+        assert!(inherited.iter().any(|m| m
+            .content_text()
             .is_some_and(|c| c.contains("PARENT-CONTEXT-MARKER"))));
     }
 

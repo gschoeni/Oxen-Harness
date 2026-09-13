@@ -250,6 +250,18 @@ fn fleet_event_wire_shapes() {
         session: "s1".into(),
         fleet: "fleet-7".into(),
     });
+    let budget = ProtocolEvent::FleetBudget {
+        session: "s1".into(),
+        fleet: "fleet-7".into(),
+        tokens: 42_000,
+        max_tokens: 1_500_000,
+        requests: 7,
+        max_requests: 200,
+        spawns: 3,
+        max_spawns: 24,
+    };
+    assert_eq!(json(&budget)["type"], "fleet.budget");
+    round_trips(budget);
 }
 
 #[test]
@@ -533,6 +545,19 @@ fn legacy_channel_names() {
                 fleet: "f".into(),
             },
             "fleet://completed",
+        ),
+        (
+            ProtocolEvent::FleetBudget {
+                session: "s".into(),
+                fleet: "f".into(),
+                tokens: 0,
+                max_tokens: 1,
+                requests: 0,
+                max_requests: 1,
+                spawns: 0,
+                max_spawns: 1,
+            },
+            "fleet://budget",
         ),
         (
             ProtocolEvent::ReviewProgress {

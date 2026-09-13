@@ -200,16 +200,35 @@ impl Agent {
     /// and persists it to the session.
     pub fn new(
         client: OxenClient,
+        tools: ToolRegistry,
+        store: Arc<HistoryStore>,
+        session_id: String,
+        config: AgentConfig,
+    ) -> Result<Self, AgentError> {
+        Self::new_with(client, tools, store, session_id, config, true)
+    }
+
+    /// [`Self::new`] with a say in whether the system prompt is written to
+    /// the store. A chat persists it (its transcript must stand alone); a
+    /// subagent lane doesn't — sixty-four lanes of one `map_agents` call
+    /// would write the same ten-thousand-character prompt sixty-four times,
+    /// and a resumed lane re-seeds it from its config instead (see
+    /// [`Self::resume_from_store`]).
+    pub fn new_with(
+        client: OxenClient,
         mut tools: ToolRegistry,
         store: Arc<HistoryStore>,
         session_id: String,
         config: AgentConfig,
+        persist_system_prompt: bool,
     ) -> Result<Self, AgentError> {
         let mut messages = Vec::new();
         let mut last_persisted_seq = -1;
         if let Some(prompt) = &config.system_prompt {
             let system = ChatMessage::system(prompt.clone());
-            last_persisted_seq = store.append_message(&session_id, &system)?;
+            if persist_system_prompt {
+                last_persisted_seq = store.append_message(&session_id, &system)?;
+            }
             messages.push(system);
         }
         let attachments = config.attachment_root.clone().map(AttachmentStore::new);
@@ -269,6 +288,13 @@ impl Agent {
         let later = store.messages_typed_after::<ChatMessage>(&session_id, through_seq)?;
         let last_persisted_seq = through_seq + later.len() as i64;
         messages.extend(later);
+        // A transcript written without its system prompt (a lane's) gets the
+        // prompt its config carries, in memory only, like the first time.
+        if !messages.first().is_some_and(|m| m.role == "system") {
+            if let Some(prompt) = &config.system_prompt {
+                messages.insert(0, ChatMessage::system(prompt.clone()));
+            }
+        }
         let attachments = config.attachment_root.clone().map(AttachmentStore::new);
         let ccr = setup_compression(&config, &mut tools);
         // Seed the cumulative count from the loaded transcript so a resumed

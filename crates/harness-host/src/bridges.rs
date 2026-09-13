@@ -189,6 +189,8 @@ impl FleetActivityBatch {
             FleetEvent::TaskStarted { index, .. } | FleetEvent::TaskCompleted { index, .. } => {
                 self.flush_lane(fleet, *index);
             }
+            // A budget reading orders after nothing in particular.
+            FleetEvent::Budget { .. } => {}
         }
         if let Some(event) = translate::fleet_event(&self.session, fleet, event) {
             self.sink.emit(event);

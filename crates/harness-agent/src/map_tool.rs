@@ -465,6 +465,33 @@ mod tests {
             4,
             "only c ran again"
         );
+
+        // A fresh spawner for the same session (a restart, a resume) finds
+        // the memo in the store: a and b still replay.
+        let reborn = Arc::new(
+            FleetSpawner::new(
+                OxenClient::new(server.url(), "k", "claude-opus-4-8"),
+                ToolRegistry::new(),
+                AgentConfig {
+                    system_prompt: None,
+                    retry: crate::test_support::fast_retry(1),
+                    ..AgentConfig::default()
+                },
+            )
+            .with_store(store.clone())
+            .with_session(parent.clone()),
+        );
+        let again = MapAgentsTool::new(reborn, Arc::new(QuietSink))
+            .invoke(serde_json::json!({
+                "items": ["ITEM-a", "ITEM-b"],
+                "prompt": "Check {{item}}."
+            }))
+            .await
+            .unwrap();
+        assert!(
+            again.starts_with("NOTE: 2 of 2 items were already answered"),
+            "{again}"
+        );
     }
 
     #[tokio::test]

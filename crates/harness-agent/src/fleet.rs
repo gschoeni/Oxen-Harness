@@ -89,6 +89,13 @@ pub enum FleetEvent {
         tokens_used: usize,
         summary: String,
     },
+    /// Where the turn's tree budget stands, sent by the spawner after any
+    /// lane's spend changes so a host can show it live. Not an engine
+    /// event: `run_fleet` never emits it.
+    Budget {
+        usage: crate::tree::TreeUsage,
+        limits: crate::tree::TreeLimits,
+    },
 }
 
 /// How a host renders a fleet that runs *inside* a turn (the `spawn_agents`
