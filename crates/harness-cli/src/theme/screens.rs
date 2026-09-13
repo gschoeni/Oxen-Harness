@@ -311,7 +311,10 @@ const KEY_HELP: &[(&str, &str)] = &[
         "/plan",
         "read-only planning; /plan approve executes the plan file",
     ),
-    ("Ctrl-C", "clear the draft, then confirm, then exit"),
+    (
+        "Ctrl-C",
+        "clear the draft, then confirm · again exits, d labels the run as training data",
+    ),
 ];
 
 /// A tombstone "game over" screen shown when the user ends the session — a

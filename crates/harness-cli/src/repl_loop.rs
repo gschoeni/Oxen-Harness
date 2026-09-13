@@ -17,6 +17,7 @@ use rustyline::DefaultEditor;
 use crate::queue::MessageQueue;
 use crate::repl::{parse_command, Command};
 use crate::theme::{self, Ui};
+use crate::training::{self, ReviewOutcome};
 use crate::turn::{ends_mid_turn, run_turn_and_drain, TurnRequest};
 use crate::{commands, live};
 
@@ -135,6 +136,18 @@ pub(crate) async fn run_classic_repl(
             editor.readline_with_initial(&prompt, (&seed, ""))
         };
         match read {
+            // Ctrl-C then `d` (+ ⏎ here, since readline hands us whole lines):
+            // label the run as training data, then leave.
+            Ok(line)
+                if exit_guard.armed()
+                    && line.trim() == crate::interrupt::LABEL_KEY.to_string() =>
+            {
+                exit_guard.disarm();
+                if label_run(agent, ui, ctx) == ReviewOutcome::Labeled {
+                    print!("{}", theme::death_screen(ui, &ctx.session()));
+                    break;
+                }
+            }
             Ok(line) => {
                 exit_guard.disarm();
                 let mut new_history = editor.add_history_entry(line.as_str()).unwrap_or(false);
@@ -159,7 +172,8 @@ pub(crate) async fn run_classic_repl(
                 }
             }
             // Staged Ctrl-C: the press already cleared the half-typed line
-            // (rustyline discards it); confirm before actually leaving.
+            // (rustyline discards it); confirm before actually leaving, or
+            // take `d` ⏎ to label the run first.
             Err(rustyline::error::ReadlineError::Interrupted) => {
                 match exit_guard.on_ctrl_c(false) {
                     crate::interrupt::CtrlC::Exit => {
@@ -167,7 +181,7 @@ pub(crate) async fn run_classic_repl(
                         break;
                     }
                     // No draft exists here, so the first press always arms.
-                    _ => println!("{}", crate::interrupt::arm_notice(ui)),
+                    _ => println!("{}", crate::interrupt::arm_notice(ui, classic_cols())),
                 }
             }
             // Ctrl-D: leave cleanly.
@@ -219,6 +233,14 @@ pub(crate) async fn run_box_repl(
                 print!("{}", theme::death_screen(ui, &ctx.session()));
                 break;
             }
+            // Ctrl-C then `d`: label the run as training data, then leave. A
+            // cancelled picker (or nothing to label) drops back to the prompt.
+            live::Idle::Label => {
+                if label_run(agent, ui, ctx) == ReviewOutcome::Labeled {
+                    print!("{}", theme::death_screen(ui, &ctx.session()));
+                    break;
+                }
+            }
             live::Idle::EditExternally(draft) => {
                 seed = match external_edit(&draft) {
                     Ok(edited) => edited,
@@ -248,6 +270,19 @@ pub(crate) async fn run_box_repl(
         }
     }
     Ok(())
+}
+
+/// The terminal width for the classic REPL's one-off notices (80 when unknown).
+fn classic_cols() -> usize {
+    crossterm::terminal::size()
+        .map(|(c, _)| c as usize)
+        .unwrap_or(80)
+}
+
+/// The Ctrl-C → `d` path: open the training-data picker for the current
+/// session (shared by the box and classic REPLs).
+fn label_run(agent: &Agent, ui: &Ui, ctx: &ReplContext<'_>) -> ReviewOutcome {
+    training::prompt_session_review(ctx.store, &ctx.session(), agent, ui)
 }
 
 /// Handle one line of input. Returns `Ok(true)` when the REPL should exit.

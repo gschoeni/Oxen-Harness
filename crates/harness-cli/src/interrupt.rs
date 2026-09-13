@@ -2,10 +2,11 @@
 //! live idle prompt, the mid-turn composer, and the classic readline REPL.
 //!
 //! Claude-Code-style staging: a first Ctrl-C clears whatever is being typed,
-//! a second warns that one more leaves, and only a confirmed third actually
-//! exits — never a surprise quit mid-thought. The wording of the arm notice
-//! and the interrupted-turn block also lives here so the live and classic
-//! surfaces can't drift apart.
+//! a second arms the exit and shows the two ways out — Ctrl-C again leaves,
+//! `d` first labels the run as training data — and only that confirmed
+//! press actually exits, never a surprise quit mid-thought. The wording of
+//! the arm notice and the interrupted-turn block also lives here so the live
+//! and classic surfaces can't drift apart.
 
 use crate::theme::Ui;
 
@@ -21,9 +22,14 @@ pub(crate) enum CtrlC {
     Exit,
 }
 
+/// The key that, pressed while the exit is armed, opens the training-data
+/// picker instead of leaving straight away.
+pub(crate) const LABEL_KEY: char = 'd';
+
 /// Tracks whether the next Ctrl-C exits. Arm it via [`ExitGuard::on_ctrl_c`];
 /// call [`ExitGuard::disarm`] on any other activity so the confirmation never
-/// goes stale.
+/// goes stale. While armed, [`ExitGuard::wants_label`] says whether a plain
+/// keystroke is the `d` that asks to label the run first.
 #[derive(Default)]
 pub(crate) struct ExitGuard {
     armed: bool,
@@ -44,15 +50,59 @@ impl ExitGuard {
     pub(crate) fn disarm(&mut self) {
         self.armed = false;
     }
+
+    pub(crate) fn armed(&self) -> bool {
+        self.armed
+    }
+
+    /// Whether `key` (an unmodified character press) is the armed-state `d`
+    /// that opens the training-data picker.
+    pub(crate) fn wants_label(&self, key: char) -> bool {
+        self.armed && key == LABEL_KEY
+    }
 }
 
-/// The warning shown when a Ctrl-C arms the exit.
-pub(crate) fn arm_notice(ui: &Ui) -> String {
-    format!(
-        "  {} {}",
-        ui.red("⚠"),
-        ui.dim("press ctrl-c again to leave the trail — any other key keeps riding"),
-    )
+/// The acknowledgement shown when a Ctrl-C arms the exit: the two ways out
+/// (leave now, or label the run as training data first) and the way back.
+/// Fitted to `cols` so the pinned row never wraps into the output above:
+/// the "any other key" tail goes first, then the label hint's detail.
+pub(crate) fn arm_notice(ui: &Ui, cols: usize) -> String {
+    let key = LABEL_KEY.to_string();
+    // (segments as (styled, plain-width)) — longest form first.
+    let forms: [Vec<(String, &str)>; 3] = [
+        vec![
+            (ui.accent("ctrl-c"), "ctrl-c"),
+            (ui.dim("again leaves the trail ·"), "again leaves the trail ·"),
+            (ui.accent(&key), "d"),
+            (
+                ui.dim("labels this run as training data first ·"),
+                "labels this run as training data first ·",
+            ),
+            (ui.dim("any other key keeps riding"), "any other key keeps riding"),
+        ],
+        vec![
+            (ui.accent("ctrl-c"), "ctrl-c"),
+            (ui.dim("again leaves ·"), "again leaves ·"),
+            (ui.accent(&key), "d"),
+            (
+                ui.dim("labels this run as training data"),
+                "labels this run as training data",
+            ),
+        ],
+        vec![
+            (ui.accent("ctrl-c"), "ctrl-c"),
+            (ui.dim("exit ·"), "exit ·"),
+            (ui.accent(&key), "d"),
+            (ui.dim("label"), "label"),
+        ],
+    ];
+    // "  ⚠ " lead (4 cells) + segments joined by single spaces.
+    let fits = |segs: &Vec<(String, &str)>| {
+        4 + segs.iter().map(|(_, w)| w.len()).sum::<usize>() + segs.len() - 1 <= cols
+    };
+    let segs = forms.iter().find(|f| fits(f)).unwrap_or(&forms[2]);
+    let body: Vec<&str> = segs.iter().map(|(s, _)| s.as_str()).collect();
+    format!("  {} {}", ui.red("⚠"), body.join(" "))
 }
 
 /// The block printed when a running turn is interrupted: what happened, and
@@ -94,5 +144,32 @@ mod tests {
         assert_eq!(guard.on_ctrl_c(true), CtrlC::ClearDraft);
         guard.disarm();
         assert_eq!(guard.on_ctrl_c(false), CtrlC::Arm);
+    }
+
+    #[test]
+    fn arm_notice_fits_the_terminal_width() {
+        let ui = Ui::with(false, std::sync::Arc::new(harness_theme::Theme::default()));
+        for cols in [40usize, 60, 80, 100, 120] {
+            let line = arm_notice(&ui, cols);
+            assert!(
+                crate::width::str_width(&line) <= cols,
+                "{cols} cols: {line:?}"
+            );
+            assert!(line.contains("ctrl-c") && line.contains(" d "), "{line:?}");
+        }
+        assert!(arm_notice(&ui, 120).contains("any other key keeps riding"));
+        assert!(!arm_notice(&ui, 80).contains("any other key"));
+    }
+
+    #[test]
+    fn label_key_only_counts_while_armed() {
+        let mut guard = ExitGuard::default();
+        assert!(!guard.wants_label(LABEL_KEY));
+        assert_eq!(guard.on_ctrl_c(false), CtrlC::Arm);
+        assert!(guard.armed());
+        assert!(guard.wants_label(LABEL_KEY));
+        assert!(!guard.wants_label('x'));
+        guard.disarm();
+        assert!(!guard.wants_label(LABEL_KEY));
     }
 }

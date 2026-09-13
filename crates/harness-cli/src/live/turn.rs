@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::Event;
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use harness_agent::{Agent, AgentError, AgentEvent};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -175,6 +175,8 @@ pub(crate) enum Idle {
     EditExternally(String),
     /// Ctrl-D on an empty box, or a confirmed double Ctrl-C — end the session.
     Exit,
+    /// Ctrl-C then `d`: label this run as training data on the way out.
+    Label,
 }
 
 /// Read one submission at the idle prompt using the pinned composer, then
@@ -241,9 +243,18 @@ pub(crate) async fn read_idle(
         };
         match event {
             Some(Event::Key(key)) => {
+                // While the exit is armed, a plain `d` opens the training-data
+                // picker instead of typing into the (empty) composer.
+                if key.kind == KeyEventKind::Press
+                    && key.modifiers == KeyModifiers::NONE
+                    && matches!(key.code, KeyCode::Char(c) if guard.wants_label(c))
+                {
+                    break Idle::Label;
+                }
                 let action = state.borrow_mut().handle_key(key, queue.len());
                 if !matches!(action, KeyAction::Interrupt) {
                     guard.disarm();
+                    state.borrow_mut().set_notice(None);
                 }
                 let residual = apply_action(&mut state.borrow_mut(), queue, action);
                 match residual {
@@ -282,8 +293,8 @@ pub(crate) async fn read_idle(
                                 s.request_paint();
                             }
                             CtrlC::Arm => {
-                                let ui = s.ui.clone();
-                                s.print_line(&arm_notice(&ui));
+                                let (ui, cols) = (s.ui.clone(), s.cols as usize);
+                                s.set_notice(Some(arm_notice(&ui, cols)));
                             }
                             CtrlC::Exit => break Idle::Exit,
                         }
@@ -297,6 +308,7 @@ pub(crate) async fn read_idle(
             Some(Event::Paste(text)) => {
                 guard.disarm();
                 let mut s = state.borrow_mut();
+                s.set_notice(None);
                 s.insert_paste(&text);
                 s.render();
             }
@@ -332,6 +344,7 @@ pub(crate) async fn read_idle(
         // The editor gets the real text too; chips would mean nothing to it.
         Idle::EditExternally(draft) => Idle::EditExternally(expand_pastes(&draft)),
         Idle::Exit => Idle::Exit,
+        Idle::Label => Idle::Label,
     })
 }
 

@@ -211,7 +211,7 @@ struct Live {
     media_check: Option<std::time::Instant>,
     /// When the running turn started, or `None` at idle. Drives the meter
     /// line's braille spinner + whole-second timer (see
-    /// [`Live::turn_indicator`]) and the `🐂 ⠋ …` terminal title.
+    /// `Live::meter_lines` in `paint.rs`) and the `🐂 ⠋ …` terminal title.
     turn_started: Option<std::time::Instant>,
     /// The last terminal title written, so the ~110ms ticker only emits an OSC
     /// sequence when the title actually changes (once a second, not nine times).
@@ -225,6 +225,10 @@ struct Live {
     /// blank row between a run of streamed text and the tool/notice lines
     /// around it (see [`events::LastWrite`]).
     last_write: events::LastWrite,
+    /// A one-line acknowledgement pinned under the composer — the staged
+    /// Ctrl-C's "again leaves · d labels" options. Cleared on any other key so
+    /// it never lingers past the moment it applies to.
+    notice: Option<String>,
 }
 
 impl Live {
@@ -264,6 +268,16 @@ impl Live {
             tool_card: None,
             results: std::collections::VecDeque::new(),
             last_write: events::LastWrite::Blank,
+            notice: None,
+        }
+    }
+
+    /// Pin (or clear) the one-line notice under the composer, repainting only
+    /// when it actually changed.
+    fn set_notice(&mut self, notice: Option<String>) {
+        if self.notice != notice {
+            self.notice = notice;
+            self.request_paint();
         }
     }
 

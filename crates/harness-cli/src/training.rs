@@ -1,11 +1,12 @@
-//! The end-of-session training-data prompt.
+//! The on-the-way-out training-data prompt.
 //!
 //! Every session is persisted with a per-session `review_status` (`""` =
 //! unreviewed, `"kept"`, `"rejected"`) — the same field the desktop app's
-//! Training-data builder curates and exports fine-tuning JSONL from. When an
-//! interactive CLI session ends, offer to label the run right there, while
-//! the user still remembers whether it went well — so good traces accumulate
-//! without a separate review pass.
+//! Training-data builder curates and exports fine-tuning JSONL from. The
+//! picker is opt-in: a Ctrl-C at idle arms the exit and offers `d`, which
+//! opens it right there while the user still remembers whether the run went
+//! well — so good traces accumulate without a separate review pass, and a
+//! plain exit never stops to ask.
 
 use harness_agent::Agent;
 use harness_store::HistoryStore;
@@ -37,10 +38,24 @@ fn status_for(picked: &str) -> Option<&'static str> {
     }
 }
 
-/// Whether the session is worth asking about: it had at least one real user
-/// prompt (not a bare open-then-quit) and hasn't already been labeled.
-fn worth_asking(agent: &Agent, current_status: &str) -> bool {
-    current_status.is_empty() && agent.messages().iter().any(|m| m.role == "user")
+/// Why the picker can't be offered right now, if it can't.
+fn not_askable(agent: &Agent, current_status: &str) -> Option<String> {
+    if !current_status.is_empty() {
+        return Some(format!("this run is already labeled {current_status}"));
+    }
+    if !agent.messages().iter().any(|m| m.role == "user") {
+        return Some("nothing to label yet — send a prompt first".to_string());
+    }
+    None
+}
+
+/// How the training-data picker ended.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReviewOutcome {
+    /// A choice was made (including "choose later") — the exit can proceed.
+    Labeled,
+    /// The picker was cancelled or couldn't run — stay in the session.
+    Cancelled,
 }
 
 /// A snapshot of the training-data curation queue. Each kept session becomes
@@ -103,10 +118,20 @@ fn print_report(ui: &Ui, outcome: &str, stats: TrainingStats) {
     }
 }
 
-pub(crate) fn prompt_session_review(store: &HistoryStore, session: &str, agent: &Agent, ui: &Ui) {
+/// Open the training-data picker for `session`. Returns
+/// [`ReviewOutcome::Labeled`] once a choice is saved (the caller then
+/// finishes the exit), [`ReviewOutcome::Cancelled`] when the picker was
+/// dismissed or there was nothing to label (a dim note says why).
+pub(crate) fn prompt_session_review(
+    store: &HistoryStore,
+    session: &str,
+    agent: &Agent,
+    ui: &Ui,
+) -> ReviewOutcome {
     let current = store.review_status(session).unwrap_or_default();
-    if !worth_asking(agent, &current) {
-        return;
+    if let Some(why) = not_askable(agent, &current) {
+        println!("  {} {}", ui.dim("⚠"), ui.dim(&why));
+        return ReviewOutcome::Cancelled;
     }
 
     let options = [
@@ -117,24 +142,25 @@ pub(crate) fn prompt_session_review(store: &HistoryStore, session: &str, agent: 
     let picked = match picker::select(
         ui,
         "Training data",
-        "One last thing — was this a good run? Kept sessions become fine-tuning \
-         examples when you export training data (desktop app → Settings → Training data).",
+        "Was this a good run? Kept sessions become fine-tuning examples when you \
+         export training data (desktop app → Settings → Training data).",
         &options,
         false,
     ) {
         Ok(Some(sel)) => sel.into_iter().next().unwrap_or_default(),
-        // Cancelled or no interactive terminal — don't hold up the exit.
-        _ => return,
+        // Cancelled or no interactive terminal — back to the trail.
+        _ => return ReviewOutcome::Cancelled,
     };
 
     let Some(status) = status_for(&picked) else {
         print_report(ui, "later", TrainingStats::collect(store));
-        return;
+        return ReviewOutcome::Labeled;
     };
     match store.set_review_status(session, status) {
         Ok(()) => print_report(ui, status, TrainingStats::collect(store)),
         Err(e) => println!("  {} {e}", ui.dim("couldn't save the label:")),
     }
+    ReviewOutcome::Labeled
 }
 
 #[cfg(test)]

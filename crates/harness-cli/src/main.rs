@@ -442,9 +442,8 @@ async fn main() -> Result<()> {
         run_classic_repl(&mut agent, &mut ui, &ctx).await
     };
 
-    // On the way out, offer to label the run for the training-data export —
-    // while the user still remembers whether it was a good one.
-    training::prompt_session_review(&store, &session, &agent, &ui);
+    // Labeling the run for the training-data export is opt-in (Ctrl-C then
+    // `d` inside the REPL), so a plain exit never stops to ask.
     // Dev servers live in a process-wide manager (nothing drops it): stop them
     // explicitly so an `npm run dev` never outlives the expedition.
     preview::shutdown().await;

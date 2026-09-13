@@ -136,7 +136,11 @@ impl Live {
         // one output row; the block trims from the end (hint, then tail rows)
         // so the lane lines themselves survive.
         let mut sections = vec![Section::blank(SectionKind::Spacer, SPACER_ROWS)];
-        let composer = Section::new(SectionKind::Composer, self.composer_box_lines());
+        // The staged-Ctrl-C acknowledgement sits on the very bottom row, under
+        // the input, so the ways out are read where the eye already is.
+        let mut composer_lines = self.composer_box_lines();
+        composer_lines.extend(self.notice.iter().cloned());
+        let composer = Section::new(SectionKind::Composer, composer_lines);
         let fixed = (SPACER_ROWS
             + compression_lines.len()
             + meter_lines.len()
@@ -513,6 +517,21 @@ mod tests {
         assert_eq!(row(&p, 17), "");
         assert_eq!(p.screen().cursor_position(), (2, 0));
         assert!(region_transition(17, 18, 24).contains("\x1b[1;18r"));
+    }
+
+    #[test]
+    fn ctrl_c_notice_pins_to_the_bottom_row_and_clears() {
+        let mut l = plain_live(60, 24);
+        let before = l.pinned_plan().rows();
+        l.set_notice(Some("ctrl-c again leaves · d labels".into()));
+        let plan = l.pinned_plan();
+        // One extra reserved row, and it is the very last line painted.
+        assert_eq!(plan.rows(), before + 1);
+        let last = plan.sections.last().unwrap();
+        assert_eq!(last.kind, SectionKind::Composer);
+        assert_eq!(last.lines.last().unwrap(), "ctrl-c again leaves · d labels");
+        l.set_notice(None);
+        assert_eq!(l.pinned_plan().rows(), before);
     }
 
     #[test]
