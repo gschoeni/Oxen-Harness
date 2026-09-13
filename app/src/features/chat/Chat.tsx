@@ -8,6 +8,7 @@ import { getDragPaths, hasDragPaths } from "../files/dnd";
 import type { CodeSnippet } from "../../lib/types";
 import { ThreadItem } from "./ThreadItem";
 import { FleetPanel } from "./FleetPanel";
+import { TasksPanel } from "./TasksPanel";
 import { Plan } from "./Plan";
 import { TrailStrip } from "../ledger/TrailStrip";
 import { Composer } from "./Composer";
@@ -242,6 +243,7 @@ export function Chat() {
         </div>
       )}
       <FleetPanel />
+      <TasksPanel />
       <Queue items={queue} onChange={setQueue} />
       {snippets.length > 0 && (
         <div className="attachments">

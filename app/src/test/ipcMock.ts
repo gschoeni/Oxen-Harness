@@ -29,6 +29,7 @@ import type {
   Theme,
   ThemeSummary,
   AgentSummary,
+  TaskSummary,
 } from "../lib/types";
 
 // ---- event plumbing --------------------------------------------------------
@@ -232,6 +233,9 @@ export const saveUiState = vi.fn(async (_state: Record<string, unknown>) => {});
 export const sessionInfo = vi.fn(async () => sampleSession);
 export const listSessions = vi.fn(async () => []);
 export const listAgents = vi.fn(async (): Promise<AgentSummary[]> => []);
+export const interjectAgent = vi.fn(async () => true);
+export const listTasks = vi.fn(async (): Promise<TaskSummary[]> => []);
+export const killBackgroundTask = vi.fn(async () => "killed");
 export const totalTokensUsed = vi.fn(async () => 0);
 export const totalCostUsd = vi.fn(async () => null as number | null);
 export const modelUsageBreakdown = vi.fn(async () => ({
@@ -529,6 +533,9 @@ export function resetIpc() {
   sessionInfo.mockReset().mockResolvedValue(sampleSession);
   listSessions.mockReset().mockResolvedValue([]);
   listAgents.mockReset().mockResolvedValue([]);
+  interjectAgent.mockReset().mockResolvedValue(true);
+  listTasks.mockReset().mockResolvedValue([]);
+  killBackgroundTask.mockReset().mockResolvedValue("killed");
   newSession.mockReset().mockResolvedValue({ ...sampleSession, session_id: "new-session-id" });
   resumeSession.mockReset().mockResolvedValue(emptyView);
   deleteSession.mockReset().mockResolvedValue(undefined);

@@ -227,7 +227,13 @@ export function Inspector({ sessionId }: { sessionId: string }) {
   const info = useStore((s) => s.infos[sessionId] ?? (s.session?.session_id === sessionId ? s.session : undefined));
   const summaryModel = useStore((s) => s.sessions.find((x) => x.id === sessionId)?.model);
   const isCurrent = useStore((s) => s.session?.session_id === sessionId);
-  const running = useStore((s) => s.runStatus[sessionId] === "running");
+  // A lane opened from the fleet panel is followed live while it runs.
+  const laneRunning = useStore(
+    (s) =>
+      s.inspectorLive &&
+      Object.values(s.fleets).some((f) => f?.lanes.some((l) => l.id === sessionId && l.status === "running")),
+  );
+  const running = useStore((s) => s.runStatus[sessionId] === "running") || laneRunning;
   const model = info?.model ?? summaryModel ?? "—";
 
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
@@ -255,6 +261,24 @@ export function Inspector({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Following a lane: re-read its transcript as it grows (it persists as it
+  // runs), and once more when it settles so the final reply is shown.
+  const follow = useCallback(async () => {
+    try {
+      setMessages(await sessionMessages(sessionId));
+    } catch {
+      // Keep the last good read.
+    }
+  }, [sessionId]);
+  useEffect(() => {
+    if (!laneRunning) return;
+    const timer = window.setInterval(() => void follow(), 1500);
+    return () => {
+      window.clearInterval(timer);
+      void follow();
+    };
+  }, [laneRunning, follow]);
 
   const stats = useMemo(() => {
     const msgs = messages ?? [];

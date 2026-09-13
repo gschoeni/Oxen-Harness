@@ -64,6 +64,37 @@ pub(crate) fn cancel_agent(
     Ok(state.cancel_lane(&session, &lane))
 }
 
+/// Hand a running lane a message for its next round; `false` once it has
+/// ended.
+#[tauri::command]
+pub(crate) fn interject_agent(
+    state: State<'_, AppState>,
+    session: String,
+    lane: String,
+    text: String,
+) -> Result<bool, String> {
+    Ok(state.interject_lane(&session, &lane, text))
+}
+
+/// A chat's background shell tasks, running and ended.
+#[tauri::command]
+pub(crate) async fn list_tasks(
+    state: State<'_, AppState>,
+    session: String,
+) -> Result<Vec<harness_protocol::TaskSummary>, String> {
+    Ok(state.list_tasks(&session).await)
+}
+
+/// Kill one background task (its whole process group).
+#[tauri::command]
+pub(crate) async fn kill_background_task(
+    state: State<'_, AppState>,
+    session: String,
+    id: u64,
+) -> Result<String, String> {
+    state.kill_task(&session, id).await
+}
+
 /// Deliver the user's answer to a pending `ask_user_question`, unblocking the
 /// agent. Unknown ids are ignored (the question may have been cancelled).
 #[tauri::command]

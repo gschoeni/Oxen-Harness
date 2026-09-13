@@ -822,6 +822,24 @@ export interface AgentSummary {
   created_at: number;
 }
 
+/** One background shell task of a chat (`tasks://changed`, `list_tasks`). */
+export interface TaskSummary {
+  id: number;
+  command: string;
+  running: boolean;
+  exit_code: number | null;
+  killed: boolean;
+  elapsed_secs: number;
+  last_line: string;
+}
+
+/** `tasks://changed` — the whole list of a chat's background tasks after
+ *  one started, ended, or was killed. */
+export interface TasksChangedEvent {
+  session: string;
+  tasks: TaskSummary[];
+}
+
 // ---- fleets (N parallel subagents: review fan-out or spawn_agents) ----------
 
 /** `fleet://started` — a fleet of parallel subagents is spinning up. `fleet`

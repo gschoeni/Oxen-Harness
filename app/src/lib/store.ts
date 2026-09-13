@@ -29,7 +29,10 @@ import {
   cancelAgent,
   cancelFleet,
   cancelTurn,
+  interjectAgent,
+  killBackgroundTask,
   listAgents,
+  listTasks,
   cancelDownload as cancelDownloadIpc,
   downloadModel as downloadModelIpc,
   configureOxenKey,
@@ -108,6 +111,8 @@ import type {
   PreviewStatus,
   RetryEvent,
   AgentSummary,
+  TasksChangedEvent,
+  TaskSummary,
 } from "./types";
 
 /** One model download the store is tracking — in flight (or failed), keyed by
@@ -379,6 +384,10 @@ interface AppState {
   /** The agents hub: a chat's subagent lanes, running and finished, as last
    *  fetched (refreshed when a fleet ends and when the panel mounts). */
   agents: Record<string, AgentSummary[] | undefined>;
+  /** A chat's background shell tasks, kept current by `tasks://changed`. */
+  tasks: Record<string, TaskSummary[] | undefined>;
+  /** The inspector follows a running lane live (polls its transcript). */
+  inspectorLive: boolean;
   /** Prompts queued while a session is mid-turn, sent in order as it frees up. */
   queues: Record<string, QueuedPrompt[]>;
   /** Documents the agent showed in the canvas, per session (ordered, by id). */
@@ -548,6 +557,16 @@ interface AppState {
   stopLane: (session: string, lane: string) => void;
   /** Re-fetch a chat's agents hub. */
   refreshAgents: (session: string) => Promise<void>;
+  /** Hand a running lane a message for its next round. */
+  steerLane: (session: string, lane: string, text: string) => void;
+  /** Open the inspector on a running lane and follow it live. */
+  watchLane: (lane: string) => void;
+  /** The chat's background tasks changed on the backend. */
+  ingestTasksChanged: (e: TasksChangedEvent) => void;
+  /** Re-fetch a chat's background tasks. */
+  refreshTasks: (session: string) => Promise<void>;
+  /** Kill one background task. */
+  killTask: (session: string, id: number) => void;
   /** Stop the current chat's in-flight turn, killing the model stream. */
   stop: () => void;
   /** Save the Oxen API key entered in a chat's inline auth prompt, then retry the
@@ -810,6 +829,8 @@ export const useStore = create<AppState>((set, get) => {
     codeReview: {},
     fleets: {},
     agents: {},
+    tasks: {},
+    inspectorLive: false,
     queues: {},
     canvases: {},
     activeCanvas: {},
@@ -1538,6 +1559,29 @@ export const useStore = create<AppState>((set, get) => {
       void cancelAgent(session, lane).catch(() => {});
     },
 
+    steerLane: (session, lane, text) => {
+      void interjectAgent(session, lane, text).catch(() => {});
+    },
+
+    watchLane: (lane) => set({ inspector: { sessionId: lane, review: null }, inspectorLive: true }),
+
+    ingestTasksChanged: (e) => set((s) => ({ tasks: { ...s.tasks, [e.session]: e.tasks } })),
+
+    refreshTasks: async (session) => {
+      try {
+        const rows = await listTasks(session);
+        // An initial fill only: a `tasks://changed` event that landed while
+        // the fetch was in flight is fresher than the fetch.
+        set((s) => (s.tasks[session] === undefined ? { tasks: { ...s.tasks, [session]: rows } } : {}));
+      } catch {
+        // Keep what the last event said.
+      }
+    },
+
+    killTask: (session, id) => {
+      void killBackgroundTask(session, id).catch(() => {});
+    },
+
     submitApiKey: async (session, itemId, key) => {
       // Don't drive a retry into a chat that's already busy. A code review
       // registers the session as "running" and holds its agent lock and its
@@ -2009,7 +2053,8 @@ export const useStore = create<AppState>((set, get) => {
       set(page ? { settingsOpen: true, settingsPage: page } : { settingsOpen: true }),
     setSettingsPage: (settingsPage) => set({ settingsPage }),
 
-    openInspector: (sessionId) => set({ inspector: { sessionId, review: null } }),
+    openInspector: (sessionId) =>
+      set({ inspector: { sessionId, review: null }, inspectorLive: false }),
     openReview: (queue, index) => {
       const i = Math.max(0, Math.min(index, queue.length - 1));
       if (!queue[i]) return;
@@ -2022,7 +2067,7 @@ export const useStore = create<AppState>((set, get) => {
         const i = Math.max(0, Math.min(insp.review.index + delta, insp.review.queue.length - 1));
         return { inspector: { sessionId: insp.review.queue[i], review: { ...insp.review, index: i } } };
       }),
-    closeInspector: () => set({ inspector: null }),
+    closeInspector: () => set({ inspector: null, inspectorLive: false }),
 
     setReviewStatus: async (id, status) => {
       await setReviewStatusIpc(id, status);

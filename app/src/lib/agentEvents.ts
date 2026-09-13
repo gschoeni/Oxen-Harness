@@ -21,6 +21,7 @@ import {
   onFleetActivity,
   onFleetAgent,
   onFleetBudget,
+  onTasksChanged,
   onFleetCompleted,
   onFleetStarted,
   onFsChanged,
@@ -85,6 +86,7 @@ export function startAgentEventBridge(): void {
     onFleetAgent((e) => s().ingestFleetAgent(e)),
     onFleetActivity((e) => s().ingestFleetActivity(e)),
     onFleetBudget((e) => s().ingestFleetBudget(e)),
+    onTasksChanged((e) => s().ingestTasksChanged(e)),
     onFleetCompleted((e) => s().ingestFleetCompleted(e.session, e.fleet)),
   ];
   Promise.all(pending).then((fns) => {

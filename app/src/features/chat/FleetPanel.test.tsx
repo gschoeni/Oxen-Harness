@@ -167,6 +167,33 @@ describe("FleetPanel", () => {
     expect(screen.getByText("explore")).toBeInTheDocument();
   });
 
+  it("a running lane can be followed live and steered", async () => {
+    render(<FleetPanel />);
+    started("f1");
+    act(() =>
+      useStore.getState().ingestFleetAgent({
+        session: "s1",
+        fleet: "f1",
+        agent: 0,
+        lane: "lane-0",
+        name: "diff-scan",
+        phase: "started",
+        tokens: 0,
+        summary: "",
+      }),
+    );
+    // Follow opens the inspector on the lane, live.
+    await userEvent.click(screen.getByRole("button", { name: "Follow diff-scan" }));
+    expect(useStore.getState().inspector?.sessionId).toBe("lane-0");
+    expect(useStore.getState().inspectorLive).toBe(true);
+    // Watching the lane shows a steer box; Enter sends the line to that lane.
+    await userEvent.click(screen.getByTitle("Watch diff-scan"));
+    const box = screen.getByRole("textbox", { name: "Steer diff-scan" });
+    await userEvent.type(box, "check the tests too{Enter}");
+    expect(ipc.interjectAgent).toHaveBeenCalledWith("s1", "lane-0", "check the tests too");
+    expect(box).toHaveValue("");
+  });
+
   it("a running lane can be stopped on its own", async () => {
     render(<FleetPanel />);
     started("f1");

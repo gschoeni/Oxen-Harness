@@ -9,7 +9,7 @@
 // so a chat may show more than one panel, oldest first.
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, CircleDashed, Square, Users, X } from "lucide-react";
+import { Check, ChevronRight, CircleDashed, Maximize2, Square, Users, X } from "lucide-react";
 import { compactTokens } from "../../lib/format";
 import { fleetsFor, useStore, type FleetLane, type FleetView } from "../../lib/store";
 import type { AgentSummary } from "../../lib/types";
@@ -97,6 +97,8 @@ function OneFleet({ id, fleet }: { id: string; fleet: FleetView }) {
   const setFocus = useStore((s) => s.setFleetFocus);
   const stopFleet = useStore((s) => s.stopFleet);
   const stopLane = useStore((s) => s.stopLane);
+  const steerLane = useStore((s) => s.steerLane);
+  const watchLane = useStore((s) => s.watchLane);
   const running = fleet.lanes.filter((l) => l.status === "running").length;
   const settled = fleet.lanes.every((l) => l.status === "done" || l.status === "failed");
   const focused = fleet.focused !== null ? fleet.lanes[fleet.focused] : null;
@@ -151,21 +153,64 @@ function OneFleet({ id, fleet }: { id: string; fleet: FleetView }) {
               )}
             </button>
             {lane.status === "running" && lane.id && (
-              <button
-                type="button"
-                className="fleet-lane-stop"
-                onClick={() => stopLane(fleet.session, lane.id)}
-                title={`Stop ${lane.name} (the other agents keep going)`}
-                aria-label={`Stop ${lane.name}`}
-              >
-                <X size={11} />
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="fleet-lane-watch"
+                  onClick={() => watchLane(lane.id)}
+                  title={`Follow ${lane.name}'s full transcript live`}
+                  aria-label={`Follow ${lane.name}`}
+                >
+                  <Maximize2 size={11} />
+                </button>
+                <button
+                  type="button"
+                  className="fleet-lane-stop"
+                  onClick={() => stopLane(fleet.session, lane.id)}
+                  title={`Stop ${lane.name} (the other agents keep going)`}
+                  aria-label={`Stop ${lane.name}`}
+                >
+                  <X size={11} />
+                </button>
+              </>
             )}
           </div>
         ))}
       </div>
       {focused && <LaneTail tail={focused.tail} />}
+      {focused && focused.status === "running" && focused.id && (
+        <SteerBox
+          name={focused.name}
+          onSend={(text) => steerLane(fleet.session, focused.id, text)}
+        />
+      )}
     </div>
+  );
+}
+
+/** One line to the watched lane: delivered at its next safe point, like a
+ *  mid-turn message to the chat itself. */
+function SteerBox({ name, onSend }: { name: string; onSend: (text: string) => void }) {
+  const [text, setText] = useState("");
+  return (
+    <form
+      className="fleet-steer"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        onSend(trimmed);
+        setText("");
+      }}
+    >
+      <input
+        id={`fleet-steer-${name}`}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={`Steer ${name}… (Enter)`}
+        aria-label={`Steer ${name}`}
+      />
+    </form>
   );
 }
 

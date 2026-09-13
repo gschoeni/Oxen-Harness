@@ -88,6 +88,8 @@ import type {
   PreviewPrefs,
   PreviewStatus,
   AgentSummary,
+  TasksChangedEvent,
+  TaskSummary,
 } from "./types";
 
 // ---- session / agent -------------------------------------------------------
@@ -97,6 +99,15 @@ export const listSessions = () => invoke<SessionSummary[]>("list_sessions");
 /** Every subagent lane of a chat, running and finished (the agents hub). */
 export const listAgents = (session: string) =>
   invoke<AgentSummary[]>("list_agents", { session });
+/** Hand a running lane a message for its next round. Resolves false once
+ *  the lane has ended. */
+export const interjectAgent = (session: string, lane: string, text: string) =>
+  invoke<boolean>("interject_agent", { session, lane, text });
+/** A chat's background shell tasks, running and ended. */
+export const listTasks = (session: string) => invoke<TaskSummary[]>("list_tasks", { session });
+/** Kill one background task (its whole process group). */
+export const killBackgroundTask = (session: string, id: number) =>
+  invoke<string>("kill_background_task", { session, id });
 /** All-time total tokens used across every stored session (a running grand total). */
 export const totalTokensUsed = () => invoke<number>("total_tokens_used");
 /** Estimated all-time Oxen cloud spend from recorded per-model usage and the
@@ -560,6 +571,10 @@ export const onFleetAgent = (handler: (e: FleetAgentEvent) => void) =>
 /** Live activity from one fleet lane (streamed text, a tool, token counts). */
 export const onFleetActivity = (handler: (e: FleetActivityEvent) => void) =>
   listen<FleetActivityEvent>("fleet://agent-activity", (e) => handler(e.payload));
+
+/** A chat's background tasks changed (one started, ended, or was killed). */
+export const onTasksChanged = (handler: (e: TasksChangedEvent) => void) =>
+  listen<TasksChangedEvent>("tasks://changed", (e) => handler(e.payload));
 
 /** Where the turn's tree budget stands, after a lane's spend changed. */
 export const onFleetBudget = (handler: (e: FleetBudgetEvent) => void) =>
