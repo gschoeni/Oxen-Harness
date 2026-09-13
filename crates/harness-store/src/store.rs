@@ -175,6 +175,13 @@ fn migrations() -> Migrations<'static> {
             "ALTER TABLE sessions ADD COLUMN forked_from TEXT;
              ALTER TABLE sessions ADD COLUMN forked_at_seq INTEGER;",
         ),
+        // M12 — synthetic user rows. The transcript carries user-role
+        // messages nobody typed (a background task's delivered output, a
+        // fleet's aside, the image stub that follows a screenshot tool
+        // result). They must reach the model, but they are not turns a
+        // rewind can go back to, so they are flagged at write time instead
+        // of guessed at from their content.
+        M::up("ALTER TABLE messages ADD COLUMN synthetic INTEGER NOT NULL DEFAULT 0;"),
     ])
 }
 
@@ -193,6 +200,16 @@ pub const SETTLE_STATE: &str = "settle";
 /// on every successful `update_trail` call; shape is `harness_tools`'
 /// `TrailSnapshot`: a model-chosen title plus named waypoints).
 pub const TRAIL_STATE: &str = "trail";
+
+/// `session_state` key for the agent's stream-rule repeat counters (which
+/// once-per-session reminders have already fired).
+pub const RULE_HISTORY_STATE: &str = "rule_history";
+
+/// The `session_state` keys that are projections of the transcript — derived
+/// from what the messages say, not facts about the session. A fork that cuts
+/// the transcript leaves them out (the agent rebuilds them from the messages
+/// it kept); a plain copy carries them over unchanged.
+const TRANSCRIPT_PROJECTION_KEYS: [&str; 3] = [PLAN_STATE, TRAIL_STATE, RULE_HISTORY_STATE];
 
 /// Errors from the history store.
 #[derive(Debug, thiserror::Error)]
@@ -408,9 +425,13 @@ impl HistoryStore {
 
     /// Copy `source` into a new session, keeping every message with
     /// `seq <= through_seq` (all of them when `None`) with their sequence
-    /// numbers, plus the context snapshot when it predates the cut and every
-    /// session-state projection. Returns the new session's id. The source is
-    /// untouched — a fork is how a rewind keeps history complete.
+    /// numbers, plus the context snapshot when it predates the cut. Session
+    /// state comes along too, except that a cut fork leaves out the keys that
+    /// are projections of the transcript ([`PLAN_STATE`], [`TRAIL_STATE`],
+    /// [`RULE_HISTORY_STATE`]): those rows describe the source *now*, not as
+    /// of the cut, and the caller rebuilds them from the messages it kept.
+    /// Returns the new session's id. The source is untouched — a fork is how
+    /// a rewind keeps history complete.
     pub fn fork_session(
         &self,
         source: &str,
@@ -434,8 +455,9 @@ impl HistoryStore {
             return Err(HistoryError::SessionNotFound(source.to_string()));
         }
         tx.execute(
-            "INSERT INTO messages (session_id, seq, role, content, raw_json, created_at)
-             SELECT ?1, seq, role, content, raw_json, created_at
+            "INSERT INTO messages
+                 (session_id, seq, role, content, raw_json, created_at, synthetic)
+             SELECT ?1, seq, role, content, raw_json, created_at, synthetic
              FROM messages WHERE session_id = ?2 AND seq <= ?3 ORDER BY seq",
             rusqlite::params![id, source, cut],
         )?;
@@ -445,11 +467,26 @@ impl HistoryStore {
              WHERE session_id = ?2 AND through_seq <= ?3",
             rusqlite::params![id, source, cut],
         )?;
-        tx.execute(
-            "INSERT INTO session_state (session_id, key, raw_json)
-             SELECT ?1, key, raw_json FROM session_state WHERE session_id = ?2",
-            rusqlite::params![id, source],
-        )?;
+        if through_seq.is_some() {
+            tx.execute(
+                "INSERT INTO session_state (session_id, key, raw_json)
+                 SELECT ?1, key, raw_json FROM session_state
+                 WHERE session_id = ?2 AND key NOT IN (?3, ?4, ?5)",
+                rusqlite::params![
+                    id,
+                    source,
+                    TRANSCRIPT_PROJECTION_KEYS[0],
+                    TRANSCRIPT_PROJECTION_KEYS[1],
+                    TRANSCRIPT_PROJECTION_KEYS[2]
+                ],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT INTO session_state (session_id, key, raw_json)
+                 SELECT ?1, key, raw_json FROM session_state WHERE session_id = ?2",
+                rusqlite::params![id, source],
+            )?;
+        }
         tx.commit()?;
         Ok(id)
     }
@@ -477,13 +514,14 @@ impl HistoryStore {
         Ok(row.and_then(|(from, seq)| from.map(|f| (f, seq))))
     }
 
-    /// Every user message in a session as `(seq, preview)`, oldest first —
-    /// the points a rewind can go back to.
+    /// Every message the user actually sent, as `(seq, preview)`, oldest
+    /// first — the points a rewind can go back to. Synthetic user-role rows
+    /// (delivered task output, fleet asides, tool-image stubs) are left out.
     pub fn user_turns(&self, session_id: &str) -> Result<Vec<(i64, String)>, HistoryError> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
             "SELECT seq, COALESCE(content, '') FROM messages
-             WHERE session_id = ?1 AND role = 'user' ORDER BY seq",
+             WHERE session_id = ?1 AND role = 'user' AND synthetic = 0 ORDER BY seq",
         )?;
         let rows = stmt.query_map([session_id], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
@@ -493,6 +531,49 @@ impl HistoryStore {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    /// Where to cut a rewind to just before the message at `turn_seq`: the
+    /// highest `seq` that leaves the fork ending on a complete exchange.
+    /// Usually that is simply `turn_seq - 1`, but a user message can follow a
+    /// tool round directly (an interjection lands between the results and
+    /// the model's next reply; a turn may have been interrupted), and a fork
+    /// that ends on tool results or an unanswered tool call would start its
+    /// next model call mid-round. The cut walks back over such rows to the
+    /// last plain assistant reply, user message, or system prompt; `-1`
+    /// means nothing survives (the fork starts empty).
+    pub fn rewind_cut(&self, session_id: &str, turn_seq: i64) -> Result<i64, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT seq, role, raw_json FROM messages
+             WHERE session_id = ?1 AND seq < ?2 ORDER BY seq DESC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id, turn_seq], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (seq, role, raw_json) = row?;
+            let mid_round = match role.as_str() {
+                "tool" => true,
+                "assistant" => serde_json::from_str::<serde_json::Value>(&raw_json)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("tool_calls")
+                            .and_then(|c| c.as_array())
+                            .map(|c| !c.is_empty())
+                    })
+                    .unwrap_or(false),
+                _ => false,
+            };
+            if !mid_round {
+                return Ok(seq);
+            }
+        }
+        Ok(-1)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -761,6 +842,7 @@ impl HistoryStore {
             &role,
             content.as_deref(),
             &raw_json,
+            false,
         )
     }
 
@@ -774,7 +856,22 @@ impl HistoryStore {
         content: Option<&str>,
         raw_json: &str,
     ) -> Result<i64, HistoryError> {
-        append_message_row(&self.lock(), session_id, role, content, raw_json)
+        append_message_row(&self.lock(), session_id, role, content, raw_json, false)
+    }
+
+    /// Like [`Self::append_raw_message`], for a message the harness composed
+    /// rather than the user typed — a delivered background result, a fleet's
+    /// aside, the image stub after a tool result. It is part of the transcript
+    /// the model sees, but [`Self::user_turns`] never offers it as a rewind
+    /// point.
+    pub fn append_raw_synthetic_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: Option<&str>,
+        raw_json: &str,
+    ) -> Result<i64, HistoryError> {
+        append_message_row(&self.lock(), session_id, role, content, raw_json, true)
     }
 
     /// Return the verbatim message JSON values for a session, ordered by `seq`.
@@ -1284,6 +1381,7 @@ fn append_message_row(
     role: &str,
     content: Option<&str>,
     raw_json: &str,
+    synthetic: bool,
 ) -> Result<i64, HistoryError> {
     let exists: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sessions WHERE id = ?1",
@@ -1299,9 +1397,17 @@ fn append_message_row(
         |row| row.get(0),
     )?;
     conn.execute(
-        "INSERT INTO messages (session_id, seq, role, content, raw_json, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![session_id, next_seq, role, content, raw_json, now()],
+        "INSERT INTO messages (session_id, seq, role, content, raw_json, created_at, synthetic)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            session_id,
+            next_seq,
+            role,
+            content,
+            raw_json,
+            now(),
+            synthetic
+        ],
     )?;
     Ok(next_seq)
 }
@@ -2117,7 +2223,10 @@ mod tests {
                 .unwrap();
         }
         store
-            .save_session_state(&src, "plan", &serde_json::json!({"x": 1}))
+            .save_session_state(&src, PLAN_STATE, &serde_json::json!({"x": 1}))
+            .unwrap();
+        store
+            .save_session_state(&src, SETTLE_STATE, &serde_json::json!({"tied": true}))
             .unwrap();
         // Rewind to before "second": keep seq 0..=1.
         let fork = store.fork_session(&src, Some(1)).unwrap();
@@ -2138,14 +2247,122 @@ mod tests {
             )
             .unwrap();
         assert_eq!(seq, 2);
-        // Projections rode along; user turns list the rewind points.
-        let state: Option<serde_json::Value> = store.session_state(&fork, "plan").unwrap();
+        // A cut fork leaves transcript projections behind (the plan as of
+        // "now" would show work the fork never did); everything else rides
+        // along. A plain copy keeps them all.
+        let state: Option<serde_json::Value> = store.session_state(&fork, PLAN_STATE).unwrap();
+        assert_eq!(
+            state, None,
+            "plan is rebuilt from the kept messages, not copied"
+        );
+        let settle: Option<serde_json::Value> = store.session_state(&fork, SETTLE_STATE).unwrap();
+        assert_eq!(settle, Some(serde_json::json!({"tied": true})));
+        let copy = store.fork_session(&src, None).unwrap();
+        let state: Option<serde_json::Value> = store.session_state(&copy, PLAN_STATE).unwrap();
         assert_eq!(state, Some(serde_json::json!({"x": 1})));
         assert_eq!(
             store.user_turns(&src).unwrap(),
             vec![(0, "first".to_string()), (2, "second".to_string())]
         );
         assert!(store.fork_session("nope", None).is_err());
+    }
+
+    #[test]
+    fn synthetic_user_rows_reach_the_transcript_but_are_not_rewind_points() {
+        let store = store();
+        let id = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&id, &serde_json::json!({"role": "user", "content": "look"}))
+            .unwrap();
+        store
+            .append_message(
+                &id,
+                &serde_json::json!({"role": "assistant", "tool_calls": [{"id": "c1",
+                    "type": "function", "function": {"name": "preview_screenshot", "arguments": "{}"}}]}),
+            )
+            .unwrap();
+        store
+            .append_message(
+                &id,
+                &serde_json::json!({"role": "tool", "tool_call_id": "c1", "content": "ok"}),
+            )
+            .unwrap();
+        let stub = serde_json::json!({"role": "user", "content": "The image(s) produced by the tool call above:"});
+        let seq = store
+            .append_raw_synthetic_message(&id, "user", Some("The image(s)…"), &stub.to_string())
+            .unwrap();
+        assert_eq!(seq, 3);
+        store
+            .append_message(
+                &id,
+                &serde_json::json!({"role": "assistant", "content": "a red button"}),
+            )
+            .unwrap();
+        store
+            .append_message(
+                &id,
+                &serde_json::json!({"role": "user", "content": "thanks"}),
+            )
+            .unwrap();
+        // The model still sees the stub in order …
+        let all = store.messages(&id).unwrap();
+        assert_eq!(all.len(), 6);
+        assert_eq!(
+            all[3]["content"],
+            "The image(s) produced by the tool call above:"
+        );
+        // … but a rewind is only offered the two messages the user typed.
+        assert_eq!(
+            store.user_turns(&id).unwrap(),
+            vec![(0, "look".to_string()), (5, "thanks".to_string())]
+        );
+        // The flag survives a fork.
+        let fork = store.fork_session(&id, Some(4)).unwrap();
+        assert_eq!(
+            store.user_turns(&fork).unwrap(),
+            vec![(0, "look".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_rewind_cut_never_leaves_a_fork_mid_tool_round() {
+        let store = store();
+        let id = store.create_session(&meta()).unwrap();
+        let call = serde_json::json!({"role": "assistant", "tool_calls": [{"id": "c1",
+            "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]});
+        for m in [
+            serde_json::json!({"role": "system", "content": "sys"}), // 0
+            serde_json::json!({"role": "user", "content": "first"}), // 1
+            serde_json::json!({"role": "assistant", "content": "a1"}), // 2
+            serde_json::json!({"role": "user", "content": "second"}), // 3
+            call.clone(),                                            // 4
+            serde_json::json!({"role": "tool", "tool_call_id": "c1", "content": "…"}), // 5
+            serde_json::json!({"role": "user", "content": "wait, stop"}), // 6 (interjection)
+            serde_json::json!({"role": "assistant", "content": "a2"}), // 7
+            serde_json::json!({"role": "user", "content": "third"}), // 8
+            call,                                                    // 9 (turn interrupted)
+            serde_json::json!({"role": "user", "content": "fourth"}), // 10
+        ] {
+            store.append_message(&id, &m).unwrap();
+        }
+        // The plain case: the row before the turn is a finished reply.
+        assert_eq!(store.rewind_cut(&id, 3).unwrap(), 2);
+        assert_eq!(store.rewind_cut(&id, 8).unwrap(), 7);
+        // Before the interjection the transcript ends on tool results; the
+        // cut backs up to the reply that opened the round.
+        assert_eq!(store.rewind_cut(&id, 6).unwrap(), 3);
+        // Before "fourth" sits an unanswered tool call.
+        assert_eq!(store.rewind_cut(&id, 10).unwrap(), 8);
+        // The very first message: nothing but the system prompt survives.
+        assert_eq!(store.rewind_cut(&id, 1).unwrap(), 0);
+        let empty = store.create_session(&meta()).unwrap();
+        store
+            .append_message(
+                &empty,
+                &serde_json::json!({"role": "user", "content": "only"}),
+            )
+            .unwrap();
+        assert_eq!(store.rewind_cut(&empty, 0).unwrap(), -1);
     }
 
     #[test]
@@ -2158,7 +2375,7 @@ mod tests {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(user_version, 11);
+        assert_eq!(user_version, 12);
     }
 
     #[test]
@@ -2186,6 +2403,16 @@ mod tests {
                      transcript_version INTEGER NOT NULL DEFAULT 1,
                      review_status TEXT NOT NULL DEFAULT ''
                  );
+                 CREATE TABLE messages (
+                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                     session_id  TEXT NOT NULL REFERENCES sessions(id),
+                     seq         INTEGER NOT NULL,
+                     role        TEXT NOT NULL,
+                     content     TEXT,
+                     raw_json    TEXT NOT NULL,
+                     created_at  INTEGER NOT NULL
+                 );
+                 CREATE UNIQUE INDEX idx_messages_session_seq ON messages(session_id, seq);
                  CREATE TABLE model_usage (
                      model             TEXT PRIMARY KEY,
                      prompt_tokens     INTEGER NOT NULL DEFAULT 0,
@@ -2208,6 +2435,12 @@ mod tests {
         assert_eq!(usage[0].source, "unpriced");
         assert_eq!(usage[0].prompt_tokens, 1200);
         assert_eq!(usage[0].completion_tokens, 300);
+        // Rows written before the synthetic flag existed count as typed.
+        let id = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&id, &serde_json::json!({"role": "user", "content": "old"}))
+            .unwrap();
+        assert_eq!(store.user_turns(&id).unwrap(), vec![(0, "old".to_string())]);
     }
 
     #[test]

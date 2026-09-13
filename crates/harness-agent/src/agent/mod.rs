@@ -27,7 +27,7 @@ use harness_llm::{
     hydrate_content_bounded, Attachment, AttachmentStore, ChatRequest, OxenClient,
     MAX_OUTBOUND_ATTACHMENT_BYTES, MAX_OUTBOUND_ATTACHMENT_PARTS,
 };
-use harness_store::{HistoryStore, SessionMeta};
+use harness_store::{HistoryStore, SessionMeta, RULE_HISTORY_STATE};
 use harness_tools::ToolRegistry;
 use tokio_util::sync::CancellationToken;
 
@@ -36,8 +36,6 @@ use crate::config::AgentConfig;
 use crate::error::AgentError;
 
 use self::compression::setup_compression;
-
-const RULE_HISTORY_STATE: &str = "rule_history";
 
 /// Narrow a registry to what a detached subagent (a `side_agent`, a fleet
 /// lane) may hold. Three tools are stripped:
@@ -760,6 +758,18 @@ impl Agent {
     /// Persist a message to the session, then append it to the in-memory
     /// transcript — the order every message takes into history.
     fn push(&mut self, message: ChatMessage) -> Result<(), AgentError> {
+        self.push_with(message, false)
+    }
+
+    /// Append a message the harness composed rather than the user typed (a
+    /// delivered background result, a fleet's aside, the image stub after a
+    /// tool result). The model sees it like any other message; the store
+    /// flags it so a rewind never offers it as one of "your" messages.
+    fn push_synthetic(&mut self, message: ChatMessage) -> Result<(), AgentError> {
+        self.push_with(message, true)
+    }
+
+    fn push_with(&mut self, message: ChatMessage, synthetic: bool) -> Result<(), AgentError> {
         if self.persist_transcript {
             let raw = serde_json::to_string(&message)?;
             let title: Option<Cow<'_, str>> = if message.role == "user" {
@@ -777,12 +787,21 @@ impl Agent {
                     "…",
                 ))
             });
-            self.last_persisted_seq = self.store.append_raw_message(
-                &self.session_id,
-                &message.role,
-                title.as_deref(),
-                &raw,
-            )?;
+            self.last_persisted_seq = if synthetic {
+                self.store.append_raw_synthetic_message(
+                    &self.session_id,
+                    &message.role,
+                    title.as_deref(),
+                    &raw,
+                )?
+            } else {
+                self.store.append_raw_message(
+                    &self.session_id,
+                    &message.role,
+                    title.as_deref(),
+                    &raw,
+                )?
+            };
         }
         self.messages.push(message);
         Ok(())
@@ -847,8 +866,8 @@ impl Agent {
             .ok()
         };
         match attached {
-            Some(message) => self.push(message),
-            None => self.push(ChatMessage::user(
+            Some(message) => self.push_synthetic(message),
+            None => self.push_synthetic(ChatMessage::user(
                 "(the tool's image could not be attached — verify another way, e.g. logs)"
                     .to_string(),
             )),

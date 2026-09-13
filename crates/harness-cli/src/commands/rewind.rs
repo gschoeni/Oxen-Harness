@@ -85,7 +85,7 @@ pub(crate) fn rewind_repl(
     };
     let (seq, text) = &turns[index];
     let original = agent.session_id().to_string();
-    let forked = agent.fork_through(Some(seq - 1))?;
+    let forked = agent.rewind_before(*seq)?;
     *agent = ctx.adopt(forked);
     println!(
         "  {} {}",

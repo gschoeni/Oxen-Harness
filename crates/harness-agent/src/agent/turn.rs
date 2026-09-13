@@ -767,7 +767,7 @@ impl Agent {
     {
         let mut delivered = false;
         for aside in self.tools.asides().take_all() {
-            self.push(ChatMessage::user(aside_delivery(
+            self.push_synthetic(ChatMessage::user(aside_delivery(
                 &aside.kind,
                 &aside.title,
                 &aside.body,
@@ -790,7 +790,7 @@ impl Agent {
                 Ok(text) => text,
                 Err(e) => format!("(output unavailable: {e})"),
             };
-            self.push(ChatMessage::user(prompt::background_task_delivery(
+            self.push_synthetic(ChatMessage::user(prompt::background_task_delivery(
                 task.id,
                 &task.command,
                 task.exit.code,
