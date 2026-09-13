@@ -109,12 +109,34 @@ fn question_text(request: &ApprovalRequest) -> String {
         ApprovalKind::TaskKill => "The agent wants to kill a background task:",
         ApprovalKind::Ship => "The agent wants to publish to the remote:",
     };
-    let mut text = format!("{action}\n\n    {}\n", request.command);
+    let mut text = format!("{action}\n\n{}\n", command_block(&request.command));
     if !request.reasons.is_empty() {
         text.push_str(&format!("\nFlagged: {}.", request.reasons.join("; ")));
     }
     text.push_str("\nAllow it?");
     text
+}
+
+/// Rows of the command shown in the prompt before the block is cut short.
+/// The picker redraws its card by counting rows, so a card taller than the
+/// terminal would smear on every keypress; a heredoc'd script longer than
+/// this shows its head and says how much follows.
+const MAX_COMMAND_LINES: usize = 40;
+
+/// The command as an indented block: every line (not just the first) sits
+/// four columns in, and an overlong script is cut with a note so the card
+/// stays shorter than the screen.
+fn command_block(command: &str) -> String {
+    let lines: Vec<&str> = command.trim_end().lines().collect();
+    let shown = lines.len().min(MAX_COMMAND_LINES);
+    let mut block: Vec<String> = lines[..shown]
+        .iter()
+        .map(|l| format!("    {}", l.trim_end()))
+        .collect();
+    if lines.len() > shown {
+        block.push(format!("    … (+{} more lines)", lines.len() - shown));
+    }
+    block.join("\n")
 }
 
 #[cfg(test)]
@@ -142,5 +164,20 @@ mod tests {
         assert!(text.contains("deletes files"));
         let edit = question_text(&request(ApprovalKind::FileEdit));
         assert!(edit.contains("wants to write"));
+    }
+
+    #[test]
+    fn multi_line_commands_indent_every_line_and_cap_the_block() {
+        let mut req = request(ApprovalKind::Shell);
+        req.command = "cd /tmp && python3 - <<'PY'\nimport json\nprint(1)\nPY".into();
+        let text = question_text(&req);
+        assert!(text.contains("\n    cd /tmp && python3 - <<'PY'\n    import json\n    print(1)\n    PY\n"));
+
+        let long: Vec<String> = (0..100).map(|i| format!("echo {i}")).collect();
+        req.command = long.join("\n");
+        let text = question_text(&req);
+        assert!(text.contains("    echo 39\n"));
+        assert!(!text.contains("echo 40\n"));
+        assert!(text.contains("… (+60 more lines)"));
     }
 }

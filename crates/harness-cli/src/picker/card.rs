@@ -9,7 +9,7 @@ use crossterm::{cursor, queue, terminal};
 
 use crate::theme::Ui;
 
-use super::core::{on_key, truncate, wrap, Choice, Outcome, Question, State};
+use super::core::{on_key, one_line, truncate, wrap, Choice, Outcome, Question, State};
 
 /// Present one question and collect the user's selection.
 ///
@@ -216,14 +216,37 @@ fn print_question_line(
     header: &str,
     question: &str,
 ) -> io::Result<()> {
-    let chip = if header.trim().is_empty() {
+    let width = terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
+    write!(out, "{}\r\n", question_echo(ui, header, question, width))?;
+    out.flush()
+}
+
+/// The single collapsed row left behind once a choice is made: the accent bar
+/// (so it still reads as the same card), the header chip, and the question
+/// flattened onto one line and fitted to the terminal. A multi-line question
+/// (an approval's command block) must never be written raw here: in raw mode
+/// each bare `\n` staircases the rows that follow, and a row wider than the
+/// terminal soft-wraps under the next prompt's redraw math.
+fn question_echo(ui: &Ui, header: &str, question: &str, width: usize) -> String {
+    let chip_text = if header.trim().is_empty() {
         String::new()
     } else {
-        format!("{} ", ui.accent(&format!("[{header}]")))
+        format!("[{header}] ")
     };
-    // Keep the accent bar so the collapsed result still reads as the same card.
-    write!(out, "  {} {chip}{}\r\n", ui.accent("│"), ui.cream(question))?;
-    out.flush()
+    // "  │ " is 4 columns; leave a 1-column right margin.
+    let cap = width
+        .saturating_sub(5 + crate::width::str_width(&chip_text))
+        .max(8);
+    let chip = if chip_text.is_empty() {
+        String::new()
+    } else {
+        ui.accent(chip_text.trim_end()) + " "
+    };
+    format!(
+        "  {} {chip}{}",
+        ui.accent("│"),
+        ui.cream(&crate::width::fit(&one_line(question), cap))
+    )
 }
 
 fn print_chosen(ui: &Ui, out: &mut io::Stdout, selected: &[String]) -> io::Result<()> {
@@ -421,5 +444,22 @@ mod tests {
             assert!(lines.iter().any(|l| l.contains("Where does")));
             assert!(lines.iter().any(|l| l.contains("row.")));
         }
+    }
+
+    #[test]
+    fn collapsed_echo_is_one_fitted_row_even_for_multi_line_questions() {
+        let ui = Ui::plain();
+        let question = "The agent wants to run:\n\n    cd /tmp && python3 - <<'PY'\n    import json\n    PY\n\nAllow it?";
+        for width in [40usize, 80, 200] {
+            let row = question_echo(&ui, "approval", question, width);
+            assert!(!row.contains('\n'), "bare newline in echo: {row:?}");
+            assert!(row.chars().count() <= width, "echo overflows {width}: {row:?}");
+            assert!(row.contains("[approval] The agent wants"), "{row:?}");
+            if width >= 80 {
+                assert!(row.contains("The agent wants to run: cd /tmp && python3"));
+            }
+        }
+        let wide = question_echo(&ui, "approval", question, 200);
+        assert!(wide.ends_with("Allow it?"), "{wide:?}");
     }
 }

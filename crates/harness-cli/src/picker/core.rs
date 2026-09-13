@@ -197,12 +197,47 @@ pub(super) fn truncate(s: &str, max: usize) -> String {
     crate::width::fit(s, max)
 }
 
-/// Word-wrap plain text to `max` terminal cells per line (overlong words are
+/// Word-wrap text to `max` terminal cells per line (overlong words are
 /// hard-split), so the card's redraw math can count physical rows reliably —
 /// a soft-wrapped line would smear stale rows into the scrollback.
+///
+/// Explicit newlines are honoured: each source line wraps on its own, blank
+/// lines stay blank, and a line's leading indent carries onto every segment
+/// it wraps into. A multi-line shell command in an approval prompt (or a
+/// model-written question with paragraphs) therefore keeps its shape instead
+/// of collapsing into one run-on paragraph.
 pub(super) fn wrap(text: &str, max: usize) -> Vec<String> {
-    use crate::width::{char_width, str_width};
     let max = max.max(8);
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        // Keep the indent, but never let it eat the whole row.
+        let indent_len = line.len() - line.trim_start().len();
+        let indent: String = line[..indent_len]
+            .chars()
+            .map(|c| if c == '\t' { "    ".to_string() } else { c.to_string() })
+            .collect::<String>()
+            .chars()
+            .take(max / 2)
+            .collect();
+        let body_max = max - indent.chars().count();
+        for segment in wrap_words(line.trim(), body_max) {
+            out.push(format!("{indent}{segment}"));
+        }
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// Wrap one logical line's words into rows of at most `max` cells.
+fn wrap_words(text: &str, max: usize) -> Vec<String> {
+    use crate::width::{char_width, str_width};
+    let max = max.max(4);
     let mut out: Vec<String> = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
@@ -239,6 +274,14 @@ pub(super) fn wrap(text: &str, max: usize) -> Vec<String> {
         out.push(line);
     }
     out
+}
+
+/// Squash a (possibly multi-line) question into one row for the collapsed
+/// echo printed after a choice: newlines and runs of whitespace become single
+/// spaces. Raw mode disables the terminal's `\n` → `\r\n` translation, so a
+/// bare newline written here would staircase every following line.
+pub(super) fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -454,5 +497,41 @@ mod tests {
         assert_eq!(split.concat(), "supercalifragilistic");
         // Empty text still yields one (blank) line.
         assert_eq!(wrap("", 10), vec![""]);
+    }
+
+    #[test]
+    fn wrap_keeps_explicit_lines_blank_rows_and_indent() {
+        // An approval prompt carries a multi-line command: every source line
+        // must land on its own row, blank separators survive, and the
+        // command's indent is kept (and carried onto wrapped continuations).
+        let text = "The agent wants to run:\n\n    cd /tmp && python3 - <<'PY'\n    import json\n    PY\n\nAllow it?";
+        assert_eq!(
+            wrap(text, 60),
+            vec![
+                "The agent wants to run:",
+                "",
+                "    cd /tmp && python3 - <<'PY'",
+                "    import json",
+                "    PY",
+                "",
+                "Allow it?",
+            ]
+        );
+        let narrow = wrap("    one two three four five", 14);
+        assert!(narrow.iter().all(|l| l.starts_with("    ")), "{narrow:?}");
+        assert!(narrow.iter().all(|l| l.chars().count() <= 14), "{narrow:?}");
+        assert_eq!(narrow.join(" ").split_whitespace().count(), 5);
+        // Indent never swallows the row: a deeply indented line still wraps.
+        let deep = wrap(&format!("{}x y z", " ".repeat(30)), 12);
+        assert!(deep.iter().all(|l| l.chars().count() <= 12), "{deep:?}");
+    }
+
+    #[test]
+    fn one_line_flattens_newlines_for_the_collapsed_echo() {
+        assert_eq!(
+            one_line("The agent wants to run:\n\n    ls -la\n\nAllow it?"),
+            "The agent wants to run: ls -la Allow it?"
+        );
+        assert_eq!(one_line("  tidy  "), "tidy");
     }
 }
