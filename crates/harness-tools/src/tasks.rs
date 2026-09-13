@@ -493,10 +493,14 @@ impl BackgroundTasks {
 
     /// Kill task `id`'s whole process group. The entry stays queryable so a
     /// final `task_output` can confirm the exit and read the last output.
+    ///
+    /// Whoever kills a task already knows how it ends, so the kill counts as
+    /// its announcement: the signal exit is not re-delivered later as fresh
+    /// "background task ended" news by [`Self::take_settled_unannounced`].
     pub async fn kill(&self, id: u64) -> Result<String, ToolError> {
-        let tasks = self.tasks.lock().await;
+        let mut tasks = self.tasks.lock().await;
         let entry = tasks
-            .get(&id)
+            .get_mut(&id)
             .ok_or_else(|| ToolError::Execution(format!("no background task {id}")))?;
         // `reaped` flips the instant the leader is waited on — after that the
         // OS may recycle the pid, so signalling the group is off the table.
@@ -513,6 +517,7 @@ impl BackgroundTasks {
                 unsafe {
                     libc::kill(-pid, libc::SIGKILL)
                 };
+                entry.announced = true;
                 return Ok(format!("kill signal sent to task {id} ({})", entry.command));
             }
         }
@@ -820,6 +825,24 @@ mod tests {
         assert_eq!(settled[0].exit.code, Some(0));
         // Announced once: a second drain has nothing to say.
         assert!(tasks.take_settled_unannounced().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_killed_task_is_not_announced_again() {
+        // `kill_task` already told the model "kill signal sent"; delivering
+        // "task N ended on a signal" at the next round would be news it made
+        // itself.
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = temp_registry(dir.path());
+        let id = tasks
+            .spawn("sleep 30", dir.path(), 1000, &Default::default())
+            .await
+            .unwrap();
+        tasks.kill(id).await.unwrap();
+        tasks.wait(id, Duration::from_secs(10)).await.unwrap();
+        assert!(tasks.take_settled_unannounced().await.is_empty());
+        // The entry is still there for a final look.
+        assert!(tasks.output(id).await.unwrap().contains("signal"));
     }
 
     #[tokio::test]
