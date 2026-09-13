@@ -182,8 +182,23 @@ fn migrations() -> Migrations<'static> {
         // rewind can go back to, so they are flagged at write time instead
         // of guessed at from their content.
         M::up("ALTER TABLE messages ADD COLUMN synthetic INTEGER NOT NULL DEFAULT 0;"),
+        // M13 — subagent lanes persist under the session that spawned them.
+        // A lane is a session whose `parent_session` names its spawner: it
+        // keeps a full transcript (so a finished lane can be inspected and
+        // resumed), but it is not a chat — every listing of chats leaves lanes
+        // out, and deleting the parent removes its lanes with it.
+        M::up(
+            "ALTER TABLE sessions ADD COLUMN parent_session TEXT NOT NULL DEFAULT '';
+             CREATE INDEX IF NOT EXISTS idx_sessions_parent
+                 ON sessions(parent_session) WHERE parent_session != '';",
+        ),
     ])
 }
+
+/// `session_state` key for a subagent lane's record — the typed result its
+/// parent read (label, status, summary, spend), written when the lane ends.
+/// Shape is `harness_agent`'s `SubagentResult`; the store only relays it.
+pub const LANE_STATE: &str = "lane";
 
 /// `session_state` key for the latest plan snapshot (written by the agent on
 /// every successful `update_plan` call; shape is `harness_tools`'
@@ -246,6 +261,10 @@ pub struct SessionMeta {
     pub system_prompt_version: String,
     /// The active theme slug at creation time.
     pub theme: String,
+    /// The session that spawned this one, for a subagent lane; empty for a
+    /// chat. Lanes are left out of every chat listing and are deleted with
+    /// their parent (see [`HistoryStore::lanes_of`]).
+    pub parent_session: String,
 }
 
 /// A session as shown in the chat-history list: its metadata plus a derived
@@ -342,6 +361,16 @@ pub struct SessionUsage {
     pub completion_tokens: i64,
 }
 
+/// One subagent lane of a session (see `HistoryStore::lanes_of`): its own
+/// session id and, once it has finished, the record its parent read.
+#[derive(Debug, Clone, Serialize)]
+pub struct LaneSummary {
+    pub id: String,
+    pub created_at: i64,
+    /// The persisted [`LANE_STATE`] record, as written by the agent crate.
+    pub record: Option<serde_json::Value>,
+}
+
 /// Ledger-wide cache economics (see `HistoryStore::cache_usage_totals`).
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct CacheUsageTotals {
@@ -414,8 +443,9 @@ impl HistoryStore {
         conn.execute(
             "INSERT INTO sessions
                  (id, workspace, model, provider, base_url, mode,
-                  context_window, system_prompt_version, theme, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                  context_window, system_prompt_version, theme, created_at,
+                  parent_session)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 id,
                 meta.workspace,
@@ -426,7 +456,8 @@ impl HistoryStore {
                 meta.context_window,
                 meta.system_prompt_version,
                 meta.theme,
-                now()
+                now(),
+                meta.parent_session
             ],
         )?;
         Ok(id)
@@ -635,7 +666,7 @@ impl HistoryStore {
         let conn = self.lock();
         conn.query_row(
             "SELECT workspace, model, provider, base_url, mode,
-                    context_window, system_prompt_version, theme
+                    context_window, system_prompt_version, theme, parent_session
              FROM sessions WHERE id = ?1",
             [session_id],
             |row| {
@@ -648,6 +679,7 @@ impl HistoryStore {
                     context_window: row.get(5)?,
                     system_prompt_version: row.get(6)?,
                     theme: row.get(7)?,
+                    parent_session: row.get(8)?,
                 })
             },
         )
@@ -675,6 +707,7 @@ impl HistoryStore {
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count,
                     s.review_status, s.source
              FROM sessions s
+             WHERE s.parent_session = ''
              ORDER BY s.created_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -732,7 +765,8 @@ impl HistoryStore {
                                              AND content != ''
                                         THEN seq END) AS reply_seq
                         FROM messages
-                        WHERE session_id IN (SELECT id FROM sessions WHERE source = '')
+                        WHERE session_id IN (SELECT id FROM sessions
+                                             WHERE source = '' AND parent_session = '')
                         GROUP BY session_id) agg
                     ON agg.session_id = s.id
              LEFT JOIN messages title
@@ -747,7 +781,7 @@ impl HistoryStore {
                     ON trail.session_id = s.id AND trail.key = ?2
              LEFT JOIN session_state settle
                     ON settle.session_id = s.id AND settle.key = ?3
-             WHERE s.source = ''
+             WHERE s.source = '' AND s.parent_session = ''
              ORDER BY last_activity DESC",
         )?;
         let rows = stmt.query_map([PLAN_STATE, TRAIL_STATE, SETTLE_STATE], |row| {
@@ -814,7 +848,7 @@ impl HistoryStore {
                                     WHERE m.session_id = s.id),
                                  s.created_at))
              FROM sessions s
-             WHERE s.source = ''
+             WHERE s.source = '' AND s.parent_session = ''
              GROUP BY s.workspace",
         )?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
@@ -1011,16 +1045,80 @@ impl HistoryStore {
             .transpose()
     }
 
-    /// Permanently delete a session and its messages. Idempotent: deleting a
-    /// session that doesn't exist is a no-op. Messages are removed first to
-    /// respect the foreign key, both in one transaction so it's all-or-nothing.
+    /// Permanently delete a session and its messages, along with every
+    /// subagent lane it spawned. Idempotent: deleting a session that doesn't
+    /// exist is a no-op. Messages are removed first to respect the foreign
+    /// key, all in one transaction so it's all-or-nothing.
     pub fn delete_session(&self, session_id: &str) -> Result<(), HistoryError> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM messages WHERE session_id = ?1", [session_id])?;
-        tx.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+        tx.execute(
+            "DELETE FROM messages WHERE session_id = ?1
+                OR session_id IN (SELECT id FROM sessions WHERE parent_session = ?1)",
+            [session_id],
+        )?;
+        tx.execute(
+            "DELETE FROM sessions WHERE id = ?1 OR parent_session = ?1",
+            [session_id],
+        )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// The subagent lanes `parent` spawned, oldest first, each with its
+    /// persisted record ([`LANE_STATE`]) when the lane has finished. Lanes
+    /// still running have no record yet — the host's live registry knows
+    /// those.
+    pub fn lanes_of(&self, parent: &str) -> Result<Vec<LaneSummary>, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT s.id, s.created_at, lane.raw_json
+             FROM sessions s
+             LEFT JOIN session_state lane
+                    ON lane.session_id = s.id AND lane.key = ?2
+             WHERE s.parent_session = ?1
+             ORDER BY s.created_at ASC, s.id ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![parent, LANE_STATE], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, created_at, raw) = row?;
+            let record = raw.map(|raw| serde_json::from_str(&raw)).transpose()?;
+            out.push(LaneSummary {
+                id,
+                created_at,
+                record,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The final assistant reply of a session    /// The final assistant reply of a session (a finished lane's answer), or
+    /// `None` when it has none. Read from the verbatim row: the `content`
+    /// column is only filled for user messages (it feeds titles).
+    pub fn last_assistant_text(&self, session_id: &str) -> Result<Option<String>, HistoryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT raw_json FROM messages
+             WHERE session_id = ?1 AND role = 'assistant'
+             ORDER BY seq DESC",
+        )?;
+        let rows = stmt.query_map([session_id], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            let value: serde_json::Value = serde_json::from_str(&row?)?;
+            if let Some(text) = crate::content::derive_content_text(value.get("content")) {
+                if !text.trim().is_empty() {
+                    return Ok(Some(text));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Set a session's training-data review status (`""`, `"kept"`, or
@@ -2393,6 +2491,75 @@ mod tests {
     }
 
     #[test]
+    fn lanes_live_under_their_parent_and_out_of_every_chat_list() {
+        let store = HistoryStore::open_in_memory().unwrap();
+        let parent = store.create_session(&meta()).unwrap();
+        let lane = store
+            .create_session(&SessionMeta {
+                parent_session: parent.clone(),
+                ..meta()
+            })
+            .unwrap();
+        for id in [&parent, &lane] {
+            store
+                .append_message(id, &serde_json::json!({"role": "user", "content": "hello"}))
+                .unwrap();
+            store
+                .append_message(
+                    id,
+                    &serde_json::json!({"role": "assistant", "content": "reply"}),
+                )
+                .unwrap();
+        }
+        assert_eq!(store.session_meta(&lane).unwrap().parent_session, parent);
+
+        // Chat listings, the ledger, and project counts all skip the lane.
+        let listed: Vec<String> = store
+            .list_sessions()
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(listed, vec![parent.clone()]);
+        let board: Vec<String> = store
+            .ledger_rows()
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(board, vec![parent.clone()]);
+        assert_eq!(
+            store
+                .session_counts_by_workspace()
+                .unwrap()
+                .get(&meta().workspace),
+            Some(&1)
+        );
+
+        // The lane is reachable through its parent, record-less until it ends.
+        let lanes = store.lanes_of(&parent).unwrap();
+        assert_eq!(lanes.len(), 1);
+        assert_eq!(lanes[0].id, lane);
+        assert!(lanes[0].record.is_none());
+        store
+            .save_session_state(&lane, LANE_STATE, &serde_json::json!({"label": "scan"}))
+            .unwrap();
+        assert_eq!(
+            store.lanes_of(&parent).unwrap()[0].record.as_ref().unwrap()["label"],
+            "scan"
+        );
+        assert_eq!(
+            store.last_assistant_text(&lane).unwrap().as_deref(),
+            Some("reply")
+        );
+
+        // Deleting the parent takes the lane with it.
+        store.delete_session(&parent).unwrap();
+        assert!(store.session_meta(&lane).is_err());
+        assert!(store.messages(&lane).unwrap().is_empty());
+    }
+
+    #[test]
     fn migrations_are_valid_and_reach_latest_version() {
         // rusqlite_migration checks the chain round-trips and the final
         // user_version matches the migration count.
@@ -2402,7 +2569,7 @@ mod tests {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(user_version, 12);
+        assert_eq!(user_version, 13);
     }
 
     #[test]
@@ -2567,6 +2734,7 @@ mod tests {
                 base_url: "http://localhost:8080/api/ai".into(),
                 mode: "local".into(),
                 context_window: Some(32_000),
+                parent_session: String::new(),
                 system_prompt_version: "v3".into(),
                 theme: "oregon".into(),
             })

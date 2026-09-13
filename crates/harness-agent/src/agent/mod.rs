@@ -58,6 +58,8 @@ use self::compression::setup_compression;
 /// fleet spawner can't drift on the policy.
 pub(crate) fn subagent_tools(mut tools: ToolRegistry) -> ToolRegistry {
     tools.remove(crate::fleet_tool::FLEET_TOOL);
+    tools.remove(crate::lane_tools::SEND_TO_AGENT_TOOL);
+    tools.remove(crate::lane_tools::READ_AGENT_TOOL);
     tools.remove(harness_tools::ASK_USER_TOOL);
     tools.remove(harness_tools::TRAIL_TOOL);
     tools
@@ -82,6 +84,8 @@ pub struct Agent {
     /// The session whose usage ledger this agent's spend lands in, when it is
     /// not this agent's own (see [`Agent::set_usage_session`]).
     usage_session: Option<String>,
+    /// Model rounds the most recent turn took (see [`Agent::rounds_last_turn`]).
+    rounds_last_turn: u32,
     /// Where attachments are persisted + resolved, derived from
     /// [`AgentConfig::attachment_root`]. `None` inlines attachments instead.
     attachments: Option<AttachmentStore>,
@@ -213,6 +217,7 @@ impl Agent {
             last_persisted_seq,
             persist_transcript: true,
             usage_session: None,
+            rounds_last_turn: 0,
             attachments,
             tokens_used: 0,
             prompt_tokens_used: 0,
@@ -273,6 +278,7 @@ impl Agent {
             last_persisted_seq,
             persist_transcript: true,
             usage_session: None,
+            rounds_last_turn: 0,
             attachments,
             tokens_used,
             // The split input/output counters price only tokens we actually
@@ -608,6 +614,12 @@ impl Agent {
     /// The configuration this agent runs under.
     pub fn config(&self) -> &AgentConfig {
         &self.config
+    }
+
+    /// How many model calls the most recent turn made — a lane's "effort",
+    /// reported beside its spend.
+    pub fn rounds_last_turn(&self) -> u32 {
+        self.rounds_last_turn
     }
 
     pub(crate) fn disable_transcript_persistence(&mut self) {

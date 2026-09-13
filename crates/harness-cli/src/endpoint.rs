@@ -319,19 +319,21 @@ pub(crate) fn register_fleet_tool(
     let spawner = Arc::new(
         harness_agent::FleetSpawner::new(client.clone(), tools.clone(), config.clone())
             .with_workspace(workspace.root())
-            .with_usage_store(usage_store),
+            .with_store(usage_store),
     );
     // Keep a handle so a later model/endpoint swap reaches future subagents;
     // set_or_ignore, since a session registers exactly once.
     let _ = FLEET_SPAWNER.set(spawner.clone());
-    tools.register_typed(
-        harness_agent::FleetTool::new(
-            spawner,
-            Arc::new(crate::fleet_sink::CliFleetSink::new(ui.clone())),
-        )
-        // A `wait: false` fleet leaves its report here for the next round.
-        .with_asides(tools.asides()),
+    let sink: Arc<dyn harness_agent::fleet::FleetSink> = Arc::new(
+        crate::fleet_sink::CliFleetSink::new(ui.clone(), spawner.tree().clone()),
     );
+    tools.register_typed(
+        harness_agent::FleetTool::new(spawner.clone(), sink.clone())
+            // A `wait: false` fleet leaves its report here for the next round.
+            .with_asides(tools.asides()),
+    );
+    tools.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
+    tools.register_typed(harness_agent::ReadAgentTool::new(spawner));
     harness_runtime::tools::load().apply(tools);
 }
 

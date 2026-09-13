@@ -348,6 +348,25 @@ async fn session_lifecycle_and_replay() {
         .unwrap();
     assert_eq!(response.status(), 404);
 
+    // Same for a single lane; and a session with no lanes lists none.
+    let response = client()
+        .post(format!("{base}/v1/sessions/{session}/agents/lane-9/cancel"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
+    let agents: Vec<Value> = client()
+        .get(format!("{base}/v1/sessions/{session}/agents"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(agents.is_empty());
+
     // Delete removes it.
     let response = client()
         .delete(format!("{base}/v1/sessions/{session}"))

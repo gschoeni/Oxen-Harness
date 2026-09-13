@@ -25,14 +25,17 @@ pub(crate) struct CliFleetSink {
     hub: Arc<FleetHub>,
     /// The cooked-mode painter, when this sink had to start one.
     painter: StdMutex<Option<BlockPainter>>,
+    /// The live-lane registry, so the keys can stop one lane by id.
+    tree: Arc<harness_agent::AgentTree>,
 }
 
 impl CliFleetSink {
-    pub(crate) fn new(ui: Ui) -> Self {
+    pub(crate) fn new(ui: Ui, tree: Arc<harness_agent::AgentTree>) -> Self {
         Self {
             ui,
             hub: FleetHub::global(),
             painter: StdMutex::new(None),
+            tree,
         }
     }
 
@@ -43,8 +46,12 @@ impl CliFleetSink {
 
 impl FleetSink for CliFleetSink {
     fn started(&self, fleet: &str, labels: &[String], cancel: CancellationToken) {
-        self.hub
-            .install(fleet, FleetState::new(labels, Some(cancel)));
+        let tree = self.tree.clone();
+        self.hub.install(
+            fleet,
+            FleetState::new(labels, Some(cancel))
+                .with_lane_stopper(Arc::new(move |id| tree.cancel(id))),
+        );
         if self.plain() {
             println!(
                 "  {} {}",

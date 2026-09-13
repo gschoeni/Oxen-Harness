@@ -183,6 +183,7 @@ impl Agent {
         let budget = budget::prompt_budget(window, self.config.effective_response_reserve());
 
         let mut turn = TurnState::default();
+        self.rounds_last_turn = 0;
 
         // The stop signal for this turn (a clone, so cancelling it from the host
         // doesn't require the agent lock the turn is holding).
@@ -222,6 +223,7 @@ impl Agent {
             // then a stop — a lane that never converges must not spend the
             // fleet's whole allowance.
             turn.rounds += 1;
+            self.rounds_last_turn = turn.rounds;
             if let Some(budget) = self.config.round_budget {
                 if turn.rounds > budget.stop_at {
                     let message = self.round_budget_stop_message(budget.stop_at);

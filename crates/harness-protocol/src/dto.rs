@@ -97,6 +97,33 @@ pub struct InterjectRequest {
     pub text: String,
 }
 
+/// One subagent lane of a session, running or finished (see
+/// `GET /v1/sessions/{id}/agents`). A running lane has a status of
+/// `"running"` and no record yet; a finished one carries the typed record
+/// its parent read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentSummary {
+    /// The lane's id (its session id).
+    pub id: String,
+    pub label: String,
+    pub fleet: String,
+    /// `running`, `done`, `partial`, or `failed`.
+    pub status: String,
+    /// The reply's head, or the error, once finished.
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub tokens: usize,
+    #[serde(default)]
+    pub rounds: u32,
+    /// Seconds running so far (running lanes only).
+    #[serde(default)]
+    pub elapsed_secs: u64,
+    /// Unix seconds the lane was created.
+    #[serde(default)]
+    pub created_at: i64,
+}
+
 /// Whether a running turn accepted the interjection. `accepted: false` means
 /// no turn was in flight — send the text as an ordinary prompt instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

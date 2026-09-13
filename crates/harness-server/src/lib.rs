@@ -154,6 +154,15 @@ pub fn build_router(config: ServerConfig) -> Router {
             "/v1/sessions/{id}/fleets/{fleet}/cancel",
             post(cancel_fleet),
         )
+        .route("/v1/sessions/{id}/agents", get(list_agents))
+        .route(
+            "/v1/sessions/{id}/agents/{agent}/cancel",
+            post(cancel_agent),
+        )
+        .route(
+            "/v1/sessions/{id}/agents/{agent}/interject",
+            post(interject_agent),
+        )
         .route("/v1/sessions/{id}/refresh-client", post(refresh_client))
         .route("/v1/sessions/{id}/review", post(run_review))
         .route("/v1/sessions/{id}/loop", post(run_loop))
@@ -486,6 +495,45 @@ async fn cancel_fleet(
             format!("no fleet {fleet} is running in session {id}"),
         ))
     }
+}
+
+/// Every subagent lane of a session, running and finished.
+async fn list_agents(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<harness_protocol::AgentSummary>>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(state.service.list_agents(&id)?))
+}
+
+/// Stop one running lane; 404 once it has ended.
+async fn cancel_agent(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((id, agent)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    authorize(&state, &headers, None)?;
+    if state.service.cancel_lane(&id, &agent) {
+        Ok(StatusCode::OK)
+    } else {
+        Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("no agent {agent} is running in session {id}"),
+        ))
+    }
+}
+
+/// Steer one running lane (see `POST …/interject` for the turn itself).
+async fn interject_agent(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((id, agent)): Path<(String, String)>,
+    Json(request): Json<harness_protocol::InterjectRequest>,
+) -> ApiResult<Json<harness_protocol::InterjectResponse>> {
+    authorize(&state, &headers, None)?;
+    let accepted = state.service.interject_lane(&id, &agent, request.text);
+    Ok(Json(harness_protocol::InterjectResponse { accepted }))
 }
 
 async fn refresh_client(

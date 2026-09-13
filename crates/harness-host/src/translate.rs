@@ -162,10 +162,11 @@ pub fn fleet_event(session: &str, fleet: &str, event: &FleetEvent) -> Option<Pro
     let session = session.to_string();
     let fleet = fleet.to_string();
     Some(match event {
-        FleetEvent::TaskStarted { index, label } => ProtocolEvent::FleetAgent {
+        FleetEvent::TaskStarted { index, label, lane } => ProtocolEvent::FleetAgent {
             session,
             fleet,
             agent: *index,
+            lane: lane.clone(),
             name: label.clone(),
             phase: harness_protocol::FleetAgentPhase::Started,
             tokens: 0,
@@ -186,6 +187,34 @@ pub fn fleet_event(session: &str, fleet: &str, event: &FleetEvent) -> Option<Pro
                     String::new(),
                     Some(*tokens_used),
                 ),
+                // What made a lane look merely quiet before: it was refused
+                // a command, nudged, compacted, or waiting out a retry.
+                AgentEvent::ApprovalResolved {
+                    command, decision, ..
+                } if decision.contains("deny") => (
+                    harness_protocol::FleetActivityKind::Note,
+                    format!("could not run `{command}` (needs approval)"),
+                    None,
+                ),
+                AgentEvent::Nudged { reason } => (
+                    harness_protocol::FleetActivityKind::Note,
+                    format!("nudged: {reason}"),
+                    None,
+                ),
+                AgentEvent::Compacted { detail } => (
+                    harness_protocol::FleetActivityKind::Note,
+                    format!("compacted: {detail}"),
+                    None,
+                ),
+                AgentEvent::Retrying {
+                    attempt,
+                    max_attempts,
+                    ..
+                } => (
+                    harness_protocol::FleetActivityKind::Note,
+                    format!("retrying ({attempt}/{max_attempts})"),
+                    None,
+                ),
                 _ => return None,
             };
             ProtocolEvent::FleetActivity {
@@ -200,6 +229,7 @@ pub fn fleet_event(session: &str, fleet: &str, event: &FleetEvent) -> Option<Pro
         FleetEvent::TaskCompleted {
             index,
             label,
+            lane,
             ok,
             tokens_used,
             summary,
@@ -207,6 +237,7 @@ pub fn fleet_event(session: &str, fleet: &str, event: &FleetEvent) -> Option<Pro
             session,
             fleet,
             agent: *index,
+            lane: lane.clone(),
             name: label.clone(),
             phase: if *ok {
                 harness_protocol::FleetAgentPhase::Done

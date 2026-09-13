@@ -182,3 +182,117 @@ mod tests {
         assert_eq!(slug("", "theme"), "theme");
     }
 }
+
+/// Parse a line range spec — `"120-180"`, `"120-"`, `"-40"`, or `"120"` —
+/// into 1-based inclusive bounds (`None` = open end). Whitespace is ignored.
+pub fn parse_line_range(spec: &str) -> Option<(usize, Option<usize>)> {
+    let spec: String = spec.chars().filter(|c| !c.is_whitespace()).collect();
+    if spec.is_empty() {
+        return None;
+    }
+    match spec.split_once('-') {
+        None => {
+            let n: usize = spec.parse().ok()?;
+            Some((n.max(1), Some(n.max(1))))
+        }
+        Some((from, to)) => {
+            let from = if from.is_empty() {
+                1
+            } else {
+                from.parse::<usize>().ok()?.max(1)
+            };
+            let to = if to.is_empty() {
+                None
+            } else {
+                Some(to.parse::<usize>().ok()?)
+            };
+            Some((from, to))
+        }
+    }
+}
+
+/// Lines `from..=to` (1-based, inclusive; `to = None` runs to the end) of
+/// `text`, each prefixed `N: ` so the reader can ask for a neighbouring
+/// range without counting. Out-of-range bounds are clamped; an empty
+/// selection is an empty string.
+pub fn slice_lines(text: &str, from: usize, to: Option<usize>) -> String {
+    let from = from.max(1);
+    text.lines()
+        .enumerate()
+        .map(|(i, line)| (i + 1, line))
+        .filter(|(n, _)| *n >= from && to.is_none_or(|to| *n <= to))
+        .map(|(n, line)| format!("{n}: {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every line of `text` containing `needle` (case-insensitive), numbered like
+/// [`slice_lines`], with `context` lines either side; runs are separated by
+/// `--`. Capped at `max_hits` matching lines.
+pub fn grep_lines(text: &str, needle: &str, context: usize, max_hits: usize) -> String {
+    let needle = needle.to_lowercase();
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut last_emitted: Option<usize> = None;
+    let mut hits = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if !line.to_lowercase().contains(&needle) {
+            continue;
+        }
+        hits += 1;
+        if hits > max_hits {
+            out.push(format!(
+                "… [more than {max_hits} matching lines; narrow the pattern]"
+            ));
+            break;
+        }
+        let start = i.saturating_sub(context);
+        let end = (i + context).min(lines.len().saturating_sub(1));
+        let resume = match last_emitted {
+            Some(last) if start <= last + 1 => last + 1,
+            Some(_) => {
+                out.push("--".to_string());
+                start
+            }
+            None => start,
+        };
+        for (n, l) in lines.iter().enumerate().take(end + 1).skip(resume) {
+            out.push(format!("{}: {l}", n + 1));
+        }
+        last_emitted = Some(end);
+    }
+    out.join("\n")
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    #[test]
+    fn line_ranges_parse_and_slice_one_based_inclusive() {
+        assert_eq!(parse_line_range("3-4"), Some((3, Some(4))));
+        assert_eq!(parse_line_range(" 3 - "), Some((3, None)));
+        assert_eq!(parse_line_range("-2"), Some((1, Some(2))));
+        assert_eq!(parse_line_range("0"), Some((1, Some(1))));
+        assert_eq!(parse_line_range("x"), None);
+        let text = "a\nb\nc\nd";
+        assert_eq!(slice_lines(text, 2, Some(3)), "2: b\n3: c");
+        assert_eq!(slice_lines(text, 4, None), "4: d");
+        assert_eq!(slice_lines(text, 9, None), "");
+    }
+
+    #[test]
+    fn grep_numbers_hits_with_context_and_caps() {
+        let text = "one\ntwo\nthree\nfour\nTWO again\nsix";
+        assert_eq!(grep_lines(text, "two", 0, 10), "2: two\n--\n5: TWO again");
+        // Overlapping context windows merge; distant ones are separated.
+        assert_eq!(
+            grep_lines(text, "two", 1, 10),
+            "1: one\n2: two\n3: three\n4: four\n5: TWO again\n6: six"
+        );
+        assert_eq!(
+            grep_lines("x\nx\nx", "x", 0, 2),
+            "1: x\n2: x\n… [more than 2 matching lines; narrow the pattern]"
+        );
+    }
+}

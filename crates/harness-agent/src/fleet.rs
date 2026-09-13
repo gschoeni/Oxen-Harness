@@ -38,6 +38,10 @@ pub struct SubagentTask {
     pub label: String,
     /// The prompt the subagent runs as its single turn.
     pub prompt: String,
+    /// When set, the lane's final reply must be a JSON object carrying the
+    /// schema's `required` keys (see `Agent::coerce_structured`); the parsed
+    /// object rides on the outcome as `structured`.
+    pub output_schema: Option<serde_json::Value>,
 }
 
 impl SubagentTask {
@@ -45,16 +49,27 @@ impl SubagentTask {
         Self {
             label: label.into(),
             prompt: prompt.into(),
+            output_schema: None,
         }
+    }
+
+    pub fn with_schema(mut self, schema: Option<serde_json::Value>) -> Self {
+        self.output_schema = schema;
+        self
     }
 }
 
 /// Progress multiplexed from every subagent, tagged by task index (the
-/// position in the `tasks` vec passed to [`run_fleet`]).
+/// position in the `tasks` vec passed to [`run_fleet`]) and by the lane's
+/// id (its session id, which hosts address it by).
 #[derive(Debug, Clone)]
 pub enum FleetEvent {
     /// The task acquired a concurrency slot and its turn is now running.
-    TaskStarted { index: usize, label: String },
+    TaskStarted {
+        index: usize,
+        label: String,
+        lane: String,
+    },
     /// A streaming/tool event from one subagent's turn. Held in an [`Arc`] so
     /// the event is deep-cloned exactly once (crossing the task→drive-loop
     /// channel); every hop after — into a `ReviewEvent`, a host payload — is a
@@ -69,6 +84,7 @@ pub enum FleetEvent {
     TaskCompleted {
         index: usize,
         label: String,
+        lane: String,
         ok: bool,
         tokens_used: usize,
         summary: String,
@@ -130,13 +146,22 @@ impl std::fmt::Display for LaneStop {
 #[derive(Debug)]
 pub struct SubagentOutcome {
     pub label: String,
+    /// The lane's session id (see [`crate::lane`]).
+    pub session: String,
     pub result: Result<String, AgentError>,
+    /// The parsed JSON reply, when the task asked for one and the lane
+    /// delivered.
+    pub structured: Option<serde_json::Value>,
     /// Estimated tokens this subagent spent (prompt + completion, all calls).
     pub tokens_used: usize,
+    /// Model calls the lane's turn took.
+    pub rounds: u32,
     /// Set when the lane was stopped before finishing: `result` then holds
     /// whatever it had produced (possibly nothing), and the combined document
     /// says so beside it.
     pub stopped: Option<LaneStop>,
+    /// Commands the lane's gate refused (see `Agent::denied_commands`).
+    pub denied: Vec<String>,
 }
 
 impl SubagentOutcome {
@@ -293,6 +318,7 @@ enum Msg {
     Started {
         index: usize,
         label: String,
+        lane: String,
     },
     Agent {
         index: usize,
@@ -305,22 +331,24 @@ enum Msg {
 }
 
 /// How a fleet builds each subagent: any source of fresh, detached agents.
-/// [`Agent::side_agent`] is the usual one (`|| agent.side_agent()`); the
+/// [`Agent::side_agent`] is the usual one (`|_, _| agent.side_agent()`); the
 /// `spawn_agents` tool uses a standalone [`FleetSpawner`](crate::fleet_tool::FleetSpawner)
 /// so a fleet can run from inside a turn.
 pub trait SpawnAgent {
     /// Build the agent for lane `index`. The index is passed so a spawner can
     /// give each lane its own workspace (see [`crate::worktree`]) and match
-    /// the resulting changes back to the task that made them.
-    fn spawn(&self, index: usize) -> Result<Agent, AgentError>;
+    /// the resulting changes back to the task that made them; `cancel` is the
+    /// token that will stop just this lane, so a spawner can register it
+    /// with a host-facing registry ([`crate::lane::AgentTree`]).
+    fn spawn(&self, index: usize, cancel: CancellationToken) -> Result<Agent, AgentError>;
 }
 
 impl<F> SpawnAgent for F
 where
-    F: Fn(usize) -> Result<Agent, AgentError>,
+    F: Fn(usize, CancellationToken) -> Result<Agent, AgentError>,
 {
-    fn spawn(&self, index: usize) -> Result<Agent, AgentError> {
-        self(index)
+    fn spawn(&self, index: usize, cancel: CancellationToken) -> Result<Agent, AgentError> {
+        self(index, cancel)
     }
 }
 
@@ -366,13 +394,14 @@ where
     let mut join = JoinSet::new();
 
     for (index, task) in tasks.into_iter().enumerate() {
-        // Build the subagent up front so construction errors surface here,
-        // synchronously, instead of as a mid-flight task failure.
-        let mut agent = spawn.spawn(index)?;
         // Each lane stops on its own token, a child of the fleet's: the fleet
-        // stopping stops the lane, and the lane's clock can stop just the lane.
+        // stopping stops the lane, and the lane's clock (or a host) can stop
+        // just the lane. Build the subagent up front so construction errors
+        // surface here, synchronously, instead of as a mid-flight task failure.
         let lane_cancel = cancel.child_token();
+        let mut agent = spawn.spawn(index, lane_cancel.clone())?;
         agent.set_cancel_token(lane_cancel.clone());
+        let lane_id = agent.session_id().to_string();
         let tx = tx.clone();
         let slots = slots.clone();
         let fleet_cancel = cancel.clone();
@@ -389,6 +418,7 @@ where
                 .send(Msg::Started {
                     index,
                     label: task.label.clone(),
+                    lane: lane_id.clone(),
                 })
                 .await;
             let forward = tx.clone();
@@ -433,14 +463,38 @@ where
             } else {
                 None
             };
+            // A lane asked for JSON that answered in prose is re-asked (a
+            // short extra round); a stopped or failed lane is left alone.
+            let (result, structured) = match (&task.output_schema, result, stopped) {
+                (Some(schema), Ok(text), None) => {
+                    let forward = tx.clone();
+                    match agent
+                        .coerce_structured(text, schema, |event| {
+                            let _ = forward.try_send(Msg::Agent {
+                                index,
+                                event: Arc::new(event.clone()),
+                            });
+                        })
+                        .await
+                    {
+                        Ok((text, structured)) => (Ok(text), structured),
+                        Err(e) => (Err(e), None),
+                    }
+                }
+                (_, result, _) => (result, None),
+            };
             let _ = tx
                 .send(Msg::Done {
                     index,
                     outcome: SubagentOutcome {
                         label: task.label,
+                        session: lane_id,
                         result,
+                        structured,
                         tokens_used: agent.tokens_used(),
+                        rounds: agent.rounds_last_turn(),
                         stopped,
+                        denied: agent.denied_commands(),
                     },
                 })
                 .await;
@@ -471,12 +525,15 @@ where
             }
         };
         match msg {
-            Msg::Started { index, label } => on_event(&FleetEvent::TaskStarted { index, label }),
+            Msg::Started { index, label, lane } => {
+                on_event(&FleetEvent::TaskStarted { index, label, lane })
+            }
             Msg::Agent { index, event } => on_event(&FleetEvent::Agent { index, event }),
             Msg::Done { index, outcome } => {
                 on_event(&FleetEvent::TaskCompleted {
                     index,
                     label: outcome.label.clone(),
+                    lane: outcome.session.clone(),
                     ok: outcome.ok(),
                     tokens_used: outcome.tokens_used,
                     summary: summarize(&outcome),
@@ -500,11 +557,15 @@ where
         .map(|(index, outcome)| {
             outcome.unwrap_or_else(|| SubagentOutcome {
                 label: format!("agent {}", index + 1),
+                session: String::new(),
                 result: Err(AgentError::Io(std::io::Error::other(
                     "the subagent task died before finishing",
                 ))),
+                structured: None,
                 tokens_used: 0,
+                rounds: 0,
                 stopped: None,
+                denied: Vec::new(),
             })
         })
         .collect())
@@ -574,7 +635,7 @@ mod tests {
         let base = base_agent(&server.url());
         let mut events = Vec::new();
         let outcomes = run_fleet(
-            |_| base.side_agent(),
+            |_, _| base.side_agent(),
             vec![
                 SubagentTask::new("alpha", "do TASK-ALPHA"),
                 SubagentTask::new("beta", "do TASK-BETA"),
@@ -630,7 +691,7 @@ mod tests {
         let base = base_agent(&server.url());
         let mut order = Vec::new();
         run_fleet(
-            |_| base.side_agent(),
+            |_, _| base.side_agent(),
             vec![
                 SubagentTask::new("first", "go"),
                 SubagentTask::new("second", "go"),
@@ -688,7 +749,7 @@ mod tests {
         let base = base_agent(&server.url());
         let mut completed = Vec::new();
         let outcomes = run_fleet(
-            |_| base.side_agent(),
+            |_, _| base.side_agent(),
             vec![
                 SubagentTask::new("good", "do TASK-GOOD"),
                 SubagentTask::new("bad", "do TASK-BAD"),
@@ -726,7 +787,7 @@ mod tests {
         cancel.cancel();
 
         let outcomes = run_fleet(
-            |_| base.side_agent(),
+            |_, _| base.side_agent(),
             vec![SubagentTask::new("a", "go"), SubagentTask::new("b", "go")],
             FleetLimits::with_concurrency(2),
             cancel.clone(),
@@ -769,7 +830,7 @@ mod tests {
         let mut completed = Vec::new();
         let started = std::time::Instant::now();
         let outcomes = run_fleet(
-            |_| base.side_agent(),
+            |_, _| base.side_agent(),
             vec![SubagentTask::new("slow", "go")],
             FleetLimits {
                 concurrency: 1,
@@ -810,7 +871,7 @@ mod tests {
         let base = base_agent(&server.url());
         let cancel = CancellationToken::new();
         let outcomes = run_fleet(
-            |_| base.side_agent(),
+            |_, _| base.side_agent(),
             vec![SubagentTask::new("a", "go"), SubagentTask::new("b", "go")],
             FleetLimits {
                 // One slot: `b` is still queued when the deadline lands.
@@ -845,10 +906,58 @@ mod tests {
     fn outcome(label: &str, text: &str) -> SubagentOutcome {
         SubagentOutcome {
             label: label.into(),
+            session: String::new(),
             result: Ok(text.into()),
+            structured: None,
             tokens_used: 1,
+            rounds: 1,
             stopped: None,
+            denied: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn a_lane_asked_for_json_is_re_asked_until_it_answers_in_json() {
+        let mut server = mockito::Server::new_async().await;
+        // The corrective names the required keys; the first request doesn't
+        // carry it, so it gets prose, and the re-ask gets the object.
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("ONLY that JSON object".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose(r#"{"verdict": "ok", "why": "clean"}"#))
+            .expect(1)
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("Looks fine to me, no issues."))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let base = base_agent(&server.url());
+        let outcomes = run_fleet(
+            |_, _| base.side_agent(),
+            vec![SubagentTask::new("judge", "review this")
+                .with_schema(Some(serde_json::json!({"required": ["verdict", "why"]})))],
+            FleetLimits::with_concurrency(1),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let judge = &outcomes[0];
+        assert!(judge.ok());
+        assert_eq!(judge.structured.as_ref().unwrap()["verdict"], "ok");
+        assert_eq!(
+            judge.rounds, 1,
+            "the re-ask is its own turn; the last one counts"
+        );
+        assert!(judge.session.len() > 8, "a lane knows its own session id");
     }
 
     #[test]
@@ -899,7 +1008,7 @@ mod tests {
     async fn empty_task_list_returns_no_outcomes() {
         let base = base_agent("http://127.0.0.1:1/api/ai");
         let outcomes = run_fleet(
-            |_| base.side_agent(),
+            |_, _| base.side_agent(),
             Vec::new(),
             FleetLimits::with_concurrency(4),
             CancellationToken::new(),

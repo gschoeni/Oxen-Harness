@@ -66,7 +66,7 @@ The catalog (see `harness-protocol/src/event.rs` for the exact fields):
 | `agent.approval_request` | permission gate — answer via `POST /v1/approvals/{id}/answer` |
 | `agent.approval` | pending/resolved thread markers for gated calls |
 | `agent.canvas` / `agent.canvas_writing` / `agent.open_file` | host-surface documents/files |
-| `fleet.started` / `fleet.agent` / `fleet.agent_activity` / `fleet.completed` | parallel subagent lanes; every event names its `fleet` (a `wait: false` fleet can overlap another in one session) |
+| `fleet.started` / `fleet.agent` / `fleet.agent_activity` / `fleet.completed` | parallel subagent lanes; every event names its `fleet` (a `wait: false` fleet can overlap another in one session) and `fleet.agent` names the `lane` (its session id — lanes persist under the parent session, so `send_to_agent` / `read_agent` and the `…/agents/{agent}` routes address it); `agent_activity` `kind: note` is a one-line notice (a refused command, a nudge, a compaction, a retry) |
 | `review.progress` / `review.token` / `review.tool` | code-review pipeline progress |
 | `preview.status` / `preview.console` | dev-server lifecycle + page errors |
 | `local.status` / `models.progress` | local-model loading / downloads (app-wide, no `session`) |
@@ -86,6 +86,9 @@ POST   /v1/sessions/{id}/turns/retry    re-drive the trailing user turn → {tex
 POST   /v1/sessions/{id}/interject      {text} → {accepted} — steer the running turn
 POST   /v1/sessions/{id}/cancel         stop the in-flight turn (no-op when idle)
 POST   /v1/sessions/{id}/fleets/{fleet}/cancel   stop one `spawn_agents` fleet (named on its `fleet.started`) without ending the turn; 404 once it has ended
+GET    /v1/sessions/{id}/agents          every subagent lane of the session, running and finished → [AgentSummary {id, label, fleet, status, summary, tokens, rounds, elapsed_secs, created_at}]
+POST   /v1/sessions/{id}/agents/{agent}/cancel     stop one running lane (its id rides on `fleet.agent`); the rest of its fleet carries on; 404 once it has ended
+POST   /v1/sessions/{id}/agents/{agent}/interject  {text} → {accepted} — steer one running lane
 POST   /v1/sessions/{id}/refresh-client rebuild the agent's client (after saving a key)
 ```
 

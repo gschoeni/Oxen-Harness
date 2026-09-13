@@ -49,6 +49,13 @@ pub use approve::{
 pub use classify::{classify, Analysis, Risk};
 pub use policy::{PermissionMode, PermissionsConfig, PolicySet, SCHEMA_VERSION};
 
+/// What a subagent's gate answers a call it cannot approve. One fixed string
+/// so the parent can find the refused calls in the lane's transcript
+/// afterwards and report them (see `Agent::denied_commands`).
+pub const SUBAGENT_DENIAL: &str = "tool error: this command needs user approval, which subagents \
+    cannot request. Do not retry it or work around it; instead, note the exact command and why \
+    it's needed in your final summary so the orchestrator or user can run it.";
+
 /// Grants accumulated during one session ("always allow this session").
 /// Deliberately *not* shared with subagents: an in-chat approval authorizes
 /// the conversation the user is watching, not headless lanes.
@@ -710,11 +717,7 @@ impl PermissionGate {
     /// The message the model reads when a gated action was declined.
     fn denial_message(&self, decision: &ApprovalDecision) -> String {
         if self.subagent {
-            return "tool error: this command needs user approval, which subagents cannot \
-                    request. Do not retry it or work around it; instead, note the exact command \
-                    and why it's needed in your final summary so the orchestrator or user can \
-                    run it."
-                .to_string();
+            return SUBAGENT_DENIAL.to_string();
         }
         let note = match decision {
             ApprovalDecision::DenyWithMessage(msg) if !msg.trim().is_empty() => {

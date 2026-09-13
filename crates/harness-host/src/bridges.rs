@@ -449,6 +449,7 @@ mod tests {
             &FleetEvent::TaskCompleted {
                 index: 0,
                 label: "a".into(),
+                lane: "l0".into(),
                 ok: true,
                 tokens_used: 10,
                 summary: "done".into(),

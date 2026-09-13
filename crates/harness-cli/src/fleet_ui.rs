@@ -68,6 +68,8 @@ pub(crate) enum LaneStatus {
 /// One subagent's live display state.
 pub(crate) struct LaneState {
     pub(crate) label: String,
+    /// The lane's id once it is running (what a host stops it by).
+    pub(crate) id: String,
     pub(crate) status: LaneStatus,
     /// One-line rolling readout (tool verb + target, or the last words).
     pub(crate) activity: String,
@@ -84,6 +86,7 @@ impl LaneState {
     fn new(label: &str) -> Self {
         Self {
             label: label.to_string(),
+            id: String::new(),
             status: LaneStatus::Queued,
             activity: String::new(),
             tail: String::new(),
@@ -100,12 +103,17 @@ impl LaneState {
     }
 }
 
-/// The lanes of one running fleet, plus which lane the user is watching and
-/// the token that stops the fleet.
+/// How a display stops one lane by id (see [`FleetState::with_lane_stopper`]).
+pub(crate) type LaneStopper = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// The lanes of one running fleet, plus which lane the user is watching, the
+/// token that stops the fleet, and (for a `spawn_agents` fleet) how to stop
+/// one lane by id.
 pub(crate) struct FleetState {
     pub(crate) lanes: Vec<LaneState>,
     pub(crate) focused: Option<usize>,
     pub(crate) cancel: Option<CancellationToken>,
+    cancel_lane: Option<LaneStopper>,
 }
 
 impl FleetState {
@@ -114,13 +122,36 @@ impl FleetState {
             lanes: labels.iter().map(|l| LaneState::new(l)).collect(),
             focused: None,
             cancel,
+            cancel_lane: None,
         }
     }
 
-    pub(crate) fn lane_started(&mut self, index: usize) {
+    /// Let the keys stop a single lane by id (see [`Self::stop_focused_lane`]).
+    pub(crate) fn with_lane_stopper(mut self, stop: LaneStopper) -> Self {
+        self.cancel_lane = Some(stop);
+        self
+    }
+
+    pub(crate) fn lane_started(&mut self, index: usize, id: &str) {
         if let Some(lane) = self.lanes.get_mut(index) {
             lane.status = LaneStatus::Running;
+            lane.id = id.to_string();
             lane.started = Some(Instant::now());
+        }
+    }
+
+    /// Stop just the focused lane (the `x` / alt+x action); `false` when
+    /// no running lane is focused or this display has no way to stop one.
+    pub(crate) fn stop_focused_lane(&self) -> bool {
+        let Some(lane) = self.focused.and_then(|i| self.lanes.get(i)) else {
+            return false;
+        };
+        if lane.status != LaneStatus::Running || lane.id.is_empty() {
+            return false;
+        }
+        match &self.cancel_lane {
+            Some(cancel) => cancel(&lane.id),
+            None => false,
         }
     }
 
@@ -223,9 +254,9 @@ pub(crate) fn apply_fleet_event(
     event: &FleetEvent,
 ) {
     match event {
-        FleetEvent::TaskStarted { index, label } => {
+        FleetEvent::TaskStarted { index, label, lane } => {
             if let Some(state) = hub.lock().get_mut(fleet) {
-                state.lane_started(*index);
+                state.lane_started(*index, lane);
             }
             if plain {
                 print_lane_started(ui, label);
@@ -242,6 +273,7 @@ pub(crate) fn apply_fleet_event(
             ok,
             tokens_used,
             summary,
+            ..
         } => {
             if let Some(state) = hub.lock().get_mut(fleet) {
                 state.lane_completed(*index, *ok, *tokens_used, summary);
@@ -475,6 +507,11 @@ pub(crate) fn apply_fleet_key(
             state.stop();
             true
         }
+        // `x` (alt+x in the composer) stops only the watched lane.
+        KeyCode::Char('x') if digits_ok && state.focused.is_some() => {
+            state.stop_focused_lane();
+            true
+        }
         _ => false,
     }
 }
@@ -485,10 +522,16 @@ fn hint_line(state: &FleetState, keys: FleetKeys) -> String {
         FleetKeys::Owned => (format!("1-{n}"), "esc".to_string()),
         FleetKeys::Shared => (format!("alt+1-{n}"), "alt+0".to_string()),
     };
-    match (state.focused, keys) {
-        (Some(_), _) => format!("{digits} switch lanes · {esc} overview · ctrl-c stop"),
-        (None, FleetKeys::Owned) => format!("{digits} watch a lane · ctrl-c stop"),
-        (None, FleetKeys::Shared) => format!("{digits} watch a lane"),
+    match (state.focused, keys, state.cancel_lane.is_some()) {
+        (Some(_), FleetKeys::Owned, true) => {
+            format!("{digits} switch lanes · {esc} overview · x stop this lane · ctrl-c stop all")
+        }
+        (Some(_), FleetKeys::Shared, true) => {
+            format!("{digits} switch lanes · {esc} overview · alt+x stop this lane")
+        }
+        (Some(_), _, false) => format!("{digits} switch lanes · {esc} overview · ctrl-c stop"),
+        (None, FleetKeys::Owned, _) => format!("{digits} watch a lane · ctrl-c stop"),
+        (None, FleetKeys::Shared, _) => format!("{digits} watch a lane"),
     }
 }
 
@@ -935,7 +978,7 @@ mod tests {
     fn events_drive_activity_tail_and_tokens() {
         let ui = Ui::with(false, std::sync::Arc::new(harness_theme::Theme::default()));
         let mut s = state(&["scan", "trace"]);
-        s.lane_started(0);
+        s.lane_started(0, "lane-0");
         s.lane_event(0, &AgentEvent::Token("hello there".into()), &ui);
         s.lane_event(
             0,
@@ -977,7 +1020,7 @@ mod tests {
     fn block_shows_lanes_hint_and_focused_tail() {
         let ui = Ui::with(false, std::sync::Arc::new(harness_theme::Theme::default()));
         let mut s = state(&["scan", "trace"]);
-        s.lane_started(0);
+        s.lane_started(0, "lane-0");
         s.lane_event(0, &AgentEvent::Token("digging into the parser".into()), &ui);
 
         // Overview: one line per lane + the hint.

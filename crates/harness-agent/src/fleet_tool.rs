@@ -30,7 +30,8 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::Agent;
 use crate::config::AgentConfig;
 use crate::error::AgentError;
-use crate::fleet::{run_fleet, FleetLimits, FleetSink, LaneStop, ResultCap, SubagentTask};
+use crate::fleet::{run_fleet, FleetLimits, FleetSink, SpawnAgent, SubagentTask};
+use crate::lane::{lane_budget, render_results, AgentTree, LiveLane, SubagentResult};
 
 /// Stable identifier the model uses to call the fleet tool.
 pub const FLEET_TOOL: &str = "spawn_agents";
@@ -49,7 +50,7 @@ pub const MAX_LIVE_FLEETS: usize = 3;
 /// A fresh fleet id, unique for the life of this process. Hosts key lanes
 /// panels and stop buttons by it, so two fleets overlapping in one session
 /// never collide.
-fn next_fleet_id() -> String {
+pub(crate) fn next_fleet_id() -> String {
     static NEXT: AtomicUsize = AtomicUsize::new(1);
     format!("fleet-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
@@ -72,14 +73,21 @@ pub struct FleetSpawner {
     /// The current turn's stop signal; hosts refresh it when they install a
     /// turn's token so cancelling the turn cancels any running fleet too.
     cancel: StdMutex<CancellationToken>,
-    /// Optional persistent aggregate ledger. Fleet transcripts remain in
-    /// memory, but their provider usage belongs in the host's all-time totals.
-    usage_store: Option<Arc<HistoryStore>>,
-    /// The session lanes are spawned from, so their spend is attributed to
-    /// it in that ledger (see [`FleetSpawner::set_session`]). A slot rather
-    /// than a builder argument: the CLI registers the tool before its
-    /// session exists.
+    /// The parent's history store. Lanes persist their transcripts here as
+    /// sessions under the spawning session (so a finished lane can be read
+    /// back and resumed) and their spend lands in its ledger. `None` (tests)
+    /// keeps lanes in memory.
+    store: Option<Arc<HistoryStore>>,
+    /// The session lanes are spawned from — their `parent_session`, and
+    /// where their spend is attributed (see [`FleetSpawner::set_session`]).
+    /// A slot rather than a builder argument: the CLI registers the tool
+    /// before its session exists.
     session: StdMutex<Option<String>>,
+    /// The lanes running right now, for a host to stop or steer one.
+    tree: Arc<AgentTree>,
+    /// How many fleets are in flight — a `wait: false` fleet can overlap a
+    /// later call, and a session holds at most [`MAX_LIVE_FLEETS`].
+    live: Arc<AtomicUsize>,
 }
 
 /// The mutable half of a [`FleetSpawner`]: what subagents inherit that can
@@ -96,9 +104,41 @@ impl FleetSpawner {
             workspace_root: StdMutex::new(None),
             endpoint: StdMutex::new(Endpoint { client, config }),
             cancel: StdMutex::new(CancellationToken::new()),
-            usage_store: None,
+            store: None,
             session: StdMutex::new(None),
+            tree: Arc::default(),
+            live: Arc::default(),
         }
+    }
+
+    /// The lanes running right now (see [`AgentTree`]).
+    pub fn tree(&self) -> &Arc<AgentTree> {
+        &self.tree
+    }
+
+    /// The parent's store, when lanes persist.
+    pub fn store(&self) -> Option<&Arc<HistoryStore>> {
+        self.store.as_ref()
+    }
+
+    /// The spawning session, once known.
+    pub fn session(&self) -> Option<String> {
+        self.session
+            .lock()
+            .expect("fleet session slot poisoned")
+            .clone()
+    }
+
+    /// Refuse a new fleet when the session already has [`MAX_LIVE_FLEETS`]
+    /// in flight.
+    pub(crate) fn admit_fleet(&self) -> Result<(), ToolError> {
+        if self.live.load(Ordering::SeqCst) >= MAX_LIVE_FLEETS {
+            return Err(ToolError::Execution(format!(
+                "{MAX_LIVE_FLEETS} fleets are already running in this session; their results \
+                 arrive automatically — wait for them before starting another"
+            )));
+        }
+        Ok(())
     }
 
     /// Tell the spawner which project it is working in, enabling `isolation:
@@ -140,10 +180,15 @@ impl FleetSpawner {
             .clone()
     }
 
-    /// Attach the host's persistent usage ledger to future fleet agents.
-    pub fn with_usage_store(mut self, store: Arc<HistoryStore>) -> Self {
-        self.usage_store = Some(store);
+    /// Persist lanes (and their spend) in `store`, the parent's history.
+    pub fn with_store(mut self, store: Arc<HistoryStore>) -> Self {
+        self.store = Some(store);
         self
+    }
+
+    /// [`Self::with_store`] under its older name.
+    pub fn with_usage_store(self, store: Arc<HistoryStore>) -> Self {
+        self.with_store(store)
     }
 
     /// Attribute future lanes' spend to `session` in that ledger — the chat
@@ -194,13 +239,18 @@ impl FleetSpawner {
             .child_token()
     }
 
-    /// One detached subagent: in-memory store, the current client/config, and
-    /// the subagent-narrowed tool set (no recursion, no interactive tools).
-    /// `lane` is the isolated checkout this subagent works in, when the fleet
-    /// opened one for it.
-    fn build_agent(
+    /// One detached subagent: a session of its own under the spawning
+    /// session (in memory when there is no store), the current client/config
+    /// through [`AgentConfig::for_subagent`], and the subagent-narrowed tool
+    /// set. `lane` is the isolated checkout this subagent works in, when the
+    /// fleet opened one for it; `cancel` is the token that stops just this
+    /// lane, registered with the tree so a host can fire it.
+    pub(crate) fn build_agent(
         &self,
+        label: &str,
+        fleet: &str,
         lane: Option<std::sync::Arc<crate::worktree::LaneWorktree>>,
+        cancel: CancellationToken,
     ) -> Result<Agent, AgentError> {
         // Everything a lane inherits differently from its parent — model
         // role, gate, round budget, attachments, prompt — is decided in one
@@ -238,11 +288,24 @@ impl FleetSpawner {
             }
             (None, None) => self.tools.clone(),
         };
-        let store = Arc::new(HistoryStore::open_in_memory()?);
-        let session = store.create_session(&SessionMeta {
+        let parent = self.session();
+        let meta = SessionMeta {
             model: config.model.clone(),
+            workspace: self
+                .root()
+                .map(|r| r.display().to_string())
+                .unwrap_or_default(),
+            parent_session: parent.clone().unwrap_or_default(),
             ..Default::default()
-        })?;
+        };
+        // A lane's transcript lives in the parent's store, under the parent,
+        // so it can be inspected and resumed later; without a store (tests)
+        // it lives and dies in memory.
+        let (store, persisted) = match (&self.store, &parent) {
+            (Some(store), Some(_)) => (store.clone(), true),
+            _ => (Arc::new(HistoryStore::open_in_memory()?), false),
+        };
+        let session = store.create_session(&meta)?;
         let mut agent = Agent::new(
             client,
             crate::agent::subagent_tools(tools),
@@ -250,19 +313,142 @@ impl FleetSpawner {
             session,
             config,
         )?;
-        agent.disable_transcript_persistence();
-        if let Some(usage_store) = &self.usage_store {
-            agent.set_usage_store(usage_store.clone());
+        if !persisted {
+            agent.disable_transcript_persistence();
+            if let Some(store) = &self.store {
+                agent.set_usage_store(store.clone());
+            }
         }
-        if let Some(session) = self
-            .session
-            .lock()
-            .expect("fleet session slot poisoned")
-            .clone()
-        {
+        self.adopt(&mut agent, label, fleet, cancel);
+        Ok(agent)
+    }
+
+    /// Bring a finished lane back with its transcript, for a follow-up.
+    /// The lane must belong to this session.
+    pub(crate) fn resume_lane(
+        &self,
+        id: &str,
+        label: &str,
+        fleet: &str,
+        cancel: CancellationToken,
+    ) -> Result<Agent, AgentError> {
+        let store = self.owned_lane_store(id)?;
+        let (client, config) = {
+            let endpoint = self.endpoint.lock().expect("fleet endpoint poisoned");
+            (endpoint.client.clone(), endpoint.config.for_subagent())
+        };
+        let tools = match self.root() {
+            Some(root) => {
+                let files = self
+                    .tools
+                    .files()
+                    .cloned()
+                    .unwrap_or_else(harness_tools::FileState::gated);
+                rooted_tools(&self.tools, &root, files)
+            }
+            None => self.tools.clone(),
+        };
+        let mut agent = Agent::resume_from_store(
+            client,
+            crate::agent::subagent_tools(tools),
+            store,
+            id.to_string(),
+            config,
+        )?;
+        self.adopt(&mut agent, label, fleet, cancel);
+        Ok(agent)
+    }
+
+    /// The store holding lane `id`, checked to be one of this session's
+    /// lanes — a lane id from another chat (or a chat id) is refused.
+    pub(crate) fn owned_lane_store(&self, id: &str) -> Result<Arc<HistoryStore>, AgentError> {
+        let not_mine = || {
+            AgentError::Tool(ToolError::InvalidArguments(format!(
+                "no agent {id} belongs to this session — use an agent id from a spawn_agents \
+                 result"
+            )))
+        };
+        let (Some(store), Some(session)) = (&self.store, self.session()) else {
+            return Err(not_mine());
+        };
+        let meta = store.session_meta(id).map_err(|_| not_mine())?;
+        if meta.parent_session != session {
+            return Err(not_mine());
+        }
+        Ok(store.clone())
+    }
+
+    /// What every lane gets after construction: spend attributed to the
+    /// spawning session, its stop token, and a place in the live registry.
+    fn adopt(&self, agent: &mut Agent, label: &str, fleet: &str, cancel: CancellationToken) {
+        if let Some(session) = self.session() {
             agent.set_usage_session(session);
         }
-        Ok(agent)
+        agent.set_cancel_token(cancel.clone());
+        self.tree.register(LiveLane {
+            id: agent.session_id().to_string(),
+            label: label.to_string(),
+            fleet: fleet.to_string(),
+            started: std::time::Instant::now(),
+            cancel,
+            steer: agent.interjections(),
+        });
+    }
+
+    /// Run `tasks` as one named fleet on lanes from `spawn`, bracketed on the
+    /// host's lanes display, and type every outcome. Lane transcripts are
+    /// persisted as they run; the typed record is written by
+    /// [`Self::record`] once the caller has finished with it (a patch may
+    /// still be attached). Returns the results and whether the fleet's token
+    /// was cancelled.
+    pub(crate) async fn run_lanes<S: SpawnAgent>(
+        &self,
+        sink: &Arc<dyn FleetSink>,
+        fleet: &str,
+        tasks: Vec<SubagentTask>,
+        limits: FleetLimits,
+        spawn: S,
+    ) -> Result<(Vec<SubagentResult>, bool), ToolError> {
+        let labels: Vec<String> = tasks.iter().map(|t| t.label.clone()).collect();
+        let cancel = self.run_token();
+        let guard = SinkGuard::open(
+            sink.clone(),
+            self.live.clone(),
+            fleet,
+            &labels,
+            cancel.clone(),
+        );
+        let outcomes = run_fleet(spawn, tasks, limits, cancel.clone(), |event| {
+            sink.event(fleet, event)
+        })
+        .await
+        .map_err(|e| ToolError::Execution(e.to_string()))?;
+        drop(guard); // normal teardown; the guard covers the abnormal paths
+        self.tree.finish_fleet(fleet);
+
+        // What the parent reads is bounded; a lane that pasted a whole file
+        // is cut, with the rest parked in the registry's overflow store so
+        // `retrieve_original` (or `read_agent`) can still fetch it.
+        let budget = lane_budget(outcomes.len());
+        let spill = self.tools.overflow_store();
+        let results = outcomes
+            .iter()
+            .map(|o| SubagentResult::from_outcome(o, fleet, budget, spill.map(Arc::as_ref)))
+            .collect();
+        Ok((results, cancel.is_cancelled()))
+    }
+
+    /// Persist each lane's typed record beside its transcript.
+    pub(crate) fn record(&self, results: &[SubagentResult]) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        for result in results {
+            if result.id.is_empty() {
+                continue;
+            }
+            let _ = store.save_session_state(&result.id, harness_store::LANE_STATE, result);
+        }
     }
 }
 
@@ -308,24 +494,44 @@ const MAX_PATCH_CHARS: usize = 20_000;
 
 /// What each isolated lane changed, appended to the fleet's result: a summary
 /// per lane and the patch itself, so the parent can review and apply rather
-/// than discovering the edits already merged.
+/// than discovering the edits already merged. The whole patch is parked in
+/// `spill` (when there is one) and its handle recorded on the lane's result.
 fn patches_section(
     lanes: &[std::sync::Arc<crate::worktree::LaneWorktree>],
-    labels: &[String],
+    results: &mut [SubagentResult],
+    spill: Option<&harness_compress::CcrStore>,
 ) -> String {
     let mut out = String::from("\n\n## Changes from isolated agents\n\n");
     let mut any = false;
     for (index, lane) in lanes.iter().enumerate() {
-        let label = labels.get(index).map(String::as_str).unwrap_or("agent");
+        let label = results
+            .get(index)
+            .map(|r| r.label.clone())
+            .unwrap_or_else(|| "agent".into());
         match crate::worktree::changes(lane) {
             Some(changes) => {
                 any = true;
-                out.push_str(&format!("### {label}\n\n{}\n\n```diff\n{}\n```\n\n", changes.summary,
+                let handle = spill.map(|store| store.put(&changes.patch));
+                if let (Some(result), Some(hash)) = (results.get_mut(index), &handle) {
+                    result.patch = Some(hash.clone());
+                }
+                let marker = match &handle {
+                    Some(hash) => format!(
+                        "\n… [patch truncated — the whole patch is {}]",
+                        harness_compress::ccr::marker(hash, Some("full_patch"))
+                    ),
+                    None => "\n… [patch truncated — ask this agent for the rest, or redo the change yourself]".to_string(),
+                };
+                out.push_str(&format!(
+                    "### {label}\n\n{}\n\n```diff\n{}\n```\n\n",
+                    changes.summary,
                     harness_core::text::truncate_with_marker(
                         &changes.patch,
                         MAX_PATCH_CHARS,
-                        "\n… [patch truncated — ask this agent for the rest, or redo the change yourself]",
-                    ).trim_end()));
+                        &marker,
+                    )
+                    .trim_end()
+                ));
             }
             None => out.push_str(&format!("### {label}\n\n(no file changes)\n\n")),
         }
@@ -350,6 +556,12 @@ pub struct FleetAgentSpec {
     /// fresh context: it cannot see this conversation, so include everything
     /// it needs (paths, symbols, constraints, expected output format).
     pub prompt: String,
+    /// Optional: make the agent's final answer a JSON object. Give the keys it
+    /// must carry as `{"required": ["verdict", "files"]}`; the parsed object
+    /// comes back beside its reply, and an agent that answers in prose is
+    /// re-asked once or twice.
+    #[serde(default)]
+    pub output_schema: Option<serde_json::Value>,
 }
 
 /// Arguments for `spawn_agents`.
@@ -378,10 +590,6 @@ pub struct FleetArgs {
 pub struct FleetTool {
     spawner: Arc<FleetSpawner>,
     sink: Arc<dyn FleetSink>,
-    /// How many fleets this tool has in flight right now — a `wait: false`
-    /// fleet can overlap a later call. The sink's lanes display is torn down
-    /// when the *last* of them ends, not when the first does.
-    live: Arc<AtomicUsize>,
     /// Where a `wait: false` fleet leaves its results for the agent to
     /// deliver. Without one, every fleet waits.
     asides: Option<harness_tools::Asides>,
@@ -392,7 +600,6 @@ impl FleetTool {
         Self {
             spawner,
             sink,
-            live: Arc::new(AtomicUsize::new(0)),
             asides: None,
         }
     }
@@ -457,7 +664,9 @@ impl TypedTool for FleetTool {
          Results return labeled by agent name. Use 2-6 agents; prefer a few well-scoped agents \
          over many vague ones. Subagents cannot spawn further agents. If the agents will EDIT \
          files, set isolate_edits: each then works in its own copy of the project and returns a \
-         patch for you to review and apply, instead of several agents writing over each other."
+         patch for you to review and apply, instead of several agents writing over each other. \
+         Every result carries an agent id: send_to_agent continues that agent with a follow-up \
+         (it keeps its context), read_agent reads its full reply."
     }
 
     /// A fleet edits, runs commands, and returns patches: it runs alone in
@@ -478,12 +687,7 @@ impl TypedTool for FleetTool {
                 args.agents.len()
             )));
         }
-        if self.live.load(Ordering::SeqCst) >= MAX_LIVE_FLEETS {
-            return Err(ToolError::Execution(format!(
-                "{MAX_LIVE_FLEETS} fleets are already running in this session; their results \
-                 arrive automatically — wait for them before starting another"
-            )));
-        }
+        self.spawner.admit_fleet()?;
         let labels: Vec<String> = args.agents.iter().map(|a| a.name.clone()).collect();
         let fleet = next_fleet_id();
         // A fleet the model doesn't wait for runs on its own task and leaves
@@ -493,7 +697,6 @@ impl TypedTool for FleetTool {
             if let Some(asides) = self.asides.clone() {
                 let spawner = self.spawner.clone();
                 let sink = self.sink.clone();
-                let live = self.live.clone();
                 let count = labels.len();
                 let names = labels.join(", ");
                 let started = format!(
@@ -502,7 +705,7 @@ impl TypedTool for FleetTool {
                      they finish — keep working on other things, do not poll."
                 );
                 tokio::spawn(async move {
-                    let body = match Self::execute(spawner, sink, live, fleet, args).await {
+                    let body = match Self::execute(spawner, sink, fleet, args).await {
                         Ok(text) => text,
                         Err(e) => format!("the fleet failed: {e}"),
                     };
@@ -515,14 +718,7 @@ impl TypedTool for FleetTool {
                 return Ok(started);
             }
         }
-        Self::execute(
-            self.spawner.clone(),
-            self.sink.clone(),
-            self.live.clone(),
-            fleet,
-            args,
-        )
-        .await
+        Self::execute(self.spawner.clone(), self.sink.clone(), fleet, args).await
     }
 }
 
@@ -531,7 +727,6 @@ impl FleetTool {
     async fn execute(
         spawner: Arc<FleetSpawner>,
         sink: Arc<dyn FleetSink>,
-        live: Arc<AtomicUsize>,
         fleet: String,
         args: FleetArgs,
     ) -> Result<String, ToolError> {
@@ -544,7 +739,7 @@ impl FleetTool {
         let tasks: Vec<SubagentTask> = args
             .agents
             .into_iter()
-            .map(|a| SubagentTask::new(a.name, a.prompt))
+            .map(|a| SubagentTask::new(a.name, a.prompt).with_schema(a.output_schema))
             .collect();
 
         // Editing lanes each get their own checkout. Falling back to the
@@ -557,34 +752,38 @@ impl FleetTool {
         let isolated = args.isolate_edits.unwrap_or(false);
         let lanes = isolated.then(|| spawner.open_lanes(labels.len())).flatten();
 
-        let cancel = spawner.run_token();
-        let guard = SinkGuard::open(sink.clone(), live, &fleet, &labels, cancel.clone());
-
         let lane_for_build = lanes.clone().unwrap_or_default();
-        let outcomes = run_fleet(
-            {
-                let spawner = spawner.clone();
-                move |index| spawner.build_agent(lane_for_build.get(index).cloned())
-            },
-            tasks,
-            FleetLimits::with_concurrency(concurrency),
-            cancel.clone(),
-            |event| sink.event(&fleet, event),
-        )
-        .await
-        .map_err(|e| ToolError::Execution(e.to_string()))?;
-        drop(guard); // normal teardown; the guard covers the abnormal paths
+        let (mut results, cancelled) = spawner
+            .run_lanes(
+                &sink,
+                &fleet,
+                tasks,
+                FleetLimits::with_concurrency(concurrency),
+                {
+                    let spawner = spawner.clone();
+                    let fleet = fleet.clone();
+                    move |index: usize, cancel: CancellationToken| {
+                        spawner.build_agent(
+                            &labels[index],
+                            &fleet,
+                            lane_for_build.get(index).cloned(),
+                            cancel,
+                        )
+                    }
+                },
+            )
+            .await?;
 
         let mut out = String::new();
-        let past_deadline = outcomes
+        let past_deadline = results
             .iter()
-            .any(|o| matches!(o.stopped, Some(LaneStop::Deadline(_))));
+            .any(|r| r.stop.as_deref().is_some_and(|s| s.contains("deadline")));
         if past_deadline {
             out.push_str(
                 "NOTE: the fleet ran past its deadline and was stopped; results below are \
                  partial. Smaller, better-scoped tasks finish in time.\n\n",
             );
-        } else if cancel.is_cancelled() {
+        } else if cancelled {
             out.push_str(
                 "NOTE: the fleet was stopped before finishing; results below may be partial.\n\n",
             );
@@ -596,19 +795,13 @@ impl FleetTool {
                  have collided). Check the result before trusting it.\n\n",
             );
         }
-        // What the parent reads is bounded; a lane that pasted a whole file
-        // is cut, with the rest parked in the registry's overflow store so
-        // `retrieve_original` can still fetch it.
-        let spill = spawner.tools.overflow_store().cloned();
-        out.push_str(&crate::fleet::combine_outcomes_capped(
-            &outcomes,
-            "agent",
-            ResultCap::default_with(spill.as_deref()),
-        ));
+        out.push_str(&render_results(&results));
         if let Some(lanes) = &lanes {
-            out.push_str(&patches_section(lanes, &labels));
+            let spill = spawner.tools.overflow_store().cloned();
+            out.push_str(&patches_section(lanes, &mut results, spill.as_deref()));
         }
         drop(lanes);
+        spawner.record(&results);
         Ok(out.trim_end().to_string())
     }
 }
@@ -680,7 +873,9 @@ mod tests {
                 ..AgentConfig::default()
             },
         );
-        let lane = sp.build_agent(None).unwrap();
+        let lane = sp
+            .build_agent("lane", "fleet-t", None, CancellationToken::new())
+            .unwrap();
         assert_eq!(
             lane.config().round_budget,
             Some(crate::config::RoundBudget::SUBAGENT),
@@ -720,7 +915,9 @@ mod tests {
                 ..AgentConfig::default()
             },
         );
-        let sub = sp.build_agent(None).unwrap();
+        let sub = sp
+            .build_agent("lane", "fleet-t", None, CancellationToken::new())
+            .unwrap();
         let names: Vec<_> = sub
             .tool_definitions()
             .iter()
@@ -824,12 +1021,39 @@ mod tests {
             "original\n"
         );
 
-        // Each lane's work comes back as its own patch.
-        let section = patches_section(&lanes, &["alpha".into(), "beta".into()]);
+        // Each lane's work comes back as its own patch, whole in the overflow
+        // store and recorded on the lane's result.
+        let spill = harness_compress::CcrStore::default();
+        let mut results: Vec<SubagentResult> = ["alpha", "beta"]
+            .iter()
+            .map(|label| {
+                SubagentResult::from_outcome(
+                    &crate::fleet::SubagentOutcome {
+                        label: label.to_string(),
+                        session: String::new(),
+                        result: Ok("done".into()),
+                        structured: None,
+                        tokens_used: 1,
+                        rounds: 1,
+                        stopped: None,
+                        denied: Vec::new(),
+                    },
+                    "fleet-t",
+                    100,
+                    None,
+                )
+            })
+            .collect();
+        let section = patches_section(&lanes, &mut results, Some(&spill));
         assert!(section.contains("### alpha"), "{section}");
         assert!(section.contains("from lane 0"), "{section}");
         assert!(section.contains("from lane 1"), "{section}");
         assert!(section.contains("NOT in the project"), "{section}");
+        let patch = results[0]
+            .patch
+            .clone()
+            .expect("the patch handle is recorded");
+        assert!(spill.get(&patch).unwrap().contains("from lane 0"));
         let paths: Vec<_> = lanes.iter().map(|l| l.path().to_path_buf()).collect();
         drop(lanes);
         assert!(
@@ -923,11 +1147,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lanes_persist_under_the_session_and_can_be_resumed_and_read() {
+        use crate::lane_tools::{ReadAgentTool, SendToAgentTool};
+
+        let mut server = mockito::Server::new_async().await;
+        let first = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("FIRST-TASK".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("first reply, then a second thought"))
+            .expect(1)
+            .create_async()
+            .await;
+        // The follow-up request must carry the lane's earlier exchange: that
+        // is what "resumes with its context" means on the wire.
+        let follow = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("FOLLOW-UP".into()),
+                mockito::Matcher::Regex("first reply, then a second thought".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("follow-up reply"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let parent = store.create_session(&SessionMeta::default()).unwrap();
+        let sp = Arc::new(
+            FleetSpawner::new(
+                OxenClient::new(server.url(), "key", "claude-opus-4-8"),
+                ToolRegistry::new(),
+                AgentConfig {
+                    system_prompt: None,
+                    ..AgentConfig::default()
+                },
+            )
+            .with_store(store.clone())
+            .with_session(parent.clone()),
+        );
+        let sink: Arc<dyn FleetSink> = Arc::new(RecordingSink::default());
+        let out = FleetTool::new(sp.clone(), sink.clone())
+            .invoke(serde_json::json!({
+                "agents": [{ "name": "scan", "prompt": "FIRST-TASK go" }]
+            }))
+            .await
+            .unwrap();
+
+        // The lane is a session under the parent, with its typed record.
+        let lanes = store.lanes_of(&parent).unwrap();
+        assert_eq!(lanes.len(), 1);
+        let id = lanes[0].id.clone();
+        let record = lanes[0]
+            .record
+            .clone()
+            .expect("a finished lane has a record");
+        assert_eq!(record["label"], "scan");
+        assert_eq!(record["status"], "done");
+        assert!(out.contains(&format!("agent id: {id}")), "{out}");
+        assert_eq!(store.messages(&id).unwrap().len(), 2, "user + assistant");
+        assert!(
+            sp.tree().live().is_empty(),
+            "a settled lane leaves the registry"
+        );
+        // Lane spend is the parent's spend.
+        assert!(store.usage_for_session(&parent).unwrap().prompt_tokens > 0);
+
+        // The full reply is readable, sliceable, and greppable by id — and a
+        // session that isn't one of this chat's lanes is refused.
+        let read = ReadAgentTool::new(sp.clone());
+        let text = read
+            .invoke(serde_json::json!({ "agent": id }))
+            .await
+            .unwrap();
+        assert_eq!(text, "first reply, then a second thought");
+        let hit = read
+            .invoke(serde_json::json!({ "agent": id, "grep": "SECOND" }))
+            .await
+            .unwrap();
+        assert_eq!(hit, "1: first reply, then a second thought");
+        let sliced = read
+            .invoke(serde_json::json!({ "agent": id, "lines": "2-" }))
+            .await
+            .unwrap();
+        assert_eq!(sliced, "");
+        assert!(read
+            .invoke(serde_json::json!({ "agent": parent }))
+            .await
+            .is_err());
+
+        // A follow-up resumes the same lane with its history.
+        let out = SendToAgentTool::new(sp.clone(), sink)
+            .invoke(serde_json::json!({ "agent": id, "message": "FOLLOW-UP please" }))
+            .await
+            .unwrap();
+        assert!(out.contains("follow-up reply"), "{out}");
+        assert!(out.contains("### scan — done"), "{out}");
+        assert_eq!(store.messages(&id).unwrap().len(), 4);
+        assert_eq!(
+            store.lanes_of(&parent).unwrap().len(),
+            1,
+            "same lane, not a new one"
+        );
+        first.assert_async().await;
+        follow.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn a_session_cannot_pile_up_fleets_without_bound() {
         let sink = Arc::new(RecordingSink::default());
         let tool = FleetTool::new(spawner("http://127.0.0.1:1/api/ai"), sink);
         // Three fleets already in flight (as `wait: false` calls leave them).
-        tool.live.store(MAX_LIVE_FLEETS, Ordering::SeqCst);
+        tool.spawner.live.store(MAX_LIVE_FLEETS, Ordering::SeqCst);
         let err = tool
             .invoke(serde_json::json!({
                 "agents": [{ "name": "a", "prompt": "go" }],
@@ -939,7 +1273,7 @@ mod tests {
             err.to_string().contains("already running"),
             "a fourth fleet is refused, not queued: {err}"
         );
-        assert_eq!(tool.live.load(Ordering::SeqCst), MAX_LIVE_FLEETS);
+        assert_eq!(tool.spawner.live.load(Ordering::SeqCst), MAX_LIVE_FLEETS);
     }
 
     #[tokio::test]
@@ -998,8 +1332,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(out.contains("### left\n\nleft says hi"));
-        assert!(out.contains("### right\n\nright says hi"));
+        assert!(out.contains("### left — done"), "{out}");
+        assert!(out.contains("left says hi"), "{out}");
+        assert!(out.contains("### right — done"), "{out}");
+        assert!(out.contains("right says hi"), "{out}");
 
         // The sink saw the full bracket: started → completions → finished,
         // every call naming the same fleet.

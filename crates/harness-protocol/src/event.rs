@@ -58,13 +58,17 @@ pub enum FleetAgentPhase {
 }
 
 /// What a `fleet.agent_activity` event carries: streamed text to append, a
-/// tool line to replace the lane's status with, or a token-counter update.
+/// tool line to replace the lane's status with, a token-counter update, or
+/// a one-line note about something the lane did on its own (a refused
+/// command, a nudge, a compaction, a retry) — the things that used to make
+/// a struggling lane look merely quiet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FleetActivityKind {
     Token,
     Tool,
     Tokens,
+    Note,
 }
 
 /// A dev server's lifecycle phase (mirrors `harness_preview::PreviewPhase`).
@@ -253,12 +257,15 @@ pub enum ProtocolEvent {
         agents: Vec<String>,
         source: FleetSource,
     },
-    /// One lane changed state.
+    /// One lane changed state. `lane` is the lane's own id (its session id),
+    /// what `POST /v1/sessions/{id}/agents/{lane}/cancel|interject` and the
+    /// model's `send_to_agent` / `read_agent` take.
     #[serde(rename = "fleet.agent")]
     FleetAgent {
         session: String,
         fleet: String,
         agent: usize,
+        lane: String,
         name: String,
         phase: FleetAgentPhase,
         tokens: usize,
