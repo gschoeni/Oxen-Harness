@@ -507,25 +507,45 @@ fn prompt_history_path() -> Option<std::path::PathBuf> {
     harness_config::paths::prompt_history_file().ok()
 }
 
+/// First line of a prompt-history file whose entries are escaped (see
+/// [`escape_history_entry`]). A file without it predates escaping and holds
+/// every entry verbatim, backslashes included; it is rewritten with the
+/// header on the next save.
+const HISTORY_HEADER: &str = "#oxen-harness-history v2";
+
 /// Load the flat prompt-history file (one entry per line) for box-mode recall.
+/// Entries are unescaped only when the file carries [`HISTORY_HEADER`]; a
+/// legacy file (no header) loads verbatim, so a pre-escaping prompt such as a
+/// regex `\d+\n` or a `C:\\new` path is not mangled.
 fn load_prompt_history(path: Option<&Path>) -> Vec<String> {
-    path.and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|s| {
-            s.lines()
-                .filter(|l| !l.is_empty())
-                .map(unescape_history_entry)
-                .collect()
+    let Some(text) = path.and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return Vec::new();
+    };
+    let mut lines = text.lines();
+    let escaped = lines.clone().next() == Some(HISTORY_HEADER);
+    if escaped {
+        lines.next();
+    }
+    lines
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            if escaped {
+                unescape_history_entry(l)
+            } else {
+                l.to_string()
+            }
         })
-        .unwrap_or_default()
+        .collect()
 }
 
-/// Persist the prompt history, one entry per line, with newlines escaped so
-/// a multi-line prompt recalls as it was typed next run.
+/// Persist the prompt history under [`HISTORY_HEADER`], one entry per line,
+/// with backslashes and newlines escaped so a multi-line prompt recalls as it
+/// was typed next run. Saving a legacy file upgrades it: its verbatim entries
+/// are escaped here and unescaped on the next load, round-tripping unchanged.
 fn save_prompt_history(path: Option<&Path>, entries: &[String]) {
     if let Some(p) = path {
-        let body = entries
-            .iter()
-            .map(|e| escape_history_entry(e))
+        let body = std::iter::once(HISTORY_HEADER.to_string())
+            .chain(entries.iter().map(|e| escape_history_entry(e)))
             .collect::<Vec<_>>()
             .join("\n");
         let _ = std::fs::write(p, body);
@@ -537,8 +557,8 @@ fn escape_history_entry(entry: &str) -> String {
     entry.replace('\\', "\\\\").replace('\n', "\\n")
 }
 
-/// The inverse of [`escape_history_entry`]. Entries written before escaping
-/// existed contain no backslash sequences and pass through unchanged.
+/// The inverse of [`escape_history_entry`], applied only to files that carry
+/// [`HISTORY_HEADER`].
 fn unescape_history_entry(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut chars = line.chars();
@@ -600,12 +620,33 @@ mod tests {
             "two\nlines\\with a backslash".to_string(),
         ];
         super::save_prompt_history(Some(&path), &entries);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.starts_with(super::HISTORY_HEADER));
         assert_eq!(super::load_prompt_history(Some(&path)), entries);
-        // A pre-escaping file still loads.
-        std::fs::write(&path, "plain\nentries").unwrap();
+    }
+
+    #[test]
+    fn legacy_history_loads_verbatim_and_upgrades_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history");
+        // Written before escaping existed: no header, backslash sequences are
+        // literal text the user typed, not escapes.
+        let legacy = "plain\nsplit on \"\\n\" and fix C:\\\\new\\\\file\nregex \\d+\\n";
+        std::fs::write(&path, legacy).unwrap();
+        let loaded = super::load_prompt_history(Some(&path));
         assert_eq!(
-            super::load_prompt_history(Some(&path)),
-            vec!["plain".to_string(), "entries".to_string()]
+            loaded,
+            vec![
+                "plain".to_string(),
+                "split on \"\\n\" and fix C:\\\\new\\\\file".to_string(),
+                "regex \\d+\\n".to_string(),
+            ]
         );
+        // Saving upgrades the file; the entries round-trip unchanged.
+        super::save_prompt_history(Some(&path), &loaded);
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .starts_with(super::HISTORY_HEADER));
+        assert_eq!(super::load_prompt_history(Some(&path)), loaded);
     }
 }
