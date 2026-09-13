@@ -217,9 +217,12 @@ impl ReviewRunner {
         .await?;
 
         let tokens: usize = outcomes.iter().map(|o| o.tokens_used).sum();
-        if outcomes.iter().all(|o| !o.ok()) {
-            // Nothing survived; surface the first error rather than feeding the
-            // next step an all-failure report.
+        // Every lane *erroring* fails the step: nothing survived, so surface
+        // the first error rather than feeding the next step an all-failure
+        // report. Lanes that were merely stopped (a cancel, a clock) still
+        // carry their partial replies, and the pipeline's own cancel check
+        // decides what happens to those.
+        if outcomes.iter().all(|o| o.result.is_err()) {
             let first = outcomes
                 .into_iter()
                 .find_map(|o| o.result.err())

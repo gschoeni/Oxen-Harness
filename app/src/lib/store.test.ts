@@ -462,3 +462,21 @@ describe("store: code review", () => {
     expect(useStore.getState().codeReview["s1"]!.activity.length).toBeLessThanOrEqual(120);
   });
 });
+
+describe("store: fleet retention", () => {
+  it("keeps a fleet as long as the chat it runs in is cached", async () => {
+    const { retainFleets, fleetsFor } = await import("./store");
+    const lane = { name: "a", status: "running" as const, activity: "", tail: "", tokens: 0 };
+    const fleets = {
+      "fleet-1": { session: "kept", source: "turn" as const, focused: null, lanes: [lane] },
+      "fleet-2": { session: "gone", source: "turn" as const, focused: null, lanes: [lane] },
+      "fleet-3": { session: "kept", source: "review" as const, focused: null, lanes: [lane] },
+    };
+    // Keyed by fleet id, so a sweep keyed by session id would drop every one;
+    // the fleet's own session is what decides.
+    const kept = retainFleets(fleets, new Set(["kept"]));
+    expect(Object.keys(kept)).toEqual(["fleet-1", "fleet-3"]);
+    expect(fleetsFor(kept, "kept").map(([id]) => id)).toEqual(["fleet-1", "fleet-3"]);
+    expect(fleetsFor(kept, "gone")).toEqual([]);
+  });
+});

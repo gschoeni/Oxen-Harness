@@ -473,6 +473,43 @@ model (marker + size line), OSC 8 links, Ctrl+G external editor.
 Deliberately not copied: sixty providers, yolo-by-default approvals, magic
 keywords, vibe/goal modes, IRC between subagents, in-process TS extensions.
 
+## Recent — fleet hardening, phase 0 of the recursive fleet plan (2026-09-13)
+
+The first phase of the Recursive Fleet Plan (the September study of Claude
+Code, Codex, oh-my-pi, Prime's RLM harness and the RLM paper against our
+`spawn_agents`): plug the holes before adding depth. Nothing new for the
+model to call yet.
+
+- **One subagent config.** `AgentConfig::for_subagent` decides everything a
+  lane inherits differently (smol role, non-interactive gate, round budget,
+  no re-attached project binaries, trail-free prompt); `side_agent` and the
+  fleet spawner both use it. A `spawn_agents` lane previously had no round
+  budget at all and re-uploaded every project PDF.
+- **Clocks.** `FleetLimits`: a 10-minute lane time limit and a 30-minute
+  fleet deadline beside the concurrency cap. Stopped lanes keep what they
+  streamed, marked with a `LaneStop`; a lane that ignores its stop for 20 s
+  is abandoned. The fleet stops on its own child token, never the caller's.
+- **Bounded results.** `combine_outcomes_capped` gives each lane 12k chars
+  (or its share of 48k) and parks the whole reply in the registry's overflow
+  store behind a `<<ccr:HASH>>` marker for `retrieve_original`. The review
+  pipeline keeps whole replies (they feed a fresh side agent).
+- **Named, stoppable, bounded fleets.** Every `fleet.*` event and `FleetSink`
+  call names its fleet; the host batches lane tokens per (fleet, lane), the
+  CLI hub keeps every fleet in flight and paints the oldest, the desktop
+  shows one panel per fleet with a Stop button. `cancel_fleet` /
+  `POST /v1/sessions/{id}/fleets/{fleet}/cancel` stops one fleet without
+  ending the turn. At most three fleets per session in flight.
+- **Classification.** `spawn_agents` is `Exclusive` (mutating to the gate,
+  alone in its wave); plan mode admits it by name.
+- **Attribution.** Lane and review spend is recorded against the spawning
+  session (`HistoryStore::usage_for_session`), the seam a tree-wide budget
+  hangs off next. Lane shells share the overflow store.
+
+Next phases, in order: a subagent as a persisted, resumable object with a
+typed result; depth 2 with a shared tree budget; context-as-variable
+(handles for big tool outputs, batched tool-less leaf calls); a declarative
+`map_agents`; fork mode; an agent hub.
+
 ## What's left / next
 
 - [ ] Run-time GUI smoke test of the desktop app (`cargo tauri dev`), incl. live

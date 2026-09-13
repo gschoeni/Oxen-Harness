@@ -356,6 +356,10 @@ where
     // capacity, while intermediate events are dropped when the lane is saturated.
     let (tx, mut rx) = mpsc::channel::<Msg>(256);
     let slots = Arc::new(Semaphore::new(limits.concurrency.max(1)));
+    // The fleet's own stop signal, a child of the caller's: the caller
+    // cancelling stops the fleet, while the deadline stops only the fleet —
+    // a review step past its clock must not cancel the whole review.
+    let cancel = cancel.child_token();
     // Set when the fleet deadline fires, so a lane the deadline stopped reports
     // that rather than a plain cancellation.
     let past_deadline = Arc::new(AtomicBool::new(false));
@@ -821,8 +825,8 @@ mod tests {
         .unwrap();
 
         assert!(
-            cancel.is_cancelled(),
-            "the deadline stops the fleet's token"
+            !cancel.is_cancelled(),
+            "the deadline stops the fleet, never the caller's own token"
         );
         assert_eq!(
             outcomes[0].stopped,

@@ -229,6 +229,17 @@ function retainCached<T>(record: Record<string, T>, threads: Record<string, Item
   return Object.fromEntries(Object.entries(record).filter(([id]) => ids.has(id)));
 }
 
+/** `retainCached` for fleets, which are keyed by fleet id rather than session:
+ *  a fleet lives as long as the chat it runs in does. */
+export function retainFleets(
+  fleets: Record<string, FleetView | undefined>,
+  sessions: Set<string>,
+): Record<string, FleetView | undefined> {
+  return Object.fromEntries(
+    Object.entries(fleets).filter(([, fleet]) => fleet !== undefined && sessions.has(fleet.session)),
+  );
+}
+
 /** Keep only the newest `MAX_CANVASES` docs. The just-touched doc is appended
  *  last (and is the active one), so it always survives the trim. */
 function capCanvases(list: CanvasDoc[]): CanvasDoc[] {
@@ -860,7 +871,7 @@ export const useStore = create<AppState>((set, get) => {
           canvases: retainCached(s.canvases, threads),
           activeCanvas: retainCached(s.activeCanvas, threads),
           codeReview: retainCached(s.codeReview, threads),
-          fleets: retainCached(s.fleets, threads),
+          fleets: retainFleets(s.fleets, new Set(Object.keys(threads))),
           queues: retainCached(s.queues, threads),
           canvasWriting: retainCached(s.canvasWriting, threads),
           streamingTool: retainCached(s.streamingTool, threads),
@@ -911,7 +922,7 @@ export const useStore = create<AppState>((set, get) => {
           canvases: retainCached(s.canvases, threads),
           activeCanvas: retainCached(s.activeCanvas, threads),
           codeReview: retainCached(s.codeReview, threads),
-          fleets: retainCached(s.fleets, threads),
+          fleets: retainFleets(s.fleets, new Set(Object.keys(threads))),
           queues: retainCached(s.queues, threads),
           canvasWriting: retainCached(s.canvasWriting, threads),
           streamingTool: retainCached(s.streamingTool, threads),
@@ -949,7 +960,7 @@ export const useStore = create<AppState>((set, get) => {
           infos: drop(s.infos),
           runStatus: drop(s.runStatus),
           codeReview: drop(s.codeReview),
-          fleets: drop(s.fleets),
+          fleets: ids.reduce((left, id) => withoutFleetsOf(left, id), s.fleets),
           queues: drop(s.queues),
           canvases: drop(s.canvases),
           activeCanvas: drop(s.activeCanvas),
@@ -1070,7 +1081,7 @@ export const useStore = create<AppState>((set, get) => {
           canvases: retainCached(s.canvases, threads),
           activeCanvas: retainCached(s.activeCanvas, threads),
           codeReview: retainCached(s.codeReview, threads),
-          fleets: retainCached(s.fleets, threads),
+          fleets: retainFleets(s.fleets, new Set(Object.keys(threads))),
           queues: retainCached(s.queues, threads),
           canvasWriting: retainCached(s.canvasWriting, threads),
           streamingTool: retainCached(s.streamingTool, threads),

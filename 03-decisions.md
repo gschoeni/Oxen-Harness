@@ -591,6 +591,35 @@ would bloat history.sqlite with reasoning nobody re-reads and clutter the
 sidebar with sessions that aren't conversations. If post-hoc inspection is ever
 needed, the seam is a `kind` column on sessions, not a behavior change.
 
+**A stopped lane is a partial result, not a lost one** (2026-09-13)
+Fleets carry two clocks (`FleetLimits`: a per-lane time limit and a
+whole-fleet deadline) because a wedged lane otherwise held the parent turn
+open indefinitely. When either fires, the lane is stopped cooperatively and
+whatever it streamed is kept, marked with a `LaneStop` the combined document
+prints beside it; only a lane that ignores its stop for a grace period is
+abandoned. Best-so-far over error: every RLM-style harness we surveyed
+converged here, and an error would hand the model nothing for the spend.
+The fleet stops on a child of the caller's token so a deadline never cancels
+the review or turn around it.
+
+**What a fleet hands the parent is capped; the rest is one retrieve away**
+(2026-09-13)
+`spawn_agents` used to paste six whole replies into one tool message while
+the same fleet run in the background was clipped at 48k by the aside
+delivery. Now every path through the parent's context is bounded the same
+way (12k per lane or its share of 48k), and the cut part goes to the
+registry's overflow store under a `<<ccr:HASH>>` marker — the same store
+truncated shell output and compression already use, so `retrieve_original`
+is the one recovery tool. The review pipeline keeps the uncapped form: its
+fan-out output feeds a fresh side agent, not the parent.
+
+**Fleets are named on the wire** (2026-09-13)
+A `wait: false` fleet can overlap a later one in the same session, so every
+`fleet.*` event and `FleetSink` call carries a fleet id, hosts key lanes and
+stop buttons by it, and a fleet can be stopped on its own
+(`POST /v1/sessions/{id}/fleets/{fleet}/cancel`) without ending the turn. A
+session holds at most three fleets in flight.
+
 **Usage is a timestamped call ledger; spend is a catalog-rate estimate** (2026-07-11)
 Usage is captured inside `Agent`, immediately after a model call has a settled
 provider count (or the calibrated fallback). This is the only layer that sees

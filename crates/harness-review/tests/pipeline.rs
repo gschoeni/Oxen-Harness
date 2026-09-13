@@ -139,6 +139,64 @@ async fn two_steps_chain_previous_output_and_yield_parsed_findings() {
 }
 
 #[tokio::test]
+async fn a_stopped_fan_out_step_reports_the_stop_rather_than_an_all_failed_fleet() {
+    let Some((_dir, root)) = dirty_repo() else {
+        return;
+    };
+    // Unroutable endpoint: no lane may reach the network. A pre-cancelled
+    // review stops every lane before its first call, so every outcome is a
+    // stopped-but-not-errored lane — which used to be mistaken for "every
+    // lane failed" and panicked looking for an error to surface.
+    let config = ReviewConfig {
+        steps: vec![
+            ReviewStep {
+                name: "find".into(),
+                prompt: String::new(),
+                agents: vec![
+                    StepAgent {
+                        name: "left".into(),
+                        prompt: "inspect\n{{diff}}".into(),
+                    },
+                    StepAgent {
+                        name: "right".into(),
+                        prompt: "inspect\n{{diff}}".into(),
+                    },
+                ],
+            },
+            ReviewStep {
+                name: "report".into(),
+                prompt: "Combine:\n{{previous}}".into(),
+                agents: Vec::new(),
+            },
+        ],
+        max_findings: 5,
+        max_parallel: 2,
+    };
+    let (agent, _store, _session) = agent("http://127.0.0.1:1/api/ai", &root);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+    let mut lanes_completed = Vec::new();
+    let result = ReviewRunner::new(config, ReviewTarget::Uncommitted, &root)
+        .with_cancel(cancel)
+        .run(&agent, |event| {
+            if let ReviewEvent::Fleet(FleetEvent::TaskCompleted { ok, summary, .. }) = event {
+                lanes_completed.push((*ok, summary.clone()));
+            }
+        })
+        .await;
+
+    assert!(
+        matches!(result, Err(harness_review::ReviewError::Cancelled { .. })),
+        "a stopped review is reported as stopped, got {result:?}"
+    );
+    assert_eq!(lanes_completed.len(), 2);
+    for (ok, summary) in &lanes_completed {
+        assert!(!ok, "a stopped lane did not finish its task");
+        assert!(summary.contains("cancelled"), "{summary}");
+    }
+}
+
+#[tokio::test]
 async fn a_fan_out_step_runs_agents_in_parallel_and_combines_their_outputs() {
     let Some((_dir, root)) = dirty_repo() else {
         return;
