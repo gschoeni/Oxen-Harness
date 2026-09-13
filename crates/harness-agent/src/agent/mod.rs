@@ -79,6 +79,9 @@ pub struct Agent {
     last_persisted_seq: i64,
     /// Detached agents need a working context, not a second SQLite transcript.
     persist_transcript: bool,
+    /// The session whose usage ledger this agent's spend lands in, when it is
+    /// not this agent's own (see [`Agent::set_usage_session`]).
+    usage_session: Option<String>,
     /// Where attachments are persisted + resolved, derived from
     /// [`AgentConfig::attachment_root`]. `None` inlines attachments instead.
     attachments: Option<AttachmentStore>,
@@ -209,6 +212,7 @@ impl Agent {
             messages,
             last_persisted_seq,
             persist_transcript: true,
+            usage_session: None,
             attachments,
             tokens_used: 0,
             prompt_tokens_used: 0,
@@ -268,6 +272,7 @@ impl Agent {
             messages,
             last_persisted_seq,
             persist_transcript: true,
+            usage_session: None,
             attachments,
             tokens_used,
             // The split input/output counters price only tokens we actually
@@ -581,6 +586,30 @@ impl Agent {
         self.usage_store = store;
     }
 
+    /// Attribute this agent's spend to `session` in the usage ledger — a
+    /// detached lane's tokens belong to the session that spawned it (its own
+    /// in-memory session id never reaches the store, so it would otherwise
+    /// be attributed to nothing).
+    pub(crate) fn set_usage_session(&mut self, session: String) {
+        self.usage_session = Some(session);
+    }
+
+    /// The session id usage rows are attributed to: the spawning session's
+    /// for a detached agent, this agent's own when its transcript persists,
+    /// and none when neither applies.
+    fn usage_session(&self) -> &str {
+        match &self.usage_session {
+            Some(session) => session.as_str(),
+            None if self.persist_transcript => self.session_id.as_str(),
+            None => "",
+        }
+    }
+
+    /// The configuration this agent runs under.
+    pub fn config(&self) -> &AgentConfig {
+        &self.config
+    }
+
     pub(crate) fn disable_transcript_persistence(&mut self) {
         self.persist_transcript = false;
     }
@@ -644,28 +673,12 @@ impl Agent {
     /// window. Its tool set is narrowed by `subagent_tools` (no recursion, no
     /// interactive tools).
     pub fn side_agent(&self) -> Result<Agent, AgentError> {
-        let mut config = self.config.clone();
-        config.model = config
-            .roles
-            .resolve(crate::config::Role::Smol, &config.model)
-            .to_owned();
+        let config = self.config.for_subagent();
         let store = Arc::new(HistoryStore::open_in_memory()?);
         let session = store.create_session(&SessionMeta {
             model: config.model.clone(),
             ..Default::default()
         })?;
-        config.initial_attachments.clear();
-        // A side agent can't drive the host's approval prompt any more than it
-        // can drive the question picker: demote its gate to auto-deny.
-        config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
-        // A lane that never converges is stopped, not left to spend the
-        // fleet's whole allowance.
-        config.round_budget = Some(crate::config::RoundBudget::SUBAGENT);
-        // The registry drops `update_trail` (see `subagent_tools`), so the
-        // inherited prompt must not mandate a tool the registry would reject.
-        config.system_prompt = config
-            .system_prompt
-            .map(|p| crate::prompt::strip_trail_sections(&p));
         let mut side = Agent::new(
             self.client.clone(),
             subagent_tools(self.tools.clone()),
@@ -675,6 +688,9 @@ impl Agent {
         )?;
         side.disable_transcript_persistence();
         side.set_usage_store(self.usage_store.clone());
+        // Its spend is this session's spend: a review or fleet the user ran
+        // from here shows up in this thread's cost, not in a phantom bucket.
+        side.set_usage_session(self.usage_session().to_owned());
         Ok(side)
     }
 
@@ -689,20 +705,13 @@ impl Agent {
         kind: &str,
         outcome: &CallOutcome,
     ) {
-        // Detached side agents keep their transcript out of the store; their
-        // spend is recorded, but not attributed to a phantom session.
-        let session_id = if self.persist_transcript {
-            self.session_id.as_str()
-        } else {
-            ""
-        };
         let _ = self.usage_store.record_model_usage_detailed(
             model,
             self.usage_source(),
             prompt_tokens,
             completion_tokens,
             &harness_store::UsageDetail {
-                session_id,
+                session_id: self.usage_session(),
                 kind,
                 cached_prompt_tokens: outcome.cached_prompt_tokens,
                 cache_write_tokens: outcome.cache_write_tokens,

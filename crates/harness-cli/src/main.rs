@@ -333,6 +333,7 @@ async fn main() -> Result<()> {
                 config.clone(),
             )?;
             agent.set_rules(endpoint::stream_rules(&root));
+            endpoint::set_fleet_session(session_id);
             Ok(agent)
         }
     };
@@ -360,6 +361,9 @@ async fn main() -> Result<()> {
             (agent, session, None)
         }
     };
+    // The fleet tool registered before the session existed; now that lanes
+    // have a session to charge, tell the spawner which.
+    endpoint::set_fleet_session(&session);
 
     // `-p/--print`: one turn, straight to stdout, then out — before the banner,
     // the store scans, and the exit review, none of which a script wants.

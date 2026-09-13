@@ -62,6 +62,11 @@ pub struct FleetSpawner {
     /// Optional persistent aggregate ledger. Fleet transcripts remain in
     /// memory, but their provider usage belongs in the host's all-time totals.
     usage_store: Option<Arc<HistoryStore>>,
+    /// The session lanes are spawned from, so their spend is attributed to
+    /// it in that ledger (see [`FleetSpawner::set_session`]). A slot rather
+    /// than a builder argument: the CLI registers the tool before its
+    /// session exists.
+    session: StdMutex<Option<String>>,
 }
 
 /// The mutable half of a [`FleetSpawner`]: what subagents inherit that can
@@ -79,6 +84,7 @@ impl FleetSpawner {
             endpoint: StdMutex::new(Endpoint { client, config }),
             cancel: StdMutex::new(CancellationToken::new()),
             usage_store: None,
+            session: StdMutex::new(None),
         }
     }
 
@@ -127,6 +133,18 @@ impl FleetSpawner {
         self
     }
 
+    /// Attribute future lanes' spend to `session` in that ledger — the chat
+    /// the fleet runs in, so its cost meter counts what its lanes burn.
+    pub fn with_session(self, session: impl Into<String>) -> Self {
+        self.set_session(session);
+        self
+    }
+
+    /// [`Self::with_session`] for a spawner that already exists.
+    pub fn set_session(&self, session: impl Into<String>) {
+        *self.session.lock().expect("fleet session slot poisoned") = Some(session.into());
+    }
+
     /// Point future subagents at a new inference client — call it wherever the
     /// live agent's client is swapped ([`Agent::set_client`]).
     pub fn set_client(&self, client: OxenClient) {
@@ -171,25 +189,13 @@ impl FleetSpawner {
         &self,
         lane: Option<std::sync::Arc<crate::worktree::LaneWorktree>>,
     ) -> Result<Agent, AgentError> {
-        let (client, mut config) = {
+        // Everything a lane inherits differently from its parent — model
+        // role, gate, round budget, attachments, prompt — is decided in one
+        // place, shared with `Agent::side_agent`.
+        let (client, config) = {
             let endpoint = self.endpoint.lock().expect("fleet endpoint poisoned");
-            (endpoint.client.clone(), endpoint.config.clone())
+            (endpoint.client.clone(), endpoint.config.for_subagent())
         };
-        // Lanes can't share the host's single approval prompt (the same
-        // deadlock reasoning as `subagent_tools` stripping `ask_user_question`):
-        // their gate auto-denies and tells the lane to report the command back.
-        config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
-        // The registry drops `update_trail` (see `subagent_tools`), so the
-        // inherited prompt must not mandate a tool the registry would reject.
-        config.system_prompt = config
-            .system_prompt
-            .map(|p| crate::prompt::strip_trail_sections(&p));
-        // Lanes read and grep far more than they write, and there are N of
-        // them: route them to the `smol` role when the user configured one.
-        config.model = config
-            .roles
-            .resolve(crate::config::Role::Smol, &config.model)
-            .to_string();
         // An isolated lane works in its own checkout, so its file and shell
         // tools must point there rather than at the shared project.
         let tools = match (&lane, self.root()) {
@@ -235,6 +241,14 @@ impl FleetSpawner {
         if let Some(usage_store) = &self.usage_store {
             agent.set_usage_store(usage_store.clone());
         }
+        if let Some(session) = self
+            .session
+            .lock()
+            .expect("fleet session slot poisoned")
+            .clone()
+        {
+            agent.set_usage_session(session);
+        }
         Ok(agent)
     }
 }
@@ -262,8 +276,10 @@ fn rooted_tools(
     tools.register_typed(SearchTool::new(workspace.clone()));
     tools.register_typed(harness_tools::git::GitTool::new(workspace.clone()));
     // A lane's background tasks are its own, so `task_output` ids resolve
-    // against the commands that lane actually started.
-    let tasks = BackgroundTasks::in_temp();
+    // against the commands that lane actually started — but truncated output
+    // spills into the shared overflow store, so the lane's `retrieve_original`
+    // (which reads that store) can still recover it.
+    let tasks = BackgroundTasks::in_temp_with_overflow(base.overflow_store().cloned());
     tools.register_typed(harness_tools::shell::ShellTool::with_tasks(
         workspace,
         tasks.clone(),
@@ -589,6 +605,41 @@ mod tests {
             ..AgentConfig::default()
         };
         Arc::new(FleetSpawner::new(client, ToolRegistry::new(), config))
+    }
+
+    #[test]
+    fn lanes_run_under_the_shared_subagent_config() {
+        // The parent's config carries everything a lane must NOT inherit
+        // verbatim: an attachment list, an unbounded round budget, a smol
+        // role to route to. `build_agent` and `side_agent` decide this in one
+        // place (`AgentConfig::for_subagent`), so a lane can't drift from a
+        // review step on any of it.
+        let sp = FleetSpawner::new(
+            OxenClient::new("http://localhost/api/ai", "k", "frontier"),
+            ToolRegistry::new(),
+            AgentConfig {
+                model: "frontier".into(),
+                system_prompt: None,
+                initial_attachments: vec![std::path::PathBuf::from("spec.pdf")],
+                round_budget: None,
+                roles: crate::config::ModelRoles {
+                    smol: Some("tiny".into()),
+                    ..Default::default()
+                },
+                ..AgentConfig::default()
+            },
+        );
+        let lane = sp.build_agent(None).unwrap();
+        assert_eq!(
+            lane.config().round_budget,
+            Some(crate::config::RoundBudget::SUBAGENT),
+            "a lane without a round budget can loop until its window fills"
+        );
+        assert!(
+            lane.config().initial_attachments.is_empty(),
+            "a lane must not re-upload the project's binary context"
+        );
+        assert_eq!(lane.model(), "tiny");
     }
 
     #[test]

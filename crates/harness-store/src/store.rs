@@ -317,8 +317,9 @@ pub struct ModelUsage {
 /// paths) record empty/zero detail rather than fabricating values.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UsageDetail<'a> {
-    /// The session that spent these tokens; empty for detached side agents
-    /// whose transcript never persists.
+    /// The session that spent these tokens — for a detached side agent or
+    /// fleet lane, the session that spawned it. Empty only when nothing
+    /// claims the spend.
     pub session_id: &'a str,
     /// What kind of call this was: `"turn"` (a turn-loop round), `"summary"`
     /// (compaction), `"oneshot"` (side completions), or empty when unknown.
@@ -331,6 +332,14 @@ pub struct UsageDetail<'a> {
     pub latency_ms: Option<u64>,
     /// Transient-failure retries burned before this call landed.
     pub retries: u32,
+}
+
+/// One session's token spend (see `HistoryStore::usage_for_session`),
+/// including whatever its detached lanes and review steps burned.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct SessionUsage {
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
 }
 
 /// Ledger-wide cache economics (see `HistoryStore::cache_usage_totals`).
@@ -1152,6 +1161,24 @@ impl HistoryStore {
                     prompt_tokens: row.get(0)?,
                     cached_prompt_tokens: row.get(1)?,
                     cache_write_tokens: row.get(2)?,
+                })
+            },
+        )
+        .map_err(HistoryError::from)
+    }
+
+    /// Everything attributed to one session: its own turns plus the spend of
+    /// every side agent and fleet lane it spawned.
+    pub fn usage_for_session(&self, session_id: &str) -> Result<SessionUsage, HistoryError> {
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0)
+             FROM usage_events WHERE session_id = ?1",
+            [session_id],
+            |row| {
+                Ok(SessionUsage {
+                    prompt_tokens: row.get(0)?,
+                    completion_tokens: row.get(1)?,
                 })
             },
         )

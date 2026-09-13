@@ -208,6 +208,33 @@ impl RoundBudget {
 }
 
 impl AgentConfig {
+    /// The configuration a detached subagent — a `side_agent`, a fleet lane —
+    /// runs under, derived from its parent's. One builder for every subagent
+    /// path, so the two can't drift on policy:
+    ///
+    /// - the model is routed through the `smol` role (lanes read and grep far
+    ///   more than they write, and there are N of them);
+    /// - the project's binary context is not re-attached (the parent's first
+    ///   prompt already carried it; N lanes re-uploading every PDF is pure
+    ///   cost);
+    /// - the permission gate is demoted to its non-interactive form (a lane
+    ///   can't drive the host's single approval prompt);
+    /// - a round budget is installed, so a lane that never converges is
+    ///   stopped instead of spending the fleet's whole allowance;
+    /// - the system prompt loses the trail mandate, since `subagent_tools`
+    ///   removes the tool it mandates.
+    pub fn for_subagent(&self) -> AgentConfig {
+        let mut config = self.clone();
+        config.model = config.roles.resolve(Role::Smol, &config.model).to_owned();
+        config.initial_attachments.clear();
+        config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
+        config.round_budget = Some(RoundBudget::SUBAGENT);
+        config.system_prompt = config
+            .system_prompt
+            .map(|p| crate::prompt::strip_trail_sections(&p));
+        config
+    }
+
     /// The reply-size cap actually used for requests and prompt budgeting:
     /// the configured reserve, clamped down to the model's reported maximum
     /// output when the catalog knows it (a cap above what the model can

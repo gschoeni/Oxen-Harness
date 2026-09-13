@@ -335,6 +335,16 @@ pub(crate) fn register_fleet_tool(
     harness_runtime::tools::load().apply(tools);
 }
 
+/// Tell the session's fleet spawner which session its lanes spend for, so
+/// their usage lands in that thread's ledger (the tool registers before the
+/// session exists, and `/resume` moves to another). A no-op when the fleet
+/// tool isn't registered.
+pub(crate) fn set_fleet_session(session: &str) {
+    if let Some(spawner) = FLEET_SPAWNER.get() {
+        spawner.set_session(session);
+    }
+}
+
 /// Point the session's fleet spawner at a swapped client and/or model, so a
 /// `spawn_agents` fleet launched after a `/model` or `/login` runs on the new
 /// endpoint rather than the one captured when the tool was registered. A no-op

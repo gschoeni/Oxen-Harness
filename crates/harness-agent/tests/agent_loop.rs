@@ -320,6 +320,15 @@ async fn detached_agent_records_usage_in_parent_ledger() {
     assert_eq!(usage.len(), 1);
     assert_eq!(usage[0].prompt_tokens, 200);
     assert_eq!(usage[0].completion_tokens, 10);
+    // ...and attributed to the session that spawned it, not to the side
+    // agent's own (in-memory, never persisted) session id.
+    let attributed = store.usage_for_session(base.session_id()).unwrap();
+    assert_eq!(attributed.prompt_tokens, 200);
+    assert_eq!(attributed.completion_tokens, 10);
+    assert_eq!(
+        store.usage_for_session(side.session_id()).unwrap(),
+        harness_store::SessionUsage::default()
+    );
 }
 
 // A model response that calls `run_shell` with a recursive delete — the shape
