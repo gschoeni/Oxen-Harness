@@ -79,8 +79,9 @@ pub struct HostHooks {
     pub on_session_deleted: Option<SessionNotify>,
 }
 
-/// Batches streamed text tokens *and* tool-call argument deltas so the
-/// transport isn't flooded with one event per SSE delta — a single large
+/// Batches streamed text tokens, tool-call argument deltas, *and* a running
+/// tool's live output chunks so the transport isn't flooded with one event
+/// per SSE delta (or per line of shell output) — a single large
 /// `write_file` call streams thousands of argument fragments, and emitting
 /// each one is enough to freeze a webview client. A run of same-kind events
 /// coalesces until [`STREAM_BATCH_BYTES`] or [`STREAM_BATCH_MAX_AGE`]; a kind
@@ -106,6 +107,15 @@ enum Pending {
         args: String,
         since: std::time::Instant,
     },
+    /// Live output of one running tool call (a shell command's stdout as it
+    /// streams). Chunks of the same call coalesce; a chunk from another call
+    /// displaces the run, so per-call attribution on the wire stays exact.
+    ToolProgress {
+        call_id: String,
+        name: String,
+        chunk: String,
+        since: std::time::Instant,
+    },
 }
 
 impl Pending {
@@ -124,12 +134,22 @@ impl Pending {
         }
     }
 
+    fn tool_progress(call_id: &str, name: &str, chunk: &str) -> Self {
+        Pending::ToolProgress {
+            call_id: call_id.to_string(),
+            name: name.to_string(),
+            chunk: chunk.to_string(),
+            since: std::time::Instant::now(),
+        }
+    }
+
     /// Whether the run is full or has been building long enough to ship.
     fn ripe(&self) -> bool {
         let (len, since) = match self {
             Pending::None => return false,
             Pending::Text { buf, since } => (buf.len(), since),
             Pending::ToolArgs { args, since, .. } => (args.len(), since),
+            Pending::ToolProgress { chunk, since, .. } => (chunk.len(), since),
         };
         len >= STREAM_BATCH_BYTES || since.elapsed() >= STREAM_BATCH_MAX_AGE
     }
@@ -172,6 +192,28 @@ impl StreamBatch {
                 (AgentEvent::ToolDelta { name, delta }, prior) => {
                     Some(std::mem::replace(prior, Pending::tool_args(name, delta)))
                 }
+                (
+                    AgentEvent::ToolProgress { call_id, chunk, .. },
+                    Pending::ToolProgress {
+                        call_id: pending_call,
+                        chunk: pending_chunk,
+                        ..
+                    },
+                ) if call_id == pending_call => {
+                    pending_chunk.push_str(chunk);
+                    None
+                }
+                (
+                    AgentEvent::ToolProgress {
+                        call_id,
+                        name,
+                        chunk,
+                    },
+                    prior,
+                ) => Some(std::mem::replace(
+                    prior,
+                    Pending::tool_progress(call_id, name, chunk),
+                )),
                 _ => return false,
             };
             let ready = pending
@@ -204,6 +246,17 @@ impl StreamBatch {
                 session: self.session.clone(),
                 name,
                 delta: args,
+            },
+            Pending::ToolProgress {
+                call_id,
+                name,
+                chunk,
+                ..
+            } => ProtocolEvent::ToolProgress {
+                session: self.session.clone(),
+                call_id,
+                name,
+                chunk,
             },
         };
         self.sink.emit(event);
@@ -1812,6 +1865,51 @@ mod tests {
         match &events[..] {
             [ProtocolEvent::Token { token, .. }] => assert_eq!(token, "slow drip"),
             other => panic!("expected the aged run to flush, got {other:?}"),
+        }
+    }
+
+    fn progress(call_id: &str, chunk: &str) -> AgentEvent {
+        AgentEvent::ToolProgress {
+            call_id: call_id.to_string(),
+            name: "run_shell".to_string(),
+            chunk: chunk.to_string(),
+        }
+    }
+
+    #[test]
+    fn stream_batch_coalesces_live_tool_output_per_call() {
+        let sink = Arc::new(RecordingSink::default());
+        let batch = StreamBatch::new(sink.clone(), "s1".into());
+
+        // A shell command's output lines ride as one progress event per
+        // flush, not one per line…
+        assert!(batch.absorb(&progress("c1", "line 1\n")));
+        assert!(batch.absorb(&progress("c1", "line 2\n")));
+        // …but another call's output (two shells in one wave) is its own run,
+        // and text after it comes after it.
+        assert!(batch.absorb(&progress("c2", "other\n")));
+        assert!(batch.absorb(&token("done")));
+        batch.flush();
+
+        let events = sink.0.lock().unwrap();
+        match &events[..] {
+            [ProtocolEvent::ToolProgress {
+                call_id: first,
+                chunk: first_chunk,
+                ..
+            }, ProtocolEvent::ToolProgress {
+                call_id: second,
+                chunk: second_chunk,
+                ..
+            }, ProtocolEvent::Token { token, .. }] => {
+                assert_eq!(
+                    (first.as_str(), first_chunk.as_str()),
+                    ("c1", "line 1\nline 2\n")
+                );
+                assert_eq!((second.as_str(), second_chunk.as_str()), ("c2", "other\n"));
+                assert_eq!(token, "done");
+            }
+            other => panic!("expected two coalesced progress runs then text, got {other:?}"),
         }
     }
 

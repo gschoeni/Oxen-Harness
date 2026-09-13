@@ -181,16 +181,18 @@ const MAX_LIVE_OUTPUT_CHARS = 8_000;
  *  id, else the newest running chip of that name). The end event replaces
  *  this with the real result. */
 export function toolProgress(prev: Item[], name: string, chunk: string, callId?: string): Item[] {
-  const next = [...prev];
-  for (let i = next.length - 1; i >= 0; i--) {
-    const it = next[i];
+  // The host coalesces a call's output into one event per flush, so this runs
+  // a few times a second at most; still, find the chip before copying so an
+  // unmatched chunk (a chip already sealed) costs no allocation at all.
+  for (let i = prev.length - 1; i >= 0; i--) {
+    const it = prev[i];
     if (it.kind !== "tool" || !it.running) continue;
     const matches = callId && it.callId ? it.callId === callId : it.name === name;
-    if (matches) {
-      const combined = it.result + chunk;
-      next[i] = { ...it, result: combined.slice(Math.max(0, combined.length - MAX_LIVE_OUTPUT_CHARS)) };
-      return next;
-    }
+    if (!matches) continue;
+    const combined = it.result + chunk;
+    const next = prev.slice();
+    next[i] = { ...it, result: combined.slice(Math.max(0, combined.length - MAX_LIVE_OUTPUT_CHARS)) };
+    return next;
   }
   return prev;
 }
