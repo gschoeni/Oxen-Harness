@@ -520,6 +520,14 @@ impl FleetSpawner {
         cancel: CancellationToken,
     ) -> Result<Agent, AgentError> {
         let store = self.owned_lane_store(id)?;
+        // Two agents on one transcript would interleave their rounds; a lane
+        // that is still running gets its result delivered, not a second turn.
+        if self.tree.is_live(id) {
+            return Err(AgentError::Tool(ToolError::Execution(format!(
+                "agent {id} is still running — wait for its result (it arrives \
+                 automatically) or stop it first"
+            ))));
+        }
         let (client, config) = {
             let endpoint = self.endpoint.lock().expect("fleet endpoint poisoned");
             (endpoint.client.clone(), endpoint.config.for_subagent())
@@ -1541,6 +1549,22 @@ mod tests {
             .invoke(serde_json::json!({ "agent": parent }))
             .await
             .is_err());
+
+        // A lane still running is not resumed on top of itself.
+        sp.tree().register(crate::lane::LiveLane {
+            id: id.clone(),
+            label: "scan".into(),
+            fleet: "fleet-busy".into(),
+            started: std::time::Instant::now(),
+            cancel: CancellationToken::new(),
+            steer: crate::Interjections::default(),
+        });
+        let err = SendToAgentTool::new(sp.clone(), sink.clone())
+            .invoke(serde_json::json!({ "agent": id, "message": "FOLLOW-UP please" }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("still running"), "{err}");
+        sp.tree().finish_fleet("fleet-busy");
 
         // A follow-up resumes the same lane with its history.
         let out = SendToAgentTool::new(sp.clone(), sink)

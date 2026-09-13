@@ -28,8 +28,13 @@ pub const MAX_ASK_PROMPTS: usize = 32;
 /// Prompts answered at once.
 pub(crate) const ASK_CONCURRENCY: usize = 6;
 
-/// Most characters of one answer that come back.
+/// Most characters of one answer that come back — or its share of
+/// [`REPLY_CHARS`] when that is tighter, so a 32-prompt call still fits.
 const ANSWER_CHARS: usize = 8_000;
+
+/// Most characters the whole numbered reply may take (the agent's parking
+/// cap; this tool's results are exempt from parking because they hold to it).
+const REPLY_CHARS: usize = 30_000;
 
 /// Arguments for `ask_model`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -135,13 +140,14 @@ impl TypedTool for AskModelTool {
             }
             answers[index] = Some(answer);
         }
+        let per_answer = ANSWER_CHARS.min(REPLY_CHARS / answers.len().max(1)).max(1);
         let mut out = String::new();
         for (index, answer) in answers.iter().enumerate() {
             out.push_str(&format!("### {}\n", index + 1));
             match answer {
                 Some(Ok(text)) => out.push_str(&harness_core::text::truncate_with_marker(
                     text.trim(),
-                    ANSWER_CHARS,
+                    per_answer,
                     "\n… [answer cut]",
                 )),
                 Some(Err(e)) => out.push_str(&format!("(failed: {e})")),

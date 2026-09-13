@@ -36,6 +36,22 @@ const MAX_TRAIL_NUDGES: u32 = 2;
 /// How much of a parked tool result the model still sees inline.
 const PARKED_HEAD_CHARS: usize = 4_000;
 
+/// Tools whose results are already cut to size by the tool itself — a
+/// retrieval the model asked for exactly, and the agent tools, whose
+/// documents cap every lane (and would otherwise be parked again, leaving
+/// the model a 4k head of the results it just waited for).
+fn bounded_by_construction(tool: &str) -> bool {
+    matches!(
+        tool,
+        harness_tools::RETRIEVE_ORIGINAL_TOOL
+            | crate::fleet_tool::FLEET_TOOL
+            | crate::map_tool::MAP_AGENTS_TOOL
+            | crate::lane_tools::SEND_TO_AGENT_TOOL
+            | crate::lane_tools::READ_AGENT_TOOL
+            | crate::ask_tool::ASK_MODEL_TOOL
+    )
+}
+
 #[derive(Default)]
 struct TurnState {
     /// A one-shot corrective appended to the *next* request only. Never
@@ -385,7 +401,7 @@ impl Agent {
     /// and nothing is parked without a store to retrieve from.
     fn park_oversized(&self, tool: &str, result: String) -> String {
         let cap = self.config.tool_result_cap;
-        if cap == 0 || tool == harness_tools::RETRIEVE_ORIGINAL_TOOL {
+        if cap == 0 || bounded_by_construction(tool) {
             return result;
         }
         let Some(store) = self.tools.overflow_store() else {
@@ -893,6 +909,28 @@ impl Agent {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_tool_results_are_never_parked_again() {
+        // Each already caps what it returns; parking would hand the model a
+        // 4k head of a document it just waited a fleet for.
+        for tool in [
+            harness_tools::RETRIEVE_ORIGINAL_TOOL,
+            crate::fleet_tool::FLEET_TOOL,
+            crate::map_tool::MAP_AGENTS_TOOL,
+            crate::lane_tools::SEND_TO_AGENT_TOOL,
+            crate::lane_tools::READ_AGENT_TOOL,
+            crate::ask_tool::ASK_MODEL_TOOL,
+        ] {
+            assert!(super::bounded_by_construction(tool), "{tool}");
+        }
+        assert!(!super::bounded_by_construction(
+            harness_tools::READ_FILE_TOOL
+        ));
+        assert!(!super::bounded_by_construction(
+            harness_tools::RUN_SHELL_TOOL
+        ));
+    }
+
     use std::sync::Arc;
 
     use harness_llm::OxenClient;
