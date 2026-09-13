@@ -60,6 +60,7 @@ pub(crate) fn subagent_tools(mut tools: ToolRegistry) -> ToolRegistry {
     tools.remove(crate::fleet_tool::FLEET_TOOL);
     tools.remove(crate::lane_tools::SEND_TO_AGENT_TOOL);
     tools.remove(crate::lane_tools::READ_AGENT_TOOL);
+    tools.remove(crate::ask_tool::ASK_MODEL_TOOL);
     tools.remove(harness_tools::ASK_USER_TOOL);
     tools.remove(harness_tools::TRAIL_TOOL);
     tools
@@ -1193,6 +1194,103 @@ mod tests {
         assert_eq!(roles.last().unwrap(), "assistant");
         assert_eq!(roles[roles.len() - 2], "user");
         assert_eq!(store.messages(&session).unwrap().len(), before + 2);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_tool_result_is_parked_behind_a_handle() {
+        use harness_tools::{ToolError, TypedTool};
+
+        /// A tool whose result is far past the cap.
+        struct BigTool;
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        struct NoArgs {}
+        #[async_trait::async_trait]
+        impl TypedTool for BigTool {
+            const NAME: &'static str = "big";
+            type Args = NoArgs;
+            fn description(&self) -> &str {
+                "big"
+            }
+            async fn run(&self, _: NoArgs) -> Result<String, ToolError> {
+                Ok((1..=5_000)
+                    .map(|n| format!("row {n} of a very long listing"))
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+        }
+
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_tool_call(
+                "call_big",
+                "big",
+                serde_json::json!({}),
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+        // The second request carries the parked head, never the whole thing.
+        let second = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("full_output".into()),
+                mockito::Matcher::Regex("row 1 of a very long listing".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose(
+                "read the head, parked the rest",
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut tools =
+            ToolRegistry::default_for_workspace(harness_tools::Workspace::new(dir.path()).unwrap());
+        tools.register_typed(BigTool);
+        let overflow = tools.overflow_store().cloned().unwrap();
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let mut agent = Agent::new(
+            OxenClient::new(server.url(), "key", "claude-opus-4-8"),
+            tools,
+            store,
+            session,
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        let reply = agent.run_turn("list everything", |_| {}).await.unwrap();
+        second.assert_async().await;
+        assert_eq!(reply, "read the head, parked the rest");
+
+        let tool_message = agent
+            .messages()
+            .iter()
+            .find(|m| m.role == "tool")
+            .and_then(|m| m.content_text())
+            .unwrap();
+        assert!(tool_message.contains("row 1 of a very long listing"));
+        assert!(!tool_message.contains("row 4999 of a very long listing"));
+        assert!(
+            tool_message.contains("over the 30000-char cap"),
+            "{tool_message}"
+        );
+        let hash = tool_message
+            .split("<<ccr:")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .expect("a handle");
+        assert!(overflow
+            .get(hash)
+            .unwrap()
+            .contains("row 4999 of a very long listing"));
     }
 
     #[test]

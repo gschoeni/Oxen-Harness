@@ -197,6 +197,11 @@ pub struct AgentConfig {
     /// `None` on a root that never spawns; the fleet spawner creates one
     /// when the host didn't.
     pub tree: Option<Arc<crate::tree::TreeBudget>>,
+    /// A tool result longer than this (in characters) is parked in the
+    /// registry's overflow store and the model sees its head plus a
+    /// `<<ccr:HASH>>` handle it can slice, grep, chunk, or hand to agents —
+    /// the context stays for decisions. `0` disables parking.
+    pub tool_result_cap: usize,
 }
 
 /// A soft cap on how many model rounds one turn may take.
@@ -295,9 +300,15 @@ impl Default for AgentConfig {
             depth: 0,
             max_depth: 2,
             tree: None,
+            tool_result_cap: DEFAULT_TOOL_RESULT_CAP,
         }
     }
 }
+
+/// The default [`AgentConfig::tool_result_cap`]: about 7.5k tokens, so a
+/// whole file or build log still reads inline while a repository dump or a
+/// giant grep is parked.
+pub const DEFAULT_TOOL_RESULT_CAP: usize = 30_000;
 
 #[cfg(test)]
 mod tests {

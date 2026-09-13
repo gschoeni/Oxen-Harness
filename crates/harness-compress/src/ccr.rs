@@ -36,6 +36,18 @@ pub fn marker(hash: &str, note: Option<&str>) -> String {
     }
 }
 
+/// The one-line header a model reads in place of parked content: the
+/// marker plus its size, so it can decide whether to read a slice, grep it,
+/// or hand it to an agent — without ever loading it.
+pub fn describe(hash: &str, note: &str, content: &str) -> String {
+    format!(
+        "{} ({} lines, {} chars)",
+        marker(hash, Some(note)),
+        content.lines().count(),
+        content.chars().count()
+    )
+}
+
 /// Bounded store of compressed-away originals, shared (via `Arc`) between the
 /// compressor (writes) and the `retrieve_original` tool (reads).
 #[derive(Debug)]

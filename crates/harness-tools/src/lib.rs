@@ -989,6 +989,12 @@ mod tests {
         // oh-my-pi's hashline, whose benchmark lifted weak models' edit
         // success 2-10x — exactly the local GGUF class this harness ships —
         // and it cuts output tokens on every large rewrite.
+        //
+        // Ranged retrieval (~0.4K, 15.9K → 16.3K): `retrieve_original` reads
+        // a slice, greps, or chunks parked content instead of loading it
+        // whole. This is what lets an oversized result stay out of the
+        // context (the recursive-language-model move); the three arguments
+        // pay for themselves the first time a 100K listing is not re-read.
         let workspace = Workspace::new(".").unwrap();
         let registry = ToolRegistry::default_for_workspace(workspace);
         let chars: usize = registry
@@ -997,8 +1003,8 @@ mod tests {
             .map(|d| d.to_string().len())
             .sum();
         assert!(
-            chars < 15_900,
-            "default tool definitions grew to {chars} chars (budget 15900)"
+            chars < 16_300,
+            "default tool definitions grew to {chars} chars (budget 16300)"
         );
     }
 }

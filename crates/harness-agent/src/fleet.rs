@@ -186,8 +186,14 @@ pub const DEFAULT_FLEET_DEADLINE: Duration = Duration::from_secs(30 * 60);
 /// (finish the in-flight model call or tool) before its turn is abandoned.
 const STOP_GRACE: Duration = Duration::from_secs(20);
 
-/// What bounds a fleet run: how many lanes at once, and how long each lane
-/// and the whole fleet may take.
+/// How long the lanes after the first wait for the first lane's reply to
+/// begin before starting anyway. Sibling lanes share a system prompt and
+/// tool block; letting one request warm the provider's prompt cache before
+/// the rest go out turns N cache writes into one write and N-1 reads.
+pub const DEFAULT_STAGGER: Duration = Duration::from_secs(3);
+
+/// What bounds a fleet run: how many lanes at once, how long each lane and
+/// the whole fleet may take, and how long siblings hold for the cache.
 #[derive(Debug, Clone, Copy)]
 pub struct FleetLimits {
     /// Lanes running at once (clamped to ≥ 1).
@@ -198,6 +204,9 @@ pub struct FleetLimits {
     /// The longest the whole fleet may run, queued lanes included; past it
     /// every lane is stopped with [`LaneStop::Deadline`].
     pub deadline: Duration,
+    /// How long lanes after the first wait for the first lane's reply to
+    /// begin (see [`DEFAULT_STAGGER`]); `None` starts them all at once.
+    pub stagger: Option<Duration>,
 }
 
 impl FleetLimits {
@@ -207,6 +216,7 @@ impl FleetLimits {
             concurrency,
             lane_timeout: DEFAULT_LANE_TIMEOUT,
             deadline: DEFAULT_FLEET_DEADLINE,
+            stagger: Some(DEFAULT_STAGGER),
         }
     }
 }
@@ -388,6 +398,10 @@ where
     // capacity, while intermediate events are dropped when the lane is saturated.
     let (tx, mut rx) = mpsc::channel::<Msg>(256);
     let slots = Arc::new(Semaphore::new(limits.concurrency.max(1)));
+    // Flipped when the first lane's reply begins streaming (its request has
+    // been accepted and, with it, the shared prefix cached); siblings hold
+    // for it up to the stagger.
+    let (warm_tx, warm_rx) = tokio::sync::watch::channel(false);
     // The fleet's own stop signal, a child of the caller's: the caller
     // cancelling stops the fleet, while the deadline stops only the fleet —
     // a review step past its clock must not cancel the whole review.
@@ -410,6 +424,7 @@ where
         let slots = slots.clone();
         let fleet_cancel = cancel.clone();
         let past_deadline = past_deadline.clone();
+        let mut warm = warm_rx.clone();
         join.spawn(async move {
             let _slot = match slots.acquire_owned().await {
                 Ok(permit) => permit,
@@ -418,6 +433,11 @@ where
                 // silently running uncapped.
                 Err(_) => return,
             };
+            if index > 0 {
+                if let Some(stagger) = limits.stagger {
+                    let _ = tokio::time::timeout(stagger, warm.wait_for(|w| *w)).await;
+                }
+            }
             let _ = tx
                 .send(Msg::Started {
                     index,
@@ -534,8 +554,18 @@ where
             Msg::Started { index, label, lane } => {
                 on_event(&FleetEvent::TaskStarted { index, label, lane })
             }
-            Msg::Agent { index, event } => on_event(&FleetEvent::Agent { index, event }),
+            Msg::Agent { index, event } => {
+                if matches!(event.as_ref(), AgentEvent::Token(_)) && !*warm_tx.borrow() {
+                    let _ = warm_tx.send(true);
+                }
+                on_event(&FleetEvent::Agent { index, event });
+            }
             Msg::Done { index, outcome } => {
+                // A lane that ended without streaming (an error) must not
+                // hold its siblings for the whole stagger.
+                if !*warm_tx.borrow() {
+                    let _ = warm_tx.send(true);
+                }
                 on_event(&FleetEvent::TaskCompleted {
                     index,
                     label: outcome.label.clone(),
@@ -680,6 +710,55 @@ mod tests {
         }
         // The base agent's own session saw none of it.
         assert!(base.messages().is_empty());
+    }
+
+    #[tokio::test]
+    async fn siblings_hold_until_the_first_lane_has_warmed_the_prefix() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("done"))
+            .expect(3)
+            .create_async()
+            .await;
+
+        let base = base_agent(&server.url());
+        let mut order = Vec::new();
+        run_fleet(
+            |_, _| base.side_agent(),
+            vec![
+                SubagentTask::new("a", "go"),
+                SubagentTask::new("b", "go"),
+                SubagentTask::new("c", "go"),
+            ],
+            FleetLimits {
+                stagger: Some(Duration::from_secs(5)),
+                ..FleetLimits::with_concurrency(3)
+            },
+            CancellationToken::new(),
+            |e| match e {
+                FleetEvent::TaskStarted { index, .. } => order.push(format!("start-{index}")),
+                FleetEvent::Agent { index, event }
+                    if matches!(event.as_ref(), AgentEvent::Token(_)) =>
+                {
+                    order.push(format!("token-{index}"))
+                }
+                _ => {}
+            },
+        )
+        .await
+        .unwrap();
+        // Three slots, yet b and c only set out once a's reply began.
+        let first_token = order.iter().position(|s| s == "token-0").unwrap();
+        for lane in ["start-1", "start-2"] {
+            let started = order.iter().position(|s| s == lane).unwrap();
+            assert!(
+                started > first_token,
+                "{lane} before a's first token: {order:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -842,6 +921,7 @@ mod tests {
                 concurrency: 1,
                 lane_timeout: Duration::from_millis(300),
                 deadline: DEFAULT_FLEET_DEADLINE,
+                stagger: None,
             },
             CancellationToken::new(),
             |e| {
@@ -884,6 +964,7 @@ mod tests {
                 concurrency: 1,
                 lane_timeout: DEFAULT_LANE_TIMEOUT,
                 deadline: Duration::from_millis(300),
+                stagger: None,
             },
             cancel.clone(),
             |_| {},

@@ -13,7 +13,7 @@ use harness_llm::ToolCall;
 
 /// Rough characters-per-token ratio for mixed English + code. Good enough for
 /// budgeting; real tokenizers vary, so we stay conservative elsewhere.
-const CHARS_PER_TOKEN: usize = 4;
+pub const CHARS_PER_TOKEN: usize = 4;
 /// Per-message structural overhead (role tags, delimiters) in tokens.
 const PER_MESSAGE_OVERHEAD: usize = 4;
 /// Context window assumed for an unrecognized model.

@@ -811,6 +811,7 @@ impl SessionService {
         );
         tools.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
         tools.register_typed(harness_agent::ReadAgentTool::new(spawner.clone()));
+        tools.register_typed(harness_agent::AskModelTool::new(spawner.clone()));
         self.fleet_spawners
             .lock()
             .expect("fleet spawners poisoned")
@@ -1878,16 +1879,18 @@ impl SessionService {
         );
         registry.register_typed(screenshot);
         registry.register_typed(console);
-        // An inert `spawn_agents` (never run — only name/description/schema
-        // are read), so the fleet is manageable like any tool.
-        registry.register_typed(harness_agent::FleetTool::new(
-            Arc::new(harness_agent::FleetSpawner::new(
-                OxenClient::new("http://localhost", "", ""),
-                ToolRegistry::new(),
-                AgentConfig::default(),
-            )),
-            Arc::new(NullFleetSink),
+        // Inert agent tools (never run — only name/description/schema are
+        // read), so the fleet and its companions are manageable like any tool.
+        let spawner = Arc::new(harness_agent::FleetSpawner::new(
+            OxenClient::new("http://localhost", "", ""),
+            ToolRegistry::new(),
+            AgentConfig::default(),
         ));
+        let sink: Arc<dyn harness_agent::fleet::FleetSink> = Arc::new(NullFleetSink);
+        registry.register_typed(harness_agent::FleetTool::new(spawner.clone(), sink.clone()));
+        registry.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
+        registry.register_typed(harness_agent::ReadAgentTool::new(spawner.clone()));
+        registry.register_typed(harness_agent::AskModelTool::new(spawner));
         Ok(registry)
     }
 }

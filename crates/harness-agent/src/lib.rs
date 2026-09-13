@@ -38,6 +38,7 @@ mod prompt;
 pub mod rules;
 pub mod worktree;
 
+pub mod ask_tool;
 pub mod budget;
 pub mod cache;
 pub mod compact;
@@ -52,6 +53,7 @@ pub mod tree;
 mod test_support;
 
 pub use agent::Agent;
+pub use ask_tool::{AskModelTool, ASK_MODEL_TOOL};
 pub use cache::PromptCacheMode;
 pub use config::{AgentConfig, ModelRoles, RetryPolicy, Role, RoundBudget, SessionBudget};
 pub use error::AgentError;

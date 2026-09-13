@@ -333,7 +333,8 @@ pub(crate) fn register_fleet_tool(
             .with_asides(tools.asides()),
     );
     tools.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
-    tools.register_typed(harness_agent::ReadAgentTool::new(spawner));
+    tools.register_typed(harness_agent::ReadAgentTool::new(spawner.clone()));
+    tools.register_typed(harness_agent::AskModelTool::new(spawner));
     harness_runtime::tools::load().apply(tools);
 }
 

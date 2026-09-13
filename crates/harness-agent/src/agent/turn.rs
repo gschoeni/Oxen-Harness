@@ -33,6 +33,9 @@ const MAX_TRAIL_NUDGES: u32 = 2;
 /// All of it is per-turn by design: a corrective that fired in an earlier turn
 /// must not suppress itself now, and an older incomplete plan must not hijack
 /// an unrelated follow-up question.
+/// How much of a parked tool result the model still sees inline.
+const PARKED_HEAD_CHARS: usize = 4_000;
+
 #[derive(Default)]
 struct TurnState {
     /// A one-shot corrective appended to the *next* request only. Never
@@ -376,6 +379,32 @@ impl Agent {
     }
 
     /// The closing message when a turn hits its round budget.
+    /// Park a tool result longer than [`AgentConfig::tool_result_cap`] in
+    /// the registry's overflow store, returning its head plus the handle.
+    /// Retrievals are never re-parked (the model asked for exactly that),
+    /// and nothing is parked without a store to retrieve from.
+    fn park_oversized(&self, tool: &str, result: String) -> String {
+        let cap = self.config.tool_result_cap;
+        if cap == 0 || tool == harness_tools::RETRIEVE_ORIGINAL_TOOL {
+            return result;
+        }
+        let Some(store) = self.tools.overflow_store() else {
+            return result;
+        };
+        if result.chars().count() <= cap {
+            return result;
+        }
+        let hash = store.put(&result);
+        let head: String = result.chars().take(PARKED_HEAD_CHARS).collect();
+        format!(
+            "{head}\n… [this result is {} — over the {cap}-char cap, so only its first \
+             {PARKED_HEAD_CHARS} chars are shown. retrieve_original with lines:\"a-b\" or \
+             grep:\"pattern\" reads a slice; chunks:n splits it into pieces agents can take \
+             (spawn_agents / ask_model inputs).]",
+            harness_compress::ccr::describe(&hash, "full_output", &result)
+        )
+    }
+
     /// Whether the tree budget stops this lane here (never the root, whose
     /// own spend the session budget bounds), and the message to end on.
     fn tree_budget_stop(&self) -> Option<String> {
@@ -778,6 +807,9 @@ impl Agent {
                     );
                 }
             }
+            // A result past the cap is parked behind a handle: the model reads
+            // its head and decides what to slice, grep, or delegate.
+            let result = self.park_oversized(&call.function.name, result);
             // A tool that produced an image (e.g. the preview screenshot) marks
             // it in-band; the `tool` role is text-only, so the image rides in
             // as a user message right after the result.

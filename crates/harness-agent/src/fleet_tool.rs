@@ -120,6 +120,17 @@ impl FleetSpawner {
         }
     }
 
+    /// The registry's overflow store — where parked content lives.
+    pub fn overflow_store(&self) -> Option<Arc<harness_compress::CcrStore>> {
+        self.tools.overflow_store().cloned()
+    }
+
+    /// The client and config lanes are built from right now.
+    pub(crate) fn endpoint_snapshot(&self) -> (OxenClient, AgentConfig) {
+        let endpoint = self.endpoint.lock().expect("fleet endpoint poisoned");
+        (endpoint.client.clone(), endpoint.config.clone())
+    }
+
     /// The wallet every lane of this session's turn spends from.
     pub fn tree_budget(&self) -> Arc<crate::tree::TreeBudget> {
         self.endpoint
@@ -173,9 +184,10 @@ impl FleetSpawner {
         Arc::new(child)
     }
 
-    /// Give a lane below the depth cap its own fleet tools, on a child
-    /// spawner. Leaves (at the cap) get none: `subagent_tools` already
-    /// stripped the parent's.
+    /// Give a lane its own agent tools on a child spawner: `ask_model` at
+    /// every depth (a leaf may still ask cheap tool-less questions), and
+    /// below the depth cap the fleet tools too. Leaves get no fleet tools:
+    /// `subagent_tools` already stripped the parent's.
     fn add_nested_tools(
         &self,
         tools: &mut ToolRegistry,
@@ -183,13 +195,14 @@ impl FleetSpawner {
         lane_session: &str,
         cancel: &CancellationToken,
     ) {
+        let child = self.child(lane_config, lane_session, cancel);
+        tools.register_typed(crate::ask_tool::AskModelTool::new(child.clone()));
         if !lane_config.may_spawn() {
             return;
         }
         let Some(sink) = self.sink() else {
             return;
         };
-        let child = self.child(lane_config, lane_session, cancel);
         tools.register_typed(
             FleetTool::new(child.clone(), sink.clone()).with_asides(tools.asides()),
         );
@@ -573,6 +586,49 @@ fn rooted_tools(
 /// half the repo is a fact worth reporting, not worth pasting.
 const MAX_PATCH_CHARS: usize = 20_000;
 
+/// The `## Inputs` block appended to a lane's prompt for the parked content
+/// it was handed: each handle with its size and first lines, and how to
+/// read it. The content itself is never pasted — the lane reads the slice
+/// it needs.
+pub(crate) fn inputs_section(
+    inputs: &[String],
+    store: Option<&harness_compress::CcrStore>,
+) -> String {
+    let mut out = String::from(
+        "## Inputs\n\nThese are parked for you; read them with retrieve_original (the whole \
+         thing, lines:\"a-b\", or grep:\"pattern\").\n",
+    );
+    for (index, input) in inputs.iter().enumerate() {
+        let hash = input
+            .trim()
+            .trim_start_matches("<<ccr:")
+            .trim_end_matches(">>")
+            .split_whitespace()
+            .next()
+            .unwrap_or_default();
+        match store.and_then(|s| s.get(hash)) {
+            Some(content) => {
+                let preview: Vec<String> = content
+                    .lines()
+                    .take(3)
+                    .map(|l| harness_core::text::ellipsize(l, 120))
+                    .collect();
+                out.push_str(&format!(
+                    "\n{}. {}\n   {}\n",
+                    index + 1,
+                    harness_compress::ccr::describe(hash, "input", &content),
+                    preview.join("\n   ")
+                ));
+            }
+            None => out.push_str(&format!(
+                "\n{}. <<ccr:{hash}>> — nothing is parked under this hash; tell the caller.\n",
+                index + 1
+            )),
+        }
+    }
+    out
+}
+
 /// What each isolated lane changed, appended to the fleet's result: a summary
 /// per lane and the patch itself, so the parent can review and apply rather
 /// than discovering the edits already merged. The whole patch is parked in
@@ -643,6 +699,13 @@ pub struct FleetAgentSpec {
     /// re-asked once or twice.
     #[serde(default)]
     pub output_schema: Option<serde_json::Value>,
+    /// Optional parked content this agent should work from: `<<ccr:HASH>>`
+    /// markers (or bare hashes) from an oversized tool result, a
+    /// retrieve_original `chunks` listing, or another agent's reply. The
+    /// agent is told what each is and reads it with retrieve_original; you
+    /// never paste it.
+    #[serde(default)]
+    pub inputs: Option<Vec<String>>,
 }
 
 /// Arguments for `spawn_agents`.
@@ -750,7 +813,9 @@ impl TypedTool for FleetTool {
          Every result carries an agent id: send_to_agent continues that agent with a follow-up \
          (it keeps its context), read_agent reads its full reply. Delegate reading and \
          searching so your own context stays for decisions; the agents of one turn share a \
-         budget, so prefer a few substantial tasks over many tiny ones."
+         budget, so prefer a few substantial tasks over many tiny ones. Parked content (a \
+         <<ccr:HASH>> handle from an oversized result or a retrieve_original chunks listing) \
+         goes in an agent's `inputs`, never pasted into its prompt."
     }
 
     /// A fleet edits, runs commands, and returns patches: it runs alone in
@@ -820,10 +885,23 @@ impl FleetTool {
             .clamp(1, MAX_FLEET_AGENTS);
 
         let labels: Vec<String> = args.agents.iter().map(|a| a.name.clone()).collect();
+        let spill = spawner.tools.overflow_store().cloned();
         let tasks: Vec<SubagentTask> = args
             .agents
             .into_iter()
-            .map(|a| SubagentTask::new(a.name, a.prompt).with_schema(a.output_schema))
+            .map(|a| {
+                let prompt = match &a.inputs {
+                    Some(inputs) if !inputs.is_empty() => {
+                        format!(
+                            "{}\n\n{}",
+                            a.prompt,
+                            inputs_section(inputs, spill.as_deref())
+                        )
+                    }
+                    _ => a.prompt,
+                };
+                SubagentTask::new(a.name, prompt).with_schema(a.output_schema)
+            })
             .collect();
 
         // Editing lanes each get their own checkout. Falling back to the
@@ -1566,6 +1644,35 @@ mod tests {
             2
         );
         assert!(sp.tree().live().is_empty());
+    }
+
+    #[test]
+    fn a_lane_is_told_about_its_inputs_without_being_handed_them() {
+        let store = harness_compress::CcrStore::default();
+        let content = (1..=200)
+            .map(|n| format!("row {n}: SECRET-PAYLOAD"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let hash = store.put(&content);
+        let section = inputs_section(
+            &[format!("<<ccr:{hash} full_output>>"), "deadbeef0000".into()],
+            Some(&store),
+        );
+        assert!(section.starts_with("## Inputs"), "{section}");
+        assert!(
+            section.contains(&format!("<<ccr:{hash} input>> (200 lines,")),
+            "{section}"
+        );
+        assert!(section.contains("row 1: SECRET-PAYLOAD"), "a short preview");
+        assert!(
+            !section.contains("row 4: SECRET-PAYLOAD"),
+            "not the content: {section}"
+        );
+        assert!(
+            section.contains("<<ccr:deadbeef0000>> — nothing is parked"),
+            "{section}"
+        );
+        assert!(section.chars().count() < 800, "{}", section.chars().count());
     }
 
     #[tokio::test]
