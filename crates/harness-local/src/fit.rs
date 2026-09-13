@@ -138,8 +138,22 @@ pub fn plan_context(budget: u64, weight_bytes: u64, native: u32) -> u32 {
     } else {
         native
     };
+    // The largest window that still leaves the machine comfortable: a `Good`
+    // fit, at most 70% of the budget. This used to accept anything under the
+    // budget line, which planned a 30B model on a 36 GB laptop at 64K — a
+    // footprint that left every other app fighting for scraps and swapped the
+    // moment the model was touched.
     for &c in LADDER {
-        if c <= cap && footprint(weight_bytes, c) <= budget {
+        if c <= cap && fit_for(weight_bytes, c, budget) == Fit::Good {
+            return c;
+        }
+    }
+    // Nothing is comfortable: the weights alone pass 70%. It is still the
+    // user's chosen model, so run it at the window the model list rated it
+    // `Tight` at (PLANNED_CONTEXT) or below — never more, since headroom is
+    // already gone.
+    for &c in LADDER {
+        if c <= cap.min(PLANNED_CONTEXT) && fit_for(weight_bytes, c, budget) == Fit::Tight {
             return c;
         }
     }
@@ -231,6 +245,33 @@ mod tests {
         // and 262144 ≈ 41 GB — both fit, so it should reach at least 131072.
         let ctx = plan_context(96 * GIB, weights, 1_048_576);
         assert!(ctx >= 131_072, "expected a large window, got {ctx}");
+    }
+
+    #[test]
+    fn plan_context_stays_comfortable_not_merely_under_budget() {
+        // The case that motivated the 70% line: a 16.7 GB Q4 30B on a 36 GB
+        // machine (27 GB usable). Under budget alone allowed 64K (~26 GB);
+        // comfortable caps it at 16K (~19 GB).
+        let weights = 16_756_683_904;
+        let budget = 27 * GIB;
+        let ctx = plan_context(budget, weights, 131_072);
+        assert_eq!(ctx, 16_384);
+        assert_eq!(fit_for(weights, ctx, budget), Fit::Good);
+        assert_eq!(fit_for(weights, 32_768, budget), Fit::Tight);
+    }
+
+    #[test]
+    fn plan_context_runs_a_tight_model_at_the_rated_window_or_below() {
+        // Weights alone pass 70% of the budget, so no window is `Good`. The
+        // model still gets planned, at the PLANNED_CONTEXT it was rated at.
+        let weights = 20 * GIB;
+        let budget = 24 * GIB;
+        assert_eq!(fit_for(weights, PLANNED_CONTEXT, budget), Fit::Tight);
+        assert_eq!(plan_context(budget, weights, 131_072), PLANNED_CONTEXT);
+        // With less room, it steps down rather than up.
+        let ctx = plan_context(22 * GIB, weights, 131_072);
+        assert!(ctx < PLANNED_CONTEXT, "got {ctx}");
+        assert_eq!(fit_for(weights, ctx, 22 * GIB), Fit::Tight);
     }
 
     #[test]
