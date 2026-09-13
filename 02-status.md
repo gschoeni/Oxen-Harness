@@ -559,6 +559,19 @@ a script sandbox before the declarative tool proves insufficient, and a
 tree-wide semaphore (a lane holding a slot while waiting on its children
 would deadlock — `max_spawns` bounds the tree instead).
 
+**Robustness pass, same day.** Agent-tool results are never re-parked
+(a 48k fleet document was being cut to a 4k head by the new tool cap);
+`send_to_agent` refuses a lane that is still running; lanes no longer
+write the system prompt per transcript and forks start from one snapshot;
+the `map_agents` memo persists beside the session; the tree budget defers
+its reset while a background fleet is in flight; `fleet.budget` events
+show the tree's spend live in both hosts; Enter steers the watched lane in
+the CLI; a finished lane opens in the desktop inspector from the hub.
+
+Still open: a real-model smoke run (everything is proven against canned
+SSE), an offline TUI scenario for the lane block, and a desktop control to
+steer a running lane.
+
 ## What's left / next
 
 - [ ] Run-time GUI smoke test of the desktop app (`cargo tauri dev`), incl. live
