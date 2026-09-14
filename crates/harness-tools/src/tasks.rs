@@ -956,6 +956,46 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_kill_reports_the_task_and_leaves_it_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = temp_registry(dir.path());
+        let id = tasks
+            .spawn("sleep 30", dir.path(), 1000, &Default::default())
+            .await
+            .unwrap();
+        let pid = tasks
+            .tasks
+            .lock()
+            .await
+            .get_mut(&id)
+            .unwrap()
+            .pid
+            .replace(0);
+        let error = tasks.kill(id).await.unwrap_err().to_string();
+        let unchanged = {
+            let mut entries = tasks.tasks.lock().await;
+            let entry = entries.get_mut(&id).unwrap();
+            entry.pid = pid;
+            !entry.killed && !entry.announced
+        };
+        tasks.kill(id).await.unwrap();
+        tasks.wait(id, Duration::from_secs(10)).await.unwrap();
+        assert!(
+            error.contains(&format!("could not stop task {id}")),
+            "{error}"
+        );
+        assert!(
+            error.contains("process group id must be positive"),
+            "{error}"
+        );
+        assert!(
+            unchanged,
+            "a rejected signal must not mark the task killed or announced"
+        );
+    }
+
     #[tokio::test]
     async fn kill_terminates_a_running_task() {
         let dir = tempfile::tempdir().unwrap();

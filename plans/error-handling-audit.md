@@ -73,3 +73,39 @@ the ordinary UI reporting path.
   Commit-only isolation therefore cannot independently establish a green build.
 - Dedicated review/refactor findings and final check totals follow in the polish
   commit.
+
+## Dedicated review/refactor pass
+
+Concrete findings and changes:
+
+1. Repeated shell-lock mappings obscured the operation. Consolidated them in a
+   small fallible helper and snapshot cwd/environment under one guard.
+2. An error after a command finished must not discard its output and invite a
+   duplicate execution. Shell state-update failures now accompany the completed
+   command's output, with the failure and explicit retry guidance.
+3. Git's bounded reader needed direct failure coverage. Extracted its existing
+   loop into a small reader function and tested partial-read errors and exact
+   truncation boundaries.
+4. A helper-only signal test did not establish that a rejected stop preserves
+   task state. Added a registry-level regression checking the useful task error
+   and unchanged killed/announced flags before real cleanup.
+5. The crash-handler regression used undefined behavior to generate SIGSEGV.
+   Replaced the null-pointer write with a deliberate signal in the helper process.
+
+The review kept the changes within existing crate boundaries; no shared lock
+abstraction, blanket poison recovery, or new dependencies were introduced.
+
+Final working-tree verification after the polish pass:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo nextest run`: 1,312 passed, 5 skipped.
+- Desktop `cargo clippy -- -D warnings`: passed.
+- Desktop `cargo test --lib commands::files::tests`: 12 passed.
+- Frontend `npx tsc --noEmit`: passed.
+- Frontend `npx vitest run`: 501 passed across 55 files.
+
+The initial feature commit is `9fdb7d6`. Existing working changes were kept out
+of the commits using a separate candidate checkout. The working tree's ongoing
+streaming-serialization/export and media implementations retain their matching
+error-handling adaptations, without committing those unrelated features.

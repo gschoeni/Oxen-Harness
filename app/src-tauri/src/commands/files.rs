@@ -85,6 +85,28 @@ struct CappedGit {
     success: bool,
 }
 
+fn read_git_stdout(mut reader: impl Read, cap: usize) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut out = Vec::new();
+    let mut truncated = false;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+            Ok(n) => {
+                let room = cap.saturating_sub(out.len());
+                out.extend_from_slice(&buf[..n.min(room)]);
+                if n > room {
+                    truncated = true;
+                    break; // dropping the pipe ends the child's stream
+                }
+            }
+        }
+    }
+    Ok((out, truncated))
+}
+
 /// Run git streaming stdout with a hard byte cap and a wall-clock timeout.
 ///
 /// `Command::output()` would buffer the ENTIRE stream before any truncation
@@ -102,8 +124,7 @@ fn run_git_capped(root: &str, args: &[&str], cap: usize) -> Result<CappedGit, St
         .spawn()
         .map_err(|e| format!("could not run git: {e}"))?;
 
-    let Some((mut stdout_pipe, mut stderr_pipe)) = child.stdout.take().zip(child.stderr.take())
-    else {
+    let Some((stdout_pipe, mut stderr_pipe)) = child.stdout.take().zip(child.stderr.take()) else {
         child
             .kill()
             .map_err(|e| format!("git output pipes are missing; could not stop git: {e}"))?;
@@ -112,27 +133,7 @@ fn run_git_capped(root: &str, args: &[&str], cap: usize) -> Result<CappedGit, St
             .map_err(|e| format!("git output pipes are missing; could not reap git: {e}"))?;
         return Err("could not capture git output: stdout or stderr pipe is missing".into());
     };
-    let reader = std::thread::spawn(move || {
-        let mut out = Vec::new();
-        let mut truncated = false;
-        let mut buf = [0u8; 64 * 1024];
-        loop {
-            match stdout_pipe.read(&mut buf) {
-                Ok(0) => break,
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(error),
-                Ok(n) => {
-                    let room = cap.saturating_sub(out.len());
-                    out.extend_from_slice(&buf[..n.min(room)]);
-                    if n > room {
-                        truncated = true;
-                        break; // dropping the pipe ends the child's stream
-                    }
-                }
-            }
-        }
-        Ok((out, truncated))
-    });
+    let reader = std::thread::spawn(move || read_git_stdout(stdout_pipe, cap));
     let err_reader = std::thread::spawn(move || {
         let mut err = Vec::new();
         (&mut stderr_pipe)
@@ -467,6 +468,31 @@ pub(crate) fn fs_create_entry(root: String, path: String, is_dir: bool) -> Resul
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn git_stdout_read_failure_is_not_successful_partial_output() {
+        struct FailingRead;
+        impl Read for FailingRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("simulated pipe failure"))
+            }
+        }
+        let reader = std::io::Cursor::new(b"partial").chain(FailingRead);
+        let error = read_git_stdout(reader, 100).unwrap_err();
+        assert!(error.to_string().contains("simulated pipe failure"));
+    }
+
+    #[test]
+    fn git_stdout_marks_only_output_beyond_the_cap_truncated() {
+        assert_eq!(
+            read_git_stdout(&b"abcd"[..], 3).unwrap(),
+            (b"abc".to_vec(), true)
+        );
+        assert_eq!(
+            read_git_stdout(&b"abc"[..], 3).unwrap(),
+            (b"abc".to_vec(), false)
+        );
+    }
+
     use super::*;
 
     fn workspace(name: &str) -> PathBuf {

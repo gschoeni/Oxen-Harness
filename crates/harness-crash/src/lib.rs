@@ -149,13 +149,14 @@ mod tests {
         if std::env::var_os("CRASH_HELPER").is_some() {
             let marker = std::path::PathBuf::from(std::env::var("CRASH_MARKER").unwrap());
             install(&marker);
-            // SAFETY: not safe — the whole point. Faults with SIGSEGV so the
-            // handler under test runs; confined to the helper child process.
+            // SAFETY: raise takes no pointers and SIGSEGV is a valid signal.
+            // The helper child deliberately terminates through our handler,
+            // without invoking undefined behavior through a null-pointer write.
             #[allow(unsafe_code)]
             unsafe {
-                std::ptr::write_volatile(std::ptr::null_mut::<u8>(), 1)
+                libc::raise(libc::SIGSEGV)
             };
-            unreachable!("the write above must fault");
+            panic!("SIGSEGV should terminate the helper child");
         }
 
         let dir = tempfile::tempdir().unwrap();

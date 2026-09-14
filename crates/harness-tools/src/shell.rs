@@ -153,34 +153,12 @@ impl ShellTool {
         self
     }
 
-    /// The directory the next command will run in.
-    fn cwd(&self) -> Result<std::path::PathBuf, ToolError> {
-        Ok(self
-            .session
-            .lock()
-            .map_err(|_| {
-                ToolError::Execution(
-                    "shell session is unavailable after a failed operation; start a new session"
-                        .into(),
-                )
-            })?
-            .cwd()
-            .to_path_buf())
-    }
-
-    /// Environment overrides for the next command.
-    fn env(&self) -> Result<std::collections::BTreeMap<String, String>, ToolError> {
-        Ok(self
-            .session
-            .lock()
-            .map_err(|_| {
-                ToolError::Execution(
-                    "shell session is unavailable after a failed operation; start a new session"
-                        .into(),
-                )
-            })?
-            .env()
-            .clone())
+    fn lock_session(&self) -> Result<std::sync::MutexGuard<'_, ShellSession>, ToolError> {
+        self.session.lock().map_err(|_| {
+            ToolError::Execution(
+                "shell session is unavailable after a failed operation; start a new session".into(),
+            )
+        })
     }
 
     /// Fold a finished command's directory/environment back into the session.
@@ -200,16 +178,18 @@ impl ShellTool {
                 )))
             }
         };
-        Ok(self
-            .session
-            .lock()
-            .map_err(|_| {
-                ToolError::Execution(
-                    "shell session is unavailable after a failed operation; start a new session"
-                        .into(),
-                )
-            })?
-            .absorb(&report, self.workspace.root()))
+        Ok(self.lock_session()?.absorb(&report, self.workspace.root()))
+    }
+
+    fn append_session_note(&self, carrier: Option<&StateFile>, output: &mut String) {
+        match self.absorb(carrier) {
+            Ok(Some(note)) => output.push_str(&format!("\n[{note}]")),
+            Ok(None) => {}
+            Err(error) => output.push_str(&format!(
+                "\n[The command finished, but shell state could not be updated: {error}. \
+                 The command output above is retained; do not repeat completed work.]"
+            )),
+        }
     }
 
     /// Wait for a foreground command, cutting the wait short if the user
@@ -284,7 +264,10 @@ impl TypedTool for ShellTool {
         }
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
         let background = args.is_background.unwrap_or(false);
-        let (cwd, env) = (self.cwd()?, self.env()?);
+        let (cwd, env) = {
+            let session = self.lock_session()?;
+            (session.cwd().to_path_buf(), session.env().clone())
+        };
         // A background command inherits the session's directory and
         // environment but never changes them: a dev server left running must
         // not decide where the next foreground command lands.
@@ -323,9 +306,7 @@ impl TypedTool for ShellTool {
                             "\n[the omitted middle is kept: call retrieve_original with {marker}]"
                         ));
                     }
-                    if let Some(note) = self.absorb(carrier.as_ref())? {
-                        out.push_str(&format!("\n[{note}]"));
-                    }
+                    self.append_session_note(carrier.as_ref(), &mut out);
                     Ok(out)
                 }
                 // The timeout is a patience limit, not a kill switch: the
@@ -384,9 +365,7 @@ impl TypedTool for ShellTool {
             ));
         }
         let mut out = format_streams(output.code, &output.stdout, &output.stderr);
-        if let Some(note) = self.absorb(carrier.as_ref())? {
-            out.push_str(&format!("\n[{note}]"));
-        }
+        self.append_session_note(carrier.as_ref(), &mut out);
         Ok(out)
     }
 }
@@ -481,6 +460,20 @@ pub(crate) fn shell_command(command: &str) -> tokio::process::Command {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn state_read_errors_preserve_completed_command_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = ShellTool::new(Workspace::new(dir.path()).unwrap());
+        let carrier = StateFile(dir.path().join("invalid-state"));
+        std::fs::write(carrier.path(), [0xff]).unwrap();
+        let mut output = "exit_code: 0\ncompleted-once".to_string();
+        tool.append_session_note(Some(&carrier), &mut output);
+        assert!(output.starts_with("exit_code: 0\ncompleted-once"));
+        assert!(output.contains("could not read shell state"));
+        assert!(output.contains("invalid-state"));
+        assert!(output.contains("do not repeat completed work"));
+    }
+
     #[tokio::test]
     async fn a_poisoned_session_refuses_to_execute_commands() {
         let dir = tempfile::tempdir().unwrap();
