@@ -27,6 +27,14 @@ beforeEach(() => {
   });
 });
 
+/** Simulate a file dropped from the OS: a `File` in `dataTransfer.files`. */
+function dropOsFile(target: HTMLElement, name: string) {
+  const file = new File([new Uint8Array([137, 80, 78, 71])], name, { type: "application/octet-stream" });
+  const dataTransfer = { types: ["Files"], files: [file] as unknown as FileList, getData: () => "", dropEffect: "none" };
+  fireEvent.dragOver(target, { dataTransfer });
+  fireEvent.drop(target, { dataTransfer });
+}
+
 describe("Chat", () => {
   it("opens the active project's files and settings from the titlebar", async () => {
     useStore.setState({
@@ -221,22 +229,48 @@ describe("Chat", () => {
   });
 
   it("attaches dropped files and sends them with the prompt", async () => {
-    render(<Chat />);
-    act(() => ipc.emit("fileDrop", ["/Users/dev/Desktop/diagram.png"]));
-    expect(await screen.findByText(/diagram\.png/)).toBeInTheDocument();
+    const { container } = render(<Chat />);
+    ipc.stageDroppedFile.mockResolvedValueOnce("/Users/dev/Desktop/diagram.png");
+    dropOsFile(container.querySelector("form.composer") as HTMLElement, "diagram.png");
+    expect(await screen.findByLabelText("Remove diagram.png")).toBeInTheDocument();
 
     await userEvent.type(screen.getByPlaceholderText(/ask the agent/i), "what is this");
     await userEvent.keyboard("{Enter}");
     expect(ipc.runTurn).toHaveBeenCalledWith("s1", "what is this", [
       "/Users/dev/Desktop/diagram.png",
     ]);
-    // The chip clears once the message is sent.
-    expect(screen.queryByText(/diagram\.png/)).toBeNull();
+    // The tray clears once the message is sent.
+    expect(screen.queryByLabelText("Remove diagram.png")).toBeNull();
+  });
+
+  it("accepts an in-app image drag dropped on the composer and lights it while hovering", async () => {
+    const { container } = render(<Chat />);
+    const main = container.querySelector("main.chat") as HTMLElement;
+    const composer = container.querySelector("form.composer") as HTMLElement;
+    const mime = "application/x-oxen-workspace-files";
+    const paths = JSON.stringify(["/w/generations/2026-09-14/0413-ox-1.png"]);
+    const dt = {
+      types: [mime],
+      getData: (t: string) => (t === mime ? paths : ""),
+      dropEffect: "none",
+    };
+    fireEvent.dragEnter(main, { dataTransfer: dt });
+    expect(main.classList.contains("chat-drop-active")).toBe(true);
+    fireEvent.dragOver(composer, { dataTransfer: dt });
+    fireEvent.drop(composer, { dataTransfer: dt });
+    expect(await screen.findByText(/0413-ox-1\.png/)).toBeInTheDocument();
+    expect(main.classList.contains("chat-drop-active")).toBe(false);
+    // The file lands in the prompt bar's own media tray, counted by kind.
+    const tray = screen.getByRole("list", { name: /attached media/i });
+    expect(tray.closest("form.composer")).toBe(composer);
+    expect(screen.getByText("1 image")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /remove 0413-ox-1\.png/i })).toBeInTheDocument();
   });
 
   it("removes a pending attachment when its ✕ is clicked", async () => {
     render(<Chat />);
-    act(() => ipc.emit("fileDrop", ["/tmp/a.pdf"]));
+    ipc.stageDroppedFile.mockResolvedValueOnce("/tmp/a.pdf");
+    dropOsFile(document.querySelector("form.composer") as HTMLElement, "a.pdf");
     await userEvent.click(await screen.findByRole("button", { name: /remove a\.pdf/i }));
     expect(screen.queryByText(/a\.pdf/)).toBeNull();
   });
@@ -584,5 +618,14 @@ describe("chat scroll following", () => {
     expect(resizeCallbacks.size).toBeGreaterThan(0);
     unmount();
     expect(resizeCallbacks.size).toBe(0);
+  });
+});
+
+describe("chat: OS file drop", () => {
+  it("stages a dropped File's bytes through the backend and attaches the returned path", async () => {
+    const { container } = render(<Chat />);
+    dropOsFile(container.querySelector("form.composer") as HTMLElement, "photo.png");
+    await waitFor(() => expect(ipc.stageDroppedFile).toHaveBeenCalledWith("photo.png", expect.any(Uint8Array)));
+    await waitFor(() => expect(screen.getByLabelText("Remove photo.png")).toBeInTheDocument());
   });
 });

@@ -1,6 +1,6 @@
-import { useEffect, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import { ArrowDown, FileCode2, FileText, SearchCode } from "lucide-react";
-import { fsReadFile, onFileDrop, pickAttachments } from "../../lib/ipc";
+import { fsReadFile, pickAttachments, stageDroppedFile } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
 import { snippetLabel } from "../../lib/snippets";
@@ -17,8 +17,7 @@ import { Hero } from "./Hero";
 import { GameDock } from "./GameDock";
 import { TokenMeter } from "./TokenMeter";
 import { StreamingWrite } from "./StreamingWrite";
-import { AttachmentImage } from "./AttachmentImage";
-import { isImagePath, isVideoPath } from "../../lib/attachments";
+import { isMediaPath } from "../../lib/attachments";
 import { QuestionPrompt } from "../questions/QuestionPrompt";
 import { ApprovalPrompt } from "../approvals/ApprovalPrompt";
 import { type Item } from "./thread";
@@ -43,6 +42,17 @@ const NO_SNIPPETS: CodeSnippet[] = [];
  *  lockfile can't quietly eat the context window. */
 const SNIPPET_FILE_CAP = 30_000;
 
+/** A File's bytes; FileReader is the fallback where `arrayBuffer` is missing. */
+function readBytes(file: File): Promise<ArrayBuffer> {
+  if (typeof file.arrayBuffer === "function") return file.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = () => reject(reader.error ?? new Error("could not read the file"));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 export function Chat() {
   const sessionId = useStore((s) => s.session?.session_id);
   // Read the current chat's thread / queue / run state straight from the store —
@@ -54,6 +64,7 @@ export function Chat() {
   // A running code review's live progress (which step, what the agent is doing).
   const review = useStore((s) => (s.session ? s.codeReview[s.session.session_id] : undefined));
   const send = useStore((s) => s.send);
+  const addNotice = useStore((s) => s.addNotice);
   const stop = useStore((s) => s.stop);
   const setQueue = useStore((s) => s.setQueue);
   // Code selections staged from the editor (or files dropped from the tree),
@@ -63,7 +74,6 @@ export function Chat() {
   const addSnippet = useStore((s) => s.addSnippet);
   const removeSnippet = useStore((s) => s.removeSnippet);
   const workspace = useStore((s) => s.session?.workspace);
-  const addNotice = useStore((s) => s.addNotice);
   // The floating game dock lets you play a round while a turn streams, so a long
   // run doesn't send you off to another app. Its toggle lives in the title bar.
   const gameDockOpen = useStore((s) => s.gameDockOpen);
@@ -92,13 +102,28 @@ export function Chat() {
     });
   }
 
-  // Subscribe to OS file drops for the active composer.
+  // A file dropped from the OS (Finder, another app) arrives as File objects
+  // with no path — the webview's native drop hook is off so in-app drags
+  // work — so its bytes are staged into the project and attached by path.
+  async function stageOsFiles(files: FileList) {
+    for (const file of Array.from(files)) {
+      try {
+        const bytes = new Uint8Array(await readBytes(file));
+        const path = await stageDroppedFile(file.name, bytes);
+        addAttachments([path]);
+      } catch (e) {
+        addNotice(`Couldn't attach ${file.name}: ${String(e)}`);
+      }
+    }
+  }
+
+  // Files another surface staged for the next message (the Gallery's "Use as
+  // reference"): take them as soon as they appear.
+  const pendingAttachments = useStore((s) => s.pendingAttachments);
+  const takePendingAttachments = useStore((s) => s.takePendingAttachments);
   useEffect(() => {
-    const unDrop = onFileDrop(addAttachments);
-    return () => {
-      unDrop.then((fn) => fn());
-    };
-  }, []);
+    if (pendingAttachments.length) addAttachments(takePendingAttachments());
+  }, [pendingAttachments, takePendingAttachments]);
 
   async function attach() {
     try {
@@ -124,16 +149,48 @@ export function Chat() {
 
   // Workspace files dragged from the Files tree / gallery tiles (in-app HTML5
   // drag; OS drops arrive separately through onFileDrop above).
+  // Highlight the composer while a file drag hovers the chat (in-app paths
+  // or OS files). A counter, not a flag: dragenter/dragleave fire for every
+  // child crossed, and only the outermost leave should clear it.
+  const [dropActive, setDropActive] = useState(false);
+  const dragDepth = useRef(0);
+  const isFileDrag = (dt: DataTransfer) => hasDragPaths(dt) || dt.types.includes("Files");
+  function onDragEnter(e: DragEvent) {
+    if (!isFileDrag(e.dataTransfer)) return;
+    dragDepth.current += 1;
+    setDropActive(true);
+  }
+  function onDragLeave(e: DragEvent) {
+    if (!isFileDrag(e.dataTransfer)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDropActive(false);
+  }
+  function onDragOver(e: DragEvent) {
+    if (isFileDrag(e.dataTransfer)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+  }
+
   function onInternalDrop(e: DragEvent) {
+    dragDepth.current = 0;
+    setDropActive(false);
     const paths = getDragPaths(e.dataTransfer);
-    if (!paths.length) return;
+    if (!paths.length) {
+      // Not an in-app drag: OS files, if any.
+      if (e.dataTransfer.files && e.dataTransfer.files.length) {
+        e.preventDefault();
+        void stageOsFiles(e.dataTransfer.files);
+      }
+      return;
+    }
     e.preventDefault();
-    const images = paths.filter(isImagePath);
-    const videos = paths.filter(isVideoPath);
-    const texts = paths.filter((p) => !isImagePath(p) && !isVideoPath(p));
-    if (images.length) addAttachments(images);
+    // Images, video, and audio all become attachments: the model sees the
+    // images, and every one of them can be a reference for generation.
+    const media = paths.filter(isMediaPath);
+    const texts = paths.filter((p) => !isMediaPath(p));
+    if (media.length) addAttachments(media);
     for (const p of texts) void stageFileSnippet(p);
-    if (videos.length) addNotice("Videos can't be sent to the model yet — view them in the Editor pane.");
   }
 
   // Send now (with any staged attachments) or, if this chat is mid-turn, queue
@@ -148,10 +205,10 @@ export function Chat() {
 
   return (
     <main
-      className="chat"
-      onDragOver={(e) => {
-        if (hasDragPaths(e.dataTransfer)) e.preventDefault();
-      }}
+      className={`chat${dropActive ? " chat-drop-active" : ""}`}
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
+      onDragOver={onDragOver}
       onDrop={onInternalDrop}
     >
       <div className="messages-wrap">
@@ -228,29 +285,6 @@ export function Chat() {
           ))}
         </div>
       )}
-      {attachments.length > 0 && (
-        <div className="attachments">
-          {attachments.map((a, i) => {
-            const remove = () => setAttachments((prev) => prev.filter((_, j) => j !== i));
-            return isImagePath(a.path) ? (
-              <span className="attachment-thumb" key={`${a.path}-${i}`} title={a.name}>
-                <AttachmentImage src={a.path} alt={a.name} className="attachment-thumb-img" />
-                <span className="attachment-thumb-name">{a.name}</span>
-                <button className="attachment-x" aria-label={`Remove ${a.name}`} onClick={remove}>
-                  ✕
-                </button>
-              </span>
-            ) : (
-              <span className="attachment-chip" key={`${a.path}-${i}`}>
-                📎 {a.name}
-                <button className="attachment-x" aria-label={`Remove ${a.name}`} onClick={remove}>
-                  ✕
-                </button>
-              </span>
-            );
-          })}
-        </div>
-      )}
       <QuestionPrompt />
       <ApprovalPrompt />
       {gameDockOpen && items.length > 0 && <GameDock />}
@@ -261,6 +295,11 @@ export function Chat() {
         onSend={submit}
         onStop={stop}
         onAttach={attach}
+        onDragOver={onDragOver}
+        onDrop={onInternalDrop}
+        attachments={attachments}
+        onRemoveAttachment={(i) => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+        onClearAttachments={() => setAttachments([])}
       />
     </main>
   );

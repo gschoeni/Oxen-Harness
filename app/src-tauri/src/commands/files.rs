@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use crate::state::AppState;
+
 /// One row in the Files tree.
 #[derive(Clone, Serialize)]
 pub(crate) struct FileEntry {
@@ -204,27 +206,52 @@ fn summarize_status(index: char, worktree: char) -> &'static str {
     }
 }
 
+/// Cap on `git status` output. ~4 MB is on the order of 80k changed paths —
+/// far past anything the tree's badges can usefully show, and a tree that
+/// dirty (a vendored checkout, an un-ignored build dir) would otherwise
+/// buffer without bound through `Command::output()` on every refresh, which
+/// fires on each watcher batch.
+const MAX_STATUS_BYTES: usize = 4 * 1024 * 1024;
+
 /// The workspace's changed files, VS Code Source-Control style: one entry per
 /// path with its porcelain letters and a summary status. `None` when the
 /// workspace isn't a Git repository (or git isn't installed) — the UI hides
 /// the whole section rather than showing an error.
 #[tauri::command]
 pub(crate) fn git_status(root: String) -> Result<Option<Vec<GitFileState>>, String> {
+    git_status_capped(&root, MAX_STATUS_BYTES)
+}
+
+/// [`git_status`] with the output cap as a parameter (so the truncation path
+/// is testable without writing tens of thousands of files).
+///
+/// Past the cap the list is *truncated*, not dropped: the entries that fit
+/// still badge the files they name, whereas `None` would make a very dirty
+/// repository look like no repository at all (the section vanishes). A
+/// partial list under-reports — acceptable at this size, since the UI has no
+/// way to show 80k changes meaningfully anyway.
+fn git_status_capped(root: &str, cap: usize) -> Result<Option<Vec<GitFileState>>, String> {
     // Same validation as every other command: only ever inspect a real
     // workspace root the frontend legitimately holds.
-    resolve(&root, "")?;
-    let Ok(out) = run_git(
-        &root,
-        // -z: NUL-separated, no quoting/escaping to undo. -uall: every
-        // untracked file individually, not collapsed directories.
-        &["status", "--porcelain", "-z", "-uall"],
-    ) else {
+    resolve(root, "")?;
+    // -z: NUL-separated, no quoting/escaping to undo. -uall: every untracked
+    // file individually, not collapsed directories — the tree badges rows by
+    // exact path and the editor asks "is THIS file changed?", so a fresh
+    // `src/new/` must yield its files, not one `src/new/` entry.
+    let Ok(out) = run_git_capped(root, &["status", "--porcelain", "-z", "-uall"], cap) else {
         return Ok(None);
     };
-    if !out.status.success() {
+    if !out.success {
         return Ok(None);
     }
-    let raw = String::from_utf8_lossy(&out.stdout);
+    let mut raw = String::from_utf8_lossy(&out.stdout);
+    if out.truncated {
+        // The cut landed mid-record; keep only whole NUL-terminated fields.
+        // (A rename whose source field was the one cut loses just that
+        // source, via the empty-field guard below.)
+        let whole = raw.rfind('\0').map_or(0, |i| i + 1);
+        raw = std::borrow::Cow::Owned(raw[..whole].to_string());
+    }
     let mut fields = raw.split('\0');
     let mut entries = Vec::new();
     while let Some(field) = fields.next() {
@@ -784,4 +811,72 @@ mod tests {
         assert!(fs_read_file(root, "blob.bin".into()).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
+}
+
+/// A file dropped from the OS onto the chat, delivered as bytes: written under
+/// the active project's `.oxen-harness/dropped/` (content-addressed, original
+/// name kept) and returned as an absolute path the attachment flow already
+/// understands.
+///
+/// Why bytes: the webview's native drag-drop hook is off (`dragDropEnabled:
+/// false`) so in-page HTML5 drags — gallery tile → composer — reach the DOM
+/// on macOS; without that hook an OS drop arrives as `File` objects with no
+/// path, so the frontend streams the bytes here instead.
+#[tauri::command]
+pub(crate) async fn stage_dropped_file(
+    state: tauri::State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    let name = request
+        .headers()
+        .get("x-file-name")
+        .and_then(|v| v.to_str().ok())
+        .map(|n| percent_decode(n))
+        .unwrap_or_else(|| "dropped".to_string());
+    let bytes: Vec<u8> = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        tauri::ipc::InvokeBody::Json(v) => serde_json::from_value::<Vec<u8>>(v.clone())
+            .map_err(|e| format!("unexpected drop payload: {e}"))?,
+    };
+    if bytes.is_empty() {
+        return Err("the dropped file is empty".into());
+    }
+    let root = state.active_root().await;
+    let dir = root.join(".oxen-harness").join("dropped");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe: String = Path::new(&name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("dropped")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .collect();
+    let hash = {
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(&bytes);
+        digest.iter().take(8).map(|b| format!("{b:02x}")).collect::<String>()
+    };
+    let path = dir.join(format!("{hash}-{safe}"));
+    if !path.exists() {
+        fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(path.display().to_string())
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }

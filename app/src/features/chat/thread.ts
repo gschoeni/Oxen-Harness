@@ -3,7 +3,7 @@
 // React) makes the streaming behavior easy to read, reuse, and unit-test.
 
 import type { ChatMessage, MessageContent } from "../../lib/types";
-import { isImagePath } from "../../lib/attachments";
+import { isMediaPath } from "../../lib/attachments";
 
 const MAX_THREAD_ITEMS = 300;
 const MAX_TOOL_RESULT_CHARS = 4000;
@@ -104,6 +104,10 @@ export function transcriptToItems(messages: ChatMessage[]): Item[] {
   for (const m of messages) {
     if (m.role === "user") {
       const text = contentText(m.content);
+      // The agent's own follow-up carrying a tool's image to the model (a
+      // generation, a screenshot): the tool card already shows the picture,
+      // so the synthetic bubble would only repeat it.
+      if (isToolImageDelivery(text)) continue;
       const images = imageRefs(m.content);
       if (text || images.length)
         items.push({ id: uid(), kind: "user", text, images: images.length ? images : undefined });
@@ -126,10 +130,21 @@ export function transcriptToItems(messages: ChatMessage[]): Item[] {
   return capThread(items);
 }
 
+/** Mirror of the agent's synthetic tool-image message (`push_tool_images`). */
+const TOOL_IMAGE_DELIVERY = "The image(s) produced by the tool call above:";
+
+/** Whether a stored user message is the agent handing a tool's image to
+ *  the model rather than something the user wrote. */
+export function isToolImageDelivery(text: string): boolean {
+  return text.trim().startsWith(TOOL_IMAGE_DELIVERY);
+}
+
 /** The user's prompt (with any image attachments) plus an empty in-flight
  *  assistant bubble for its reply. */
 export function startTurn(prev: Item[], prompt: string, attachments: string[] = []): Item[] {
-  const images = attachments.filter(isImagePath);
+  // Every media file the user attached rides the bubble (video and audio
+  // render as players; the model itself only sees images).
+  const images = attachments.filter(isMediaPath);
   return capThread([
     ...prev,
     { id: uid(), kind: "user", text: prompt, images: images.length ? images : undefined },

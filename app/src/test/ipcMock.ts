@@ -409,6 +409,7 @@ export const onRetry = listener("retry");
 export const onQuestion = listener("question");
 export const onFileDrop = listener("fileDrop");
 export const pickAttachments = vi.fn(async () => [] as string[]);
+export const stageDroppedFile = vi.fn(async (name: string, _bytes: Uint8Array) => `/ws/.oxen-harness/dropped/${name}`);
 export const answerQuestion = vi.fn(async () => {});
 export const onApprovalRequest = listener("approvalRequest");
 export const onApproval = listener("approval");
@@ -608,6 +609,7 @@ export function resetIpc() {
   cancelAgent.mockReset().mockResolvedValue(true);
   configureOxenKey.mockReset().mockResolvedValue(undefined);
   pickAttachments.mockReset().mockResolvedValue([]);
+  stageDroppedFile.mockReset().mockImplementation(async (name: string) => `/ws/.oxen-harness/dropped/${name}`);
   answerQuestion.mockReset().mockResolvedValue(undefined);
   answerApproval.mockReset().mockResolvedValue(undefined);
   setPermissionMode.mockReset().mockResolvedValue(undefined);

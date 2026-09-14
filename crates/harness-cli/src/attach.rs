@@ -93,7 +93,10 @@ fn classify(tok: &str) -> Candidate {
         return Candidate::PromptText;
     }
     match AttachmentKind::from_path(p) {
-        AttachmentKind::Image | AttachmentKind::Pdf | AttachmentKind::Video => Candidate::Media,
+        AttachmentKind::Image
+        | AttachmentKind::Pdf
+        | AttachmentKind::Video
+        | AttachmentKind::Audio => Candidate::Media,
         _ if p.is_absolute() => Candidate::Dropped,
         _ => Candidate::PromptText,
     }

@@ -62,6 +62,9 @@ pub enum AttachmentKind {
     Text,
     /// A video — not viewable by the model; sent as a text note.
     Video,
+    /// An audio track — not audible to the model; sent as a text note (and
+    /// usable as a reference for video generation).
+    Audio,
     /// An opaque binary the model can't read; sent as a text note.
     Other,
 }
@@ -76,6 +79,7 @@ impl AttachmentKind {
             "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "heic" => Self::Image,
             "pdf" => Self::Pdf,
             "mp4" | "mov" | "webm" | "mkv" | "avi" | "m4v" | "gif_video" => Self::Video,
+            "mp3" | "wav" | "m4a" | "aac" | "ogg" | "oga" | "flac" | "opus" => Self::Audio,
             _ => Self::Other,
         }
     }
@@ -112,6 +116,12 @@ pub fn mime_for_extension(ext: &str) -> &'static str {
         "webm" => "video/webm",
         "mkv" => "video/x-matroska",
         "avi" => "video/x-msvideo",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
+        "aac" => "audio/aac",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "flac" => "audio/flac",
         _ => "application/octet-stream",
     }
 }
@@ -305,6 +315,12 @@ impl Attachment {
             AttachmentKind::Video => ContentPart::text(format!(
                 "[Attached video `{}` ({}). The model can't watch video; \
                  describe what you need from it.]",
+                self.filename,
+                format_bytes(self.bytes.len() as u64),
+            )),
+            AttachmentKind::Audio => ContentPart::text(format!(
+                "[Attached audio `{}` ({}). The model can't listen to it; it can be used \
+                 as a reference track for video generation.]",
                 self.filename,
                 format_bytes(self.bytes.len() as u64),
             )),

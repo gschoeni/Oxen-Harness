@@ -438,6 +438,13 @@ export async function pickAttachments(): Promise<string[]> {
 
 /** Subscribe to OS file drops onto the window. Fires with the dropped absolute
  *  paths. Returns an unlisten function. */
+/** A file dropped from the OS onto the chat, sent as bytes (the webview's
+ *  native drag-drop hook is off so in-page drags work; without it a drop has
+ *  no path). Written under the project's `.oxen-harness/dropped/`; resolves to
+ *  the absolute path the attachment flow uses. */
+export const stageDroppedFile = (name: string, bytes: Uint8Array) =>
+  invoke<string>("stage_dropped_file", bytes, { headers: { "x-file-name": encodeURIComponent(name) } });
+
 export const onFileDrop = (handler: (paths: string[]) => void) =>
   getCurrentWebview().onDragDropEvent((e) => {
     if (e.payload.type === "drop") handler(e.payload.paths);
