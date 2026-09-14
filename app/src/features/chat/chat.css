@@ -29,7 +29,7 @@
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 
 /* Appears when the user scrolls up out of the live tail. */

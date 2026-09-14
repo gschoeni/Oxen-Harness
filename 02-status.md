@@ -641,3 +641,11 @@ Verification: 1,259 Rust tests passed (3 skipped); workspace fmt and Clippy pass
 inspection covered light/dark and a 390px viewport with no horizontal overflow.
 The dedicated review/refactor pass is complete and documented in
 `plans/subagent-hardening.md`.
+
+## Chat scroll following — 2026-09-13
+
+Fixed unexpected loss of automatic scrolling: streaming and layout changes follow
+until the reader scrolls up; returning to the bottom, using the arrow, sending a
+prompt, or switching chats resumes following. Eleven regression tests and real
+browser checks cover the behavior. See `plans/chat-scroll.md` for verification
+and existing workspace check blockers.

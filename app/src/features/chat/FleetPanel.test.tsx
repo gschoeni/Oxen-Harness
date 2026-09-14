@@ -201,7 +201,7 @@ describe("agent hub", () => {
     const agent = saved("durable-id", { status: "running" });
     const fleet = {
       session: "s1",
-      source: "agents",
+      source: "turn" as const,
       focused: null,
       lanes: [
         {

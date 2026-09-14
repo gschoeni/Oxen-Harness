@@ -129,3 +129,8 @@ When adding a new file to the project, update this document map.
 - `crates/harness-agent/tests/subagent_regressions.rs` — cancellation, construction cleanup, persistence ordering, request admission, and worktree recovery regressions.
 - `crates/harness-host/src/agents.rs` — recursive agent history, follow-up, and reviewed patch access/application shared by transports.
 - `app/src/features/chat/agents.css` — minimal Agents panel presentation across themes and narrow windows.
+
+## Chat scroll following (2026-09-13)
+
+- `app/src/features/chat/useChatScroll.ts` — scroll intent, layout observation, and return-to-latest behavior; integration tests in `Chat.test.tsx`.
+- `plans/chat-scroll.md` — auto-scroll diagnosis, behavior, regression coverage, and review record.

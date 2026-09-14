@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useState, type DragEvent } from "react";
 import { ArrowDown, FileCode2, FileText, SearchCode } from "lucide-react";
 import { fsReadFile, onFileDrop, pickAttachments } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
@@ -23,6 +23,7 @@ import { QuestionPrompt } from "../questions/QuestionPrompt";
 import { ApprovalPrompt } from "../approvals/ApprovalPrompt";
 import { type Item } from "./thread";
 import "./chat.css";
+import { useChatScroll } from "./useChatScroll";
 import { dispatchSlashCommand } from "./slashDispatch";
 
 const EXAMPLES = [
@@ -78,45 +79,8 @@ export function Chat() {
   const showReopenCanvas = !!lastCanvas && !canvasShowing;
 
   const [attachments, setAttachments] = useState<{ path: string; name: string }[]>([]);
-  const [atBottom, setAtBottom] = useState(true);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  // Mirrors `atBottom` so the auto-scroll effect can read the latest value
-  // without listing it as a dependency (which would re-snap on every toggle).
-  const stick = useRef(true);
-
-  function isNearBottom(el: HTMLElement) {
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  }
-
-  // Track whether the user is parked at the bottom. Scrolling up unsticks the
-  // view so streaming output stops yanking them back down.
-  function onScroll() {
-    const el = scrollRef.current;
-    if (!el) return;
-    stick.current = isNearBottom(el);
-    setAtBottom(stick.current);
-  }
-
-  function scrollToBottom(smooth = true) {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
-    stick.current = true;
-    setAtBottom(true);
-  }
-
-  // Switching chats starts pinned to the bottom of that chat's thread.
-  useEffect(() => {
-    stick.current = true;
-    setAtBottom(true);
-  }, [sessionId]);
-
-  // Follow new content only while the user is parked at the bottom.
-  useLayoutEffect(() => {
-    if (!stick.current) return;
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [items]);
+  const { scrollRef, contentRef, paused, scrollToBottom, onScroll, onWheel } =
+    useChatScroll(sessionId, items);
 
   // Add files (from an OS drop or the picker) to the pending attachments,
   // skipping any path already staged so re-picking is idempotent.
@@ -175,8 +139,7 @@ export function Chat() {
   // Send now (with any staged attachments) or, if this chat is mid-turn, queue
   // the prompt and the same attachment set so the eventual turn is identical.
   async function submit(text: string) {
-    stick.current = true;
-    setAtBottom(true);
+    scrollToBottom();
     if (await dispatchSlashCommand(text)) return;
     const paths = attachments.map((a) => a.path);
     setAttachments([]);
@@ -204,13 +167,13 @@ export function Chat() {
             <span>{lastCanvas.title}</span>
           </button>
         )}
-        <div className="messages" ref={scrollRef} onScroll={onScroll}>
+        <div className="messages" ref={scrollRef} onScroll={onScroll} onWheel={onWheel}>
           {items.length === 0 ? (
-            <div className="chat-empty">
+            <div className="chat-empty" ref={contentRef}>
               <Hero examples={EXAMPLES} busy={running} onPick={submit} />
             </div>
           ) : (
-            <div className="thread">
+            <div className="thread" ref={contentRef}>
               {items.map((it) => (
                 <ThreadItem key={it.id} item={it} />
               ))}
@@ -218,7 +181,7 @@ export function Chat() {
             </div>
           )}
         </div>
-        {items.length > 0 && !atBottom && (
+        {items.length > 0 && paused && (
           <button
             className="scroll-bottom"
             onClick={() => scrollToBottom()}

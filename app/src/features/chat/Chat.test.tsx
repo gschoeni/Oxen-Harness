@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -404,5 +404,170 @@ describe("Chat", () => {
     render(<Chat />);
     expect(screen.getByText("previous question")).toBeInTheDocument();
     expect(screen.getByText("previous answer")).toBeInTheDocument();
+  });
+});
+
+
+describe("chat scroll following", () => {
+  const append = (text: string) => act(() => useStore.setState((s) => ({
+    threads: { ...s.threads, s1: [{ id: "stream", kind: "assistant", text, streaming: true }] },
+  })));
+  const resizeCallbacks = new Set<ResizeObserverCallback>();
+
+  beforeEach(() => {
+    resizeCallbacks.clear();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private callback: ResizeObserverCallback) { resizeCallbacks.add(callback); }
+      observe() {}
+      unobserve() {}
+      disconnect() { resizeCallbacks.delete(this.callback); }
+    });
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  function setupScroll() {
+    useStore.setState({ runStatus: { s1: "running" } });
+    append("An answer");
+    const { container, unmount } = render(<Chat />);
+    const viewport = container.querySelector<HTMLElement>(".messages")!;
+    const size = { height: 1200, viewport: 400, top: 800 };
+    Object.defineProperties(viewport, {
+      scrollHeight: { get: () => size.height },
+      clientHeight: { get: () => size.viewport },
+      scrollTop: {
+        get: () => size.top,
+        set: (value: number) => { size.top = Math.max(0, Math.min(value, size.height - size.viewport)); },
+      },
+    });
+    const resize = () => act(() => {
+      for (const callback of resizeCallbacks) callback([], {} as ResizeObserver);
+    });
+    append(" more");
+    fireEvent.scroll(viewport);
+    return { viewport, size, resize, unmount };
+  }
+
+  it("keeps following after layout growth emits a scroll event", () => {
+    const { viewport, size, resize } = setupScroll();
+    size.height += 500;
+    fireEvent.scroll(viewport);
+    resize();
+    expect(size.top).toBe(1300);
+    expect(screen.queryByRole("button", { name: "Scroll to latest" })).not.toBeInTheDocument();
+  });
+
+  it("follows independently resized content and a shrinking viewport", () => {
+    const { size, resize } = setupScroll();
+    size.height += 240; // e.g. an image finishes loading, without a new token
+    resize();
+    expect(size.top).toBe(1040);
+    size.viewport -= 120; // e.g. the agents panel or composer expands
+    resize();
+    expect(size.top).toBe(1160);
+  });
+
+  it("lets even a small upward scroll pause streaming until latest is clicked", () => {
+    const { viewport, size } = setupScroll();
+    size.top -= 20;
+    fireEvent.scroll(viewport);
+    expect(screen.getByRole("button", { name: "Scroll to latest" })).toBeInTheDocument();
+    size.height += 300;
+    append(" still streaming");
+    expect(size.top).toBe(780);
+    fireEvent.click(screen.getByRole("button", { name: "Scroll to latest" }));
+    expect(size.top).toBe(1100);
+    size.height += 100;
+    append(" and following again");
+    expect(size.top).toBe(1200);
+  });
+
+  it("resumes following when manually scrolled back to the bottom", () => {
+    const { viewport, size } = setupScroll();
+    size.top = 400;
+    fireEvent.scroll(viewport);
+    size.top = 800;
+    fireEvent.scroll(viewport);
+    size.height += 100;
+    append(" more");
+    expect(size.top).toBe(900);
+    expect(screen.queryByRole("button", { name: "Scroll to latest" })).not.toBeInTheDocument();
+  });
+
+  it("preserves the reading position across content and viewport resizes", () => {
+    const { viewport, size, resize } = setupScroll();
+    size.top = 400;
+    fireEvent.scroll(viewport);
+    size.height += 300;
+    size.viewport -= 100;
+    resize();
+    append(" more");
+    expect(size.top).toBe(400);
+  });
+
+  it("starts a newly selected chat at the bottom even if the old chat was paused", () => {
+    const { viewport, size } = setupScroll();
+    size.top = 400;
+    fireEvent.scroll(viewport);
+    size.height = 2000;
+    act(() => useStore.setState({
+      session: { ...ipc.sampleSession, session_id: "s2" },
+      threads: { s2: [{ id: "reply", kind: "assistant", text: "Another chat", streaming: false }] },
+    }));
+    expect(size.top).toBe(1600);
+    expect(screen.queryByRole("button", { name: "Scroll to latest" })).not.toBeInTheDocument();
+  });
+
+  it("honors an upward wheel gesture arriving at the same time as new content", () => {
+    const { viewport, size, resize } = setupScroll();
+    fireEvent.wheel(viewport, { deltaY: -30 });
+    size.height += 300;
+    resize();
+    append(" more");
+    expect(size.top).toBe(800);
+    expect(screen.getByRole("button", { name: "Scroll to latest" })).toBeInTheDocument();
+  });
+
+  it("keeps following when an upward wheel scroll belongs to a nested code block", () => {
+    const { viewport, size } = setupScroll();
+    const code = document.createElement("pre");
+    code.style.overflowY = "auto";
+    code.scrollTop = 80;
+    viewport.append(code);
+    fireEvent.wheel(code, { deltaY: -20 });
+    size.height += 100;
+    append(" more");
+    expect(size.top).toBe(900);
+    expect(screen.queryByRole("button", { name: "Scroll to latest" })).not.toBeInTheDocument();
+    code.remove();
+  });
+
+  it("follows a content collapse instead of treating its scroll clamp as an upward gesture", () => {
+    const { viewport, size, resize } = setupScroll();
+    size.height -= 300;
+    size.top = 500;
+    fireEvent.scroll(viewport);
+    resize();
+    size.height += 100;
+    append(" more");
+    expect(size.top).toBe(600);
+    expect(screen.queryByRole("button", { name: "Scroll to latest" })).not.toBeInTheDocument();
+  });
+
+  it("returns to following when a prompt is queued while reading above", async () => {
+    const { viewport, size } = setupScroll();
+    size.top = 400;
+    fireEvent.scroll(viewport);
+    await userEvent.type(screen.getByPlaceholderText(/queue a message/i), "Continue");
+    await userEvent.keyboard("{Enter}");
+    expect(size.top).toBe(800);
+    expect(screen.queryByRole("button", { name: "Scroll to latest" })).not.toBeInTheDocument();
+  });
+
+  it("disconnects its layout observer when the chat unmounts", () => {
+    const { unmount } = setupScroll();
+    expect(resizeCallbacks.size).toBeGreaterThan(0);
+    unmount();
+    expect(resizeCallbacks.size).toBe(0);
   });
 });
