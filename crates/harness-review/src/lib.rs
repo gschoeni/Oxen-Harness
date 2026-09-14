@@ -31,6 +31,8 @@ pub use target::{resolve_target, ReviewInput, ReviewTarget};
 /// Errors from resolving or running a review.
 #[derive(Debug, thiserror::Error)]
 pub enum ReviewError {
+    #[error("review step {step} returned no reviewer results")]
+    EmptyFleet { step: usize },
     #[error("nothing to review — the target has no changes")]
     NothingToReview,
     #[error("the review was stopped")]

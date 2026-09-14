@@ -30,6 +30,8 @@ use harness_core::DEFAULT_BASE_URL;
 /// Errors returned by the LLM client.
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
+    #[error("could not encode chat request: {0}")]
+    Encode(#[source] serde_json::Error),
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
     #[error("Oxen API error ({status}): {message}")]

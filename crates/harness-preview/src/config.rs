@@ -54,16 +54,33 @@ pub fn load(root: &Path) -> PreviewConfig {
 /// once) can never leave a torn file behind — a half-written config would
 /// silently lose the project's remembered start command.
 pub fn remember(root: &Path, server: SavedServer) -> std::io::Result<()> {
-    let mut config = load(root);
+    let path = config_path(root);
+    let mut config: PreviewConfig = match std::fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str(&raw).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "could not update {}: {e}; repair the config before saving",
+                    path.display()
+                ),
+            )
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PreviewConfig::default(),
+        Err(e) => {
+            return Err(std::io::Error::new(
+                e.kind(),
+                format!("could not read {}: {e}", path.display()),
+            ))
+        }
+    };
     match config.servers.iter_mut().find(|s| s.name == server.name) {
         Some(existing) => *existing = server,
         None => config.servers.push(server),
     }
-    let path = config_path(root);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let json = serde_json::to_string_pretty(&config).expect("config serializes");
+    let json = serde_json::to_string_pretty(&config).map_err(std::io::Error::other)?;
     let temp = path.with_extension(format!("json.tmp{}", std::process::id()));
     std::fs::write(&temp, json)?;
     std::fs::rename(&temp, &path)
@@ -71,6 +88,27 @@ pub fn remember(root: &Path, server: SavedServer) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remember_preserves_an_unreadable_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = config_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{broken config").unwrap();
+        let error = remember(
+            dir.path(),
+            SavedServer {
+                name: "dev".into(),
+                command: "npm run dev".into(),
+                port: None,
+                auto_port: true,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("preview.json"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "{broken config");
+    }
+
     use super::*;
 
     #[test]

@@ -102,15 +102,25 @@ fn run_git_capped(root: &str, args: &[&str], cap: usize) -> Result<CappedGit, St
         .spawn()
         .map_err(|e| format!("could not run git: {e}"))?;
 
-    let mut stdout_pipe = child.stdout.take().expect("stdout piped");
-    let mut stderr_pipe = child.stderr.take().expect("stderr piped");
+    let Some((mut stdout_pipe, mut stderr_pipe)) = child.stdout.take().zip(child.stderr.take())
+    else {
+        child
+            .kill()
+            .map_err(|e| format!("git output pipes are missing; could not stop git: {e}"))?;
+        child
+            .wait()
+            .map_err(|e| format!("git output pipes are missing; could not reap git: {e}"))?;
+        return Err("could not capture git output: stdout or stderr pipe is missing".into());
+    };
     let reader = std::thread::spawn(move || {
         let mut out = Vec::new();
         let mut truncated = false;
         let mut buf = [0u8; 64 * 1024];
         loop {
             match stdout_pipe.read(&mut buf) {
-                Ok(0) | Err(_) => break,
+                Ok(0) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
                 Ok(n) => {
                     let room = cap.saturating_sub(out.len());
                     out.extend_from_slice(&buf[..n.min(room)]);
@@ -121,40 +131,56 @@ fn run_git_capped(root: &str, args: &[&str], cap: usize) -> Result<CappedGit, St
                 }
             }
         }
-        (out, truncated)
+        Ok((out, truncated))
     });
     let err_reader = std::thread::spawn(move || {
         let mut err = Vec::new();
-        let _ = (&mut stderr_pipe)
+        (&mut stderr_pipe)
             .take(MAX_STDERR_BYTES as u64)
-            .read_to_end(&mut err);
+            .read_to_end(&mut err)?;
         // Drain the rest so a chatty child can't block on a full pipe.
-        let _ = std::io::copy(&mut stderr_pipe, &mut std::io::sink());
-        String::from_utf8_lossy(&err).into_owned()
+        std::io::copy(&mut stderr_pipe, &mut std::io::sink())?;
+        Ok::<_, std::io::Error>(String::from_utf8_lossy(&err).into_owned())
     });
 
     let deadline = Instant::now() + GIT_VIEW_TIMEOUT;
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
+            Ok(Some(status)) => break Ok(status),
             Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
+                child
+                    .kill()
+                    .map_err(|e| format!("git timed out; could not stop it: {e}"))?;
+                child
+                    .wait()
+                    .map_err(|e| format!("git timed out; could not reap it: {e}"))?;
+                break Err(format!(
+                    "git {} did not finish within {}s",
+                    args.join(" "),
+                    GIT_VIEW_TIMEOUT.as_secs()
+                ));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(_) => break None,
+            Err(error) => {
+                child
+                    .kill()
+                    .map_err(|e| format!("could not wait for git ({error}) or stop it ({e})"))?;
+                child
+                    .wait()
+                    .map_err(|e| format!("could not wait for git ({error}) or reap it ({e})"))?;
+                break Err(format!("could not wait for git: {error}"));
+            }
         }
     };
-    let (stdout, truncated) = reader.join().unwrap_or_default();
-    let stderr = err_reader.join().unwrap_or_default();
-    let Some(status) = status else {
-        return Err(format!(
-            "git {} did not finish within {}s",
-            args.join(" "),
-            GIT_VIEW_TIMEOUT.as_secs()
-        ));
-    };
+    let stdout = reader.join();
+    let stderr = err_reader.join();
+    let status = status?;
+    let (stdout, truncated) = stdout
+        .map_err(|_| "git stdout reader failed unexpectedly".to_string())?
+        .map_err(|e| format!("could not read git stdout: {e}"))?;
+    let stderr = stderr
+        .map_err(|_| "git stderr reader failed unexpectedly".to_string())?
+        .map_err(|e| format!("could not read git stderr: {e}"))?;
     Ok(CappedGit {
         stdout,
         stderr,
@@ -593,10 +619,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlinks_cannot_carry_operations_outside_the_workspace() {
-        let outside = std::env::temp_dir().join(format!(
-            "oxen-harness-files-outside-{}",
-            std::process::id()
-        ));
+        let outside =
+            std::env::temp_dir().join(format!("oxen-harness-files-outside-{}", std::process::id()));
         let _ = fs::remove_dir_all(&outside);
         fs::create_dir_all(&outside).unwrap();
         fs::write(outside.join("secret.txt"), "s3cret").unwrap();
@@ -620,7 +644,10 @@ mod tests {
             "hello"
         );
         // The outside file was never touched.
-        assert_eq!(fs::read_to_string(outside.join("secret.txt")).unwrap(), "s3cret");
+        assert_eq!(
+            fs::read_to_string(outside.join("secret.txt")).unwrap(),
+            "s3cret"
+        );
         fs::remove_dir_all(dir).unwrap();
         fs::remove_dir_all(outside).unwrap();
     }

@@ -357,10 +357,10 @@ impl ChatRequest {
     /// content-part array carrying the marker (the form OpenAI-compatible
     /// proxies accept `cache_control` in); an already-multipart message gets
     /// the marker on its last part.
-    pub fn to_body(&self) -> serde_json::Value {
-        let mut body = serde_json::to_value(self).expect("ChatRequest always serializes");
+    pub fn to_body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        let mut body = serde_json::to_value(self)?;
         if self.cache_anchors.is_empty() {
-            return body;
+            return Ok(body);
         }
         if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
             for &i in &self.cache_anchors {
@@ -369,7 +369,7 @@ impl ChatRequest {
                 }
             }
         }
-        body
+        Ok(body)
     }
 }
 
@@ -651,7 +651,7 @@ mod tests {
         )
         .with_cache_anchors(vec![0, 1, 2, 99]); // out-of-range index is ignored
 
-        let body = req.to_body();
+        let body = req.to_body().unwrap();
         // A system message is never converted to parts, even when anchored —
         // proxies translating to the Anthropic API reject that form.
         assert_eq!(body["messages"][0]["content"], "be helpful");
@@ -678,12 +678,12 @@ mod tests {
         // No anchors → the wire body is byte-identical to the serde form, and
         // the anchor field itself never serializes.
         let req = ChatRequest::new("m", vec![ChatMessage::user("hi")]);
-        assert_eq!(req.to_body(), serde_json::to_value(&req).unwrap());
-        assert!(req.to_body().get("cache_anchors").is_none());
+        assert_eq!(req.to_body().unwrap(), serde_json::to_value(&req).unwrap());
+        assert!(req.to_body().unwrap().get("cache_anchors").is_none());
 
         let anchored =
             ChatRequest::new("m", vec![ChatMessage::user("hi")]).with_cache_anchors(vec![0]);
-        assert!(anchored.to_body().get("cache_anchors").is_none());
+        assert!(anchored.to_body().unwrap().get("cache_anchors").is_none());
     }
 
     #[test]

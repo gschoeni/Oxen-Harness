@@ -76,7 +76,9 @@ pub(crate) fn fs_watch(
     state: State<'_, FsWatchState>,
     root: String,
 ) -> Result<(), String> {
-    let mut watchers = state.0.lock().unwrap();
+    let mut watchers = state.0.lock().map_err(|_| {
+        "file watchers are unavailable after a failed operation; restart the application"
+    })?;
     if watchers.contains_key(&root) {
         return Ok(());
     }
@@ -155,7 +157,13 @@ pub(crate) fn fs_watch(
 /// Stop watching a workspace root (no-op if it wasn't watched).
 #[tauri::command]
 pub(crate) fn fs_unwatch(state: State<'_, FsWatchState>, root: String) -> Result<(), String> {
-    state.0.lock().unwrap().remove(&root);
+    state
+        .0
+        .lock()
+        .map_err(|_| {
+            "file watchers are unavailable after a failed operation; restart the application"
+        })?
+        .remove(&root);
     Ok(())
 }
 

@@ -159,7 +159,9 @@ fn adopt_single_string_field(schema: &Value, args: &mut Value) -> bool {
     if strings.len() != 1 || obj.len() != 1 {
         return false;
     }
-    let value = obj.remove(&strings[0]).expect("present");
+    let Some(value) = obj.remove(&strings[0]) else {
+        return false;
+    };
     obj.insert(key.to_string(), value);
     true
 }

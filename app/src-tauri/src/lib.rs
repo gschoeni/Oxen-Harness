@@ -39,7 +39,7 @@ use state::{launch_dir, AppState};
 
 /// Entry point shared by the binary and mobile targets.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run() -> Result<(), tauri::Error> {
     // Load ~/.oxen-harness/.env so saved API keys reach the environment before
     // any agent or tool reads them, then migrate any legacy plaintext keys out
     // of connection.json into the .env.
@@ -275,8 +275,7 @@ pub fn run() {
             commands::ui::load_ui_state,
             commands::ui::save_ui_state
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building oxen-harness desktop app")
+        .build(tauri::generate_context!())?
         .run(|app, event| {
             // The local `llama-server` runs as a separate child process. On a
             // normal quit (Cmd+Q, window close, app menu) drop it so it doesn't
@@ -296,4 +295,5 @@ pub fn run() {
                 });
             }
         });
+    Ok(())
 }

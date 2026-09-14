@@ -176,8 +176,7 @@ pub(crate) async fn run_turn_and_drain(
     ) {
         return Ok(false);
     }
-    while !queue.is_empty() {
-        let next = queue.pop_front().expect("queue is non-empty");
+    while let Some(next) = queue.pop_front() {
         println!(
             "  {} {}",
             ui.brown("▶ rolling the wagon:"),

@@ -22,7 +22,7 @@ const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) async fn take_png(webview: tauri::webview::Webview) -> Result<Vec<u8>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel::<Result<Vec<u8>, String>>();
     // The completion block is `Fn`, so hand the one-shot sender through a slot.
-    let slot = std::sync::Mutex::new(Some(tx));
+    let slot = std::cell::Cell::new(Some(tx));
 
     webview
         .with_webview(move |platform| {
@@ -33,15 +33,23 @@ pub(crate) async fn take_png(webview: tauri::webview::Webview) -> Result<Vec<u8>
             // process) each time. The pointer is valid and non-null; this
             // closure runs on the main thread (Tauri dispatches it through the
             // event loop), which is where WKWebView must be touched.
-            let wk: Retained<WKWebView> =
-                unsafe { Retained::from_raw(platform.inner().cast::<WKWebView>()) }
-                    .expect("tauri hands over a non-null WKWebView");
+            let Some(wk) = (unsafe { Retained::from_raw(platform.inner().cast::<WKWebView>()) })
+            else {
+                if let Some(tx) = slot.into_inner() {
+                    let _ = tx.send(Err("snapshot failed: native webview is unavailable".into()));
+                }
+                return;
+            };
             let block = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
                 let result = png_from(image, error);
-                if let Some(tx) = slot.lock().unwrap().take() {
+                // WebKit invokes this completion on the main thread. Take the
+                // sender before sending so a repeated callback is harmless.
+                if let Some(tx) = slot.take() {
                     let _ = tx.send(result);
                 }
             });
+            // SAFETY: wk is retained and used on the main thread; WebKit
+            // copies the completion block for the asynchronous callback.
             unsafe { wk.takeSnapshotWithConfiguration_completionHandler(None, &block) };
         })
         .map_err(|e| format!("snapshot: {e}"))?;
@@ -72,6 +80,8 @@ fn png_from(image: *mut NSImage, error: *mut NSError) -> Result<Vec<u8>, String>
         .TIFFRepresentation()
         .ok_or("snapshot has no bitmap data")?;
     let rep = NSBitmapImageRep::imageRepWithData(&tiff).ok_or("could not decode snapshot")?;
+    // SAFETY: rep is a live bitmap representation and PNG accepts an empty
+    // properties dictionary; the returned optional image data is checked.
     let png: Retained<_> = unsafe {
         rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
     }

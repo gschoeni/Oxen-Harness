@@ -72,6 +72,33 @@ cd app && npx tsc --noEmit && npx vitest run       # the React frontend
 - **No narrating comments.** Comments explain intent/trade-offs, not what the code
   literally does.
 
+## Error handling and panic safety
+
+- **Production code must not use `unwrap()` or `expect()`** on `Result` or
+  `Option`, or `panic!`, `todo!`, `unimplemented!`, or `unreachable!` as error
+  handling. Use `?`, `ok_or_else`, or explicit matching. Express proven
+  collection invariants with pattern matching instead of a panic.
+- **Bubble useful errors to the user.** Preserve the original cause in the
+  crate's error type and add the failed operation plus relevant path, session,
+  tool, or model. Carry that error through the agent/host to the CLI, HTTP, or
+  desktop error surface. Never include secrets or full request bodies.
+- **Do not disguise failures as success.** Avoid `.ok()`, `let _ =`, and
+  `unwrap_or_default()` when they discard an operational failure. Fallbacks
+  must be intentional, documented, and safe; report degraded behavior when it
+  affects the user. A missing optional value is different from a failed read.
+- **Poisoned locks are errors**, especially for history, permissions, budgets,
+  and workspace edits. Propagate them; do not blindly recover possibly
+  inconsistent state with `into_inner()` or swap lock implementations merely
+  to remove the check. Callbacks that cannot return errors must deliver them
+  through the host's error/event channel.
+- **Prefer safe Rust.** Keep unavoidable platform FFI narrowly scoped, document
+  each `unsafe` block's `SAFETY` invariants, validate pointers and identifiers,
+  and check syscall return values. Propagate failures at normal call sites;
+  signal handlers and destructors require documented best-effort reporting.
+- Tests may use `expect`/`unwrap` for setup and assertions, and deliberate
+  panics when testing failure recovery. Add regression coverage for meaningful
+  error paths, including the error users receive, alongside the fix.
+
 ## Codebase orientation
 
 Read these in order — it follows a single prompt from keypress to reply, and by

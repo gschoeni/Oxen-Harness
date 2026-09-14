@@ -2,5 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    oxen_harness_app_lib::run();
+    if let Err(error) = oxen_harness_app_lib::run() {
+        eprintln!("Could not start oxen-harness desktop app: {error}");
+        std::process::exit(1);
+    }
 }

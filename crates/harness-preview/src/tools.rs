@@ -216,7 +216,7 @@ impl TypedTool for StartDevServerTool {
         let url = status.url.clone().unwrap_or_default();
         let port = status.port.unwrap_or_default();
         // Remember the working spec so future sessions can one-click start it.
-        let _ = config::remember(
+        let remembered = config::remember(
             &self.ctx.root,
             SavedServer {
                 name,
@@ -249,6 +249,11 @@ impl TypedTool for StartDevServerTool {
                 status.name,
             ),
         };
+        if let Err(error) = remembered {
+            message.push_str(&format!(
+                "\nWarning: the server is running, but its settings were not saved: {error}"
+            ));
+        }
         if let Some(hint) = &self.verify_hint {
             message.push(' ');
             message.push_str(hint);
@@ -469,6 +474,36 @@ impl TypedTool for DevServerLogsTool {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn running_server_reports_config_failure_without_overwriting_the_file() {
+        let Some(py) = python3() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".oxen-harness");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("preview.json");
+        std::fs::write(&config_path, "{broken config").unwrap();
+        let (start, stop, _) = session_tools(
+            DevServerManager::new(),
+            "config-failure",
+            dir.path(),
+            RecordingSink::new(),
+        );
+        let output = start
+            .invoke(serde_json::json!({
+                "command": format!("{py} -m http.server \"$PORT\" --bind 127.0.0.1")
+            }))
+            .await
+            .unwrap();
+        stop.invoke(serde_json::json!({})).await.unwrap();
+        assert!(output.contains("running at http://"), "{output}");
+        assert!(output.contains("settings were not saved"), "{output}");
+        assert!(output.contains("preview.json"), "{output}");
+        assert_eq!(
+            std::fs::read_to_string(config_path).unwrap(),
+            "{broken config"
+        );
+    }
+
     use super::*;
     use crate::server::tests::{python3, RecordingSink};
 

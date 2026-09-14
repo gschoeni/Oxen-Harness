@@ -594,13 +594,13 @@ impl BackgroundTasks {
         #[cfg(unix)]
         {
             if let Some(pid) = entry.pid {
-                // Negative pid = the whole process group (the task is its
-                // group's leader — see `spawn`). SAFETY: plain syscall on a
-                // pid we spawned; the worst a stale pid can do is ESRCH.
-                #[allow(unsafe_code)]
-                unsafe {
-                    libc::kill(-pid, libc::SIGKILL)
-                };
+                if !kill_process_group(pid).map_err(|e| {
+                    ToolError::Execution(format!(
+                        "could not stop task {id} (process group {pid}): {e}"
+                    ))
+                })? {
+                    return Ok(format!("task {id} had already exited"));
+                }
                 entry.announced = true;
                 entry.killed = true;
                 let command = entry.command.clone();
@@ -612,6 +612,31 @@ impl BackgroundTasks {
         Err(ToolError::Execution(format!(
             "task {id} cannot be killed on this platform"
         )))
+    }
+}
+
+/// Returns false when the group has already exited. Never signal group zero
+/// (our own process group) or let a negative identifier broaden the target.
+#[cfg(unix)]
+fn kill_process_group(pid: i32) -> std::io::Result<bool> {
+    if pid <= 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "process group id must be positive",
+        ));
+    }
+    // SAFETY: kill takes no pointers. The positive id belongs to a child
+    // spawned as its own group leader; negation targets that group.
+    #[allow(unsafe_code)]
+    let result = unsafe { libc::kill(-pid, libc::SIGKILL) };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(false)
+    } else {
+        Err(error)
     }
 }
 
@@ -892,6 +917,17 @@ mod registry_tests {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn kill_rejects_ids_that_could_signal_unrelated_processes() {
+        for pid in [0, -1, i32::MIN] {
+            assert_eq!(
+                kill_process_group(pid).unwrap_err().kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+        }
+    }
+
     use super::*;
 
     fn temp_registry(dir: &Path) -> Arc<BackgroundTasks> {

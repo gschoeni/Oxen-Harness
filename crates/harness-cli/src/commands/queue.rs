@@ -93,11 +93,10 @@ async fn run_queue(
     ui: &Ui,
     carryover: &mut String,
 ) -> Result<bool> {
-    if queue.is_empty() {
+    let Some(first) = queue.pop_front() else {
         println!("  {}", ui.dim("the wagon is empty — nothing to send"));
         return Ok(false);
-    }
-    let first = queue.pop_front().expect("queue is non-empty");
+    };
     println!(
         "  {} {}",
         ui.brown("▶ rolling the wagon:"),

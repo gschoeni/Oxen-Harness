@@ -355,7 +355,9 @@ fn line_hunk(
             new_lines,
         });
     }
-    let first = edit.line_start.expect("by_line");
+    let first = edit.line_start.ok_or_else(|| {
+        label("line-addressed edits require `line_start` or `insert_after_line`".into())
+    })?;
     let last = edit.line_end.unwrap_or(first);
     if first == 0 {
         return Err(label("`line_start` is 1-based; the first line is 1".into()));

@@ -223,10 +223,11 @@ impl ReviewRunner {
         // carry their partial replies, and the pipeline's own cancel check
         // decides what happens to those.
         if outcomes.iter().all(|o| o.result.is_err()) {
-            let first = outcomes
-                .into_iter()
-                .find_map(|o| o.result.err())
-                .expect("all-failed fleet has an error");
+            let first = outcomes.into_iter().find_map(|o| o.result.err()).ok_or(
+                ReviewError::EmptyFleet {
+                    step: step_index + 1,
+                },
+            )?;
             return Err(first.into());
         }
 

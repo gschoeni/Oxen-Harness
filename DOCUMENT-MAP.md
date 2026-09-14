@@ -134,3 +134,7 @@ When adding a new file to the project, update this document map.
 
 - `app/src/features/chat/useChatScroll.ts` — scroll intent, layout observation, and return-to-latest behavior; integration tests in `Chat.test.tsx`.
 - `plans/chat-scroll.md` — auto-scroll diagnosis, behavior, regression coverage, and review record.
+
+## Error handling audit (2026-09-13)
+
+- `plans/error-handling-audit.md` — propagated-error fixes, remaining lock/FFI findings, regression coverage, and verification record.

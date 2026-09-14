@@ -234,6 +234,17 @@ const TRANSCRIPT_PROJECTION_KEYS: [&str; 3] = [PLAN_STATE, TRAIL_STATE, RULE_HIS
 /// Errors from the history store.
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryError {
+    #[error("history store is unavailable after a failed operation; restart the application to reopen the database")]
+    Poisoned,
+    #[error("could not inspect history filesystem at {path}: {source}")]
+    FilesystemProbe {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("could not decode exported history as UTF-8: {0}")]
+    ExportEncoding(#[from] std::string::FromUtf8Error),
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     #[error("schema migration failed: {0}")]
@@ -416,7 +427,12 @@ impl HistoryStore {
         // Wait out a concurrent writer instead of failing fast with SQLITE_BUSY
         // (two front ends sharing one history database is a supported setup).
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        if !crate::netfs::is_network_filesystem(path) {
+        if !crate::netfs::is_network_filesystem(path).map_err(|source| {
+            HistoryError::FilesystemProbe {
+                path: path.to_path_buf(),
+                source,
+            }
+        })? {
             // Best-effort: `journal_mode` returns the mode actually in effect;
             // a refusal (e.g. an exotic filesystem) just keeps the default.
             let _ = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0));
@@ -444,7 +460,7 @@ impl HistoryStore {
     /// Create a new session, returning its generated id.
     pub fn create_session(&self, meta: &SessionMeta) -> Result<String, HistoryError> {
         let id = uuid::Uuid::new_v4().to_string();
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.execute(
             "INSERT INTO sessions
                  (id, workspace, model, provider, base_url, mode,
@@ -484,7 +500,7 @@ impl HistoryStore {
     ) -> Result<String, HistoryError> {
         let id = uuid::Uuid::new_v4().to_string();
         let cut = through_seq.unwrap_or(i64::MAX);
-        let mut conn = self.lock();
+        let mut conn = self.lock()?;
         let tx = conn.transaction()?;
         let copied = tx.execute(
             "INSERT INTO sessions
@@ -543,7 +559,7 @@ impl HistoryStore {
         session_id: &str,
     ) -> Result<Option<(String, Option<i64>)>, HistoryError> {
         use rusqlite::OptionalExtension;
-        let conn = self.lock();
+        let conn = self.lock()?;
         let row = conn
             .query_row(
                 "SELECT forked_from, forked_at_seq FROM sessions WHERE id = ?1",
@@ -563,7 +579,7 @@ impl HistoryStore {
     /// first — the points a rewind can go back to. Synthetic user-role rows
     /// (delivered task output, fleet asides, tool-image stubs) are left out.
     pub fn user_turns(&self, session_id: &str) -> Result<Vec<(i64, String)>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT seq, COALESCE(content, '') FROM messages
              WHERE session_id = ?1 AND role = 'user' AND synthetic = 0 ORDER BY seq",
@@ -588,7 +604,7 @@ impl HistoryStore {
     /// last plain assistant reply, user message, or system prompt; `-1`
     /// means nothing survives (the fork starts empty).
     pub fn rewind_cut(&self, session_id: &str, turn_seq: i64) -> Result<i64, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT seq, role, raw_json FROM messages
              WHERE session_id = ?1 AND seq < ?2 ORDER BY seq DESC",
@@ -621,14 +637,14 @@ impl HistoryStore {
         Ok(-1)
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().expect("history store mutex poisoned")
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, HistoryError> {
+        self.conn.lock().map_err(|_| HistoryError::Poisoned)
     }
 
     /// Read an app-wide counter (`app_meta`), or `None` if it was never set.
     pub fn meta_get_i64(&self, key: &str) -> Result<Option<i64>, HistoryError> {
         use rusqlite::OptionalExtension;
-        let conn = self.lock();
+        let conn = self.lock()?;
         let value = conn
             .query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |row| {
                 row.get::<_, i64>(0)
@@ -639,7 +655,7 @@ impl HistoryStore {
 
     /// Set an app-wide counter (`app_meta`) to an absolute value.
     pub fn meta_set_i64(&self, key: &str, value: i64) -> Result<(), HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.execute(
             "INSERT INTO app_meta (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -652,7 +668,7 @@ impl HistoryStore {
     /// `delta` if absent, and return the new total. Keeps running aggregates cheap
     /// to update without read-modify-write races across sessions.
     pub fn meta_add_i64(&self, key: &str, delta: i64) -> Result<i64, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.execute(
             "INSERT INTO app_meta (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = value + excluded.value",
@@ -668,7 +684,7 @@ impl HistoryStore {
     ///
     /// Used to resume a previous session (restoring its workspace + model).
     pub fn session_meta(&self, session_id: &str) -> Result<SessionMeta, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.query_row(
             "SELECT workspace, model, provider, base_url, mode,
                     context_window, system_prompt_version, theme, parent_session
@@ -702,7 +718,7 @@ impl HistoryStore {
     /// a readable label. Brand-new sessions that only contain the seeded system
     /// prompt are omitted — they have no user turn to title them with.
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT s.id, s.workspace, s.model, s.created_at,
                     (SELECT m.content FROM messages m
@@ -745,7 +761,7 @@ impl HistoryStore {
     /// as are imported transcripts: another tool's history is reading material,
     /// not a thread of ours to tie off.
     pub fn ledger_rows(&self) -> Result<Vec<LedgerRow>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         // One grouped pass over messages finds each session's landmarks (the
         // seqs of its title / last / last-reply messages, its count, its last
         // activity); the landmark rows are then fetched by (session_id, seq)
@@ -828,7 +844,7 @@ impl HistoryStore {
     /// backfill plan snapshots for sessions that predate them; new sessions
     /// persist their snapshot as each call happens.
     pub fn plan_message_candidates(&self, session_id: &str) -> Result<Vec<String>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT raw_json FROM messages
              WHERE session_id = ?1 AND role = 'assistant'
@@ -846,7 +862,7 @@ impl HistoryStore {
     pub fn workspace_last_used(
         &self,
     ) -> Result<std::collections::HashMap<String, i64>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT s.workspace,
                     MAX(COALESCE((SELECT MAX(m.created_at) FROM messages m
@@ -885,7 +901,7 @@ impl HistoryStore {
         let raw_json = serde_json::to_string(&value)?;
 
         append_message_row(
-            &self.lock(),
+            &*self.lock()?,
             session_id,
             &role,
             content.as_deref(),
@@ -904,7 +920,7 @@ impl HistoryStore {
         content: Option<&str>,
         raw_json: &str,
     ) -> Result<i64, HistoryError> {
-        append_message_row(&self.lock(), session_id, role, content, raw_json, false)
+        append_message_row(&*self.lock()?, session_id, role, content, raw_json, false)
     }
 
     /// Like [`Self::append_raw_message`], for a message the harness composed
@@ -919,12 +935,12 @@ impl HistoryStore {
         content: Option<&str>,
         raw_json: &str,
     ) -> Result<i64, HistoryError> {
-        append_message_row(&self.lock(), session_id, role, content, raw_json, true)
+        append_message_row(&*self.lock()?, session_id, role, content, raw_json, true)
     }
 
     /// Return the verbatim message JSON values for a session, ordered by `seq`.
     pub fn messages(&self, session_id: &str) -> Result<Vec<serde_json::Value>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt =
             conn.prepare("SELECT raw_json FROM messages WHERE session_id = ?1 ORDER BY seq ASC")?;
         let rows = stmt.query_map([session_id], |row| row.get::<_, String>(0))?;
@@ -943,7 +959,7 @@ impl HistoryStore {
         session_id: &str,
         after_seq: i64,
     ) -> Result<Vec<T>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT raw_json FROM messages
              WHERE session_id = ?1 AND seq > ?2 ORDER BY seq ASC",
@@ -966,7 +982,7 @@ impl HistoryStore {
         messages: &T,
     ) -> Result<(), HistoryError> {
         let raw = serde_json::to_string(messages)?;
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.execute(
             "INSERT INTO context_snapshots (session_id, through_seq, raw_json)
              VALUES (?1, ?2, ?3)
@@ -984,7 +1000,7 @@ impl HistoryStore {
         session_id: &str,
     ) -> Result<Option<(i64, T)>, HistoryError> {
         use rusqlite::OptionalExtension;
-        let conn = self.lock();
+        let conn = self.lock()?;
         let row = conn
             .query_row(
                 "SELECT through_seq, raw_json FROM context_snapshots WHERE session_id = ?1",
@@ -1008,7 +1024,7 @@ impl HistoryStore {
         value: &T,
     ) -> Result<(), HistoryError> {
         let raw = serde_json::to_string(value)?;
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.execute(
             "INSERT INTO session_state (session_id, key, raw_json)
              VALUES (?1, ?2, ?3)
@@ -1021,7 +1037,7 @@ impl HistoryStore {
     /// Remove one per-session projection. Idempotent: clearing a key that was
     /// never saved is a no-op.
     pub fn clear_session_state(&self, session_id: &str, key: &str) -> Result<(), HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.execute(
             "DELETE FROM session_state WHERE session_id = ?1 AND key = ?2",
             rusqlite::params![session_id, key],
@@ -1037,7 +1053,7 @@ impl HistoryStore {
         key: &str,
     ) -> Result<Option<T>, HistoryError> {
         use rusqlite::OptionalExtension;
-        let conn = self.lock();
+        let conn = self.lock()?;
         let raw = conn
             .query_row(
                 "SELECT raw_json FROM session_state
@@ -1055,7 +1071,7 @@ impl HistoryStore {
     /// exist is a no-op. Messages are removed first to respect the foreign
     /// key, all in one transaction so it's all-or-nothing.
     pub fn delete_session(&self, session_id: &str) -> Result<(), HistoryError> {
-        let mut conn = self.lock();
+        let mut conn = self.lock()?;
         let tx = conn.transaction()?;
         tx.execute(
             "DELETE FROM messages WHERE session_id = ?1
@@ -1075,7 +1091,7 @@ impl HistoryStore {
     /// still running have no record yet — the host's live registry knows
     /// those.
     pub fn lanes_of(&self, parent: &str) -> Result<Vec<LaneSummary>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT s.id, s.created_at, lane.raw_json
              FROM sessions s
@@ -1108,7 +1124,7 @@ impl HistoryStore {
     /// `None` when it has none. Read from the verbatim row: the `content`
     /// column is only filled for user messages (it feeds titles).
     pub fn last_assistant_text(&self, session_id: &str) -> Result<Option<String>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT raw_json FROM messages
              WHERE session_id = ?1 AND role = 'assistant'
@@ -1129,7 +1145,7 @@ impl HistoryStore {
     /// Set a session's training-data review status (`""`, `"kept"`, or
     /// `"rejected"`). Errors if the session doesn't exist.
     pub fn set_review_status(&self, session_id: &str, status: &str) -> Result<(), HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let changed = conn.execute(
             "UPDATE sessions SET review_status = ?2 WHERE id = ?1",
             rusqlite::params![session_id, status],
@@ -1143,7 +1159,7 @@ impl HistoryStore {
     /// A session's training-data review status (`""` when unreviewed). Errors
     /// if the session doesn't exist.
     pub fn review_status(&self, session_id: &str) -> Result<String, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.query_row(
             "SELECT review_status FROM sessions WHERE id = ?1",
             [session_id],
@@ -1164,7 +1180,7 @@ impl HistoryStore {
         session_ids: &[String],
         status: &str,
     ) -> Result<usize, HistoryError> {
-        let mut conn = self.lock();
+        let mut conn = self.lock()?;
         let tx = conn.transaction()?;
         let mut changed = 0usize;
         {
@@ -1224,7 +1240,7 @@ impl HistoryStore {
         detail: &UsageDetail<'_>,
         created_at: i64,
     ) -> Result<(), HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.execute(
             "INSERT INTO usage_events
                  (model, source, prompt_tokens, completion_tokens, created_at,
@@ -1252,7 +1268,7 @@ impl HistoryStore {
     /// portion served from a provider prompt cache and the portion written into
     /// it. All zeros until an endpoint starts reporting cache activity.
     pub fn cache_usage_totals(&self) -> Result<CacheUsageTotals, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.query_row(
             "SELECT COALESCE(SUM(prompt_tokens), 0),
                     COALESCE(SUM(cached_prompt_tokens), 0),
@@ -1273,7 +1289,7 @@ impl HistoryStore {
     /// Everything attributed to one session: its own turns plus the spend of
     /// every side agent and fleet lane it spawned.
     pub fn usage_for_session(&self, session_id: &str) -> Result<SessionUsage, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.query_row(
             "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0)
              FROM usage_events WHERE session_id = ?1",
@@ -1291,7 +1307,7 @@ impl HistoryStore {
     /// The per-model usage breakdown, busiest first — every model that has
     /// accumulated usage, with separate prompt and completion counts.
     pub fn model_usage_breakdown(&self) -> Result<Vec<ModelUsage>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT model, source, SUM(prompt_tokens), SUM(completion_tokens)
              FROM usage_events
@@ -1315,7 +1331,7 @@ impl HistoryStore {
 
     /// Per-model usage for one local-calendar day (`YYYY-MM-DD`).
     pub fn model_usage_for_day(&self, date: &str) -> Result<Vec<ModelUsage>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT model, source, SUM(prompt_tokens), SUM(completion_tokens)
              FROM usage_events
@@ -1338,7 +1354,7 @@ impl HistoryStore {
     /// Daily token totals for `year`, in the machine's local timezone. Days
     /// with no activity are omitted; the UI fills those cells with zero.
     pub fn daily_usage(&self, year: i32) -> Result<Vec<DailyUsage>, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT date(created_at, 'unixepoch', 'localtime') AS day,
                     SUM(prompt_tokens), SUM(completion_tokens)
@@ -1361,7 +1377,7 @@ impl HistoryStore {
 
     /// Total model throughput represented by the per-model ledger.
     pub fn total_model_tokens(&self) -> Result<i64, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         conn.query_row(
             "SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0)
              FROM usage_events",
@@ -1416,7 +1432,7 @@ impl HistoryStore {
     /// How many sessions were imported from `source` (for the import panel's
     /// "already imported" count).
     pub fn imported_count(&self, source: &str) -> Result<i64, HistoryError> {
-        let conn = self.lock();
+        let conn = self.lock()?;
         Ok(conn.query_row(
             "SELECT COUNT(*) FROM sessions WHERE source = ?1",
             [source],
@@ -1438,7 +1454,7 @@ impl HistoryStore {
     ) -> Result<crate::import::ImportReport, HistoryError> {
         use rusqlite::OptionalExtension;
         let mut report = crate::import::ImportReport::default();
-        let mut conn = self.lock();
+        let mut conn = self.lock()?;
         let tx = conn.transaction()?;
         for conv in conversations {
             let existing: Option<(String, i64)> = tx
@@ -1551,6 +1567,22 @@ fn now() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn poisoned_connection_returns_errors_without_accessing_state() {
+        let store = HistoryStore::open_in_memory().unwrap();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = store.conn.lock().unwrap();
+            panic!("simulate a failed database operation");
+        }));
+        let read = store.list_sessions().unwrap_err().to_string();
+        assert!(read.contains("history store"), "{read}");
+        assert!(read.contains("restart"), "{read}");
+        assert!(store.create_session(&SessionMeta::default()).is_err());
+        assert!(store
+            .export_chat_completions(&["session".into()], true)
+            .is_err());
+    }
+
     use super::*;
     use harness_core::Message;
 
@@ -1572,9 +1604,13 @@ mod tests {
         let store = HistoryStore::open(dir.path().join("history.sqlite")).unwrap();
         let mode: String = store
             .lock()
+            .unwrap()
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .unwrap();
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         assert_eq!(mode.to_lowercase(), "wal");
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        assert_eq!(mode.to_lowercase(), "delete");
     }
 
     #[test]
@@ -2082,7 +2118,7 @@ mod tests {
 
         // Pin timestamps directly so the assertion doesn't depend on the wall clock.
         {
-            let conn = store.lock();
+            let conn = store.lock().unwrap();
             conn.execute(
                 "UPDATE sessions SET created_at = 100 WHERE id = ?1",
                 rusqlite::params![idle],
@@ -2234,7 +2270,7 @@ mod tests {
 
         // The raw row carries the attribution columns.
         let (session, kind, latency, retries): (String, String, i64, i64) = {
-            let conn = store.lock();
+            let conn = store.lock().unwrap();
             conn.query_row(
                 "SELECT session_id, kind, latency_ms, retries
                  FROM usage_events WHERE kind = 'turn'",
@@ -2310,7 +2346,7 @@ mod tests {
             )
             .unwrap();
         let (date, year): (String, i32) = {
-            let conn = store.lock();
+            let conn = store.lock().unwrap();
             conn.query_row(
                 "SELECT date(?1, 'unixepoch', 'localtime'),
                         CAST(strftime('%Y', ?1, 'unixepoch', 'localtime') AS INTEGER)",
@@ -2563,7 +2599,7 @@ mod tests {
         // user_version matches the migration count.
         assert!(migrations().validate().is_ok());
         let store = store();
-        let conn = store.lock();
+        let conn = store.lock().unwrap();
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();

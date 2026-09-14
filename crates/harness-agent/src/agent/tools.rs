@@ -427,7 +427,7 @@ impl Agent {
     /// Every call gets a `ToolEnd`, a crashed tool included.
     pub(super) async fn run_wave<F>(
         &self,
-        wave: Vec<PreparedCall>,
+        mut wave: Vec<PreparedCall>,
         on_event: &mut F,
     ) -> Vec<(usize, String)>
     where
@@ -441,7 +441,9 @@ impl Agent {
             // A lone call (every exclusive tool, notably the shell) is the one
             // whose progress can be attributed: forward the registry's live
             // output chunks tagged with its name while it runs.
-            let prepared = wave.into_iter().next().expect("one call");
+            let Some(prepared) = wave.pop() else {
+                return results;
+            };
             let (index, call_id, name) = (prepared.index, prepared.call_id, prepared.name);
             let executed = self
                 .supervise(

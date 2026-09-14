@@ -10,7 +10,8 @@ use harness_protocol::{
     TurnResponse,
 };
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
     let schema = serde_json::json!({
         "$comment": "oxen-harness wire protocol: the event stream plus command DTOs",
         "event": schemars::schema_for!(ProtocolEvent),
@@ -23,8 +24,8 @@ fn main() {
             "ApprovalAnswer": schemars::schema_for!(ApprovalAnswer),
         },
     });
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&schema).expect("schema serializes")
-    );
+    let mut out = std::io::stdout().lock();
+    serde_json::to_writer_pretty(&mut out, &schema)?;
+    writeln!(out)?;
+    Ok(())
 }

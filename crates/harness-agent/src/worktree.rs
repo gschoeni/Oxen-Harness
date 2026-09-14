@@ -330,7 +330,9 @@ impl WorktreeSnapshot {
             &self.baseline_ref,
             false,
         )?;
-        let lane = lanes.pop().expect("one checkout requested");
+        let lane = lanes.pop().ok_or_else(|| {
+            std::io::Error::other("could not restore agent workspace: no checkout was created")
+        })?;
         if !self.patch.is_empty() {
             let file = lane.scratch_root.join("restore.patch");
             std::fs::write(&file, &self.patch)?;

@@ -118,8 +118,7 @@ pub(crate) async fn run_prompt(
                 }
                 // Auto-drain: send the next stacked message (more may still be
                 // typed while it runs — they just keep stacking onto the queue).
-                if !queue.is_empty() {
-                    let msg = queue.pop_front().expect("queue is non-empty");
+                if let Some(msg) = queue.pop_front() {
                     let mut s = state.borrow_mut();
                     s.sync_queue(queue.items());
                     s.print_line(&format!(

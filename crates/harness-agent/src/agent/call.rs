@@ -176,7 +176,9 @@ impl Agent {
                         && attempt >= retry.max_attempts
                         && fallbacks.clone().next().is_some() =>
                 {
-                    let next = fallbacks.next().expect("checked above").clone();
+                    let Some(next) = fallbacks.next().cloned() else {
+                        return Err(e.into());
+                    };
                     crate::errlog::record(
                         self.config.error_log.as_deref(),
                         "model_fallback",

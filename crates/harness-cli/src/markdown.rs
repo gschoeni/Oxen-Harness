@@ -175,10 +175,10 @@ impl<W: Write> MarkdownStream<W> {
 
         // --- Table state machine -------------------------------------------
         // Inside a table: keep collecting rows until a non-table line ends it.
-        if self.table.is_some() {
+        if let Some(table) = self.table.as_mut() {
             if is_table_row(trimmed) {
                 let cells = parse_row(line);
-                self.table.as_mut().unwrap().rows.push(cells);
+                table.rows.push(cells);
                 return;
             }
             self.flush_table();

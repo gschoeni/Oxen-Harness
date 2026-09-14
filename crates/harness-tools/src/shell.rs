@@ -154,28 +154,62 @@ impl ShellTool {
     }
 
     /// The directory the next command will run in.
-    fn cwd(&self) -> std::path::PathBuf {
-        self.session
+    fn cwd(&self) -> Result<std::path::PathBuf, ToolError> {
+        Ok(self
+            .session
             .lock()
-            .expect("shell session")
+            .map_err(|_| {
+                ToolError::Execution(
+                    "shell session is unavailable after a failed operation; start a new session"
+                        .into(),
+                )
+            })?
             .cwd()
-            .to_path_buf()
+            .to_path_buf())
     }
 
     /// Environment overrides for the next command.
-    fn env(&self) -> std::collections::BTreeMap<String, String> {
-        self.session.lock().expect("shell session").env().clone()
+    fn env(&self) -> Result<std::collections::BTreeMap<String, String>, ToolError> {
+        Ok(self
+            .session
+            .lock()
+            .map_err(|_| {
+                ToolError::Execution(
+                    "shell session is unavailable after a failed operation; start a new session"
+                        .into(),
+                )
+            })?
+            .env()
+            .clone())
     }
 
     /// Fold a finished command's directory/environment back into the session.
-    /// A missing or unreadable report (the command called `exit`, or the
-    /// shell died) simply leaves the previous state in place.
-    fn absorb(&self, carrier: Option<&StateFile>) -> Option<String> {
-        let report = std::fs::read_to_string(carrier?.path()).ok()?;
-        self.session
+    /// A missing report (the command called `exit`, or the shell died) leaves
+    /// the previous state in place. Other read failures are reported.
+    fn absorb(&self, carrier: Option<&StateFile>) -> Result<Option<String>, ToolError> {
+        let Some(carrier) = carrier else {
+            return Ok(None);
+        };
+        let report = match std::fs::read_to_string(carrier.path()) {
+            Ok(report) => report,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(ToolError::Execution(format!(
+                    "could not read shell state at {}: {error}",
+                    carrier.path().display()
+                )))
+            }
+        };
+        Ok(self
+            .session
             .lock()
-            .expect("shell session")
-            .absorb(&report, self.workspace.root())
+            .map_err(|_| {
+                ToolError::Execution(
+                    "shell session is unavailable after a failed operation; start a new session"
+                        .into(),
+                )
+            })?
+            .absorb(&report, self.workspace.root()))
     }
 
     /// Wait for a foreground command, cutting the wait short if the user
@@ -250,7 +284,7 @@ impl TypedTool for ShellTool {
         }
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
         let background = args.is_background.unwrap_or(false);
-        let (cwd, env) = (self.cwd(), self.env());
+        let (cwd, env) = (self.cwd()?, self.env()?);
         // A background command inherits the session's directory and
         // environment but never changes them: a dev server left running must
         // not decide where the next foreground command lands.
@@ -289,7 +323,7 @@ impl TypedTool for ShellTool {
                             "\n[the omitted middle is kept: call retrieve_original with {marker}]"
                         ));
                     }
-                    if let Some(note) = self.absorb(carrier.as_ref()) {
+                    if let Some(note) = self.absorb(carrier.as_ref())? {
                         out.push_str(&format!("\n[{note}]"));
                     }
                     Ok(out)
@@ -350,7 +384,7 @@ impl TypedTool for ShellTool {
             ));
         }
         let mut out = format_streams(output.code, &output.stdout, &output.stderr);
-        if let Some(note) = self.absorb(carrier.as_ref()) {
+        if let Some(note) = self.absorb(carrier.as_ref())? {
             out.push_str(&format!("\n[{note}]"));
         }
         Ok(out)
@@ -447,6 +481,23 @@ pub(crate) fn shell_command(command: &str) -> tokio::process::Command {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn a_poisoned_session_refuses_to_execute_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = ShellTool::new(Workspace::new(dir.path()).unwrap());
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = tool.session.lock().unwrap();
+            panic!("simulate incomplete shell state update");
+        }));
+        let error = tool
+            .invoke(serde_json::json!({"command": "touch should-not-exist"}))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("shell session"));
+        assert!(error.to_string().contains("start a new session"));
+        assert!(!dir.path().join("should-not-exist").exists());
+    }
+
     use super::*;
 
     #[tokio::test]

@@ -244,7 +244,7 @@ pub(crate) async fn handle_repl(
                 .await
                 .map_err(|e| e.to_string()),
             "patch" => spawner.patch(&row.id).map_err(|e| e.to_string()),
-            _ => unreachable!(),
+            _ => Err(format!("Unknown agents command: {command}")),
         };
         match result {
             Ok(text) => {
