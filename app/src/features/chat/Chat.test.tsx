@@ -564,6 +564,21 @@ describe("chat scroll following", () => {
     expect(screen.queryByRole("button", { name: "Scroll to latest" })).not.toBeInTheDocument();
   });
 
+  it("can pause again after a content collapse brings the reader back to the bottom", () => {
+    const { viewport, size, resize } = setupScroll();
+    size.top = 400;
+    fireEvent.scroll(viewport);
+    size.height = 800;
+    resize();
+    expect(screen.queryByRole("button", { name: "Scroll to latest" })).not.toBeInTheDocument();
+    size.top -= 20;
+    fireEvent.scroll(viewport);
+    size.height += 300;
+    append(" more");
+    expect(size.top).toBe(380);
+    expect(screen.getByRole("button", { name: "Scroll to latest" })).toBeInTheDocument();
+  });
+
   it("disconnects its layout observer when the chat unmounts", () => {
     const { unmount } = setupScroll();
     expect(resizeCallbacks.size).toBeGreaterThan(0);

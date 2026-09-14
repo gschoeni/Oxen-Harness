@@ -52,7 +52,11 @@ export function useChatScroll(sessionId: string | undefined, items: unknown) {
     // the composer can shrink the viewport without changing the thread.
     const observer = new ResizeObserver(() => {
       if (following.current) pin();
-      else if (atBottom(position(viewport))) follow(true);
+      else {
+        const current = position(viewport);
+        previous.current = current;
+        if (atBottom(current)) follow(true);
+      }
     });
     observer.observe(viewport);
     observer.observe(content);
@@ -65,8 +69,10 @@ export function useChatScroll(sessionId: string | undefined, items: unknown) {
     const current = position(el);
     const last = previous.current;
     if (atBottom(current)) follow(true);
-    else if (last && current.top < last.top && current.height === last.height &&
-      current.viewport === last.viewport && current.width === last.width) follow(false);
+    else if (
+      last && current.top < last.top && current.height === last.height &&
+      current.viewport === last.viewport && current.width === last.width
+    ) follow(false);
     previous.current = current;
   }
 

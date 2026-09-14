@@ -646,6 +646,6 @@ The dedicated review/refactor pass is complete and documented in
 
 Fixed unexpected loss of automatic scrolling: streaming and layout changes follow
 until the reader scrolls up; returning to the bottom, using the arrow, sending a
-prompt, or switching chats resumes following. Eleven regression tests and real
+prompt, or switching chats resumes following. Twelve regression tests and real
 browser checks cover the behavior. See `plans/chat-scroll.md` for verification
 and existing workspace check blockers.

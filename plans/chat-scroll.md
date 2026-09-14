@@ -43,3 +43,38 @@ A pre-existing agent test fixture also used an invalid fleet source; it now uses
   pre-existing `Agent::invalidate_tool_cache` call: that method is absent from
   committed HEAD. These backend failures are independent of the frontend diff.
   The working tree contains the method, explaining why its Tauri check passes.
+
+
+## Dedicated review / polish
+
+Reviewed the committed diff for modularity, readability, and pragmatic behavior:
+
+1. **Fix stale geometry when resuming after a resize.** If collapsed content
+   brings a paused reader to the bottom, the next upward scroll must compare
+   against the new dimensions. Added a regression (failed before the fix) and
+   refreshed the saved position in the resize observer.
+2. **Keep the scroll policy local.** The dedicated hook separates layout and
+   intent from attachment/composer behavior without adding a generalized scroll
+   framework or animation state machine. Expanded the directional condition for
+   readability; no further abstraction was warranted.
+3. **Check actual browser behavior separately from mocked layout.** The tests
+   exercise React integration with controlled geometry; Chromium checks cover
+   actual scrolling, delayed layout, and the existing content-visibility styles.
+
+The review adds a twelfth integration regression. Backend verification is also
+sensitive to ongoing unrelated edits: a later working-tree Clippy/nextest run
+failed in `harness-media` and on a missing `harness_llm::base64_len` export. No
+backend files are changed by this feature.
+
+## Final verification
+
+After polish, TypeScript and all 478 working-tree frontend tests passed; the
+isolated frontend passed TypeScript and all 397 tests. Workspace formatting and
+working-tree Tauri Clippy passed. Workspace Clippy and nextest remain blocked by
+unrelated missing `harness_config::paths::cache_dir` and `harness_llm::base64_len`
+symbols in the ongoing backend edits. Existing React act warnings remain in the
+frontend suite. The scroll feature and review do not claim a green Rust suite.
+
+Feature commit: `0155668`. Only this feature's frontend/docs changes and the
+small fleet test-fixture correction were staged; other working-tree changes were
+preserved.
