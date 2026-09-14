@@ -636,7 +636,8 @@ follow-up/patch commands. The desktop keeps live and finished descendants in
 one minimal panel with retained drafts, acknowledged stop/send controls,
 scroll-follow control, and reviewed patch application.
 
-Verification: 1,258 Rust tests passed (3 skipped); workspace fmt and Clippy passed;
-465 frontend tests and TypeScript passed; Tauri bridge Clippy passed. Browser
+Verification: 1,259 Rust tests passed (3 skipped); workspace fmt and Clippy passed;
+466 frontend tests and TypeScript passed; Tauri bridge Clippy passed. Browser
 inspection covered light/dark and a 390px viewport with no horizontal overflow.
-The dedicated review/refactor pass is tracked in `plans/subagent-hardening.md`.
+The dedicated review/refactor pass is complete and documented in
+`plans/subagent-hardening.md`.

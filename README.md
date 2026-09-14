@@ -434,7 +434,8 @@ show the current selection and where Enter sends your message:
 `/agents list` prints stable short IDs. Use an ID or a unique name with
 `/agents watch`, `read`, `show`, `stop`, or `patch`. Send text with
 `/agents send <id> <message>`; continue a finished agent with
-`/agents follow-up <id> <message>`. `/agents help` shows examples. In terminals
+`/agents follow-up <id> <message>`. `/agents drafts` recovers unsent directions;
+`/agents follow-up <id>` sends that agent's saved draft. `/agents help` shows examples. In terminals
 that use Option for special characters, configure Option as Alt/Meta or use the
 commands. Plain terminals print milestones and the agent list.
 

@@ -228,30 +228,7 @@ impl TypedTool for MapAgentsTool {
             .map(|i| i.trim().to_string())
             .filter(|i| !i.is_empty())
             .collect();
-        if items.is_empty() {
-            return Err(ToolError::InvalidArguments(
-                "map_agents needs at least one item".into(),
-            ));
-        }
-        if items.len() > MAX_MAP_ITEMS {
-            return Err(ToolError::InvalidArguments(format!(
-                "map_agents fans over at most {MAX_MAP_ITEMS} items per call (got {})",
-                items.len()
-            )));
-        }
         let reduce_with_agent = matches!(args.reduce.as_deref(), Some("agent"));
-        if reduce_with_agent
-            && args
-                .reduce_prompt
-                .as_deref()
-                .unwrap_or("")
-                .trim()
-                .is_empty()
-        {
-            return Err(ToolError::InvalidArguments(
-                "reduce: \"agent\" needs a reduce_prompt".into(),
-            ));
-        }
         let leaf = args.leaf.unwrap_or(false);
         let run_id = args.run_id.clone().unwrap_or_else(next_fleet_id);
         let model = self.spawner.endpoint_snapshot().1.for_subagent().model;

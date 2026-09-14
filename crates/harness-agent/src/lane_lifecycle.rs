@@ -26,7 +26,7 @@ pub(crate) struct LaneLifecycle {
 }
 
 impl LaneLifecycle {
-    fn save(&self, outcome: &SubagentOutcome, count: usize) -> Result<SubagentResult, AgentError> {
+    fn record(&self, outcome: &SubagentOutcome, count: usize) -> SubagentResult {
         let mut record = SubagentResult::from_outcome(
             outcome,
             &self.fleet,
@@ -35,6 +35,11 @@ impl LaneLifecycle {
         );
         record.model = self.model.clone();
         record.elapsed_ms = self.started.elapsed().as_millis() as u64;
+        record
+    }
+
+    fn save(&self, outcome: &SubagentOutcome, count: usize) -> Result<SubagentResult, AgentError> {
+        let mut record = self.record(outcome, count);
         if let Some(workspace) = &self.workspace {
             let snapshot = WorktreeSnapshot::capture(workspace, &self.id)?;
             if !snapshot.patch.is_empty() {
@@ -51,38 +56,59 @@ impl LaneLifecycle {
 
     pub fn finish(mut self, outcome: &mut SubagentOutcome, count: usize) {
         match self.save(outcome, count) {
+            Ok(record) => outcome.record = Some(record),
             Err(error) => {
-                if let Some(workspace) = &self.workspace {
+                let recovery = if let Some(workspace) = &self.workspace {
                     workspace.preserve();
+                    format!(
+                        "; recover the retained checkout at {}",
+                        workspace.path().display()
+                    )
+                } else {
+                    String::new()
+                };
+                outcome.result = Err(AgentError::Io(std::io::Error::other(format!(
+                    "could not save agent result: {error}{recovery}"
+                ))));
+                let record = self.record(outcome, count);
+                match self
+                    .store
+                    .save_session_state(&self.id, harness_store::LANE_STATE, &record)
+                {
+                    Ok(()) => outcome.record = Some(record),
+                    Err(error) => {
+                        tracing::error!(lane = %self.id, %error, "could not persist agent failure")
+                    }
                 }
-                outcome.result = Err(error);
-            }
-            Ok(record) => {
-                outcome.record = Some(record);
-                self.completed = true;
             }
         }
-        self.tree.finish_lane(&self.id);
+        // Drop releases this registration exactly once, after persistence.
+        self.completed = true;
     }
 }
 
 impl Drop for LaneLifecycle {
     fn drop(&mut self) {
         if !self.completed {
+            let panicked = std::thread::panicking();
             let outcome = SubagentOutcome {
                 record: None,
                 label: self.label.clone(),
                 session: self.id.clone(),
-                result: Ok(self
-                    .store
-                    .last_assistant_text(&self.id)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default()),
+                result: if panicked {
+                    Err(AgentError::Io(std::io::Error::other("agent task panicked")))
+                } else {
+                    Ok(self
+                        .store
+                        .last_assistant_text(&self.id)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default())
+                },
                 structured: None,
                 tokens_used: 0,
                 rounds: 0,
-                stopped: Some(LaneStop::Cancelled),
+                stopped: (!panicked).then_some(LaneStop::Cancelled),
                 denied: Vec::new(),
             };
             if let Err(error) = self.save(&outcome, 1) {

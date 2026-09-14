@@ -487,16 +487,30 @@ pub(crate) async fn resume_session(
 }
 
 #[tauri::command]
-pub(crate) fn agent_patch(state: State<'_, AppState>, session: String, lane: String) -> Result<String, String> {
+pub(crate) fn agent_patch(
+    state: State<'_, AppState>,
+    session: String,
+    lane: String,
+) -> Result<String, String> {
     state.agent_patch(&session, &lane)
 }
 
 #[tauri::command]
-pub(crate) async fn follow_up_agent(state: State<'_, AppState>, session: String, lane: String, text: String) -> Result<String, String> {
+pub(crate) async fn follow_up_agent(
+    state: State<'_, AppState>,
+    session: String,
+    lane: String,
+    text: String,
+) -> Result<String, String> {
     state.follow_up_agent(&session, &lane, &text).await
 }
 
 #[tauri::command]
-pub(crate) async fn apply_agent_patch(state: State<'_, AppState>, session: String, lane: String, patch: String) -> Result<(), String> {
+pub(crate) async fn apply_agent_patch(
+    state: State<'_, AppState>,
+    session: String,
+    lane: String,
+    patch: String,
+) -> Result<(), String> {
     state.apply_agent_patch(&session, &lane, &patch).await
 }

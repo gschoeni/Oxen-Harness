@@ -160,6 +160,12 @@ impl FleetSpawner {
                 "write a follow-up message".into(),
             ));
         }
+        if self.tree.is_live(id) {
+            return Err(ToolError::Execution(
+                "This agent is still running; send a direction or stop it first".into(),
+            ));
+        }
+        self.tree_budget().reset();
         let (_, config) = self.endpoint_snapshot();
         let session = self
             .session()
@@ -198,6 +204,7 @@ impl FleetSpawner {
     pub fn register_tools(self: &Arc<Self>, tools: &mut ToolRegistry, sink: Arc<dyn FleetSink>) {
         self.set_sink(sink.clone());
         tools.register_typed(crate::AskModelTool::new(self.clone()));
+        tools.register_typed(crate::ReadAgentTool::new(self.clone()));
         if self.endpoint_snapshot().1.may_spawn() {
             let mut fleet = FleetTool::new(self.clone(), sink.clone());
             let mut map = crate::MapAgentsTool::new(self.clone(), sink.clone());
@@ -209,7 +216,6 @@ impl FleetSpawner {
             tools.register_typed(fleet);
             tools.register_typed(map);
             tools.register_typed(crate::SendToAgentTool::new(self.clone(), sink));
-            tools.register_typed(crate::ReadAgentTool::new(self.clone()));
         }
         if let Some(policy) = &*self.agent_policy.lock().expect("agent policy poisoned") {
             for name in agent_tool_names() {
@@ -324,26 +330,28 @@ impl FleetSpawner {
 
     pub(crate) fn memo_put(&self, key: u64, result: SubagentResult) {
         self.load_memo();
-        let snapshot = {
-            let mut memo = self.memo.lock().expect("fleet memo poisoned");
-            memo.insert(key, result);
-            memo.clone()
-        };
-        if let (Some(store), Some(session)) = (&self.store, self.session()) {
-            let rows: std::collections::HashMap<String, SubagentResult> = snapshot
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect();
-            let _ = store.save_session_state(&session, harness_store::MAP_MEMO_STATE, &rows);
+        let session = self.session();
+        let mut memo = self.memo.lock().expect("fleet memo poisoned");
+        memo.insert(key, result);
+        if let (Some(store), Some(session)) = (&self.store, session) {
+            let rows: std::collections::HashMap<String, &SubagentResult> =
+                memo.iter().map(|(k, v)| (k.to_string(), v)).collect();
+            if let Err(error) =
+                store.save_session_state(&session, harness_store::MAP_MEMO_STATE, &rows)
+            {
+                tracing::warn!(%session, %error, "could not persist map resume state");
+            }
         }
     }
 
-    /// Pull the session's persisted memo in once, the first time it's needed.
+    /// Hold the cache lock until persisted rows are visible to all callers.
     fn load_memo(&self) {
+        let session = self.session();
+        let mut memo = self.memo.lock().expect("fleet memo poisoned");
         if self.memo_loaded.swap(true, Ordering::SeqCst) {
             return;
         }
-        let (Some(store), Some(session)) = (&self.store, self.session()) else {
+        let (Some(store), Some(session)) = (&self.store, session) else {
             return;
         };
         let Ok(Some(rows)) = store
@@ -354,7 +362,6 @@ impl FleetSpawner {
         else {
             return;
         };
-        let mut memo = self.memo.lock().expect("fleet memo poisoned");
         for (key, result) in rows {
             if let Ok(key) = key.parse::<u64>() {
                 memo.entry(key).or_insert(result);
@@ -1594,6 +1601,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_followup_gets_a_fresh_budget_after_a_stopped_turn() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose("continued"))
+            .expect(1)
+            .create_async()
+            .await;
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let parent = store.create_session(&SessionMeta::default()).unwrap();
+        let budget = Arc::new(crate::TreeBudget::new(crate::TreeLimits {
+            max_requests: 1,
+            max_tokens: 10000,
+            max_spawns: 2,
+        }));
+        let spawner = Arc::new(
+            FleetSpawner::new(
+                OxenClient::new(server.url(), "k", "m"),
+                ToolRegistry::new(),
+                AgentConfig {
+                    tree: Some(budget.clone()),
+                    ..Default::default()
+                },
+            )
+            .with_store(store)
+            .with_session(parent),
+        );
+        let lane = spawner
+            .build_agent("saved", "first", None, CancellationToken::new())
+            .unwrap();
+        let id = lane.session_id().to_string();
+        drop(lane);
+        budget.charge(100);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        spawner.set_cancel(cancel);
+        let result = spawner.follow_up(&id, "continue").await.unwrap();
+        assert!(result.contains("continued"), "{result}");
+        mock.assert_async().await;
+        assert_eq!(budget.usage().requests, 1);
+    }
+
+    #[tokio::test]
     async fn nested_and_resumed_lanes_keep_isolation_and_depth() {
         let project = git_project();
         let store = Arc::new(HistoryStore::open_in_memory().unwrap());
@@ -2048,16 +2100,16 @@ mod tests {
             .unwrap();
         assert_eq!(leaf.config().depth, 2);
         assert!(!leaf.config().may_spawn());
-        for tool in [
-            FLEET_TOOL,
-            crate::lane_tools::SEND_TO_AGENT_TOOL,
-            crate::lane_tools::READ_AGENT_TOOL,
-        ] {
+        for tool in [FLEET_TOOL, crate::lane_tools::SEND_TO_AGENT_TOOL] {
             assert!(
                 !names(&leaf).contains(&tool.to_string()),
                 "a leaf may not {tool}"
             );
         }
+        assert!(
+            names(&leaf).contains(&crate::lane_tools::READ_AGENT_TOOL.to_string()),
+            "a leaf can retrieve full answers from its tool-less children"
+        );
         let prompt = leaf.messages()[0].content_text().unwrap_or_default();
         assert!(prompt.contains("there are no further agents to delegate to"));
         // Both share the turn's wallet.

@@ -351,7 +351,7 @@ pub(crate) fn apply_fleet_event(
                 }
             }
             if plain {
-                print_lane_completed(ui, label, *ok, *tokens_used, summary);
+                print_lane_completed(ui, label, *ok, *stopped, *tokens_used, summary);
             }
         }
         FleetEvent::Budget { usage, limits } => {
@@ -378,6 +378,7 @@ pub(crate) struct FleetHub {
     /// where the sink can't write). Drained on the composer's tick, at idle
     /// and mid-turn alike.
     notices: StdMutex<Vec<String>>,
+    drafts: StdMutex<std::collections::HashMap<String, String>>,
 }
 
 /// The hub's fleets under lock: the primary for painting and keys, any fleet
@@ -388,7 +389,17 @@ impl FleetBoard<'_> {
     pub(crate) fn composer_target(&self) -> String {
         self.0
             .first()
-            .and_then(|(fleet, state)| state.focused.map(|index| format!("{fleet}:{index}")))
+            .and_then(|(fleet, state)| {
+                state.focused.and_then(|index| {
+                    state.lanes.get(index).map(|lane| {
+                        if lane.id.is_empty() {
+                            format!("{fleet}:{index}")
+                        } else {
+                            lane.id.clone()
+                        }
+                    })
+                })
+            })
             .unwrap_or_else(|| "main".into())
     }
 
@@ -448,6 +459,23 @@ impl FleetBoard<'_> {
 }
 
 impl FleetHub {
+    pub(crate) fn keep_draft(&self, target: &str, text: &str) {
+        let mut drafts = self.drafts.lock().expect("agent drafts poisoned");
+        if text.is_empty() {
+            drafts.remove(target);
+        } else {
+            drafts.insert(target.to_string(), text.to_string());
+        }
+    }
+    pub(crate) fn draft(&self, target: &str) -> String {
+        self.drafts
+            .lock()
+            .expect("agent drafts poisoned")
+            .get(target)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// The process-wide hub the `spawn_agents` sink and the live composer
     /// share. (The review pipeline uses its own local hub — its painter and
     /// its state have the same owner, so nothing global is needed there.)
@@ -1049,8 +1077,22 @@ pub(crate) fn print_lane_started(ui: &Ui, label: &str) {
 }
 
 /// The matching completion line: `└─ label done — summary (12.3k tok)`.
-pub(crate) fn print_lane_completed(ui: &Ui, label: &str, ok: bool, tokens: usize, summary: &str) {
-    let outcome = if ok {
+pub(crate) fn print_lane_completed(
+    ui: &Ui,
+    label: &str,
+    ok: bool,
+    stopped: Option<harness_agent::fleet::LaneStop>,
+    tokens: usize,
+    summary: &str,
+) {
+    let outcome = if let Some(reason) = stopped {
+        let status = if reason == harness_agent::fleet::LaneStop::Cancelled {
+            "stopped"
+        } else {
+            "partial"
+        };
+        ui.dim(&format!("{label} {status}"))
+    } else if ok {
         ui.green(&format!("{label} done"))
     } else {
         ui.red(&format!("{label} failed"))
@@ -1099,12 +1141,12 @@ mod tests {
         hub.install("second", second);
         let mut board = hub.lock();
         assert!(board.watch_lane("lane-b"));
-        assert_eq!(board.composer_target(), "first:1");
+        assert_eq!(board.composer_target(), "lane-b");
         assert!(board.navigate(KeyCode::Char(']'), KeyModifiers::ALT));
         assert_eq!(board.composer_target(), "main");
         assert!(board.watch_lane("lane-c"));
         assert!(board.navigate(KeyCode::Char('['), KeyModifiers::ALT));
-        assert_eq!(board.composer_target(), "first:1");
+        assert_eq!(board.composer_target(), "lane-b");
         apply_fleet_key(
             board.primary_mut().unwrap(),
             KeyCode::Right,
@@ -1118,7 +1160,7 @@ mod tests {
             KeyModifiers::ALT,
             FleetKeys::Shared,
         );
-        assert_eq!(board.composer_target(), "first:1");
+        assert_eq!(board.composer_target(), "lane-b");
         assert!(!board.watch_lane("missing"));
     }
 

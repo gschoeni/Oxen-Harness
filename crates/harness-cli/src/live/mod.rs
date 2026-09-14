@@ -202,7 +202,6 @@ struct Live {
     fleet: Arc<FleetHub>,
     /// Advances the fleet block's spinner glyphs on the turn ticker.
     fleet_frame: usize,
-    fleet_drafts: std::collections::HashMap<String, String>,
     composer_target: String,
     /// Whether the last tick found a fleet on the hub: the tick after the
     /// last fleet leaves repaints once more, so the pinned block clears.
@@ -242,6 +241,10 @@ impl Live {
     }
 
     fn with_sink(ui: Ui, cols: u16, rows: u16, out: Sink) -> Self {
+        let fleet = FleetHub::global();
+        let composer_target = fleet.lock().composer_target();
+        let mut composer = Composer::new();
+        composer.set_text(&fleet.draft(&composer_target));
         Self {
             ui,
             cols,
@@ -251,7 +254,7 @@ impl Live {
             md: None,
             spinner: None,
             suspension: None,
-            composer: Composer::new(),
+            composer,
             history: History::default(),
             focus: Focus::Composer,
             edit: None,
@@ -265,9 +268,8 @@ impl Live {
             compression_line: None,
             completion: None,
             model_items: None,
-            composer_target: FleetHub::global().lock().composer_target(),
-            fleet_drafts: Default::default(),
-            fleet: FleetHub::global(),
+            composer_target,
+            fleet,
             fleet_frame: 0,
             fleet_shown: false,
             media_check: None,
@@ -449,9 +451,16 @@ impl Live {
             return false;
         }
         let old = std::mem::replace(&mut self.composer_target, target.clone());
-        self.fleet_drafts.insert(old, self.composer.text());
-        self.composer
-            .set_text(&self.fleet_drafts.remove(&target).unwrap_or_default());
+        let draft = self.composer.text();
+        self.fleet.keep_draft(&old, &draft);
+        self.composer.set_text(&self.fleet.draft(&target));
+        if old != "main" && target == "main" && !draft.is_empty() {
+            self.print_line(&format!(
+                "  {}",
+                self.ui
+                    .dim("Agent draft kept · /agents drafts lists unsent directions")
+            ));
+        }
         true
     }
 
@@ -821,6 +830,13 @@ impl Live {
     }
 }
 
+impl Drop for Live {
+    fn drop(&mut self) {
+        self.fleet
+            .keep_draft(&self.composer_target, &self.composer.text());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crossterm::event::KeyCode;
@@ -889,6 +905,10 @@ mod tests {
         assert_eq!(l.composer.text(), "scan direction");
         l.handle_fleet_key(&alt(KeyCode::Char('0')));
         assert_eq!(l.composer.text(), "main message");
+        let hub = l.fleet.clone();
+        drop(l);
+        assert_eq!(hub.draft("drafts:0"), "scan direction");
+        assert_eq!(hub.draft("drafts:1"), "trace direction");
     }
 
     #[test]

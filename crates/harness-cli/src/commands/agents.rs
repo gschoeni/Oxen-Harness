@@ -1,5 +1,5 @@
 //! `/agents` — the hub: every subagent lane of this chat, running and
-//! finished, and `/agents read <n|id>` to print one's full reply.
+//! finished, with stable IDs for direct controls and a guided chooser.
 
 use std::sync::Arc;
 
@@ -96,6 +96,32 @@ pub(crate) async fn handle_repl(
     ui: &Ui,
 ) {
     let rows = rows(store, session);
+    let hub = crate::fleet_ui::FleetHub::global();
+    if rest.as_deref().is_some_and(|s| s.trim() == "drafts") {
+        let mut found = false;
+        for row in &rows {
+            let draft = hub.draft(&row.id);
+            if !draft.is_empty() {
+                found = true;
+                println!(
+                    "  {}\n    {}",
+                    ui.title(&format!("{} · {}", row.label, short_id(&rows, &row.id))),
+                    ui.cream(&draft)
+                );
+                println!(
+                    "  {}",
+                    ui.dim(&format!(
+                        "/agents follow-up {} sends this saved draft",
+                        short_id(&rows, &row.id)
+                    ))
+                );
+            }
+        }
+        if !found {
+            println!("  {}", ui.dim("No unsent agent directions in this chat"));
+        }
+        return;
+    }
     if rest.as_deref().is_some_and(|s| s.trim() == "help") {
         help(ui, None);
         return;
@@ -181,6 +207,12 @@ pub(crate) async fn handle_repl(
         let Some(spawner) = crate::endpoint::fleet_spawner() else {
             return;
         };
+        let saved = hub.draft(&row.id);
+        let message = if command == "follow-up" && message.trim().is_empty() {
+            saved.as_str()
+        } else {
+            message
+        };
         let result: Result<String, String> = match command {
             "watch" => {
                 if crate::fleet_ui::FleetHub::global()
@@ -215,7 +247,12 @@ pub(crate) async fn handle_repl(
             _ => unreachable!(),
         };
         match result {
-            Ok(text) => println!("  {}", ui.cream(&text)),
+            Ok(text) => {
+                if matches!(command, "follow-up" | "send") {
+                    hub.keep_draft(&row.id, "");
+                }
+                println!("  {}", ui.cream(&text));
+            }
             Err(error) => println!("  {}", ui.red(&error)),
         }
         return;
@@ -268,7 +305,7 @@ pub(crate) async fn handle_repl(
             }
         }
         (Some("read"), Some(which)) => {
-            // `read 3` by position, or `read <id-prefix>`.
+            // Direct commands use the same stable selector as the chooser.
             let row = match resolve(&rows, which) {
                 Ok(row) => row,
                 Err(error) => {
@@ -342,11 +379,9 @@ fn resolve<'a>(rows: &'a [Row], which: &str) -> Result<&'a Row, String> {
         (Some(_), Some(_)) => Err(format!(
             "Agent prefix {which} is ambiguous; use more of its ID"
         )),
-        _ => which
-            .parse::<usize>()
-            .ok()
-            .and_then(|n| rows.get(n.checked_sub(1)?))
-            .ok_or_else(|| format!("No agent {which} in this chat")),
+        _ => Err(format!(
+            "No agent {which} in this chat; use an ID or unique name from /agents list"
+        )),
     }
 }
 
@@ -375,6 +410,7 @@ fn help(ui: &Ui, example: Option<&str>) {
         format!("Read results     /agents read {id} · show {id} for the transcript"),
         format!("Continue         /agents follow-up {id} fix the remaining issue"),
         format!("Review edits     /agents patch {id}"),
+        "Recover drafts   /agents drafts · follow-up <id> sends its saved direction".into(),
         "/agents opens the chooser · /agents list prints IDs · /agents help shows this guide."
             .into(),
     ] {
@@ -403,6 +439,10 @@ mod tests {
         ];
         assert!(resolve(&rows, "abcdefgh").is_err());
         assert!(resolve(&rows, "scan").is_err());
+        assert!(
+            resolve(&rows, "1").is_err(),
+            "list positions must not silently retarget commands"
+        );
         assert_eq!(resolve(&rows, "tests").unwrap().id, "other1234");
         assert_eq!(resolve(&rows, "abcdefgh1").unwrap().id, "abcdefgh1");
         for row in &rows {
