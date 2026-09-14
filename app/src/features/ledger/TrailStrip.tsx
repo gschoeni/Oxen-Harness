@@ -9,7 +9,7 @@ import { useStore } from "../../lib/store";
 import { findThread } from "./ledger";
 import { Trail } from "./Trail";
 import { useBoard } from "./useBoard";
-import { statusLine, TieKnot } from "./Wagon";
+import { SessionIdChip, statusLine, TieKnot } from "./Wagon";
 import "./ledger.css";
 
 export function TrailStrip() {
@@ -32,6 +32,7 @@ export function TrailStrip() {
 
   return (
     <div className="chat-trail" aria-label="This thread's trail">
+      <SessionIdChip id={thread.entry.id} />
       <Trail thread={thread} settling={settling} />
       <span className="chat-trail-status">{settling ? "tying off…" : statusLine(thread)}</span>
       {thread.state === "settled" ? (

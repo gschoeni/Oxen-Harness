@@ -306,6 +306,13 @@
   min-width: 0;
 }
 
+/* In the chat strip the chip leads the row; the trail takes the slack, so
+ * no auto margin here. */
+.chat-trail .ledger-session-id {
+  flex: none;
+  margin-right: 0;
+}
+
 .chat-trail-status {
   flex: none;
   font-family: var(--font-readout, var(--font-mono));
@@ -711,6 +718,33 @@
 
 .ledger-waystation-ctas > .btn {
   min-width: 130px;
+}
+
+/* The session id chip sits at the far left of the CTA row, in readout type,
+ * so it reads as bookkeeping rather than a third way out. */
+.ledger-session-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+  padding: 3px var(--space-2);
+  background: transparent;
+  color: var(--text-tertiary);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.ledger-session-id:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.ledger-session-id.copied {
+  color: var(--success, var(--text));
 }
 
 /* The knot keeps a hairline outline so both ways out read as buttons —

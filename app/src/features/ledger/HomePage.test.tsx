@@ -139,6 +139,23 @@ describe("the board", () => {
     expect(ipc.ledgerMarkSeen).toHaveBeenCalled();
   });
 
+  it("offers the session id as a copy chip beside the knot", async () => {
+    seed({ entries: [entry({ id: "session-0123456789abcdef", title: "copy me" })] });
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    const { container } = render(<HomePage />);
+
+    await clickWagon(container, /copy me/);
+    const chip = screen.getByRole("button", { name: /copy session id session-0123456789abcdef/i });
+    // Only the tail shows; the full id rides in the tooltip and the clipboard.
+    expect(chip.textContent).toContain("…89abcdef");
+    await userEvent.click(chip);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("session-0123456789abcdef"));
+    expect(await screen.findByText("copied")).toBeTruthy();
+    // Copying never rides out or folds the waystation.
+    expect(useStore.getState().homeOpen).toBe(true);
+    expect(ipc.resumeSession).not.toHaveBeenCalled();
+  });
+
   it("holds the knot while shipping loops are open — tying anyway takes the confirm", async () => {
     seed({
       entries: [

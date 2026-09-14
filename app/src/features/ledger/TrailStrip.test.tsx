@@ -66,6 +66,21 @@ describe("the chat's pinned trail", () => {
     });
   });
 
+  it("leads the strip with a session id copy chip", async () => {
+    seedChat(entry({ id: "sess-0123456789abcdef" }));
+    useStore.setState((s) => ({ session: { ...s.session!, session_id: "sess-0123456789abcdef" } }));
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    const { container } = render(<TrailStrip />);
+
+    const chip = screen.getByRole("button", { name: /copy session id sess-0123456789abcdef/i });
+    expect(container.querySelector(".chat-trail")?.firstElementChild).toBe(chip);
+    expect(chip.textContent).toContain("…89abcdef");
+    await userEvent.click(chip);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("sess-0123456789abcdef"));
+    expect(await screen.findByText("copied")).toBeTruthy();
+    expect(ipc.settleSession).not.toHaveBeenCalled();
+  });
+
   it("offers no tie-off while the agent is riding", () => {
     seedChat(entry(), ["cur"]);
     render(<TrailStrip />);

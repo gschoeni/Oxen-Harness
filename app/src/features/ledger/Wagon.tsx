@@ -4,7 +4,7 @@
 // ritual. Shared by the home board's trains and a project page's full trail.
 
 import { useEffect, useRef, useState } from "react";
-import { CircleDot, MessageSquare, Trash2 } from "lucide-react";
+import { Check, CircleDot, Copy, MessageSquare, Trash2 } from "lucide-react";
 import { Button, Modal } from "../../components/ui";
 import { relativeTime, truncate } from "../../lib/format";
 import { useStore } from "../../lib/store";
@@ -161,6 +161,7 @@ function Waystation({
         </div>
       </div>
       <div className="ledger-waystation-ctas">
+        <SessionIdChip id={entry.id} />
         <Button size="sm" onClick={() => open(thread)} disabled={settling}>
           <MessageSquare size={13} />
           {state === "dangling" ? "Pick it back up" : "Open chat"}
@@ -170,6 +171,32 @@ function Waystation({
         )}
       </div>
     </div>
+  );
+}
+
+/** The session id as a quiet copy chip: the full id is one click away for
+ *  `oxen-harness --resume`, bug reports, or grepping the logs, without ever
+ *  crowding the story. Shows a short tail so rows stay scannable. */
+export function SessionIdChip({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  const short = id.length > 12 ? `…${id.slice(-8)}` : id;
+  return (
+    <button
+      type="button"
+      className={`ledger-session-id ${copied ? "copied" : ""}`}
+      title={copied ? "Copied" : `Copy session id ${id}`}
+      aria-label={copied ? "Session id copied" : `Copy session id ${id}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        void navigator.clipboard?.writeText(id).then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1200);
+        });
+      }}
+    >
+      {copied ? <Check size={11} /> : <Copy size={11} />}
+      <span className="ledger-session-id-text">{copied ? "copied" : short}</span>
+    </button>
   );
 }
 
