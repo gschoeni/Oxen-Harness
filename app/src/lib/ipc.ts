@@ -764,3 +764,7 @@ export const importTheme = (contents: string) => invoke<Theme>("import_theme", {
 export const exportTheme = (name: string) => invoke<string>("export_theme", { name });
 export const removeTheme = (name: string) => invoke<void>("remove_theme", { name });
 export const newTheme = (brief: string) => invoke<Theme>("new_theme", { brief });
+
+export const agentPatch = (session: string, lane: string) => invoke<string>("agent_patch", { session, lane });
+export const followUpAgent = (session: string, lane: string, text: string) => invoke<string>("follow_up_agent", { session, lane, text });
+export const applyAgentPatch = (session: string, lane: string, patch: string) => invoke<void>("apply_agent_patch", { session, lane, patch });

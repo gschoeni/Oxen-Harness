@@ -86,6 +86,7 @@ pub enum FleetEvent {
         label: String,
         lane: String,
         ok: bool,
+        stopped: Option<LaneStop>,
         tokens_used: usize,
         summary: String,
     },
@@ -156,6 +157,7 @@ impl std::fmt::Display for LaneStop {
 /// it) plus what it cost.
 #[derive(Debug)]
 pub struct SubagentOutcome {
+    pub record: Option<crate::lane::SubagentResult>,
     pub label: String,
     /// The lane's session id (see [`crate::lane`]).
     pub session: String,
@@ -347,7 +349,7 @@ enum Msg {
     },
     Done {
         index: usize,
-        outcome: SubagentOutcome,
+        outcome: Box<SubagentOutcome>,
     },
 }
 
@@ -418,119 +420,102 @@ where
     let past_deadline = Arc::new(AtomicBool::new(false));
     let mut join = JoinSet::new();
 
-    for (index, task) in tasks.into_iter().enumerate() {
-        // Each lane stops on its own token, a child of the fleet's: the fleet
-        // stopping stops the lane, and the lane's clock (or a host) can stop
-        // just the lane. Build the subagent up front so construction errors
-        // surface here, synchronously, instead of as a mid-flight task failure.
-        let lane_cancel = cancel.child_token();
-        let mut agent = spawn.spawn(index, lane_cancel.clone())?;
-        agent.set_cancel_token(lane_cancel.clone());
+    // Construct the batch before launching it: a bad fork or store failure
+    // drops all already-created agents and their lifecycle guards immediately.
+    let prepared = tasks
+        .into_iter()
+        .enumerate()
+        .map(|(index, task)| {
+            let token = cancel.child_token();
+            let mut agent = spawn.spawn(index, token.clone())?;
+            agent.set_cancel_token(token.clone());
+            Ok((index, task, agent, token))
+        })
+        .collect::<Result<Vec<_>, AgentError>>()?;
+    let identities: Vec<_> = prepared
+        .iter()
+        .map(|(_, task, agent, _)| (task.label.clone(), agent.session_id().to_string()))
+        .collect();
+    for (index, task, mut agent, lane_cancel) in prepared {
         let lane_id = agent.session_id().to_string();
         let tx = tx.clone();
         let slots = slots.clone();
-        let fleet_cancel = cancel.clone();
         let past_deadline = past_deadline.clone();
         let mut warm = warm_rx.clone();
         join.spawn(async move {
-            let _slot = match slots.acquire_owned().await {
-                Ok(permit) => permit,
-                // The semaphore is never closed today; if that ever changes,
-                // bail (the reaper synthesizes a failed outcome) rather than
-                // silently running uncapped.
-                Err(_) => return,
+            let slot = tokio::select! {
+                biased;
+                _ = lane_cancel.cancelled() => None,
+                permit = slots.acquire_owned() => permit.ok(),
             };
-            if index > 0 {
+            if index > 0 && slot.is_some() {
                 if let Some(stagger) = limits.stagger {
-                    let _ = tokio::time::timeout(stagger, warm.wait_for(|w| *w)).await;
+                    tokio::select! {
+                        _ = lane_cancel.cancelled() => {},
+                        _ = tokio::time::timeout(stagger, warm.wait_for(|w| *w)) => {},
+                    }
                 }
             }
-            let _ = tx
-                .send(Msg::Started {
-                    index,
-                    label: task.label.clone(),
-                    lane: lane_id.clone(),
-                })
-                .await;
+            if slot.is_some() {
+                let _ = tx.send(Msg::Started { index, label: task.label.clone(), lane: lane_id.clone() }).await;
+            }
+            let partial = Arc::new(std::sync::Mutex::new(String::new()));
+            let streamed = partial.clone();
             let forward = tx.clone();
-            // Scoped so the turn's borrow of `agent` ends before its spend is
-            // read below.
+            let on_event = move |event: &AgentEvent| {
+                if let AgentEvent::Token(text) = event {
+                    harness_core::text::push_capped(&mut streamed.lock().expect("lane output poisoned"), text, FLEET_RESULT_CHARS);
+                }
+                let _ = forward.try_send(Msg::Agent { index, event: Arc::new(event.clone()) });
+            };
             let (result, timed_out) = {
-                let turn = agent.run_turn(task.prompt, |event| {
-                    // The one deep clone: from the borrowed callback event into
-                    // an Arc that rides the channel and every downstream hop.
-                    let _ = forward.try_send(Msg::Agent {
-                        index,
-                        event: Arc::new(event.clone()),
-                    });
-                });
+                let turn = async {
+                    let text = agent.run_turn(task.prompt, &on_event).await?;
+                    match &task.output_schema {
+                        Some(schema) if !lane_cancel.is_cancelled() && !agent.stopped_by_budget() =>
+                            agent.coerce_structured(text, schema, &on_event).await,
+                        _ => Ok((text, None)),
+                    }
+                };
                 tokio::pin!(turn);
                 tokio::select! {
+                    biased;
+                    _ = lane_cancel.cancelled() => {
+                        let result = tokio::time::timeout(STOP_GRACE, &mut turn).await
+                            .unwrap_or_else(|_| Ok((partial.lock().expect("lane output poisoned").clone(), None)));
+                        (result, false)
+                    }
                     result = &mut turn => (result, false),
                     _ = tokio::time::sleep(limits.lane_timeout) => {
                         lane_cancel.cancel();
-                        // The turn checks its token between rounds and while
-                        // streaming; give it that long to settle, then abandon
-                        // it (dropping the future) rather than wait on a
-                        // wedged tool.
-                        match tokio::time::timeout(STOP_GRACE, &mut turn).await {
-                            Ok(result) => (result, true),
-                            Err(_) => (
-                                Err(AgentError::TimedOut {
-                                    after: limits.lane_timeout,
-                                }),
-                                true,
-                            ),
-                        }
+                        let result = tokio::time::timeout(STOP_GRACE, &mut turn).await
+                            .unwrap_or_else(|_| Ok((partial.lock().expect("lane output poisoned").clone(), None)));
+                        (result, true)
                     }
                 }
             };
-            let stopped = if timed_out {
-                Some(LaneStop::TimedOut(limits.lane_timeout))
-            } else if past_deadline.load(Ordering::SeqCst) {
+            let stopped = if past_deadline.load(Ordering::SeqCst) {
                 Some(LaneStop::Deadline(limits.deadline))
-            } else if fleet_cancel.is_cancelled() {
+            } else if timed_out {
+                Some(LaneStop::TimedOut(limits.lane_timeout))
+            } else if lane_cancel.is_cancelled() {
                 Some(LaneStop::Cancelled)
             } else if agent.stopped_by_budget() {
                 Some(LaneStop::Budget)
-            } else {
-                None
+            } else { None };
+            let (result, structured) = match result {
+                Ok((text, structured)) => (Ok(text), structured),
+                Err(error) => (Err(error), None),
             };
-            // A lane asked for JSON that answered in prose is re-asked (a
-            // short extra round); a stopped or failed lane is left alone.
-            let (result, structured) = match (&task.output_schema, result, stopped) {
-                (Some(schema), Ok(text), None) => {
-                    let forward = tx.clone();
-                    match agent
-                        .coerce_structured(text, schema, |event| {
-                            let _ = forward.try_send(Msg::Agent {
-                                index,
-                                event: Arc::new(event.clone()),
-                            });
-                        })
-                        .await
-                    {
-                        Ok((text, structured)) => (Ok(text), structured),
-                        Err(e) => (Err(e), None),
-                    }
-                }
-                (_, result, _) => (result, None),
+            let mut outcome = SubagentOutcome {
+                record: None,
+                label: task.label, session: lane_id, result, structured,
+                tokens_used: agent.tokens_used(),
+                rounds: agent.rounds_last_turn(),
+                stopped, denied: agent.denied_commands(),
             };
-            let _ = tx
-                .send(Msg::Done {
-                    index,
-                    outcome: SubagentOutcome {
-                        label: task.label,
-                        session: lane_id,
-                        result,
-                        structured,
-                        tokens_used: agent.tokens_used(),
-                        rounds: agent.rounds_last_turn(),
-                        stopped,
-                        denied: agent.denied_commands(),
-                    },
-                })
-                .await;
+            if let Some(lifecycle) = agent.lane_lifecycle.take() { lifecycle.finish(&mut outcome, count); }
+            let _ = tx.send(Msg::Done { index, outcome: Box::new(outcome) }).await;
         });
     }
     // Drop the original sender: the channel closes exactly when every task has
@@ -578,10 +563,11 @@ where
                     label: outcome.label.clone(),
                     lane: outcome.session.clone(),
                     ok: outcome.ok(),
+                    stopped: outcome.stopped,
                     tokens_used: outcome.tokens_used,
                     summary: summarize(&outcome),
                 });
-                outcomes[index] = Some(outcome);
+                outcomes[index] = Some(*outcome);
             }
         }
     }
@@ -598,17 +584,30 @@ where
         .into_iter()
         .enumerate()
         .map(|(index, outcome)| {
-            outcome.unwrap_or_else(|| SubagentOutcome {
-                label: format!("agent {}", index + 1),
-                session: String::new(),
-                result: Err(AgentError::Io(std::io::Error::other(
-                    "the subagent task died before finishing",
-                ))),
-                structured: None,
-                tokens_used: 0,
-                rounds: 0,
-                stopped: None,
-                denied: Vec::new(),
+            outcome.unwrap_or_else(|| {
+                let outcome = SubagentOutcome {
+                    record: None,
+                    label: identities[index].0.clone(),
+                    session: identities[index].1.clone(),
+                    result: Err(AgentError::Io(std::io::Error::other(
+                        "the subagent task died before finishing",
+                    ))),
+                    structured: None,
+                    tokens_used: 0,
+                    rounds: 0,
+                    stopped: None,
+                    denied: Vec::new(),
+                };
+                on_event(&FleetEvent::TaskCompleted {
+                    index,
+                    label: outcome.label.clone(),
+                    lane: outcome.session.clone(),
+                    ok: false,
+                    stopped: outcome.stopped,
+                    tokens_used: outcome.tokens_used,
+                    summary: summarize(&outcome),
+                });
+                outcome
             })
         })
         .collect())
@@ -999,6 +998,7 @@ mod tests {
 
     fn outcome(label: &str, text: &str) -> SubagentOutcome {
         SubagentOutcome {
+            record: None,
             label: label.into(),
             session: String::new(),
             result: Ok(text.into()),
@@ -1048,8 +1048,8 @@ mod tests {
         assert!(judge.ok());
         assert_eq!(judge.structured.as_ref().unwrap()["verdict"], "ok");
         assert_eq!(
-            judge.rounds, 1,
-            "the re-ask is its own turn; the last one counts"
+            judge.rounds, 2,
+            "structured retries count toward the lane total"
         );
         assert!(judge.session.len() > 8, "a lane knows its own session id");
     }

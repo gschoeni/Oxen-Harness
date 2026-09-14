@@ -69,7 +69,7 @@ impl TypedTool for SendToAgentTool {
     }
 
     async fn run(&self, args: SendToAgentArgs) -> Result<String, ToolError> {
-        self.spawner.admit_fleet(1)?;
+        let _admission = self.spawner.admit_fleet(1)?;
         let id = args.agent.trim().to_string();
         let label = self
             .spawner
@@ -92,7 +92,6 @@ impl TypedTool for SendToAgentTool {
                     },
                 )
                 .await?;
-        self.spawner.record(&results);
         let mut out = String::new();
         if cancelled {
             out.push_str(

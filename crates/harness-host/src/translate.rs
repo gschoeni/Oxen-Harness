@@ -241,6 +241,7 @@ pub fn fleet_event(session: &str, fleet: &str, event: &FleetEvent) -> Option<Pro
             label,
             lane,
             ok,
+            stopped,
             tokens_used,
             summary,
         } => ProtocolEvent::FleetAgent {
@@ -249,7 +250,11 @@ pub fn fleet_event(session: &str, fleet: &str, event: &FleetEvent) -> Option<Pro
             agent: *index,
             lane: lane.clone(),
             name: label.clone(),
-            phase: if *ok {
+            phase: if matches!(stopped, Some(harness_agent::fleet::LaneStop::Cancelled)) {
+                harness_protocol::FleetAgentPhase::Cancelled
+            } else if stopped.is_some() {
+                harness_protocol::FleetAgentPhase::Partial
+            } else if *ok {
                 harness_protocol::FleetAgentPhase::Done
             } else {
                 harness_protocol::FleetAgentPhase::Failed

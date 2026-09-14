@@ -157,7 +157,7 @@ export interface FleetLane {
   name: string;
   /** The lane's id once it is running (what a per-lane stop takes). */
   id: string;
-  status: "queued" | "running" | "done" | "failed";
+  status: "queued" | "running" | "done" | "failed" | "partial" | "cancelled";
   /** One-line rolling readout (tool name or the freshest streamed words). */
   activity: string;
   /** Rolling tail of everything the lane streamed, for the expanded view. */
@@ -167,6 +167,7 @@ export interface FleetLane {
 
 /** A running fleet: its lanes plus which one is expanded for watching. */
 export interface FleetView {
+  finished?: boolean;
   /** The chat it runs in (fleets are keyed by their own id, see `fleets`). */
   session: string;
   source: "review" | "turn";
@@ -552,13 +553,13 @@ interface AppState {
   setFleetFocus: (fleet: string, index: number | null) => void;
   /** Stop one fleet without ending the turn; its panel closes on the
    *  backend's `fleet://completed` once the lanes settle. */
-  stopFleet: (session: string, fleet: string) => void;
+  stopFleet: (session: string, fleet: string) => Promise<boolean>;
   /** Stop one lane of a fleet; the rest of the fleet carries on. */
-  stopLane: (session: string, lane: string) => void;
+  stopLane: (session: string, lane: string) => Promise<boolean>;
   /** Re-fetch a chat's agents hub. */
   refreshAgents: (session: string) => Promise<void>;
   /** Hand a running lane a message for its next round. */
-  steerLane: (session: string, lane: string, text: string) => void;
+  steerLane: (session: string, lane: string, text: string) => Promise<boolean>;
   /** Open the inspector on a running lane and follow it live. */
   watchLane: (lane: string) => void;
   /** The chat's background tasks changed on the backend. */
@@ -1469,6 +1470,7 @@ export const useStore = create<AppState>((set, get) => {
             ? { ...lane, status: "running", id: e.lane }
             : {
                 ...lane,
+                id: e.lane || lane.id,
                 status: e.phase,
                 tokens: e.tokens,
                 activity: e.summary || lane.activity,
@@ -1525,7 +1527,9 @@ export const useStore = create<AppState>((set, get) => {
       set((s) => {
         if (!s.fleets[id]) return {};
         const fleets = { ...s.fleets };
-        delete fleets[id];
+        fleets[id] = { ...fleets[id]!, finished: true };
+        const finished = Object.entries(fleets).filter(([, f]) => f?.session === session && f.finished);
+        for (const [key] of finished.slice(0, -20)) delete fleets[key];
         return { fleets };
       });
       // The lanes just settled: their records are the hub's rows now.
@@ -1552,15 +1556,15 @@ export const useStore = create<AppState>((set, get) => {
     stopFleet: (session, fleet) => {
       // Best effort: a fleet that already ended (false) or an IPC hiccup
       // leaves the panel to the backend's completion event either way.
-      void cancelFleet(session, fleet).catch(() => {});
+      return cancelFleet(session, fleet);
     },
 
     stopLane: (session, lane) => {
-      void cancelAgent(session, lane).catch(() => {});
+      return cancelAgent(session, lane);
     },
 
     steerLane: (session, lane, text) => {
-      void interjectAgent(session, lane, text).catch(() => {});
+      return interjectAgent(session, lane, text);
     },
 
     watchLane: (lane) => set({ inspector: { sessionId: lane, review: null }, inspectorLive: true }),

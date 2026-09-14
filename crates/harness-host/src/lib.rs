@@ -16,6 +16,7 @@
 //! the [`PendingMap`]s — the same id-keyed oneshot pattern on every
 //! transport.
 
+mod agents;
 mod bridges;
 mod ledger;
 mod service;

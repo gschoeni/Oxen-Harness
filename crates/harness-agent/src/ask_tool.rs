@@ -1,22 +1,12 @@
-//! `ask_model` — batched, tool-less model calls: the recursive-language-model
-//! `llm_query_batched`. Each prompt is one completion on the cheap `smol`
-//! role with no tools and no transcript; parked content the caller names as
-//! `inputs` is handed to every call whole. That is the leaf of the RLM
-//! pattern — the parent never loads the chunk, the leaf reads all of it and
-//! answers in a line — at a fraction of a lane's cost (no tool loop, no
-//! session, one round).
-//!
-//! Available at every depth. Charges the tree budget like a lane's call.
+//! `ask_model` — parallel tool-less completions on the smol role.
+//! Leaves share lane cancellation, budgets, and durable result history.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use harness_llm::types::ChatMessage;
-use harness_llm::ChatRequest;
 use harness_tools::{ToolError, TypedTool};
 use schemars::JsonSchema;
 use serde::Deserialize;
-use tokio_util::sync::CancellationToken;
 
 use crate::fleet_tool::FleetSpawner;
 
@@ -106,56 +96,42 @@ impl TypedTool for AskModelTool {
             .system
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_SYSTEM.to_string());
-        let tree = self.spawner.tree_budget();
-        tree.admit_spawn(0).map_err(ToolError::Execution)?;
-
-        // Fan out with a small cap; a failed prompt is one numbered error,
-        // not a failed call.
-        let slots = Arc::new(tokio::sync::Semaphore::new(ASK_CONCURRENCY));
-        let mut join = tokio::task::JoinSet::new();
-        for (index, prompt) in prompts.into_iter().enumerate() {
-            let spawner = self.spawner.clone();
-            let slots = slots.clone();
-            let system = system.clone();
-            let user = match &material {
-                Some(material) => format!("{material}\n\n---\n\n{prompt}"),
-                None => prompt,
-            };
-            join.spawn(async move {
-                let _slot = slots.acquire_owned().await;
-                (index, spawner.ask(&system, &user).await)
-            });
-        }
-        let mut answers: Vec<Option<Result<String, String>>> = Vec::new();
-        while let Some(joined) = join.join_next().await {
-            let (index, answer) = match joined {
-                Ok(pair) => pair,
-                Err(e) => {
-                    tracing::warn!("ask_model prompt task died: {e}");
-                    continue;
-                }
-            };
-            if answers.len() <= index {
-                answers.resize(index + 1, None);
-            }
-            answers[index] = Some(answer);
-        }
-        let per_answer = ANSWER_CHARS.min(REPLY_CHARS / answers.len().max(1)).max(1);
-        let mut out = String::new();
-        for (index, answer) in answers.iter().enumerate() {
-            out.push_str(&format!("### {}\n", index + 1));
-            match answer {
-                Some(Ok(text)) => out.push_str(&harness_core::text::truncate_with_marker(
-                    text.trim(),
-                    per_answer,
-                    "\n… [answer cut]",
-                )),
-                Some(Err(e)) => out.push_str(&format!("(failed: {e})")),
-                None => out.push_str("(no answer)"),
-            }
-            out.push_str("\n\n");
-        }
-        Ok(out.trim_end().to_string())
+        let tasks = prompts
+            .into_iter()
+            .enumerate()
+            .map(|(index, prompt)| {
+                let user = match &material {
+                    Some(material) => format!("{material}\n\n---\n\n{prompt}"),
+                    None => prompt,
+                };
+                crate::fleet::SubagentTask::new((index + 1).to_string(), user)
+            })
+            .collect();
+        let results = self
+            .spawner
+            .run_leaf_tasks(tasks, ASK_CONCURRENCY, &system)
+            .await?;
+        let cap = ANSWER_CHARS.min(REPLY_CHARS / results.len().max(1));
+        Ok(results
+            .iter()
+            .map(|r| {
+                let label = if r.status == crate::LaneStatus::Done {
+                    r.label.clone()
+                } else {
+                    format!("{} · {}", r.label, r.status_line())
+                };
+                format!(
+                    "### {}\n{}",
+                    label,
+                    harness_core::text::truncate_with_marker(
+                        &r.summary,
+                        cap,
+                        &format!("\n… [read_agent {} has the full answer]", r.id)
+                    )
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n"))
     }
 }
 
@@ -189,59 +165,6 @@ impl AskModelTool {
     }
 }
 
-impl FleetSpawner {
-    /// One tool-less completion on the `smol` role, charged to the tree
-    /// budget and the session's ledger. Not cancellable mid-stream: a
-    /// batched question is short, and a stop lands between them.
-    pub(crate) async fn ask(&self, system: &str, user: &str) -> Result<String, String> {
-        let (client, config) = self.endpoint_snapshot();
-        let model = config
-            .roles
-            .resolve(crate::config::Role::Smol, &config.model)
-            .to_string();
-        let messages = vec![
-            ChatMessage::system(system.to_string()),
-            ChatMessage::user(user.to_string()),
-        ];
-        let estimated_prompt = crate::budget::estimate_prompt_tokens(&messages, &[]);
-        let request = ChatRequest::new(&model, messages).streaming(true);
-        let assembled = client
-            .stream_chat(&request, &CancellationToken::new(), |_| {})
-            .await
-            .map_err(|e| e.to_string())?;
-        let (prompt, completion) = match &assembled.usage {
-            Some(usage) => (
-                usage.prompt_tokens as usize,
-                usage.completion_tokens as usize,
-            ),
-            None => (
-                estimated_prompt,
-                assembled.content.chars().count() / crate::budget::CHARS_PER_TOKEN,
-            ),
-        };
-        self.tree_budget().charge((prompt + completion) as u64);
-        if let (Some(store), Some(session)) = (self.store(), self.session()) {
-            let source = if harness_llm::host_from_base_url(client.base_url()) == "hub.oxen.ai" {
-                "oxen_cloud"
-            } else {
-                "unpriced"
-            };
-            let _ = store.record_model_usage_detailed(
-                &model,
-                source,
-                prompt,
-                completion,
-                &harness_store::UsageDetail {
-                    session_id: &session,
-                    kind: "oneshot",
-                    ..Default::default()
-                },
-            );
-        }
-        Ok(assembled.content)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -252,6 +175,49 @@ mod tests {
     use super::*;
     use crate::test_support::sse_prose;
     use crate::AgentConfig;
+
+    #[tokio::test]
+    async fn queued_leaves_obey_request_budget_and_cancellation() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("answer"))
+            .expect(1)
+            .create_async()
+            .await;
+        let budget = Arc::new(crate::TreeBudget::new(crate::TreeLimits {
+            max_requests: 1,
+            max_tokens: 10000,
+            max_spawns: 24,
+        }));
+        let spawner = Arc::new(FleetSpawner::new(
+            OxenClient::new(server.url(), "k", "m"),
+            ToolRegistry::new(),
+            AgentConfig {
+                tree: Some(budget.clone()),
+                ..Default::default()
+            },
+        ));
+        let tool = AskModelTool::new(spawner.clone());
+        let output = tool.invoke(serde_json::json!({"prompts": ["one", "two", "three", "four", "five", "six", "seven"]})).await.unwrap();
+        mock.assert_async().await;
+        assert!(output.contains("partial"), "{output}");
+        assert_eq!(budget.usage().requests, 1);
+        assert!(spawner.tree().live().is_empty());
+        budget.reset();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+        spawner.set_cancel(cancel);
+        let output = tool
+            .invoke(serde_json::json!({"prompts": ["cancelled one", "cancelled two"]}))
+            .await
+            .unwrap();
+        assert!(output.contains("cancelled"));
+        assert_eq!(budget.usage().requests, 0);
+        mock.assert_async().await;
+    }
 
     #[tokio::test]
     async fn prompts_are_answered_in_parallel_over_the_parked_material() {

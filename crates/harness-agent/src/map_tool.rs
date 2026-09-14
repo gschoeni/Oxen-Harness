@@ -7,9 +7,8 @@
 //! a wide margin.
 //!
 //! Every item produces exactly one result; a failed item is a row with a
-//! failure, never a missing row. Results are memoized by (item, prompt,
-//! schema) for the session, so a run stopped by a cancel or a budget can
-//! be re-issued and only the unfinished items run again. `reduce` folds
+//! failure, never a missing row. An explicit run_id resumes completed rows
+//! when the rendered input, source content, model, and schema still match. `reduce` folds
 //! the rows: concatenated (default) or through one more agent given the
 //! rows and a reduce prompt.
 
@@ -42,6 +41,13 @@ pub struct MapAgentsArgs {
     /// content handles (`<<ccr:HASH>>` markers from a retrieve_original
     /// `chunks` listing). One agent per item.
     pub items: Vec<String>,
+    /// Resume a prior map run by the run_id printed in its result. Omit to
+    /// start fresh. Completed rows are reused only within this explicit run.
+    #[serde(default)]
+    pub run_id: Option<String>,
+    /// Recompute rows even when resuming a run.
+    #[serde(default)]
+    pub refresh: bool,
     /// The task, as a template: `{{item}}` is replaced with the item and
     /// `{{index}}` with its 1-based position. A parked handle as the item
     /// is also handed to the agent as an input it reads on demand.
@@ -80,6 +86,7 @@ pub struct MapAgentsTool {
     /// Where a `wait: false` run leaves its rows for the agent to deliver.
     /// Without one, every run waits.
     asides: Option<harness_tools::Asides>,
+    admitted: bool,
 }
 
 impl MapAgentsTool {
@@ -89,6 +96,7 @@ impl MapAgentsTool {
             spawner,
             sink,
             asides: None,
+            admitted: false,
         }
     }
 
@@ -146,8 +154,7 @@ impl TypedTool for MapAgentsTool {
          parked result to read, questions to answer). `{{item}}` in the prompt is the item; \
          a <<ccr:HASH>> item is handed to its agent as parked input. Set `leaf` when no tools \
          are needed (one cheap model call per item). `reduce: \"agent\"` folds the rows through \
-         one more agent with `reduce_prompt`. Finished items are remembered for the session, \
-         so re-running after a stop only runs what's left."
+         one more agent with `reduce_prompt`. Use the returned run_id to resume finished rows; refresh recomputes them."
     }
 
     /// Fans out agents that may edit and run commands: alone in its wave,
@@ -157,34 +164,63 @@ impl TypedTool for MapAgentsTool {
     }
 
     async fn run(&self, args: MapAgentsArgs) -> Result<String, ToolError> {
-        // A run the model doesn't wait for goes to its own task and reports
-        // through the aside queue, exactly like a `wait: false` fleet.
-        if args.wait == Some(false) {
-            if let Some(asides) = self.asides.clone() {
-                let count = args.items.len();
-                let me = Self {
-                    spawner: self.spawner.clone(),
-                    sink: self.sink.clone(),
-                    asides: None,
-                };
-                let args = MapAgentsArgs { wait: None, ..args };
-                tokio::spawn(async move {
-                    let body = match me.run(args).await {
-                        Ok(text) => text,
-                        Err(e) => format!("the map run failed: {e}"),
-                    };
-                    asides.push(harness_tools::Aside {
-                        kind: "map".into(),
-                        title: format!("map_agents over {count} items finished"),
-                        body,
+        let count = args.items.iter().filter(|i| !i.trim().is_empty()).count();
+        if count == 0 || count > MAX_MAP_ITEMS {
+            return Err(ToolError::InvalidArguments(format!(
+                "map_agents needs 1–{MAX_MAP_ITEMS} nonempty items (got {count})"
+            )));
+        }
+        if args.prompt.trim().is_empty() {
+            return Err(ToolError::InvalidArguments("write a task in prompt".into()));
+        }
+        if args
+            .reduce
+            .as_deref()
+            .is_some_and(|r| r != "concat" && r != "agent")
+        {
+            return Err(ToolError::InvalidArguments(
+                "reduce must be concat or agent".into(),
+            ));
+        }
+        if args.reduce.as_deref() == Some("agent")
+            && args
+                .reduce_prompt
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+        {
+            return Err(ToolError::InvalidArguments(
+                "reduce: agent needs a reduce_prompt".into(),
+            ));
+        }
+        if !self.admitted {
+            let admission = self.spawner.admit_fleet(0)?;
+            let me = Self {
+                spawner: self.spawner.operation(),
+                sink: self.sink.clone(),
+                asides: None,
+                admitted: true,
+            };
+            if args.wait == Some(false) {
+                if let Some(asides) = self.asides.clone() {
+                    tokio::spawn(async move {
+                        let _admission = admission;
+                        let body = match me.run(args).await {
+                            Ok(text) => text,
+                            Err(e) => format!("the map run failed: {e}"),
+                        };
+                        asides.push(harness_tools::Aside {
+                            kind: "map".into(),
+                            title: format!("map_agents over {count} items finished"),
+                            body,
+                        });
                     });
-                });
-                return Ok(format!(
-                    "map_agents started over {count} items in the background. The rows will be \
-                     delivered to you automatically when the run finishes — keep working on \
-                     other things, do not poll."
-                ));
+                    return Ok(format!("map_agents started over {count} items in the background. Results arrive automatically; keep working."));
+                }
             }
+            let _admission = admission;
+            return me.run(args).await;
         }
         let items: Vec<String> = args
             .items
@@ -217,19 +253,61 @@ impl TypedTool for MapAgentsTool {
             ));
         }
         let leaf = args.leaf.unwrap_or(false);
+        let run_id = args.run_id.clone().unwrap_or_else(next_fleet_id);
+        let model = self.spawner.endpoint_snapshot().1.for_subagent().model;
+        let session = self.spawner.session().unwrap_or_default();
+        let key_for = |index: usize, item: &str| {
+            let file = self
+                .spawner
+                .root()
+                .and_then(|root| harness_tools::Workspace::new(root).ok())
+                .and_then(|ws| ws.resolve(item).ok())
+                .and_then(|path| std::fs::read(path).ok());
+            let context = format!(
+                "{session}\n{run_id}\n{model}\n{leaf}\n{}\n{:?}",
+                render(&args.prompt, item, index),
+                file.map(|bytes| {
+                    let mut h = DefaultHasher::new();
+                    bytes.hash(&mut h);
+                    h.finish()
+                })
+            );
+            memo_key(item, &context, &args.output_schema)
+        };
+        let keys: Vec<_> = items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| key_for(i, item))
+            .collect();
         let schema = args.output_schema;
 
         // Rows already answered under this exact task are replayed; only the
         // rest run. A row is filled in item order either way.
         let mut rows: Vec<Option<SubagentResult>> = items
             .iter()
-            .map(|item| self.spawner.memo_get(memo_key(item, &args.prompt, &schema)))
+            .enumerate()
+            .map(|(index, _)| {
+                if args.refresh {
+                    None
+                } else {
+                    self.spawner.memo_get(keys[index])
+                }
+            })
             .collect();
         let pending: Vec<usize> = (0..items.len()).filter(|i| rows[*i].is_none()).collect();
 
         if !pending.is_empty() {
             let fresh = if leaf {
-                self.run_leaves(&items, &pending, &args.prompt).await
+                self.run_leaves(
+                    &items,
+                    &pending,
+                    &args.prompt,
+                    &schema,
+                    args.max_parallel
+                        .unwrap_or(DEFAULT_MAP_PARALLEL)
+                        .clamp(1, MAX_FLEET_AGENTS),
+                )
+                .await?
             } else {
                 let parallel = args
                     .max_parallel
@@ -239,18 +317,17 @@ impl TypedTool for MapAgentsTool {
                     .await?
             };
             for (index, result) in pending.iter().zip(fresh) {
-                if result.status == LaneStatus::Done {
-                    self.spawner.memo_put(
-                        memo_key(&items[*index], &args.prompt, &schema),
-                        result.clone(),
-                    );
+                if result.status == LaneStatus::Done
+                    && (schema.is_none() || result.structured.is_some())
+                {
+                    self.spawner.memo_put(keys[*index], result.clone());
                 }
                 rows[*index] = Some(result);
             }
         }
         let rows: Vec<SubagentResult> = rows.into_iter().flatten().collect();
         let replayed = items.len() - pending.len();
-        let mut out = String::new();
+        let mut out = format!("Map run: {run_id}. Resume with run_id: \"{run_id}\"; refresh: true recomputes rows.\n\n");
         if replayed > 0 {
             out.push_str(&format!(
                 "NOTE: {replayed} of {} items were already answered under this task and are \
@@ -285,7 +362,10 @@ impl MapAgentsTool {
         schema: &Option<serde_json::Value>,
         parallel: usize,
     ) -> Result<Vec<SubagentResult>, ToolError> {
-        self.spawner.admit_fleet(pending.len() as u32)?;
+        self.spawner
+            .tree_budget()
+            .admit_spawn(pending.len() as u32)
+            .map_err(ToolError::Execution)?;
         let spill = self.spawner.overflow_store();
         let tasks: Vec<SubagentTask> = pending
             .iter()
@@ -317,7 +397,6 @@ impl MapAgentsTool {
                 },
             )
             .await?;
-        self.spawner.record(&results);
         Ok(results)
     }
 
@@ -328,46 +407,28 @@ impl MapAgentsTool {
         items: &[String],
         pending: &[usize],
         template: &str,
-    ) -> Vec<SubagentResult> {
+        schema: &Option<serde_json::Value>,
+        parallel: usize,
+    ) -> Result<Vec<SubagentResult>, ToolError> {
         let store = self.spawner.overflow_store();
-        let mut join = tokio::task::JoinSet::new();
-        let slots = Arc::new(tokio::sync::Semaphore::new(
-            crate::ask_tool::ASK_CONCURRENCY,
-        ));
-        for &index in pending {
-            let item = items[index].clone();
-            let mut user = render(template, &item, index);
-            if let Some(content) = as_handle(&item).and_then(|h| store.as_ref()?.get(h)) {
-                user = format!("## Input\n\n{content}\n\n---\n\n{user}");
-            }
-            let spawner = self.spawner.clone();
-            let slots = slots.clone();
-            join.spawn(async move {
-                let _slot = slots.acquire_owned().await;
-                (
-                    index,
-                    spawner.ask(crate::ask_tool::DEFAULT_SYSTEM, &user).await,
-                )
-            });
-        }
-        let mut answers: std::collections::HashMap<usize, Result<String, String>> =
-            std::collections::HashMap::new();
-        while let Some(joined) = join.join_next().await {
-            if let Ok((index, answer)) = joined {
-                answers.insert(index, answer);
-            }
-        }
-        pending
+        let tasks = pending
             .iter()
             .map(|&index| {
-                let label = format!("item {}", index + 1);
-                match answers.remove(&index) {
-                    Some(Ok(text)) => SubagentResult::leaf(label, text),
-                    Some(Err(e)) => SubagentResult::failed(label, e),
-                    None => SubagentResult::failed(label, "the call died before answering".into()),
+                let item = &items[index];
+                let mut user = render(template, item, index);
+                if let Some(hash) = as_handle(item) {
+                    let content = store.as_ref().and_then(|s| s.get(hash)).ok_or_else(|| {
+                        ToolError::InvalidArguments(format!("nothing is parked under {hash}"))
+                    })?;
+                    user = format!("## Input\n\n{content}\n\n---\n\n{user}");
                 }
+                Ok(SubagentTask::new(format!("item {}", index + 1), user)
+                    .with_schema(schema.clone()))
             })
-            .collect()
+            .collect::<Result<Vec<_>, ToolError>>()?;
+        self.spawner
+            .run_leaf_tasks_admitted(tasks, parallel, crate::ask_tool::DEFAULT_SYSTEM)
+            .await
     }
 
     /// Fold the rows through one more lane.
@@ -377,7 +438,10 @@ impl MapAgentsTool {
         reduce_prompt: &str,
         document: &str,
     ) -> Result<String, ToolError> {
-        self.spawner.admit_fleet(1)?;
+        self.spawner
+            .tree_budget()
+            .admit_spawn(1)
+            .map_err(ToolError::Execution)?;
         let prompt = format!(
             "{reduce_prompt}\n\n## The rows to reduce ({} items)\n\n{document}",
             rows.len()
@@ -399,7 +463,6 @@ impl MapAgentsTool {
                 },
             )
             .await?;
-        self.spawner.record(&results);
         let mut out = String::new();
         if cancelled {
             out.push_str("NOTE: the reduce agent was stopped before finishing.\n\n");
@@ -439,6 +502,58 @@ mod tests {
         assert_eq!(render("review it", "a.rs", 0), "review it\n\nItem 1: a.rs");
         assert_eq!(as_handle("<<ccr:abc123 chunk>>"), Some("abc123"));
         assert_eq!(as_handle("src/lib.rs"), None);
+    }
+
+    #[tokio::test]
+    async fn explicit_resume_invalidates_changed_files_and_refresh_bypasses_cache() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("reviewed"))
+            .expect(4)
+            .create_async()
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("file"), "before").unwrap();
+        let spawner = Arc::new(
+            FleetSpawner::new(
+                OxenClient::new(server.url(), "k", "m"),
+                ToolRegistry::new(),
+                AgentConfig::default(),
+            )
+            .with_workspace(dir.path()),
+        );
+        let tool = MapAgentsTool::new(spawner, Arc::new(QuietSink));
+        let args = serde_json::json!({"items": ["file"], "prompt": "review {{item}}", "run_id":"review", "leaf":true});
+        tool.invoke(args.clone()).await.unwrap();
+        assert!(tool
+            .invoke(args.clone())
+            .await
+            .unwrap()
+            .contains("already answered"));
+        std::fs::write(dir.path().join("file"), "after").unwrap();
+        assert!(!tool
+            .invoke(args.clone())
+            .await
+            .unwrap()
+            .contains("already answered"));
+        let mut refresh = args.clone();
+        refresh["refresh"] = true.into();
+        assert!(!tool
+            .invoke(refresh)
+            .await
+            .unwrap()
+            .contains("already answered"));
+        let mut fresh = args;
+        fresh.as_object_mut().unwrap().remove("run_id");
+        assert!(!tool
+            .invoke(fresh)
+            .await
+            .unwrap()
+            .contains("already answered"));
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -486,7 +601,7 @@ mod tests {
         let tool = MapAgentsTool::new(spawner.clone(), Arc::new(QuietSink));
         let args = serde_json::json!({
             "items": ["ITEM-a", "ITEM-b", "ITEM-c"],
-            "prompt": "Check {{item}}."
+            "prompt": "Check {{item}}.", "run_id": "test-map"
         });
         let out = tool.invoke(args.clone()).await.unwrap();
         // One row per item, in item order, the failed one a typed row.
@@ -500,7 +615,7 @@ mod tests {
         // each), only c runs again.
         let again = tool.invoke(args).await.unwrap();
         assert!(
-            again.starts_with("NOTE: 2 of 3 items were already answered"),
+            again.contains("NOTE: 2 of 3 items were already answered"),
             "{again}"
         );
         assert!(again.contains("ITEM-b looks fine"), "{again}");
@@ -532,12 +647,12 @@ mod tests {
         let again = MapAgentsTool::new(reborn, Arc::new(QuietSink))
             .invoke(serde_json::json!({
                 "items": ["ITEM-a", "ITEM-b"],
-                "prompt": "Check {{item}}."
+                "prompt": "Check {{item}}.", "run_id": "test-map"
             }))
             .await
             .unwrap();
         assert!(
-            again.starts_with("NOTE: 2 of 2 items were already answered"),
+            again.contains("NOTE: 2 of 2 items were already answered"),
             "{again}"
         );
     }

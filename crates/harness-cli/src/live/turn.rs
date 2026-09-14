@@ -286,9 +286,18 @@ pub(crate) async fn read_idle(
                         let trimmed = line.trim().to_string();
                         if trimmed.is_empty() {
                             state.borrow_mut().request_paint();
-                        } else if let Some(label) = steer_watched_lane(&trimmed) {
+                        } else if let Some(result) = steer_watched_lane(&trimmed) {
                             let mut s = state.borrow_mut();
                             let ui = s.ui.clone();
+                            let label = match result {
+                                Ok(label) => label,
+                                Err(error) => {
+                                    s.print_line(&format!("  {}", ui.dim(&error)));
+                                    s.composer.set_text(&line);
+                                    s.request_paint();
+                                    continue;
+                                }
+                            };
                             s.print_line(&format!(
                                 "  {} {}",
                                 ui.brown(&format!("🗣 steering {label}:")),
@@ -423,18 +432,25 @@ fn recover_interjections(
 /// Whether a mid-turn submission can be sent to the model as chat (steered
 /// into a running turn, or queued): only plain prompts — a recognized
 /// `/command` would reach the LLM as literal chat text instead of running.
-/// Deliver `text` to the watched, running fleet lane, returning its label
-/// when it took the message. `None` when nothing is watched (or the lane
-/// already finished), so the caller sends the text where it normally would.
-fn steer_watched_lane(text: &str) -> Option<String> {
+/// A selected agent keeps ownership of the message even if it finishes
+/// between selection and delivery. Failed sends stay in the composer.
+fn steer_watched_lane(text: &str) -> Option<Result<String, String>> {
     if !stackable(text) {
         return None;
     }
-    let (id, label) = crate::fleet_ui::FleetHub::global()
-        .lock()
-        .primary()
-        .and_then(|f| f.focused_running_lane())?;
-    crate::endpoint::interject_lane(&id, expand_pastes(text)).then_some(label)
+    let hub = crate::fleet_ui::FleetHub::global();
+    let board = hub.lock();
+    let state = board.primary()?;
+    let lane = state.lanes.get(state.focused?)?;
+    Some(
+        if lane.status == crate::fleet_ui::LaneStatus::Running
+            && crate::endpoint::interject_lane(&lane.id, expand_pastes(text))
+        {
+            Ok(lane.label.clone())
+        } else {
+            Err(format!("{} is not accepting messages. Draft kept · Alt+0 returns to main chat · /agents follow-up {} <message> continues it", lane.label, lane.id))
+        },
+    )
 }
 
 /// The idle status line for commands still running in the background, so a
@@ -581,20 +597,16 @@ async fn run_one_turn(
                                     // its next safe point (not queued for
                                     // after). Ctrl+Enter / Ctrl+Q stack a
                                     // follow-up for later.
-                                    let watched = crate::fleet_ui::FleetHub::global()
-                                        .lock()
-                                        .primary()
-                                        .and_then(|f| f.focused_running_lane());
-                                    let target = match watched {
-                                        Some((id, label))
-                                            if crate::endpoint::interject_lane(
-                                                &id,
-                                                expand_pastes(trimmed),
-                                            ) =>
-                                        {
-                                            format!("🗣 steering {label}:")
+                                    let target = match steer_watched_lane(trimmed) {
+                                        Some(Ok(label)) => format!("🗣 steering {label}:"),
+                                        Some(Err(error)) => {
+                                            let ui = s.ui.clone();
+                                            s.print_line(&format!("  {}", ui.dim(&error)));
+                                            s.composer.set_text(&line);
+                                            s.request_paint();
+                                            continue;
                                         }
-                                        _ => {
+                                        None => {
                                             interject.push(expand_pastes(trimmed));
                                             "🗣 steering:".to_string()
                                         }

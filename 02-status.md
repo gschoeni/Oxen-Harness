@@ -620,3 +620,23 @@ real-model run now that the first one's failures are fixed.
       (`.github/workflows/ci.yml`, badge in the README).
 - [x] Persist/restore previous sessions in the CLI (`--resume <id>` /
       `--continue`) and the desktop app (per-session agents).
+
+## Recent — subagent hardening and agent hub (2026-09-13)
+
+The review findings are fixed across isolation, lifecycle, tool preferences,
+budgets, caching, and both front ends. Lane results are saved before completion;
+committed and uncommitted edits survive cleanup and isolated follow-ups.
+Tool-less leaves share cancellation and request admission with full agents.
+Map resumption is explicit through `run_id`, with source/configuration checks
+and `refresh`.
+
+The CLI now has an `/agents` chooser, stable IDs, numbered live rows, previous/
+next shortcuts, fleet switching, explicit message targets, and watch/send/stop/
+follow-up/patch commands. The desktop keeps live and finished descendants in
+one minimal panel with retained drafts, acknowledged stop/send controls,
+scroll-follow control, and reviewed patch application.
+
+Verification: 1,258 Rust tests passed (3 skipped); workspace fmt and Clippy passed;
+465 frontend tests and TypeScript passed; Tauri bridge Clippy passed. Browser
+inspection covered light/dark and a 390px viewport with no horizontal overflow.
+The dedicated review/refactor pass is tracked in `plans/subagent-hardening.md`.

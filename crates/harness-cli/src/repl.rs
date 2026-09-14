@@ -292,7 +292,7 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
     SlashSpec {
         name: "/agents",
         aliases: &["/lanes"],
-        description: "list this chat's subagents; `read <n>` / `show <n>` print one",
+        description: "watch, steer, stop, or continue subagents; `help` shows controls",
         build: Command::Agents,
         completer: ArgCompleter::None,
     },

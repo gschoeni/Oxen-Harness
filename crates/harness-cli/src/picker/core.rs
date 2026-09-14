@@ -206,7 +206,7 @@ pub(super) fn truncate(s: &str, max: usize) -> String {
 /// it wraps into. A multi-line shell command in an approval prompt (or a
 /// model-written question with paragraphs) therefore keeps its shape instead
 /// of collapsing into one run-on paragraph.
-pub(super) fn wrap(text: &str, max: usize) -> Vec<String> {
+pub(crate) fn wrap(text: &str, max: usize) -> Vec<String> {
     let max = max.max(8);
     let mut out: Vec<String> = Vec::new();
     for line in text.lines() {

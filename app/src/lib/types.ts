@@ -808,6 +808,11 @@ export interface CodeReviewProgressEvent {
 
 /** One subagent lane of a chat, running or finished (the agents hub). */
 export interface AgentSummary {
+  parent?: string;
+  depth?: number;
+  model?: string;
+  stop?: string | null;
+  has_patch?: boolean;
   /** The lane's id (its session id). */
   id: string;
   label: string;
@@ -861,7 +866,7 @@ export interface FleetAgentEvent {
   agent: number;
   lane: string;
   name: string;
-  phase: "started" | "done" | "failed";
+  phase: "started" | "done" | "failed" | "partial" | "cancelled";
   tokens: number;
   summary: string;
 }

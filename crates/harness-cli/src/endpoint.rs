@@ -327,23 +327,13 @@ pub(crate) fn register_fleet_tool(
     let sink: Arc<dyn harness_agent::fleet::FleetSink> = Arc::new(
         crate::fleet_sink::CliFleetSink::new(ui.clone(), spawner.tree().clone()),
     );
-    tools.register_typed(
-        harness_agent::FleetTool::new(spawner.clone(), sink.clone())
-            // A `wait: false` fleet leaves its report here for the next round.
-            .with_asides(tools.asides()),
-    );
-    tools.register_typed(
-        harness_agent::MapAgentsTool::new(spawner.clone(), sink.clone())
-            .with_asides(tools.asides()),
-    );
+    spawner.register_tools(tools, sink);
     // The session's task registry, for `/tasks`.
     if let Some(tasks) = tools.background_tasks().cloned() {
         let _ = TASKS.set(tasks);
     }
-    tools.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
-    tools.register_typed(harness_agent::ReadAgentTool::new(spawner.clone()));
-    tools.register_typed(harness_agent::AskModelTool::new(spawner));
     harness_runtime::tools::load().apply(tools);
+    spawner.set_agent_policy(tools);
 }
 
 /// Tell the session's fleet spawner which session its lanes spend for, so
@@ -510,6 +500,11 @@ pub(crate) fn open_store() -> Result<HistoryStore> {
         .map_err(|e| anyhow::anyhow!("resolving history path: {e}"))?;
     HistoryStore::open(&path).with_context(|| format!("opening history at {}", path.display()))
 }
+/// The active chat’s agent controls, shared by the hub commands.
+pub(crate) fn fleet_spawner() -> Option<Arc<harness_agent::FleetSpawner>> {
+    FLEET_SPAWNER.get().cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

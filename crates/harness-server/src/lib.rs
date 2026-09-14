@@ -155,6 +155,14 @@ pub fn build_router(config: ServerConfig) -> Router {
             post(cancel_fleet),
         )
         .route("/v1/sessions/{id}/agents", get(list_agents))
+        .route(
+            "/v1/sessions/{id}/agents/{agent}/patch",
+            get(agent_patch).post(apply_agent_patch),
+        )
+        .route(
+            "/v1/sessions/{id}/agents/{agent}/follow-up",
+            post(follow_up_agent),
+        )
         .route("/v1/sessions/{id}/tasks", get(list_tasks))
         .route("/v1/sessions/{id}/tasks/{task}/kill", post(kill_task))
         .route(
@@ -741,6 +749,39 @@ fn sanitize_filename(name: &str) -> String {
     } else {
         safe
     }
+}
+
+async fn agent_patch(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((id, agent)): Path<(String, String)>,
+) -> ApiResult<Json<String>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(state.service.agent_patch(&id, &agent)?))
+}
+async fn apply_agent_patch(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((id, agent)): Path<(String, String)>,
+    Json(patch): Json<String>,
+) -> ApiResult<StatusCode> {
+    authorize(&state, &headers, None)?;
+    state.service.apply_agent_patch(&id, &agent, &patch).await?;
+    Ok(StatusCode::OK)
+}
+async fn follow_up_agent(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((id, agent)): Path<(String, String)>,
+    Json(request): Json<harness_protocol::InterjectRequest>,
+) -> ApiResult<Json<String>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(
+        state
+            .service
+            .follow_up_agent(&id, &agent, &request.text)
+            .await?,
+    ))
 }
 
 #[cfg(test)]

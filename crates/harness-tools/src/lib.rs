@@ -553,6 +553,55 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// Rebind the enabled workspace capabilities for a lane. The registry's
+    /// metadata, shell state, task output, and steering must follow its tools.
+    pub fn for_workspace(&self, workspace: Workspace, files: Arc<FileState>) -> Self {
+        let tasks = BackgroundTasks::in_temp_with_overflow(self.overflow.clone());
+        let (notifier, signal) = steer_channel();
+        let mut tools = Self {
+            workspace: Some(workspace.clone()),
+            files: Some(files.clone()),
+            tasks: Some(tasks.clone()),
+            steer: Some(notifier),
+            asides: Asides::default(),
+            roster: Roster::default(),
+            ..self.clone()
+        };
+        for name in tools.tools.keys() {
+            tools.roster.insert(name);
+        }
+        fn replace<T: TypedTool + 'static>(tools: &mut ToolRegistry, tool: T) {
+            if tools.get(T::NAME).is_some() {
+                tools.register_typed(tool);
+            }
+        }
+        replace(
+            &mut tools,
+            fs::ReadFileTool::with_state(workspace.clone(), files.clone()),
+        );
+        replace(
+            &mut tools,
+            fs::WriteFileTool::with_state(workspace.clone(), files.clone()),
+        );
+        replace(
+            &mut tools,
+            fs::EditFileTool::with_state(workspace.clone(), files),
+        );
+        replace(&mut tools, fs::FindFilesTool::new(workspace.clone()));
+        replace(&mut tools, fs::SearchTool::new(workspace.clone()));
+        replace(&mut tools, git::GitTool::new(workspace.clone()));
+        replace(&mut tools, gh::GhTool::new(workspace.clone()));
+        let shell =
+            shell::ShellTool::with_tasks(workspace, tasks.clone()).intercepting_for(tools.roster());
+        replace(&mut tools, shell.with_steer(signal.clone()));
+        replace(
+            &mut tools,
+            tasks::TaskOutputTool::new(tasks.clone()).with_steer(signal),
+        );
+        replace(&mut tools, tasks::KillTaskTool::new(tasks));
+        tools
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -661,6 +710,10 @@ impl ToolRegistry {
 
     pub fn get(&self, name: &str) -> Option<&Arc<dyn Tool>> {
         self.tools.get(name)
+    }
+
+    pub fn description_override(&self, name: &str) -> Option<&str> {
+        self.description_overrides.get(name).map(String::as_str)
     }
 
     /// The (name, default description, schema) of every registered tool, sorted
@@ -913,6 +966,35 @@ mod tests {
             .await
             .unwrap();
         assert!(still.starts_with("Blocked: use read_file"), "{still}");
+    }
+
+    #[tokio::test]
+    async fn reroot_preserves_disabled_capabilities_and_description_overrides() {
+        let parent = tempfile::tempdir().unwrap();
+        let lane = tempfile::tempdir().unwrap();
+        std::fs::write(parent.path().join("sample"), "parent").unwrap();
+        std::fs::write(lane.path().join("sample"), "lane").unwrap();
+        let mut registry =
+            ToolRegistry::default_for_workspace(Workspace::new(parent.path()).unwrap());
+        registry.remove(fs::WRITE_FILE_TOOL);
+        registry.remove(shell::RUN_SHELL_TOOL);
+        registry.set_description_override(fs::READ_FILE_TOOL, "Read the selected workspace");
+        let rooted =
+            registry.for_workspace(Workspace::new(lane.path()).unwrap(), FileState::gated());
+        assert!(rooted.get(fs::WRITE_FILE_TOOL).is_none());
+        assert!(rooted.get(shell::RUN_SHELL_TOOL).is_none());
+        assert_eq!(
+            rooted.description_override(fs::READ_FILE_TOOL),
+            Some("Read the selected workspace")
+        );
+        let result = rooted
+            .get(fs::READ_FILE_TOOL)
+            .unwrap()
+            .invoke(serde_json::json!({"path":"sample"}))
+            .await
+            .unwrap();
+        assert!(result.contains("lane"));
+        assert!(!result.contains("parent"));
     }
 
     #[test]

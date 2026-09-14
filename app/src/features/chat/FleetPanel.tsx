@@ -1,242 +1,201 @@
-// The fleet panel: live lanes for N parallel subagents running in this chat —
-// a review fan-out step or a `spawn_agents` call the model made mid-turn.
-// Each lane shows its status, name, a one-line activity readout, and token
-// spend; clicking a lane expands it to watch that agent's live output tail
-// (click again, or another lane, to switch). A fleet can be stopped on its
-// own — the turn around it carries on with the partial report. The panel
-// appears when a fleet starts and disappears when it finishes — results land
-// in the thread. A background (`wait: false`) fleet can overlap a later one,
-// so a chat may show more than one panel, oldest first.
-
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, CircleDashed, Maximize2, Square, Users, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, CircleDashed, FileDiff, MessageSquare, Square, Users, X } from "lucide-react";
 import { compactTokens } from "../../lib/format";
-import { fleetsFor, useStore, type FleetLane, type FleetView } from "../../lib/store";
+import { agentPatch, applyAgentPatch, followUpAgent } from "../../lib/ipc";
+import { fleetsFor, useStore, type FleetView } from "../../lib/store";
 import type { AgentSummary } from "../../lib/types";
+import "./agents.css";
+
+type Row = AgentSummary & { key: string; tail: string; activity: string; fleetIndex?: number };
+const active = (status: string) => status === "running" || status === "queued";
+const statusLabel = (status: string) => ({ running: "Working", queued: "Queued", done: "Done", partial: "Partial", cancelled: "Stopped", failed: "Failed", unknown: "Interrupted" })[status] ?? status;
+
+/** Persisted rows and event snapshots share lane IDs, including across follow-ups. */
+export function agentRows(agents: AgentSummary[], fleets: Array<[string, FleetView]>): Row[] {
+  const rows = new Map<string, Row>();
+  for (const agent of agents) rows.set(agent.id, { ...agent, key: agent.id, tail: "", activity: agent.summary });
+  for (const [fleetId, fleet] of fleets) {
+    fleet.lanes.forEach((lane, index) => {
+      const key = lane.id || `${fleetId}:${index}`;
+      const saved = rows.get(key);
+      if (fleet.finished && saved) return;
+      rows.set(key, { ...saved, key, id: lane.id, label: lane.name, fleet: fleetId,
+        status: fleet.finished && active(lane.status) ? "unknown" : lane.status,
+        summary: lane.activity, activity: lane.activity, tail: lane.tail,
+        tokens: lane.tokens, rounds: saved?.rounds ?? 0, elapsed_secs: saved?.elapsed_secs ?? 0,
+        created_at: saved?.created_at ?? 0, fleetIndex: index });
+    });
+  }
+  const all = [...rows.values()];
+  const sorted: Row[] = [];
+  const visited = new Set<string>();
+  const visit = (row: Row) => { if (visited.has(row.key)) return; visited.add(row.key); sorted.push(row); all.filter((r) => r.parent === row.id && r.id !== row.id).forEach(visit); };
+  all.filter((row) => !row.parent || !rows.has(row.parent)).forEach(visit);
+  all.forEach(visit);
+  return sorted;
+}
 
 export function FleetPanel() {
-  const sessionId = useStore((s) => s.session?.session_id);
+  const session = useStore((s) => s.session?.session_id);
+  return session ? <AgentHub key={session} session={session} /> : null;
+}
+
+function AgentHub({ session }: { session: string }) {
   const fleets = useStore((s) => s.fleets);
-  const agents = useStore((s) => (s.session ? s.agents[s.session.session_id] : undefined));
-  const refreshAgents = useStore((s) => s.refreshAgents);
-  useEffect(() => {
-    if (sessionId) void refreshAgents(sessionId);
-  }, [sessionId, refreshAgents]);
-  if (!sessionId) return null;
-  const mine = fleetsFor(fleets, sessionId);
-  const finished = (agents ?? []).filter((a) => a.status !== "running");
-  if (mine.length === 0 && finished.length === 0) return null;
+  const agents = useStore((s) => s.agents[session]);
+  const refresh = useStore((s) => s.refreshAgents);
+  const [open, setOpen] = useState(true);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const mine = fleetsFor(fleets, session);
+  const rows = agentRows(agents ?? [], mine);
+  const knownIds = rows.filter((r) => active(r.status)).map((r) => r.id).join(",");
+  useEffect(() => { void refresh(session); }, [session, refresh, knownIds]);
+  const working = rows.filter((r) => active(r.status)).length;
+  const focused = rows.find((r) => r.key === selected);
+  const budget = mine.filter(([, f]) => !f.finished).slice(-1)[0]?.[1].budget;
+  if (!rows.length) return null;
   return (
-    <>
-      {mine.map(([id, fleet]) => (
-        <OneFleet key={id} id={id} fleet={fleet} />
-      ))}
-      {finished.length > 0 && <AgentsHub agents={finished} />}
-    </>
-  );
-}
-
-/** The finished lanes of this chat: what each did, in a line, collapsed by
- *  default so a chat with many agents stays readable. */
-function AgentsHub({ agents }: { agents: AgentSummary[] }) {
-  const [open, setOpen] = useState(false);
-  const openInspector = useStore((s) => s.openInspector);
-  return (
-    <div className="fleet-panel agents-hub" role="region" aria-label="Finished agents">
-      <button
-        type="button"
-        className="fleet-panel-head agents-hub-toggle"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-      >
-        <ChevronRight size={13} className={`agents-hub-chevron ${open ? "open" : ""}`} />
-        <span className="fleet-panel-title">
-          {agents.length} finished agent{agents.length === 1 ? "" : "s"}
-        </span>
-        <span className="fleet-panel-hint">{open ? "click to collapse" : "click to list"}</span>
+    <section className="agent-hub" aria-label="Agents">
+      <div className="agent-hub-header"><button className="agent-hub-heading" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <Users size={14} /><strong>Agents</strong>
+        <span>{working ? `${working} working` : `${rows.length} finished`}</span>
+        {working > 0 && rows.length > working && <span>· {rows.length - working} finished</span>}
+        <span className="agent-hub-spacer" />
+        {budget && <span className="agent-hub-budget" title={`${compactTokens(budget.tokens)} of ${compactTokens(budget.max_tokens)} shared tokens`}>{compactTokens(budget.tokens)} tokens</span>}
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
-      {open && (
-        <div className="fleet-lanes">
-          {agents.map((agent) => (
-            <button
-              key={agent.id}
-              type="button"
-              className="fleet-lane agents-hub-row"
-              title={`Open ${agent.label}'s transcript`}
-              onClick={() => openInspector(agent.id)}
-            >
-              <AgentGlyph status={agent.status} />
-              <span className="fleet-lane-name">{agent.label}</span>
-              <span className="fleet-lane-activity">
-                {agent.status === "failed" ? "failed — " : ""}
-                {agent.summary}
-              </span>
-              {agent.tokens > 0 && (
-                <span className="fleet-lane-tokens">{compactTokens(agent.tokens)}</span>
-              )}
+      {working > 0 && <StopAll session={session} fleets={mine.filter(([, f]) => !f.finished)} />}</div>
+      {open && <>
+        <div className="agent-hub-rows">
+          {rows.map((row) => <div key={row.key} className={`agent-hub-row ${row.key === selected ? "selected" : ""}`}>
+            <button className="agent-hub-select" style={{ paddingLeft: 14 + Math.min(row.depth ?? 0, 4) * 16 }}
+              title={`Watch ${row.label}`} onClick={() => setSelected(selected === row.key ? null : row.key)} aria-expanded={selected === row.key}>
+              <Glyph status={row.status} /><span className="agent-hub-name">{row.label}</span>
+              <span className="agent-hub-activity">{row.activity || statusLabel(row.status)}</span>
+              <span className={`agent-hub-status ${row.status}`}>{statusLabel(row.status)}</span>
             </button>
-          ))}
+            {active(row.status) && row.id && <StopButton session={session} row={row} />}
+          </div>)}
         </div>
-      )}
+        {focused && <AgentDetails key={focused.key} session={session} row={focused}
+          draft={drafts[focused.key] ?? ""} setDraft={(value) => setDrafts((d) => ({ ...d, [focused.key]: value }))} />}
+      </>}
+    </section>
+  );
+}
+
+function StopAll({ session, fleets }: { session: string; fleets: Array<[string, FleetView]> }) {
+  const stop = useStore((s) => s.stopFleet);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  if (!fleets.length) return null;
+  return <div className="agent-hub-stop-wrap"><button className="agent-hub-stop" aria-label="Stop all agents"
+    title="Stop all agents in this chat" disabled={pending} onClick={async () => {
+      setPending(true); setError("");
+      const results = await Promise.allSettled(fleets.map(([id]) => stop(session, id)));
+      const failed = results.find(r => r.status === "rejected");
+      if (failed?.status === "rejected") { setError(String(failed.reason)); setPending(false); }
+    }}>{pending ? "Stopping…" : <Square size={11} />}</button>
+    {error && <span role="alert" className="agent-hub-error">{error}</span>}</div>;
+}
+
+function Glyph({ status }: { status: string }) {
+  if (status === "running") return <span className="agent-hub-dot" aria-label="working" />;
+  if (status === "done") return <Check size={13} className="agent-hub-done" />;
+  if (status === "failed") return <X size={13} className="agent-hub-failed" />;
+  if (status === "cancelled") return <Square size={11} />;
+  return <CircleDashed size={13} />;
+}
+
+function StopButton({ session, row }: { session: string; row: Row }) {
+  const stop = useStore((s) => s.stopLane);
+  const refresh = useStore((s) => s.refreshAgents);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  return <div className="agent-hub-stop-wrap">
+    <button className="agent-hub-stop" aria-label={`Stop ${row.label}`} title={error || `Stop ${row.label}`}
+      disabled={pending} onClick={async () => {
+        setPending(true); setError("");
+        try { if (!(await stop(session, row.id))) { setPending(false); await refresh(session); setError("Agent already finished"); } }
+        catch (e) { setError(String(e)); setPending(false); }
+      }}>{pending ? <span>Stopping…</span> : <Square size={10} />}</button>
+    {error && <span role="alert" className="agent-hub-error">{error}</span>}
+  </div>;
+}
+
+function AgentDetails({ session, row, draft, setDraft }: { session: string; row: Row; draft: string; setDraft: (text: string) => void }) {
+  const openInspector = useStore((s) => s.openInspector);
+  const watch = useStore((s) => s.watchLane);
+  const steer = useStore((s) => s.steerLane);
+  const refresh = useStore((s) => s.refreshAgents);
+  const [pending, setPending] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [patch, setPatch] = useState<string | null>(null);
+  const [patchBusy, setPatchBusy] = useState(false);
+  const [applied, setApplied] = useState(false);
+  const running = active(row.status);
+  useEffect(() => { setPatch(null); setApplied(false); }, [row.status, row.tokens]);
+  return <div className="agent-hub-details">
+    <div className="agent-hub-meta">
+      <code title={row.id}>{row.id.slice(0, 8)}</code>
+      {row.model && <span>{row.model}</span>}
+      {row.tokens > 0 && <span>{compactTokens(row.tokens)} tokens</span>}
+      {row.elapsed_secs > 0 && <span>{row.elapsed_secs}s</span>}
+      <span className="agent-hub-spacer" />
+      {row.id && <button onClick={() => running ? watch(row.id) : openInspector(row.id)} aria-label={`Follow ${row.label}`}><MessageSquare size={12} /> Transcript</button>}
+      {row.has_patch && !running && <button disabled={patchBusy} onClick={async () => {
+        setPatchBusy(true); setError("");
+        try { setPatch(await agentPatch(session, row.id)); } catch (e) { setError(String(e)); }
+        finally { setPatchBusy(false); }
+      }}><FileDiff size={12} /> Review changes</button>}
     </div>
-  );
+    {row.stop && <p className="agent-hub-note">{row.stop}</p>}
+    <OutputTail text={row.tail || row.summary} />
+    {patch !== null && <div className="agent-hub-patch">
+      <div><span>Proposed changes</span><button disabled={applied || patchBusy || !patch} onClick={async () => {
+        setPatchBusy(true); setError("");
+        try { await applyAgentPatch(session, row.id, patch); setApplied(true); }
+        catch (e) { setError(String(e)); } finally { setPatchBusy(false); }
+      }}>{applied ? "Applied" : patchBusy ? "Applying…" : "Apply changes"}</button></div>
+      <pre aria-label="Agent changes">{patch || "No changes to apply."}</pre>
+    </div>}
+    {row.id && <form className="agent-hub-compose" onSubmit={async (event) => {
+      event.preventDefault(); const text = draft.trim(); if (!text || pending) return;
+      setPending(true); setError(""); setNotice("");
+      try {
+        if (running) {
+          if (!(await steer(session, row.id, text))) { await refresh(session); throw new Error("This agent has finished. Your message is saved; send it as a follow-up."); }
+          setNotice("Queued for the agent’s next step");
+        } else { await followUpAgent(session, row.id, text); await refresh(session); setNotice("Follow-up complete"); }
+        setDraft("");
+      } catch (e) { setError(String(e).replace(/^Error: /, "")); }
+      finally { setPending(false); }
+    }}>
+      <input value={draft} onChange={(e) => setDraft(e.target.value)} disabled={pending}
+        aria-label={`${running ? "Steer" : "Follow up with"} ${row.label}`}
+        placeholder={running ? "Add a direction…" : "Ask a follow-up…"} />
+      <button disabled={pending || !draft.trim()} aria-label="Send message"><ArrowUp size={14} /></button>
+    </form>}
+    {error && <p role="alert" className="agent-hub-error">{error}</p>}
+    {notice && <p role="status" className="agent-hub-note">{notice}</p>}
+  </div>;
 }
 
-function AgentGlyph({ status }: { status: string }) {
-  switch (status) {
-    case "done":
-      return <Check size={12} className="fleet-glyph done" />;
-    case "failed":
-      return <X size={12} className="fleet-glyph failed" />;
-    default:
-      return <CircleDashed size={12} className="fleet-glyph queued" />;
-  }
-}
-
-function OneFleet({ id, fleet }: { id: string; fleet: FleetView }) {
-  const setFocus = useStore((s) => s.setFleetFocus);
-  const stopFleet = useStore((s) => s.stopFleet);
-  const stopLane = useStore((s) => s.stopLane);
-  const steerLane = useStore((s) => s.steerLane);
-  const watchLane = useStore((s) => s.watchLane);
-  const running = fleet.lanes.filter((l) => l.status === "running").length;
-  const settled = fleet.lanes.every((l) => l.status === "done" || l.status === "failed");
-  const focused = fleet.focused !== null ? fleet.lanes[fleet.focused] : null;
-
-  return (
-    <div className="fleet-panel" role="status" aria-label="Parallel agents">
-      <div className="fleet-panel-head">
-        <Users size={13} className="fleet-panel-icon" />
-        <span className="fleet-panel-title">
-          {fleet.source === "review" ? "Review agents" : "Agents"} — {running} of{" "}
-          {fleet.lanes.length} running
-        </span>
-        {fleet.budget && (
-          <span
-            className="fleet-panel-budget"
-            title="What every agent of this turn has spent of their shared budget"
-          >
-            tree {compactTokens(fleet.budget.tokens)} / {compactTokens(fleet.budget.max_tokens)} ·{" "}
-            {fleet.budget.spawns}/{fleet.budget.max_spawns} agents
-          </span>
-        )}
-        <span className="fleet-panel-hint">
-          {focused ? "click again to collapse" : "click a lane to watch it"}
-        </span>
-        {!settled && (
-          <button
-            type="button"
-            className="fleet-panel-stop"
-            onClick={() => stopFleet(fleet.session, id)}
-            title="Stop these agents (the chat keeps going with what they have)"
-            aria-label="Stop agents"
-          >
-            <Square size={10} />
-            Stop
-          </button>
-        )}
-      </div>
-      <div className="fleet-lanes">
-        {fleet.lanes.map((lane, i) => (
-          <div key={`${lane.name}-${i}`} className="fleet-lane-row">
-            <button
-              className={`fleet-lane ${fleet.focused === i ? "focused" : ""}`}
-              onClick={() => setFocus(id, fleet.focused === i ? null : i)}
-              aria-pressed={fleet.focused === i}
-              title={`Watch ${lane.name}`}
-            >
-              <LaneGlyph lane={lane} />
-              <span className="fleet-lane-name">{lane.name}</span>
-              <span className="fleet-lane-activity">{lane.activity}</span>
-              {lane.tokens > 0 && (
-                <span className="fleet-lane-tokens">{compactTokens(lane.tokens)}</span>
-              )}
-            </button>
-            {lane.status === "running" && lane.id && (
-              <>
-                <button
-                  type="button"
-                  className="fleet-lane-watch"
-                  onClick={() => watchLane(lane.id)}
-                  title={`Follow ${lane.name}'s full transcript live`}
-                  aria-label={`Follow ${lane.name}`}
-                >
-                  <Maximize2 size={11} />
-                </button>
-                <button
-                  type="button"
-                  className="fleet-lane-stop"
-                  onClick={() => stopLane(fleet.session, lane.id)}
-                  title={`Stop ${lane.name} (the other agents keep going)`}
-                  aria-label={`Stop ${lane.name}`}
-                >
-                  <X size={11} />
-                </button>
-              </>
-            )}
-          </div>
-        ))}
-      </div>
-      {focused && <LaneTail tail={focused.tail} />}
-      {focused && focused.status === "running" && focused.id && (
-        <SteerBox
-          name={focused.name}
-          onSend={(text) => steerLane(fleet.session, focused.id, text)}
-        />
-      )}
-    </div>
-  );
-}
-
-/** One line to the watched lane: delivered at its next safe point, like a
- *  mid-turn message to the chat itself. */
-function SteerBox({ name, onSend }: { name: string; onSend: (text: string) => void }) {
-  const [text, setText] = useState("");
-  return (
-    <form
-      className="fleet-steer"
-      onSubmit={(e) => {
-        e.preventDefault();
-        const trimmed = text.trim();
-        if (!trimmed) return;
-        onSend(trimmed);
-        setText("");
-      }}
-    >
-      <input
-        id={`fleet-steer-${name}`}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder={`Steer ${name}… (Enter)`}
-        aria-label={`Steer ${name}`}
-      />
-    </form>
-  );
-}
-
-function LaneGlyph({ lane }: { lane: FleetLane }) {
-  switch (lane.status) {
-    case "queued":
-      return <CircleDashed size={12} className="fleet-glyph queued" />;
-    case "running":
-      return <span className="fleet-glyph running" aria-label="running" />;
-    case "done":
-      return <Check size={12} className="fleet-glyph done" />;
-    case "failed":
-      return <X size={12} className="fleet-glyph failed" />;
-  }
-}
-
-/** The expanded lane's live output, auto-scrolled to the newest text. */
-function LaneTail({ tail }: { tail: string }) {
+function OutputTail({ text }: { text: string }) {
   const ref = useRef<HTMLPreElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [tail]);
-  return (
-    <pre className="fleet-tail" ref={ref}>
-      {tail || "…waiting for output"}
-    </pre>
-  );
+  const follow = useRef(true);
+  const [paused, setPaused] = useState(false);
+  useEffect(() => { if (follow.current && ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [text]);
+  return <div className="agent-hub-output">
+    <pre ref={ref} onScroll={() => {
+      const el = ref.current; if (!el) return;
+      follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      setPaused(!follow.current);
+    }}>{text || "Waiting for output…"}</pre>
+    {paused && <button className="agent-hub-latest" onClick={() => {
+      follow.current = true; setPaused(false); if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+    }}><ArrowDown size={12} /> Latest output</button>}
+  </div>;
 }

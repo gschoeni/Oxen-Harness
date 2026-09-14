@@ -202,6 +202,8 @@ struct Live {
     fleet: Arc<FleetHub>,
     /// Advances the fleet block's spinner glyphs on the turn ticker.
     fleet_frame: usize,
+    fleet_drafts: std::collections::HashMap<String, String>,
+    composer_target: String,
     /// Whether the last tick found a fleet on the hub: the tick after the
     /// last fleet leaves repaints once more, so the pinned block clears.
     fleet_shown: bool,
@@ -263,6 +265,8 @@ impl Live {
             compression_line: None,
             completion: None,
             model_items: None,
+            composer_target: FleetHub::global().lock().composer_target(),
+            fleet_drafts: Default::default(),
             fleet: FleetHub::global(),
             fleet_frame: 0,
             fleet_shown: false,
@@ -380,6 +384,7 @@ impl Live {
     /// the block static, so the composer stops rewriting it 9×/second for a
     /// picture that no longer changes; a fresh lane event repaints on its own.
     pub(super) fn tick_fleet(&mut self) -> bool {
+        let target_changed = self.sync_fleet_target();
         let (present, animating) = {
             let board = self.fleet.lock();
             let primary = board.primary();
@@ -399,7 +404,7 @@ impl Live {
         for line in notices {
             self.print_line(&line);
         }
-        animating || changed || announced
+        animating || changed || announced || target_changed
     }
 
     /// When the idle composer (which has no ticker) should wake to advance
@@ -417,16 +422,37 @@ impl Live {
     /// lane, alt+0 the overview — bare digits keep typing into the composer.
     /// Only consumes the key while a fleet is actually running.
     fn handle_fleet_key(&mut self, key: &KeyEvent) -> bool {
-        let mut board = self.fleet.lock();
-        let Some(state) = board.primary_mut() else {
-            return false;
+        let handled = {
+            let mut board = self.fleet.lock();
+            if board.navigate(key.code, key.modifiers) {
+                true
+            } else if let Some(state) = board.primary_mut() {
+                crate::fleet_ui::apply_fleet_key(
+                    state,
+                    key.code,
+                    key.modifiers,
+                    crate::fleet_ui::FleetKeys::Shared,
+                )
+            } else {
+                false
+            }
         };
-        crate::fleet_ui::apply_fleet_key(
-            state,
-            key.code,
-            key.modifiers,
-            crate::fleet_ui::FleetKeys::Shared,
-        )
+        if handled {
+            self.sync_fleet_target();
+        }
+        handled
+    }
+
+    fn sync_fleet_target(&mut self) -> bool {
+        let target = self.fleet.lock().composer_target();
+        if target == self.composer_target {
+            return false;
+        }
+        let old = std::mem::replace(&mut self.composer_target, target.clone());
+        self.fleet_drafts.insert(old, self.composer.text());
+        self.composer
+            .set_text(&self.fleet_drafts.remove(&target).unwrap_or_default());
+        true
     }
 
     // --- queue snapshot + focus -------------------------------------------
@@ -840,6 +866,29 @@ mod tests {
         assert!(hub.take_notices().is_empty(), "the tick drained the notice");
         assert!(l.fleet_tick_due().is_none());
         assert!(!l.tick_fleet());
+    }
+
+    #[test]
+    fn switching_agents_keeps_each_composer_draft() {
+        use crate::fleet_ui::{FleetHub, FleetState};
+        let mut l = live(80, 24);
+        let hub = Arc::new(FleetHub::default());
+        hub.install(
+            "drafts",
+            FleetState::new(&["scan".into(), "trace".into()], None),
+        );
+        l.fleet = hub;
+        l.composer.set_text("main message");
+        l.handle_fleet_key(&alt(KeyCode::Char('1')));
+        assert_eq!(l.composer.text(), "");
+        l.composer.set_text("scan direction");
+        l.handle_fleet_key(&alt(KeyCode::Right));
+        assert_eq!(l.composer.text(), "");
+        l.composer.set_text("trace direction");
+        l.handle_fleet_key(&alt(KeyCode::Left));
+        assert_eq!(l.composer.text(), "scan direction");
+        l.handle_fleet_key(&alt(KeyCode::Char('0')));
+        assert_eq!(l.composer.text(), "main message");
     }
 
     #[test]

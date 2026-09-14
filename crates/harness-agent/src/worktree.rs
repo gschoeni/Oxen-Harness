@@ -13,8 +13,10 @@
 //! merged automatically — the parent agent decides what to keep, which is the
 //! whole reason to isolate rather than to serialize.
 
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// One lane's private checkout.
@@ -29,11 +31,18 @@ pub struct LaneWorktree {
     repo: PathBuf,
     /// Parent shared by this fleet's lane checkouts. The last lane removes it.
     scratch_root: PathBuf,
+    baseline: String,
+    preserve: AtomicBool,
 }
 
 impl LaneWorktree {
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Keep a checkout whose changes could not be safely recorded.
+    pub fn preserve(&self) {
+        self.preserve.store(true, Ordering::Relaxed);
     }
 
     fn scope(&self) -> &Path {
@@ -49,6 +58,10 @@ impl Drop for LaneWorktree {
     /// Worktrees are process-lifetime scratch space; a crashed run leaves them
     /// for `git worktree prune`, which is exactly what that command is for.
     fn drop(&mut self) {
+        if self.preserve.load(Ordering::Relaxed) {
+            tracing::warn!(path = %self.path.display(), "preserving unrecorded subagent work");
+            return;
+        }
         let _ = git(
             &self.repo,
             &[
@@ -74,60 +87,73 @@ pub struct LaneChanges {
 /// Create `count` detached worktrees containing `workspace`, named after
 /// `label`.
 ///
-/// Returns `None` when the workspace isn't a git repository or git refuses —
-/// callers fall back to the shared workspace rather than failing the fleet,
-/// since isolation is a safety upgrade, not a precondition.
-pub fn create(workspace: &Path, label: &str, count: usize) -> Option<Vec<LaneWorktree>> {
-    let workspace = workspace.canonicalize().ok()?;
+/// Fails if Git cannot create an isolated copy of the current workspace.
+pub fn create(workspace: &Path, label: &str, count: usize) -> std::io::Result<Vec<LaneWorktree>> {
+    let workspace = workspace.canonicalize()?;
     let repo = repository_root(&workspace)?;
-    let prefix = workspace.strip_prefix(&repo).ok()?;
+    let prefix = workspace
+        .strip_prefix(&repo)
+        .map_err(std::io::Error::other)?;
+    create_at(&repo, prefix, label, count, "HEAD", true)
+}
+
+fn create_at(
+    repo: &Path,
+    prefix: &Path,
+    label: &str,
+    count: usize,
+    revision: &str,
+    carry: bool,
+) -> std::io::Result<Vec<LaneWorktree>> {
     // Pid plus a process-wide counter: two fleets running at once (two chat
     // sessions, or a fleet inside a review) must not land on each other's
     // lane directories — the first run's worktrees would be clobbered by the
     // second's, silently.
     static INSTANCE: AtomicU64 = AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
-        "oxen-harness-lanes-{}-{}-{label}",
+        "oxen-harness-lanes-{}-{}-{}-{label}",
         std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
         INSTANCE.fetch_add(1, Ordering::Relaxed)
     ));
     let mut lanes = Vec::with_capacity(count);
     for index in 0..count {
         let checkout = root.join(format!("lane-{index}"));
-        // A stale directory from a crashed run would make `worktree add` fail.
-        let _ = std::fs::remove_dir_all(&checkout);
-        let added = git(
-            &repo,
+        capture(
+            repo,
             &[
                 "worktree",
                 "add",
                 "--detach",
                 &checkout.to_string_lossy(),
-                "HEAD",
+                revision,
             ],
-        );
-        if !added {
-            // Partial success is worse than none: the lanes that did get a
-            // worktree are dropped (and removed) with `lanes`.
-            return None;
-        }
-        let lane = LaneWorktree {
+        )?;
+        let mut lane = LaneWorktree {
             path: checkout.join(prefix),
             checkout,
-            repo: repo.clone(),
+            repo: repo.to_path_buf(),
             scratch_root: root.clone(),
+            baseline: String::new(),
+            preserve: AtomicBool::new(false),
         };
         // `worktree add HEAD` checks out the last commit, not the tree the
         // user is actually looking at. A lane asked to fix code that was just
         // written would not find it, and would return a patch against a state
         // nobody has — so the uncommitted work comes along.
-        carry_uncommitted(&repo, &lane.checkout, prefix);
-        if std::fs::create_dir_all(&lane.path).is_err() {
-            return None;
+        if carry {
+            carry_uncommitted(repo, &lane.checkout, prefix)?;
         }
+        std::fs::create_dir_all(&lane.path)?;
+        lane.baseline = capture(&lane.checkout, &["rev-parse", "HEAD"])?
+            .trim()
+            .to_string();
         lanes.push(lane);
     }
-    Some(lanes)
+    Ok(lanes)
 }
 
 /// Reproduce the parent's uncommitted state in a fresh worktree: tracked
@@ -138,52 +164,58 @@ pub fn create(workspace: &Path, label: &str, count: usize) -> Option<Vec<LaneWor
 /// The commit lands on the worktree's detached HEAD, so no branch in the
 /// parent repository is touched.
 ///
-/// Best-effort by design — a lane that starts from HEAD is still useful, and
-/// failing the whole fleet because one binary file wouldn't patch would not be.
-fn carry_uncommitted(repo: &Path, checkout: &Path, prefix: &Path) {
+/// Any copy failure aborts construction so a lane never starts from stale files.
+fn carry_uncommitted(repo: &Path, checkout: &Path, prefix: &Path) -> std::io::Result<()> {
     let scope = pathspec(prefix);
-    if let Some(diff) = capture(repo, &["diff", "HEAD", "--binary", "--", &scope]) {
-        if !diff.trim().is_empty() {
-            let patch = checkout.join(".oxen-harness-carry.patch");
-            if std::fs::write(&patch, &diff).is_ok() {
-                let _ = git(checkout, &["apply", &patch.to_string_lossy()]);
-                let _ = std::fs::remove_file(&patch);
-            }
-        }
+    let diff = capture(repo, &["diff", "HEAD", "--binary", "--", &scope])?;
+    if !diff.trim().is_empty() {
+        let patch = checkout.join(".oxen-harness-carry.patch");
+        std::fs::write(&patch, &diff)?;
+        let applied = capture(checkout, &["apply", &patch.to_string_lossy()]);
+        std::fs::remove_file(&patch)?;
+        applied?;
     }
-    let Some(untracked) = capture(
+    let untracked = capture(
         repo,
         &[
             "ls-files",
+            "-z",
             "--others",
             "--exclude-standard",
             "--full-name",
             "--",
             &scope,
         ],
-    ) else {
-        return;
-    };
-    for rel in untracked.lines().filter(|l| !l.trim().is_empty()) {
+    )?;
+    for rel in untracked.split('\0').filter(|l| !l.is_empty()) {
         let (from, to) = (repo.join(rel), checkout.join(rel));
         if let Some(parent) = to.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent)?;
         }
-        let _ = std::fs::copy(&from, &to);
+        #[cfg(unix)]
+        if from.symlink_metadata()?.file_type().is_symlink() {
+            std::os::unix::fs::symlink(std::fs::read_link(&from)?, &to)?;
+            continue;
+        }
+        std::fs::copy(&from, &to)?;
     }
-    baseline(checkout, prefix);
+    baseline(checkout, prefix)
 }
 
 /// Commit whatever the lane starts with, so `changes` reports only what the
 /// lane did. Identity is supplied inline: a repository without `user.email`
 /// configured would otherwise refuse the commit and every lane would report
 /// the user's own edits as its own.
-fn baseline(checkout: &Path, prefix: &Path) {
+fn baseline(checkout: &Path, prefix: &Path) -> std::io::Result<()> {
     let scope = pathspec(prefix);
-    let _ = git(checkout, &["add", "-A", "--", &scope]);
-    let _ = git(
+    capture(checkout, &["add", "-A", "--", &scope])?;
+    capture(
         checkout,
         &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
             "-c",
             "user.email=agent@oxen-harness.local",
             "-c",
@@ -194,7 +226,8 @@ fn baseline(checkout: &Path, prefix: &Path) {
             "-m",
             "lane baseline (the working tree this lane started from)",
         ],
-    );
+    )?;
+    Ok(())
 }
 
 /// What a lane changed in its worktree, or `None` when it changed nothing.
@@ -202,29 +235,29 @@ fn baseline(checkout: &Path, prefix: &Path) {
 /// Untracked files are staged first so new files appear in the patch — a lane
 /// that adds a module and never mentions it would otherwise report "no
 /// changes" while its work sat invisible in a temp directory.
-pub fn changes(lane: &LaneWorktree) -> Option<LaneChanges> {
+pub fn changes(lane: &LaneWorktree) -> std::io::Result<Option<LaneChanges>> {
     let scope = lane.scope().to_string_lossy();
-    let _ = git(&lane.checkout, &["add", "-A", "--", &scope]);
+    capture(&lane.checkout, &["add", "-A", "--", &scope])?;
     let summary = capture(
         &lane.checkout,
-        &["diff", "--cached", "--stat", "--", &scope],
+        &["diff", "--cached", &lane.baseline, "--stat", "--", &scope],
     )?;
     if summary.trim().is_empty() {
-        return None;
+        return Ok(None);
     }
     let patch = capture(
         &lane.checkout,
-        &["diff", "--cached", "--binary", "--", &scope],
+        &["diff", "--cached", &lane.baseline, "--binary", "--", &scope],
     )?;
-    Some(LaneChanges {
+    Ok(Some(LaneChanges {
         patch,
         summary: summary.trim().to_string(),
-    })
+    }))
 }
 
-fn repository_root(path: &Path) -> Option<PathBuf> {
+fn repository_root(path: &Path) -> std::io::Result<PathBuf> {
     let root = capture(path, &["rev-parse", "--show-toplevel"])?;
-    PathBuf::from(root.trim()).canonicalize().ok()
+    PathBuf::from(root.trim()).canonicalize()
 }
 
 fn pathspec(prefix: &Path) -> std::borrow::Cow<'_, str> {
@@ -243,15 +276,69 @@ fn git(cwd: &Path, args: &[&str]) -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
-fn capture(cwd: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+fn capture(cwd: &Path, args: &[&str]) -> std::io::Result<String> {
+    let out = Command::new("git").args(args).current_dir(cwd).output()?;
+    if !out.status.success() {
+        return Err(std::io::Error::other(format!(
+            "git {}: {}",
+            args.first().unwrap_or(&""),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    String::from_utf8(out.stdout).map_err(std::io::Error::other)
+}
+
+/// A recoverable isolated workspace. The ref pins the baseline across Git GC;
+/// the patch is stored with the lane, independent of the overflow cache.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeSnapshot {
+    pub repository: PathBuf,
+    pub prefix: PathBuf,
+    pub baseline_ref: String,
+    pub patch: String,
+}
+
+impl WorktreeSnapshot {
+    pub fn capture(lane: &LaneWorktree, id: &str) -> std::io::Result<Self> {
+        let repository = PathBuf::from(
+            capture(
+                &lane.checkout,
+                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            )?
+            .trim(),
+        );
+        let baseline_ref = format!("refs/oxen-harness/lanes/{id}");
+        capture(&repository, &["update-ref", &baseline_ref, &lane.baseline])?;
+        Ok(Self {
+            repository,
+            prefix: lane
+                .path
+                .strip_prefix(&lane.checkout)
+                .map_err(std::io::Error::other)?
+                .to_path_buf(),
+            baseline_ref,
+            patch: changes(lane)?.map(|c| c.patch).unwrap_or_default(),
+        })
+    }
+
+    pub fn restore(&self) -> std::io::Result<LaneWorktree> {
+        let mut lanes = create_at(
+            &self.repository,
+            &self.prefix,
+            "resume",
+            1,
+            &self.baseline_ref,
+            false,
+        )?;
+        let lane = lanes.pop().expect("one checkout requested");
+        if !self.patch.is_empty() {
+            let file = lane.scratch_root.join("restore.patch");
+            std::fs::write(&file, &self.patch)?;
+            capture(&lane.checkout, &["apply", &file.to_string_lossy()])?;
+            std::fs::remove_file(file)?;
+        }
+        Ok(lane)
+    }
 }
 
 #[cfg(test)]
@@ -302,7 +389,7 @@ mod tests {
         std::fs::write(lanes[0].path().join("main.rs"), "fn main() { changed() }\n").unwrap();
         std::fs::write(lanes[0].path().join("added.rs"), "pub fn extra() {}\n").unwrap();
 
-        let changes = changes(&lanes[0]).expect("changes");
+        let changes = changes(&lanes[0]).unwrap().expect("changes");
 
         assert!(changes.patch.contains("changed()"), "{}", changes.patch);
         // A new file the lane never mentions must not vanish silently.
@@ -353,7 +440,7 @@ mod tests {
         )
         .unwrap();
 
-        let changes = changes(&lanes[0]).expect("binary change");
+        let changes = changes(&lanes[0]).unwrap().expect("binary change");
 
         assert!(
             changes.patch.contains("GIT binary patch"),
@@ -389,7 +476,7 @@ mod tests {
         );
         // And the carrier patch must not be left behind as a change of its own.
         assert!(
-            changes(&lanes[0]).is_none(),
+            changes(&lanes[0]).unwrap().is_none(),
             "a fresh lane has changed nothing"
         );
     }
@@ -398,7 +485,7 @@ mod tests {
     fn a_lane_that_changed_nothing_reports_nothing() {
         let dir = repo();
         let lanes = create(dir.path(), "test", 1).unwrap();
-        assert!(changes(&lanes[0]).is_none());
+        assert!(changes(&lanes[0]).unwrap().is_none());
     }
 
     #[test]
@@ -414,6 +501,6 @@ mod tests {
     #[test]
     fn a_directory_that_is_not_a_repository_declines_rather_than_failing() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(create(dir.path(), "test", 1).is_none());
+        assert!(create(dir.path(), "test", 1).is_err());
     }
 }

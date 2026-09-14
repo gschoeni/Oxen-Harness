@@ -9,7 +9,7 @@
 //! budget resets when a root turn starts, so a tree is one turn's worth of
 //! delegated work.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use serde::Serialize;
 
@@ -43,18 +43,20 @@ pub struct TreeUsage {
     pub spawns: u32,
 }
 
-/// The shared wallet (see the module docs). Cheap to share: three atomics.
+/// The shared wallet (see the module docs). Admissions and resets are serialized under one lock.
 #[derive(Debug)]
 pub struct TreeBudget {
     limits: TreeLimits,
-    tokens: AtomicU64,
-    requests: AtomicU32,
-    spawns: AtomicU32,
-    /// Fleets running right now. A `wait: false` fleet outlives the turn
-    /// that spawned it, and a reset landing mid-flight would hand it a fresh
-    /// wallet; the reset waits until the last fleet ends.
-    inflight: AtomicU32,
-    pending_reset: AtomicBool,
+    state: Mutex<BudgetState>,
+}
+
+#[derive(Debug, Default)]
+struct BudgetState {
+    tokens: u64,
+    requests: u32,
+    spawns: u32,
+    inflight: u32,
+    pending_reset: bool,
 }
 
 impl Default for TreeBudget {
@@ -67,106 +69,84 @@ impl TreeBudget {
     pub fn new(limits: TreeLimits) -> Self {
         Self {
             limits,
-            tokens: AtomicU64::new(0),
-            requests: AtomicU32::new(0),
-            spawns: AtomicU32::new(0),
-            inflight: AtomicU32::new(0),
-            pending_reset: AtomicBool::new(false),
+            state: Mutex::default(),
         }
     }
-
     pub fn limits(&self) -> TreeLimits {
         self.limits
     }
-
-    /// A new root turn: the tree starts over — once no fleet is in flight.
     pub fn reset(&self) {
-        if self.inflight.load(Ordering::SeqCst) > 0 {
-            self.pending_reset.store(true, Ordering::SeqCst);
-            return;
+        let mut state = self.state.lock().expect("tree budget poisoned");
+        if state.inflight > 0 {
+            state.pending_reset = true;
+        } else {
+            *state = BudgetState::default();
         }
-        self.clear();
     }
-
-    fn clear(&self) {
-        self.tokens.store(0, Ordering::Relaxed);
-        self.requests.store(0, Ordering::Relaxed);
-        self.spawns.store(0, Ordering::Relaxed);
-        self.pending_reset.store(false, Ordering::SeqCst);
-    }
-
-    /// A fleet is starting; the wallet stays as it is until it ends.
     pub fn begin_fleet(&self) {
-        self.inflight.fetch_add(1, Ordering::SeqCst);
+        self.state.lock().expect("tree budget poisoned").inflight += 1;
     }
-
-    /// A fleet ended; a reset a root turn asked for meanwhile lands now.
     pub fn end_fleet(&self) {
-        let remaining = self
-            .inflight
-            .fetch_sub(1, Ordering::SeqCst)
-            .saturating_sub(1);
-        if remaining == 0 && self.pending_reset.load(Ordering::SeqCst) {
-            self.clear();
+        let mut state = self.state.lock().expect("tree budget poisoned");
+        state.inflight = state.inflight.saturating_sub(1);
+        if state.inflight == 0 && state.pending_reset {
+            *state = BudgetState::default();
         }
     }
-
-    /// Count one model call of `tokens` by a lane.
-    pub fn charge(&self, tokens: u64) {
-        self.tokens.fetch_add(tokens, Ordering::Relaxed);
-        self.requests.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Reserve `count` lanes, or say why not.
-    pub fn admit_spawn(&self, count: u32) -> Result<(), String> {
-        if let Some(reason) = self.exhausted() {
+    /// Admit a model round atomically before sending it, including leaf calls.
+    pub fn reserve_request(&self) -> Result<(), String> {
+        let mut state = self.state.lock().expect("tree budget poisoned");
+        if let Some(reason) = self.reason(&state) {
             return Err(reason);
         }
-        let mut current = self.spawns.load(Ordering::Relaxed);
-        loop {
-            let next = current.saturating_add(count);
-            if next > self.limits.max_spawns {
-                return Err(format!(
-                    "the tree budget allows {} agents per turn and {} have been spawned; \
-                     finish with what they returned or ask for fewer",
-                    self.limits.max_spawns, current
-                ));
-            }
-            match self.spawns.compare_exchange_weak(
-                current,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(actual) => current = actual,
-            }
-        }
+        state.requests += 1;
+        Ok(())
     }
-
-    /// Why a lane should stop now, if the tree has spent its tokens or calls.
-    pub fn exhausted(&self) -> Option<String> {
-        let usage = self.usage();
-        if usage.tokens >= self.limits.max_tokens {
-            return Some(format!(
+    pub fn charge_tokens(&self, tokens: u64) {
+        let mut state = self.state.lock().expect("tree budget poisoned");
+        state.tokens = state.tokens.saturating_add(tokens);
+    }
+    /// Account for a caller that already made a request without a reservation.
+    pub fn charge(&self, tokens: u64) {
+        let mut state = self.state.lock().expect("tree budget poisoned");
+        state.tokens = state.tokens.saturating_add(tokens);
+        state.requests += 1;
+    }
+    pub fn admit_spawn(&self, count: u32) -> Result<(), String> {
+        let mut state = self.state.lock().expect("tree budget poisoned");
+        if let Some(reason) = self.reason(&state) {
+            return Err(reason);
+        }
+        if state.spawns.saturating_add(count) > self.limits.max_spawns {
+            return Err(format!("the tree budget allows {} agents per turn and {} have been spawned; finish with what they returned or ask for fewer", self.limits.max_spawns, state.spawns));
+        }
+        state.spawns += count;
+        Ok(())
+    }
+    fn reason(&self, state: &BudgetState) -> Option<String> {
+        if state.tokens >= self.limits.max_tokens {
+            Some(format!(
                 "the agents of this turn have spent their shared budget of {} tokens",
                 self.limits.max_tokens
-            ));
-        }
-        if usage.requests >= self.limits.max_requests {
-            return Some(format!(
+            ))
+        } else if state.requests >= self.limits.max_requests {
+            Some(format!(
                 "the agents of this turn have made their shared budget of {} model calls",
                 self.limits.max_requests
-            ));
+            ))
+        } else {
+            None
         }
-        None
     }
-
+    pub fn exhausted(&self) -> Option<String> {
+        self.reason(&self.state.lock().expect("tree budget poisoned"))
+    }
     pub fn usage(&self) -> TreeUsage {
+        let state = self.state.lock().expect("tree budget poisoned");
         TreeUsage {
-            tokens: self.tokens.load(Ordering::Relaxed),
-            requests: self.requests.load(Ordering::Relaxed),
-            spawns: self.spawns.load(Ordering::Relaxed),
+            tokens: state.tokens,
+            requests: state.requests,
+            spawns: state.spawns,
         }
     }
 }

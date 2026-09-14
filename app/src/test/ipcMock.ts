@@ -529,6 +529,9 @@ export const newTheme = vi.fn(async () => sampleTheme);
 
 /** Restore default implementations + clear call history and event subscribers. */
 export function resetIpc() {
+  agentPatch.mockReset().mockResolvedValue("");
+  applyAgentPatch.mockReset().mockResolvedValue(undefined);
+  followUpAgent.mockReset().mockResolvedValue("done");
   for (const k of Object.keys(handlers)) delete handlers[k];
   sessionInfo.mockReset().mockResolvedValue(sampleSession);
   listSessions.mockReset().mockResolvedValue([]);
@@ -719,3 +722,7 @@ export function resetIpc() {
     onProjectOpen,
   ].forEach((fn) => fn.mockClear());
 }
+
+export const agentPatch = vi.fn().mockResolvedValue("");
+export const followUpAgent = vi.fn().mockResolvedValue("Done");
+export const applyAgentPatch = vi.fn().mockResolvedValue(undefined);

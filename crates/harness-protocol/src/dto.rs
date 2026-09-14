@@ -105,6 +105,16 @@ pub struct InterjectRequest {
 pub struct AgentSummary {
     /// The lane's id (its session id).
     pub id: String,
+    #[serde(default)]
+    pub parent: String,
+    #[serde(default)]
+    pub depth: usize,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub stop: Option<String>,
+    #[serde(default)]
+    pub has_patch: bool,
     pub label: String,
     pub fleet: String,
     /// `running`, `done`, `partial`, or `failed`.

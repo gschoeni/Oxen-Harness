@@ -121,3 +121,11 @@ Context is finite. Load what's relevant, not everything.
 ## Maintenance
 
 When adding a new file to the project, update this document map.
+
+## Subagent hardening (2026-09-13)
+
+- `plans/subagent-hardening.md` — review findings, acceptance checks, and verification record.
+- `crates/harness-agent/src/lane_lifecycle.rs` — lane registration cleanup and durable result/workspace finalization.
+- `crates/harness-agent/tests/subagent_regressions.rs` — cancellation, construction cleanup, persistence ordering, request admission, and worktree recovery regressions.
+- `crates/harness-host/src/agents.rs` — recursive agent history, follow-up, and reviewed patch access/application shared by transports.
+- `app/src/features/chat/agents.css` — minimal Agents panel presentation across themes and narrow windows.

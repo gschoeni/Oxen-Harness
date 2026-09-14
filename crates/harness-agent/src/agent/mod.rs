@@ -87,7 +87,7 @@ pub struct Agent {
     /// not this agent's own (see [`Agent::set_usage_session`]).
     usage_session: Option<String>,
     /// Model rounds the most recent turn took (see [`Agent::rounds_last_turn`]).
-    rounds_last_turn: u32,
+    pub(crate) rounds_last_turn: u32,
     /// Whether the most recent turn ended because a budget (session or
     /// tree) was spent rather than because the model finished.
     stopped_by_budget: bool,
@@ -95,6 +95,7 @@ pub struct Agent {
     /// `spawn_agents` call runs, so a `fork: true` lane can inherit it
     /// (see [`Agent::set_fork_slot`]).
     fork_slot: Option<crate::fleet_tool::ForkSlot>,
+    pub(crate) lane_lifecycle: Option<crate::lane_lifecycle::LaneLifecycle>,
     /// Where attachments are persisted + resolved, derived from
     /// [`AgentConfig::attachment_root`]. `None` inlines attachments instead.
     attachments: Option<AttachmentStore>,
@@ -196,6 +197,18 @@ pub(crate) struct PrefireSummary {
 }
 
 impl Agent {
+    pub(crate) fn history_store(&self) -> &Arc<HistoryStore> {
+        &self.store
+    }
+
+    pub(crate) fn make_tool_less(&mut self, system: &str) {
+        self.tools = ToolRegistry::new();
+        self.invalidate_tool_cache();
+        self.config.system_prompt = Some(system.to_string());
+        self.messages.retain(|m| m.role != "system");
+        self.messages
+            .insert(0, ChatMessage::system(system.to_string()));
+    }
     /// Construct an agent. Seeds the transcript with the system prompt (if any)
     /// and persists it to the session.
     pub fn new(
@@ -248,6 +261,7 @@ impl Agent {
             rounds_last_turn: 0,
             stopped_by_budget: false,
             fork_slot: None,
+            lane_lifecycle: None,
             attachments,
             tokens_used: 0,
             prompt_tokens_used: 0,
@@ -318,6 +332,7 @@ impl Agent {
             rounds_last_turn: 0,
             stopped_by_budget: false,
             fork_slot: None,
+            lane_lifecycle: None,
             attachments,
             tokens_used,
             // The split input/output counters price only tokens we actually
@@ -806,7 +821,7 @@ impl Agent {
         // own calls are the session budget's business.
         if self.config.depth > 0 {
             if let Some(tree) = &self.config.tree {
-                tree.charge(total as u64);
+                tree.charge_tokens(total as u64);
             }
         }
     }

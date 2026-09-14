@@ -97,6 +97,12 @@ pub struct SubagentResult {
     pub patch: Option<String>,
     pub tokens: usize,
     pub rounds: u32,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    #[serde(default)]
+    pub has_patch: bool,
     /// Commands the lane's gate refused (a subagent cannot ask for
     /// approval); the parent or user runs them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -156,6 +162,9 @@ impl SubagentResult {
             patch: None,
             tokens: outcome.tokens_used,
             rounds: outcome.rounds,
+            model: String::new(),
+            elapsed_ms: 0,
+            has_patch: false,
             denied: outcome.denied.clone(),
         }
     }
@@ -176,6 +185,9 @@ impl SubagentResult {
             patch: None,
             tokens: 0,
             rounds: 1,
+            model: String::new(),
+            elapsed_ms: 0,
+            has_patch: false,
             denied: Vec::new(),
         }
     }
@@ -195,6 +207,9 @@ impl SubagentResult {
             patch: None,
             tokens: 0,
             rounds: 0,
+            model: String::new(),
+            elapsed_ms: 0,
+            has_patch: false,
             denied: Vec::new(),
         }
     }
@@ -293,6 +308,7 @@ impl Agent {
     where
         F: FnMut(&AgentEvent),
     {
+        let mut total_rounds = self.rounds_last_turn();
         let required: Vec<&str> = schema
             .get("required")
             .and_then(|r| r.as_array())
@@ -306,6 +322,7 @@ impl Agent {
                     .filter(|key| object.get(*key).is_none())
                     .collect();
                 if missing.is_empty() {
+                    self.rounds_last_turn = total_rounds;
                     return Ok((text, Some(object)));
                 }
             }
@@ -326,7 +343,9 @@ impl Agent {
                     &mut on_event,
                 )
                 .await?;
+            total_rounds += self.rounds_last_turn();
         }
+        self.rounds_last_turn = total_rounds;
         Ok((text, None))
     }
 
@@ -392,6 +411,17 @@ pub struct AgentTree {
 }
 
 impl AgentTree {
+    pub fn try_register(&self, lane: LiveLane) -> Result<(), String> {
+        let mut live = self.live.lock().expect("agent tree poisoned");
+        if live.contains_key(&lane.id) {
+            return Err(format!("agent {} is already running", lane.id));
+        }
+        live.insert(lane.id.clone(), lane);
+        Ok(())
+    }
+    pub fn finish_lane(&self, id: &str) {
+        self.live.lock().expect("agent tree poisoned").remove(id);
+    }
     pub fn register(&self, lane: LiveLane) {
         self.live
             .lock()
@@ -461,6 +491,7 @@ mod tests {
 
     fn outcome(text: Result<&str, AgentError>) -> SubagentOutcome {
         SubagentOutcome {
+            record: None,
             label: "scan".into(),
             session: "lane-1".into(),
             result: text.map(str::to_owned),

@@ -53,7 +53,14 @@ pub const MAX_LIVE_FLEETS: usize = 3;
 /// never collide.
 pub(crate) fn next_fleet_id() -> String {
     static NEXT: AtomicUsize = AtomicUsize::new(1);
-    format!("fleet-{}", NEXT.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "fleet-{:x}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// Builds the detached agents a fleet runs on, from the session agent's
@@ -89,17 +96,20 @@ pub struct FleetSpawner {
     /// How many fleets are in flight — a `wait: false` fleet can overlap a
     /// later call, and a session holds at most [`MAX_LIVE_FLEETS`].
     live: Arc<AtomicUsize>,
+    reserved: Arc<AtomicUsize>,
     /// The host's lanes display, once a `FleetTool` is built on this
     /// spawner; a lane that may spawn its own fleet renders through it too.
     sink: StdMutex<Option<Arc<dyn FleetSink>>>,
     /// `map_agents` rows already answered this session, by
     /// (item, task, schema) — a stopped run re-issued only runs what's left.
     /// Mirrored to the session's state so it survives a restart.
-    memo: StdMutex<std::collections::HashMap<u64, SubagentResult>>,
-    memo_loaded: std::sync::atomic::AtomicBool,
+    memo: Arc<StdMutex<std::collections::HashMap<u64, SubagentResult>>>,
+    memo_loaded: Arc<std::sync::atomic::AtomicBool>,
     /// The parent's transcript as of its latest `spawn_agents` call, for
     /// lanes spawned with `fork: true` (see [`ForkSlot`]).
     fork: ForkSlot,
+    workspace_lane: Option<Arc<crate::worktree::LaneWorktree>>,
+    agent_policy: StdMutex<Option<std::collections::BTreeMap<String, Option<String>>>>,
 }
 
 /// Where a session's agent publishes its transcript right before a
@@ -116,6 +126,154 @@ struct Endpoint {
 }
 
 impl FleetSpawner {
+    /// Freeze the session, endpoint, and stop token before scheduling background work.
+    pub(crate) fn operation(&self) -> Arc<Self> {
+        let (_, config) = self.endpoint_snapshot();
+        let cancel = self
+            .cancel
+            .lock()
+            .expect("fleet cancel slot poisoned")
+            .clone();
+        let mut child = self.child(
+            &config,
+            &self.session().unwrap_or_default(),
+            &cancel,
+            &self.tools,
+            self.workspace_lane.clone(),
+        );
+        let operation = Arc::get_mut(&mut child).expect("fresh operation");
+        operation.live = self.live.clone();
+        operation.reserved = self.reserved.clone();
+        operation.memo = self.memo.clone();
+        operation.memo_loaded = self.memo_loaded.clone();
+        operation.fork = self.fork.clone();
+        child
+    }
+
+    /// User-initiated follow-up has a fresh stop token, even if the preceding
+    /// chat turn was cancelled. The live registry still excludes double runs.
+    pub async fn follow_up(self: &Arc<Self>, id: &str, message: &str) -> Result<String, ToolError> {
+        self.owned_lane_store(id)
+            .map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
+        if message.trim().is_empty() {
+            return Err(ToolError::InvalidArguments(
+                "write a follow-up message".into(),
+            ));
+        }
+        let (_, config) = self.endpoint_snapshot();
+        let session = self
+            .session()
+            .ok_or_else(|| ToolError::Execution("no session".into()))?;
+        let mut spawner = self.child(
+            &config,
+            &session,
+            &CancellationToken::new(),
+            &self.tools,
+            self.workspace_lane.clone(),
+        );
+        let fresh = Arc::get_mut(&mut spawner).expect("new follow-up spawner");
+        fresh.live = self.live.clone();
+        fresh.reserved = self.reserved.clone();
+        let sink = self.sink().unwrap_or_else(|| Arc::new(QuietFleetSink));
+        crate::SendToAgentTool::new(spawner, sink)
+            .invoke(serde_json::json!({ "agent": id, "message": message }))
+            .await
+    }
+
+    pub fn patch(&self, id: &str) -> Result<String, ToolError> {
+        let store = self
+            .owned_lane_store(id)
+            .map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
+        Ok(store
+            .session_state::<crate::worktree::WorktreeSnapshot>(
+                id,
+                crate::lane_lifecycle::WORKSPACE_STATE,
+            )
+            .map_err(|e| ToolError::Execution(e.to_string()))?
+            .map(|s| s.patch)
+            .unwrap_or_default())
+    }
+    /// One registration path for hosts and descendants. Hosts apply their
+    /// preferences, then snapshot the surviving family with `set_agent_policy`.
+    pub fn register_tools(self: &Arc<Self>, tools: &mut ToolRegistry, sink: Arc<dyn FleetSink>) {
+        self.set_sink(sink.clone());
+        tools.register_typed(crate::AskModelTool::new(self.clone()));
+        if self.endpoint_snapshot().1.may_spawn() {
+            let mut fleet = FleetTool::new(self.clone(), sink.clone());
+            let mut map = crate::MapAgentsTool::new(self.clone(), sink.clone());
+            // Descendants return their children's results before settling their own lane.
+            if self.endpoint_snapshot().1.depth == 0 {
+                fleet = fleet.with_asides(tools.asides());
+                map = map.with_asides(tools.asides());
+            }
+            tools.register_typed(fleet);
+            tools.register_typed(map);
+            tools.register_typed(crate::SendToAgentTool::new(self.clone(), sink));
+            tools.register_typed(crate::ReadAgentTool::new(self.clone()));
+        }
+        if let Some(policy) = &*self.agent_policy.lock().expect("agent policy poisoned") {
+            for name in agent_tool_names() {
+                match policy.get(name) {
+                    None => {
+                        tools.remove(name);
+                    }
+                    Some(Some(description)) => tools.set_description_override(name, description),
+                    Some(None) => {}
+                }
+            }
+        }
+    }
+
+    pub fn set_agent_policy(&self, tools: &ToolRegistry) {
+        *self.agent_policy.lock().expect("agent policy poisoned") = Some(
+            agent_tool_names()
+                .into_iter()
+                .filter(|name| tools.get(name).is_some())
+                .map(|name| {
+                    (
+                        name.to_string(),
+                        tools.description_override(name).map(str::to_string),
+                    )
+                })
+                .collect(),
+        );
+    }
+
+    pub(crate) async fn run_leaf_tasks(
+        self: &Arc<Self>,
+        tasks: Vec<SubagentTask>,
+        parallel: usize,
+        system: &str,
+    ) -> Result<Vec<SubagentResult>, ToolError> {
+        let _admission = self.admit_fleet(0)?;
+        self.run_leaf_tasks_admitted(tasks, parallel, system).await
+    }
+
+    pub(crate) async fn run_leaf_tasks_admitted(
+        self: &Arc<Self>,
+        tasks: Vec<SubagentTask>,
+        parallel: usize,
+        system: &str,
+    ) -> Result<Vec<SubagentResult>, ToolError> {
+        let fleet = next_fleet_id();
+        let labels: Vec<_> = tasks.iter().map(|t| t.label.clone()).collect();
+        let sink = self.sink().unwrap_or_else(|| Arc::new(QuietFleetSink));
+        let (results, _) = self
+            .run_lanes(
+                &sink,
+                &fleet,
+                tasks,
+                FleetLimits::with_concurrency(parallel),
+                |index: usize, cancel| {
+                    let mut agent = self.build_agent(&labels[index], &fleet, None, cancel)?;
+                    agent.make_tool_less(system);
+                    Ok(agent)
+                },
+            )
+            .await?;
+        Ok(results)
+    }
+
     pub fn new(client: OxenClient, tools: ToolRegistry, mut config: AgentConfig) -> Self {
         // Every lane of a turn spends from one wallet; a host that didn't
         // hand one in gets the defaults.
@@ -131,10 +289,13 @@ impl FleetSpawner {
             session: StdMutex::new(None),
             tree: Arc::default(),
             live: Arc::default(),
+            reserved: Arc::default(),
             sink: StdMutex::new(None),
-            memo: StdMutex::new(std::collections::HashMap::new()),
-            memo_loaded: std::sync::atomic::AtomicBool::new(false),
+            memo: Arc::default(),
+            memo_loaded: Arc::default(),
             fork: Arc::default(),
+            workspace_lane: None,
+            agent_policy: StdMutex::new(None),
         }
     }
 
@@ -242,6 +403,8 @@ impl FleetSpawner {
         lane_config: &AgentConfig,
         lane_session: &str,
         cancel: &CancellationToken,
+        tools: &ToolRegistry,
+        workspace_lane: Option<Arc<crate::worktree::LaneWorktree>>,
     ) -> Arc<FleetSpawner> {
         let client = self
             .endpoint
@@ -249,11 +412,21 @@ impl FleetSpawner {
             .expect("fleet endpoint poisoned")
             .client
             .clone();
-        let mut child = FleetSpawner::new(client, self.tools.clone(), lane_config.clone());
+        let mut child = FleetSpawner::new(client, tools.clone(), lane_config.clone());
         *child
             .workspace_root
             .get_mut()
-            .expect("fleet workspace poisoned") = self.root();
+            .expect("fleet workspace poisoned") = workspace_lane
+            .as_ref()
+            .map(|l| l.path().to_path_buf())
+            .or_else(|| self.root());
+        child.workspace_lane = workspace_lane;
+        child.agent_policy = StdMutex::new(
+            self.agent_policy
+                .lock()
+                .expect("agent policy poisoned")
+                .clone(),
+        );
         child.store = self.store.clone();
         child.tree = self.tree.clone();
         *child
@@ -275,24 +448,13 @@ impl FleetSpawner {
         lane_config: &AgentConfig,
         lane_session: &str,
         cancel: &CancellationToken,
-    ) {
-        let child = self.child(lane_config, lane_session, cancel);
-        tools.register_typed(crate::ask_tool::AskModelTool::new(child.clone()));
-        if !lane_config.may_spawn() {
-            return;
-        }
-        let Some(sink) = self.sink() else {
-            return;
-        };
-        tools.register_typed(
-            FleetTool::new(child.clone(), sink.clone()).with_asides(tools.asides()),
-        );
-        tools.register_typed(
-            crate::map_tool::MapAgentsTool::new(child.clone(), sink.clone())
-                .with_asides(tools.asides()),
-        );
-        tools.register_typed(crate::lane_tools::SendToAgentTool::new(child.clone(), sink));
-        tools.register_typed(crate::lane_tools::ReadAgentTool::new(child));
+        workspace_lane: Option<Arc<crate::worktree::LaneWorktree>>,
+    ) -> ForkSlot {
+        let child = self.child(lane_config, lane_session, cancel, tools, workspace_lane);
+        let fork = child.fork_slot();
+        let sink = self.sink().unwrap_or_else(|| Arc::new(QuietFleetSink));
+        child.register_tools(tools, sink);
+        fork
     }
 
     /// The lanes running right now (see [`AgentTree`]).
@@ -316,16 +478,28 @@ impl FleetSpawner {
     /// Refuse a new fleet of `lanes` when the session already has
     /// [`MAX_LIVE_FLEETS`] in flight, or the tree budget has no room for
     /// more lanes.
-    pub(crate) fn admit_fleet(&self, lanes: u32) -> Result<(), ToolError> {
-        if self.live.load(Ordering::SeqCst) >= MAX_LIVE_FLEETS {
+    pub(crate) fn admit_fleet(&self, lanes: u32) -> Result<FleetAdmission, ToolError> {
+        if self.live.load(Ordering::SeqCst) >= MAX_LIVE_FLEETS
+            || self
+                .reserved
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                    (n < MAX_LIVE_FLEETS).then_some(n + 1)
+                })
+                .is_err()
+        {
             return Err(ToolError::Execution(format!(
                 "{MAX_LIVE_FLEETS} fleets are already running in this session; their results \
                  arrive automatically — wait for them before starting another"
             )));
         }
-        self.tree_budget()
-            .admit_spawn(lanes)
-            .map_err(ToolError::Execution)
+        let tree = self.tree_budget();
+        tree.begin_fleet();
+        let admission = FleetAdmission {
+            reserved: self.reserved.clone(),
+            tree: tree.clone(),
+        };
+        tree.admit_spawn(lanes).map_err(ToolError::Execution)?;
+        Ok(admission)
     }
 
     /// Tell the spawner which project it is working in, enabling `isolation:
@@ -338,29 +512,30 @@ impl FleetSpawner {
         self
     }
 
-    /// Cut one detached worktree per lane, or `None` when the project isn't a
-    /// git repository (isolation is an upgrade, not a precondition). The
+    /// Cut one detached worktree per lane, failing if isolation is unavailable. The
     /// lanes belong to the fleet run that opened them — the spawner keeps no
     /// slot of its own, so two fleets in flight at once (a `wait: false`
     /// fleet plus a foreground one) can't tear down each other's checkouts.
     fn open_lanes(
         &self,
         count: usize,
-    ) -> Option<Vec<std::sync::Arc<crate::worktree::LaneWorktree>>> {
+    ) -> Result<Vec<std::sync::Arc<crate::worktree::LaneWorktree>>, ToolError> {
         let root = self
             .workspace_root
             .lock()
             .expect("fleet workspace poisoned")
-            .clone()?;
-        let lanes: Vec<_> = crate::worktree::create(&root, "fleet", count)?
+            .clone()
+            .ok_or_else(|| ToolError::Execution("isolation needs a workspace".into()))?;
+        let lanes: Vec<_> = crate::worktree::create(&root, "fleet", count)
+            .map_err(|e| ToolError::Execution(format!("could not isolate agents: {e}")))?
             .into_iter()
             .map(std::sync::Arc::new)
             .collect();
-        Some(lanes)
+        Ok(lanes)
     }
 
     /// The project root, when the host told us about one.
-    fn root(&self) -> Option<std::path::PathBuf> {
+    pub(crate) fn root(&self) -> Option<std::path::PathBuf> {
         self.workspace_root
             .lock()
             .expect("fleet workspace poisoned")
@@ -387,7 +562,14 @@ impl FleetSpawner {
 
     /// [`Self::with_session`] for a spawner that already exists.
     pub fn set_session(&self, session: impl Into<String>) {
-        *self.session.lock().expect("fleet session slot poisoned") = Some(session.into());
+        let session = session.into();
+        let mut current = self.session.lock().expect("fleet session slot poisoned");
+        if current.as_ref() != Some(&session) {
+            self.memo.lock().expect("fleet memo poisoned").clear();
+            self.memo_loaded.store(false, Ordering::Release);
+            *self.fork.lock().expect("fleet fork poisoned") = None;
+            *current = Some(session);
+        }
     }
 
     /// Point future subagents at a new inference client — call it wherever the
@@ -463,7 +645,8 @@ impl FleetSpawner {
         };
         // An isolated lane works in its own checkout, so its file and shell
         // tools must point there rather than at the shared project.
-        let tools = match (&lane, self.root()) {
+        let workspace_lane = lane.clone().or_else(|| self.workspace_lane.clone());
+        let tools = match (&workspace_lane, self.root()) {
             // An isolated lane works in its own checkout, so its file and
             // shell tools point there, with file state of its own (nothing
             // else can touch that tree).
@@ -474,7 +657,7 @@ impl FleetSpawner {
                     .files()
                     .map(|files| files.fresh_with_rules())
                     .unwrap_or_else(harness_tools::FileState::gated),
-            ),
+            )?,
             // A shared lane keeps the parent's file state — that shared state
             // is what makes the per-path lock serialize two lanes editing one
             // file — but still gets its own shell, since `run_shell` now
@@ -486,7 +669,7 @@ impl FleetSpawner {
                     .files()
                     .cloned()
                     .unwrap_or_else(harness_tools::FileState::gated);
-                rooted_tools(&self.tools, &root, files)
+                rooted_tools(&self.tools, &root, files)?
             }
             (None, None) => self.tools.clone(),
         };
@@ -521,7 +704,13 @@ impl FleetSpawner {
         };
         let session = store.create_session(&meta)?;
         let mut tools = crate::agent::subagent_tools(tools);
-        self.add_nested_tools(&mut tools, &config, &session, &cancel);
+        let fork_slot = self.add_nested_tools(
+            &mut tools,
+            &config,
+            &session,
+            &cancel,
+            workspace_lane.clone(),
+        );
         let mut agent = if let Some(source) = source {
             // The parent's messages become the lane's starting context as one
             // snapshot row (not a message row each: a long conversation forked
@@ -551,7 +740,8 @@ impl FleetSpawner {
                 agent.set_usage_store(store.clone());
             }
         }
-        self.adopt(&mut agent, label, fleet, cancel);
+        agent.set_fork_slot(fork_slot);
+        self.adopt(&mut agent, label, fleet, cancel, workspace_lane)?;
         Ok(agent)
     }
 
@@ -573,25 +763,44 @@ impl FleetSpawner {
                  automatically) or stop it first"
             ))));
         }
-        let (client, config) = {
+        let (client, mut config) = {
             let endpoint = self.endpoint.lock().expect("fleet endpoint poisoned");
-            (endpoint.client.clone(), endpoint.config.for_subagent())
+            (endpoint.client.clone(), endpoint.config.clone())
         };
-        let tools = match self.root() {
+        let parent = self.session().unwrap_or_default();
+        let mut ancestor = id.to_string();
+        while ancestor != parent {
+            config = config.for_subagent();
+            ancestor = store.session_meta(&ancestor)?.parent_session;
+        }
+        let workspace_lane = store
+            .session_state::<crate::worktree::WorktreeSnapshot>(
+                id,
+                crate::lane_lifecycle::WORKSPACE_STATE,
+            )?
+            .map(|snapshot| snapshot.restore().map(Arc::new))
+            .transpose()?;
+        let root = workspace_lane
+            .as_ref()
+            .map(|l| l.path().to_path_buf())
+            .or_else(|| self.root());
+        let tools = match root {
             Some(root) => {
                 let files = self
                     .tools
                     .files()
                     .cloned()
                     .unwrap_or_else(harness_tools::FileState::gated);
-                rooted_tools(&self.tools, &root, files)
+                rooted_tools(&self.tools, &root, files)?
             }
             None => self.tools.clone(),
         };
         let mut tools = crate::agent::subagent_tools(tools);
-        self.add_nested_tools(&mut tools, &config, id, &cancel);
+        let fork_slot =
+            self.add_nested_tools(&mut tools, &config, id, &cancel, workspace_lane.clone());
         let mut agent = Agent::resume_from_store(client, tools, store, id.to_string(), config)?;
-        self.adopt(&mut agent, label, fleet, cancel);
+        agent.set_fork_slot(fork_slot);
+        self.adopt(&mut agent, label, fleet, cancel, workspace_lane)?;
         Ok(agent)
     }
 
@@ -607,34 +816,68 @@ impl FleetSpawner {
         let (Some(store), Some(session)) = (&self.store, self.session()) else {
             return Err(not_mine());
         };
-        let meta = store.session_meta(id).map_err(|_| not_mine())?;
-        if meta.parent_session != session {
-            return Err(not_mine());
+        let mut ancestor = id.to_string();
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            if !visited.insert(ancestor.clone()) {
+                return Err(not_mine());
+            }
+            let meta = store.session_meta(&ancestor).map_err(|_| not_mine())?;
+            if meta.parent_session == session {
+                break;
+            }
+            if meta.parent_session.is_empty() {
+                return Err(not_mine());
+            }
+            ancestor = meta.parent_session;
         }
         Ok(store.clone())
     }
 
     /// What every lane gets after construction: spend attributed to the
     /// spawning session, its stop token, and a place in the live registry.
-    fn adopt(&self, agent: &mut Agent, label: &str, fleet: &str, cancel: CancellationToken) {
+    fn adopt(
+        &self,
+        agent: &mut Agent,
+        label: &str,
+        fleet: &str,
+        cancel: CancellationToken,
+        workspace: Option<Arc<crate::worktree::LaneWorktree>>,
+    ) -> Result<(), AgentError> {
         if let Some(session) = self.session() {
             agent.set_usage_session(session);
         }
         agent.set_cancel_token(cancel.clone());
-        self.tree.register(LiveLane {
+        self.tree
+            .try_register(LiveLane {
+                id: agent.session_id().to_string(),
+                label: label.to_string(),
+                fleet: fleet.to_string(),
+                started: std::time::Instant::now(),
+                cancel,
+                steer: agent.interjections(),
+            })
+            .map_err(ToolError::Execution)?;
+
+        agent.lane_lifecycle = Some(crate::lane_lifecycle::LaneLifecycle {
             id: agent.session_id().to_string(),
             label: label.to_string(),
             fleet: fleet.to_string(),
+            tree: self.tree.clone(),
+            store: agent.history_store().clone(),
+            workspace,
+            spill: self.overflow_store(),
+            model: agent.model().to_string(),
             started: std::time::Instant::now(),
-            cancel,
-            steer: agent.interjections(),
+            completed: false,
         });
+        Ok(())
     }
 
     /// Run `tasks` as one named fleet on lanes from `spawn`, bracketed on the
     /// host's lanes display, and type every outcome. Lane transcripts are
     /// persisted as they run; the typed record is written by
-    /// [`Self::record`] once the caller has finished with it (a patch may
+    /// the lane lifecycle before completion is emitted (a patch may
     /// still be attached). Returns the results and whether the fleet's token
     /// was cancelled.
     pub(crate) async fn run_lanes<S: SpawnAgent>(
@@ -701,7 +944,11 @@ impl FleetSpawner {
         let spill = self.tools.overflow_store();
         let results: Vec<SubagentResult> = outcomes
             .iter()
-            .map(|o| SubagentResult::from_outcome(o, fleet, budget, spill.map(Arc::as_ref)))
+            .map(|o| {
+                o.record.clone().unwrap_or_else(|| {
+                    SubagentResult::from_outcome(o, fleet, budget, spill.map(Arc::as_ref))
+                })
+            })
             .collect();
         // The trajectory: one line per fleet with every lane's verdict and
         // spend, beside the turn's other developer-log events, so a tree
@@ -729,19 +976,23 @@ impl FleetSpawner {
         );
         Ok((results, cancel.is_cancelled()))
     }
+}
 
-    /// Persist each lane's typed record beside its transcript.
-    pub(crate) fn record(&self, results: &[SubagentResult]) {
-        let Some(store) = &self.store else {
-            return;
-        };
-        for result in results {
-            if result.id.is_empty() {
-                continue;
-            }
-            let _ = store.save_session_state(&result.id, harness_store::LANE_STATE, result);
-        }
-    }
+fn agent_tool_names() -> [&'static str; 5] {
+    [
+        FLEET_TOOL,
+        crate::MAP_AGENTS_TOOL,
+        crate::ASK_MODEL_TOOL,
+        crate::SEND_TO_AGENT_TOOL,
+        crate::READ_AGENT_TOOL,
+    ]
+}
+
+struct QuietFleetSink;
+impl FleetSink for QuietFleetSink {
+    fn started(&self, _: &str, _: &[String], _: CancellationToken) {}
+    fn event(&self, _: &str, _: &FleetEvent) {}
+    fn finished(&self, _: &str) {}
 }
 
 /// The parent's tool set with every workspace-rooted tool rebuilt against
@@ -752,32 +1003,9 @@ fn rooted_tools(
     base: &ToolRegistry,
     root: &std::path::Path,
     files: std::sync::Arc<harness_tools::FileState>,
-) -> ToolRegistry {
-    use harness_tools::fs::{EditFileTool, FindFilesTool, ReadFileTool, SearchTool, WriteFileTool};
-    use harness_tools::tasks::{BackgroundTasks, KillTaskTool, TaskOutputTool};
-
-    let Ok(workspace) = harness_tools::Workspace::new(root) else {
-        return base.clone();
-    };
-    let mut tools = base.clone();
-    tools.register_typed(ReadFileTool::with_state(workspace.clone(), files.clone()));
-    tools.register_typed(WriteFileTool::with_state(workspace.clone(), files.clone()));
-    tools.register_typed(EditFileTool::with_state(workspace.clone(), files));
-    tools.register_typed(FindFilesTool::new(workspace.clone()));
-    tools.register_typed(SearchTool::new(workspace.clone()));
-    tools.register_typed(harness_tools::git::GitTool::new(workspace.clone()));
-    // A lane's background tasks are its own, so `task_output` ids resolve
-    // against the commands that lane actually started — but truncated output
-    // spills into the shared overflow store, so the lane's `retrieve_original`
-    // (which reads that store) can still recover it.
-    let tasks = BackgroundTasks::in_temp_with_overflow(base.overflow_store().cloned());
-    tools.register_typed(harness_tools::shell::ShellTool::with_tasks(
-        workspace,
-        tasks.clone(),
-    ));
-    tools.register_typed(TaskOutputTool::new(tasks.clone()));
-    tools.register_typed(KillTaskTool::new(tasks));
-    tools
+) -> Result<ToolRegistry, ToolError> {
+    let workspace = harness_tools::Workspace::new(root)?;
+    Ok(base.for_workspace(workspace, files))
 }
 
 /// The most of one lane's patch that reaches the model. A lane that rewrote
@@ -844,7 +1072,7 @@ fn patches_section(
             .map(|r| r.label.clone())
             .unwrap_or_else(|| "agent".into());
         match crate::worktree::changes(lane) {
-            Some(changes) => {
+            Ok(Some(changes)) => {
                 any = true;
                 let handle = spill.map(|store| store.put(&changes.patch));
                 if let (Some(result), Some(hash)) = (results.get_mut(index), &handle) {
@@ -868,7 +1096,14 @@ fn patches_section(
                     .trim_end()
                 ));
             }
-            None => out.push_str(&format!("### {label}\n\n(no file changes)\n\n")),
+            Ok(None) => out.push_str(&format!("### {label}\n\n(no file changes)\n\n")),
+            Err(error) => {
+                lane.preserve();
+                out.push_str(&format!(
+                    "### {label}\n\nPatch capture failed: {error}. Work preserved at {}\n",
+                    lane.path().display()
+                ));
+            }
         }
     }
     if !any {
@@ -966,6 +1201,17 @@ impl FleetTool {
 /// waits (see `TreeBudget::reset`). Dropped on every exit path.
 struct InFlight(Arc<crate::tree::TreeBudget>);
 
+pub(crate) struct FleetAdmission {
+    reserved: Arc<AtomicUsize>,
+    tree: Arc<crate::tree::TreeBudget>,
+}
+impl Drop for FleetAdmission {
+    fn drop(&mut self) {
+        self.reserved.fetch_sub(1, Ordering::SeqCst);
+        self.tree.end_fleet();
+    }
+}
+
 impl InFlight {
     fn begin(tree: Arc<crate::tree::TreeBudget>) -> Self {
         tree.begin_fleet();
@@ -1029,7 +1275,7 @@ impl TypedTool for FleetTool {
          the full tool set but sees ONLY its own prompt (not this conversation), so make every \
          prompt self-contained: include paths, names, constraints, and the output you want back. \
          Results return labeled by agent name. Use 2-6 agents; prefer a few well-scoped agents \
-         over many vague ones. Subagents cannot spawn further agents. If the agents will EDIT \
+         over many vague ones. Delegation is bounded by the configured depth; each agent is told which tools it can use. If the agents will EDIT \
          files, set isolate_edits: each then works in its own copy of the project and returns a \
          patch for you to review and apply, instead of several agents writing over each other. \
          Every result carries an agent id: send_to_agent continues that agent with a follow-up \
@@ -1060,7 +1306,7 @@ impl TypedTool for FleetTool {
                 args.agents.len()
             )));
         }
-        self.spawner.admit_fleet(args.agents.len() as u32)?;
+        let _admission = self.spawner.admit_fleet(args.agents.len() as u32)?;
         let labels: Vec<String> = args.agents.iter().map(|a| a.name.clone()).collect();
         let fleet = next_fleet_id();
         // A fleet the model doesn't wait for runs on its own task and leaves
@@ -1068,7 +1314,7 @@ impl TypedTool for FleetTool {
         // the next step boundary, exactly like a finished background task.
         if args.wait == Some(false) {
             if let Some(asides) = self.asides.clone() {
-                let spawner = self.spawner.clone();
+                let spawner = self.spawner.operation();
                 let sink = self.sink.clone();
                 let count = labels.len();
                 let names = labels.join(", ");
@@ -1078,6 +1324,7 @@ impl TypedTool for FleetTool {
                      they finish — keep working on other things, do not poll."
                 );
                 tokio::spawn(async move {
+                    let _admission = _admission;
                     let body = match Self::execute(spawner, sink, fleet, args).await {
                         Ok(text) => text,
                         Err(e) => format!("the fleet failed: {e}"),
@@ -1133,15 +1380,13 @@ impl FleetTool {
             })
             .collect();
 
-        // Editing lanes each get their own checkout. Falling back to the
-        // shared workspace when git can't oblige keeps the fleet working, so
-        // the note below says which way it went — silently sharing when the
-        // model asked for isolation would be the dangerous outcome. This run
-        // owns its lanes: dropping `lanes` (normal return or a cancelled,
-        // dropped future) removes the worktrees, and no other fleet can reach
-        // them.
+        // Each run owns its checkouts; requested isolation must succeed.
         let isolated = args.isolate_edits.unwrap_or(false);
-        let lanes = isolated.then(|| spawner.open_lanes(labels.len())).flatten();
+        let lanes = if isolated {
+            Some(spawner.open_lanes(labels.len())?)
+        } else {
+            None
+        };
 
         let lane_for_build = lanes.clone().unwrap_or_default();
         let (mut results, cancelled) = spawner
@@ -1180,20 +1425,12 @@ impl FleetTool {
                 "NOTE: the fleet was stopped before finishing; results below may be partial.\n\n",
             );
         }
-        if isolated && lanes.is_none() {
-            out.push_str(
-                "NOTE: isolation was requested but this project is not a git repository, so \
-                 the agents shared one workspace and their edits are already applied (and may \
-                 have collided). Check the result before trusting it.\n\n",
-            );
-        }
         out.push_str(&render_results(&results));
         if let Some(lanes) = &lanes {
             let spill = spawner.tools.overflow_store().cloned();
             out.push_str(&patches_section(lanes, &mut results, spill.as_deref()));
         }
         drop(lanes);
-        spawner.record(&results);
         Ok(out.trim_end().to_string())
     }
 }
@@ -1281,7 +1518,7 @@ mod tests {
     }
 
     #[test]
-    fn subagents_cannot_recurse_ask_or_chart() {
+    fn leaf_agents_cannot_recurse_ask_or_chart() {
         use harness_tools::{AskUserTool, Question, QuestionAnswer, QuestionAsker, ToolError};
 
         struct NoopAsker;
@@ -1301,6 +1538,7 @@ mod tests {
             OxenClient::new("http://localhost/api/ai", "k", "m"),
             tools,
             AgentConfig {
+                max_depth: 1,
                 // The parent's real prompt mandates charting; a lane must not
                 // inherit a mandate for a tool its registry rejects.
                 system_prompt: Some(crate::prompt::default_system_prompt(false)),
@@ -1356,6 +1594,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nested_and_resumed_lanes_keep_isolation_and_depth() {
+        let project = git_project();
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let parent = store.create_session(&SessionMeta::default()).unwrap();
+        let mut tools = ToolRegistry::default_for_workspace(
+            harness_tools::Workspace::new(project.path()).unwrap(),
+        );
+        tools.remove(harness_tools::WRITE_FILE_TOOL);
+        let spawner = FleetSpawner::new(
+            OxenClient::new("http://127.0.0.1:1", "k", "m"),
+            tools,
+            AgentConfig::default(),
+        )
+        .with_store(store.clone())
+        .with_session(parent)
+        .with_workspace(project.path());
+        let worktrees = spawner.open_lanes(1).unwrap();
+        let worktree = worktrees[0].clone();
+        std::fs::write(worktree.path().join("shared.txt"), "isolated edit\n").unwrap();
+        let lane = spawner
+            .build_agent(
+                "outer",
+                "fleet",
+                Some(worktree.clone()),
+                CancellationToken::new(),
+            )
+            .unwrap();
+        let lane_id = lane.session_id().to_string();
+        let tools = rooted_tools(
+            &spawner.tools,
+            worktree.path(),
+            harness_tools::FileState::gated(),
+        )
+        .unwrap();
+        let child = spawner.child(
+            lane.config(),
+            &lane_id,
+            &CancellationToken::new(),
+            &tools,
+            Some(worktree.clone()),
+        );
+        assert_eq!(child.root().as_deref(), Some(worktree.path()));
+        let result = child
+            .tools
+            .invoke(
+                harness_tools::READ_FILE_TOOL,
+                serde_json::json!({"path":"shared.txt"}),
+            )
+            .await
+            .unwrap();
+        assert!(result.contains("isolated edit"));
+        let nested = child
+            .build_agent("nested", "fleet2", None, CancellationToken::new())
+            .unwrap();
+        let nested_id = nested.session_id().to_string();
+        assert_eq!(nested.config().depth, 2);
+        drop(nested);
+        drop(child);
+        drop(lane);
+        drop(worktree);
+        drop(worktrees);
+        let resumed = spawner
+            .resume_lane(&nested_id, "nested", "followup", CancellationToken::new())
+            .unwrap();
+        assert_eq!(resumed.config().depth, 2);
+        let names = resumed.tool_definitions();
+        assert!(!names
+            .iter()
+            .any(|d| d["function"]["name"] == harness_tools::WRITE_FILE_TOOL));
+        assert!(!names.iter().any(|d| d["function"]["name"] == FLEET_TOOL));
+        let workspace = resumed
+            .lane_lifecycle
+            .as_ref()
+            .unwrap()
+            .workspace
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("shared.txt")).unwrap(),
+            "isolated edit\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("shared.txt")).unwrap(),
+            "original\n"
+        );
+    }
+
+    #[tokio::test]
     async fn isolated_lanes_write_to_their_own_checkouts() {
         let project = git_project();
         let spawner = FleetSpawner::new(
@@ -1382,7 +1708,8 @@ mod tests {
                 &spawner.tools,
                 lanes[index].path(),
                 harness_tools::FileState::gated(),
-            );
+            )
+            .unwrap();
             // Read first — the lane's own tools enforce that, as they should.
             tools
                 .invoke(
@@ -1421,6 +1748,7 @@ mod tests {
             .map(|label| {
                 SubagentResult::from_outcome(
                     &crate::fleet::SubagentOutcome {
+                        record: None,
                         label: label.to_string(),
                         session: String::new(),
                         result: Ok("done".into()),
@@ -1455,7 +1783,7 @@ mod tests {
     }
 
     #[test]
-    fn a_project_without_git_declines_isolation_instead_of_failing() {
+    fn a_project_without_git_refuses_isolation() {
         let dir = tempfile::tempdir().unwrap();
         let spawner = FleetSpawner::new(
             OxenClient::new("http://localhost/api/ai", "k", "m"),
@@ -1466,7 +1794,7 @@ mod tests {
 
         // The caller falls back to a shared workspace and says so, rather than
         // failing a fleet that would have worked.
-        assert!(spawner.open_lanes(2).is_none());
+        assert!(spawner.open_lanes(2).is_err());
     }
 
     #[test]
@@ -1708,7 +2036,13 @@ mod tests {
         assert!(prompt.starts_with("base prompt"));
         assert!(prompt.contains("You may spawn agents of your own"));
 
-        let child = sp.child(lane.config(), "lane-session", &CancellationToken::new());
+        let child = sp.child(
+            lane.config(),
+            "lane-session",
+            &CancellationToken::new(),
+            &sp.tools,
+            None,
+        );
         let leaf = child
             .build_agent("leaf", "fleet-u", None, CancellationToken::new())
             .unwrap();

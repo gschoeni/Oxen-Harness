@@ -493,3 +493,80 @@ async fn deleting_a_running_chat_cancels_and_awaits_the_run() {
     assert!(service.list_sessions().unwrap().is_empty());
     fake_turn.await.unwrap();
 }
+
+#[tokio::test]
+async fn agent_patch_requires_ownership_and_exact_review_and_applies_in_subdirectory() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "user.email", "test@example.test"]);
+    std::fs::create_dir(root.join("app")).unwrap();
+    std::fs::write(root.join("app/file"), "before\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "initial"]);
+    let service = service_for(
+        "http://127.0.0.1:1".into(),
+        Arc::default(),
+        &root.join("app"),
+    );
+    let store = service.store().unwrap();
+    let session = store
+        .create_session(&harness_store::SessionMeta {
+            workspace: root.join("app").display().to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    let lane = store
+        .create_session(&harness_store::SessionMeta {
+            parent_session: session.clone(),
+            ..Default::default()
+        })
+        .unwrap();
+    let stranger = store
+        .create_session(&harness_store::SessionMeta::default())
+        .unwrap();
+    let worktrees = harness_agent::worktree::create(&root.join("app"), "host", 1).unwrap();
+    std::fs::write(worktrees[0].path().join("file"), "after\n").unwrap();
+    let snapshot =
+        harness_agent::worktree::WorktreeSnapshot::capture(&worktrees[0], &lane).unwrap();
+    store
+        .save_session_state(&lane, harness_agent::LANE_WORKSPACE_STATE, &snapshot)
+        .unwrap();
+    drop(worktrees);
+    assert!(service.agent_patch(&stranger, &lane).is_err());
+    assert!(service
+        .apply_agent_patch(&session, &lane, "old patch")
+        .await
+        .unwrap_err()
+        .contains("Review"));
+    service
+        .apply_agent_patch(&session, &lane, &snapshot.patch)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join("app/file")).unwrap(),
+        "after\n"
+    );
+    assert!(service
+        .apply_agent_patch(&session, &lane, &snapshot.patch)
+        .await
+        .unwrap_err()
+        .contains("not applied"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("app/file")).unwrap(),
+        "after\n"
+    );
+}

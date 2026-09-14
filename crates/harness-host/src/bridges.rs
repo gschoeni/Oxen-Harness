@@ -453,6 +453,7 @@ mod tests {
                 label: "a".into(),
                 lane: "l0".into(),
                 ok: true,
+                stopped: None,
                 tokens_used: 10,
                 summary: "done".into(),
             },

@@ -28,6 +28,6 @@ mod core;
 mod input;
 
 pub use self::core::Choice;
-pub(crate) use self::core::{centered_window, wrap_step};
+pub(crate) use self::core::{centered_window, wrap, wrap_step};
 pub use card::select;
 pub(crate) use input::{card_input, CardInput, CardInputSpec};

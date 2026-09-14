@@ -92,6 +92,9 @@ GET    /v1/sessions/{id}/tasks           the session's background shell tasks �
 POST   /v1/sessions/{id}/tasks/{task}/kill   kill one background task (its whole process group); 404 when unknown
 POST   /v1/sessions/{id}/agents/{agent}/cancel     stop one running lane (its id rides on `fleet.agent`); the rest of its fleet carries on; 404 once it has ended
 POST   /v1/sessions/{id}/agents/{agent}/interject  {text} → {accepted} — steer one running lane
+GET    /v1/sessions/{id}/agents/{agent}/patch     saved isolated patch as a JSON string
+POST   /v1/sessions/{id}/agents/{agent}/patch     JSON string containing the exact reviewed patch → 204; rejects stale artifacts, running lanes, or conflicts
+POST   /v1/sessions/{id}/agents/{agent}/follow-up {text} → JSON result string; continues the saved lane (fleet events stream while it runs)
 POST   /v1/sessions/{id}/refresh-client rebuild the agent's client (after saving a key)
 ```
 
@@ -185,3 +188,13 @@ npx json-schema-to-typescript protocol-schema.json   # for example
 - **Settings management** (tools/skills/themes/permissions editing, local
   model downloads) — desktop/CLI only for now; the server reads the shared
   config they write.
+
+### Agent result lifecycle
+
+`fleet.agent.phase` also includes `partial` and `cancelled`; neither means
+success. Completion events are emitted after the lane result is saved and its
+live registration removed. Clients can fetch history immediately on completion.
+`GET …/agents` includes all descendants and reports `parent`, `depth` (direct
+children are 0), `model`, `stop`, and `has_patch`, in addition to the existing
+fields. Cancel and interject acknowledgments must be checked: an agent may
+finish between selection and delivery. Keep unsent text when delivery fails.

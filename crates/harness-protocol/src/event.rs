@@ -53,6 +53,8 @@ pub enum FleetSource {
 #[serde(rename_all = "snake_case")]
 pub enum FleetAgentPhase {
     Started,
+    Partial,
+    Cancelled,
     Done,
     Failed,
 }

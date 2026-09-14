@@ -299,6 +299,15 @@ impl Agent {
             if let Some(reason) = turn.nudge_reason.take() {
                 on_event(&AgentEvent::Nudged { reason });
             }
+            if self.config.depth > 0 {
+                if let Some(tree) = &self.config.tree {
+                    if let Err(message) = tree.reserve_request() {
+                        self.stopped_by_budget = true;
+                        self.push(ChatMessage::assistant(message.clone()))?;
+                        return Ok(message);
+                    }
+                }
+            }
             let (assembled, mut outcome, rule_hits) = self
                 .stream_reply(outbound, &tool_defs, nudge.as_ref(), &cancel, &mut on_event)
                 .await?;

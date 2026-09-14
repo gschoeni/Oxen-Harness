@@ -1,7 +1,7 @@
 # Working Decisions & Rationale
 
 **Purpose:** Currently relevant decisions with enough "why" to be useful during implementation. For full deep-dive analysis, cite the source in each entry.
-**Updated:** 2026-07-25
+**Updated:** 2026-09-13
 
 ---
 
@@ -930,3 +930,26 @@ the default per-user NSIS location on Windows, with `OXEN_HARNESS_APP`
 overriding everything for dev builds. The bundle binary is renamed to
 `oxen-harness-app` (`mainBinaryName`) because the Linux packages would
 otherwise install a second `oxen-harness` over the CLI's name on PATH.
+
+## Subagent execution and recovery (2026-09-13)
+
+A lane owns a lifecycle guard that persists its result and workspace artifact
+before publishing completion, and releases its live registration on every exit.
+Tool-less leaves use the same execution path so cancellation and request
+admission have one implementation. Requested isolation fails closed.
+
+An isolated lane stores a patch against an immutable baseline pinned under
+`refs/oxen-harness/lanes/<session-id>`. Follow-ups restore that baseline and patch;
+Git commits inside a lane cannot erase its deliverable. Baseline refs remain
+available for recovery even after a lane checkout is removed. Removing session
+history does not currently prune these refs.
+
+Hosts and nested spawners register agent tools through one helper and snapshot
+the enabled family after preferences. Re-rooting preserves that capability set.
+Map caching requires an explicit run ID and includes source content, rendered
+index, effective model, leaf mode, session, and schema in its key.
+
+The CLI uses a chooser plus stable IDs, numbered live rows, and a visible
+message target. The desktop has one Agents panel with persistent results and
+acknowledged controls. Patch application requires the exact artifact reviewed
+by the user and lets Git reject conflicts atomically.

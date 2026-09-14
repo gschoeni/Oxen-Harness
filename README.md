@@ -411,23 +411,52 @@ desktop composer has the same pipeline behind its **Review** button.
 
 ### Parallel subagents (`spawn_agents`)
 
-The fleet isn't just for reviews. The model itself can fan work out from **any
-turn** — a chat in the CLI or desktop app, a loop pass — with the
-`spawn_agents` tool: up to six parallel agents, each with its own prompt and a
-fresh context plus the full tool set (except `spawn_agents` itself — one level
-deep, no fork bombs). Ask for it naturally:
+The model can delegate work from a chat or loop with `spawn_agents`: up to
+six agents at a time, each with its own context and the tools you enabled.
+Agents may delegate within the configured depth limit (two levels by default).
+All descendants share token, request, and spawn budgets.
 
-```
-🐂 trail ❯ search the codebase for every place we touch the filesystem —
-           split the work across a few parallel agents
-```
+Ask naturally: “Review the filesystem code; split the work across a few agents.”
 
-Each subagent appears as a live lane while it works. In the CLI's interactive
-composer, **alt+1-9** switches which lane you're watching (**alt+0** for the
-overview); in the desktop app the same lanes render as a panel above the
-composer — click a lane to watch that agent's output stream, click again to
-collapse. Results come back labeled by agent, one section each, and the model
-carries on with them in hand. Stopping the turn stops the fleet.
+**CLI:** type `/agents` to open the chooser. Use ↑/↓ and Enter to watch a
+working agent or read a finished answer. During a turn, the numbered live rows
+show the current selection and where Enter sends your message:
+
+| Action | Control |
+| --- | --- |
+| Previous / next agent | Alt+← / Alt+→ |
+| Jump to a numbered row | Alt+1–9 |
+| Return to main chat | Alt+0 |
+| Switch active fleets | Alt+[ / Alt+] |
+| Send a direction to the watched agent | Enter |
+| Stop the watched agent | Alt+X |
+
+`/agents list` prints stable short IDs. Use an ID or a unique name with
+`/agents watch`, `read`, `show`, `stop`, or `patch`. Send text with
+`/agents send <id> <message>`; continue a finished agent with
+`/agents follow-up <id> <message>`. `/agents help` shows examples. In terminals
+that use Option for special characters, configure Option as Alt/Meta or use the
+commands. Plain terminals print milestones and the agent list.
+
+**Desktop:** the Agents panel keeps working and finished agents together,
+with descendants indented. Select a row for output, transcript, steering, or a
+follow-up. Failed sends keep the draft; stop requests show “Stopping…” until
+the agent settles. Scrolling upward pauses output following. Isolated edits
+have **Review changes**, then **Apply changes** for the exact reviewed patch.
+Conflicts leave the workspace unchanged.
+
+**Isolation:** `isolate_edits: true` requires Git and fails if a checkout cannot
+be created. Each lane starts with the current workspace, including uncommitted
+files, and returns its committed and uncommitted changes as a saved patch.
+Nested agents inherit that workspace; isolated follow-ups restore it. Nothing
+is merged automatically. If capture fails, the checkout is retained for recovery.
+
+**Batches:** `ask_model` and `map_agents` with `leaf: true` run tool-less calls
+with the same cancellation, request admission, and history as other agents.
+`map_agents` starts fresh by default. To resume, pass the returned `run_id`;
+completed rows are reused only when their input content and configuration still
+match. `refresh: true` recomputes them. Background work belongs to the turn
+that started it; descendants finish their own children before returning.
 
 ### Resuming an expedition
 

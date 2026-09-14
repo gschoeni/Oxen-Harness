@@ -855,9 +855,6 @@ impl SessionService {
         workspace_root: &Path,
         usage_store: Arc<HistoryStore>,
     ) {
-        if !harness_runtime::tools::load().is_enabled(harness_agent::FLEET_TOOL) {
-            return;
-        }
         let spawner = Arc::new(
             harness_agent::FleetSpawner::new(client.clone(), tools.clone(), config.clone())
                 .with_workspace(workspace_root)
@@ -870,17 +867,9 @@ impl SessionService {
             harness_protocol::FleetSource::Turn,
             self.fleet_cancels.clone(),
         ));
-        tools.register_typed(
-            harness_agent::FleetTool::new(spawner.clone(), sink.clone())
-                .with_asides(tools.asides()),
-        );
-        tools.register_typed(
-            harness_agent::MapAgentsTool::new(spawner.clone(), sink.clone())
-                .with_asides(tools.asides()),
-        );
-        tools.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
-        tools.register_typed(harness_agent::ReadAgentTool::new(spawner.clone()));
-        tools.register_typed(harness_agent::AskModelTool::new(spawner.clone()));
+        spawner.register_tools(tools, sink);
+        harness_runtime::tools::load().apply(tools);
+        spawner.set_agent_policy(tools);
         self.fleet_spawners
             .lock()
             .expect("fleet spawners poisoned")
@@ -1464,70 +1453,6 @@ impl SessionService {
     pub fn interject_lane(&self, session: &str, lane: &str, text: impl Into<String>) -> bool {
         self.fleet_spawner_for(session)
             .is_some_and(|spawner| spawner.tree().interject(lane, text))
-    }
-
-    /// Every subagent lane of `session`: the ones running now (from the live
-    /// registry) and the ones that finished (from the store, with the typed
-    /// record their parent read), oldest first.
-    pub fn list_agents(
-        &self,
-        session: &str,
-    ) -> Result<Vec<harness_protocol::AgentSummary>, String> {
-        use harness_protocol::AgentSummary;
-        let mut out: Vec<AgentSummary> = Vec::new();
-        let live: Vec<harness_agent::LiveLaneInfo> = self
-            .fleet_spawner_for(session)
-            .map(|spawner| spawner.tree().live())
-            .unwrap_or_default();
-        let running: std::collections::HashSet<&str> = live.iter().map(|l| l.id.as_str()).collect();
-        for lane in self.store()?.lanes_of(session).map_err(|e| e.to_string())? {
-            if running.contains(lane.id.as_str()) {
-                continue;
-            }
-            let record: Option<harness_agent::SubagentResult> = lane
-                .record
-                .and_then(|value| serde_json::from_value(value).ok());
-            out.push(match record {
-                Some(record) => AgentSummary {
-                    id: lane.id,
-                    summary: record.brief(),
-                    label: record.label,
-                    fleet: record.fleet,
-                    status: format!("{:?}", record.status).to_lowercase(),
-                    tokens: record.tokens,
-                    rounds: record.rounds,
-                    elapsed_secs: 0,
-                    created_at: lane.created_at,
-                },
-                // A lane that was interrupted before its record was written
-                // (a crash mid-fleet): known, but with nothing to show.
-                None => AgentSummary {
-                    id: lane.id,
-                    label: "agent".into(),
-                    fleet: String::new(),
-                    status: "unknown".into(),
-                    summary: String::new(),
-                    tokens: 0,
-                    rounds: 0,
-                    elapsed_secs: 0,
-                    created_at: lane.created_at,
-                },
-            });
-        }
-        for lane in live {
-            out.push(AgentSummary {
-                id: lane.id,
-                label: lane.label,
-                fleet: lane.fleet,
-                status: "running".into(),
-                summary: String::new(),
-                tokens: 0,
-                rounds: 0,
-                elapsed_secs: lane.elapsed_secs,
-                created_at: 0,
-            });
-        }
-        Ok(out)
     }
 
     /// Stop one running fleet (a `spawn_agents` call) in `session` without

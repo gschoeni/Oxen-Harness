@@ -69,6 +69,8 @@ pub(crate) enum LaneStatus {
     Queued,
     Running,
     Done,
+    Partial,
+    Cancelled,
     Failed,
 }
 
@@ -118,6 +120,8 @@ pub(crate) type LaneStopper = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 /// one lane by id.
 pub(crate) struct FleetState {
     pub(crate) lanes: Vec<LaneState>,
+    fleet_id: String,
+    fleet_count: usize,
     pub(crate) focused: Option<usize>,
     pub(crate) cancel: Option<CancellationToken>,
     cancel_lane: Option<LaneStopper>,
@@ -129,6 +133,8 @@ impl FleetState {
     pub(crate) fn new(labels: &[String], cancel: Option<CancellationToken>) -> Self {
         Self {
             lanes: labels.iter().map(|l| LaneState::new(l)).collect(),
+            fleet_id: String::new(),
+            fleet_count: 1,
             focused: None,
             cancel,
             cancel_lane: None,
@@ -148,6 +154,8 @@ impl FleetState {
                 let glyph = match lane.status {
                     LaneStatus::Done => "✓",
                     LaneStatus::Failed => "✗",
+                    LaneStatus::Partial => "◐",
+                    LaneStatus::Cancelled => "■",
                     LaneStatus::Running | LaneStatus::Queued => "·",
                 };
                 match lane.clock(now) {
@@ -188,14 +196,6 @@ impl FleetState {
 
     /// The watched lane, when it is running and known by id: where a
     /// mid-turn message goes instead of the parent turn.
-    pub(crate) fn focused_running_lane(&self) -> Option<(String, String)> {
-        let lane = self.focused.and_then(|i| self.lanes.get(i))?;
-        (lane.status == LaneStatus::Running && !lane.id.is_empty())
-            .then(|| (lane.id.clone(), lane.label.clone()))
-    }
-
-    /// Stop just the focused lane (the `x` / alt+x action); `false` when
-    /// no running lane is focused or this display has no way to stop one.
     pub(crate) fn stop_focused_lane(&self) -> bool {
         let Some(lane) = self.focused.and_then(|i| self.lanes.get(i)) else {
             return false;
@@ -269,6 +269,14 @@ impl FleetState {
     }
 
     /// Cycle focus: overview → lane 0 → 1 → … → overview.
+    pub(crate) fn focus_previous(&mut self) {
+        self.focused = match self.focused {
+            Some(0) => None,
+            Some(i) => Some(i - 1),
+            None => self.lanes.len().checked_sub(1),
+        };
+    }
+
     pub(crate) fn focus_next(&mut self) {
         self.focused = match self.focused {
             None => (!self.lanes.is_empty()).then_some(0),
@@ -326,11 +334,21 @@ pub(crate) fn apply_fleet_event(
             label,
             ok,
             tokens_used,
+            stopped,
             summary,
             ..
         } => {
             if let Some(state) = hub.lock().get_mut(fleet) {
                 state.lane_completed(*index, *ok, *tokens_used, summary);
+                if let Some(lane) = state.lanes.get_mut(*index) {
+                    if let Some(reason) = stopped {
+                        lane.status = if *reason == harness_agent::fleet::LaneStop::Cancelled {
+                            LaneStatus::Cancelled
+                        } else {
+                            LaneStatus::Partial
+                        };
+                    }
+                }
             }
             if plain {
                 print_lane_completed(ui, label, *ok, *tokens_used, summary);
@@ -367,6 +385,47 @@ pub(crate) struct FleetHub {
 pub(crate) struct FleetBoard<'a>(MutexGuard<'a, Vec<(String, FleetState)>>);
 
 impl FleetBoard<'_> {
+    pub(crate) fn composer_target(&self) -> String {
+        self.0
+            .first()
+            .and_then(|(fleet, state)| state.focused.map(|index| format!("{fleet}:{index}")))
+            .unwrap_or_else(|| "main".into())
+    }
+
+    pub(crate) fn watch_lane(&mut self, id: &str) -> bool {
+        let found = self.0.iter().enumerate().find_map(|(fleet, (_, state))| {
+            state
+                .lanes
+                .iter()
+                .position(|lane| lane.id == id)
+                .map(|lane| (fleet, lane))
+        });
+        if let Some((fleet, lane)) = found {
+            self.0.rotate_left(fleet);
+            self.0[0].1.focus(Some(lane));
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn navigate(
+        &mut self,
+        code: crossterm::event::KeyCode,
+        mods: crossterm::event::KeyModifiers,
+    ) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        if self.0.is_empty() || !mods.contains(KeyModifiers::ALT) {
+            return false;
+        }
+        match code {
+            KeyCode::Char(']') => self.0.rotate_left(1),
+            KeyCode::Char('[') => self.0.rotate_right(1),
+            _ => return false,
+        }
+        true
+    }
+
     /// The fleet on display (the oldest still in flight).
     pub(crate) fn primary(&self) -> Option<&FleetState> {
         self.0.first().map(|(_, state)| state)
@@ -398,18 +457,31 @@ impl FleetHub {
     }
 
     /// Add `fleet` (replacing a same-named one, which a restarted fleet is).
-    pub(crate) fn install(&self, fleet: &str, state: FleetState) {
+    pub(crate) fn install(&self, fleet: &str, mut state: FleetState) {
         let mut fleets = self.fleets.lock().expect("fleet hub poisoned");
         fleets.retain(|(id, _)| id != fleet);
+        state.fleet_id = fleet.to_string();
         fleets.push((fleet.to_string(), state));
+        let count = fleets.len();
+        for (_, state) in fleets.iter_mut() {
+            state.fleet_count = count;
+        }
     }
 
     /// Drop `fleet`; the next-oldest fleet, if any, becomes the primary.
     pub(crate) fn remove(&self, fleet: &str) {
-        self.fleets
-            .lock()
-            .expect("fleet hub poisoned")
-            .retain(|(id, _)| id != fleet);
+        let mut fleets = self.fleets.lock().expect("fleet hub poisoned");
+        let was_primary = fleets.first().is_some_and(|(id, _)| id == fleet);
+        fleets.retain(|(id, _)| id != fleet);
+        let count = fleets.len();
+        for (_, state) in fleets.iter_mut() {
+            state.fleet_count = count;
+        }
+        if was_primary {
+            if let Some((_, state)) = fleets.first_mut() {
+                state.focus(None);
+            }
+        }
     }
 
     pub(crate) fn clear(&self) {
@@ -508,11 +580,44 @@ pub(crate) fn block_lines(
         .max()
         .unwrap_or(0);
     let now = Instant::now();
-    let mut out: Vec<String> = state
-        .lanes
-        .iter()
-        .map(|lane| lane_line(lane, style, label_width, width, frame, now))
-        .collect();
+    let title = if state.fleet_count > 1 {
+        format!(
+            "Agents · {} · {} active fleets",
+            state.fleet_id, state.fleet_count
+        )
+    } else {
+        "Agents".to_string()
+    };
+    let mut out = vec![format!(
+        "  {}",
+        paint(
+            &crate::render::truncate(&title, width.saturating_sub(2)),
+            style.accent_rgb
+        )
+    )];
+    // Put instructions above output so a short terminal still teaches navigation.
+    out.extend(
+        crate::picker::wrap(&hint_line(state, hint_keys), width.saturating_sub(4))
+            .into_iter()
+            .map(|line| format!("  {}", paint(&line, style.dim_rgb))),
+    );
+    for (index, lane) in state.lanes.iter().enumerate() {
+        let selected = if state.focused == Some(index) {
+            "›"
+        } else {
+            " "
+        };
+        let key = index + 1;
+        let line = lane_line(
+            lane,
+            style,
+            label_width,
+            width.saturating_sub(5),
+            frame,
+            now,
+        );
+        out.push(format!("{selected} {key:>2} {line}"));
+    }
 
     if let Some(focused) = state.focused.and_then(|i| state.lanes.get(i)) {
         let title = format!("── watching {} ", focused.label);
@@ -526,10 +631,6 @@ pub(crate) fn block_lines(
         }
     }
 
-    out.push(format!(
-        "  {}",
-        paint(&hint_line(state, hint_keys), style.dim_rgb)
-    ));
     out
 }
 
@@ -559,6 +660,14 @@ pub(crate) fn apply_fleet_key(
     use crossterm::event::{KeyCode, KeyModifiers};
     let digits_ok = matches!(keys, FleetKeys::Owned) || mods.contains(KeyModifiers::ALT);
     match code {
+        KeyCode::Right if mods.contains(KeyModifiers::ALT) => {
+            state.focus_next();
+            true
+        }
+        KeyCode::Left if mods.contains(KeyModifiers::ALT) => {
+            state.focus_previous();
+            true
+        }
         KeyCode::Char(c @ '1'..='9') if digits_ok => {
             state.focus(Some(c as usize - '1' as usize));
             true
@@ -592,27 +701,35 @@ pub(crate) fn apply_fleet_key(
 
 fn hint_line(state: &FleetState, keys: FleetKeys) -> String {
     let n = state.lanes.len().min(9);
-    let (digits, esc) = match keys {
-        FleetKeys::Owned => (format!("1-{n}"), "esc".to_string()),
-        FleetKeys::Shared => (format!("alt+1-{n}"), "alt+0".to_string()),
+    let (select, back) = match keys {
+        FleetKeys::Owned => (format!("1–{n} watch"), "0 overview"),
+        FleetKeys::Shared => (format!("Alt+1–{n} watch"), "Alt+0 main chat"),
     };
-    let keys_hint = match (state.focused, keys, state.cancel_lane.is_some()) {
-        (Some(_), FleetKeys::Owned, true) => {
-            format!("{digits} switch lanes · {esc} overview · x stop this lane · ctrl-c stop all")
+    let target = match state.focused.and_then(|i| state.lanes.get(i)) {
+        Some(lane) if lane.status == LaneStatus::Running && matches!(keys, FleetKeys::Shared) => {
+            format!("Enter sends to {} · Alt+X stop", lane.label)
         }
-        (Some(_), FleetKeys::Shared, true) => {
-            format!(
-                "{digits} switch lanes · {esc} overview · alt+x stop this lane · enter steers it"
-            )
-        }
-        (Some(_), _, false) => format!("{digits} switch lanes · {esc} overview · ctrl-c stop"),
-        (None, FleetKeys::Owned, _) => format!("{digits} watch a lane · ctrl-c stop"),
-        (None, FleetKeys::Shared, _) => format!("{digits} watch a lane"),
+        Some(lane) if matches!(keys, FleetKeys::Shared) => format!(
+            "{} is {} · return to main chat to send",
+            lane.label,
+            if lane.status == LaneStatus::Queued {
+                "queued"
+            } else {
+                "finished"
+            }
+        ),
+        Some(_) => "X stop agent · Ctrl+C stop fleet".to_string(),
+        None if matches!(keys, FleetKeys::Shared) => "Enter sends to main chat".to_string(),
+        None => "Tab next agent · Ctrl+C stop fleet".to_string(),
     };
-    match state.budget_readout() {
-        Some(budget) => format!("{keys_hint} · {budget}"),
-        None => keys_hint,
+    let mut hint = format!("{select} · Alt+←/→ previous/next · {back} · {target}");
+    if state.fleet_count > 1 {
+        hint.push_str(" · Alt+[ / ] switch fleet");
     }
+    if let Some(budget) = state.budget_readout() {
+        hint.push_str(&format!(" · {budget}"));
+    }
+    hint
 }
 
 /// Compose one painted lane line, fitted to `width` columns.
@@ -632,6 +749,8 @@ fn lane_line(
         ),
         LaneStatus::Done => ("✓".to_string(), style.good_rgb),
         LaneStatus::Failed => ("✗".to_string(), style.bad_rgb),
+        LaneStatus::Partial => ("◐".to_string(), style.dim_rgb),
+        LaneStatus::Cancelled => ("■".to_string(), style.dim_rgb),
     };
     let meta = lane_meta(lane, now);
     let cells = lane_cells(lane, label_width, width, &meta);
@@ -883,6 +1002,9 @@ fn poll_keys(hub: &FleetHub) {
             continue;
         }
         let mut board = hub.lock();
+        if board.navigate(key.code, key.modifiers) {
+            continue;
+        }
         let Some(state) = board.primary_mut() else {
             continue;
         };
@@ -963,6 +1085,42 @@ pub(crate) fn pinned_lines(
 #[cfg(test)]
 mod tests {
     use crossterm::event::{KeyCode, KeyModifiers};
+
+    #[test]
+    fn fleet_switching_preserves_each_watch_and_back_returns_to_main() {
+        use super::*;
+        let hub = FleetHub::default();
+        let mut first = FleetState::new(&["scan".into(), "test".into()], None);
+        first.lane_started(0, "lane-a");
+        first.lane_started(1, "lane-b");
+        let mut second = FleetState::new(&["review".into()], None);
+        second.lane_started(0, "lane-c");
+        hub.install("first", first);
+        hub.install("second", second);
+        let mut board = hub.lock();
+        assert!(board.watch_lane("lane-b"));
+        assert_eq!(board.composer_target(), "first:1");
+        assert!(board.navigate(KeyCode::Char(']'), KeyModifiers::ALT));
+        assert_eq!(board.composer_target(), "main");
+        assert!(board.watch_lane("lane-c"));
+        assert!(board.navigate(KeyCode::Char('['), KeyModifiers::ALT));
+        assert_eq!(board.composer_target(), "first:1");
+        apply_fleet_key(
+            board.primary_mut().unwrap(),
+            KeyCode::Right,
+            KeyModifiers::ALT,
+            FleetKeys::Shared,
+        );
+        assert_eq!(board.composer_target(), "main");
+        apply_fleet_key(
+            board.primary_mut().unwrap(),
+            KeyCode::Left,
+            KeyModifiers::ALT,
+            FleetKeys::Shared,
+        );
+        assert_eq!(board.composer_target(), "first:1");
+        assert!(!board.watch_lane("missing"));
+    }
 
     #[test]
     fn fleet_key_vocabularies_share_one_reducer() {
@@ -1123,11 +1281,16 @@ mod tests {
         s.lane_started(0, "lane-0");
         s.lane_event(0, &AgentEvent::Token("digging into the parser".into()), &ui);
 
-        // Overview: one line per lane + the hint.
         let lines = block_lines(&s, &style(), 80, 30, 0, FleetKeys::Owned);
-        assert_eq!(lines.len(), 3);
-        assert!(plain(&lines[0]).contains("scan"));
-        assert!(plain(&lines[2]).contains("1-2 watch a lane"));
+        assert_eq!(plain(&lines[0]).trim(), "Agents");
+        let text = lines
+            .iter()
+            .map(|l| plain(l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("1–2 watch"));
+        assert!(text.contains("scan"));
+        assert!(text.contains("trace"));
 
         // Focused: lanes + rule + tail rows + hint, alt vocabulary for live.
         s.focus(Some(0));
@@ -1139,7 +1302,9 @@ mod tests {
             .join("\n");
         assert!(text.contains("── watching scan"));
         assert!(text.contains("digging into the parser"));
-        assert!(text.contains("alt+1-2 switch lanes"));
+        assert!(text.contains("Alt+1–2 watch"));
+        assert!(hint_line(&s, FleetKeys::Shared).contains("Enter sends to scan"));
+        assert!(text.contains("›  1"));
     }
 
     #[test]
