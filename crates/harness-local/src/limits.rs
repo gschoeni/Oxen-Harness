@@ -1,9 +1,10 @@
 //! Cache of API-reported per-model limits.
 //!
 //! The Oxen models catalog reports each model's real `context_length` and
-//! `max_output_tokens`. Those are the authoritative numbers for context
-//! budgeting and reply caps — the name-derived table in `harness-agent` is
-//! only a fallback for models the catalog hasn't described.
+//! `max_output_tokens`, and which input modalities it accepts. Those are the
+//! authoritative numbers for context budgeting, reply caps, and whether an
+//! image may ride in a request at all — the name-derived table in
+//! `harness-agent` is only a fallback for models the catalog hasn't described.
 //!
 //! The cache is refreshed automatically by every hosted-catalog fetch (model
 //! search, pricing warm-ups, usage reports — see `source::fetch_oxen_models`)
@@ -30,12 +31,20 @@ pub struct ModelLimits {
     /// Maximum tokens the model can generate in one reply.
     #[serde(default)]
     pub max_output_tokens: Option<u64>,
+    /// Whether the model accepts image input (`capabilities.input` lists
+    /// `"image"`). `None` when the catalog row carried no capabilities —
+    /// unknown, not "no": a text-only model that is *known* text-only is what
+    /// stops the agent from sending it a picture it would reject.
+    #[serde(default)]
+    pub accepts_images: Option<bool>,
 }
 
 impl ModelLimits {
     /// True when the catalog reported nothing for this model.
     pub fn is_empty(&self) -> bool {
-        self.context_length.is_none() && self.max_output_tokens.is_none()
+        self.context_length.is_none()
+            && self.max_output_tokens.is_none()
+            && self.accepts_images.is_none()
     }
 }
 
@@ -65,6 +74,13 @@ pub fn context_window(model: &str) -> Option<usize> {
 /// The cached maximum reply size for `model`, in tokens.
 pub fn max_output_tokens(model: &str) -> Option<usize> {
     get(model)?.max_output_tokens.map(|v| v as usize)
+}
+
+/// Whether `model` accepts image input, when a catalog fetch has said either
+/// way. `None` = unknown (never fetched, or a local model the catalog doesn't
+/// describe); callers should keep attaching images in that case.
+pub fn accepts_images(model: &str) -> Option<bool> {
+    get(model)?.accepts_images
 }
 
 /// Merge freshly fetched limits into the cache. Best-effort (a cache write
@@ -105,6 +121,7 @@ mod tests {
                 ModelLimits {
                     context_length: Some(1_000_000),
                     max_output_tokens: Some(64_000),
+                    accepts_images: Some(true),
                 },
             ),
             // Reported nothing → skipped, not stored.
@@ -113,7 +130,9 @@ mod tests {
 
         assert_eq!(context_window("claude-opus-4-8"), Some(1_000_000));
         assert_eq!(max_output_tokens("claude-opus-4-8"), Some(64_000));
+        assert_eq!(accepts_images("claude-opus-4-8"), Some(true));
         assert_eq!(get("flux-2-klein"), None);
+        assert_eq!(accepts_images("flux-2-klein"), None);
 
         // A later fetch updates in place…
         record(vec![(
@@ -121,9 +140,22 @@ mod tests {
             ModelLimits {
                 context_length: Some(2_000_000),
                 max_output_tokens: Some(64_000),
+                accepts_images: Some(true),
             },
         )]);
         assert_eq!(context_window("claude-opus-4-8"), Some(2_000_000));
+
+        // A text-only model is recorded as such — that "no" is the signal
+        // the agent uses to keep pictures out of its requests.
+        record(vec![(
+            "deepseek-v4-pro".to_string(),
+            ModelLimits {
+                context_length: Some(1_048_576),
+                max_output_tokens: Some(384_000),
+                accepts_images: Some(false),
+            },
+        )]);
+        assert_eq!(accepts_images("deepseek-v4-pro"), Some(false));
 
         // …and an empty-limits row never erases known-good values.
         record(vec![(

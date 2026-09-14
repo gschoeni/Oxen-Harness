@@ -583,6 +583,7 @@ impl SessionService {
         // back to the name-derived window and the configured reply reserve.
         agent.set_context_window(harness_local::limits::context_window(&model));
         agent.set_max_output_tokens(harness_local::limits::max_output_tokens(&model));
+        agent.set_accepts_images(harness_local::limits::accepts_images(&model));
         // Follow the swap through to the fleet spawner so a later
         // spawn_agents fleet runs on the new model/endpoint.
         let session = agent.session_id().to_string();
@@ -787,6 +788,9 @@ impl SessionService {
             // The catalog-reported reply ceiling, when a fetch has cached it
             // (misses for local aliases — they fall back to the reserve).
             max_output_tokens: harness_local::limits::max_output_tokens(model_label),
+            // Whether the model takes pictures at all (a known text-only
+            // model gets notes in place of images, never a rejected request).
+            accepts_images: harness_local::limits::accepts_images(model_label),
             attachment_root: Some(workspace_root.to_path_buf()),
             initial_attachments: harness_runtime::project::binary_context_paths(workspace_root),
             compression: harness_runtime::compression::mode(),

@@ -132,6 +132,12 @@ pub struct AgentConfig {
     /// harness never asks a model for more output than it can produce.
     /// `None` leaves `response_reserve` as the cap.
     pub max_output_tokens: Option<usize>,
+    /// Whether the model accepts image input, when the endpoint's catalog
+    /// has said. `Some(false)` (a known text-only model) makes the agent
+    /// replace every image part with a short note before sending, instead of
+    /// letting the provider reject the whole request. `None` = unknown:
+    /// images are sent as-is.
+    pub accepts_images: Option<bool>,
     /// Maximum approximate text retained in the active model context. Verbatim
     /// history remains on disk; older turns are compacted before this grows
     /// without bound even when the provider advertises a very large window.
@@ -245,6 +251,13 @@ impl AgentConfig {
     pub fn for_subagent(&self) -> AgentConfig {
         let mut config = self.clone();
         config.model = config.roles.resolve(Role::Smol, &config.model).to_owned();
+        // A lane on a different model has different limits; the parent's
+        // catalog facts must not be mistaken for the child's.
+        if config.model != self.model {
+            config.context_window = None;
+            config.max_output_tokens = None;
+            config.accepts_images = None;
+        }
         config.initial_attachments.clear();
         config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
         config.round_budget = Some(RoundBudget::SUBAGENT);
@@ -291,6 +304,7 @@ impl Default for AgentConfig {
             context_window: None,
             response_reserve: 4096,
             max_output_tokens: None,
+            accepts_images: None,
             max_resident_context_chars: 1_000_000,
             attachment_root: None,
             initial_attachments: Vec::new(),

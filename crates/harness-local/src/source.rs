@@ -545,6 +545,10 @@ async fn fetch_oxen_models(
             crate::limits::ModelLimits {
                 context_length: e.context_length,
                 max_output_tokens: e.max_output_tokens,
+                accepts_images: e
+                    .capabilities
+                    .as_ref()
+                    .map(|c| c.input.iter().any(|i| i == "image")),
             },
         )
     }));

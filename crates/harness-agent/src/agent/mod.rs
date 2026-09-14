@@ -549,6 +549,15 @@ impl Agent {
         self.config.max_output_tokens = max;
     }
 
+    /// Set (or clear) whether the model accepts image input, after a live
+    /// model swap — pairs with [`Agent::set_model`] like the other limit
+    /// setters. `Some(false)` keeps pictures out of every request from now
+    /// on (see [`Agent::outbound_messages`]); the transcript itself keeps
+    /// them, so switching back to a multimodal model restores its sight.
+    pub fn set_accepts_images(&mut self, accepts: Option<bool>) {
+        self.config.accepts_images = accepts;
+    }
+
     /// Install the stop signal for the next turn. The host keeps a clone so it
     /// can cancel a running turn (`token.cancel()`) without taking the agent's
     /// lock — set a fresh token before each turn so a prior cancellation doesn't
@@ -1010,8 +1019,22 @@ impl Agent {
     /// with any on-disk attachment references hydrated back into inline data
     /// URIs the provider can consume. When no attachment store is configured the
     /// messages already carry inline content, so this is just the clone.
+    ///
+    /// A model the catalog marks text-only never sees an image part: each is
+    /// swapped for a note naming the file, so the request goes through and
+    /// the model knows what it's missing. This is the single chokepoint —
+    /// user attachments, tool screenshots, generated images, and a transcript
+    /// resumed onto a different model all pass here — so the transcript can
+    /// keep the images and a later multimodal model can still look at them.
     fn outbound_messages(&self) -> Vec<ChatMessage> {
         let mut messages = self.messages.clone();
+        if self.config.accepts_images == Some(false) {
+            for message in messages.iter_mut() {
+                if let Some(content) = message.content.as_mut() {
+                    strip_image_parts(content, &self.config.model);
+                }
+            }
+        }
         if let Some(store) = &self.attachments {
             let mut remaining_bytes = MAX_OUTBOUND_ATTACHMENT_BYTES;
             let mut remaining_parts = MAX_OUTBOUND_ATTACHMENT_PARTS;
@@ -1027,6 +1050,29 @@ impl Agent {
             }
         }
         messages
+    }
+}
+
+/// Replace every image part in `content` with a text note, for a model that
+/// cannot take image input. The note names the stored file (or says the image
+/// was inline) so the model can point the user at it or ask for a model swap,
+/// rather than being left hunting for a picture the surrounding text promised.
+fn strip_image_parts(content: &mut MessageContent, model: &str) {
+    let MessageContent::Parts(parts) = content else {
+        return;
+    };
+    for part in parts.iter_mut() {
+        if let ContentPart::ImageUrl { image_url } = part {
+            let location = if image_url.url.starts_with("data:") {
+                "it was attached inline".to_string()
+            } else {
+                format!("it is saved at {}", image_url.url)
+            };
+            *part = ContentPart::text(format!(
+                "[image omitted: {model} accepts text only, so it was not sent; {location}. \
+                 Switch to a model with image input to look at it.]"
+            ));
+        }
     }
 }
 
@@ -1235,6 +1281,68 @@ mod tests {
             },
             other => panic!("expected parts, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn text_only_model_gets_a_note_in_place_of_every_image_part() {
+        use harness_llm::types::{ContentPart, MessageContent};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "deepseek-v4-pro");
+        let client = OxenClient::new("http://localhost/api/ai", "key", "deepseek-v4-pro");
+        let config = AgentConfig {
+            model: "deepseek-v4-pro".into(),
+            attachment_root: Some(dir.path().to_path_buf()),
+            accepts_images: Some(false),
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        // The generated-image follow-up a tool produces (see push_tool_images).
+        let img = Attachment::from_bytes("ox.png", vec![1, 2, 3]).unwrap();
+        let msg = build_user_message(
+            "The image(s) produced by the tool call above:".into(),
+            std::slice::from_ref(&img),
+            agent.attachments.as_ref(),
+        )
+        .unwrap();
+        agent.push(msg).unwrap();
+
+        // Outbound: no image part survives; a note names the stored file.
+        let outbound = agent.outbound_messages();
+        let Some(MessageContent::Parts(parts)) = &outbound.last().unwrap().content else {
+            panic!("expected parts");
+        };
+        assert!(
+            !parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. })),
+            "a text-only model must never be sent an image part"
+        );
+        match &parts[1] {
+            ContentPart::Text { text } => {
+                assert!(text.contains("image omitted"), "{text}");
+                assert!(text.contains("deepseek-v4-pro"), "{text}");
+                assert!(text.contains(".oxen-harness/attachments/"), "{text}");
+            }
+            other => panic!("expected a note, got {other:?}"),
+        }
+
+        // The transcript keeps the image: swap to a multimodal model and it
+        // rides out hydrated, exactly as before.
+        agent.set_accepts_images(Some(true));
+        let outbound = agent.outbound_messages();
+        let Some(MessageContent::Parts(parts)) = &outbound.last().unwrap().content else {
+            panic!("expected parts");
+        };
+        assert!(matches!(&parts[1], ContentPart::ImageUrl { image_url } if image_url.url.starts_with("data:image/png")));
+
+        // Unknown capability (None) also sends the image — only a known "no" strips.
+        agent.set_accepts_images(None);
+        let outbound = agent.outbound_messages();
+        let Some(MessageContent::Parts(parts)) = &outbound.last().unwrap().content else {
+            panic!("expected parts");
+        };
+        assert!(matches!(&parts[1], ContentPart::ImageUrl { .. }));
     }
 
     #[test]
