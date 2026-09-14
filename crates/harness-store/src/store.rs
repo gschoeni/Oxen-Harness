@@ -238,6 +238,13 @@ pub const SETTLE_STATE: &str = "settle";
 /// `TrailSnapshot`: a model-chosen title plus named waypoints).
 pub const TRAIL_STATE: &str = "trail";
 
+/// `session_state` key: unix seconds the user last *looked at* this thread —
+/// opened its chat, or watched its turn finish. Written by the host's seen
+/// mark; shape is a bare JSON integer. The Ledger reads "finished while you
+/// were away" against it, per thread, so leaving the board never silently
+/// clears a loose end the user has yet to open.
+pub const SEEN_STATE: &str = "seen";
+
 /// `session_state` key for the agent's stream-rule repeat counters (which
 /// once-per-session reminders have already fired).
 pub const RULE_HISTORY_STATE: &str = "rule_history";
@@ -353,6 +360,9 @@ pub struct LedgerRow {
     pub trail_json: Option<String>,
     /// Raw JSON under [`SETTLE_STATE`]; `None` while the thread is open.
     pub settle_json: Option<String>,
+    /// Unix seconds under [`SEEN_STATE`]; `0` when the thread was never
+    /// opened since the mark existed.
+    pub seen_at: i64,
     /// Training-data curation status: `""` (unreviewed), `"kept"`, `"rejected"`.
     pub review_status: String,
 }
@@ -793,15 +803,17 @@ impl HistoryStore {
         // seqs of its title / last / last-reply messages, its count, its last
         // activity); the landmark rows are then fetched by (session_id, seq)
         // point-joins on the unique index. The board polls this on every
-        // refresh — five correlated per-session scans added up.
-        let mut stmt = conn.prepare(
+        // refresh — five correlated per-session scans added up. Title and
+        // reply are clipped in SQL: the board only ever shows a line of each.
+        let mut stmt = conn.prepare(&format!(
             "SELECT s.id, s.workspace, s.model, s.created_at,
-                    title.content AS title,
+                    substr(title.content, 1, {TITLE_CHARS}) AS title,
                     COALESCE(agg.msg_count, 0),
                     COALESCE(agg.last_msg_at, s.created_at) AS last_activity,
                     COALESCE(last.role, ''),
-                    COALESCE(substr(reply.content, 1, 280), ''),
-                    plan.raw_json, trail.raw_json, settle.raw_json, s.review_status
+                    COALESCE(substr(reply.content, 1, {PREVIEW_CHARS}), ''),
+                    plan.raw_json, trail.raw_json, settle.raw_json, s.review_status,
+                    COALESCE(CAST(seen.raw_json AS INTEGER), 0)
              FROM sessions s
              LEFT JOIN (SELECT session_id,
                                COUNT(*) AS msg_count,
@@ -829,10 +841,12 @@ impl HistoryStore {
                     ON trail.session_id = s.id AND trail.key = ?2
              LEFT JOIN session_state settle
                     ON settle.session_id = s.id AND settle.key = ?3
+             LEFT JOIN session_state seen
+                    ON seen.session_id = s.id AND seen.key = ?4
              WHERE s.source = '' AND s.parent_session = ''
              ORDER BY last_activity DESC",
-        )?;
-        let rows = stmt.query_map([PLAN_STATE, TRAIL_STATE, SETTLE_STATE], |row| {
+        ))?;
+        let rows = stmt.query_map([PLAN_STATE, TRAIL_STATE, SETTLE_STATE, SEEN_STATE], |row| {
             Ok((
                 row.get::<_, Option<String>>(4)?,
                 LedgerRow {
@@ -849,6 +863,7 @@ impl HistoryStore {
                     trail_json: row.get(10)?,
                     settle_json: row.get(11)?,
                     review_status: row.get(12)?,
+                    seen_at: row.get(13)?,
                 },
             ))
         })?;
@@ -1945,6 +1960,13 @@ mod tests {
         assert_eq!(row.trail_json.as_deref(), Some(r#"{"title":"t"}"#));
         assert_eq!(row.settle_json, None);
         assert_eq!(row.review_status, "kept");
+        // Never opened since the mark existed: zero, not NULL.
+        assert_eq!(row.seen_at, 0);
+
+        store
+            .save_session_state(&session, SEEN_STATE, &1_753_000_000_i64)
+            .unwrap();
+        assert_eq!(store.ledger_rows().unwrap()[0].seen_at, 1_753_000_000);
     }
 
     #[test]

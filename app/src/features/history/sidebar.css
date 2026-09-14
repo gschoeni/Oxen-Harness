@@ -94,6 +94,60 @@
   margin: 0 calc(-1 * var(--space-1));
   padding: 0 var(--space-1);
 }
+/* Section labels live inside the scrolling list now (the list has bands);
+   every band after the first breathes a little. */
+.history > .history-head {
+  margin-bottom: var(--space-1);
+  padding-top: var(--space-1);
+}
+.history > .history-head:not(:first-child) {
+  margin-top: var(--space-4);
+}
+.history-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0;
+  text-transform: none;
+  min-width: 1.6em;
+  text-align: center;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+/* "Needs you": the loose ends, in the same warning voice as the home card's
+   "N need you" pill — the number here IS that number. */
+.history-head.needs {
+  color: var(--warning, var(--accent));
+}
+.history-head.needs .history-count {
+  color: var(--warning, var(--accent));
+  background: color-mix(in srgb, var(--warning, var(--accent)) 13%, transparent);
+}
+.history-item.needy {
+  border-color: color-mix(in srgb, var(--warning, var(--accent)) 22%, transparent);
+}
+.history-item.needy.active {
+  border-color: color-mix(in srgb, var(--warning, var(--accent)) 45%, var(--separator));
+}
+/* The reason a chat needs the user — one quiet line under the title. */
+.history-need {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--warning, var(--accent));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+/* Settled: tied off, nothing owed — quieted, but still a click away. */
+.history-item.settled {
+  opacity: 0.66;
+}
+.history-item.settled:hover,
+.history-item.settled.active {
+  opacity: 1;
+}
 
 .history-item {
   display: flex;
@@ -242,6 +296,14 @@
 @keyframes run-ripple {
   0% { transform: scale(1); opacity: 0.55; }
   100% { transform: scale(2.6); opacity: 0; }
+}
+/* Needs you: a small solid warning dot, no motion — the card pill's dot. */
+.chat-status.needy {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--warning, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning, var(--accent)) 18%, transparent);
 }
 /* Done but unread: a small solid dot, no motion. */
 .chat-status.unread {

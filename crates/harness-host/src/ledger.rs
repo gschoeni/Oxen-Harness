@@ -14,7 +14,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use harness_protocol::{LedgerEntry, LedgerSnapshot, PlanProgress, SettleState};
-use harness_store::{HistoryStore, LedgerRow, PLAN_STATE, SETTLE_STATE};
+use harness_store::{HistoryStore, LedgerRow, PLAN_STATE, SEEN_STATE, SETTLE_STATE};
 use harness_tools::PlanSnapshot;
 
 use crate::SessionService;
@@ -106,6 +106,20 @@ impl SessionService {
         }
     }
 
+    /// Record that the user just looked at one thread — opened its chat, or
+    /// watched its turn finish — returning the new mark. Anything that lands
+    /// on the thread after this is "finished while you were away" until the
+    /// user opens it again; the board-level mark below can't clear it.
+    pub fn mark_session_seen(&self, session: &str) -> Result<i64, String> {
+        let store = self.store()?;
+        store.session_meta(session).map_err(|e| e.to_string())?;
+        let seen = now();
+        store
+            .save_session_state(session, SEEN_STATE, &seen)
+            .map_err(|e| e.to_string())?;
+        Ok(seen)
+    }
+
     /// Record that the user just looked at the board, returning the new mark.
     /// The *next* visit renders its "since you left" story against this.
     pub fn mark_ledger_seen(&self) -> Result<i64, String> {
@@ -153,6 +167,7 @@ fn entry_from_row(store: &HistoryStore, row: LedgerRow) -> LedgerEntry {
             .as_deref()
             .and_then(|raw| serde_json::from_str(raw).ok()),
         review_status: row.review_status,
+        seen_at: row.seen_at,
         id: row.id,
         workspace: row.workspace,
         model: row.model,

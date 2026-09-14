@@ -10,7 +10,7 @@ import { useStore } from "../../lib/store";
 import type { Project } from "../../lib/types";
 import { getUi, setUi } from "../../lib/uiState";
 import { RemoveProjectModal } from "../projects/RemoveProjectModal";
-import type { Board } from "./ledger";
+import { needsUser, type Board } from "./ledger";
 
 type CardSort = "recent" | "name";
 
@@ -66,9 +66,9 @@ export function ProjectCards({
       map.set(train.workspace, {
         open: train.threads.length,
         running: train.threads.filter((t) => t.state === "running").length,
-        // A stuck agent (parked on an approval) has `need === null` — it's
-        // running — but it is the loudest claim on attention there is.
-        needs: train.threads.filter((t) => t.need !== null || t.stuck).length,
+        // The same predicate the project's chat list sections on, so the
+        // pill's number is exactly the rows waiting inside.
+        needs: train.threads.filter(needsUser).length,
       });
     }
     return map;

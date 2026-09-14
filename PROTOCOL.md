@@ -115,6 +115,7 @@ The Ledger (the home board of threads across every project):
 ```
 GET    /v1/ledger                    → LedgerSnapshot {entries, running, last_seen}
 POST   /v1/ledger/seen               record "the user just looked" → new mark (unix secs)
+POST   /v1/sessions/{id}/seen        record "the user just looked at THIS thread" → new mark
 POST   /v1/sessions/{id}/settle      tie a thread off: {note?} → SettleState
 DELETE /v1/sessions/{id}/settle      bring it back to the trail
 ```
@@ -125,8 +126,9 @@ reply never arrived), the latest `update_plan` reading (`plan: {done, total,
 active}`), the journey the model charted via `update_trail` (`trail: {title,
 waypoints: [{name, status}]}` — its title supersedes the first-user-message
 title for display), the opening of its newest reply (`last_reply`), the
-training-data curation verdict (`review_status`), and its settle mark if tied
-off. `running` comes from the host's in-flight registry, so it is
+training-data curation verdict (`review_status`), when the user last looked at
+it (`seen_at` — activity newer than this is "finished while you were away",
+per thread), and its settle mark if tied off. `running` comes from the host's in-flight registry, so it is
 correct even after a client restart. Workspace git state is deliberately not
 here — it belongs to the workspace, not the thread (the desktop reads it via
 its own `workspace_git` command).

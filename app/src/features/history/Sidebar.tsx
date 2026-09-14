@@ -1,9 +1,11 @@
-import { useState, type PointerEvent } from "react";
+import { useEffect, useMemo, useState, type PointerEvent } from "react";
 import { FolderOpen, Plus, Settings as SettingsIcon, Trash2 } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { relativeTime } from "../../lib/format";
 import { Button, Modal } from "../../components/ui";
 import { DockToggle } from "../docks/DockToggle";
+import { needLabel, needRank, needsUser, rankOfNeed, type Thread } from "../ledger/ledger";
+import { useBoard } from "../ledger/useBoard";
 import type { RunStatus, SessionSummary } from "../../lib/types";
 import "./sidebar.css";
 
@@ -16,6 +18,28 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
   const resume = useStore((s) => s.resume);
   const removeSession = useStore((s) => s.removeSession);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
+  const ledger = useStore((s) => s.ledger);
+  const refreshLedger = useStore((s) => s.refreshLedger);
+
+  // The chat list reads the same derived board as the home cards, so the
+  // "N need you" a card promised is exactly the rows sectioned off up top.
+  // A chat can be reached without ever visiting Home — fetch the snapshot
+  // once if nothing has; the store keeps it fresh from there.
+  useEffect(() => {
+    if (!ledger) void refreshLedger();
+  }, [ledger, refreshLedger]);
+  const board = useBoard();
+  // Every thread the board has a verdict on, by session. Archived ("lost")
+  // threads are left out on purpose: the amnesty means they never nag, and
+  // the home card doesn't count them either.
+  const threads = useMemo(() => {
+    const map = new Map<string, Thread>();
+    for (const train of board?.trains ?? []) {
+      for (const thread of train.threads) map.set(thread.entry.id, thread);
+    }
+    for (const thread of board?.settled ?? []) map.set(thread.entry.id, thread);
+    return map;
+  }, [board]);
 
   // The chat queued for deletion (drives the confirm modal), and whether the
   // delete request is in flight.
@@ -67,6 +91,8 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
   // minting another empty session each press would only pile up orphans.
   const onFreshChat = pinned !== null && runStatus[pinned.id] !== "running";
 
+  const sections = useMemo(() => sectionRows(rows, threads, runStatus), [rows, threads, runStatus]);
+
   return (
     <aside className="sidebar">
       {onResizeStart && (
@@ -98,24 +124,71 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
             New chat
           </button>
 
-          <div className="history-head">
-            <span>Chats</span>
-          </div>
-
           <div className="history">
             {rows.length === 0 ? (
-              <div className="history-empty">No chats yet. Start one above.</div>
+              <>
+                <div className="history-head">
+                  <span>Chats</span>
+                </div>
+                <div className="history-empty">No chats yet. Start one above.</div>
+              </>
             ) : (
-              rows.map((s) => (
-                <ChatRow
-                  key={s.id}
-                  row={s}
-                  current={s.id === currentId}
-                  status={runStatus[s.id]}
-                  onOpen={() => resume(s.id)}
-                  onDelete={() => setPendingDelete(s)}
-                />
-              ))
+              <>
+                {sections.needs.length > 0 && (
+                  <>
+                    <div
+                      className="history-head needs"
+                      title="Loose ends: pick each one back up, or open it and tie the knot"
+                    >
+                      <span>Needs you</span>
+                      <span className="history-count">{sections.needs.length}</span>
+                    </div>
+                    {sections.needs.map((s) => (
+                      <ChatRow
+                        key={s.row.id}
+                        row={s.row}
+                        current={s.row.id === currentId}
+                        status={runStatus[s.row.id]}
+                        need={s.label}
+                        onOpen={() => resume(s.row.id)}
+                        onDelete={() => setPendingDelete(s.row)}
+                      />
+                    ))}
+                  </>
+                )}
+                {sections.open.length > 0 && (
+                  <div className="history-head">
+                    <span>{sections.needs.length > 0 ? "Other chats" : "Chats"}</span>
+                  </div>
+                )}
+                {sections.open.map((s) => (
+                  <ChatRow
+                    key={s.id}
+                    row={s}
+                    current={s.id === currentId}
+                    status={runStatus[s.id]}
+                    onOpen={() => resume(s.id)}
+                    onDelete={() => setPendingDelete(s)}
+                  />
+                ))}
+                {sections.settled.length > 0 && (
+                  <div className="history-head settled" title="Tied off — nothing owed here">
+                    <span>Settled</span>
+                    <span className="history-count">{sections.settled.length}</span>
+                  </div>
+                )}
+                {sections.settled.map((s) => (
+                  <ChatRow
+                    key={s.id}
+                    row={s}
+                    current={s.id === currentId}
+                    status={runStatus[s.id]}
+                    settled
+                    onOpen={() => resume(s.id)}
+                    onDelete={() => setPendingDelete(s)}
+                  />
+                ))}
+              </>
             )}
           </div>
         </>
@@ -163,17 +236,61 @@ export function Sidebar({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
   );
 }
 
-/** A single chat entry with its run indicator and a hover-revealed delete icon. */
+/** A needy chat with the words it wears. */
+interface NeedyRow {
+  row: SessionSummary;
+  label: string;
+}
+
+/** The project's chats in three bands, top to bottom: the ones that need the
+ *  user (most urgent first — a parked agent, a lost reply, a finish they
+ *  haven't seen, an open plan, a thread going cold), the rest of the open
+ *  chats in their usual order, and the tied-off ones last. Reads the board's
+ *  verdict per thread; a chat the board hasn't met yet (no user turn, or the
+ *  snapshot still loading) is an ordinary open chat. A finish the store saw
+ *  land offscreen this session (`unread`) counts as needing the user even
+ *  before the board catches up — the dot always meant "look at this". */
+export function sectionRows(
+  rows: SessionSummary[],
+  threads: Map<string, Thread>,
+  runStatus: Record<string, RunStatus | undefined>,
+): { needs: NeedyRow[]; open: SessionSummary[]; settled: SessionSummary[] } {
+  const needs: (NeedyRow & { rank: number; index: number })[] = [];
+  const open: SessionSummary[] = [];
+  const settled: SessionSummary[] = [];
+  rows.forEach((row, index) => {
+    const thread = threads.get(row.id);
+    if (thread?.state === "settled") {
+      settled.push(row);
+    } else if (thread && needsUser(thread)) {
+      needs.push({ row, label: needLabel(thread) ?? "", rank: needRank(thread), index });
+    } else if (runStatus[row.id] === "unread") {
+      needs.push({ row, label: "finished while you were away", rank: rankOfNeed("finished"), index });
+    } else {
+      open.push(row);
+    }
+  });
+  needs.sort((a, b) => a.rank - b.rank || a.index - b.index);
+  return { needs: needs.map(({ row, label }) => ({ row, label })), open, settled };
+}
+
+/** A single chat entry with its run indicator and a hover-revealed delete icon.
+ *  A needy row also carries its reason under the title, in the warning color
+ *  the home card's pill wears; a settled row is quieted. */
 function ChatRow({
   row,
   current,
   status,
+  need,
+  settled = false,
   onOpen,
   onDelete,
 }: {
   row: SessionSummary;
   current: boolean;
   status: RunStatus | undefined;
+  need?: string;
+  settled?: boolean;
   onOpen: () => void;
   onDelete: () => void;
 }) {
@@ -187,10 +304,13 @@ function ChatRow({
     return p && p.phase === "ready" ? p.port : null;
   });
   return (
-    <div className={`history-item ${current ? "active" : ""}`}>
+    <div
+      className={`history-item ${current ? "active" : ""} ${need ? "needy" : ""} ${settled ? "settled" : ""}`}
+    >
       <button className="history-open" onClick={onOpen}>
         <span className="history-text">
           <span className="history-title">{title}</span>
+          {need && <span className="history-need">{need}</span>}
           <span className="history-sub">
             <span className="history-date">{when}</span>
             {model && (
@@ -215,6 +335,8 @@ function ChatRow({
           <span className="chat-status running" title="Running" aria-label="Running">
             <span className="run-dot" />
           </span>
+        ) : need ? (
+          <span className="chat-status needy" title={need} aria-label="Needs you" />
         ) : status === "unread" && !current ? (
           <span className="chat-status unread" title="Done — unread" aria-label="Done, unread" />
         ) : null}

@@ -274,7 +274,12 @@ function deriveThread(
         ? "dangling"
         : "camp";
   const idleDays = Math.max(0, now - entry.last_activity_at) / DAY;
-  const fresh = !isRunning && lastSeen > 0 && entry.last_activity_at > lastSeen;
+  // "Finished while you were away" is measured per thread once the user has
+  // opened it: leaving the board can't quietly clear a loose end they never
+  // looked at. Threads never opened since the mark existed fall back to the
+  // board-level stamp, the only baseline they have.
+  const seenAt = entry.seen_at > 0 ? entry.seen_at : lastSeen;
+  const fresh = !isRunning && seenAt > 0 && entry.last_activity_at > seenAt;
   return {
     entry,
     state,
@@ -304,6 +309,58 @@ function threadNeed(
   if (entry.plan && entry.plan.done < entry.plan.total) return "plan-open";
   if (idleDays >= COLD_DAYS) return "going-cold";
   return null;
+}
+
+/** Whether a thread has a claim on the user right now — the one predicate the
+ *  project card's "N need you" pill and the chat list's "Needs you" section
+ *  both count, so the number on the card is the number of rows inside. A
+ *  stuck agent (parked on an approval) has `need === null` because it is
+ *  running, yet it is the loudest claim there is. */
+export function needsUser(thread: Thread): boolean {
+  return thread.need !== null || thread.stuck;
+}
+
+/** Why the thread needs the user, in a few words — the reason a chat row
+ *  wears beside its title. Null when nothing is owed. */
+export function needLabel(thread: Thread): string | null {
+  if (thread.stuck) return "waiting on your approval";
+  switch (thread.need) {
+    case "dangling":
+      return "left dangling — reply never arrived";
+    case "finished":
+      return "finished while you were away";
+    case "plan-open": {
+      const plan = thread.entry.plan;
+      return plan ? `plan ${plan.done}/${plan.total} — pick it up or tie off` : "plan unfinished";
+    }
+    case "going-cold":
+      return `going cold — ${Math.floor(thread.idleDays)}d idle, tie off?`;
+    case null:
+      return null;
+  }
+}
+
+/** Urgency order for needy threads, lowest first: a parked agent burns
+ *  wall-clock, a dangler lost its reply, then the rest in the board's ranking.
+ *  Threads that need nothing sort last. */
+export function needRank(thread: Thread): number {
+  return thread.stuck ? 0 : rankOfNeed(thread.need);
+}
+
+/** [`needRank`] for a bare need, when there is no derived thread to ask. */
+export function rankOfNeed(need: Need | null): number {
+  switch (need) {
+    case "dangling":
+      return 1;
+    case "finished":
+      return 2;
+    case "plan-open":
+      return 3;
+    case "going-cold":
+      return 4;
+    case null:
+      return 5;
+  }
 }
 
 /** Seconds since local midnight for unix time `now` — "settled today" means

@@ -233,6 +233,9 @@ export const settleSession = (id: string, note?: string) =>
 export const reopenSession = (id: string) => invoke<void>("reopen_session", { id });
 /** Record that the user just looked at the board; resolves with the new mark. */
 export const ledgerMarkSeen = () => invoke<number>("ledger_mark_seen");
+/** Record that the user just looked at one thread (opened its chat, or
+ *  watched its turn end); returns the new mark. */
+export const sessionMarkSeen = (id: string) => invoke<number>("session_mark_seen", { id });
 /** Git overviews for workspaces, keyed by path; non-repos are absent. */
 export const workspaceGit = (paths: string[]) =>
   invoke<Record<string, GitOverview>>("workspace_git", { paths });

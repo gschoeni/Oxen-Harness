@@ -276,6 +276,12 @@ pub struct LedgerEntry {
     /// Training-data curation: `""` (unreviewed), `"kept"`, or `"rejected"`.
     #[serde(default)]
     pub review_status: String,
+    /// Unix seconds the user last looked at this thread (opened its chat or
+    /// watched its turn end); `0` when never recorded. Activity newer than
+    /// this is "finished while you were away" — per thread, so it stays
+    /// flagged until the user actually opens it.
+    #[serde(default)]
+    pub seen_at: i64,
 }
 
 /// Everything the Ledger board needs, in one read.

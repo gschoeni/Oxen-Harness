@@ -69,6 +69,17 @@ pub(crate) async fn ledger_mark_seen(state: State<'_, AppState>) -> Result<i64, 
     state.service.mark_ledger_seen()
 }
 
+/// Record that the user just looked at one thread (opened its chat, or
+/// watched its turn end). Activity after this mark is "finished while you
+/// were away" for that thread until it is opened again.
+#[tauri::command]
+pub(crate) async fn session_mark_seen(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<i64, String> {
+    state.service.mark_session_seen(&id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,6 +99,7 @@ mod tests {
             trail: None,
             settle: None,
             review_status: String::new(),
+            seen_at: 0,
         }
     }
 
@@ -99,7 +111,11 @@ mod tests {
             last_seen: 0,
         };
         drop_removed(&mut snapshot, &["/gone".to_string()]);
-        let workspaces: Vec<_> = snapshot.entries.iter().map(|e| e.workspace.as_str()).collect();
+        let workspaces: Vec<_> = snapshot
+            .entries
+            .iter()
+            .map(|e| e.workspace.as_str())
+            .collect();
         assert_eq!(workspaces, ["/kept", "/kept-too"]);
 
         // No removals: untouched.

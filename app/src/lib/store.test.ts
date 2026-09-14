@@ -74,6 +74,19 @@ describe("store: navigation", () => {
   });
 });
 
+describe("store: per-thread seen marks", () => {
+  it("opening a chat marks it seen, then repaints the board against the new mark", async () => {
+    await useStore.getState().resume("older");
+    await vi.waitFor(() => expect(ipc.sessionMarkSeen).toHaveBeenCalledWith("older"));
+    await vi.waitFor(() => expect(ipc.ledgerSnapshot).toHaveBeenCalled());
+    // The mark lands BEFORE the snapshot that repaints — never the other way.
+    const markAt = ipc.sessionMarkSeen.mock.invocationCallOrder[0];
+    const order = ipc.ledgerSnapshot.mock.invocationCallOrder;
+    const lastSnapshot = order[order.length - 1];
+    expect(lastSnapshot).toBeGreaterThan(markAt);
+  });
+});
+
 describe("store: trail dust", () => {
   it("tool starts raise dust for any session, cached thread or not", () => {
     // No thread cached for "bg" — the chat runs entirely in the background —
@@ -109,6 +122,7 @@ describe("store: ledger refreshes", () => {
     last_reply: "",
     message_count: 1,
     mid_turn: false,
+    seen_at: 0,
     plan: null,
     trail: null,
     review_status: "",

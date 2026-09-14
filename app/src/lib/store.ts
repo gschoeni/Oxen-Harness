@@ -10,9 +10,11 @@ import { tailChars } from "./format";
 import { applyThemePalette, applyThemeStyle } from "./theme";
 import {
   deleteProject,
+  sessionMessages,
   deleteSession,
   gitStatus,
   ledgerMarkSeen,
+  sessionMarkSeen,
   ledgerSnapshot,
   listCloudModels,
   listProjects,
@@ -832,6 +834,34 @@ export const useStore = create<AppState>((rawSet, get) => {
     void s.refreshLedger();
   }
 
+  // A turn (or review) just ended with nothing queued: read if the chat is in
+  // view, unread if it finished offscreen. Viewing counts as seeing — the
+  // thread's durable seen mark moves too, so the board never flags a reply
+  // the user watched land as "finished while you were away".
+  function settleRunStatus(id: string) {
+    set((s) => {
+      const runStatus = { ...s.runStatus };
+      if (s.session?.session_id === id) delete runStatus[id];
+      else runStatus[id] = "unread";
+      return { runStatus };
+    });
+  }
+
+  // Mark a thread seen, then refresh the board — in that order, so the
+  // snapshot it reads already carries the mark (a refresh racing the write
+  // would paint the thread ✦ for a beat).
+  async function markSeenThenRefresh(id: string) {
+    await sessionMarkSeen(id).catch(() => {});
+    await get().refreshLedger();
+  }
+
+  // A turn just ended: seen if the chat is in view, else just repaint.
+  // Offscreen threads have nothing to mark — their activity IS the "while
+  // you were away" story.
+  function refreshLedgerAfterSeen(id: string) {
+    return get().session?.session_id === id ? markSeenThenRefresh(id) : get().refreshLedger();
+  }
+
   // Monotonic stamp for ledger refreshes. Concurrent calls race the network
   // (board mount, window focus, turn end, settle clicks), and the git probe
   // makes each one two sequential awaits — without the stamp, an older probe
@@ -895,12 +925,7 @@ export const useStore = create<AppState>((rawSet, get) => {
           set((s) => ({ queues: { ...s.queues, [id]: (s.queues[id] ?? []).slice(1) } }));
           setTimeout(() => runTurnFor(id, next.text, next.attachments), 0); // let state settle first
         } else {
-          set((s) => {
-            const runStatus = { ...s.runStatus };
-            if (s.session?.session_id === id) delete runStatus[id]; // in view → read
-            else runStatus[id] = "unread";
-            return { runStatus };
-          });
+          settleRunStatus(id);
         }
         // The turn settled: the wagon parks and its live verb comes off.
         set((s) => ({ trailActivity: { ...s.trailActivity, [id]: undefined } }));
@@ -1479,12 +1504,8 @@ export const useStore = create<AppState>((rawSet, get) => {
             set((s) => ({ queues: { ...s.queues, [id]: (s.queues[id] ?? []).slice(1) } }));
             setTimeout(() => runTurnFor(id, next.text, next.attachments), 0);
           } else {
-            set((s) => {
-              const runStatus = { ...s.runStatus };
-              if (s.session?.session_id === id) delete runStatus[id];
-              else runStatus[id] = "unread";
-              return { runStatus };
-            });
+            settleRunStatus(id);
+            void refreshLedgerAfterSeen(id);
           }
         });
     },

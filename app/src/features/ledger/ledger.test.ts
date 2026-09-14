@@ -4,6 +4,9 @@ import {
   ARCHIVE_DAYS,
   shipStage,
   findThread,
+  needLabel,
+  needRank,
+  needsUser,
   COLD_DAYS,
   currentStage,
   deriveBoard,
@@ -27,6 +30,7 @@ function entry(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
     last_reply: "",
     message_count: 8,
     mid_turn: false,
+    seen_at: 0,
     plan: null,
     trail: null,
     review_status: "",
@@ -106,6 +110,31 @@ describe("thread states", () => {
     expect(fresh).toEqual(["new"]);
     expect(board.freshCount).toBe(1);
     expect(board.awaySeconds).toBe(DAY);
+  });
+
+  it("a thread the user has opened measures freshness against ITS seen mark, not the board's", () => {
+    // Board marked seen a minute ago (the user just left Home); both threads
+    // finished before that. Board-only freshness would clear them both — but
+    // "opened" was looked at after its finish, "unopened" never was.
+    const board = deriveBoard(
+      inputs({
+        entries: [
+          entry({ id: "opened", last_activity_at: NOW - 3_600, seen_at: NOW - 1_800 }),
+          entry({ id: "unopened", last_activity_at: NOW - 3_600, seen_at: NOW - 2 * DAY }),
+          entry({ id: "legacy", last_activity_at: NOW - 3_600, seen_at: 0 }),
+        ],
+        lastSeen: NOW - 60,
+      }),
+    );
+    const byId = Object.fromEntries(
+      board.trains.flatMap((t) => t.threads).map((t) => [t.entry.id, t]),
+    );
+    expect(byId.opened.fresh).toBe(false);
+    expect(byId.opened.need).toBeNull();
+    expect(byId.unopened.fresh).toBe(true);
+    expect(byId.unopened.need).toBe("finished");
+    // Never opened since the mark existed: the board stamp is the only baseline.
+    expect(byId.legacy.fresh).toBe(false);
   });
 
   it("first visit has no freshness story at all", () => {
@@ -599,5 +628,45 @@ describe("trail geometry", () => {
     expect(shape.progress).toBeGreaterThan(shape.stations[1].at);
     // Ship styling survives the fallback layout.
     expect(shape.stations.map((s) => s.ship)).toEqual([false, true, false, true]);
+  });
+});
+
+describe("needs: the one predicate the card pill and the chat list share", () => {
+  it("names the reason in the user's words and ranks a parked agent first", () => {
+    const board = deriveBoard(
+      inputs({
+        entries: [
+          entry({ id: "stuck", last_activity_at: NOW - 60 }),
+          entry({ id: "dangle", mid_turn: true }),
+          entry({ id: "fin", last_activity_at: NOW - 600 }),
+          entry({ id: "plan", plan: { done: 2, total: 5, active: null } }),
+          entry({ id: "cold", last_activity_at: NOW - (COLD_DAYS + 1) * DAY }),
+          entry({ id: "calm", trail: { title: "", waypoints: [{ name: "implement", status: "current" }] } }),
+          entry({ id: "tied", settle: { settled_at: NOW - 60, note: "" } }),
+        ],
+        running: new Set(["stuck"]),
+        waiting: new Set(["stuck"]),
+        lastSeen: NOW - 3_600,
+      }),
+    );
+    const all = [...board.trains.flatMap((t) => t.threads), ...board.settled];
+    const byId = Object.fromEntries(all.map((t) => [t.entry.id, t]));
+
+    expect(needsUser(byId.stuck)).toBe(true);
+    expect(needLabel(byId.stuck)).toBe("waiting on your approval");
+    expect(needLabel(byId.dangle)).toMatch(/left dangling/);
+    expect(needLabel(byId.fin)).toBe("finished while you were away");
+    expect(needLabel(byId.plan)).toMatch(/plan 2\/5/);
+    expect(needLabel(byId.cold)).toMatch(/going cold/);
+    expect(needsUser(byId.calm)).toBe(false);
+    expect(needLabel(byId.calm)).toBeNull();
+    expect(needsUser(byId.tied)).toBe(false);
+
+    const order = ["cold", "plan", "fin", "dangle", "stuck"]
+      .map((id) => byId[id])
+      .sort((a, b) => needRank(a) - needRank(b))
+      .map((t) => t.entry.id);
+    expect(order).toEqual(["stuck", "dangle", "fin", "plan", "cold"]);
+    expect(needRank(byId.calm)).toBeGreaterThan(needRank(byId.cold));
   });
 });

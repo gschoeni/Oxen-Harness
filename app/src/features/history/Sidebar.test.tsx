@@ -9,7 +9,7 @@ import { ProjectsNav } from "../projects/ProjectsNav";
 import { useStore } from "../../lib/store";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
-import type { Project, SessionSummary } from "../../lib/types";
+import type { LedgerEntry, Project, SessionSummary } from "../../lib/types";
 
 const sessions: SessionSummary[] = [
   { id: "s1", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "First chat", message_count: 4, review_status: "", source: "" },
@@ -95,13 +95,90 @@ describe("Sidebar", () => {
     expect(useStore.getState().settingsOpen).toBe(true);
   });
 
-  it("shows a running indicator and an unread dot per chat", () => {
+  it("shows a running indicator, and an unread finish wears the needs-you dot", () => {
+    // Unread used to be its own quiet dot; a finish the user hasn't looked at
+    // is a loose end now, so it takes the warning dot and the Needs you band.
     useStore.setState({ runStatus: { s1: "running", s2: "unread" } });
     render(<Sidebar />);
     const first = screen.getByText("First chat").closest(".history-item")!;
     const second = screen.getByText("Second chat").closest(".history-item")!;
     expect(first.querySelector(".chat-status.running")).not.toBeNull();
-    expect(second.querySelector(".chat-status.unread")).not.toBeNull();
+    expect(second.querySelector(".chat-status.needy")).not.toBeNull();
+    expect(second.querySelector(".chat-status.unread")).toBeNull();
+  });
+
+  it("sections the list into Needs you / other chats / settled, with the reason on each loose end", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const ledgerEntry = (overrides: Partial<LedgerEntry>): LedgerEntry => ({
+      id: "s1",
+      workspace: "/w",
+      model: "m",
+      created_at: now - 86_400,
+      last_activity_at: now - 3_600,
+      title: "",
+      last_reply: "",
+      message_count: 2,
+      mid_turn: false,
+      plan: null,
+      trail: null,
+      settle: null,
+      review_status: "",
+      seen_at: 0,
+      ...overrides,
+    });
+    useStore.setState({
+      sessions: [
+        ...sessions,
+        { id: "s3", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "Third chat", message_count: 2, review_status: "", source: "" },
+        { id: "s4", workspace: "/w", model: "m", created_at: 1_700_000_000, title: "Fourth chat", message_count: 2, review_status: "", source: "" },
+      ],
+      ledger: {
+        entries: [
+          // s1: an ordinary open chat — the last word was spoken, nothing owed.
+          ledgerEntry({ id: "s1", title: "First chat" }),
+          // s2: the reply never arrived.
+          ledgerEntry({ id: "s2", title: "Second chat", mid_turn: true }),
+          // s3: tied off.
+          ledgerEntry({ id: "s3", title: "Third chat", settle: { settled_at: now - 60, note: "" } }),
+          // s4: finished after the user last looked at it.
+          ledgerEntry({ id: "s4", title: "Fourth chat", seen_at: now - 7_200 }),
+        ],
+        running: [],
+        last_seen: now - 60,
+      },
+    });
+    render(<Sidebar />);
+
+    // The band headers, with the loose-end count the home card promised.
+    const needsHead = screen.getByText("Needs you").closest(".history-head")!;
+    expect(needsHead.querySelector(".history-count")).toHaveTextContent("2");
+    expect(screen.getByText("Other chats")).toBeInTheDocument();
+    expect(screen.getByText("Settled")).toBeInTheDocument();
+
+    // Rows land in the right bands, most urgent first, each wearing its reason.
+    const titles = Array.from(document.querySelectorAll(".history-title")).map((el) => el.textContent);
+    expect(titles).toEqual(["Second chat", "Fourth chat", "First chat", "Third chat"]);
+    const second = screen.getByText("Second chat").closest(".history-item")!;
+    expect(second).toHaveClass("needy");
+    expect(second.querySelector(".history-need")).toHaveTextContent(/left dangling/);
+    expect(second.querySelector(".chat-status.needy")).not.toBeNull();
+    const fourth = screen.getByText("Fourth chat").closest(".history-item")!;
+    expect(fourth.querySelector(".history-need")).toHaveTextContent("finished while you were away");
+    expect(screen.getByText("First chat").closest(".history-item")!.querySelector(".history-need")).toBeNull();
+    expect(screen.getByText("Third chat").closest(".history-item")).toHaveClass("settled");
+  });
+
+  it("a finish the store saw land offscreen counts as needing you before the board catches up", () => {
+    useStore.setState({ runStatus: { s2: "unread" } });
+    render(<Sidebar />);
+    expect(screen.getByText("Needs you")).toBeInTheDocument();
+    const second = screen.getByText("Second chat").closest(".history-item")!;
+    expect(second.querySelector(".history-need")).toHaveTextContent("finished while you were away");
+  });
+
+  it("fetches the board once when nothing has, so a chat reached without visiting Home still sections", () => {
+    render(<Sidebar />);
+    expect(ipc.ledgerSnapshot).toHaveBeenCalledOnce();
   });
 
   it("shows the model and date for each chat", () => {

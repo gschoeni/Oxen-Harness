@@ -165,6 +165,11 @@ export interface LedgerEntry {
   settle: SettleState | null;
   /** Training-data curation: "" (unreviewed), "kept", or "rejected". */
   review_status: ReviewStatus;
+  /** Unix seconds the user last looked at this thread (opened its chat or
+   *  watched its turn end); 0 when never recorded. Activity newer than this
+   *  is "finished while you were away" — per thread, so a loose end stays
+   *  flagged until the user actually opens it. */
+  seen_at: number;
 }
 
 /** Everything the Ledger board needs, in one read. */

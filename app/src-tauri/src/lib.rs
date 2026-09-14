@@ -192,6 +192,7 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::ledger::settle_session,
             commands::ledger::reopen_session,
             commands::ledger::ledger_mark_seen,
+            commands::ledger::session_mark_seen,
             commands::ledger::workspace_git,
             commands::browser::browser_attach,
             commands::browser::browser_detach,

@@ -23,6 +23,7 @@ function entry(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
     last_reply: "",
     message_count: 8,
     mid_turn: false,
+    seen_at: 0,
     plan: null,
     trail: null,
     settle: null,
