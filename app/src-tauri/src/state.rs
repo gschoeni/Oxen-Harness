@@ -32,6 +32,9 @@ pub struct AppState {
     /// stream (`cancel_download`); an id's presence doubles as the guard that
     /// keeps two invokes from racing the same `.part` file.
     pub(crate) downloads: Mutex<HashMap<String, CancellationToken>>,
+    /// The `--open <surface>` of a cold start, handed to the UI once (see
+    /// `take_launch_surface`); a second-instance launch emits it instead.
+    pub(crate) launch_surface: std::sync::Mutex<Option<String>>,
 }
 
 impl std::ops::Deref for AppState {
@@ -79,6 +82,7 @@ impl AppState {
             console_bridge: tokio::sync::OnceCell::new(),
             preview_attach: Mutex::new(()),
             downloads: Mutex::new(HashMap::new()),
+            launch_surface: std::sync::Mutex::new(None),
         }
     }
 }

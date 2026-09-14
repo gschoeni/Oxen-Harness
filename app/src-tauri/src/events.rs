@@ -38,4 +38,6 @@ pub(crate) struct BrowserOpenPayload {
 #[derive(Clone, Serialize)]
 pub(crate) struct ProjectOpenPayload {
     pub(crate) path: String,
+    /// What to open once there: `gallery`, `settings:<page>`, `session:<id>`.
+    pub(crate) surface: Option<String>,
 }

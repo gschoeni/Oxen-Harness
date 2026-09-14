@@ -30,25 +30,51 @@ pub(crate) fn dir_from_args(args: impl IntoIterator<Item = String>, base: &Path)
         })
 }
 
+/// The surface a launch asks the UI to open once it's on the project: the
+/// value after `--open` (`gallery`, `settings:<page>`, `session:<id>`).
+pub(crate) fn surface_from_args(args: impl IntoIterator<Item = String>) -> Option<String> {
+    let mut args = args.into_iter().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--open" {
+            return args.next().filter(|s| !s.trim().is_empty());
+        }
+        if let Some(value) = arg.strip_prefix("--open=") {
+            return (!value.trim().is_empty()).then(|| value.to_string());
+        }
+    }
+    None
+}
+
 /// The single-instance callback: a second `oxen-harness ui <dir>` (or plain
 /// second launch) landed while this instance owns the app. Focus the window;
 /// if the argv carries a directory, make it the active project and hand it to
-/// the UI.
+/// the UI — with the surface to open there, when one was asked for.
 pub(crate) fn open_from_second_instance(app: &AppHandle, argv: &[String], cwd: &str) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
-    let Some(dir) = dir_from_args(argv.iter().cloned(), Path::new(cwd)) else {
+    let dir = dir_from_args(argv.iter().cloned(), Path::new(cwd));
+    let surface = surface_from_args(argv.iter().cloned());
+    if dir.is_none() && surface.is_none() {
         return;
-    };
-    let _ = remember_project(&dir);
+    }
+    if let Some(dir) = &dir {
+        let _ = remember_project(dir);
+    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
-        *state.active_project.lock().await = PathBuf::from(&dir);
-        let _ = app.emit("project://open", ProjectOpenPayload { path: dir });
+        let path = match dir {
+            Some(dir) => {
+                *state.active_project.lock().await = PathBuf::from(&dir);
+                dir
+            }
+            // A surface with no directory opens on the current project.
+            None => state.active_project.lock().await.display().to_string(),
+        };
+        let _ = app.emit("project://open", ProjectOpenPayload { path, surface });
     });
 }
 
@@ -98,6 +124,20 @@ mod tests {
             )
         );
         std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn surface_follows_the_open_flag() {
+        assert_eq!(
+            surface_from_args(args(&["app", "/tmp", "--open", "gallery"])),
+            Some("gallery".into())
+        );
+        assert_eq!(
+            surface_from_args(args(&["app", "--open=settings:media"])),
+            Some("settings:media".into())
+        );
+        assert_eq!(surface_from_args(args(&["app", "/tmp"])), None);
+        assert_eq!(surface_from_args(args(&["app", "--open"])), None);
     }
 
     #[test]
