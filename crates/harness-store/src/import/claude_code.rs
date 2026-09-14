@@ -29,13 +29,25 @@ pub fn scan(root: &Path) -> usize {
 /// Read every session transcript under `root` (`~/.claude/projects`) into
 /// normalized conversations, oldest first. Unreadable files and unparseable
 /// lines are skipped — importing a foreign format is best-effort by nature.
+///
+/// Holds every conversation at once; a full import should drain
+/// [`conversations`] instead and persist as it goes.
 pub fn load(root: &Path) -> Vec<ImportedConversation> {
-    let mut out: Vec<ImportedConversation> = session_files(root)
-        .iter()
-        .filter_map(|path| parse_session_file(path))
-        .collect();
+    let mut out: Vec<ImportedConversation> = conversations(root).collect();
     out.sort_by_key(|c| c.created_at);
     out
+}
+
+/// Every session transcript under `root`, parsed one file at a time as the
+/// iterator is pulled — so an import can persist each batch and drop it
+/// before the next file is read, instead of holding months of transcripts
+/// (tool results included) in memory at once. Order is directory order, not
+/// time: dedup is by `source_ref`, and fresh session ids are random, so
+/// nothing downstream depends on arrival order. Same skip rules as [`load`].
+pub fn conversations(root: &Path) -> impl Iterator<Item = ImportedConversation> {
+    session_files(root)
+        .into_iter()
+        .filter_map(|path| parse_session_file(&path))
 }
 
 /// Every `<project-slug>/<session-uuid>.jsonl` under the projects root.

@@ -324,7 +324,7 @@ export const importSourcesScan = vi.fn(
   async () => [] as { source: string; available: number; imported: number }[],
 );
 export const importExternal = vi.fn(async () => ({ imported: 0, updated: 0, skipped: 0 }));
-export const attachmentDataUri = vi.fn(async () => "data:image/png;base64,AAAA");
+export const attachmentPath = vi.fn(async (path: string) => (path.startsWith("/") ? path : `/ws/${path}`));
 export const newSession = vi.fn(async () => ({ ...sampleSession, session_id: "new-session-id" }));
 export const resumeSession = vi.fn(async () => emptyView);
 export const deleteSession = vi.fn(async () => {});
@@ -695,7 +695,7 @@ export function resetIpc() {
   saveSkill.mockReset().mockResolvedValue(undefined);
   deleteSkill.mockReset().mockResolvedValue(undefined);
   setSkillEnabled.mockReset().mockResolvedValue(undefined);
-  attachmentDataUri.mockReset().mockResolvedValue("data:image/png;base64,AAAA");
+  attachmentPath.mockReset().mockImplementation(async (path: string) => (path.startsWith("/") ? path : `/ws/${path}`));
   runCodeReview.mockReset().mockResolvedValue({
     status: "ok",
     user: "Run a code review of the uncommitted changes in this workspace.",

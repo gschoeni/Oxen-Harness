@@ -43,32 +43,58 @@ pub fn scan(user_dir: &Path) -> usize {
 /// Read every conversation from a Cursor user directory
 /// (`~/Library/Application Support/Cursor/User` on macOS), oldest first.
 /// Unparseable rows are skipped — best-effort over a foreign format.
+///
+/// Holds every conversation at once; a full import should drain
+/// [`conversations`] instead and persist as it goes.
 pub fn load(user_dir: &Path) -> Vec<ImportedConversation> {
-    let Ok(conn) = open_read_only(&global_db(user_dir)) else {
-        return Vec::new();
-    };
-    let workspaces = workspace_by_composer(user_dir);
-
-    let Ok(mut stmt) =
-        conn.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'")
-    else {
-        return Vec::new();
-    };
-    let rows: Vec<(String, String)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .map(|rows| rows.flatten().collect())
-        .unwrap_or_default();
-
-    let mut out: Vec<ImportedConversation> = rows
-        .iter()
-        .filter_map(|(key, value)| {
-            let composer_id = key.strip_prefix("composerData:")?;
-            let data: Value = serde_json::from_str(value).ok()?;
-            parse_composer(&conn, composer_id, &data, &workspaces)
-        })
-        .collect();
+    let mut out: Vec<ImportedConversation> = conversations(user_dir).collect();
     out.sort_by_key(|c| c.created_at);
     out
+}
+
+/// Every conversation in the Cursor user dir, one composer at a time as the
+/// iterator is pulled. Only the composer ids are read up front (one short
+/// key per conversation); each composer's metadata row and its bubbles are
+/// fetched when its turn comes, so an import holds one conversation's worth
+/// of transcript plus whatever batch it is accumulating — not the whole
+/// history. Order is the key/value store's, not time: dedup is by
+/// `source_ref` and session ids are random, so nothing depends on it. Same
+/// skip rules as [`load`]; a missing or unreadable database yields nothing.
+pub fn conversations(user_dir: &Path) -> impl Iterator<Item = ImportedConversation> {
+    let conn = open_read_only(&global_db(user_dir)).ok();
+    let composer_ids: Vec<String> = conn
+        .as_ref()
+        .and_then(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT key FROM cursorDiskKV WHERE key LIKE 'composerData:%'")
+                .ok()?;
+            let ids = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .ok()?
+                .flatten()
+                .filter_map(|key| key.strip_prefix("composerData:").map(str::to_string))
+                .collect();
+            Some(ids)
+        })
+        .unwrap_or_default();
+    let workspaces = if composer_ids.is_empty() {
+        HashMap::new()
+    } else {
+        workspace_by_composer(user_dir)
+    };
+
+    composer_ids.into_iter().filter_map(move |composer_id| {
+        let conn = conn.as_ref()?;
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM cursorDiskKV WHERE key = ?1",
+                [format!("composerData:{composer_id}")],
+                |row| row.get(0),
+            )
+            .ok()?;
+        let data: Value = serde_json::from_str(&raw).ok()?;
+        parse_composer(conn, &composer_id, &data, &workspaces)
+    })
 }
 
 fn global_db(user_dir: &Path) -> std::path::PathBuf {

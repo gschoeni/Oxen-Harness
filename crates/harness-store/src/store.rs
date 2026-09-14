@@ -212,6 +212,23 @@ pub const MAP_MEMO_STATE: &str = "map_memo";
 /// writer and the reader can never drift apart.
 pub const PLAN_STATE: &str = "plan";
 
+/// How many characters of the first user message a session title keeps.
+/// Titles label sidebar rows, ledger wagons, and pickers — one line each — so
+/// the store clips in SQL rather than shipping a pasted document per session
+/// on every list refresh.
+pub const TITLE_CHARS: usize = 200;
+
+/// How many characters a one-line message preview keeps (the ledger's last
+/// reply, a rewind picker's turn text). Slightly longer than a title: a reply
+/// preview reads as a sentence or two.
+pub const PREVIEW_CHARS: usize = 280;
+
+/// How many imported conversations are persisted per transaction by
+/// [`HistoryStore::import_conversations_iter`]. Small enough that a batch of
+/// tool-heavy transcripts is a modest allocation; large enough that a history
+/// of thousands does not pay per-conversation commit cost.
+pub const IMPORT_BATCH: usize = 50;
+
 /// `session_state` key marking a thread tied off in the Ledger (written by the
 /// host's settle command; shape is `harness_protocol`'s `SettleState`).
 pub const SETTLE_STATE: &str = "settle";
@@ -244,7 +261,6 @@ pub enum HistoryError {
     },
     #[error("could not decode exported history as UTF-8: {0}")]
     ExportEncoding(#[from] std::string::FromUtf8Error),
-
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     #[error("schema migration failed: {0}")]
@@ -253,6 +269,9 @@ pub enum HistoryError {
     Json(#[from] serde_json::Error),
     #[error("session not found: {0}")]
     SessionNotFound(String),
+    /// Writing an export to its destination failed (the store itself is fine).
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 /// Metadata describing a session (one working-directory-scoped run).
@@ -291,7 +310,9 @@ pub struct SessionSummary {
     pub workspace: String,
     pub model: String,
     pub created_at: i64,
-    /// The first user message's text, used as the conversation title.
+    /// The first user message's text, used as the conversation title. Clipped
+    /// to [`TITLE_CHARS`] characters in SQL: a pasted stack trace or file body
+    /// as the opening prompt would otherwise ride along in every list refresh.
     pub title: Option<String>,
     pub message_count: i64,
     /// Training-data review status: `""` (unreviewed), `"kept"`, or `"rejected"`.
@@ -312,7 +333,8 @@ pub struct LedgerRow {
     pub workspace: String,
     pub model: String,
     pub created_at: i64,
-    /// The first user message's text (the conversation title).
+    /// The first user message's text (the conversation title), clipped to
+    /// [`TITLE_CHARS`] characters like [`SessionSummary::title`].
     pub title: String,
     pub message_count: i64,
     /// The newest message's timestamp, falling back to session creation.
@@ -578,12 +600,15 @@ impl HistoryStore {
     /// Every message the user actually sent, as `(seq, preview)`, oldest
     /// first — the points a rewind can go back to. Synthetic user-role rows
     /// (delivered task output, fleet asides, tool-image stubs) are left out.
+    /// The preview is clipped to [`PREVIEW_CHARS`] characters: every consumer
+    /// shows one line per turn, and a pasted document should not be loaded
+    /// whole just to pick it from a list.
     pub fn user_turns(&self, session_id: &str) -> Result<Vec<(i64, String)>, HistoryError> {
         let conn = self.lock()?;
-        let mut stmt = conn.prepare(
-            "SELECT seq, COALESCE(content, '') FROM messages
+        let mut stmt = conn.prepare(&format!(
+            "SELECT seq, COALESCE(substr(content, 1, {PREVIEW_CHARS}), '') FROM messages
              WHERE session_id = ?1 AND role = 'user' AND synthetic = 0 ORDER BY seq",
-        )?;
+        ))?;
         let rows = stmt.query_map([session_id], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -716,12 +741,14 @@ impl HistoryStore {
     ///
     /// Each summary carries the first user message as a title so the UI can show
     /// a readable label. Brand-new sessions that only contain the seeded system
-    /// prompt are omitted — they have no user turn to title them with.
+    /// prompt are omitted — they have no user turn to title them with. The
+    /// title is clipped in SQL ([`TITLE_CHARS`]) so the whole history list
+    /// stays small no matter how much was pasted into an opening prompt.
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, HistoryError> {
         let conn = self.lock()?;
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT s.id, s.workspace, s.model, s.created_at,
-                    (SELECT m.content FROM messages m
+                    (SELECT substr(m.content, 1, {TITLE_CHARS}) FROM messages m
                        WHERE m.session_id = s.id AND m.role = 'user'
                          AND m.content IS NOT NULL
                        ORDER BY m.seq ASC LIMIT 1) AS title,
@@ -730,7 +757,7 @@ impl HistoryStore {
              FROM sessions s
              WHERE s.parent_session = ''
              ORDER BY s.created_at DESC",
-        )?;
+        ))?;
         let rows = stmt.query_map([], |row| {
             Ok(SessionSummary {
                 id: row.get(0)?,
@@ -877,6 +904,36 @@ impl HistoryStore {
         for row in rows {
             let (workspace, last_used): (String, i64) = row?;
             out.insert(workspace, last_used);
+        }
+        Ok(out)
+    }
+
+    /// How many native chats each workspace holds — the project list's chat
+    /// counts. Counted in SQL rather than by materializing `list_sessions`:
+    /// that builds a titled summary per session just to be tallied and
+    /// dropped. Same population as [`Self::list_sessions`] filtered to
+    /// `source == ""` — sessions with no user turn yet are left out, so a
+    /// directory whose only chat is an unused blank one does not count as
+    /// having history. Imported transcripts keep their source tool's cwd as
+    /// workspace and would otherwise mint phantom projects.
+    pub fn session_counts_by_workspace(
+        &self,
+    ) -> Result<std::collections::HashMap<String, usize>, HistoryError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT s.workspace, COUNT(*)
+             FROM sessions s
+             WHERE s.source = '' AND s.parent_session = ''
+               AND EXISTS (SELECT 1 FROM messages m
+                            WHERE m.session_id = s.id AND m.role = 'user'
+                              AND m.content IS NOT NULL)
+             GROUP BY s.workspace",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (workspace, count): (String, i64) = row?;
+            out.insert(workspace, count.max(0) as usize);
         }
         Ok(out)
     }
@@ -1120,7 +1177,7 @@ impl HistoryStore {
         Ok(out)
     }
 
-    /// The final assistant reply of a session    /// The final assistant reply of a session (a finished lane's answer), or
+    /// The final assistant reply of a session (a finished lane's answer), or
     /// `None` when it has none. Read from the verbatim row: the `content`
     /// column is only filled for user messages (it feeds titles).
     pub fn last_assistant_text(&self, session_id: &str) -> Result<Option<String>, HistoryError> {
@@ -1410,23 +1467,45 @@ impl HistoryStore {
     /// text-only dialogue; when true, `tool_calls` and tool results are
     /// preserved so the data can teach tool use. Sessions with no usable
     /// messages are skipped, so the output never has blank conversations.
+    ///
+    /// Buffers the whole file in memory; prefer
+    /// [`Self::export_chat_completions_to`] when the destination is a file.
     pub fn export_chat_completions(
         &self,
         session_ids: &[String],
         include_tools: bool,
     ) -> Result<String, HistoryError> {
-        let mut out = String::new();
+        let mut out = Vec::new();
+        self.export_chat_completions_to(&mut out, session_ids, include_tools)?;
+        Ok(String::from_utf8(out)?)
+    }
+
+    /// [`Self::export_chat_completions`], streamed: each session is loaded,
+    /// normalized, and written as one line before the next is read, so the
+    /// peak footprint is a single transcript rather than the whole dataset —
+    /// exporting every chat in a long history to a file no longer means
+    /// holding the entire JSONL as one string first. Returns the number of
+    /// conversations written (the line count). The writer is not flushed;
+    /// the caller owns that, along with whatever buffering it wants.
+    pub fn export_chat_completions_to<W: std::io::Write>(
+        &self,
+        out: &mut W,
+        session_ids: &[String],
+        include_tools: bool,
+    ) -> Result<usize, HistoryError> {
+        let mut written = 0;
         for sid in session_ids {
             let messages = self.messages(sid)?;
             if let Some(conversation) =
                 crate::export::conversation_from_messages(&messages, include_tools)
             {
                 let line = serde_json::json!({ "messages": conversation });
-                out.push_str(&serde_json::to_string(&line)?);
-                out.push('\n');
+                serde_json::to_writer(&mut *out, &line)?;
+                out.write_all(b"\n")?;
+                written += 1;
             }
         }
-        Ok(out)
+        Ok(written)
     }
 
     /// How many sessions were imported from `source` (for the import panel's
@@ -1447,6 +1526,10 @@ impl HistoryStore {
     /// grew since the last import (the source tool kept chatting) has its
     /// messages replaced in full, keeping the session id and any review status
     /// already assigned; an unchanged one is skipped.
+    ///
+    /// One transaction for the whole slice; a full import of another tool's
+    /// history should go through [`Self::import_conversations_iter`], which
+    /// feeds this in bounded batches.
     pub fn import_conversations(
         &self,
         source: &str,
@@ -1518,6 +1601,48 @@ impl HistoryStore {
         }
         tx.commit()?;
         Ok(report)
+    }
+
+    /// [`Self::import_conversations`] over a lazy source, committed in
+    /// batches of [`IMPORT_BATCH`]. Each batch is parsed, persisted, and
+    /// dropped before the next is pulled, so importing a large history costs
+    /// one batch of transcripts in memory rather than all of them, and the
+    /// store lock is released between batches (the parse happens outside
+    /// it). Batches keep transaction count low without pinning much: the
+    /// dedup key is `(source, source_ref)`, so the result is the same
+    /// whatever order conversations arrive in or how they are chunked. The
+    /// report is the sum over batches. A batch that fails to commit ends the
+    /// import with that error; earlier batches stay committed, and a rescan
+    /// picks up where it left off by the usual dedup.
+    pub fn import_conversations_iter<I>(
+        &self,
+        source: &str,
+        conversations: I,
+    ) -> Result<crate::import::ImportReport, HistoryError>
+    where
+        I: IntoIterator<Item = crate::import::ImportedConversation>,
+    {
+        let mut total = crate::import::ImportReport::default();
+        let mut batch = Vec::with_capacity(IMPORT_BATCH);
+        let mut flush = |batch: &mut Vec<crate::import::ImportedConversation>| {
+            if batch.is_empty() {
+                return Ok(());
+            }
+            let report = self.import_conversations(source, batch)?;
+            total.imported += report.imported;
+            total.updated += report.updated;
+            total.skipped += report.skipped;
+            batch.clear();
+            Ok::<(), HistoryError>(())
+        };
+        for conv in conversations {
+            batch.push(conv);
+            if batch.len() >= IMPORT_BATCH {
+                flush(&mut batch)?;
+            }
+        }
+        flush(&mut batch)?;
+        Ok(total)
     }
 }
 
@@ -2137,6 +2262,186 @@ mod tests {
     }
 
     #[test]
+    fn session_counts_by_workspace_matches_the_listed_native_chats() {
+        use crate::import::ImportedConversation;
+        let store = store();
+        let chat = |workspace: &str, prompt: &str| {
+            let mut m = meta();
+            m.workspace = workspace.into();
+            let id = store.create_session(&m).unwrap();
+            store.append_message(&id, &Message::user(prompt)).unwrap();
+            id
+        };
+        chat("/tmp/a", "one");
+        chat("/tmp/a", "two");
+        chat("/tmp/b", "three");
+        // Opened but never used: no user turn, so not a chat the list shows.
+        let mut blank = meta();
+        blank.workspace = "/tmp/blank".into();
+        store.create_session(&blank).unwrap();
+        // An imported transcript keeps its source tool's cwd — not a project.
+        store
+            .import_conversations(
+                "claude-code",
+                &[ImportedConversation {
+                    source_ref: "ext-1".into(),
+                    workspace: "/tmp/imported".into(),
+                    model: "m".into(),
+                    created_at: 10,
+                    messages: vec![
+                        serde_json::json!({"role": "user", "content": "hi"}),
+                        serde_json::json!({"role": "assistant", "content": "hello"}),
+                    ],
+                }],
+            )
+            .unwrap();
+
+        let counts = store.session_counts_by_workspace().unwrap();
+        assert_eq!(counts.get("/tmp/a"), Some(&2));
+        assert_eq!(counts.get("/tmp/b"), Some(&1));
+        assert_eq!(counts.get("/tmp/blank"), None);
+        assert_eq!(counts.get("/tmp/imported"), None);
+
+        // Exactly what tallying `list_sessions` by hand used to produce.
+        let mut by_hand = std::collections::HashMap::new();
+        for s in store.list_sessions().unwrap() {
+            if s.source.is_empty() {
+                *by_hand.entry(s.workspace).or_insert(0usize) += 1;
+            }
+        }
+        assert_eq!(counts, by_hand);
+    }
+
+    #[test]
+    fn list_titles_and_previews_are_clipped_in_sql() {
+        let store = store();
+        let id = store.create_session(&meta()).unwrap();
+        // A multi-byte character makes sure the clip counts characters, not
+        // bytes — SQLite's substr() on TEXT is character-based.
+        let long = "é".repeat(TITLE_CHARS * 5);
+        store.append_message(&id, &Message::user(&long)).unwrap();
+        store
+            .append_message(&id, &Message::assistant(&long))
+            .unwrap();
+
+        let listed = store.list_sessions().unwrap();
+        let title = listed[0].title.as_deref().unwrap();
+        assert_eq!(title.chars().count(), TITLE_CHARS);
+        assert!(long.starts_with(title));
+
+        let ledger = store.ledger_rows().unwrap();
+        assert_eq!(ledger[0].title.chars().count(), TITLE_CHARS);
+        assert_eq!(ledger[0].last_reply.chars().count(), PREVIEW_CHARS);
+
+        let turns = store.user_turns(&id).unwrap();
+        assert_eq!(turns[0].1.chars().count(), PREVIEW_CHARS);
+
+        // Short titles come through whole — clipping never pads or truncates
+        // anything that already fits.
+        let short = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&short, &Message::user("fits"))
+            .unwrap();
+        let listed = store.list_sessions().unwrap();
+        let row = listed.iter().find(|s| s.id == short).unwrap();
+        assert_eq!(row.title.as_deref(), Some("fits"));
+    }
+
+    #[test]
+    fn export_writer_form_matches_the_string_form_byte_for_byte() {
+        let store = store();
+        let mut ids = Vec::new();
+        for (prompt, reply) in [("hi", "hello"), ("what's 2+2?", "4"), ("bye", "see you")] {
+            let id = store.create_session(&meta()).unwrap();
+            store
+                .append_message(&id, &Message::system("be helpful"))
+                .unwrap();
+            store.append_message(&id, &Message::user(prompt)).unwrap();
+            store
+                .append_message(&id, &Message::assistant(reply))
+                .unwrap();
+            ids.push(id);
+        }
+        // One without an exchange: skipped by both forms.
+        let bare = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&bare, &Message::user("unanswered"))
+            .unwrap();
+        ids.push(bare);
+
+        for include_tools in [false, true] {
+            let string_form = store.export_chat_completions(&ids, include_tools).unwrap();
+            let mut streamed = Vec::new();
+            let count = store
+                .export_chat_completions_to(&mut streamed, &ids, include_tools)
+                .unwrap();
+            assert_eq!(count, 3);
+            assert_eq!(streamed, string_form.as_bytes());
+            assert_eq!(string_form.lines().count(), count);
+        }
+    }
+
+    #[test]
+    fn import_conversations_iter_batches_and_sums_reports() {
+        use crate::import::{ImportReport, ImportedConversation};
+        let store = store();
+        let conv = |n: usize, replies: usize| ImportedConversation {
+            source_ref: format!("ext-{n}"),
+            workspace: "/Users/me/proj".into(),
+            model: "m".into(),
+            created_at: n as i64,
+            messages: std::iter::once(serde_json::json!({"role": "user", "content": "hi"}))
+                .chain(
+                    (0..replies)
+                        .map(|_| serde_json::json!({"role": "assistant", "content": "hello"})),
+                )
+                .collect(),
+        };
+        // More than two batches' worth, with a ragged tail.
+        let total = IMPORT_BATCH * 2 + 7;
+
+        let first = store
+            .import_conversations_iter("claude-code", (0..total).map(|n| conv(n, 1)))
+            .unwrap();
+        assert_eq!(
+            first,
+            ImportReport {
+                imported: total,
+                updated: 0,
+                skipped: 0
+            }
+        );
+        assert_eq!(store.imported_count("claude-code").unwrap(), total as i64);
+
+        // A rescan where only the first few grew: dedup is by source_ref, so
+        // batching and arrival order change nothing about the outcome.
+        let grown = 3;
+        let again = store
+            .import_conversations_iter(
+                "claude-code",
+                (0..total)
+                    .rev()
+                    .map(|n| conv(n, if n < grown { 2 } else { 1 })),
+            )
+            .unwrap();
+        assert_eq!(
+            again,
+            ImportReport {
+                imported: 0,
+                updated: grown,
+                skipped: total - grown
+            }
+        );
+        assert_eq!(store.imported_count("claude-code").unwrap(), total as i64);
+
+        // An empty source is a no-op, not an error.
+        let none = store
+            .import_conversations_iter("claude-code", std::iter::empty())
+            .unwrap();
+        assert_eq!(none, ImportReport::default());
+    }
+
+    #[test]
     fn append_to_unknown_session_errors() {
         let store = store();
         let err = store
@@ -2569,6 +2874,13 @@ mod tests {
             .map(|r| r.id)
             .collect();
         assert_eq!(board, vec![parent.clone()]);
+        assert_eq!(
+            store
+                .session_counts_by_workspace()
+                .unwrap()
+                .get(&meta().workspace),
+            Some(&1)
+        );
 
         // The lane is reachable through its parent, record-less until it ends.
         let lanes = store.lanes_of(&parent).unwrap();

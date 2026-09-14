@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use harness_llm::{Attachment, ChatMessage};
+use harness_llm::ChatMessage;
 use harness_protocol::{AgentSummary, SessionInfo, SessionView};
 use harness_store::{DailyUsage, HistoryStore, ModelUsage, SessionSummary};
 use serde::Serialize;
@@ -81,13 +81,20 @@ pub(crate) async fn delete_session(state: State<'_, AppState>, id: String) -> Re
     state.delete_session(&id).await
 }
 
-/// Load an attachment as a `data:` URI for display in the UI (composer preview
-/// and chat history). `path` is either an absolute path (a freshly picked file)
-/// or a path relative to a session's workspace (how persisted image attachments
-/// are stored, under `.oxen-harness/attachments/`). Returning a data URI keeps
-/// rendering CSP-safe — no asset-protocol or file:// access needed.
+/// The absolute on-disk path of an attachment, for display through the
+/// webview's asset protocol (`convertFileSrc`). `path` is either an absolute
+/// path (a freshly picked file) or a path relative to a session's workspace
+/// (how persisted image attachments are stored, under
+/// `.oxen-harness/attachments/`).
+///
+/// This used to return a `data:` URI: the whole file base64-encoded in Rust,
+/// copied over IPC, and then held as a string in the JS heap — a 4 MB
+/// screenshot became a 5 MB string per mounted thumbnail, plus the decoded
+/// bitmap, for as long as it was on screen. The asset protocol streams the
+/// bytes straight from disk into WebKit's image decoder instead, the same way
+/// the editor pane shows images.
 #[tauri::command]
-pub(crate) async fn attachment_data_uri(
+pub(crate) async fn attachment_path(
     state: State<'_, AppState>,
     path: String,
     session: Option<String>,
@@ -100,24 +107,33 @@ pub(crate) async fn attachment_data_uri(
     } else {
         p.to_path_buf()
     };
-    let attachment = Attachment::from_path(&abs).map_err(|e| e.to_string())?;
-    Ok(attachment.data_uri())
+    if !abs.is_file() {
+        return Err(format!("attachment not found: {}", abs.display()));
+    }
+    Ok(abs.display().to_string())
 }
 
 /// Export the given sessions as chat-completions fine-tuning JSONL (Oxen.ai
 /// format: one `{"messages":[…]}` conversation per line) to `path`. Returns the
 /// number of conversations written. `include_tools` keeps tool calls + results.
+/// Streams session by session through a buffered file writer: "export
+/// everything" over a long history used to assemble the whole dataset as one
+/// string before a single byte hit disk.
 #[tauri::command]
 pub(crate) async fn export_finetuning(
     path: String,
     session_ids: Vec<String>,
     include_tools: bool,
 ) -> Result<usize, String> {
-    let jsonl = open_history_store()?
-        .export_chat_completions(&session_ids, include_tools)
+    use std::io::Write;
+    let store = open_history_store()?;
+    let file = std::fs::File::create(&path).map_err(|e| format!("could not write {path}: {e}"))?;
+    let mut out = std::io::BufWriter::new(file);
+    let count = store
+        .export_chat_completions_to(&mut out, &session_ids, include_tools)
         .map_err(|e| e.to_string())?;
-    let count = jsonl.lines().filter(|l| !l.is_empty()).count();
-    std::fs::write(&path, jsonl).map_err(|e| format!("could not write {path}: {e}"))?;
+    out.flush()
+        .map_err(|e| format!("could not write {path}: {e}"))?;
     Ok(count)
 }
 
@@ -182,23 +198,27 @@ pub(crate) async fn import_sources_scan() -> Result<Vec<ImportSourceStatus>, Str
 /// the source's own conversation id: new conversations are added, ones that
 /// grew since the last import are refreshed (keeping their review status), and
 /// unchanged ones are skipped. Runs on a blocking thread — parsing a large
-/// history can take a while.
+/// history can take a while. Conversations are parsed lazily and persisted in
+/// batches, so a year of transcripts is never all in memory at once.
 #[tauri::command]
 pub(crate) async fn import_external(source: String) -> Result<harness_store::ImportReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use harness_store::import::{claude_code, cursor, SOURCE_CLAUDE_CODE, SOURCE_CURSOR};
-        let conversations = match source.as_str() {
-            SOURCE_CLAUDE_CODE => claude_code_root()
-                .map(|r| claude_code::load(&r))
-                .unwrap_or_default(),
-            SOURCE_CURSOR => cursor_user_dir()
-                .map(|d| cursor::load(&d))
-                .unwrap_or_default(),
+        let store = open_history_store()?;
+        let report = match source.as_str() {
+            SOURCE_CLAUDE_CODE => match claude_code_root() {
+                Some(root) => {
+                    store.import_conversations_iter(&source, claude_code::conversations(&root))
+                }
+                None => Ok(Default::default()),
+            },
+            SOURCE_CURSOR => match cursor_user_dir() {
+                Some(dir) => store.import_conversations_iter(&source, cursor::conversations(&dir)),
+                None => Ok(Default::default()),
+            },
             other => return Err(format!("unknown import source: {other}")),
         };
-        open_history_store()?
-            .import_conversations(&source, &conversations)
-            .map_err(|e| e.to_string())
+        report.map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

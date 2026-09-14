@@ -17,8 +17,9 @@ pub mod store;
 pub use import::{ImportReport, ImportedConversation};
 pub use store::{
     CacheUsageTotals, DailyUsage, HistoryError, HistoryStore, LaneSummary, LedgerRow, ModelUsage,
-    SessionMeta, SessionSummary, SessionUsage, UsageDetail, LANE_STATE, MAP_MEMO_STATE,
-    PLAN_STATE, RULE_HISTORY_STATE, SETTLE_STATE, TRAIL_STATE,
+    SessionMeta, SessionSummary, SessionUsage, UsageDetail, IMPORT_BATCH, LANE_STATE,
+    MAP_MEMO_STATE, PLAN_STATE, PREVIEW_CHARS, RULE_HISTORY_STATE, SEEN_STATE, SETTLE_STATE,
+    TITLE_CHARS, TRAIL_STATE,
 };
 
 use serde::Serialize;

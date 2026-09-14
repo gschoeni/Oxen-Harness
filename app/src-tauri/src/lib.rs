@@ -164,7 +164,7 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::session::set_review_status,
             commands::session::set_review_status_many,
             commands::session::delete_session,
-            commands::session::attachment_data_uri,
+            commands::session::attachment_path,
             commands::tools::tool_definitions,
             commands::tools::list_tools,
             commands::tools::add_custom_tool,

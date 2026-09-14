@@ -201,10 +201,13 @@ export const importSourcesScan = () => invoke<ImportSourceStatus[]>("import_sour
 export const importExternal = (source: string) =>
   invoke<ImportReport>("import_external", { source });
 
-/** Load an attachment (absolute path, or relative to a session's workspace) as a
- *  data: URI for display — used by the composer preview and chat history. */
-export const attachmentDataUri = (path: string, session?: string) =>
-  invoke<string>("attachment_data_uri", { path, session });
+/** Resolve an attachment reference (an absolute path, or a path relative to a
+ *  session's workspace) to its absolute on-disk path — errors if the file is
+ *  gone. The caller renders it through the asset protocol (`convertFileSrc`),
+ *  so the webview streams the bytes itself: no base64 copy of every image in
+ *  the chat is ever built on the Rust side or held in JS heap. */
+export const attachmentPath = (path: string, session?: string) =>
+  invoke<string>("attachment_path", { path, session });
 export const newSession = () => invoke<SessionInfo>("new_session");
 export const resumeSession = (id: string) => invoke<SessionView>("resume_session", { id });
 /** Permanently delete a chat session and its messages. */
