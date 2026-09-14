@@ -72,13 +72,19 @@ pub(crate) fn arm_notice(ui: &Ui, cols: usize) -> String {
     let forms: [Vec<(String, &str)>; 3] = [
         vec![
             (ui.accent("ctrl-c"), "ctrl-c"),
-            (ui.dim("again leaves the trail ·"), "again leaves the trail ·"),
+            (
+                ui.dim("again leaves the trail ·"),
+                "again leaves the trail ·",
+            ),
             (ui.accent(&key), "d"),
             (
                 ui.dim("labels this run as training data first ·"),
                 "labels this run as training data first ·",
             ),
-            (ui.dim("any other key keeps riding"), "any other key keeps riding"),
+            (
+                ui.dim("any other key keeps riding"),
+                "any other key keeps riding",
+            ),
         ],
         vec![
             (ui.accent("ctrl-c"), "ctrl-c"),

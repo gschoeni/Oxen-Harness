@@ -218,7 +218,13 @@ pub(crate) fn wrap(text: &str, max: usize) -> Vec<String> {
         let indent_len = line.len() - line.trim_start().len();
         let indent: String = line[..indent_len]
             .chars()
-            .map(|c| if c == '\t' { "    ".to_string() } else { c.to_string() })
+            .map(|c| {
+                if c == '\t' {
+                    "    ".to_string()
+                } else {
+                    c.to_string()
+                }
+            })
             .collect::<String>()
             .chars()
             .take(max / 2)

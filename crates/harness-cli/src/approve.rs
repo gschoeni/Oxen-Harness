@@ -171,7 +171,9 @@ mod tests {
         let mut req = request(ApprovalKind::Shell);
         req.command = "cd /tmp && python3 - <<'PY'\nimport json\nprint(1)\nPY".into();
         let text = question_text(&req);
-        assert!(text.contains("\n    cd /tmp && python3 - <<'PY'\n    import json\n    print(1)\n    PY\n"));
+        assert!(text.contains(
+            "\n    cd /tmp && python3 - <<'PY'\n    import json\n    print(1)\n    PY\n"
+        ));
 
         let long: Vec<String> = (0..100).map(|i| format!("echo {i}")).collect();
         req.command = long.join("\n");

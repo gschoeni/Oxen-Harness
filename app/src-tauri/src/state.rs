@@ -45,11 +45,7 @@ impl AppState {
     /// Wire the service to this app: protocol events emit on the legacy
     /// webview channels, and the preview hooks use the native child-webview
     /// surfaces.
-    pub(crate) fn new(
-        app: AppHandle,
-        initial_project: PathBuf,
-        initial_model: String,
-    ) -> Self {
+    pub(crate) fn new(app: AppHandle, initial_project: PathBuf, initial_model: String) -> Self {
         let sink = Arc::new(TauriSink { app: app.clone() });
         let preview_app = app.clone();
         let lens_app = app.clone();

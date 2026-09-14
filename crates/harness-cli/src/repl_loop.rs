@@ -139,8 +139,7 @@ pub(crate) async fn run_classic_repl(
             // Ctrl-C then `d` (+ ⏎ here, since readline hands us whole lines):
             // label the run as training data, then leave.
             Ok(line)
-                if exit_guard.armed()
-                    && line.trim() == crate::interrupt::LABEL_KEY.to_string() =>
+                if exit_guard.armed() && line.trim() == crate::interrupt::LABEL_KEY.to_string() =>
             {
                 exit_guard.disarm();
                 if label_run(agent, ui, ctx) == ReviewOutcome::Labeled {

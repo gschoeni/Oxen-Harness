@@ -453,7 +453,10 @@ mod tests {
         for width in [40usize, 80, 200] {
             let row = question_echo(&ui, "approval", question, width);
             assert!(!row.contains('\n'), "bare newline in echo: {row:?}");
-            assert!(row.chars().count() <= width, "echo overflows {width}: {row:?}");
+            assert!(
+                row.chars().count() <= width,
+                "echo overflows {width}: {row:?}"
+            );
             assert!(row.contains("[approval] The agent wants"), "{row:?}");
             if width >= 80 {
                 assert!(row.contains("The agent wants to run: cd /tmp && python3"));
