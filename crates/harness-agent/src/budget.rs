@@ -60,6 +60,25 @@ pub fn context_window_for(model: &str) -> usize {
 
 /// Estimate the prompt tokens for a transcript plus its tool definitions.
 pub fn estimate_prompt_tokens(messages: &[ChatMessage], tools: &[serde_json::Value]) -> usize {
+    estimate_prompt_tokens_with_tool_chars(messages, tool_definition_chars(tools))
+}
+
+/// The character weight of a set of tool definitions: the length of each
+/// schema's JSON text. Stringifying every schema is the expensive half of
+/// [`estimate_prompt_tokens`], and the definitions rarely change, so callers
+/// that estimate repeatedly (e.g. the agent's context meter) cache this and
+/// pass it to [`estimate_prompt_tokens_with_tool_chars`].
+pub fn tool_definition_chars(tools: &[serde_json::Value]) -> usize {
+    tools.iter().map(|t| t.to_string().len()).sum()
+}
+
+/// [`estimate_prompt_tokens`] with the tool definitions' weight supplied as a
+/// precomputed character count (see [`tool_definition_chars`]). Same
+/// arithmetic; the two are interchangeable.
+pub fn estimate_prompt_tokens_with_tool_chars(
+    messages: &[ChatMessage],
+    tool_chars: usize,
+) -> usize {
     let mut chars = 0usize;
     for m in messages {
         chars += m.role.len();
@@ -78,7 +97,6 @@ pub fn estimate_prompt_tokens(messages: &[ChatMessage], tools: &[serde_json::Val
             chars += name.len();
         }
     }
-    let tool_chars: usize = tools.iter().map(|t| t.to_string().len()).sum();
     chars += tool_chars;
 
     chars / CHARS_PER_TOKEN + messages.len() * PER_MESSAGE_OVERHEAD
@@ -189,6 +207,34 @@ mod tests {
         assert!(big > small);
         // ~4000 chars / 4 chars-per-token ≈ 1000 tokens (plus overhead).
         assert!(big >= 1000);
+    }
+
+    #[test]
+    fn precomputed_tool_chars_give_the_same_estimate() {
+        let tools = vec![
+            serde_json::json!({"type":"function","function":{"name":"read_file",
+                "parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}),
+            serde_json::json!({"type":"function","function":{"name":"noop"}}),
+        ];
+        let messages = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("x".repeat(1000)),
+            ChatMessage::tool_result("c1", "ok"),
+        ];
+        let chars = tool_definition_chars(&tools);
+        assert_eq!(
+            chars,
+            tools.iter().map(|t| t.to_string().len()).sum::<usize>()
+        );
+        assert_eq!(
+            estimate_prompt_tokens(&messages, &tools),
+            estimate_prompt_tokens_with_tool_chars(&messages, chars)
+        );
+        assert_eq!(tool_definition_chars(&[]), 0);
+        assert_eq!(
+            estimate_prompt_tokens(&messages, &[]),
+            estimate_prompt_tokens_with_tool_chars(&messages, 0)
+        );
     }
 
     #[test]

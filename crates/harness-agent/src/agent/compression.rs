@@ -45,6 +45,9 @@ impl Agent {
                 self.ccr = None;
             }
         }
+        // The tool set just changed; the context meter's cached tool weight
+        // must be recomputed from the new definitions.
+        self.invalidate_tool_cache();
     }
 
     /// Cumulative estimated tokens compression saved (`on`) or would have
@@ -213,6 +216,42 @@ mod tests {
                 .unwrap();
         }
         session
+    }
+
+    #[test]
+    fn context_tokens_follows_the_tool_set_across_compression_toggles() {
+        // `context_tokens` caches the tool definitions' weight; a compression
+        // switch registers/removes `retrieve_original`, so the cache must be
+        // dropped or the meter keeps counting the old tool set.
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new("http://127.0.0.1:1", "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: Some("be helpful".into()),
+            compression: CompressionMode::Off,
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+        let fresh = |agent: &Agent| {
+            crate::budget::estimate_prompt_tokens(&agent.messages, &agent.tool_definitions())
+        };
+
+        assert!(agent.tool_definitions().is_empty());
+        let without_tool = agent.context_tokens();
+        assert_eq!(without_tool, fresh(&agent));
+        // A second read comes from the cache and must agree.
+        assert_eq!(agent.context_tokens(), without_tool);
+
+        agent.set_compression_mode(CompressionMode::On);
+        assert_eq!(agent.tool_definitions().len(), 1);
+        let with_tool = agent.context_tokens();
+        assert_eq!(with_tool, fresh(&agent));
+        assert!(with_tool > without_tool, "the new tool's schema must count");
+
+        agent.set_compression_mode(CompressionMode::Off);
+        assert!(agent.tool_definitions().is_empty());
+        assert_eq!(agent.context_tokens(), without_tool);
+        assert_eq!(agent.context_tokens(), fresh(&agent));
     }
 
     #[tokio::test]

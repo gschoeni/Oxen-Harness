@@ -19,12 +19,12 @@ mod turn;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use harness_compress::{CcrStore, CompressConfig};
-use harness_llm::types::{ChatMessage, ContentPart};
+use harness_llm::types::{ChatMessage, ContentPart, MessageContent};
 use harness_llm::{
-    hydrate_content_bounded, Attachment, AttachmentStore, ChatRequest, OxenClient,
+    base64_len, hydrate_content_bounded, Attachment, AttachmentStore, ChatRequest, OxenClient,
     MAX_OUTBOUND_ATTACHMENT_BYTES, MAX_OUTBOUND_ATTACHMENT_PARTS,
 };
 use harness_store::{HistoryStore, SessionMeta, RULE_HISTORY_STATE};
@@ -119,6 +119,13 @@ pub struct Agent {
     /// In-memory only — diagnostics, not state.
     prev_request_hashes: Vec<u64>,
     prev_tools_hash: Option<u64>,
+    /// Character weight of the advertised tool definitions (see
+    /// [`budget::tool_definition_chars`]), computed lazily and reused by
+    /// [`Agent::context_tokens`] so a `session_info` doesn't re-stringify
+    /// every tool schema. Reset by [`Agent::invalidate_tool_cache`] whenever
+    /// `tools` changes after construction (today: only a compression-mode
+    /// switch, which registers/removes `retrieve_original`).
+    tool_def_chars: OnceLock<usize>,
     /// Cooperative stop signal for the in-flight turn. Replaced per turn (see
     /// [`Agent::set_cancel_token`]) so the host can cancel a streaming response
     /// without holding the agent's lock; a fresh token each turn keeps a prior
@@ -270,6 +277,7 @@ impl Agent {
             cache_write_tokens_used: 0,
             prev_request_hashes: Vec::new(),
             prev_tools_hash: None,
+            tool_def_chars: OnceLock::new(),
             cancel: CancellationToken::new(),
             token_ratio: 1.0,
             ccr,
@@ -344,6 +352,7 @@ impl Agent {
             cache_write_tokens_used: 0,
             prev_request_hashes: Vec::new(),
             prev_tools_hash: None,
+            tool_def_chars: OnceLock::new(),
             cancel: CancellationToken::new(),
             token_ratio: 1.0,
             ccr,
@@ -596,10 +605,25 @@ impl Agent {
     /// i.e. how full the context window is right now, calibrated by the latest
     /// real usage so the meter and budget reflect actual consumption.
     pub fn context_tokens(&self) -> usize {
-        self.calibrated(budget::estimate_prompt_tokens(
+        self.calibrated(budget::estimate_prompt_tokens_with_tool_chars(
             &self.messages,
-            &self.tools.definitions(),
+            self.tool_def_chars(),
         ))
+    }
+
+    /// The cached character weight of the current tool definitions, computed
+    /// on first use (see the `tool_def_chars` field).
+    fn tool_def_chars(&self) -> usize {
+        *self
+            .tool_def_chars
+            .get_or_init(|| budget::tool_definition_chars(&self.tools.definitions()))
+    }
+
+    /// Forget the cached tool-definition weight. Must follow any mutation of
+    /// `self.tools` after construction, or [`Agent::context_tokens`] keeps
+    /// counting the old tool set.
+    pub(super) fn invalidate_tool_cache(&mut self) {
+        self.tool_def_chars = OnceLock::new();
     }
 
     /// Scale a raw client-side token estimate by the learned calibration factor.
@@ -1021,7 +1045,13 @@ fn build_user_message(
     if attachments.is_empty() {
         return Ok(ChatMessage::user(text));
     }
-    let total_bytes = attachments.iter().map(|a| a.bytes.len()).sum::<usize>();
+    // Measured the way the outbound budget is: in wire bytes (base64 is 4/3
+    // the raw size). Checking raw bytes here would admit an attachment the
+    // hydrator then silently drops from the very turn it was attached in.
+    let total_bytes = attachments
+        .iter()
+        .map(|a| base64_len(a.bytes.len()))
+        .sum::<usize>();
     if total_bytes > MAX_OUTBOUND_ATTACHMENT_BYTES {
         return Err(AgentError::AttachmentsTooLarge {
             size: total_bytes,

@@ -76,7 +76,8 @@ impl OxenClient {
             .http
             .post(self.endpoint())
             .bearer_auth(&self.api_key)
-            .json(&request.to_body().map_err(LlmError::Encode)?)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(request.to_bytes().map_err(LlmError::Encode)?)
             .send()
             .await?;
 
@@ -119,7 +120,8 @@ impl OxenClient {
                 .http
                 .post(self.endpoint())
                 .bearer_auth(&self.api_key)
-                .json(&request.to_body().map_err(LlmError::Encode)?)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(request.to_bytes().map_err(LlmError::Encode)?)
                 .send() => resp?,
         };
 

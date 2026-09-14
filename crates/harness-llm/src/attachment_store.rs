@@ -22,10 +22,33 @@ use crate::types::{ContentPart, MessageContent};
 
 /// Subdirectory (relative to the project root) holding stored attachments.
 const ATTACHMENTS_SUBDIR: &str = ".oxen-harness/attachments";
-/// Per-request byte budget for rehydrated binary attachments.
-pub const MAX_OUTBOUND_ATTACHMENT_BYTES: usize = 32 * 1024 * 1024;
+/// Per-request budget for rehydrated binary attachments, in **bytes on the
+/// wire**: the size of the `data:` URIs as they land in the request body (and
+/// in memory while it's built), not the raw file size. Base64 is 4/3 the raw
+/// size, so this admits roughly 6 MiB of raw image/PDF bytes per request.
+pub const MAX_OUTBOUND_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 /// Per-request count budget for historical binary attachments.
 pub const MAX_OUTBOUND_ATTACHMENT_PARTS: usize = 4;
+
+/// The `data:` URI scaffolding around the base64 payload.
+const DATA_URI_SCHEME: &str = "data:";
+const DATA_URI_BASE64_MARKER: &str = ";base64,";
+
+/// The base64-encoded length of `raw_len` bytes (standard alphabet, padded):
+/// four output bytes per three input bytes, the last group padded to four.
+pub fn base64_len(raw_len: usize) -> usize {
+    raw_len.div_ceil(3) * 4
+}
+
+/// How many bytes a stored file with extension `ext` occupies once hydrated
+/// into a `data:` URI — the exact length [`hydrate_content`] produces, so the
+/// outbound budget can be charged before the file is read.
+pub fn hydrated_data_uri_len(ext: &str, raw_len: usize) -> usize {
+    DATA_URI_SCHEME.len()
+        + mime_for_extension(ext).len()
+        + DATA_URI_BASE64_MARKER.len()
+        + base64_len(raw_len)
+}
 
 /// Persists binary attachments under a project root and resolves their stored
 /// paths back to bytes.
@@ -105,14 +128,28 @@ fn hydrate_ref(value: &str, root: &Path) -> Option<std::io::Result<String>> {
         return None;
     }
     let path = root.join(value);
-    Some(std::fs::read(&path).map(|bytes| {
-        let ext = Path::new(value)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        format!("data:{};base64,{}", mime_for_extension(ext), b64)
-    }))
+    Some(std::fs::read(&path).map(|bytes| encode_data_uri(extension_of(value), &bytes)))
+}
+
+/// The file extension of a stored reference (`""` when it has none).
+fn extension_of(value: &str) -> &str {
+    Path::new(value)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+}
+
+/// Build `data:<mime>;base64,<payload>` for `bytes`, encoding straight into a
+/// String pre-sized to the final length — so the only transient copies alive
+/// are the raw bytes and the URI, never a third `format!` buffer holding the
+/// encoded payload a second time.
+fn encode_data_uri(ext: &str, bytes: &[u8]) -> String {
+    let mut uri = String::with_capacity(hydrated_data_uri_len(ext, bytes.len()));
+    uri.push_str(DATA_URI_SCHEME);
+    uri.push_str(mime_for_extension(ext));
+    uri.push_str(DATA_URI_BASE64_MARKER);
+    base64::engine::general_purpose::STANDARD.encode_string(bytes, &mut uri);
+    uri
 }
 
 /// Hydrate every stored attachment reference in a message's content to an inline
@@ -127,6 +164,13 @@ pub fn hydrate_content(content: &mut MessageContent, root: &Path) {
 
 /// Hydrate attachments while enforcing a request-wide byte and part budget.
 /// Callers walk newest messages first, so stale media is replaced before recent.
+///
+/// The byte budget is charged in wire bytes — the length of the `data:` URI
+/// each part becomes — so an on-disk reference (charged via
+/// [`hydrated_data_uri_len`] from its file size, before reading it) and an
+/// already-inline `data:` part (charged at its actual length) are measured
+/// the same way, and `remaining_bytes` bounds what the request body actually
+/// carries.
 pub fn hydrate_content_bounded(
     content: &mut MessageContent,
     root: &Path,
@@ -145,12 +189,14 @@ pub fn hydrate_content_bounded(
         let inline_data = slot.starts_with("data:");
         if inline_data || !is_inline_ref(slot) {
             let size = if inline_data {
-                // Base64 is 4/3 of the source bytes; using encoded length is a
-                // conservative request-memory budget and needs no decoding.
+                // Already what goes on the wire.
                 slot.len()
             } else {
+                // What it will be once hydrated (base64 is 4/3 the file size
+                // plus the URI prefix) — not the raw file size, which would
+                // let ~33% more than the budget into the request.
                 std::fs::metadata(root.join(&*slot))
-                    .map(|m| m.len() as usize)
+                    .map(|m| hydrated_data_uri_len(extension_of(slot), m.len() as usize))
                     .unwrap_or(0)
             };
             if *remaining_parts == 0 || size > *remaining_bytes {
@@ -274,5 +320,109 @@ mod tests {
         };
         assert!(matches!(parts[0], ContentPart::ImageUrl { .. }));
         assert!(matches!(parts[1], ContentPart::Text { .. }));
+    }
+
+    #[test]
+    fn hydrated_length_estimate_is_exact() {
+        // The budget is charged from the estimate before the file is read, so
+        // the estimate must equal the URI the hydrator actually builds — for
+        // every base64 padding case and for a file with no extension.
+        for len in [0usize, 1, 2, 3, 4, 5, 6, 100, 1023] {
+            let bytes = vec![0xABu8; len];
+            for ext in ["png", "jpg", "pdf", ""] {
+                let uri = encode_data_uri(ext, &bytes);
+                assert_eq!(
+                    uri.len(),
+                    hydrated_data_uri_len(ext, len),
+                    "ext={ext} len={len}"
+                );
+                assert!(uri.starts_with("data:"));
+                assert!(uri.contains(";base64,"));
+            }
+        }
+        assert_eq!(base64_len(0), 0);
+        assert_eq!(base64_len(1), 4);
+        assert_eq!(base64_len(3), 4);
+        assert_eq!(base64_len(4), 8);
+    }
+
+    #[test]
+    fn on_disk_and_inline_parts_are_charged_the_same_wire_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+        let raw = vec![7u8; 3001];
+        let rel = store.store_bytes("png", &raw).unwrap();
+
+        // Hydrate once (unbounded) to learn the URI's real length.
+        let mut hydrated = MessageContent::Parts(vec![ContentPart::image(rel.clone())]);
+        hydrate_content(&mut hydrated, dir.path());
+        let MessageContent::Parts(parts) = &hydrated else {
+            panic!("expected parts")
+        };
+        let ContentPart::ImageUrl { image_url } = &parts[0] else {
+            panic!("expected image")
+        };
+        let wire = image_url.url.len();
+        assert!(wire > raw.len(), "the URI is bigger than the file");
+
+        // The on-disk reference is charged exactly the wire size…
+        let mut bytes = usize::MAX;
+        let mut n = usize::MAX;
+        let mut content = MessageContent::Parts(vec![ContentPart::image(rel)]);
+        hydrate_content_bounded(&mut content, dir.path(), &mut bytes, &mut n);
+        assert_eq!(usize::MAX - bytes, wire);
+
+        // …and so is the same part when it arrives already inline.
+        let mut bytes = usize::MAX;
+        let mut n = usize::MAX;
+        hydrate_content_bounded(&mut hydrated, dir.path(), &mut bytes, &mut n);
+        assert_eq!(usize::MAX - bytes, wire);
+    }
+
+    #[test]
+    fn budget_admits_a_file_just_under_six_mib_raw_and_omits_one_at_six_mib() {
+        // 8 MiB on the wire ≈ 6 MiB raw. The largest PNG that fits is
+        // 6 MiB − 18 bytes (8 MiB − 22-byte prefix, floored to a base64 group);
+        // one byte more spills the encoded size past the budget.
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+        let six_mib = 6 * 1024 * 1024;
+        let under = store.store_bytes("png", &vec![1u8; six_mib - 18]).unwrap();
+        let over = store.store_bytes("png", &vec![2u8; six_mib]).unwrap();
+        assert!(hydrated_data_uri_len("png", six_mib - 18) <= MAX_OUTBOUND_ATTACHMENT_BYTES);
+        assert!(hydrated_data_uri_len("png", six_mib - 17) > MAX_OUTBOUND_ATTACHMENT_BYTES);
+        // (Under the old raw-size accounting a 6 MiB file would have fit and
+        // then put 8 MiB + prefix into the request.)
+        assert!(six_mib <= MAX_OUTBOUND_ATTACHMENT_BYTES);
+
+        let fits = |rel: &str| {
+            let mut bytes = MAX_OUTBOUND_ATTACHMENT_BYTES;
+            let mut parts = MAX_OUTBOUND_ATTACHMENT_PARTS;
+            let mut content = MessageContent::Parts(vec![ContentPart::image(rel.to_string())]);
+            hydrate_content_bounded(&mut content, dir.path(), &mut bytes, &mut parts);
+            let MessageContent::Parts(parts) = content else {
+                panic!("expected parts")
+            };
+            match &parts[0] {
+                ContentPart::ImageUrl { image_url } => {
+                    assert!(image_url.url.starts_with("data:image/png;base64,"));
+                    assert!(image_url.url.len() <= MAX_OUTBOUND_ATTACHMENT_BYTES);
+                    true
+                }
+                ContentPart::Text { text } => {
+                    assert!(text.contains("omitted from the active context"));
+                    false
+                }
+                other => panic!("unexpected part {other:?}"),
+            }
+        };
+        assert!(
+            fits(&under),
+            "6 MiB − 18 raw (8 MiB − 2 on the wire) must fit"
+        );
+        assert!(
+            !fits(&over),
+            "6 MiB raw (> 8 MiB on the wire) must be omitted"
+        );
     }
 }

@@ -300,9 +300,9 @@ pub struct ChatRequest {
     pub stream_options: Option<StreamOptions>,
     /// Message indices to mark with an Anthropic-style
     /// `cache_control: {"type": "ephemeral"}` breakpoint when the body is
-    /// built (see [`ChatRequest::to_body`]). Not part of the wire struct
-    /// itself — the marker is applied to the serialized JSON so the typed
-    /// message structs stay provider-neutral. Empty means no markers.
+    /// built (see [`ChatRequest::to_bytes`]). Not part of the wire struct
+    /// itself — the marker is applied while serializing so the typed message
+    /// structs stay provider-neutral. Empty means no markers.
     #[serde(skip)]
     pub cache_anchors: Vec<usize>,
 }
@@ -348,42 +348,58 @@ impl ChatRequest {
         self
     }
 
-    /// The JSON body actually sent on the wire: the serialized request, plus
-    /// `cache_control` markers applied to each anchored message.
+    /// The JSON body actually sent on the wire, as bytes: the serialized
+    /// request, plus `cache_control` markers applied to each anchored message.
+    ///
+    /// The markers are applied *during* serialization (see [`WireRequest`]),
+    /// so a request is written straight from the typed structs to the output
+    /// buffer — no intermediate `serde_json::Value` tree of the whole
+    /// transcript (which costs 2–4× the JSON text, per call, on top of the
+    /// hydrated attachments).
     ///
     /// The transformation is deterministic — identical requests produce
     /// byte-identical bodies — and shape-preserving for providers that ignore
     /// unknown fields: a text-only anchored message becomes a one-element
     /// content-part array carrying the marker (the form OpenAI-compatible
     /// proxies accept `cache_control` in); an already-multipart message gets
-    /// the marker on its last part.
+    /// the marker on its last part. Key order is fixed (`type`, payload,
+    /// `cache_control`), matching what the previous `Value`-based builder
+    /// produced under serde_json's `preserve_order` feature, which every
+    /// shipping build enables.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec(&WireRequest(self))
+    }
+
+    /// The wire body as a `serde_json::Value` tree — the parsed form of
+    /// [`ChatRequest::to_bytes`], for inspection and tests. The HTTP client
+    /// sends the bytes directly and never builds this tree.
     pub fn to_body(&self) -> Result<serde_json::Value, serde_json::Error> {
-        let mut body = serde_json::to_value(self)?;
+        serde_json::from_slice(&self.to_bytes()?)
+    }
+
+    /// The pre-streaming builder: serialize to a `Value` tree, then patch the
+    /// anchored messages in place. Kept only as the reference the byte-identity
+    /// tests compare [`ChatRequest::to_bytes`] against.
+    #[cfg(test)]
+    fn legacy_body(&self) -> serde_json::Value {
+        let mut body = serde_json::to_value(self).expect("ChatRequest always serializes");
         if self.cache_anchors.is_empty() {
-            return Ok(body);
+            return body;
         }
         if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
             for &i in &self.cache_anchors {
                 if let Some(message) = messages.get_mut(i) {
-                    apply_cache_control(message);
+                    legacy_apply_cache_control(message);
                 }
             }
         }
-        Ok(body)
+        body
     }
 }
 
-/// Attach `cache_control: {"type":"ephemeral"}` to a serialized message's
-/// content. String content is wrapped into a single text part (the marker
-/// rides on parts, not bare strings); multipart content marks its last part.
-/// Messages with no content (e.g. a tool-call-only assistant turn) are left
-/// untouched — the caller should anchor a content-bearing message instead.
-///
-/// `system` messages are never touched: proxies that translate to the
-/// Anthropic Messages API reject a parts-form system message ("use the
-/// top-level 'system' parameter"), and a breakpoint on a *later* message
-/// caches the whole prefix — system prompt and tools included — anyway.
-fn apply_cache_control(message: &mut serde_json::Value) {
+/// The legacy in-place `cache_control` patch (see [`ChatRequest::legacy_body`]).
+#[cfg(test)]
+fn legacy_apply_cache_control(message: &mut serde_json::Value) {
     if message.get("role").and_then(|r| r.as_str()) == Some("system") {
         return;
     }
@@ -406,6 +422,209 @@ fn apply_cache_control(message: &mut serde_json::Value) {
             }
         }
         _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Wire view: `ChatRequest` serialized with cache anchors applied on the fly.
+//
+// These wrappers mirror the derived `Serialize` impls field-for-field (same
+// names, same order, same `skip_serializing_if` rules) and differ only where
+// an anchored message's content picks up the `cache_control` marker. The
+// wrappers are private: the only entry point is `ChatRequest::to_bytes`.
+// ---------------------------------------------------------------------------
+
+/// `ChatRequest` as it goes on the wire. Mirrors the derived field set of
+/// [`ChatRequest`] (minus the skipped `cache_anchors`), routing `messages`
+/// through [`WireMessages`] so anchors are applied during serialization.
+struct WireRequest<'a>(&'a ChatRequest);
+
+impl Serialize for WireRequest<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let req = self.0;
+        let len = 3
+            + usize::from(!req.tools.is_empty())
+            + usize::from(req.tool_choice.is_some())
+            + usize::from(req.temperature.is_some())
+            + usize::from(req.max_tokens.is_some())
+            + usize::from(req.stream_options.is_some());
+        let mut s = serializer.serialize_struct("ChatRequest", len)?;
+        s.serialize_field("model", &req.model)?;
+        s.serialize_field(
+            "messages",
+            &WireMessages {
+                messages: &req.messages,
+                anchors: &req.cache_anchors,
+            },
+        )?;
+        if !req.tools.is_empty() {
+            s.serialize_field("tools", &req.tools)?;
+        }
+        if let Some(choice) = &req.tool_choice {
+            s.serialize_field("tool_choice", choice)?;
+        }
+        if let Some(temperature) = req.temperature {
+            // `serde_json::to_value` widens an `f32` to `f64` before printing
+            // (`0.7f32` → `0.699999988079071`); widen the same way so the
+            // bytes stay identical to the `Value`-built body.
+            s.serialize_field("temperature", &f64::from(temperature))?;
+        }
+        if let Some(max_tokens) = req.max_tokens {
+            s.serialize_field("max_tokens", &max_tokens)?;
+        }
+        s.serialize_field("stream", &req.stream)?;
+        if let Some(options) = &req.stream_options {
+            s.serialize_field("stream_options", options)?;
+        }
+        s.end()
+    }
+}
+
+/// The `messages` array, each element wrapped in [`WireMessage`] with its
+/// anchored flag. Out-of-range anchors simply never match an index.
+struct WireMessages<'a> {
+    messages: &'a [ChatMessage],
+    anchors: &'a [usize],
+}
+
+impl Serialize for WireMessages<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(self.messages.len()))?;
+        for (i, msg) in self.messages.iter().enumerate() {
+            seq.serialize_element(&WireMessage {
+                msg,
+                anchored: self.anchors.contains(&i),
+            })?;
+        }
+        seq.end()
+    }
+}
+
+/// One message on the wire. Mirrors the derived [`ChatMessage`] serialization
+/// exactly, except that an anchored message's content is emitted through
+/// [`AnchoredContent`].
+///
+/// `system` messages are never marked even when anchored: proxies that
+/// translate to the Anthropic Messages API reject a parts-form system message
+/// ("use the top-level 'system' parameter"), and a breakpoint on a *later*
+/// message caches the whole prefix — system prompt and tools included —
+/// anyway. Messages with no content (e.g. a tool-call-only assistant turn) have
+/// nothing to mark and serialize unchanged.
+struct WireMessage<'a> {
+    msg: &'a ChatMessage,
+    anchored: bool,
+}
+
+impl Serialize for WireMessage<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let msg = self.msg;
+        let len = 1
+            + usize::from(msg.content.is_some())
+            + usize::from(msg.tool_calls.is_some())
+            + usize::from(msg.tool_call_id.is_some())
+            + usize::from(msg.name.is_some());
+        let mut s = serializer.serialize_struct("ChatMessage", len)?;
+        s.serialize_field("role", &msg.role)?;
+        if let Some(content) = &msg.content {
+            if self.anchored && msg.role != "system" {
+                s.serialize_field("content", &AnchoredContent(content))?;
+            } else {
+                s.serialize_field("content", content)?;
+            }
+        }
+        if let Some(tool_calls) = &msg.tool_calls {
+            s.serialize_field("tool_calls", tool_calls)?;
+        }
+        if let Some(id) = &msg.tool_call_id {
+            s.serialize_field("tool_call_id", id)?;
+        }
+        if let Some(name) = &msg.name {
+            s.serialize_field("name", name)?;
+        }
+        s.end()
+    }
+}
+
+/// Message content carrying the cache breakpoint. String content is wrapped
+/// into a single marked text part (the marker rides on parts, not bare
+/// strings); multipart content marks its last part; an empty parts array has
+/// no last part and serializes as `[]`.
+struct AnchoredContent<'a>(&'a MessageContent);
+
+impl Serialize for AnchoredContent<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        match self.0 {
+            MessageContent::Text(text) => {
+                let mut seq = serializer.serialize_seq(Some(1))?;
+                seq.serialize_element(&MarkedPart::Text(text))?;
+                seq.end()
+            }
+            MessageContent::Parts(parts) => {
+                let mut seq = serializer.serialize_seq(Some(parts.len()))?;
+                let last = parts.len().checked_sub(1);
+                for (i, part) in parts.iter().enumerate() {
+                    if Some(i) == last {
+                        seq.serialize_element(&MarkedPart::Existing(part))?;
+                    } else {
+                        seq.serialize_element(part)?;
+                    }
+                }
+                seq.end()
+            }
+        }
+    }
+}
+
+/// A content part with `cache_control` appended after its regular fields —
+/// the derived `{"type": ..., <payload>}` shape of [`ContentPart`] plus the
+/// marker as the final key.
+enum MarkedPart<'a> {
+    /// A bare string wrapped into a text part.
+    Text(&'a str),
+    /// An existing part, re-emitted with the marker.
+    Existing(&'a ContentPart),
+}
+
+impl Serialize for MarkedPart<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("ContentPart", 3)?;
+        match self {
+            MarkedPart::Text(text) => {
+                s.serialize_field("type", "text")?;
+                s.serialize_field("text", text)?;
+            }
+            MarkedPart::Existing(ContentPart::Text { text }) => {
+                s.serialize_field("type", "text")?;
+                s.serialize_field("text", text)?;
+            }
+            MarkedPart::Existing(ContentPart::ImageUrl { image_url }) => {
+                s.serialize_field("type", "image_url")?;
+                s.serialize_field("image_url", image_url)?;
+            }
+            MarkedPart::Existing(ContentPart::File { file }) => {
+                s.serialize_field("type", "file")?;
+                s.serialize_field("file", file)?;
+            }
+        }
+        s.serialize_field("cache_control", &CacheMarker)?;
+        s.end()
+    }
+}
+
+/// `{"type":"ephemeral"}` — the Anthropic-style prompt-cache breakpoint.
+struct CacheMarker;
+
+impl Serialize for CacheMarker {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("CacheControl", 1)?;
+        s.serialize_field("type", "ephemeral")?;
+        s.end()
     }
 }
 
@@ -684,6 +903,227 @@ mod tests {
         let anchored =
             ChatRequest::new("m", vec![ChatMessage::user("hi")]).with_cache_anchors(vec![0]);
         assert!(anchored.to_body().unwrap().get("cache_anchors").is_none());
+    }
+
+    /// Whether this build's `serde_json` keeps map insertion order. Every
+    /// shipping build enables `preserve_order` (the app and the agent graph
+    /// pull it in); a `-p harness-llm`-only build doesn't, and there the
+    /// legacy `Value` builder sorted the injected marker's keys alphabetically,
+    /// so only structural equality is meaningful.
+    fn preserve_order_enabled() -> bool {
+        serde_json::to_vec(&serde_json::json!({"z": 1, "a": 2})).unwrap() == br#"{"z":1,"a":2}"#
+    }
+
+    /// `to_bytes()` must reproduce the legacy `Value`-built body: structurally
+    /// in every build, and byte-for-byte wherever the legacy key order is
+    /// defined (i.e. with `preserve_order`, as shipped).
+    fn assert_wire_matches_legacy(req: &ChatRequest) {
+        let bytes = req.to_bytes().unwrap();
+        let legacy = req.legacy_body();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed, legacy, "wire body differs structurally from legacy");
+        if preserve_order_enabled() {
+            assert_eq!(
+                String::from_utf8(bytes).unwrap(),
+                serde_json::to_string(&legacy).unwrap(),
+                "wire bytes differ from the legacy body"
+            );
+        }
+        // `to_body` is the parsed form of the same bytes.
+        assert_eq!(req.to_body().unwrap(), legacy);
+    }
+
+    /// One of every message shape the agent produces (plus a few edge cases),
+    /// so the anchor sweep below covers each variant as the anchored message.
+    fn every_message_shape() -> Vec<ChatMessage> {
+        let call = |id: &str, name: &str, args: &str| ToolCall {
+            id: id.into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: name.into(),
+                arguments: args.into(),
+            },
+        };
+        vec![
+            // 0: system text — never marked.
+            ChatMessage::system("be helpful \"quoted\" \\ back\nslash\ttab \u{1F600} é"),
+            // 1: user text needing JSON escapes.
+            ChatMessage::user("plain \"question\"\n<tag> & \u{0007} bell"),
+            // 2: multipart with image + file parts (last part gets the marker).
+            ChatMessage::user_parts(vec![
+                ContentPart::text("look"),
+                ContentPart::image("data:image/png;base64,AAAA"),
+                ContentPart::file("doc.pdf", "data:application/pdf;base64,JVBERi0="),
+            ]),
+            // 3: tool-call-only assistant turn — no content, nothing to mark.
+            ChatMessage::assistant_with_tools(
+                String::new(),
+                vec![call("c1", "read_file", r#"{"path":"a.rs"}"#)],
+            ),
+            // 4: tool result with tool_call_id.
+            ChatMessage::tool_result("c1", "{\"ok\":true,\"lines\":[1,2,3]}"),
+            // 5: assistant text + tool calls together.
+            ChatMessage::assistant_with_tools(
+                "let me check".into(),
+                vec![call("c2", "shell", ""), call("c3", "web_search", "{}")],
+            ),
+            // 6: a `name`d message (every optional field populated).
+            ChatMessage {
+                role: "user".into(),
+                content: Some(MessageContent::Text("named".into())),
+                tool_calls: None,
+                tool_call_id: Some("c9".into()),
+                name: Some("alice".into()),
+            },
+            // 7: explicit empty parts array — no last part to mark.
+            ChatMessage {
+                role: "user".into(),
+                content: Some(MessageContent::Parts(vec![])),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            // 8: multipart whose last part is text.
+            ChatMessage::user_parts(vec![
+                ContentPart::image("data:image/jpeg;base64,/9j/"),
+                ContentPart::text("caption"),
+            ]),
+            // 9: a system message in multipart form — still never marked.
+            ChatMessage {
+                role: "system".into(),
+                content: Some(MessageContent::Parts(vec![ContentPart::text("sys")])),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            // 10: plain assistant text; 11: tool result on a bare-string body.
+            ChatMessage::assistant("done"),
+            ChatMessage::tool_result("c2", "exit 0"),
+        ]
+    }
+
+    /// A request exercising every optional request-level field.
+    fn full_request(messages: Vec<ChatMessage>) -> ChatRequest {
+        let mut req = ChatRequest::new("claude-opus-4-8", messages)
+            .with_tools(vec![
+                serde_json::json!({"type":"function","function":{"name":"read_file",
+                    "description":"Read","parameters":{"type":"object",
+                    "properties":{"path":{"type":"string"},"n":{"type":"number","default":1.5}},
+                    "required":["path"]}}}),
+                serde_json::json!({"type":"function","function":{"name":"noop",
+                    "parameters":{"type":"object","properties":{}}}}),
+            ])
+            .max_tokens(4096)
+            .streaming(true);
+        req.tool_choice = Some(ToolChoice::Mode("auto".into()));
+        req.temperature = Some(0.7);
+        req
+    }
+
+    #[test]
+    fn wire_bytes_match_legacy_body_without_anchors() {
+        let req = ChatRequest::new("m", every_message_shape());
+        assert_wire_matches_legacy(&req);
+        // No anchors → identical to the plain derived serialization, in every
+        // build (no injected maps, so no key-order question).
+        assert_eq!(req.to_bytes().unwrap(), serde_json::to_vec(&req).unwrap());
+
+        let full = full_request(every_message_shape());
+        assert_wire_matches_legacy(&full);
+        // `temperature` is the one field where the derived serializer and the
+        // legacy `Value` body disagree (`0.7` vs the f64 widening); the wire
+        // follows the legacy body, so compare the derived form without it.
+        let mut no_temp = full_request(every_message_shape());
+        no_temp.temperature = None;
+        assert_wire_matches_legacy(&no_temp);
+        assert_eq!(
+            no_temp.to_bytes().unwrap(),
+            serde_json::to_vec(&no_temp).unwrap()
+        );
+
+        // A forced tool choice and a non-streaming request too.
+        let mut forced = ChatRequest::new("m", vec![ChatMessage::user("hi")]).with_tools(vec![
+            serde_json::json!({"type":"function","function":{"name":"f"}}),
+        ]);
+        forced.tool_choice = Some(ToolChoice::Function(
+            serde_json::json!({"type":"function","function":{"name":"f"}}),
+        ));
+        assert_wire_matches_legacy(&forced);
+        assert_eq!(
+            forced.to_bytes().unwrap(),
+            serde_json::to_vec(&forced).unwrap()
+        );
+    }
+
+    #[test]
+    fn wire_bytes_match_legacy_body_for_every_anchor_position() {
+        let messages = every_message_shape();
+        // Each index alone — string content, multipart, system (untouched),
+        // tool-call-only (untouched), tool result, named, empty parts, …
+        for i in 0..messages.len() {
+            let req = full_request(messages.clone()).with_cache_anchors(vec![i]);
+            assert_wire_matches_legacy(&req);
+        }
+        // Out of range, duplicates, several at once, and an unsorted set.
+        for anchors in [
+            vec![99],
+            vec![1, 1],
+            vec![0, 1, 2, 99],
+            vec![8, 2, 4],
+            (0..messages.len() + 3).collect(),
+        ] {
+            let req = full_request(messages.clone()).with_cache_anchors(anchors);
+            assert_wire_matches_legacy(&req);
+        }
+    }
+
+    #[test]
+    fn wire_bytes_use_the_shipped_key_order_for_markers() {
+        // The exact bytes, independent of this build's serde_json features:
+        // `type`, payload, `cache_control` — the order the legacy builder
+        // produced under `preserve_order`, which is what every shipping build
+        // (and every proxy that has cached on it) has seen.
+        let req = ChatRequest::new(
+            "m",
+            vec![
+                ChatMessage::system("s"),
+                ChatMessage::user("q"),
+                ChatMessage::user_parts(vec![
+                    ContentPart::text("look"),
+                    ContentPart::image("data:image/png;base64,AAAA"),
+                ]),
+                ChatMessage::user_parts(vec![ContentPart::file("d.pdf", "data:x;base64,QQ==")]),
+            ],
+        )
+        .with_cache_anchors(vec![0, 1, 2, 3]);
+        let body = String::from_utf8(req.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            body,
+            concat!(
+                r#"{"model":"m","messages":["#,
+                r#"{"role":"system","content":"s"},"#,
+                r#"{"role":"user","content":[{"type":"text","text":"q","cache_control":{"type":"ephemeral"}}]},"#,
+                r#"{"role":"user","content":[{"type":"text","text":"look"},"#,
+                r#"{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"},"cache_control":{"type":"ephemeral"}}]},"#,
+                r#"{"role":"user","content":[{"type":"file","file":{"filename":"d.pdf","file_data":"data:x;base64,QQ=="},"cache_control":{"type":"ephemeral"}}]}"#,
+                r#"],"stream":false}"#,
+            )
+        );
+        assert!(!body.contains("cache_anchors"));
+    }
+
+    #[test]
+    fn wire_temperature_widens_like_the_value_builder() {
+        // `to_value(0.7f32)` prints the f64 widening; the streaming path must
+        // print the same digits, not the shorter f32 form.
+        let mut req = ChatRequest::new("m", vec![ChatMessage::user("hi")]);
+        req.temperature = Some(0.7);
+        let body = String::from_utf8(req.to_bytes().unwrap()).unwrap();
+        assert!(
+            body.contains(r#""temperature":0.699999988079071"#),
+            "got {body}"
+        );
+        assert_wire_matches_legacy(&req);
     }
 
     #[test]
