@@ -1,0 +1,34 @@
+[package]
+name = "harness-media"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Image and video generation tools over the Oxen.ai async queue, with a per-project media library"
+
+[dependencies]
+harness-config = { workspace = true }
+harness-core = { workspace = true }
+harness-llm = { workspace = true }
+harness-tools = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true, features = ["stream", "multipart"] }
+futures-util = "0.3"
+harness-oxen = { workspace = true }
+sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+
+[dev-dependencies]
+tempfile = "3"
+mockito = "1"
+
+[lints]
+workspace = true

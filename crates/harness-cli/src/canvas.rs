@@ -21,7 +21,7 @@ fn canvas_dir() -> Option<PathBuf> {
 }
 
 /// Open a path in the user's default browser/app (best-effort, non-blocking).
-fn open_in_browser(path: &Path) {
+pub(crate) fn open_in_browser(path: &Path) {
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(target_os = "windows") {

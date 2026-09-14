@@ -153,6 +153,105 @@ pub struct TaskSummary {
     pub last_line: String,
 }
 
+/// One image/video generation of a project (`media.changed`, and the
+/// media listing commands): a manifest row of `harness_media`, mirrored on
+/// the wire. Paths are project-relative.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MediaItem {
+    /// The hub's generation id.
+    pub id: String,
+    /// The chat that asked for it.
+    pub session: String,
+    /// Groups the outputs of one tool call.
+    #[serde(default)]
+    pub batch: String,
+    /// 1-based position within the batch.
+    #[serde(default)]
+    pub index: u32,
+    /// `image` or `video`.
+    pub kind: String,
+    pub model: String,
+    pub prompt: String,
+    /// The request parameters sent (minus prompt and reference data).
+    #[serde(default)]
+    pub params: serde_json::Value,
+    /// Project-relative paths of the reference copies used.
+    #[serde(default)]
+    pub refs: Vec<String>,
+    /// Project-relative path of the saved output, once there is one.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Project-relative poster frame for a video, when one was extracted.
+    #[serde(default)]
+    pub poster: Option<String>,
+    #[serde(default)]
+    pub bytes: u64,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+    #[serde(default)]
+    pub duration_secs: Option<f64>,
+    /// The catalog's estimate for this one output, in USD.
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    /// `queued`, `processing`, `succeeded`, `failed`, `cancelled`, `timed_out`.
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Unix seconds.
+    pub created_at: i64,
+    #[serde(default)]
+    pub completed_at: Option<i64>,
+    /// The item this one varies, upscales, or animates.
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub seed: Option<serde_json::Value>,
+}
+
+/// One reference on its way to the hub for a generation (`media.changed`
+/// `uploads`): a progress-bar row. Live-only — a finished upload leaves the
+/// list once its generation is recorded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MediaUpload {
+    pub id: String,
+    pub session: String,
+    /// The chip label it came from (`[Image #1]`), when it did.
+    #[serde(default)]
+    pub label: Option<String>,
+    pub filename: String,
+    /// `image`, `video`, `audio`.
+    pub kind: String,
+    pub bytes_sent: u64,
+    pub bytes_total: u64,
+    /// `uploading`, `presigning`, `done`, `reused`, `failed`.
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Unix seconds.
+    #[serde(default)]
+    pub started_at: i64,
+}
+
+/// One image/video model of the hub catalog, for pickers (`GET
+/// /v1/media/models`, the desktop's Settings → Media).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MediaModelSummary {
+    pub id: String,
+    /// `image` or `video`.
+    pub kind: String,
+    /// `$0.01/image`, `$0.08–$0.17/s`, `unpriced`.
+    pub price: String,
+    #[serde(default)]
+    pub developer: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Input modalities (`text`, `image`, `video`, `audio`).
+    #[serde(default)]
+    pub inputs: Vec<String>,
+}
+
 /// Whether a running turn accepted the interjection. `accepted: false` means
 /// no turn was in flight — send the text as an ordinary prompt instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -35,6 +35,10 @@ import type {
   ImportReport,
   CanvasEvent,
   FsChangedEvent,
+  MediaChangedEvent,
+  MediaItem,
+  MediaModelSummary,
+  MediaPrefs,
   GitFileDiff,
   GitFileState,
   GitOverview,
@@ -90,6 +94,7 @@ import type {
   AgentSummary,
   TasksChangedEvent,
   TaskSummary,
+  ProjectOpenEvent,
 } from "./types";
 
 // ---- session / agent -------------------------------------------------------
@@ -248,8 +253,12 @@ export const openProject = (path: string) => invoke<Project>("open_project", { p
 /** Fires when a directory arrives from the command line (`oxen-harness ui <dir>`)
  *  while the app is already running — the single-instance guard focused the
  *  window and forwarded the directory; enter that project. */
-export const onProjectOpen = (handler: (path: string) => void) =>
-  listen<{ path: string }>("project://open", (e) => handler(e.payload.path));
+export const onProjectOpen = (handler: (e: ProjectOpenEvent) => void) =>
+  listen<ProjectOpenEvent>("project://open", (e) => handler(e.payload));
+/** `oxen-harness ui <dir> --gallery` on a cold start: the surface to open once
+ *  the UI is up (`gallery`, `settings:<page>`, `session:<id>`), handed over
+ *  exactly once. */
+export const takeLaunchSurface = () => invoke<string | null>("take_launch_surface");
 /** Switch the active project to an already-known directory. */
 export const setActiveProject = (path: string) => invoke<void>("set_active_project", { path });
 /** Select a cloud model for future chats without mutating the chat currently on screen. */
@@ -584,6 +593,29 @@ export const onFleetAgent = (handler: (e: FleetAgentEvent) => void) =>
 /** Live activity from one fleet lane (streamed text, a tool, token counts). */
 export const onFleetActivity = (handler: (e: FleetActivityEvent) => void) =>
   listen<FleetActivityEvent>("fleet://agent-activity", (e) => handler(e.payload));
+
+// ---- media generation ---------------------------------------------------------
+
+/** The project's image/video generations, newest first (cold load; live
+ *  updates arrive on `media://changed`). */
+export const listMedia = (root: string) => invoke<MediaItem[]>("list_media", { root });
+
+/** Cancel an in-flight generation by its hub id. */
+export const cancelMedia = (id: string) => invoke<void>("cancel_media", { id });
+
+export const getMediaPrefs = () => invoke<MediaPrefs>("get_media_prefs");
+
+/** Persist the media preferences; applies to new (and resumed) chats. */
+export const setMediaPrefs = (prefs: MediaPrefs) => invoke<void>("set_media_prefs", { prefs });
+
+/** The hub's image/video models for pickers (`kind` = image | video). */
+export const listMediaModels = (kind?: "image" | "video") =>
+  invoke<MediaModelSummary[]>("list_media_models", { kind: kind ?? null });
+
+/** The project's media library changed (a generation queued, progressed,
+ *  finished, or failed). Carries the whole list. */
+export const onMediaChanged = (handler: (e: MediaChangedEvent) => void) =>
+  listen<MediaChangedEvent>("media://changed", (e) => handler(e.payload));
 
 /** A chat's background tasks changed (one started, ended, or was killed). */
 export const onTasksChanged = (handler: (e: TasksChangedEvent) => void) =>

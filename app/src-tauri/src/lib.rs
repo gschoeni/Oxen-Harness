@@ -131,6 +131,13 @@ pub fn run() -> Result<(), tauri::Error> {
                 initial_project,
                 initial_model,
             ));
+            // A cold start's `--open <surface>` waits for the UI to ask.
+            if let Some(surface) = cli_open::surface_from_args(std::env::args()) {
+                *app.state::<AppState>()
+                    .launch_surface
+                    .lock()
+                    .expect("launch surface poisoned") = Some(surface);
+            }
             app.manage(commands::watch::FsWatchState::default());
             Ok(())
         })
@@ -209,6 +216,11 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::preview::preview_restart,
             commands::preview::get_preview_prefs,
             commands::preview::set_preview_auto_verify,
+            commands::media::list_media,
+            commands::media::cancel_media,
+            commands::media::get_media_prefs,
+            commands::media::set_media_prefs,
+            commands::media::list_media_models,
             commands::files::fs_list_dir,
             commands::files::fs_read_file,
             commands::files::fs_write_file,

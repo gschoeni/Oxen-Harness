@@ -17,3 +17,19 @@ export function useFsChanged(workspace: string, paths: string[], onChange: () =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fsChange]);
 }
+
+/** Run `onChange` when a watcher batch touches anything under `prefix`
+ *  (workspace-relative, e.g. `generations/`) — or is a bulk change. Same
+ *  post-mount rule as `useFsChanged`. */
+export function useFsChangedUnder(workspace: string, prefix: string, onChange: () => void) {
+  const fsChange = useStore((s) => s.fsChange);
+  const seenTick = useRef(useStore.getState().fsChange?.tick ?? 0);
+  useEffect(() => {
+    if (!fsChange || fsChange.tick === seenTick.current) return;
+    seenTick.current = fsChange.tick;
+    if (fsChange.root !== workspace) return;
+    if (fsChange.paths.length && !fsChange.paths.some((p) => p.startsWith(prefix))) return;
+    onChange();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fsChange]);
+}

@@ -25,6 +25,7 @@ function entry(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
     last_reply: "",
     message_count: 8,
     mid_turn: false,
+    seen_at: 0,
     plan: null,
     trail: null,
     settle: null,
@@ -457,6 +458,43 @@ describe("the board", () => {
     // The project is gone — we land back on the board and its train is gone.
     await waitFor(() => expect(screen.getByText("Home")).toBeTruthy());
     await waitFor(() => expect(screen.queryByText(/thread a/)).toBeNull());
+  });
+
+  it("has a media lens that lists projects' generations and sticks", async () => {
+    setUi("homeView", "cards");
+    const app = project("/work/app", "app");
+    seed({ entries: [entry()] }, [app]);
+    vi.mocked(ipc.listMedia).mockResolvedValue([
+      {
+        id: "g1",
+        session: "s1",
+        batch: "b",
+        index: 1,
+        kind: "image",
+        model: "flux",
+        prompt: "an ox",
+        params: {},
+        refs: [],
+        path: "generations/a.png",
+        poster: null,
+        bytes: 1,
+        width: 4,
+        height: 2,
+        duration_secs: null,
+        cost_usd: 0.01,
+        status: "succeeded",
+        error: null,
+        created_at: NOW,
+        completed_at: null,
+        parent: null,
+        seed: null,
+      },
+    ]);
+    render(<HomePage />);
+    await userEvent.click(await screen.findByRole("button", { name: /media/i }));
+    expect(getUi("homeView")).toBe("media");
+    expect(await screen.findByTitle("an ox")).toBeInTheDocument();
+    expect(screen.getByText("1 generation")).toBeInTheDocument();
   });
 
   it("opens on the cards lens by default; the ledger is a toggle away and sticks", async () => {

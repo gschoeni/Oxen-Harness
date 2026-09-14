@@ -20,7 +20,10 @@ const MACOS_BUNDLE_ID: &str = "ai.oxen.harness";
 /// — deliberately not `oxen-harness`, which is this CLI).
 const APP_BINARY: &str = "oxen-harness-app";
 
-pub(crate) fn run_ui(path: Option<PathBuf>, ui: &Ui) -> Result<()> {
+/// `oxen-harness ui [dir] [--gallery | --settings <page> | --session <id>]`.
+/// `surface` is what the app should open once it's on the project:
+/// `gallery`, `settings:<page>`, or `session:<id>` (travels as `--open`).
+pub(crate) fn run_ui(path: Option<PathBuf>, surface: Option<String>, ui: &Ui) -> Result<()> {
     let dir = path.unwrap_or_else(|| PathBuf::from("."));
     let dir = dir
         .canonicalize()
@@ -34,7 +37,11 @@ pub(crate) fn run_ui(path: Option<PathBuf>, ui: &Ui) -> Result<()> {
         .ok()
         .filter(|v| !v.trim().is_empty())
         .or_else(installed_windows_app);
-    let (program, args) = launch_plan(&dir, override_app.as_deref(), std::env::consts::OS);
+    let (program, mut args) = launch_plan(&dir, override_app.as_deref(), std::env::consts::OS);
+    if let Some(surface) = surface.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        args.push("--open".into());
+        args.push(surface.to_string());
+    }
 
     if program == "open" {
         // `open` is a short-lived launcher, not the app: wait for it so a
@@ -67,9 +74,13 @@ pub(crate) fn run_ui(path: Option<PathBuf>, ui: &Ui) -> Result<()> {
     }
 
     println!(
-        "{} {}",
+        "{} {}{}",
         ui.green("✓ opening the desktop app in"),
-        ui.cream(&dir)
+        ui.cream(&dir),
+        surface
+            .as_deref()
+            .map(|s| ui.dim(&format!(" · {s}")))
+            .unwrap_or_default()
     );
     Ok(())
 }

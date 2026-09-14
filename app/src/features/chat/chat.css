@@ -878,6 +878,141 @@
 
 .slash-option code { color: var(--accent); }
 .slash-option span { color: var(--text-secondary); }
+/* A file drag over the chat lights the composer: this is where it lands. */
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.chat.chat-drop-active .composer-inner {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+/* "Drop to attach": an overlay label, so the bar never shifts under a drag. */
+.composer-drop-hint {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-3);
+  padding: 1px 8px;
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.chat.chat-drop-active .composer-drop-hint {
+  opacity: 1;
+}
+
+/* The media tray: everything staged for the next message, in the bar. */
+.composer-tray {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  min-width: 0;
+}
+.composer-tray::-webkit-scrollbar {
+  display: none;
+}
+.composer-tray-count {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  padding-right: var(--space-1);
+}
+.composer-tray-tile {
+  position: relative;
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.composer-tray-img,
+.composer-tray-tile .attach-img-loading {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+.composer-tray-icon {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--accent);
+  background: var(--accent-tint-strong);
+}
+.composer-tray-icon.video {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg) 85%, var(--accent));
+}
+.composer-tray-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.composer-tray-x {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+  line-height: 1;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  color: var(--text);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.composer-tray-tile:hover .composer-tray-x,
+.composer-tray-tile:focus-within .composer-tray-x {
+  opacity: 1;
+}
+.composer-tray-x:hover {
+  background: var(--danger);
+  color: var(--on-accent);
+}
+.composer-tray-clear {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 2px 8px;
+  font-size: var(--text-xs);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.composer-tray-clear:hover {
+  color: var(--text);
+  border-color: var(--separator-strong);
+}
 .composer-inner:focus-within {
   border-color: var(--accent);
   box-shadow: var(--frame-shadow), var(--focus-ring);
@@ -1438,4 +1573,119 @@
   border-top: 1px solid var(--separator);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.msg-attachments video {
+  max-width: 320px;
+  max-height: 260px;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+.msg-attachments audio {
+  width: 260px;
+}
+
+/* The in-flight generations strip reuses the tasks panel; its hint is a link. */
+.media-panel-link {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--accent);
+  font: inherit;
+}
+.media-panel-link:hover {
+  text-decoration: underline;
+}
+
+/* Reference uploads: a name line over a slim bar. Shares the tasks-panel
+   row rhythm; the fill is the accent, the track the separator. */
+.media-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px 6px;
+}
+.media-upload-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 12px;
+}
+.media-upload-icon {
+  flex: none;
+  color: var(--text-muted);
+}
+.media-upload-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.media-upload-label {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.media-upload-status {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+}
+.media-upload.failed .media-upload-status {
+  color: var(--danger, var(--text-muted));
+}
+.media-upload-track {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--separator);
+}
+.media-upload-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 160ms ease-out;
+}
+.media-upload.failed .media-upload-fill {
+  background: var(--danger, var(--separator-strong));
+}
+.media-upload-track.indeterminate .media-upload-fill {
+  width: 40% !important;
+  animation: media-upload-slide 1.1s ease-in-out infinite;
+}
+@keyframes media-upload-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .media-upload-track.indeterminate .media-upload-fill {
+    animation: none;
+    width: 100% !important;
+  }
+}
+/* Inside a generation card: tighter rows under one header line. */
+.media-uploads {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+}
+.media-uploads-head {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  padding: 0 8px 2px;
+}
+.media-upload.compact {
+  padding: 2px 8px 4px;
 }

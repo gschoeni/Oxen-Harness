@@ -9,6 +9,7 @@ import type { CodeSnippet } from "../../lib/types";
 import { ThreadItem } from "./ThreadItem";
 import { FleetPanel } from "./FleetPanel";
 import { TasksPanel } from "./TasksPanel";
+import { MediaPanel } from "./MediaPanel";
 import { Plan } from "./Plan";
 import { TrailStrip } from "../ledger/TrailStrip";
 import { Composer } from "./Composer";
@@ -264,6 +265,7 @@ export function Chat() {
       )}
       <FleetPanel />
       <TasksPanel />
+      <MediaPanel />
       <Queue items={queue} onChange={setQueue} />
       {snippets.length > 0 && (
         <div className="attachments">

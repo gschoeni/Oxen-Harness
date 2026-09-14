@@ -15,6 +15,7 @@ harness-compress = { workspace = true }
 harness-llm = { workspace = true }
 harness-tools = { workspace = true }
 harness-oxen = { workspace = true }
+harness-media = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 globset = "0.4"

@@ -6,6 +6,7 @@ import { useStore } from "../../lib/store";
 import type { Project, ProjectContext, StartupModelChoice } from "../../lib/types";
 import { ModelPicker } from "../chat/ModelPicker";
 import { ProjectTrail } from "../ledger/ProjectTrail";
+import { ProjectMediaCard } from "../media/ProjectMediaCard";
 import { useBoard } from "../ledger/useBoard";
 import { RemoveProjectModal } from "./RemoveProjectModal";
 import "./projects.css";
@@ -192,6 +193,7 @@ export function ProjectHome({
               <p>Start with a task and the agent will pick up the project goal, instructions, and references automatically.</p>
             </div>
           )}
+          <ProjectMediaCard path={project.path} />
         </section>
 
         <aside className="project-context-panel">

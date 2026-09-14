@@ -365,3 +365,59 @@ pub fn local_phase(phase: harness_local::LoadPhase) -> harness_protocol::LocalPh
         harness_local::LoadPhase::Ready => harness_protocol::LocalPhase::Ready,
     }
 }
+
+/// A media library item as its wire shape.
+pub fn media_item(item: harness_media::MediaItem) -> harness_protocol::MediaItem {
+    harness_protocol::MediaItem {
+        id: item.id,
+        session: item.session,
+        batch: item.batch,
+        index: item.index,
+        kind: item.kind.as_str().to_string(),
+        model: item.model,
+        prompt: item.prompt,
+        params: item.params,
+        refs: item.refs,
+        path: item.path,
+        poster: item.poster,
+        bytes: item.bytes,
+        width: item.width,
+        height: item.height,
+        duration_secs: item.duration_secs,
+        cost_usd: item.cost_usd,
+        status: item.status.as_str().to_string(),
+        error: item.error,
+        created_at: item.created_at,
+        completed_at: item.completed_at,
+        parent: item.parent,
+        seed: item.seed,
+    }
+}
+
+/// An upload-progress row as its wire shape.
+pub fn media_upload(upload: harness_media::MediaUpload) -> harness_protocol::MediaUpload {
+    harness_protocol::MediaUpload {
+        id: upload.id,
+        session: upload.session,
+        label: upload.label,
+        filename: upload.filename,
+        kind: upload.kind,
+        bytes_sent: upload.bytes_sent,
+        bytes_total: upload.bytes_total,
+        status: upload.status.as_str().to_string(),
+        error: upload.error,
+        started_at: upload.started_at,
+    }
+}
+
+/// A catalog model as its picker summary.
+pub fn media_model(model: &harness_media::MediaModel) -> harness_protocol::MediaModelSummary {
+    harness_protocol::MediaModelSummary {
+        id: model.id.clone(),
+        kind: model.kind.as_str().to_string(),
+        price: model.price_label(),
+        developer: model.developer.clone(),
+        summary: model.summary.clone().or_else(|| model.description.clone()),
+        inputs: model.inputs.clone(),
+    }
+}

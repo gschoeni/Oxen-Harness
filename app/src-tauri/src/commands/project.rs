@@ -68,6 +68,17 @@ fn write_projects_config(cfg: &ProjectsConfig) -> Result<(), String> {
 
 /// Record `path` as a known project and make it active (persisted). Re-adding a
 /// previously removed path un-hides it.
+/// The surface a cold start asked for (`oxen-harness ui <dir> --gallery`),
+/// once: the UI calls this at boot and opens it after entering the project.
+#[tauri::command]
+pub(crate) fn take_launch_surface(state: State<'_, AppState>) -> Option<String> {
+    state
+        .launch_surface
+        .lock()
+        .expect("launch surface poisoned")
+        .take()
+}
+
 pub(crate) fn remember_project(path: &str) -> Result<(), String> {
     let mut cfg = read_projects_config();
     if !cfg.paths.iter().any(|p| p == path) {
@@ -82,8 +93,21 @@ pub(crate) fn remember_project(path: &str) -> Result<(), String> {
 /// the directory stays on disk, it just no longer surfaces as a project. The
 /// path is recorded in `removed` so the history-derived union does not bring it
 /// back on the next load.
+///
+/// This is the ONLY thing "Remove project" does. It must never grow a
+/// filesystem delete: a project is any directory the user pointed us at —
+/// their home folder, a repo with uncommitted work — and forgetting the
+/// reference must stay a safe, reversible bookkeeping edit.
 pub(crate) fn forget_project(path: &str) -> Result<(), String> {
     let mut cfg = read_projects_config();
+    forget_in(&mut cfg, path);
+    write_projects_config(&cfg)
+}
+
+/// The pure edit behind [`forget_project`]: drop `path` from the listed
+/// projects, remember it as removed, and clear it as active. Touches the
+/// config value and nothing else.
+fn forget_in(cfg: &mut ProjectsConfig, path: &str) {
     cfg.paths.retain(|p| p != path);
     if !cfg.removed.iter().any(|p| p == path) {
         cfg.removed.push(path.to_string());
@@ -91,7 +115,6 @@ pub(crate) fn forget_project(path: &str) -> Result<(), String> {
     if cfg.active.as_deref() == Some(path) {
         cfg.active = None;
     }
-    write_projects_config(&cfg)
 }
 
 /// Return the saved parent directory for new projects when it still exists.
@@ -152,14 +175,14 @@ pub(crate) async fn list_projects(state: State<'_, AppState>) -> Result<Vec<Proj
     // Chats per workspace, so each directory with history shows up as a
     // project. Native chats only: imported transcripts (Claude Code / Cursor)
     // carry their original cwd as workspace and would mint phantom projects —
-    // the sidebar and chat lists hide them too (`source === ""`).
+    // the sidebar and chat lists hide them too (`source === ""`). Counted in
+    // SQL: listing every session (title and all) just to tally them made this
+    // page's load scale with the size of the whole history.
     let mut counts: HashMap<String, usize> = HashMap::new();
     let mut last_used: HashMap<String, i64> = HashMap::new();
     if let Ok(store) = open_history_store() {
-        if let Ok(sessions) = store.list_sessions() {
-            for s in sessions.into_iter().filter(|s| s.source.is_empty()) {
-                *counts.entry(s.workspace).or_default() += 1;
-            }
+        if let Ok(by_workspace) = store.session_counts_by_workspace() {
+            counts = by_workspace;
         }
         if let Ok(activity) = store.workspace_last_used() {
             last_used = activity;
@@ -407,6 +430,51 @@ mod tests {
         let history = strings(&["/gone"]);
         let paths = union_project_paths(&cfg, "/gone", history.iter());
         assert!(paths.is_empty());
+    }
+
+    /// Removing a project forgets the reference and leaves the directory —
+    /// and everything in it — exactly as it was. Pinned against a real
+    /// folder: the home directory is a legitimate project, so this path can
+    /// never be allowed to reach for the filesystem.
+    #[test]
+    fn removing_a_project_never_touches_its_directory_on_disk() {
+        let tmp = std::env::temp_dir().join(format!(
+            "oxen-harness-remove-project-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::write(tmp.join("src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(tmp.join("notes.txt"), "precious").unwrap();
+        let path = tmp.display().to_string();
+
+        let mut cfg = ProjectsConfig {
+            paths: strings(&[&path, "/other"]),
+            active: Some(path.clone()),
+            ..Default::default()
+        };
+        forget_in(&mut cfg, &path);
+
+        // The reference is gone (and stays gone across history-derived unions)…
+        assert_eq!(cfg.paths, strings(&["/other"]));
+        assert_eq!(cfg.removed, strings(&[&path]));
+        assert_eq!(cfg.active, None);
+        // …and the directory is untouched, byte for byte.
+        assert!(tmp.is_dir());
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("src/main.rs")).unwrap(),
+            "fn main() {}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("notes.txt")).unwrap(),
+            "precious"
+        );
+
+        // Forgetting twice is idempotent: one `removed` entry, no error.
+        forget_in(&mut cfg, &path);
+        assert_eq!(cfg.removed, strings(&[&path]));
+
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     #[test]

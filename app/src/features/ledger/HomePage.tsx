@@ -7,12 +7,13 @@
 // agents legible in one glance and every loose end one click from closed.
 
 import { useEffect, useState } from "react";
-import { FolderPlus, LayoutGrid, Plus, Rows3, Settings2, Trash2 } from "lucide-react";
+import { FolderPlus, Images, LayoutGrid, Plus, Rows3, Settings2, Trash2 } from "lucide-react";
 import { Button, Modal } from "../../components/ui";
 import { relativeTime } from "../../lib/format";
 import { useStore } from "../../lib/store";
 import type { Project } from "../../lib/types";
 import { getUi, setUi } from "../../lib/uiState";
+import { MediaLens } from "../media/MediaLens";
 import { ProjectHome } from "../projects/ProjectHome";
 import { RemoveProjectModal } from "../projects/RemoveProjectModal";
 import { StartProjectModal } from "../projects/StartProjectModal";
@@ -99,13 +100,15 @@ export function HomePage() {
   );
 }
 
-/** Home's two lenses: the project cards (altitude, calm view — the default)
- *  and the ledger (the trail map — threads, working view). Persisted — a
- *  lens is a habit. */
-type HomeView = "ledger" | "cards";
+/** Home's three lenses: the project cards (altitude, calm view — the
+ *  default), the ledger (the trail map — threads, working view), and media
+ *  (every project's generated images and clips). Persisted — a lens is a
+ *  habit. */
+type HomeView = "ledger" | "cards" | "media";
 
 function savedView(): HomeView {
-  return getUi("homeView") === "ledger" ? "ledger" : "cards";
+  const saved = getUi("homeView");
+  return saved === "ledger" || saved === "media" ? saved : "cards";
 }
 
 function BoardView({
@@ -118,6 +121,7 @@ function BoardView({
   onStartProject: () => void;
 }) {
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
+  const projects = useStore((s) => s.projects);
 
   // The one unfolded waystation, if any — opening another folds the first.
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -159,6 +163,14 @@ function BoardView({
             >
               <Rows3 size={13} /> ledger
             </button>
+            <button
+              className={`home-view-option ${view === "media" ? "selected" : ""}`}
+              aria-pressed={view === "media"}
+              title="Media — generated images and clips across projects"
+              onClick={() => changeView("media")}
+            >
+              <Images size={13} /> media
+            </button>
           </div>
           <Button variant="ghost" onClick={() => setSettingsOpen(true)}>
             <Settings2 size={16} /> Settings
@@ -179,6 +191,8 @@ function BoardView({
         </button>
       ) : view === "cards" ? (
         <ProjectCards board={board} onOpenProject={onOpenProject} />
+      ) : view === "media" ? (
+        <MediaLens projects={projects} />
       ) : (
         <>
           <section className="ledger-trains" aria-label="Open threads by project">

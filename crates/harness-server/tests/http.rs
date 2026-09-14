@@ -17,6 +17,10 @@ fn isolate_config_home() {
     static HOME: OnceLock<PathBuf> = OnceLock::new();
     let path = HOME.get_or_init(|| tempfile::tempdir().expect("config home").keep());
     std::env::set_var("OXEN_HARNESS_DIR", path);
+    // No hub credentials leak in from the developer's machine: the media
+    // routes must see "no key", not a real (or stale) login.
+    std::env::set_var("OXEN_CONFIG_DIR", path);
+    std::env::remove_var("OXEN_API_KEY");
 }
 
 const FINAL_SSE: &str = concat!(
@@ -385,6 +389,66 @@ async fn session_lifecycle_and_replay() {
         .await
         .unwrap();
     assert_eq!(response.status(), 404);
+
+    // Media: the project's library is empty, the preferences round-trip,
+    // and a cancel without a hub key is a plain 400 with a message.
+    let media: Vec<Value> = client()
+        .get(format!("{base}/v1/media"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(media.is_empty());
+    let mut prefs: Value = client()
+        .get(format!("{base}/v1/media/prefs"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(prefs["output_dir"], "generations");
+    assert_eq!(prefs["per_run_usd"], 1.0);
+    prefs["per_run_usd"] = Value::Null;
+    prefs["default_image_model"] = json!("nano-banana-2");
+    let response = client()
+        .put(format!("{base}/v1/media/prefs"))
+        .bearer_auth(TOKEN)
+        .json(&prefs)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 204);
+    let prefs: Value = client()
+        .get(format!("{base}/v1/media/prefs"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(prefs["per_run_usd"], Value::Null);
+    assert_eq!(prefs["default_image_model"], "nano-banana-2");
+    let response = client()
+        .post(format!("{base}/v1/media/nope/cancel"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    let body: Value = response.json().await.unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("Media generation needs your Oxen API key."),
+        "{body}"
+    );
 
     // Delete removes it.
     let response = client()

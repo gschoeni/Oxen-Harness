@@ -15,6 +15,7 @@ harness-llm = { workspace = true }
 harness-local = { workspace = true }
 harness-permissions = { workspace = true }
 harness-preview = { workspace = true }
+harness-media = { workspace = true }
 harness-runtime = { workspace = true }
 harness-review = { workspace = true }
 harness-loop = { workspace = true }
@@ -22,7 +23,9 @@ harness-compress = { workspace = true }
 harness-store = { workspace = true }
 harness-tools = { workspace = true }
 harness-config = { workspace = true }
+harness-core = { workspace = true }
 async-trait = { workspace = true }
+reqwest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

@@ -314,3 +314,4 @@
   .project-context-panel { grid-template-columns: 1fr; }
   .project-context-card + .project-context-card { border-left: 0; border-top: 1px solid var(--separator); }
 }
+

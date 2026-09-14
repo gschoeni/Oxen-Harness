@@ -68,6 +68,7 @@ The catalog (see `harness-protocol/src/event.rs` for the exact fields):
 | `agent.canvas` / `agent.canvas_writing` / `agent.open_file` | host-surface documents/files |
 | `fleet.started` / `fleet.agent` / `fleet.agent_activity` / `fleet.budget` / `fleet.completed` | parallel subagent lanes (`budget`: where the turn's shared tree budget stands — tokens, model calls, spawns against their caps — after a lane's spend changed); every event names its `fleet` (a `wait: false` fleet can overlap another in one session) and `fleet.agent` names the `lane` (its session id — lanes persist under the parent session, so `send_to_agent` / `read_agent` and the `…/agents/{agent}` routes address it); `agent_activity` `kind: note` is a one-line notice (a refused command, a nudge, a compaction, a retry) |
 | `tasks.changed` | the session's background shell tasks after one started, ended, or was killed — the whole list (`TaskSummary`), so a client never merges |
+| `media.changed` | the project's media library after a generation was queued, progressed, finished, or failed — `root` names the project and `items` is the whole library (`MediaItem`, newest first), so a client never merges; `session` is the chat whose generation changed |
 | `review.progress` / `review.token` / `review.tool` | code-review pipeline progress |
 | `preview.status` / `preview.console` | dev-server lifecycle + page errors |
 | `local.status` / `models.progress` | local-model loading / downloads (app-wide, no `session`) |
@@ -90,6 +91,11 @@ POST   /v1/sessions/{id}/fleets/{fleet}/cancel   stop one `spawn_agents` fleet (
 GET    /v1/sessions/{id}/agents          every subagent lane of the session, running and finished → [AgentSummary {id, label, fleet, status, summary, tokens, rounds, elapsed_secs, created_at}]
 GET    /v1/sessions/{id}/tasks           the session's background shell tasks → [TaskSummary {id, command, running, exit_code, killed, elapsed_secs, last_line}]
 POST   /v1/sessions/{id}/tasks/{task}/kill   kill one background task (its whole process group); 404 when unknown
+GET    /v1/media?root=                  the project's image/video generations, newest first → [MediaItem {id, session, kind, model, prompt, params, refs, path, poster, status, cost_usd, created_at, …}] (defaults to the active project)
+POST   /v1/media/{generation}/cancel    cancel an in-flight generation by its hub id
+GET    /v1/media/prefs                  media preferences → MediaPrefs {default_image_model, default_video_model, output_dir, per_generation_usd, per_run_usd}
+PUT    /v1/media/prefs                  replace the media preferences (applies to new/resumed chats)
+GET    /v1/media/models?kind=           the hub's image/video models → [MediaModelSummary {id, kind, price, developer, summary, inputs}]
 POST   /v1/sessions/{id}/agents/{agent}/cancel     stop one running lane (its id rides on `fleet.agent`); the rest of its fleet carries on; 404 once it has ended
 POST   /v1/sessions/{id}/agents/{agent}/interject  {text} → {accepted} — steer one running lane
 GET    /v1/sessions/{id}/agents/{agent}/patch     saved isolated patch as a JSON string

@@ -9,6 +9,7 @@ import {
   FolderOpen,
   Globe,
   GraduationCap,
+  Images,
   Link2,
   Moon,
   Palette,
@@ -34,6 +35,7 @@ import { CloudModelsPage } from "./CloudModelsPage";
 import { CodeReviewPage } from "./CodeReviewPage";
 import { PermissionsPage } from "./PermissionsPage";
 import { PreviewPage } from "./PreviewPage";
+import { MediaPage } from "./MediaPage";
 import { CompressionPage } from "./CompressionPage";
 import { UsagePage } from "./UsagePage";
 import { LogsPage } from "../logs/LogsPage";
@@ -59,6 +61,7 @@ const NAV: {
   { page: "rules", icon: <Radar size={18} />, label: "Rules", blurb: "What it must not do" },
   { page: "permissions", icon: <ShieldCheck size={18} />, label: "Permissions", blurb: "When it asks you first", group: "How it works" },
   { page: "preview", icon: <Globe size={18} />, label: "Preview", blurb: "Live app preview & dev servers" },
+  { page: "media", icon: <Images size={18} />, label: "Media", blurb: "Image & video generation, budgets" },
   { page: "code-review", icon: <SearchCode size={18} />, label: "Code review", blurb: "The find → verify → report pipeline" },
   { page: "compression", icon: <Shrink size={18} />, label: "Compression", blurb: "Shrink stale context on the wire" },
   { page: "usage", icon: <DollarSign size={18} />, label: "Usage", blurb: "Tokens & dollars spent per model", group: "This machine" },
@@ -75,6 +78,7 @@ const TITLE: Record<SettingsPage, string> = {
   skills: "Skills",
   rules: "Rules",
   preview: "Preview",
+  media: "Media",
   "code-review": "Code review",
   compression: "Compression",
   usage: "Usage",
@@ -155,6 +159,7 @@ export function Settings() {
             {page === "skills" && <SkillsPage />}
             {page === "rules" && <RulesPage />}
             {page === "preview" && <PreviewPage />}
+            {page === "media" && <MediaPage />}
             {page === "code-review" && <CodeReviewPage />}
             {page === "compression" && <CompressionPage />}
             {page === "usage" && <UsagePage />}

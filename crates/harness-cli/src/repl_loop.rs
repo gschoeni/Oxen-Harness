@@ -352,6 +352,7 @@ async fn handle_line(
             commands::agents::handle_repl(rest, ctx.store, &ctx.session(), ui).await
         }
         Command::Tasks(rest) => commands::tasks::handle_repl(rest, ui).await,
+        Command::Gallery(rest) => commands::gallery::handle_repl(rest, ui)?,
         Command::Resume(rest) => commands::resume::handle_repl(rest, agent, ui, ctx).await?,
         Command::Fork => commands::rewind::fork_repl(agent, ui, ctx)?,
         Command::Rewind(rest) => commands::rewind::rewind_repl(rest, agent, ui, ctx)?,

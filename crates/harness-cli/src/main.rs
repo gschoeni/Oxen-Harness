@@ -136,6 +136,15 @@ enum TopCommand {
     Ui {
         /// The project directory to open.
         path: Option<std::path::PathBuf>,
+        /// Open the project's media gallery (generated images and videos).
+        #[arg(long)]
+        gallery: bool,
+        /// Open a Settings page (e.g. `media`, `connection`, `tools`).
+        #[arg(long, value_name = "PAGE")]
+        settings: Option<String>,
+        /// Resume a chat by session id (as printed on the death screen).
+        #[arg(long, value_name = "ID")]
+        session: Option<String>,
     },
 }
 
@@ -197,7 +206,21 @@ async fn main() -> Result<()> {
         }
         Some(TopCommand::Trace { action }) => return commands::trace::run_trace(action, &ui),
         Some(TopCommand::Oxen { action }) => return commands::oxen::run_oxen(action, &ui),
-        Some(TopCommand::Ui { path }) => return commands::ui::run_ui(path, &ui),
+        Some(TopCommand::Ui {
+            path,
+            gallery,
+            settings,
+            session,
+        }) => {
+            let surface = if gallery {
+                Some("gallery".to_string())
+            } else if let Some(page) = settings {
+                Some(format!("settings:{page}"))
+            } else {
+                session.map(|id| format!("session:{id}"))
+            };
+            return commands::ui::run_ui(path, surface, &ui);
+        }
         None => {}
     }
 
@@ -309,8 +332,8 @@ async fn main() -> Result<()> {
     // work without re-entering keys.
     let _ = harness_runtime::connection::load();
 
-    let mut tools = build_tool_registry(&workspace, &ui);
     let base_url = client.base_url().to_string();
+    let mut tools = build_tool_registry(&workspace, &ui, &base_url);
     let config = agent_config(&model, context_window, &tools, &workspace, &ui);
 
     endpoint::register_fleet_tool(&mut tools, &client, &config, &workspace, store.clone(), &ui);

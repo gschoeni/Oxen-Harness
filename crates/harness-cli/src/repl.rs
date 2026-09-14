@@ -71,6 +71,10 @@ pub enum Command {
     /// Background shell tasks: `/tasks` lists them; `/tasks kill <n|id>`
     /// stops one.
     Tasks(Option<String>),
+    /// The project's generated images and videos: `/gallery` opens a picker
+    /// over them (open one, or stage it as a reference chip); `/gallery
+    /// open <n>` / `/gallery use <n>` skip the picker.
+    Gallery(Option<String>),
     /// Pick up an earlier trail in this workspace: `/resume` opens a picker
     /// over the recent sessions, `/resume <id-prefix>` jumps straight to one.
     Resume(Option<String>),
@@ -302,6 +306,17 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
         description: "list background commands; `kill <n>` stops one",
         build: Command::Tasks,
         completer: ArgCompleter::None,
+    },
+    SlashSpec {
+        name: "/gallery",
+        aliases: &["/media", "/generations"],
+        description: "browse generated images & videos; open one or use it as a reference",
+        build: Command::Gallery,
+        completer: ArgCompleter::Static(&[
+            ("open", "open a generation in its viewer"),
+            ("use", "stage a generation as an [Image #N] reference chip"),
+            ("desktop", "browse the gallery in the desktop app"),
+        ]),
     },
     SlashSpec {
         name: "/preview",

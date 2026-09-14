@@ -84,12 +84,13 @@ impl Protocol {
     }
 }
 
-/// The largest picture drawn inline, in cells.
-pub(crate) const MAX_COLS: usize = 48;
-pub(crate) const MAX_ROWS: usize = 12;
+/// The largest picture drawn inline, in cells — sized so a generated image
+/// reads as a picture, not a thumbnail, while leaving the transcript room.
+pub(crate) const MAX_COLS: usize = 72;
+pub(crate) const MAX_ROWS: usize = 20;
 /// Pixels along the longest edge of the bytes actually transmitted — a
-/// thumbnail, not the original.
-const THUMB_EDGE: u32 = 640;
+/// preview, not the original.
+const THUMB_EDGE: u32 = 1024;
 /// A terminal cell is about twice as tall as it is wide.
 const CELL_ASPECT: f64 = 2.0;
 

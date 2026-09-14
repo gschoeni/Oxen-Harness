@@ -107,6 +107,25 @@ describe("FilesPanel", () => {
     await waitFor(() => expect(fsListDir).toHaveBeenCalledWith(ROOT, "src"));
   });
 
+  it("reveals a path: expands its ancestors and selects the row", async () => {
+    fsListDir.mockImplementation(async (_root: string, path: string) => {
+      if (path === "") return [{ name: "generations", path: "generations", is_dir: true }];
+      if (path === "generations") return [{ name: "2026-09-13", path: "generations/2026-09-13", is_dir: true }];
+      if (path === "generations/2026-09-13") return [{ name: "a.png", path: "generations/2026-09-13/a.png", is_dir: false }];
+      return [];
+    });
+    seedSession();
+    render(<FilesPanel />);
+    await screen.findByText("generations");
+    act(() => useStore.getState().revealInFiles("generations/2026-09-13/a.png"));
+    expect(useStore.getState().leftTab).toBe("files");
+    const row = await screen.findByTitle("generations/2026-09-13/a.png");
+    expect(row).toHaveClass("selected");
+    expect(fsListDir).toHaveBeenCalledWith(ROOT, "generations");
+    expect(fsListDir).toHaveBeenCalledWith(ROOT, "generations/2026-09-13");
+    await waitFor(() => expect(useStore.getState().filesReveal).toBeNull());
+  });
+
   it("renders nothing without a workspace", () => {
     const { container } = render(<FilesPanel />);
     expect(container).toBeEmptyDOMElement();

@@ -47,14 +47,78 @@ function iconFor(entry: FileEntry, open: boolean): ReactNode {
 
 const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
 
+/** Whether `dir` is under `ancestor` ("" is the root and contains everything). */
+const isUnder = (dir: string, ancestor: string) => ancestor === "" || dir.startsWith(`${ancestor}/`);
+
+/** Whether every ancestor of `dir` is expanded — i.e. its rows are on screen. */
+function isVisible(dir: string, expanded: Set<string>): boolean {
+  for (let p = parentOf(dir); p !== ""; p = parentOf(p)) if (!expanded.has(p)) return false;
+  return true;
+}
+
+/** The most directory listings kept in memory at once. Listings are only
+ *  cached for directories whose rows are on screen (a collapse releases its
+ *  subtree), so this is a backstop for a tree with hundreds of folders open at
+ *  once, not the working bound. */
+const MAX_CACHED_DIRS = 200;
+
+/** `entries` with `dir` (re)inserted last — insertion order doubles as the LRU
+ *  order — and, past the cap, the oldest listings that are not on screen
+ *  evicted. On-screen listings are never evicted: they are what the tree is
+ *  rendering. */
+function cacheListing(
+  prev: Record<string, FileEntry[]>,
+  dir: string,
+  list: FileEntry[],
+  expanded: Set<string>,
+): Record<string, FileEntry[]> {
+  const next: Record<string, FileEntry[]> = {};
+  for (const [d, l] of Object.entries(prev)) if (d !== dir) next[d] = l;
+  next[dir] = list;
+  const keys = Object.keys(next);
+  if (keys.length > MAX_CACHED_DIRS) {
+    let excess = keys.length - MAX_CACHED_DIRS;
+    for (const d of keys) {
+      if (excess === 0) break;
+      if (d === "" || d === dir || (expanded.has(d) && isVisible(d, expanded))) continue;
+      delete next[d];
+      excess--;
+    }
+  }
+  return next;
+}
+
+/** `entries` without `dir`'s listing and every listing below it. */
+function dropSubtree(prev: Record<string, FileEntry[]>, dir: string): Record<string, FileEntry[]> {
+  const next: Record<string, FileEntry[]> = {};
+  for (const [d, l] of Object.entries(prev)) if (d !== dir && !isUnder(d, dir)) next[d] = l;
+  return next;
+}
+
 export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent) => void }) {
   const workspace = useStore((s) => s.session?.workspace ?? null);
   const running = useStore((s) => !!s.session && s.runStatus[s.session.session_id] === "running");
   const openInViewer = useStore((s) => s.openInViewer);
+  const filesReveal = useStore((s) => s.filesReveal);
+  const clearFilesReveal = useStore((s) => s.clearFilesReveal);
+  /** A reveal in progress: the path whose row to scroll to once its
+   *  ancestors have listed. */
+  const revealing = useRef<string | null>(null);
 
-  /** Loaded directory listings, keyed by workspace-relative dir ("" = root). */
+  /** Directory listings for what the tree is showing, keyed by
+   *  workspace-relative dir ("" = root). Not a history of everything ever
+   *  opened: collapsing a folder releases its subtree's listings (a project
+   *  with node_modules browsed once would otherwise pin thousands of entries
+   *  and re-list them on every watcher batch), and `cacheListing` bounds the
+   *  rest. Re-expanding re-lists — cheap, and it is fresher for it. */
   const [entries, setEntries] = useState<Record<string, FileEntry[]>>({});
+  /** Folders the user has opened. Kept across a parent's collapse so that
+   *  re-opening the parent shows the same shape it had; their listings are
+   *  re-fetched then (see `expandDir`). */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // The latest expanded set for callbacks that must not re-create per change.
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
   /** Highlighted rows (⌘-click extends); drives the gallery + multi-drag. */
   const [selected, setSelected] = useState<Set<string>>(new Set());
   /** Where New file / New folder create: the selected row's directory. */
@@ -125,6 +189,34 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
     for (const dir of dirs) if (dir === "" || entries[dir]) void loadDir(dir);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fsChange]);
+
+  // "Reveal in Files": open every ancestor of the path, select its row, and
+  // scroll to it once the listings have arrived (below, on `entries`).
+  useEffect(() => {
+    if (!filesReveal || !workspace) return;
+    const path = filesReveal.path;
+    const ancestors: string[] = [];
+    for (let p = parentOf(path); p !== ""; p = parentOf(p)) ancestors.unshift(p);
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const dir of ancestors) next.add(dir);
+      return next;
+    });
+    for (const dir of ancestors) void loadDir(dir);
+    setSelected(new Set([path]));
+    setTargetDir(parentOf(path));
+    revealing.current = path;
+    clearFilesReveal();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filesReveal]);
+  useEffect(() => {
+    const path = revealing.current;
+    if (!path) return;
+    const row = document.querySelector<HTMLElement>(`.ft-row[data-path="${CSS.escape(path)}"]`);
+    if (!row) return;
+    row.scrollIntoView?.({ block: "center" });
+    revealing.current = null;
+  }, [entries]);
 
   /** Git state per changed path, for the tree rows' badges. */
   const gitByPath = useMemo(() => {
@@ -267,6 +359,7 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
             <div key={entry.path}>
               <button
                 className={`ft-row${selected.has(entry.path) ? " selected" : ""}${state ? ` git-${state.status}` : ""}`}
+                data-path={entry.path}
                 style={{ paddingLeft: 10 + depth * 14 }}
                 title={state ? `${entry.path} — ${state.status}` : entry.path}
                 draggable={!entry.is_dir}

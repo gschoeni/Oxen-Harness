@@ -49,6 +49,7 @@ of focused crates:
 | `harness-config` | Shared config plumbing: `~/.oxen-harness` paths, versioned JSON files, secrets in `.env` |
 | `harness-llm` | Oxen.ai chat completions client: tool calling + SSE streaming, lightweight auth |
 | `harness-tools` | The `TypedTool` trait + built-in tools: read/write/edit files, glob find, regex search, sandboxed shell, git, web search, web page fetch, interactive questions, canvas documents, plans, skills, and user-defined HTTP tools |
+| `harness-media` | Image and video generation over the Oxen.ai async queue: the hosted model catalog with per-model parameter schemas and cost estimates, the `generate_image` / `generate_video` / `media_models` / `media_status` tools, reference media (dropped files → the model's own request fields), spend limits, and the per-project `generations/` library with its `manifest.jsonl` |
 | `harness-compress` | Reversible context compression for stale tool output before it goes on the wire |
 | `harness-store` | SQLite history (verbatim) + JSONL export for fine-tuning |
 | `harness-local` | Local models: config-file GGUF catalog, downloads + disk tracking, offline-first resolution, `llama-server` launcher |
@@ -328,6 +329,45 @@ terminal shows it inline after `🖼 image attached for the model`. Set
 file in Finder and pasting attaches the file, not Finder's icon. Links in
 replies are clickable where the terminal supports it, and **Ctrl+G** opens the
 draft in `$EDITOR`.
+
+### Images and video (generation)
+
+The agent can make pictures and clips with the image/video models on
+[Oxen.ai](https://oxen.ai) — flux, nano-banana, gpt-image, seedance, kling,
+veo, wan and the rest — using the same API key as the chat model. Ask for one
+("make me a 16:9 hero image of…", "animate that as a 5-second clip") and it
+works like an art director: brainstorms, drafts cheaply, renders the pick with
+a stronger model, and saves everything under `generations/` in the project
+(readable names, a date folder per day, an append-only `manifest.jsonl`).
+
+- **References.** Drop images, video, or audio into the chat and they show up
+  labeled `[Image #1]`, `[Video #1]`, `[Audio #1]`; the agent passes those
+  labels in `refs`, each file is uploaded to your `playground` repository on
+  the hub (with a progress bar in the chat and the terminal) and its signed URL
+  goes into the chosen model's matching request field (a first frame, a style
+  reference, a soundtrack). A file you've uploaded before is reused, not sent
+  again. Earlier generations are references too, by path — so "make a
+  variation of that one" just works. The agent will ask you for a reference
+  when one would help.
+- **Budgets.** `~/.oxen-harness/media.json` (Settings → Media in the desktop
+  app) holds a per-generation and a per-run limit in dollars; anything at or
+  under both runs without asking, anything over asks you first with the
+  estimate from the catalog's pricing. Set a limit to "always ask" to approve
+  every call.
+- **Seeing it.** The desktop shows each generation in the chat and in a
+  Gallery dock (a Midjourney-style feed of the project's media, with
+  use-as-reference, open, and copy-prompt). The terminal draws images inline
+  (kitty, ghostty, WezTerm, iTerm2) and `/gallery` opens a picker over past
+  generations to open one or stage it as a reference chip. Videos render in
+  the background and their result is delivered to the agent when done.
+- **From the terminal to the desktop.** `oxen-harness ui <dir> --gallery`
+  opens the desktop app straight on that project's gallery (also
+  `--settings media` and `--session <id>`), and `/gallery`'s "desktop" action
+  does the same for the current project.
+- **Models.** `media_models` browses the catalog (39 image and 80 video
+  models at the time of writing) and returns any model's exact parameters, so
+  the agent can fill `extra` with seedance's shot lists or gpt-image's quality
+  tiers without you looking anything up.
 
 ### Plan mode
 

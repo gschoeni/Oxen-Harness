@@ -310,6 +310,21 @@ pub enum ProtocolEvent {
         tasks: Vec<crate::dto::TaskSummary>,
     },
 
+    // --- Media generation --------------------------------------------------------
+    /// The project's media library changed (a generation was queued,
+    /// progressed, finished, or failed); `items` is the whole library for
+    /// `root`, newest first, so a client never has to merge.
+    #[serde(rename = "media.changed")]
+    MediaChanged {
+        session: String,
+        /// The project root the library belongs to.
+        root: String,
+        items: Vec<crate::dto::MediaItem>,
+        /// References being uploaded for a generation (progress rows).
+        #[serde(default)]
+        uploads: Vec<crate::dto::MediaUpload>,
+    },
+
     // --- Code review -----------------------------------------------------------
     /// Which pipeline step a running code review is on (and, for a fan-out
     /// step, its parallel lanes).
@@ -387,6 +402,7 @@ impl ProtocolEvent {
             Self::FleetBudget { .. } => "fleet.budget",
             Self::FleetCompleted { .. } => "fleet.completed",
             Self::TasksChanged { .. } => "tasks.changed",
+            Self::MediaChanged { .. } => "media.changed",
             Self::ReviewProgress { .. } => "review.progress",
             Self::ReviewToken { .. } => "review.token",
             Self::ReviewTool { .. } => "review.tool",
@@ -433,6 +449,7 @@ impl ProtocolEvent {
             | Self::FleetBudget { session, .. }
             | Self::FleetCompleted { session, .. }
             | Self::TasksChanged { session, .. }
+            | Self::MediaChanged { session, .. }
             | Self::ReviewProgress { session, .. }
             | Self::ReviewToken { session, .. }
             | Self::ReviewTool { session, .. }

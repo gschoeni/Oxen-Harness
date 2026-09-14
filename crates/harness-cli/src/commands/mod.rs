@@ -24,6 +24,7 @@
 pub(crate) mod agents;
 pub(crate) mod auth;
 pub(crate) mod compression;
+pub(crate) mod gallery;
 pub(crate) mod location;
 pub(crate) mod loops;
 pub(crate) mod model;

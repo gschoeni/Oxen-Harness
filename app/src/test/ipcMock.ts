@@ -30,6 +30,9 @@ import type {
   ThemeSummary,
   AgentSummary,
   TaskSummary,
+  MediaItem,
+  MediaModelSummary,
+  MediaPrefs,
 } from "../lib/types";
 
 // ---- event plumbing --------------------------------------------------------
@@ -378,6 +381,7 @@ export const removeProjectContext = vi.fn(async (path: string): Promise<Project>
 }));
 export const setActiveProject = vi.fn(async () => {});
 export const onProjectOpen = listener("projectOpen");
+export const takeLaunchSurface = vi.fn(async (): Promise<string | null> => null);
 export const selectCloudModelForNewChats = vi.fn(async () => {});
 export const getDefaultProjectLocation = vi.fn(async () => null as string | null);
 export const setDefaultProjectLocation = vi.fn(async (path: string) => path);
@@ -440,6 +444,23 @@ export const previewStatuses = vi.fn(async () => [] as unknown[]);
 export const previewRestart = vi.fn(async () => {});
 export const getPreviewPrefs = vi.fn(async () => ({ auto_verify: true }));
 export const setPreviewAutoVerify = vi.fn(async () => {});
+
+// ---- media generation --------------------------------------------------------
+export const sampleMediaPrefs: MediaPrefs = {
+  default_image_model: "black-forest-labs-flux-2-klein-4b",
+  default_video_model: "bytedance-seedance-2-0-fast-text-to-video",
+  output_dir: "generations",
+  per_generation_usd: 0.25,
+  per_run_usd: 1,
+  hub_repo: null,
+  commit_with_oxen: false,
+};
+export const listMedia = vi.fn(async (_root: string): Promise<MediaItem[]> => []);
+export const cancelMedia = vi.fn(async (_id: string) => {});
+export const getMediaPrefs = vi.fn(async (): Promise<MediaPrefs> => ({ ...sampleMediaPrefs }));
+export const setMediaPrefs = vi.fn(async (_prefs: MediaPrefs) => {});
+export const listMediaModels = vi.fn(async (_kind?: string): Promise<MediaModelSummary[]> => []);
+export const onMediaChanged = listener("mediaChanged");
 
 // ---- workspace files (Files tree + Editor dock) -------------------------------
 export const fsListDir = vi.fn(
@@ -540,6 +561,7 @@ export function resetIpc() {
   listAgents.mockReset().mockResolvedValue([]);
   interjectAgent.mockReset().mockResolvedValue(true);
   listTasks.mockReset().mockResolvedValue([]);
+  takeLaunchSurface.mockReset().mockResolvedValue(null);
   killBackgroundTask.mockReset().mockResolvedValue("killed");
   newSession.mockReset().mockResolvedValue({ ...sampleSession, session_id: "new-session-id" });
   resumeSession.mockReset().mockResolvedValue(emptyView);
@@ -631,6 +653,11 @@ export function resetIpc() {
   previewRestart.mockReset().mockResolvedValue(undefined);
   getPreviewPrefs.mockReset().mockResolvedValue({ auto_verify: true });
   setPreviewAutoVerify.mockReset().mockResolvedValue(undefined);
+  listMedia.mockReset().mockResolvedValue([]);
+  cancelMedia.mockReset().mockResolvedValue(undefined);
+  getMediaPrefs.mockReset().mockResolvedValue({ ...sampleMediaPrefs });
+  setMediaPrefs.mockReset().mockResolvedValue(undefined);
+  listMediaModels.mockReset().mockResolvedValue([]);
   fsListDir.mockReset().mockResolvedValue([]);
   fsReadFile.mockReset().mockResolvedValue({ content: "", truncated: false, size: 0 });
   fsWriteFile.mockReset().mockResolvedValue(undefined);

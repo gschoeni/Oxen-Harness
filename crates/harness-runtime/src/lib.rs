@@ -15,6 +15,8 @@
 //!   and user-defined custom HTTP tools.
 //! - [`skills`] — skill discovery (global + per-project `SKILL.md` dirs),
 //!   preferences, and authoring.
+//! - [`media`] — image/video generation preferences (default models, output
+//!   folder, spend limits) and the API handle the media tools use.
 //! - [`compression`] — the context-compression mode (off/audit/on) applied
 //!   when building an agent.
 //! - [`rules`] — stream rules: user/project corrections that watch the
@@ -30,6 +32,7 @@ pub mod config_repo;
 pub mod connection;
 pub mod context_files;
 pub mod limits;
+pub mod media;
 pub mod models;
 pub mod preview;
 pub mod project;

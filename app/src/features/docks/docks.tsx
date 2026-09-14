@@ -24,7 +24,7 @@
 // for every dock).
 
 import type { ReactNode } from "react";
-import { Compass, FileCode2, FolderTree, Globe, MessagesSquare, NotebookPen } from "lucide-react";
+import { Compass, FileCode2, FolderTree, Globe, Images, MessagesSquare, NotebookPen } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { Sidebar } from "../history/Sidebar";
 import { Canvas } from "../canvas/Canvas";
@@ -32,6 +32,7 @@ import { Preview } from "../preview/Preview";
 import { Browser } from "../browser/Browser";
 import { FilesPanel } from "../files/FilesPanel";
 import { EditorPane } from "../files/EditorPane";
+import { GalleryPanel } from "../media/GalleryPanel";
 import { ProjectsNav } from "../projects/ProjectsNav";
 
 export type DockSide = "left" | "right";
@@ -92,6 +93,17 @@ function useEditorAvailable(): boolean {
   });
 }
 
+/** Does the current chat's project have generations to show (or did the
+ *  user ask for the Gallery explicitly)? */
+function useGalleryAvailable(): boolean {
+  return useStore((s) => {
+    const id = s.session?.session_id;
+    const root = s.session?.workspace;
+    if (!id || !root) return false;
+    return (s.media[root]?.length ?? 0) > 0 || s.rightTab[id] === "gallery";
+  });
+}
+
 export const DOCKS: DockSpec[] = [
   {
     id: "history",
@@ -145,6 +157,16 @@ export const DOCKS: DockSpec[] = [
     minWidth: 340,
     useAvailable: useEditorAvailable,
     render: ({ onResizeStart }) => <EditorPane onResizeStart={onResizeStart} />,
+  },
+  {
+    id: "gallery",
+    side: "right",
+    title: "Gallery",
+    icon: <Images size={16} />,
+    defaultWidth: 520,
+    minWidth: 340,
+    useAvailable: useGalleryAvailable,
+    render: ({ onResizeStart }) => <GalleryPanel onResizeStart={onResizeStart} />,
   },
   {
     id: "browser",

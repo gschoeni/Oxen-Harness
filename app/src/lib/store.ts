@@ -49,6 +49,9 @@ import {
   totalCostUsd,
   totalTokensUsed,
   useLocalModel,
+  listMedia,
+  cancelMedia as cancelMediaIpc,
+  getMediaPrefs,
 } from "./ipc";
 import {
   appendApiKeyPrompt,
@@ -116,6 +119,10 @@ import type {
   AgentSummary,
   TasksChangedEvent,
   TaskSummary,
+  MediaChangedEvent,
+  MediaItem,
+  MediaUpload,
+  MediaPrefs,
 } from "./types";
 
 /** One model download the store is tracking — in flight (or failed), keyed by
@@ -153,7 +160,7 @@ function saveDockLayout(layout: DockLayout) {
 
 /** The right-column dock ids a user can pick as the active tab
  *  (see `features/docks/docks.tsx`). */
-export type RightTabId = "preview" | "canvas" | "browser" | "editor";
+export type RightTabId = "preview" | "canvas" | "browser" | "editor" | "gallery";
 
 /** One parallel subagent as shown in the chat's fleet panel. */
 export interface FleetLane {
@@ -468,6 +475,21 @@ interface AppState {
   agents: Record<string, AgentSummary[] | undefined>;
   /** A chat's background shell tasks, kept current by `tasks://changed`. */
   tasks: Record<string, TaskSummary[] | undefined>;
+  /** Each project's media library (generations, in flight and done), keyed
+   *  by workspace root and kept current by `media://changed`. */
+  media: Record<string, MediaItem[] | undefined>;
+  /** Reference uploads in flight per workspace root (live-only). */
+  mediaUploads: Record<string, MediaUpload[]>;
+  /** The media preferences (default models, folder, budgets), fetched once
+   *  on first use so cards can name the model a call defaulted to. */
+  mediaPrefs: MediaPrefs | null;
+  ensureMediaPrefs: () => void;
+  /** The generation the Gallery should select and scroll to (a chat card was
+   *  clicked); cleared once the panel has honored it. */
+  mediaFocus: string | null;
+  /** Files another surface (the Gallery's "Use as reference") staged for the
+   *  composer; Chat drains them into its attachment list. Absolute paths. */
+  pendingAttachments: string[];
   /** The inspector follows a running lane live (polls its transcript). */
   inspectorLive: boolean;
   /** Prompts queued while a session is mid-turn, sent in order as it frees up. */
@@ -504,6 +526,10 @@ interface AppState {
   /** Which left-dock is active when more than one has content (a dock id from
    *  the registry). App-wide: the file tree follows the workspace, not the chat. */
   leftTab: string | null;
+  /** A workspace-relative path the Files dock should expand to, select, and
+   *  scroll into view (the Gallery's "Reveal in Files"). `tick` makes the
+   *  same path revealable twice; the panel clears it once done. */
+  filesReveal: { path: string; tick: number } | null;
   /** The Editor/viewer dock's open tabs per session. Each tab is a group of
    *  workspace-relative paths: one text file for the code editor, one media
    *  file for the media view, or several images for the gallery grid.
@@ -649,6 +675,20 @@ interface AppState {
   refreshTasks: (session: string) => Promise<void>;
   /** Kill one background task. */
   killTask: (session: string, id: number) => void;
+  /** A project's media library changed on the backend. */
+  ingestMediaChanged: (e: MediaChangedEvent) => void;
+  /** Re-fetch a project's media library. */
+  refreshMedia: (root: string) => Promise<void>;
+  /** Cancel an in-flight generation. */
+  cancelMedia: (id: string) => void;
+  /** Show the Gallery dock for the current chat, selecting `itemId` if given. */
+  openGallery: (itemId?: string) => void;
+  /** Consume the Gallery's focus request. */
+  clearMediaFocus: () => void;
+  /** Stage a file for the composer's next message (absolute path). */
+  stageAttachment: (path: string) => void;
+  /** The composer took the staged files. */
+  takePendingAttachments: () => string[];
   /** Stop the current chat's in-flight turn, killing the model stream. */
   stop: () => void;
   /** Save the Oxen API key entered in a chat's inline auth prompt, then retry the
@@ -721,6 +761,9 @@ interface AppState {
   setRightTab: (tab: RightTabId) => void;
   /** Switch the left column's active tab (chats / files). */
   setLeftTab: (id: string) => void;
+  /** Show the Files dock and reveal a workspace-relative path in its tree. */
+  revealInFiles: (path: string) => void;
+  clearFilesReveal: () => void;
   /** Open workspace files in the Editor/viewer dock as a tab: one text file
    *  for the editor, one media file for the media view, or several images as
    *  a grid. An already-open tab is fronted instead of duplicated. */
@@ -985,6 +1028,17 @@ export const useStore = create<AppState>((rawSet, get) => {
     fleets: {},
     agents: {},
     tasks: {},
+    media: {},
+    mediaUploads: {},
+    mediaPrefs: null,
+    ensureMediaPrefs: () => {
+      if (get().mediaPrefs) return;
+      getMediaPrefs()
+        .then((prefs) => set({ mediaPrefs: prefs }))
+        .catch(() => {});
+    },
+    mediaFocus: null,
+    pendingAttachments: [],
     inspectorLive: false,
     queues: {},
     canvases: {},
@@ -998,6 +1052,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     rightTab: {},
     browserUrl: null,
     leftTab: null,
+    filesReveal: null,
     editorTabs: {},
     fsChange: null,
     snippets: {},
@@ -1717,6 +1772,54 @@ export const useStore = create<AppState>((rawSet, get) => {
 
     killTask: (session, id) => {
       void killBackgroundTask(session, id).catch(() => {});
+    },
+
+    ingestMediaChanged: (e) =>
+      set((s) => ({
+        media: { ...s.media, [e.root]: e.items },
+        mediaUploads: { ...s.mediaUploads, [e.root]: e.uploads ?? [] },
+      })),
+
+    refreshMedia: async (root) => {
+      try {
+        const items = await listMedia(root);
+        // An initial fill only: a `media://changed` event that landed while
+        // the fetch was in flight is fresher than the fetch.
+        set((s) => (s.media[root] === undefined ? { media: { ...s.media, [root]: items } } : {}));
+      } catch {
+        // Keep what the last event said.
+      }
+    },
+
+    cancelMedia: (id) => {
+      void cancelMediaIpc(id).catch(() => {});
+    },
+
+    openGallery: (itemId) => {
+      set({ mediaFocus: itemId ?? null });
+      get().setRightTab("gallery");
+    },
+
+    clearMediaFocus: () => set({ mediaFocus: null }),
+
+    revealInFiles: (path) => {
+      get().setLeftTab("files");
+      set((s) => ({ filesReveal: { path, tick: (s.filesReveal?.tick ?? 0) + 1 } }));
+    },
+
+    clearFilesReveal: () => set({ filesReveal: null }),
+
+    stageAttachment: (path) =>
+      set((s) =>
+        s.pendingAttachments.includes(path)
+          ? {}
+          : { pendingAttachments: [...s.pendingAttachments, path] },
+      ),
+
+    takePendingAttachments: () => {
+      const paths = get().pendingAttachments;
+      if (paths.length) set({ pendingAttachments: [] });
+      return paths;
     },
 
     submitApiKey: async (session, itemId, key) => {

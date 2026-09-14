@@ -27,9 +27,9 @@ import {
   WrapText,
   X,
 } from "lucide-react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../../lib/store";
-import { fsAssetPath, fsReadFile, fsWriteFile } from "../../lib/ipc";
+import { fsReadFile, fsWriteFile } from "../../lib/ipc";
+import { useAssetSrc } from "./useAssetSrc";
 import { basename } from "../../lib/format";
 import { isImagePath, isVideoPath } from "../../lib/attachments";
 import { CodeEditor, type EditorSelection } from "./CodeEditor";
@@ -411,28 +411,6 @@ function CodeView({
 
 // ---- one image or video ------------------------------------------------------
 
-/** Asset-protocol URL for a workspace file, gated on the backend's CANONICAL
- *  boundary check: the asset protocol follows symlinks, so a workspace entry
- *  linking outside the project must yield nothing, not someone's home file.
- *  Null until validated (and forever, for anything outside). */
-function useAssetSrc(workspace: string, path: string, bust: number): string | null {
-  const [abs, setAbs] = useState<string | null>(null);
-  useEffect(() => {
-    let stale = false;
-    setAbs(null);
-    fsAssetPath(workspace, path)
-      .then((real) => {
-        if (!stale) setAbs(real);
-      })
-      .catch(() => {
-        /* outside the boundary (or gone): render nothing */
-      });
-    return () => {
-      stale = true;
-    };
-  }, [workspace, path]);
-  return abs ? convertFileSrc(abs) + (bust ? `?v=${bust}` : "") : null;
-}
 
 function MediaView({ workspace, path, onClose }: { workspace: string; path: string; onClose: () => void }) {
   const abs = `${workspace}/${path}`;

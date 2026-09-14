@@ -101,6 +101,29 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
                 target: None,
             },
         },
+        // A generation's prompt streams in as arguments; say what's coming
+        // (the full block prints on ToolStart).
+        AgentEvent::ToolPending { name }
+            if name == harness_media::GENERATE_IMAGE_TOOL
+                || name == harness_media::GENERATE_VIDEO_TOOL =>
+        {
+            let video = name == harness_media::GENERATE_VIDEO_TOOL;
+            Cue::Block {
+                lines: vec![format!(
+                    "  {} {}",
+                    ui.green(if video { "🎬" } else { "🎨" }),
+                    ui.dim(if video {
+                        "writing a video prompt…"
+                    } else {
+                        "writing an image prompt…"
+                    })
+                )],
+                then: NextSpinner::Working {
+                    tool: name.clone(),
+                    target: None,
+                },
+            }
+        }
         AgentEvent::ToolPending { .. } => Cue::Ignore,
         AgentEvent::ToolStart {
             name, arguments, ..
@@ -281,6 +304,17 @@ fn tool_start_cue(ui: &Ui, name: &str, arguments: &str) -> Cue {
             then: NextSpinner::Working {
                 tool: name.to_string(),
                 target,
+            },
+        };
+    }
+    // A generation shows its model, prompt, and references; the result
+    // line then reports the saved files (and the image draws inline).
+    if name == harness_media::GENERATE_IMAGE_TOOL || name == harness_media::GENERATE_VIDEO_TOOL {
+        return Cue::Block {
+            lines: crate::media::render_generation_block(ui, name, arguments).unwrap_or_default(),
+            then: NextSpinner::Working {
+                tool: name.to_string(),
+                target: None,
             },
         };
     }

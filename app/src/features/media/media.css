@@ -1,0 +1,455 @@
+/* The Gallery dock: a feed of generated images and videos, and the detail
+   pane for one of them. Shares the dock chrome (.canvas-panel / .canvas-head)
+   with the other right docks. */
+.gallery {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.gallery-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.gallery-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.gallery-inflight {
+  color: var(--accent);
+}
+.gallery-filters {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.gallery-chip {
+  padding: 1px 9px;
+  font-size: var(--text-xs);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--separator);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.gallery-chip.on {
+  background: var(--accent-tint-strong);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--separator));
+  color: var(--accent);
+}
+.gallery-empty {
+  padding: var(--space-5) var(--space-4);
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+/* The feed scrolls; it is also the size container the grid's columns and
+   row heights are computed from. */
+.gallery-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  container-type: inline-size;
+  background: var(--bg);
+}
+/* Square cells sized from the column width, never from what the tiles
+   contain: WebKit sizes auto rows from the panel height rather than a
+   button's intrinsic (aspect-ratio / spacer) height, which made rows
+   shorter than the tiles and let them overlap. Explicit rows + explicit
+   columns leave nothing for the engine to guess. */
+.gallery-grid {
+  --cols: 1;
+  --gap: var(--space-2);
+  --pad: var(--space-3);
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  grid-auto-rows: calc((100cqw - 2 * var(--pad) - (var(--cols) - 1) * var(--gap)) / var(--cols));
+  gap: var(--gap);
+  padding: var(--pad);
+  align-content: start;
+}
+@container (min-width: 380px) {
+  .gallery-grid {
+    --cols: 2;
+  }
+}
+@container (min-width: 600px) {
+  .gallery-grid {
+    --cols: 3;
+  }
+}
+@container (min-width: 820px) {
+  .gallery-grid {
+    --cols: 4;
+  }
+}
+.gallery-grid > * {
+  overflow: hidden;
+}
+.gallery-tile {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.gallery-tile:hover {
+  border-color: var(--accent);
+}
+.gallery-tile.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.gallery-tile img,
+.gallery-tile video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
+.gallery-tile video {
+  background: #000;
+}
+.gallery-tile-badge {
+  position: absolute;
+  left: var(--space-1);
+  bottom: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  font-size: var(--text-3xs);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  color: var(--text);
+}
+.gallery-tile.inflight,
+.gallery-tile-loading {
+  background: linear-gradient(100deg, var(--surface-2) 30%, var(--surface-3) 50%, var(--surface-2) 70%);
+  background-size: 200% 100%;
+  animation: media-shimmer 1.6s ease-in-out infinite;
+  cursor: default;
+}
+.gallery-tile-loading {
+  position: absolute;
+  inset: 0;
+}
+.gallery-tile.failed {
+  background: var(--surface);
+  color: var(--text-tertiary);
+  border-style: dashed;
+}
+/* Labels of a tile without a picture sit centered over the square spacer. */
+.gallery-tile.inflight > :not(.gallery-tile-cancel),
+.gallery-tile.failed > * {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-2);
+  text-align: center;
+}
+.gallery-tile-status {
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.gallery-tile-cancel {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--separator-strong);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.gallery-tile-cancel:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+@media (prefers-reduced-motion: reduce) {
+  .gallery-tile.inflight,
+  .gallery-tile-loading {
+    animation: none;
+  }
+}
+
+/* --- detail pane --- */
+.gallery-detail {
+  flex-shrink: 0;
+  max-height: 70%;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--separator-strong);
+  background: var(--surface);
+  overflow: auto;
+}
+/* The whole frame, as big as the dock allows: tiles crop to squares, so
+   this is where the real aspect ratio shows. */
+.gallery-detail-preview {
+  position: relative;
+  background: #000;
+  display: grid;
+  place-items: center;
+  min-height: 200px;
+  max-height: min(60vh, 560px);
+}
+.gallery-detail-preview img,
+.gallery-detail-preview video {
+  width: 100%;
+  max-height: min(60vh, 560px);
+  object-fit: contain;
+  object-position: center;
+  display: block;
+}
+.gallery-detail-nofile {
+  padding: var(--space-4);
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+.gallery-detail-close {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--separator-strong);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  color: var(--text);
+  cursor: pointer;
+}
+.gallery-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+.gallery-detail-prompt {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.gallery-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.gallery-detail-model {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gallery-status.succeeded {
+  color: var(--green);
+}
+.gallery-status.failed,
+.gallery-status.timed_out {
+  color: var(--danger);
+}
+.gallery-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.gallery-param {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+.gallery-param-key {
+  color: var(--text-tertiary);
+}
+.gallery-refs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.gallery-refs-label {
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+.gallery-ref-thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--separator);
+}
+.gallery-ref-chip {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-tint-strong);
+  color: var(--accent);
+}
+.gallery-parent {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.gallery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.gallery-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  font-size: var(--text-xs);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--separator-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.gallery-action:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* --- the project page's media card --- */
+.project-media-empty {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  font-style: italic;
+}
+.project-media-strip {
+  display: flex;
+  gap: var(--space-2);
+  overflow: hidden;
+}
+.project-media-slot {
+  flex: 0 0 auto;
+  height: 76px;
+}
+.project-media-slot .gallery-tile {
+  width: 76px;
+  height: 76px;
+}
+
+/* --- Home's media lens --- */
+.media-lens {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.media-lens-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+.media-lens-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-8) var(--space-4);
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+.media-lens-empty p {
+  margin: 0;
+  max-width: 40ch;
+}
+.media-lens-project {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.media-lens-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+.media-lens-name {
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+}
+.media-lens-name:hover {
+  color: var(--accent);
+}
+.media-lens-count {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.media-lens-grid {
+  --cols: 1;
+  --gap: var(--space-2);
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  grid-auto-rows: calc((100cqw - (var(--cols) - 1) * var(--gap)) / var(--cols));
+  gap: var(--gap);
+  align-content: start;
+}
+@container (min-width: 380px) {
+  .media-lens-grid {
+    --cols: 2;
+  }
+}
+@container (min-width: 600px) {
+  .media-lens-grid {
+    --cols: 3;
+  }
+}
+@container (min-width: 820px) {
+  .media-lens-grid {
+    --cols: 4;
+  }
+}
+@container (min-width: 1100px) {
+  .media-lens-grid {
+    --cols: 6;
+  }
+}
+.media-lens-grid > * {
+  overflow: hidden;
+}

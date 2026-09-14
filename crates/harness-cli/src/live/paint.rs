@@ -150,15 +150,22 @@ impl Live {
         let fleet_budget = self.rows.saturating_sub(fixed + 1) as usize;
         let mut fleet_lines = self.fleet_lines();
         fleet_lines.truncate(fleet_budget);
-        // The command-output card gets what the fleet left; a card that
-        // doesn't fit shows its newest rows.
-        let card_budget = fleet_budget.saturating_sub(fleet_lines.len());
+        // Generations rendering on the hub get a short block under the
+        // lanes (a header plus a row per job, capped so a big batch can't
+        // eat the screen).
+        let media_budget = fleet_budget.saturating_sub(fleet_lines.len());
+        let mut media_lines = self.media_lines();
+        media_lines.truncate(media_budget.min(super::MEDIA_BLOCK_ROWS));
+        // The command-output card gets what the fleet and media left; a card
+        // that doesn't fit shows its newest rows.
+        let card_budget = media_budget.saturating_sub(media_lines.len());
         let mut card_lines = self.tool_card_lines();
         if card_lines.len() > card_budget {
             card_lines.drain(..card_lines.len() - card_budget);
         }
 
         sections.push(Section::new(SectionKind::Fleet, fleet_lines));
+        sections.push(Section::new(SectionKind::Media, media_lines));
         sections.push(Section::new(SectionKind::ToolCard, card_lines));
         sections.push(Section::new(SectionKind::Compression, compression_lines));
         sections.push(Section::new(SectionKind::Status, meter_lines));
@@ -610,6 +617,7 @@ mod tests {
             vec![
                 SectionKind::Spacer,
                 SectionKind::Fleet,
+                SectionKind::Media,
                 SectionKind::ToolCard,
                 SectionKind::Compression,
                 SectionKind::Status,

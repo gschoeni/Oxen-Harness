@@ -723,6 +723,7 @@ export type SettingsPage =
   | "permissions"
   | "skills"
   | "preview"
+  | "media"
   | "code-review"
   | "compression"
   | "usage"
@@ -848,6 +849,90 @@ export interface TaskSummary {
 export interface TasksChangedEvent {
   session: string;
   tasks: TaskSummary[];
+}
+
+// ---- media generation (generate_image / generate_video) --------------------
+
+/** One image/video generation of a project (`media://changed`, `list_media`).
+ *  Paths are project-relative. Mirrors `harness_protocol::MediaItem`. */
+export interface MediaItem {
+  id: string;
+  session: string;
+  batch: string;
+  index: number;
+  kind: "image" | "video";
+  model: string;
+  prompt: string;
+  params: Record<string, unknown>;
+  refs: string[];
+  path: string | null;
+  poster: string | null;
+  bytes: number;
+  width: number | null;
+  height: number | null;
+  duration_secs: number | null;
+  cost_usd: number | null;
+  status: "queued" | "processing" | "succeeded" | "failed" | "cancelled" | "timed_out";
+  error: string | null;
+  created_at: number;
+  completed_at: number | null;
+  parent: string | null;
+  seed: unknown;
+}
+
+/** `media://changed` — the whole media library of a project after a
+ *  generation was queued, progressed, finished, or failed. */
+export interface MediaChangedEvent {
+  session: string;
+  root: string;
+  items: MediaItem[];
+  /** Reference uploads in flight for this project (live-only; absent on
+   *  older payloads and after a generation is recorded). */
+  uploads?: MediaUpload[];
+}
+
+/** One reference file on its way to the hub (`media://changed` `uploads`). */
+export interface MediaUpload {
+  id: string;
+  /** The chat that triggered it. */
+  session: string;
+  /** The chip label (`[Image #1]`) when it came from an attachment. */
+  label: string | null;
+  filename: string;
+  /** `image`, `video`, or `audio`. */
+  kind: string;
+  bytes_sent: number;
+  bytes_total: number;
+  /** `uploading`, `presigning`, `done`, `reused`, or `failed`. */
+  status: string;
+  error: string | null;
+  /** Unix seconds. */
+  started_at: number;
+}
+
+/** Persisted media-generation preferences (mirrors `harness_media::MediaPrefs`).
+ *  A `null` budget means "always ask". */
+export interface MediaPrefs {
+  default_image_model: string;
+  default_video_model: string;
+  output_dir: string;
+  per_generation_usd: number | null;
+  per_run_usd: number | null;
+  /** `namespace/repo` on hub.oxen.ai where the hub also keeps every
+   *  generation (under the output folder); null = files stay in the project. */
+  hub_repo: string | null;
+  /** When the project is an Oxen repo, add and commit each finished batch. */
+  commit_with_oxen: boolean;
+}
+
+/** One image/video model of the hub catalog, for pickers. */
+export interface MediaModelSummary {
+  id: string;
+  kind: "image" | "video";
+  price: string;
+  developer: string | null;
+  summary: string | null;
+  inputs: string[];
 }
 
 // ---- fleets (N parallel subagents: review fan-out or spawn_agents) ----------
@@ -1135,4 +1220,12 @@ export interface CodeSnippet {
   start: number;
   end: number;
   code: string;
+}
+
+/** `project://open` — a directory (and optionally a surface to open there)
+ *  arrived from the command line while the app was running. */
+export interface ProjectOpenEvent {
+  path: string;
+  /** `gallery`, `settings:<page>`, or `session:<id>`. */
+  surface: string | null;
 }

@@ -166,6 +166,10 @@ pub fn build_router(config: ServerConfig) -> Router {
         )
         .route("/v1/sessions/{id}/tasks", get(list_tasks))
         .route("/v1/sessions/{id}/tasks/{task}/kill", post(kill_task))
+        .route("/v1/media", get(list_media))
+        .route("/v1/media/{generation}/cancel", post(cancel_media))
+        .route("/v1/media/prefs", get(media_prefs).put(set_media_prefs))
+        .route("/v1/media/models", get(media_models))
         .route(
             "/v1/sessions/{id}/agents/{agent}/cancel",
             post(cancel_agent),
@@ -526,6 +530,72 @@ async fn list_tasks(
 ) -> ApiResult<Json<Vec<harness_protocol::TaskSummary>>> {
     authorize(&state, &headers, None)?;
     Ok(Json(state.service.list_tasks(&id).await))
+}
+
+#[derive(Deserialize)]
+struct MediaQuery {
+    /// The project root whose library to read.
+    root: Option<String>,
+    /// `image` or `video`, for the models listing.
+    kind: Option<String>,
+}
+
+/// The project's media library (generations and in-flight jobs), newest
+/// first — the cold-load counterpart of `media.changed`.
+async fn list_media(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<MediaQuery>,
+) -> ApiResult<Json<Vec<harness_protocol::MediaItem>>> {
+    authorize(&state, &headers, None)?;
+    let root = match query.root {
+        Some(root) => std::path::PathBuf::from(root),
+        None => state.service.active_root().await,
+    };
+    Ok(Json(state.service.list_media(&root)))
+}
+
+/// Cancel an in-flight generation by its hub id.
+async fn cancel_media(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(generation): Path<String>,
+) -> ApiResult<StatusCode> {
+    authorize(&state, &headers, None)?;
+    state.service.cancel_media(&generation).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The media preferences (default models, output folder, spend limits).
+async fn media_prefs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<harness_runtime::media::MediaPrefs>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(harness_runtime::media::load()))
+}
+
+/// Replace the media preferences; applies to newly built (or resumed) agents.
+async fn set_media_prefs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(prefs): Json<harness_runtime::media::MediaPrefs>,
+) -> ApiResult<StatusCode> {
+    authorize(&state, &headers, None)?;
+    harness_runtime::media::save(&prefs).map_err(|e| e.to_string())?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The hub's image/video models for pickers (`?kind=image|video`).
+async fn media_models(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<MediaQuery>,
+) -> ApiResult<Json<Vec<harness_protocol::MediaModelSummary>>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(
+        state.service.media_models(query.kind.as_deref()).await?,
+    ))
 }
 
 /// Kill one background task (its whole process group); 404 when unknown.

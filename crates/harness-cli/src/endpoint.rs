@@ -253,7 +253,7 @@ async fn first_run_pick(endpoint: Endpoint, args: &Args, interactive: bool, ui: 
 /// interactive question picker and the canvas document viewer wired to their CLI
 /// front ends, with the user's saved tool preferences and skills applied — the
 /// same setup the desktop app builds, so sessions behave identically.
-pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui) -> ToolRegistry {
+pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui, base_url: &str) -> ToolRegistry {
     let mut tools = ToolRegistry::default_for_workspace(workspace.clone());
     // Let the agent interview the user via the interactive terminal picker.
     tools.register_typed(harness_tools::AskUserTool::new(Arc::new(
@@ -264,6 +264,27 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui) -> ToolRegistr
     tools.register_typed(harness_tools::CanvasTool::new(Arc::new(
         canvas::CliCanvasSink,
     )));
+    // Image/video generation: chips the composer staged resolve through the
+    // shared registry, results land in the project's media library, and a
+    // call over the user's budget asks through the same terminal picker.
+    let media_ctx = harness_media::MediaContext::new(
+        crate::preview::SESSION_KEY,
+        workspace.root(),
+        harness_runtime::media::load(),
+        harness_runtime::media::api_for(base_url),
+        crate::media::refs(),
+        crate::media::library(workspace.root()),
+        Arc::new(harness_media::AskerSpendConfirm(Arc::new(
+            ask::CliAsker::new(ui.clone()),
+        ))),
+    )
+    .with_asides(tools.asides());
+    let (media_models, generate_image, generate_video, media_status) =
+        harness_media::session_tools(media_ctx);
+    tools.register_typed(media_models);
+    tools.register_typed(generate_image);
+    tools.register_typed(generate_video);
+    tools.register_typed(media_status);
     // `open_file` (the desktop's file-viewer panel) is deliberately NOT
     // registered: the terminal has no viewer surface, and a host-surface tool
     // that can't surface anything would just mislead the model (the prompt

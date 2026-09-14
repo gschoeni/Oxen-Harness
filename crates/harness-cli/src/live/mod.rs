@@ -93,14 +93,51 @@ use terminal::{region_bottom, title_sequence, CrlfWriter, TitleState, BELL};
 
 /// Blank rows kept between the agent's scrolling output and the pinned input
 /// area. Zero: every region write ends in a newline, so the output cursor's
-/// own row (where the spinner rides during a turn) is always a blank line
-/// directly above the pinned area — that row is the breathing room. A spacer
-/// on top of it showed as two empty rows under every reply.
+/// own row is always a blank line directly above the pinned area — that row
+/// is the breathing room. A spacer on top of it showed as two empty rows
+/// under every reply. (During a turn the spinner rides below that row with
+/// a blank row of its own under it — see [`region`].)
 const SPACER_ROWS: usize = 0;
+
+/// The pinned area following the conversation instead of sitting on the
+/// terminal's bottom rows.
+///
+/// Rows the conversation scrolled off the top are gone for good — the
+/// terminal can't scroll them back — so whenever something that made room
+/// for itself disappears, re-anchoring the pinned area at the bottom would
+/// leave a void of blank rows between the last line of output and the
+/// meters. Two things do that: a picker (approval, ask-user), whose tall
+/// card draws in cooked mode below the conversation and is erased once
+/// answered; and the spinner itself, which breathes two rows under the
+/// output while a turn runs and vanishes when it ends. Instead the region is
+/// carved right under the output (its row comes from a cursor-position
+/// probe, at reclaim or when a layout starts), and it grows a row for every
+/// row the output advances (see [`advance`]) until it reaches the anchor at
+/// the bottom, where the layout is back to normal and this is dropped.
+///
+/// `bottom` only ever grows: the spinner needs two rows under the cursor
+/// row while a turn runs and none between turns, and shrinking the region
+/// back on every tool call would make the pinned area jitter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Follow {
+    /// Where the output cursor is (1-based row): the probed row plus every
+    /// row written since.
+    row: u16,
+    /// The region bottom carved so far while following.
+    bottom: u16,
+}
+
+/// Whether a conversation is under way — set by the first turn. From then
+/// on every layout starts by probing the cursor and following the
+/// conversation (see [`Follow`]); before it, the idle landing keeps the
+/// composer on the bottom rows under the banner.
+static CONVERSATION_STARTED: AtomicBool = AtomicBool::new(false);
 
 /// Rows for the faint divider rule drawn just above the input area (matching the
 /// idle prompt's separator).
 const DIVIDER_ROWS: usize = 1;
+/// The most rows the rendering-generations block takes (header + jobs).
+pub(super) const MEDIA_BLOCK_ROWS: usize = 10;
 
 /// Most input lines shown inside the box at once; beyond this it windows around
 /// the caret so a long paste can't push the conversation off-screen.
@@ -219,6 +256,11 @@ struct Live {
     /// Whether the last tick found a fleet on the hub: the tick after the
     /// last fleet leaves repaints once more, so the pinned block clears.
     fleet_shown: bool,
+    /// Advances the rendering-generations block's spinner.
+    media_frame: usize,
+    /// Whether the last tick found generations in flight — same clearing
+    /// rule as `fleet_shown`.
+    media_shown: bool,
     /// When a deferred media-path check is due (see
     /// [`Live::tick_media_check`]): set on every non-delimiter insert so a
     /// key-event-burst drop only collapses to a chip once input settles —
@@ -305,6 +347,8 @@ impl Live {
             fleet,
             fleet_frame: 0,
             fleet_shown: false,
+            media_frame: 0,
+            media_shown: false,
             media_check: None,
             turn_started: None,
             title: None,
@@ -482,6 +526,35 @@ impl Live {
             self.print_line(&line);
         }
         animating || changed || announced || target_changed
+    }
+
+    fn media_lines(&self) -> Vec<String> {
+        crate::media::pinned_lines(&self.ui, self.cols as usize, self.media_frame)
+    }
+
+    /// Advance the rendering-generations block and report whether the pinned
+    /// area needs a repaint: while any generation is in flight (its clock
+    /// and spinner move), and once more after the last one settles so the
+    /// block clears.
+    pub(super) fn tick_media_jobs(&mut self) -> bool {
+        let present = crate::media::library_opt().is_some_and(|l| {
+            !l.in_flight(None).is_empty() || !l.uploads_in_flight(None).is_empty()
+        });
+        let changed = std::mem::replace(&mut self.media_shown, present) != present;
+        if present {
+            self.media_frame = self.media_frame.wrapping_add(1);
+        }
+        present || changed
+    }
+
+    /// When the idle composer should wake to advance the generations block:
+    /// twice a second while something renders, once more after it settles.
+    pub(super) fn media_tick_due(&self) -> Option<std::time::Instant> {
+        let present = crate::media::library_opt().is_some_and(|l| {
+            !l.in_flight(None).is_empty() || !l.uploads_in_flight(None).is_empty()
+        });
+        (present || self.media_shown)
+            .then(|| std::time::Instant::now() + std::time::Duration::from_millis(500))
     }
 
     /// When the idle composer (which has no ticker) should wake to advance

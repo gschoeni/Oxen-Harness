@@ -244,6 +244,23 @@ pub fn ui_state_file() -> Result<PathBuf, ConfigError> {
     under("ui.json")
 }
 
+/// `~/.oxen-harness/media.json` — image/video generation preferences
+/// (default models, output folder, spend limits). No secrets.
+pub fn media_file() -> Result<PathBuf, ConfigError> {
+    under("media.json")
+}
+
+/// `~/.oxen-harness/cache/` — regenerable data (catalog copies, thumbnails):
+/// safe to delete, never user state.
+pub fn cache_dir() -> Result<PathBuf, ConfigError> {
+    let dir = base_dir()?.join("cache");
+    std::fs::create_dir_all(&dir).map_err(|source| ConfigError::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    Ok(dir)
+}
+
 /// `~/.oxen-harness/cache/previews/` — latest preview/browser screenshot per
 /// session. Everything under `cache/` is regenerable: safe to delete, never
 /// user state.

@@ -14,7 +14,7 @@
 //! old prompt from history re-attaches its files.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use harness_llm::{Attachment, AttachmentKind};
 
@@ -27,6 +27,32 @@ struct Staged {
 /// Staged media for this session, looked up by exact chip label.
 static STAGED: Mutex<Vec<Staged>> = Mutex::new(Vec::new());
 
+/// The same chips as the generation tools see them: every label handed out
+/// here is mirrored into this registry, so `generate_image` can resolve
+/// "[Image #2]" to the file the user dropped. Process-wide, like [`STAGED`]
+/// — the CLI runs one session.
+static REFS: OnceLock<Arc<harness_media::MediaRefs>> = OnceLock::new();
+
+/// The session's reference registry shared with the media tools.
+pub(crate) fn refs() -> Arc<harness_media::MediaRefs> {
+    REFS.get_or_init(|| Arc::new(harness_media::MediaRefs::new()))
+        .clone()
+}
+
+/// The project's media library (generations + manifest), one per process.
+static LIBRARY: OnceLock<Arc<harness_media::MediaLibrary>> = OnceLock::new();
+
+/// The media library for the workspace, created on first use with the
+/// user's configured output folder.
+pub(crate) fn library(root: &Path) -> Arc<harness_media::MediaLibrary> {
+    LIBRARY
+        .get_or_init(|| {
+            let dir = harness_runtime::media::load().output_dir_rel();
+            Arc::new(harness_media::MediaLibrary::new(root, dir))
+        })
+        .clone()
+}
+
 /// The chip word for a media kind the model receives as a real part (or a
 /// deliberate note, for video). Text/other files are never chipped — they stay
 /// visible as paths for the agent's file tools.
@@ -35,6 +61,7 @@ fn chip_word(kind: AttachmentKind) -> Option<&'static str> {
         AttachmentKind::Image => Some("Image"),
         AttachmentKind::Pdf => Some("PDF"),
         AttachmentKind::Video => Some("Video"),
+        AttachmentKind::Audio => Some("Audio"),
         AttachmentKind::Text | AttachmentKind::Other => None,
     }
 }
@@ -55,11 +82,194 @@ pub(crate) fn stage_path(path: impl Into<PathBuf>) -> String {
     let mut staged = STAGED.lock().expect("media registry poisoned");
     let n = staged.iter().filter(|s| s.label.starts_with(&open)).count() + 1;
     let label = format!("{open}{n}]");
+    refs().stage_as(&label, &path);
     staged.push(Staged {
         label: label.clone(),
         path,
     });
     label
+}
+
+/// The media library, if a session has started one (the pinned block reads
+/// it without creating it).
+pub(crate) fn library_opt() -> Option<Arc<harness_media::MediaLibrary>> {
+    LIBRARY.get().cloned()
+}
+
+const SPIN: [&str; 4] = ["◐", "◓", "◑", "◒"];
+
+/// The pinned block for generations still rendering: one header, one row
+/// per job (kind · model · prompt · elapsed · status), animated by `frame`.
+/// Empty when nothing is in flight, so the block clears itself.
+pub(crate) fn pinned_lines(ui: &crate::theme::Ui, cols: usize, frame: usize) -> Vec<String> {
+    let Some(library) = library_opt() else {
+        return Vec::new();
+    };
+    let jobs = library.in_flight(None);
+    let uploads = library.uploads();
+    let uploading: Vec<_> = uploads
+        .iter()
+        .filter(|u| !u.status.is_terminal() || u.status == harness_media::UploadStatus::Failed)
+        .collect();
+    if jobs.is_empty() && uploading.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    // References on their way to the hub: a bar per file.
+    if !uploading.is_empty() {
+        lines.push(format!(
+            "  {} {}",
+            ui.green("⬆"),
+            ui.dim(&format!(
+                "uploading {} reference{} to the hub",
+                uploading.len(),
+                if uploading.len() == 1 { "" } else { "s" }
+            ))
+        ));
+        for u in uploading.iter().take(4) {
+            let pct = (u.bytes_sent * 100)
+                .checked_div(u.bytes_total)
+                .unwrap_or(100) as usize;
+            let filled = pct / 10;
+            let bar = format!("{}{}", "▰".repeat(filled), "▱".repeat(10 - filled));
+            let state = match u.status {
+                harness_media::UploadStatus::Failed => {
+                    format!("failed: {}", u.error.as_deref().unwrap_or("upload error"))
+                }
+                harness_media::UploadStatus::Presigning => "signing…".to_string(),
+                _ => format!("{pct:>3}%"),
+            };
+            let label = u
+                .label
+                .as_deref()
+                .map(|l| format!(" {l}"))
+                .unwrap_or_default();
+            let plain = format!("  {bar} {} {}{label}", state, u.filename);
+            let clipped: String = plain.chars().take(cols.max(20)).collect();
+            lines.push(if u.status == harness_media::UploadStatus::Failed {
+                clipped
+            } else {
+                clipped.replacen(&bar, &ui.accent(&bar), 1)
+            });
+        }
+        if jobs.is_empty() {
+            return lines;
+        }
+    }
+    let now = harness_media::library::now_unix();
+    lines.push(format!(
+        "  {} {}",
+        ui.green("🎬"),
+        ui.dim(&format!(
+            "{} generation{} rendering — results land in the chat when done",
+            jobs.len(),
+            if jobs.len() == 1 { "" } else { "s" }
+        ))
+    ));
+    for job in jobs.iter().take(6) {
+        let elapsed = now.saturating_sub(job.created_at);
+        let prompt: String = job.prompt.chars().take(48).collect();
+        let prompt = if prompt.len() < job.prompt.len() {
+            format!("{prompt}…")
+        } else {
+            prompt
+        };
+        let plain = format!(
+            "  {} {} · {} · {} · {}s · {}",
+            SPIN[frame % SPIN.len()],
+            job.kind,
+            job.model,
+            prompt,
+            elapsed,
+            job.status.as_str()
+        );
+        let clipped: String = plain.chars().take(cols.max(20)).collect();
+        // Color only the spinner so the row stays quiet next to the lanes.
+        let colored = clipped.replacen(
+            SPIN[frame % SPIN.len()],
+            &ui.accent(SPIN[frame % SPIN.len()]),
+            1,
+        );
+        lines.push(ui.dim(&colored));
+    }
+    lines
+}
+
+/// Render an inline block for a `generate_image` / `generate_video` call from
+/// its raw JSON arguments — the model, the prompt (a few lines), the
+/// references — or `None` if the arguments don't parse. Mirrors
+/// `diff::render_file_change` so both renderers can drop it in.
+pub(crate) fn render_generation_block(
+    ui: &crate::theme::Ui,
+    name: &str,
+    arguments: &str,
+) -> Option<Vec<String>> {
+    let v: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let video = name == harness_media::GENERATE_VIDEO_TOOL;
+    let prefs = harness_runtime::media::load();
+    let model = v
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or(if video {
+            prefs.default_video_model
+        } else {
+            prefs.default_image_model
+        });
+    let count = v
+        .get("count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(1);
+    let mut detail = Vec::new();
+    for key in ["duration", "resolution", "aspect_ratio"] {
+        if let Some(x) = v.get(key) {
+            detail.push(match x {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) if key == "duration" => format!("{n}s"),
+                o => o.to_string(),
+            });
+        }
+    }
+    let what = if video { "video" } else { "image" };
+    let plural = if count == 1 {
+        String::new()
+    } else {
+        "s".to_string()
+    };
+    let mut lines = vec![format!(
+        "  {} {}  {}",
+        ui.green(if video { "🎬" } else { "🎨" }),
+        ui.accent(&format!("Generating {count} {what}{plural}")),
+        ui.dim(&if detail.is_empty() {
+            model.clone()
+        } else {
+            format!("{model} · {}", detail.join(" · "))
+        }),
+    )];
+    if let Some(prompt) = v.get("prompt").and_then(serde_json::Value::as_str) {
+        for (i, line) in prompt.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+            if i == 4 {
+                lines.push(format!("     {}", ui.dim("…")));
+                break;
+            }
+            let shown: String = line.chars().take(110).collect();
+            lines.push(format!("     {}", ui.dim(&shown)));
+        }
+    }
+    if let Some(refs) = v.get("refs").and_then(serde_json::Value::as_array) {
+        let names: Vec<String> = refs
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect();
+        if !names.is_empty() {
+            lines.push(format!(
+                "     {}",
+                ui.dim(&format!("refs: {}", names.join(", ")))
+            ));
+        }
+    }
+    Some(lines)
 }
 
 /// The path staged behind a chip label, if that label was ever handed out.
@@ -121,7 +331,7 @@ pub(crate) fn resolve_labels(text: &str) -> (Vec<Attachment>, Vec<String>) {
 /// `[Video #N]`), in order of appearance.
 fn scan_labels(text: &str) -> Vec<String> {
     let mut found: Vec<(usize, String)> = Vec::new();
-    for word in ["Image", "PDF", "Video"] {
+    for word in ["Image", "PDF", "Video", "Audio"] {
         let open = format!("[{word} #");
         let mut from = 0;
         while let Some(i) = text[from..].find(&open) {

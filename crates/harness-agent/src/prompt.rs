@@ -25,6 +25,9 @@ pub struct OptionalTools {
     /// fleet is registered after the prompt is built, so hosts set this from
     /// the same preference that decides whether it registers.
     pub agents: bool,
+    /// The media tools (`generate_image`, `generate_video`, `media_models`,
+    /// `media_status`) — registered per session by hosts with a spend sink.
+    pub media: bool,
 }
 
 impl OptionalTools {
@@ -38,6 +41,7 @@ impl OptionalTools {
             gh: tools.get(harness_tools::GH_TOOL).is_some(),
             trail: tools.get(harness_tools::TRAIL_TOOL).is_some(),
             agents: tools.get(crate::fleet_tool::FLEET_TOOL).is_some(),
+            media: tools.get(harness_media::GENERATE_IMAGE_TOOL).is_some(),
         }
     }
 
@@ -102,6 +106,30 @@ pub fn system_prompt_with_env(tools: OptionalTools, workspace: &std::path::Path)
 /// The trail's entry in the prompt's tool list. A named constant so
 /// [`strip_trail_sections`] can remove exactly what was added.
 const TRAIL_TOOL_LIST_ENTRY: &str = ", `update_trail` (chart the session's journey)";
+
+/// The media tools' entry in the prompt's tool list.
+const MEDIA_TOOL_LIST_ENTRY: &str =
+    ", `generate_image` / `generate_video` (create images and video clips \
+with Oxen.ai models, saved into the project), `media_models` (browse those models and their \
+parameters), `media_status` (in-flight generations; cancel)";
+
+/// How to be a good art director: cheap drafts first, the model's own idiom,
+/// references through `refs`, and ask the user for the media you need.
+const MEDIA_GUIDELINE: &str = "\n- Media generation (`generate_image`, `generate_video`) costs \
+money and is saved into the project's media folder. Work like an art director: brainstorm and \
+tighten the prompt in chat first, then draft cheaply (the default image model, one or two \
+outputs, low video resolution and short duration), show the user, and render the chosen \
+direction with a stronger model. Write prompts in the model's idiom — subject, style, \
+composition, lighting, camera and motion for video, a timed shot list for multi-beat clips — \
+and read `media_models` (with `id`) before using a model's own parameters in `extra`. \
+References: when a reference image, video, or audio track would make the result better or \
+is needed (a character to keep consistent, a first frame, a style, a soundtrack), ask the \
+user to drop it into the chat and say what it's for; attached media shows up labeled \
+`[Image #N]`, `[Video #N]`, `[Audio #N]` — pass those labels (or an earlier generation's \
+path) in `refs` and mention them in the prompt; the tool places them in the model's matching \
+fields. Tell the user the estimated cost before a large batch, and never generate more than \
+they asked for. Videos render in the background: keep working and let the result come to \
+you rather than polling.";
 
 /// Appended to a lane's system prompt when it may still spawn lanes of its
 /// own: delegate reading, never sub-call everything.
@@ -274,6 +302,12 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
         (true, true) => TRAIL_GUIDELINE_WITH_GH,
         (true, false) => TRAIL_GUIDELINE_NO_GH,
     };
+    let media_tool = if tools.media {
+        MEDIA_TOOL_LIST_ENTRY
+    } else {
+        ""
+    };
+    let media_guideline = if tools.media { MEDIA_GUIDELINE } else { "" };
     let open_file_guideline = if tools.open_file {
         "\n- After creating or substantially rewriting a project file the user \
          will want to look at — or when walking them through one — call \
@@ -289,7 +323,7 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
          `search_files` (regex content search), `read_file` (line-numbered, supports \
          offset/limit), `write_file`, `edit_file` (exact-string patch), `run_shell`, \
          `git`{gh_tool}, `update_plan` (maintain a task checklist){trail_tool}, \
-         `ask_user_question` (interview the user){web_tool}{canvas_tool}{open_file_tool}{agents_tool}.\n\n\
+         `ask_user_question` (interview the user){web_tool}{canvas_tool}{open_file_tool}{agents_tool}{media_tool}.\n\n\
          Guidelines:\n\
          - Prefer the dedicated tools over shell equivalents: use `find_files` not \
            `find`/`ls`, `search_files` not `grep`, `read_file` not `cat`, and \
@@ -322,7 +356,7 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
            has multiple reasonable approaches with real trade-offs, call \
            `ask_user_question` to interview the user instead of guessing. Keep \
            options concise and distinct; don't add an 'Other' option (the user can \
-           always type their own). Don't ask about trivia you can decide yourself.{canvas_guideline}{open_file_guideline}\n\
+           always type their own). Don't ask about trivia you can decide yourself.{canvas_guideline}{open_file_guideline}{media_guideline}\n\
          - Be careful with destructive commands. Prefer reversible, narrowly-scoped \
            operations, and never chain a destructive action (deleting files, killing \
            processes, force-pushing, rewriting git history) with unrelated commands in \
@@ -575,8 +609,12 @@ mod tests {
             gh: true,
             trail: true,
             agents: false,
+            media: true,
         });
         assert!(full.contains("`web_search` (Brave web search)"));
+        assert!(full.contains("`generate_image` / `generate_video`"));
+        assert!(full.contains("Work like an art director"));
+        assert!(!bare.contains("generate_image"));
         assert!(full.contains("`canvas` (show a document in a side panel)"));
         assert!(full.contains("`open_file` (show a project file in the user's file viewer)"));
         assert!(full.contains("`open_file` to put it in their file viewer"));

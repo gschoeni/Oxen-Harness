@@ -265,6 +265,51 @@ fn fleet_event_wire_shapes() {
     assert_eq!(json(&tasks)["type"], "tasks.changed");
     round_trips(tasks);
 
+    let media = ProtocolEvent::MediaChanged {
+        session: "s1".into(),
+        root: "/w/project".into(),
+        items: vec![harness_protocol::MediaItem {
+            id: "dc9f746b".into(),
+            session: "s1".into(),
+            batch: "b1".into(),
+            index: 1,
+            kind: "video".into(),
+            model: "bytedance-seedance-2-0-fast-text-to-video".into(),
+            prompt: "an ox at dawn".into(),
+            params: serde_json::json!({"duration": 5, "resolution": "720p"}),
+            refs: vec!["generations/refs/3f9a.png".into()],
+            path: Some("generations/2026-09-13/1402-an-ox-at-dawn-1.mp4".into()),
+            poster: Some("generations/2026-09-13/1402-an-ox-at-dawn-1.jpg".into()),
+            bytes: 8_123_456,
+            width: None,
+            height: None,
+            duration_secs: Some(5.0),
+            cost_usd: Some(0.865),
+            status: "succeeded".into(),
+            error: None,
+            created_at: 1_789_000_000,
+            completed_at: Some(1_789_000_184),
+            parent: None,
+            seed: Some(serde_json::json!(42)),
+        }],
+        uploads: vec![harness_protocol::MediaUpload {
+            id: "u1".into(),
+            session: "s1".into(),
+            label: Some("[Image #1]".into()),
+            filename: "photo.png".into(),
+            kind: "image".into(),
+            bytes_sent: 512,
+            bytes_total: 2048,
+            status: "uploading".into(),
+            error: None,
+            started_at: 1_789_000_000,
+        }],
+    };
+    assert_eq!(json(&media)["type"], "media.changed");
+    assert_eq!(json(&media)["uploads"][0]["status"], "uploading");
+    assert_eq!(json(&media)["items"][0]["status"], "succeeded");
+    round_trips(media);
+
     let budget = ProtocolEvent::FleetBudget {
         session: "s1".into(),
         fleet: "fleet-7".into(),
@@ -580,6 +625,15 @@ fn legacy_channel_names() {
                 tasks: vec![],
             },
             "tasks://changed",
+        ),
+        (
+            ProtocolEvent::MediaChanged {
+                session: "s".into(),
+                root: "/w".into(),
+                items: vec![],
+                uploads: vec![],
+            },
+            "media://changed",
         ),
         (
             ProtocolEvent::ReviewProgress {

@@ -17,6 +17,8 @@ pub(super) enum SectionKind {
     Spacer,
     /// The running fleet's lanes block (only while a fleet is on screen).
     Fleet,
+    /// Generations still rendering on the hub (only while some are).
+    Media,
     /// The running command's live output tail (only while one streams).
     ToolCard,
     /// The in-place compression-savings line.
