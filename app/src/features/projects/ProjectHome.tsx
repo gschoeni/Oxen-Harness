@@ -1,7 +1,7 @@
-import { FormEvent, useState } from "react";
-import { ArrowLeft, FileImage, FileText, FolderOpen, MessageSquare, Paperclip, Pencil, Plus, Send, Trash2, X } from "lucide-react";
+import { FormEvent, useEffect, useState } from "react";
+import { ArrowLeft, Check, ExternalLink, FileImage, FileText, FolderOpen, GitBranch, MessageSquare, Paperclip, Pencil, Plus, Send, Trash2, X } from "lucide-react";
 import { Button, IconButton, Modal } from "../../components/ui";
-import { addProjectContext, pickProjectContext, removeProjectContext, updateProject } from "../../lib/ipc";
+import { addProjectContext, getConnection, openExternal, pickProjectContext, removeProjectContext, updateProject } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import type { Project, ProjectContext, StartupModelChoice } from "../../lib/types";
 import { ModelPicker } from "../chat/ModelPicker";
@@ -51,7 +51,7 @@ export function ProjectHome({
     setSavingDetails(true);
     try {
       await onProjectChanged(
-        await updateProject(project.path, cleanName, cleanGoal, project.instructions),
+        await updateProject(project.path, cleanName, cleanGoal, project.instructions, project.remote_repo),
       );
       setName(cleanName);
       setGoal(cleanGoal);
@@ -207,6 +207,15 @@ export function ProjectHome({
             </div>
           </section>
 
+          <RepositoryCard
+            project={project}
+            onSave={async (remoteRepo) => {
+              await onProjectChanged(
+                await updateProject(project.path, project.name, project.description, project.instructions, remoteRepo),
+              );
+            }}
+          />
+
           <section className="project-context-card">
             <div className="project-context-card-header">
               <div><h2>Context</h2><p>References the agent can use across chats.</p></div>
@@ -250,7 +259,7 @@ export function ProjectHome({
           onClose={() => setEditingInstructions(false)}
           onSave={async (instructions) => {
             await onProjectChanged(
-              await updateProject(project.path, project.name, project.description, instructions),
+              await updateProject(project.path, project.name, project.description, instructions, project.remote_repo),
             );
             setEditingInstructions(false);
           }}
@@ -258,6 +267,111 @@ export function ProjectHome({
       )}
     </main>
   );
+}
+
+/** The project's remote Oxen repository: `namespace/name` on the hub. The
+ *  same setting the agent's `create_repository` tool fills in and
+ *  `oxen-harness project set-repo` edits — one field, saved on Enter or
+ *  the check, cleared by emptying it. */
+function RepositoryCard({
+  project,
+  onSave,
+}: {
+  project: Project;
+  onSave: (remoteRepo: string | null) => Promise<void>;
+}) {
+  const current = project.remote_repo ?? "";
+  const [value, setValue] = useState(current);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const host = useHubHost();
+  const clean = value.trim().replace(/^\/+|\/+$/g, "");
+  const changed = clean !== current;
+  const wellFormed = clean === "" || /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(clean);
+  const url = current ? repoUrl(host, current) : "";
+
+  async function save() {
+    if (!changed || !wellFormed || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onSave(clean === "" ? null : clean);
+      setValue(clean);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="project-context-card project-repo-card">
+      <div className="project-context-card-header">
+        <div><h2>Repository</h2><p>Where this project lives on the hub. Generated media keeps copies there.</p></div>
+        {url && (
+          <IconButton aria-label="Open repository on the hub" title={url} onClick={() => void openExternal(url)}>
+            <ExternalLink size={16} />
+          </IconButton>
+        )}
+      </div>
+      <div className="project-repo-row">
+        <GitBranch size={14} className="project-repo-icon" />
+        <input
+          aria-label="Remote Oxen repository"
+          value={value}
+          placeholder="namespace/name"
+          spellCheck={false}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void save();
+            }
+          }}
+        />
+        {changed && (
+          <IconButton
+            aria-label="Save repository"
+            disabled={!wellFormed || saving}
+            onClick={() => void save()}
+          >
+            <Check size={15} />
+          </IconButton>
+        )}
+      </div>
+      {!wellFormed ? (
+        <small className="project-field-hint project-repo-error">Use the form <code>namespace/name</code>, e.g. <code>ox/my-app</code>.</small>
+      ) : error ? (
+        <small className="project-field-hint project-repo-error" role="alert">{error}</small>
+      ) : current ? null : (
+        <small className="project-field-hint">None yet — set one here, or ask the agent to create a repository for this project.</small>
+      )}
+    </section>
+  );
+}
+
+/** The hub host the app is connected to (Settings → Connection), so the
+ *  repository link points at the same hub the agent's tool created it on. */
+function useHubHost(): string {
+  const [host, setHost] = useState("hub.oxen.ai");
+  useEffect(() => {
+    let live = true;
+    getConnection()
+      .then((c) => {
+        if (live && c.host) setHost(c.host);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  return host;
+}
+
+/** The repository's page on `host` (a bare host or a full origin). */
+function repoUrl(host: string, remote: string): string {
+  const origin = host.includes("://") ? host.replace(/\/+$/, "") : `https://${host}`;
+  return `${origin}/${remote}`;
 }
 
 function EditInstructionsModal({

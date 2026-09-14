@@ -132,6 +132,12 @@ enum TopCommand {
         #[command(subcommand)]
         action: commands::oxen::OxenAction,
     },
+    /// Inspect or set a project's metadata, e.g. its remote Oxen repository
+    /// (show / set-repo / clear-repo).
+    Project {
+        #[command(subcommand)]
+        action: commands::project::ProjectAction,
+    },
     /// Open the desktop app on a project directory (defaults to the current one).
     Ui {
         /// The project directory to open.
@@ -206,6 +212,9 @@ async fn main() -> Result<()> {
         }
         Some(TopCommand::Trace { action }) => return commands::trace::run_trace(action, &ui),
         Some(TopCommand::Oxen { action }) => return commands::oxen::run_oxen(action, &ui),
+        Some(TopCommand::Project { action }) => {
+            return commands::project::run_project(action, &ui)
+        }
         Some(TopCommand::Ui {
             path,
             gallery,

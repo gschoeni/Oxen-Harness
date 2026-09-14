@@ -315,3 +315,29 @@
   .project-context-card + .project-context-card { border-left: 0; border-top: 1px solid var(--separator); }
 }
 
+/* ---- the repository card --------------------------------------------------- */
+
+.project-repo-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+}
+.project-repo-row:focus-within { border-color: var(--accent); }
+.project-repo-icon { flex: none; color: var(--text-tertiary); }
+.project-repo-row input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font: var(--text-sm)/1.4 var(--font-readout, var(--font-mono));
+}
+.project-repo-row input::placeholder { color: var(--text-tertiary); }
+.project-repo-card .project-field-hint { display: block; margin-top: var(--space-2); }
+.project-repo-error { color: var(--danger); }
+.project-repo-card code { font-family: var(--font-mono); font-size: var(--text-xs); }

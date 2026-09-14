@@ -37,6 +37,8 @@ pub(crate) struct ProjectView {
     description: String,
     instructions: String,
     context: Vec<ProjectContext>,
+    /// The project's remote Oxen repository (`namespace/name`), if set.
+    remote_repo: Option<String>,
     session_count: usize,
     active: bool,
     /// Unix seconds of the newest message in any of this project's chats;
@@ -160,6 +162,7 @@ fn project_view(
         description: metadata.description,
         instructions: metadata.instructions,
         context: metadata.context,
+        remote_repo: metadata.remote_repo,
         session_count,
         active,
         last_used_at,
@@ -281,6 +284,7 @@ pub(crate) async fn start_project(
             description,
             instructions: existing.instructions,
             context: existing.context,
+            remote_repo: existing.remote_repo,
         };
         project::save(&canonical, &config).map_err(|error| error.to_string())?;
         Ok(())
@@ -310,6 +314,7 @@ pub(crate) async fn update_project(
     name: String,
     description: String,
     instructions: String,
+    remote_repo: Option<String>,
 ) -> Result<ProjectView, String> {
     let root = PathBuf::from(&path);
     let existing = project::load(&root);
@@ -318,6 +323,8 @@ pub(crate) async fn update_project(
         description,
         instructions,
         context: existing.context,
+        // `save` normalizes to `namespace/name` and refuses anything else.
+        remote_repo,
     };
     project::save(&root, &config).map_err(|error| error.to_string())?;
     Ok(project_view(path, 0, false, None))

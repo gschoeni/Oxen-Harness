@@ -354,7 +354,7 @@ export const openProject = vi.fn(async (path: string) => ({
   description: "",
   instructions: "",
   context: [],
-  session_count: 0,
+  remote_repo: null,  session_count: 0,
   active: true,
   last_used_at: null,
 }));
@@ -364,20 +364,20 @@ export const startProject = vi.fn(async (input: StartProjectInput): Promise<Proj
   description: input.description,
   instructions: "",
   context: [],
-  session_count: 0,
+  remote_repo: null,  session_count: 0,
   active: true,
   last_used_at: null,
 }));
-export const updateProject = vi.fn(async (path: string, name: string, description: string, instructions: string): Promise<Project> => ({
-  path, name, description, instructions, context: [], session_count: 0, active: true, last_used_at: null,
+export const updateProject = vi.fn(async (path: string, name: string, description: string, instructions: string, remoteRepo: string | null = null): Promise<Project> => ({
+  path, name, description, instructions, context: [], remote_repo: remoteRepo, session_count: 0, active: true, last_used_at: null,
 }));
 export const deleteProject = vi.fn(async () => {});
 export const addProjectContext = vi.fn(async (path: string, contextPaths: string[]): Promise<Project> => ({
-  path, name: "Demo", description: "", instructions: "", session_count: 0, active: true, last_used_at: null,
+  path, name: "Demo", description: "", instructions: "", remote_repo: null, session_count: 0, active: true, last_used_at: null,
   context: contextPaths.map((source) => ({ path: source, name: source.split("/").pop() ?? source, kind: "text" as const, size_bytes: 42 })),
 }));
 export const removeProjectContext = vi.fn(async (path: string): Promise<Project> => ({
-  path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true, last_used_at: null,
+  path, name: "Demo", description: "", instructions: "", context: [], remote_repo: null, session_count: 0, active: true, last_used_at: null,
 }));
 export const setActiveProject = vi.fn(async () => {});
 export const onProjectOpen = listener("projectOpen");
@@ -573,7 +573,7 @@ export function resetIpc() {
     description: "",
     instructions: "",
     context: [],
-    session_count: 0,
+    remote_repo: null,    session_count: 0,
     active: true,
     last_used_at: null,
   }));
@@ -583,20 +583,20 @@ export function resetIpc() {
     description: input.description,
     instructions: "",
     context: [],
-    session_count: 0,
+    remote_repo: null,    session_count: 0,
     active: true,
     last_used_at: null,
   }));
-  updateProject.mockReset().mockImplementation(async (path: string, name: string, description: string, instructions: string): Promise<Project> => ({
-    path, name, description, instructions, context: [], session_count: 0, active: true, last_used_at: null,
+  updateProject.mockReset().mockImplementation(async (path: string, name: string, description: string, instructions: string, remoteRepo: string | null = null): Promise<Project> => ({
+    path, name, description, instructions, context: [], remote_repo: remoteRepo, session_count: 0, active: true, last_used_at: null,
   }));
   deleteProject.mockReset().mockResolvedValue(undefined);
   addProjectContext.mockReset().mockImplementation(async (path: string, contextPaths: string[]): Promise<Project> => ({
-    path, name: "Demo", description: "", instructions: "", session_count: 0, active: true, last_used_at: null,
+    path, name: "Demo", description: "", instructions: "", remote_repo: null, session_count: 0, active: true, last_used_at: null,
     context: contextPaths.map((source) => ({ path: source, name: source.split("/").pop() ?? source, kind: "text" as const, size_bytes: 42 })),
   }));
   removeProjectContext.mockReset().mockImplementation(async (path: string): Promise<Project> => ({
-    path, name: "Demo", description: "", instructions: "", context: [], session_count: 0, active: true, last_used_at: null,
+    path, name: "Demo", description: "", instructions: "", context: [], remote_repo: null, session_count: 0, active: true, last_used_at: null,
   }));
   setActiveProject.mockReset().mockResolvedValue(undefined);
   selectCloudModelForNewChats.mockReset().mockResolvedValue(undefined);

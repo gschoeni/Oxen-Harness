@@ -17,7 +17,7 @@ const project = (path: string, name: string): Project => ({
   description: "",
   instructions: "",
   context: [],
-  session_count: 1,
+  remote_repo: null,  session_count: 1,
   active: false,
   last_used_at: 0,
 });

@@ -358,6 +358,8 @@ impl SessionServiceBuilder {
             session_asides: StdMutex::new(HashMap::new()),
             dev_servers: harness_preview::DevServerManager::new(),
             crash_announced: StdMutex::new(HashMap::new()),
+            session_refs: StdMutex::new(HashMap::new()),
+            media_libraries: StdMutex::new(HashMap::new()),
         }
     }
 }
@@ -456,6 +458,13 @@ pub struct SessionService {
     /// session. NOT evicted with the agents map — a background chat's server
     /// keeps serving until stopped or the host exits.
     pub dev_servers: harness_preview::DevServerManager,
+    /// Each session's staged reference media (`[Image #N]` labels → files),
+    /// kept across agent rebuilds like the aside queue: a label handed out
+    /// on turn one must still resolve on turn ten.
+    session_refs: StdMutex<HashMap<String, Arc<harness_media::MediaRefs>>>,
+    /// One media library per project root, shared by every chat in that
+    /// project; its change feed is forwarded once per library.
+    media_libraries: StdMutex<HashMap<PathBuf, Arc<harness_media::MediaLibrary>>>,
     /// Sessions already told (once) that their dev server died.
     crash_announced: StdMutex<HashMap<String, String>>,
 }
@@ -685,6 +694,132 @@ impl SessionService {
             .clone()
     }
 
+    /// The session's reference-media registry, created on first sight.
+    fn refs_for(&self, session: &str) -> Arc<harness_media::MediaRefs> {
+        self.session_refs
+            .lock()
+            .expect("session refs poisoned")
+            .entry(session.to_string())
+            .or_default()
+            .clone()
+    }
+
+    /// The media library for a project root, created (and its change feed
+    /// forwarded as `media.changed`) on first sight. Keyed by the canonical
+    /// root so two spellings of one project share a library.
+    fn media_library_for(&self, root: &Path) -> Arc<harness_media::MediaLibrary> {
+        let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let mut libraries = self
+            .media_libraries
+            .lock()
+            .expect("media libraries poisoned");
+        if let Some(existing) = libraries.get(&key) {
+            return existing.clone();
+        }
+        let dir = harness_runtime::media::load().output_dir_rel();
+        let library = Arc::new(harness_media::MediaLibrary::new(&key, dir));
+        libraries.insert(key, library.clone());
+        self.watch_media(library.clone());
+        library
+    }
+
+    /// Forward every library change as a `media.changed` event carrying the
+    /// whole list, tagged with the session whose item changed. Holds only a
+    /// weak handle, so the forwarder ends with the library.
+    fn watch_media(&self, library: Arc<harness_media::MediaLibrary>) {
+        let mut changes = library.changes();
+        let weak = Arc::downgrade(&library);
+        let sink = self.sink.clone();
+        tokio::spawn(async move {
+            while changes.changed().await.is_ok() {
+                let Some(library) = weak.upgrade() else { break };
+                let session = changes.borrow().session.clone();
+                let root = library.root().display().to_string();
+                let items = library
+                    .items()
+                    .into_iter()
+                    .map(translate::media_item)
+                    .collect();
+                let uploads = library
+                    .uploads()
+                    .into_iter()
+                    .map(translate::media_upload)
+                    .collect();
+                sink.emit(ProtocolEvent::MediaChanged {
+                    session,
+                    root,
+                    items,
+                    uploads,
+                });
+            }
+        });
+    }
+
+    /// The project's media library (generations and in-flight jobs),
+    /// newest first — the cold-load counterpart of `media.changed`.
+    pub fn list_media(&self, root: &Path) -> Vec<harness_protocol::MediaItem> {
+        self.media_library_for(root)
+            .items()
+            .into_iter()
+            .map(translate::media_item)
+            .collect()
+    }
+
+    /// Cancel an in-flight generation from the client (no agent turn
+    /// involved) and mark it cancelled in whichever library holds it.
+    pub async fn cancel_media(&self, id: &str) -> Result<(), String> {
+        let api =
+            harness_runtime::media::api().ok_or_else(|| harness_media::MEDIA_NO_KEY.to_string())?;
+        let queue = harness_media::QueueClient::new(&api.base_url, api.api_key);
+        queue.cancel(id).await.map_err(|e| e.to_string())?;
+        let libraries: Vec<Arc<harness_media::MediaLibrary>> = self
+            .media_libraries
+            .lock()
+            .expect("media libraries poisoned")
+            .values()
+            .cloned()
+            .collect();
+        for library in libraries {
+            if let Some(mut item) = library.in_flight(None).into_iter().find(|i| i.id == id) {
+                item.status = harness_media::MediaStatus::Cancelled;
+                item.completed_at = Some(harness_media::library::now_unix());
+                let _ = library.record(item);
+            }
+        }
+        Ok(())
+    }
+
+    /// The hub's image/video models for pickers, optionally one kind.
+    pub async fn media_models(
+        &self,
+        kind: Option<&str>,
+    ) -> Result<Vec<harness_protocol::MediaModelSummary>, String> {
+        let api = harness_runtime::media::api();
+        let base = api
+            .as_ref()
+            .map(|a| a.base_url.clone())
+            .unwrap_or_else(|| harness_core::DEFAULT_BASE_URL.to_string());
+        let http = reqwest::Client::new();
+        let cache = harness_media::catalog_cache_path(&base);
+        let catalog = harness_media::Catalog::load(
+            &http,
+            &base,
+            api.as_ref().map(|a| a.api_key.as_str()),
+            cache.as_deref(),
+        )
+        .await?;
+        let kind = kind.and_then(|k| match k {
+            "image" => Some(harness_media::MediaKind::Image),
+            "video" => Some(harness_media::MediaKind::Video),
+            _ => None,
+        });
+        Ok(catalog
+            .search(kind, None)
+            .into_iter()
+            .map(translate::media_model)
+            .collect())
+    }
+
     /// Complete a session's tool registry and derive its run config: the
     /// session-scoped canvas/viewer/preview tools, the user's saved tool
     /// preferences applied to the complete set, the `skill` tool when enabled
@@ -752,6 +887,39 @@ impl SessionService {
             harness_preview::sight_tools(self.dev_servers.clone(), session, preview_lens);
         tools.register_typed(screenshot);
         tools.register_typed(console);
+        // Image/video generation: the session's reference registry, the
+        // project's shared library, and spend confirmation through the same
+        // question bridge `ask_user_question` uses.
+        let asker: Arc<dyn harness_tools::QuestionAsker> = Arc::new(HostAsker {
+            sink: self.sink.clone(),
+            session: session.to_string(),
+            pending: self.pending_questions.clone(),
+        });
+        let media_ctx = harness_media::MediaContext::new(
+            session,
+            workspace_root,
+            // The project's own remote repository (when set) is where its
+            // generations keep copies, over the global hub-repo setting.
+            harness_runtime::media::prefs_for(workspace_root),
+            harness_runtime::media::api(),
+            self.refs_for(session),
+            self.media_library_for(workspace_root),
+            Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
+        )
+        .with_asides(tools.asides());
+        let (media_models, generate_image, generate_video, media_status) =
+            harness_media::session_tools(media_ctx);
+        tools.register_typed(media_models);
+        tools.register_typed(generate_image);
+        tools.register_typed(generate_video);
+        tools.register_typed(media_status);
+        // Give the project a remote Oxen repository — confirmed through the
+        // same question bridge, recorded in the project's config.
+        tools.register_typed(harness_runtime::repo_tool::CreateRepositoryTool::new(
+            workspace_root,
+            harness_runtime::media::api(),
+            asker,
+        ));
         harness_runtime::tools::load().apply(tools);
         // Skills load on demand through the `skill` tool; it's only
         // registered when the user has enabled skills, so an empty set costs
@@ -1048,7 +1216,8 @@ impl SessionService {
             });
             agents.keys().cloned().collect()
         };
-        // The fleet-spawner map mirrors the agents map, so evict in lockstep.
+        // The fleet-spawner and task maps mirror the agents map, so evict in
+        // lockstep.
         self.fleet_spawners
             .lock()
             .expect("fleet spawners poisoned")
@@ -1229,7 +1398,8 @@ impl SessionService {
         if let Some(hook) = &self.hooks.on_session_deleted {
             hook(id);
         }
-        // Drop the session's fleet spawner in lockstep with its agent.
+        // Drop the session's fleet spawner and task registry in lockstep
+        // with its agent.
         self.fleet_spawners
             .lock()
             .expect("fleet spawners poisoned")
@@ -1237,6 +1407,18 @@ impl SessionService {
         self.session_tasks
             .lock()
             .expect("session tasks poisoned")
+            .remove(id);
+        // The aside queue outlives agent rebuilds on purpose (see the field
+        // docs), so nothing else ever removes it — and a background fleet
+        // still pushing into it would keep filling a queue no turn will ever
+        // drain. Same for the crash note: the server it describes is stopped.
+        self.session_asides
+            .lock()
+            .expect("session asides poisoned")
+            .remove(id);
+        self.crash_announced
+            .lock()
+            .expect("crash announcements poisoned")
             .remove(id);
         let mut current = self.current.lock().await;
         if current.as_deref() == Some(id) {
@@ -1258,6 +1440,25 @@ impl SessionService {
         prompt: String,
         attachments: Vec<String>,
     ) -> Result<String, String> {
+        // Stage each media attachment under a chip label and name it in the
+        // prompt, so the model can hand "[Image #2]" back to the generation
+        // tools as a reference.
+        let refs = self.refs_for(session);
+        let mut labels = Vec::new();
+        for path in &attachments {
+            if let Some(label) = refs.stage(path) {
+                let name = Path::new(path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file");
+                labels.push(format!("{label} {name}"));
+            }
+        }
+        let prompt = if labels.is_empty() {
+            prompt
+        } else {
+            format!("{prompt}\n\nAttached: {}", labels.join(", "))
+        };
         let attachments: Vec<Attachment> = attachments
             .iter()
             .filter_map(|p| Attachment::from_path(p).ok())
@@ -1888,6 +2089,24 @@ impl SessionService {
         );
         registry.register_typed(start_server);
         registry.register_typed(stop_server);
+        let media_ctx = harness_media::MediaContext::new(
+            "settings",
+            &root,
+            harness_runtime::media::load(),
+            None,
+            Arc::new(harness_media::MediaRefs::new()),
+            Arc::new(harness_media::MediaLibrary::new(
+                &root,
+                harness_media::DEFAULT_OUTPUT_DIR,
+            )),
+            Arc::new(harness_media::NoConfirmSink),
+        );
+        let (media_models, generate_image, generate_video, media_status) =
+            harness_media::session_tools(media_ctx);
+        registry.register_typed(media_models);
+        registry.register_typed(generate_image);
+        registry.register_typed(generate_video);
+        registry.register_typed(media_status);
         registry.register_typed(server_logs);
         let (screenshot, console) = harness_preview::sight_tools(
             harness_preview::DevServerManager::new(),

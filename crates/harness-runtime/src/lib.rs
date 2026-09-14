@@ -36,6 +36,7 @@ pub mod media;
 pub mod models;
 pub mod preview;
 pub mod project;
+pub mod repo_tool;
 pub mod rules;
 pub mod skills;
 pub mod tools;

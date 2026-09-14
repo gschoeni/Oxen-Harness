@@ -34,6 +34,7 @@
 pub mod budget;
 pub mod catalog;
 pub mod events;
+pub mod hub;
 pub mod library;
 pub mod queue;
 pub mod refs;
@@ -55,6 +56,7 @@ pub use refs::{MediaRefs, RefKind, ResolvedRef};
 pub use tools::{
     GenerateImageTool, GenerateVideoTool, MediaContext, MediaModelsTool, MediaStatusTool,
 };
+pub use hub::{repo_web_url, HubRepos, NewRepo};
 pub use upload::{HubUploader, UploadError, UploadedRef};
 
 /// Tool names the model calls (and front ends special-case for rendering).

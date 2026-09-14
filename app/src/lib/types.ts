@@ -104,6 +104,8 @@ export interface Project {
   description: string;
   instructions: string;
   context: ProjectContext[];
+  /** The project's remote Oxen repository on the hub as `namespace/name`; null when none is set. */
+  remote_repo: string | null;
   session_count: number;
   active: boolean;
   /** Unix seconds of the newest message in any of this project's chats; null when it has no history. */

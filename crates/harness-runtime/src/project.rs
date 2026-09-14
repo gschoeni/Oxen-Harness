@@ -23,6 +23,33 @@ pub struct ProjectConfig {
     pub instructions: String,
     #[serde(default)]
     pub context: Vec<ProjectContext>,
+    /// The project's remote Oxen repository on the hub, as `namespace/name`
+    /// (e.g. `ox/my-app`). Optional: set by the `create_repository` tool,
+    /// the project's settings page, or `oxen-harness project set-repo`. It is
+    /// where generated media keeps its copies and where traces are shared;
+    /// the agent is told about it in the system prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_repo: Option<String>,
+}
+
+impl ProjectConfig {
+    /// The remote split into `(namespace, name)`, when set and well-formed.
+    pub fn remote_target(&self) -> Option<(String, String)> {
+        parse_remote_repo(self.remote_repo.as_deref()?)
+    }
+}
+
+/// Parse `namespace/name` (surrounding whitespace and slashes tolerated;
+/// nested paths, empty halves, and a bare name are rejected).
+pub fn parse_remote_repo(raw: &str) -> Option<(String, String)> {
+    let raw = raw.trim().trim_matches('/');
+    let (ns, name) = raw.split_once('/')?;
+    let ok = !ns.is_empty()
+        && !name.is_empty()
+        && !name.contains('/')
+        && ns.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    ok.then(|| (ns.to_string(), name.to_string()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,8 +94,31 @@ pub fn save(root: &Path, config: &ProjectConfig) -> Result<ProjectConfig, Runtim
     if saved.name.is_empty() {
         saved.name = folder_name(root);
     }
+    // The remote is normalized to `namespace/name` or dropped: a value that
+    // can't be parsed would only ever produce broken URLs downstream.
+    saved.remote_repo = match saved.remote_repo.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(raw) => Some(
+            parse_remote_repo(raw)
+                .map(|(ns, name)| format!("{ns}/{name}"))
+                .ok_or_else(|| {
+                    RuntimeError::Invalid(format!(
+                        "remote repository must look like `namespace/name`, got `{raw}`"
+                    ))
+                })?,
+        ),
+    };
     harness_config::write_versioned(&config_path(root), SCHEMA_VERSION, &saved)?;
     Ok(saved)
+}
+
+/// Set (or, with `None`/empty, clear) the project's remote repository,
+/// keeping every other field. The one write path the tool, the desktop
+/// settings page, and the CLI subcommand share.
+pub fn set_remote_repo(root: &Path, remote: Option<&str>) -> Result<ProjectConfig, RuntimeError> {
+    let mut config = load(root);
+    config.remote_repo = remote.map(str::trim).filter(|r| !r.is_empty()).map(str::to_string);
+    save(root, &config)
 }
 
 pub fn add_context(root: &Path, sources: &[PathBuf]) -> Result<ProjectConfig, RuntimeError> {
@@ -153,6 +203,15 @@ pub fn prompt_section(root: &Path) -> String {
     if !config.instructions.is_empty() {
         section.push_str("\nInstructions:\n");
         section.push_str(&config.instructions);
+    }
+    match &config.remote_repo {
+        Some(repo) => section.push_str(&format!(
+            "\nRemote Oxen repository: {repo} (on the hub). Generated media keeps copies there; \
+             `oxen push` targets it when the project is an Oxen repo."
+        )),
+        None => section.push_str(
+            "\nRemote Oxen repository: none configured. If the user wants one, call `create_repository`.",
+        ),
     }
     if !config.context.is_empty() {
         section.push_str(
@@ -264,6 +323,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn remote_repo_round_trips_normalized_and_is_told_to_the_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        assert_eq!(load(root).remote_repo, None);
+
+        let saved = set_remote_repo(root, Some(" /ox/my-app/ ")).unwrap();
+        assert_eq!(saved.remote_repo.as_deref(), Some("ox/my-app"));
+        assert_eq!(load(root).remote_target(), Some(("ox".into(), "my-app".into())));
+        assert!(prompt_section(root).contains("Remote Oxen repository: ox/my-app"));
+
+        // Other fields survive the setter.
+        let mut config = load(root);
+        config.description = "ship it".into();
+        save(root, &config).unwrap();
+        set_remote_repo(root, Some("ox/other")).unwrap();
+        assert_eq!(load(root).description, "ship it");
+
+        // Clearing: None or blank both drop it, and the prompt says so.
+        set_remote_repo(root, Some("  ")).unwrap();
+        assert_eq!(load(root).remote_repo, None);
+        assert!(prompt_section(root).contains("none configured"));
+    }
+
+    #[test]
+    fn a_malformed_remote_is_refused_not_stored() {
+        let tmp = tempfile::tempdir().unwrap();
+        for bad in ["my-app", "ox/a/b", "/", "ox/", "ox/my app"] {
+            let err = set_remote_repo(tmp.path(), Some(bad)).unwrap_err();
+            assert!(err.to_string().contains("namespace/name"), "{bad}: {err}");
+        }
+        assert_eq!(parse_remote_repo("ox/my-app"), Some(("ox".into(), "my-app".into())));
+        assert_eq!(parse_remote_repo("ox/my_app.v2"), Some(("ox".into(), "my_app.v2".into())));
+    }
+
+    #[test]
     fn a_folder_without_metadata_is_still_a_named_project() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("existing-app");
@@ -287,6 +381,7 @@ mod tests {
             description: "Build a calm writing space.".into(),
             instructions: "Prefer accessible, keyboard-first interactions.".into(),
             context: vec![],
+            remote_repo: None,
         };
 
         let saved = save(&root, &config).unwrap();
@@ -369,6 +464,7 @@ mod tests {
                 description: "Ship the onboarding flow.".into(),
                 instructions: "Use plain language and preserve accessibility.".into(),
                 context: vec![],
+                remote_repo: None,
             },
         )
         .unwrap();

@@ -80,6 +80,7 @@ pub struct HubUploader {
     http: reqwest::Client,
     api_root: String,
     api_key: String,
+    repos: crate::hub::HubRepos,
     /// `namespace/repo` from the user's settings, else the account's
     /// `playground`.
     override_repo: Option<(String, String)>,
@@ -103,10 +104,13 @@ impl HubUploader {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
+        let api_root = api_root.into();
+        let api_key = api_key.into();
         Self {
+            repos: crate::hub::HubRepos::new(http.clone(), api_root.clone(), api_key.clone()),
             http,
-            api_root: api_root.into(),
-            api_key: api_key.into(),
+            api_root,
+            api_key,
             override_repo,
             target: tokio::sync::OnceCell::new(),
             cache_path,
@@ -169,66 +173,27 @@ impl HubUploader {
     }
 
     async fn whoami(&self) -> Result<String, UploadError> {
-        let res = self
-            .http
-            .get(format!("{}/users/me", self.api_root))
-            .bearer_auth(&self.api_key)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| UploadError::Http(e.to_string()))?;
-        let v: Value = Self::body(res).await?;
-        v.get("user")
-            .and_then(|u| u.get("username"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .ok_or_else(|| UploadError::Json("users/me carried no username".into()))
+        self.repos.whoami().await
     }
 
     /// Whether `namespace/repo` exists and this key can see it (a 403 reads
     /// as "not for this key", not as an error — another namespace may be).
     async fn repo_exists(&self, namespace: &str, repo: &str) -> Result<bool, UploadError> {
-        let res = self
-            .http
-            .get(format!("{}/repos/{namespace}/{repo}", self.api_root))
-            .bearer_auth(&self.api_key)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| UploadError::Http(e.to_string()))?;
-        match res.status().as_u16() {
-            200..=299 => Ok(true),
-            401 => Err(UploadError::Unauthorized),
-            403 | 404 => Ok(false),
-            other => {
-                let text = res.text().await.unwrap_or_default();
-                Err(UploadError::Api {
-                    status: other,
-                    message: format!("checking {namespace}/{repo}: {}", error_message(&text)),
-                })
-            }
-        }
+        self.repos.repo_exists(namespace, repo).await
     }
 
     /// Create the playground under `namespace`; when the hub refuses (this
     /// key can't create, or the name is taken elsewhere), say what to set.
     async fn create_repo(&self, namespace: &str, repo: &str) -> Result<(), UploadError> {
-        let res = self
-            .http
-            .post(format!("{}/repos/", self.api_root))
-            .bearer_auth(&self.api_key)
-            .json(&serde_json::json!({
-                "name": repo,
-                "description": "Uploads and generations from oxen-harness.",
-                "visibility": "private",
-                "workbench": true,
-            }))
-            .timeout(Duration::from_secs(60))
-            .send()
-            .await
-            .map_err(|e| UploadError::Http(e.to_string()))?;
-        match Self::body::<Value>(res).await {
-            Ok(_) => Ok(()),
+        let new = crate::hub::NewRepo {
+            name: repo,
+            namespace: Some(namespace),
+            description: "Uploads and generations from oxen-harness.",
+            public: false,
+            workbench: true,
+        };
+        match self.repos.create_repo(new).await {
+            Ok(()) => Ok(()),
             Err(UploadError::Api { status, message }) => Err(UploadError::Api {
                 status,
                 message: format!(
@@ -324,7 +289,7 @@ impl HubUploader {
             .send()
             .await
             .map_err(|e| UploadError::Http(e.to_string()))?;
-        let v: Value = Self::body(res).await.map_err(|e| match e {
+        let v: Value = crate::hub::body(res).await.map_err(|e| match e {
             UploadError::Api { status, message } => UploadError::Api {
                 status,
                 message: format!("uploading to {namespace}/{repo}: {message}"),
@@ -375,7 +340,7 @@ impl HubUploader {
             .send()
             .await
             .map_err(|e| UploadError::Http(e.to_string()))?;
-        let v: Value = Self::body(res).await.map_err(|e| match e {
+        let v: Value = crate::hub::body(res).await.map_err(|e| match e {
             UploadError::Api { status, message } => UploadError::Api {
                 status,
                 message: format!("presigning {asset_path} in {namespace}/{repo}: {message}"),
@@ -429,47 +394,6 @@ impl HubUploader {
         }
     }
 
-    async fn body<T: serde::de::DeserializeOwned>(
-        res: reqwest::Response,
-    ) -> Result<T, UploadError> {
-        let status = res.status();
-        let text = res
-            .text()
-            .await
-            .map_err(|e| UploadError::Http(e.to_string()))?;
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(UploadError::Unauthorized);
-        }
-        if !status.is_success() {
-            return Err(UploadError::Api {
-                status: status.as_u16(),
-                message: error_message(&text),
-            });
-        }
-        serde_json::from_str(&text).map_err(|e| {
-            UploadError::Json(format!(
-                "{e} (body: {})",
-                text.chars().take(200).collect::<String>()
-            ))
-        })
-    }
-}
-
-fn error_message(text: &str) -> String {
-    let Ok(v) = serde_json::from_str::<Value>(text) else {
-        return text.chars().take(300).collect();
-    };
-    if let Some(err) = v.get("error") {
-        if let Some(s) = err.as_str() {
-            return s.to_string();
-        }
-        for key in ["detail", "message", "title", "type"] {
-            if let Some(s) = err.get(key).and_then(Value::as_str) {
-                return s.to_string();
-            }
-        }
-    }
-    text.chars().take(300).collect()
 }
 
 fn hex(bytes: &[u8]) -> String {

@@ -19,6 +19,18 @@ pub fn load() -> MediaPrefs {
     crate::config::load_or_default(paths::media_file())
 }
 
+/// The preferences a session under `root` runs with: the saved global ones,
+/// with the project's own remote repository (when it has one) standing in
+/// for the global "hub repo" — a project that knows where it lives keeps
+/// its generations there, not in a shared playground.
+pub fn prefs_for(root: &std::path::Path) -> MediaPrefs {
+    let mut prefs = load();
+    if let Some(repo) = crate::project::load(root).remote_repo {
+        prefs.hub_repo = Some(repo);
+    }
+    prefs
+}
+
 /// Atomically persist the preferences and snapshot the config repo.
 pub fn save(prefs: &MediaPrefs) -> Result<(), RuntimeError> {
     crate::config::write_and_snapshot(
@@ -69,6 +81,22 @@ mod tests {
             let loaded = load();
             assert_eq!(loaded, prefs);
             assert_eq!(loaded.per_generation_usd, None);
+        });
+    }
+
+    #[test]
+    fn a_projects_remote_repo_overrides_the_global_hub_repo() {
+        with_temp_home(|| {
+            let mut prefs = load();
+            prefs.hub_repo = Some("ox/playground".into());
+            save(&prefs).unwrap();
+
+            let tmp = tempfile::tempdir().unwrap();
+            // No project remote → the global one.
+            assert_eq!(prefs_for(tmp.path()).hub_repo.as_deref(), Some("ox/playground"));
+            crate::project::set_remote_repo(tmp.path(), Some("ox/my-app")).unwrap();
+            assert_eq!(prefs_for(tmp.path()).hub_repo.as_deref(), Some("ox/my-app"));
+            assert_eq!(prefs_for(tmp.path()).hub_target(), Some(("ox".into(), "my-app".into())));
         });
     }
 }

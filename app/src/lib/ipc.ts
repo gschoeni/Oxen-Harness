@@ -268,8 +268,13 @@ export const startProject = (input: StartProjectInput) => invoke<Project>("start
 export const getDefaultProjectLocation = () => invoke<string | null>("get_default_project_location");
 export const setDefaultProjectLocation = (path: string) =>
   invoke<string>("set_default_project_location", { path });
-export const updateProject = (path: string, name: string, description: string, instructions: string) =>
-  invoke<Project>("update_project", { path, name, description, instructions });
+export const updateProject = (
+  path: string,
+  name: string,
+  description: string,
+  instructions: string,
+  remoteRepo: string | null,
+) => invoke<Project>("update_project", { path, name, description, instructions, remoteRepo });
 export const addProjectContext = (path: string, contextPaths: string[]) =>
   invoke<Project>("add_project_context", { path, contextPaths });
 export const removeProjectContext = (path: string, contextPath: string) =>

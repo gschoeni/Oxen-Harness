@@ -33,6 +33,7 @@ pub(crate) mod permissions;
 pub(crate) mod plan;
 pub(crate) mod preview;
 pub(crate) mod print;
+pub(crate) mod project;
 pub(crate) mod queue;
 pub(crate) mod resume;
 pub(crate) mod review;

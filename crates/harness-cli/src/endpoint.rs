@@ -267,16 +267,17 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui, base_url: &str
     // Image/video generation: chips the composer staged resolve through the
     // shared registry, results land in the project's media library, and a
     // call over the user's budget asks through the same terminal picker.
+    let asker: Arc<dyn harness_tools::QuestionAsker> = Arc::new(ask::CliAsker::new(ui.clone()));
     let media_ctx = harness_media::MediaContext::new(
         crate::preview::SESSION_KEY,
         workspace.root(),
-        harness_runtime::media::load(),
+        // The project's own remote repository (when set) is where its
+        // generations keep copies, over the global hub-repo setting.
+        harness_runtime::media::prefs_for(workspace.root()),
         harness_runtime::media::api_for(base_url),
         crate::media::refs(),
         crate::media::library(workspace.root()),
-        Arc::new(harness_media::AskerSpendConfirm(Arc::new(
-            ask::CliAsker::new(ui.clone()),
-        ))),
+        Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
     )
     .with_asides(tools.asides());
     let (media_models, generate_image, generate_video, media_status) =
@@ -285,6 +286,13 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui, base_url: &str
     tools.register_typed(generate_image);
     tools.register_typed(generate_video);
     tools.register_typed(media_status);
+    // Give the project a remote Oxen repository — confirmed through the same
+    // terminal picker, recorded in the project's config.
+    tools.register_typed(harness_runtime::repo_tool::CreateRepositoryTool::new(
+        workspace.root(),
+        harness_runtime::media::api_for(base_url),
+        asker,
+    ));
     // `open_file` (the desktop's file-viewer panel) is deliberately NOT
     // registered: the terminal has no viewer surface, and a host-surface tool
     // that can't surface anything would just mislead the model (the prompt
