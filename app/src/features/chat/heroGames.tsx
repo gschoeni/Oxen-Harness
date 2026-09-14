@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ThemePalette } from "../../lib/types";
-import type { HeroGameDefinition } from "./games/gameKit";
+import { dailyLabel, dailyPreference, pointerAsKey, seedRun, setDailyPreference, type HeroGameDefinition, type PointerInput, type SfxEvent } from "./games/gameKit";
+import { playSfx, setSfxPreference, sfxPreference, unlockSfx } from "./games/sfx";
 import { TumbleweedDodgeGame } from "./games/tumbleweed";
 import { OxenTrailGame } from "./games/oregonTrail";
+import { HuntGame } from "./games/hunt";
 
 export type { HeroGameDefinition } from "./games/gameKit";
 
@@ -13,6 +15,7 @@ type AnyHeroGameDefinition = HeroGameDefinition<any>;
 export const HERO_GAMES = {
   tumbleweed: TumbleweedDodgeGame,
   oregon: OxenTrailGame,
+  hunt: HuntGame,
 } satisfies Record<string, AnyHeroGameDefinition>;
 
 export type HeroGameName = keyof typeof HERO_GAMES;
@@ -24,7 +27,8 @@ export function getHeroGame(name: string | undefined): AnyHeroGameDefinition {
 }
 
 // The Konami-style start combo. Requiring a deliberate sequence keeps stray
-// arrow presses (scrolling, editing) from launching the game.
+// arrow presses (scrolling, editing) from launching the game. A click on the
+// screen also starts it — for trackpad players who never touch the arrows.
 const START_COMBO = ["ArrowUp", "ArrowUp", "ArrowDown", "ArrowDown"];
 const ARROW_GLYPHS: Record<string, string> = {
   ArrowUp: "↑",
@@ -34,10 +38,16 @@ const ARROW_GLYPHS: Record<string, string> = {
 };
 // Keys a game receives while playing, unless its definition widens the set.
 const DEFAULT_GAME_KEYS = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Enter"];
+// A pointer that travels less than this (px) is a tap; more is a swipe.
+const SWIPE_PX = 18;
 
-function isEditableTarget(e: KeyboardEvent) {
+function isEditableTarget(e: Event) {
   const t = e.target as HTMLElement | null;
   return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+}
+
+function seedSaltOf(def: AnyHeroGameDefinition, name: string) {
+  return def.seedSalt ?? Array.from(name).reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7);
 }
 
 interface HeroGameProps {
@@ -54,9 +64,16 @@ interface HeroGameProps {
 export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "hero" }: HeroGameProps) {
   const definition = useMemo(() => getHeroGame(gameName), [gameName]);
   const [playing, setPlaying] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [combo, setCombo] = useState(0);
   const comboRef = useRef(0);
   const [state, setState] = useState(() => definition.initialState());
+  // Sound: the hero follows the saved preference; the dock always starts muted
+  // so a game popped open mid-turn doesn't chirp over your work.
+  const [sound, setSound] = useState(() => (variant === "dock" ? false : sfxPreference()));
+  const [daily, setDaily] = useState(() => dailyPreference());
+  const lastSfx = useRef(0);
+  const pointerStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const entries = Object.entries(HERO_GAMES) as [string, AnyHeroGameDefinition][];
   const showTabs = !!onSelectGame && entries.length > 1;
 
@@ -64,10 +81,22 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
   // start combo, which reads as inserting a fresh cartridge.
   useEffect(() => {
     setPlaying(false);
+    setPaused(false);
     setCombo(0);
     comboRef.current = 0;
     setState(definition.initialState());
   }, [definition]);
+
+  const start = useCallback(() => {
+    comboRef.current = 0;
+    setCombo(0);
+    unlockSfx();
+    seedRun(seedSaltOf(definition, gameName));
+    setState((current: any) => (definition.onStart ? definition.onStart(current) : definition.initialState()));
+    setPaused(false);
+    setPlaying(true);
+    if (sound) playSfx("start");
+  }, [definition, gameName, sound]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -75,15 +104,19 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
       if (isEditableTarget(e)) return;
 
       if (!playing) {
-        if (!(e.key in ARROW_GLYPHS)) return;
+        if (!(e.key in ARROW_GLYPHS)) {
+          // Non-arrow keys on the attract screen go to the game's pre-play
+          // choices (rider, difficulty…), if it offers any.
+          if (definition.handleAttractKey && e.key.length === 1) {
+            setState((current: any) => definition.handleAttractKey!(current, e.key));
+          }
+          return;
+        }
         e.preventDefault();
         const prev = comboRef.current;
         const next = e.key === START_COMBO[prev] ? prev + 1 : e.key === START_COMBO[0] ? 1 : 0;
         if (next >= START_COMBO.length) {
-          comboRef.current = 0;
-          setCombo(0);
-          setState((current: any) => (definition.onStart ? definition.onStart(current) : definition.initialState()));
-          setPlaying(true);
+          start();
         } else {
           comboRef.current = next;
           setCombo(next);
@@ -93,21 +126,61 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
 
       if (e.key === "Escape") {
         setPlaying(false);
+        setPaused(false);
+        return;
+      }
+      // Any key resumes from a pause; the key itself is swallowed so a resume
+      // never doubles as a move.
+      if (paused) {
+        e.preventDefault();
+        setPaused(false);
         return;
       }
       const wants = definition.keys ? definition.keys(e.key) : DEFAULT_GAME_KEYS.includes(e.key);
       if (!wants) return;
       e.preventDefault();
+      unlockSfx();
       setState((current: any) => definition.handleKey(current, e.key));
     }
 
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [definition, playing]);
+    // Releases only matter to games with hold-to-move controls.
+    function onKeyUp(e: KeyboardEvent) {
+      if (!playing || !definition.handleKeyUp || isEditableTarget(e)) return;
+      const wants = definition.keys ? definition.keys(e.key) : DEFAULT_GAME_KEYS.includes(e.key);
+      if (!wants) return;
+      setState((current: any) => definition.handleKeyUp!(current, e.key));
+    }
 
-  // The frame loop only runs while playing; the attract screen is static.
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [definition, playing, paused, start]);
+
+  // Losing the window mid-run pauses instead of letting the ox crash while you
+  // answer a message; any key or click brings it back.
   useEffect(() => {
     if (!playing) return;
+    function pause() {
+      setPaused(true);
+      if (definition.onPause) setState((current: any) => definition.onPause!(current));
+    }
+    function onVisibility() {
+      if (document.hidden) pause();
+    }
+    window.addEventListener("blur", pause);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("blur", pause);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [definition, playing]);
+
+  // The frame loop only runs while playing and unpaused; the attract screen is static.
+  useEffect(() => {
+    if (!playing || paused) return;
     let frame = 0;
     let cancelled = false;
     let last = performance.now();
@@ -127,15 +200,79 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
       cancelled = true;
       caf(frame);
     };
-  }, [definition, playing]);
+  }, [definition, playing, paused]);
+
+  // Play whatever cues the game queued since the last render.
+  useEffect(() => {
+    const queue: SfxEvent[] | undefined = (state as any)?.sfx;
+    if (!queue || queue.length === 0) return;
+    const newest = queue[queue.length - 1].id;
+    if (newest <= lastSfx.current) return;
+    if (sound && playing) {
+      for (const cue of queue) if (cue.id > lastSfx.current) playSfx(cue.name);
+    }
+    lastSfx.current = newest;
+  }, [state, sound, playing]);
+
+  function toggleSound() {
+    const next = !sound;
+    setSound(next);
+    if (variant !== "dock") setSfxPreference(next);
+    if (next) {
+      unlockSfx();
+      playSfx("menu");
+    }
+  }
+
+  function toggleDaily() {
+    const next = !daily;
+    setDaily(next);
+    setDailyPreference(next);
+  }
+
+  // Pointer play: a click on the attract screen starts; while playing, taps and
+  // swipes on the field reach the game (as arrow keys unless it maps them).
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if ((e.target as HTMLElement).closest("button")) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    pointerStart.current = { x: e.clientX - rect.left, y: e.clientY - rect.top, w: rect.width, h: rect.height };
+  }
+
+  function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    const s0 = pointerStart.current;
+    pointerStart.current = null;
+    if (!s0 || (e.target as HTMLElement).closest("button")) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const dx = e.clientX - rect.left - s0.x;
+    const dy = e.clientY - rect.top - s0.y;
+    unlockSfx();
+    if (!playing) {
+      start();
+      return;
+    }
+    if (paused) {
+      setPaused(false);
+      return;
+    }
+    let input: PointerInput;
+    if (Math.hypot(dx, dy) < SWIPE_PX) {
+      input = { kind: "tap", x: s0.x / s0.w, y: s0.y / s0.h };
+    } else {
+      const dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? "ArrowLeft" : "ArrowRight") : dy < 0 ? "ArrowUp" : "ArrowDown";
+      input = { kind: "swipe", x: s0.x / s0.w, y: s0.y / s0.h, dir };
+    }
+    setState((current: any) => (definition.handlePointer ? definition.handlePointer(current, input) : definition.handleKey(current, pointerAsKey(input))));
+  }
 
   const label = playing
-    ? `${definition.title}. Press escape to make camp.`
-    : `${definition.title}. Press up, up, down, down to play.`;
+    ? paused
+      ? `${definition.title}. Paused — press any key to resume.`
+      : `${definition.title}. Press escape to make camp.`
+    : `${definition.title}. Press up, up, down, down to play, or click the screen.`;
 
   return (
     <div className="hero-game" data-variant={variant} aria-label={label}>
-      <div className="hero-game-stage">
+      <div className="hero-game-stage" onPointerDown={onPointerDown} onPointerUp={onPointerUp} onPointerCancel={() => (pointerStart.current = null)}>
         {!playing && definition.renderAttract ? definition.renderAttract(palette) : definition.render(state, palette)}
         {showTabs && !playing && (
           <div className="hero-game-tabs" role="tablist" aria-label="Choose a game">
@@ -152,7 +289,25 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
             ))}
           </div>
         )}
-        {playing && definition.help && (
+        {/* Cabinet switches: sound and the daily seed. Small, corner-mounted,
+            available on the attract screen and while playing. */}
+        <div className="hero-game-switches">
+          {!playing && (
+            <button className={daily ? "hero-game-switch active" : "hero-game-switch"} onClick={toggleDaily} aria-pressed={daily} title="Daily run: everyone gets today's trail">
+              {daily ? `DAILY ${dailyLabel()}` : "DAILY"}
+            </button>
+          )}
+          <button className={sound ? "hero-game-switch active" : "hero-game-switch"} onClick={toggleSound} aria-pressed={sound} aria-label={sound ? "Mute game sound" : "Unmute game sound"} title={sound ? "Sound on" : "Sound off"}>
+            {sound ? "♪ ON" : "♪ OFF"}
+          </button>
+        </div>
+        {playing && paused && (
+          <div className="hero-game-pause" role="status">
+            <span>PAUSED</span>
+            <small>press any key</small>
+          </div>
+        )}
+        {playing && !paused && definition.help && (
           <div className="hero-game-help" aria-hidden="true">
             {definition.help}
           </div>
@@ -176,7 +331,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
                 </kbd>
               ))}
             </span>
-            <span className="hero-game-start-label">to hit the trail</span>
+            <span className="hero-game-start-label">or click to hit the trail</span>
           </span>
         </div>
       )}

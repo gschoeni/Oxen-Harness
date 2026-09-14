@@ -237,6 +237,66 @@
   color: #000;
   border-color: #f4f1e8;
 }
+/* Corner switches on the cabinet: sound and the daily seed. */
+.hero-game-switches {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: flex;
+  gap: 4px;
+  z-index: 3;
+}
+.hero-game-switch {
+  font-family: var(--font-readout);
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  color: #f4f1e8;
+  background: rgba(0, 0, 0, 0.55);
+  border: 2px solid rgba(244, 241, 232, 0.35);
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
+  cursor: pointer;
+  pointer-events: auto;
+  opacity: 0.8;
+  transition: opacity var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.hero-game-switch:hover {
+  opacity: 1;
+  border-color: #f4f1e8;
+}
+.hero-game-switch.active {
+  background: #f4f1e8;
+  color: #000;
+  border-color: #f4f1e8;
+  opacity: 1;
+}
+/* Window-blur pause card over the playfield. */
+.hero-game-pause {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  font-family: var(--font-readout);
+  color: #f4f1e8;
+  text-shadow: 2px 2px 0 #000;
+  font-size: 22px;
+  letter-spacing: 0.08em;
+  z-index: 2;
+  pointer-events: none;
+}
+.hero-game-pause small {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  opacity: 0.8;
+}
+.hero-game-stage {
+  touch-action: none;
+  cursor: pointer;
+}
 /* The white-on-black "Press RETURN to size up the situation" bar. */
 .hero-prompt {
   font-family: var(--font-readout);
