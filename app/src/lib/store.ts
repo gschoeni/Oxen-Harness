@@ -58,6 +58,7 @@ import {
   finalizeAssistant,
   lastUserText,
   resolveRecoveryPrompt,
+  resumeMidTurn,
   startTurn,
   toolEnd,
   toolStart,
@@ -217,30 +218,70 @@ const MAX_QUEUE = 50;
  *  clicked. Set well above any realistic session so it never trims in practice. */
 const MAX_CANVASES = 12;
 const MAX_CACHED_THREADS = 4;
+/** How many *running* background sessions keep their thread resident beyond
+ *  the cache cap. A fleet or loop can have dozens of chats streaming at once,
+ *  and every resident thread is up to 300 items with 16 KB tool args each —
+ *  so only the most recently active few stay; the rest keep running headless
+ *  (their transcript persists on the backend) and rebuild their thread from
+ *  it when viewed. The visible session is always protected on top of these. */
+const MAX_PROTECTED_RUNNING = 6;
 const MAX_STREAMING_TOOL_ARGS = 256_000;
 
-function capThreadSessions(
+/** When each session last streamed a token or swung a tool (ms epoch). Not
+ *  store state: it changes on the hot path and nothing renders it — it only
+ *  ranks running sessions for thread-cache protection. */
+const lastActive = new Map<string, number>();
+
+/** Keep the current session's thread, the most recently active running
+ *  sessions' threads (up to `MAX_PROTECTED_RUNNING`), and then the newest
+ *  threads up to `MAX_CACHED_THREADS` in all. Exported for its unit test;
+ *  `activity` defaults to the live ranking. */
+export function capThreadSessions(
   threads: Record<string, Item[]>,
   runStatus: Record<string, RunStatus>,
   current: string,
+  activity: ReadonlyMap<string, number> = lastActive,
 ): Record<string, Item[]> {
-  const protectedIds = new Set([
-    current,
-    ...Object.entries(runStatus)
-      .filter(([, status]) => status === "running")
-      .map(([id]) => id),
-  ]);
+  // Key order is insertion order (oldest first) — the tie-break when two
+  // running sessions have no recorded activity yet.
+  const order = Object.keys(threads);
+  const running = order
+    .filter((id) => id !== current && runStatus[id] === "running")
+    .sort(
+      (a, b) =>
+        (activity.get(b) ?? 0) - (activity.get(a) ?? 0) || order.indexOf(b) - order.indexOf(a),
+    );
+  const protectedIds = new Set([current, ...running.slice(0, MAX_PROTECTED_RUNNING)]);
   const keep = new Set(protectedIds);
-  for (const id of Object.keys(threads).reverse()) {
+  for (const id of order.slice().reverse()) {
     if (keep.size >= MAX_CACHED_THREADS && !protectedIds.has(id)) continue;
     keep.add(id);
   }
   return Object.fromEntries(Object.entries(threads).filter(([id]) => keep.has(id)));
 }
 
-function retainCached<T>(record: Record<string, T>, threads: Record<string, Item[]>): Record<string, T> {
-  const ids = new Set(Object.keys(threads));
+/** Drop a per-session record's entries for sessions that are neither cached
+ *  nor running. A running session may have lost its thread to the cap above,
+ *  but its queue, fleet lanes, review card, info and staged snippets are live
+ *  state the turn still depends on — only the thread (rebuildable from the
+ *  persisted transcript) is what eviction targets. */
+function retainCached<T>(
+  record: Record<string, T>,
+  threads: Record<string, Item[]>,
+  runStatus: Record<string, RunStatus>,
+): Record<string, T> {
+  const ids = cachedSessionIds(threads, runStatus);
   return Object.fromEntries(Object.entries(record).filter(([id]) => ids.has(id)));
+}
+
+/** The sessions whose per-session state survives a sweep: cached or running. */
+function cachedSessionIds(
+  threads: Record<string, Item[]>,
+  runStatus: Record<string, RunStatus>,
+): Set<string> {
+  const ids = new Set(Object.keys(threads));
+  for (const [id, status] of Object.entries(runStatus)) if (status === "running") ids.add(id);
+  return ids;
 }
 
 /** `retainCached` for fleets, which are keyed by fleet id rather than session:
@@ -253,6 +294,44 @@ export function retainFleets(
     Object.entries(fleets).filter(([, fleet]) => fleet !== undefined && sessions.has(fleet.session)),
   );
 }
+
+/** The one sweep every session switch runs: install the capped `threads` and
+ *  trim every per-session slice that can hold real content (canvas docs,
+ *  streaming previews, staged code snippets, preview errors, …) to match.
+ *  Adding a per-session record to the store? If it can grow, add it here. */
+function sweepCached(s: AppState, threads: Record<string, Item[]>): Partial<AppState> {
+  const keep = <T,>(record: Record<string, T>) => retainCached(record, threads, s.runStatus);
+  return {
+    threads,
+    infos: keep(s.infos),
+    canvases: keep(s.canvases),
+    activeCanvas: keep(s.activeCanvas),
+    codeReview: keep(s.codeReview),
+    fleets: retainFleets(s.fleets, cachedSessionIds(threads, s.runStatus)),
+    queues: keep(s.queues),
+    canvasWriting: keep(s.canvasWriting),
+    streamingTool: keep(s.streamingTool),
+    streamingCanvas: keep(s.streamingCanvas),
+    liveTokens: keep(s.liveTokens),
+    sessionUsage: keep(s.sessionUsage),
+    tokensPerSecond: keep(s.tokensPerSecond),
+    compression: keep(s.compression),
+    snippets: keep(s.snippets),
+    previewErrors: keep(s.previewErrors),
+  };
+}
+
+// ---- token coalescing --------------------------------------------------------
+//
+// The backend already batches deltas (~512 B / 150 ms per StreamBatch), yet a
+// fast model still lands many events a second, and each one used to copy the
+// session's whole thread array plus the `threads`/`liveTokens` records. Tokens
+// now accumulate here per session and land in the store on a short timer, so a
+// burst costs one copy. The window is short because the backend has already
+// smoothed the stream; anything longer only adds latency.
+const TOKEN_FLUSH_MS = 50;
+const pendingTokens = new Map<string, { text: string; est: number; tps: number | null }>();
+let tokenFlushTimer: number | null = null;
 
 /** Keep only the newest `MAX_CANVASES` docs. The just-touched doc is appended
  *  last (and is the active one), so it always survives the trim. */
@@ -582,6 +661,10 @@ interface AppState {
   setQueue: (items: string[]) => void;
   /** Route a streamed token / tool event into its session's thread. */
   ingestToken: (session: string, token: string) => void;
+  /** Land any buffered streamed tokens in the store now. Every store mutation
+   *  does this itself first, so callers only need it to observe the thread
+   *  synchronously (tests; teardown). */
+  flushTokens: () => void;
   ingestTool: (e: ToolEvent) => void;
   /** Accumulate a streaming tool-args fragment (live file/canvas preview). */
   ingestToolDelta: (e: ToolDeltaEvent) => void;
@@ -686,7 +769,53 @@ interface AppState {
   clearApproval: (session: string) => void;
 }
 
-export const useStore = create<AppState>((set, get) => {
+export const useStore = create<AppState>((rawSet, get) => {
+  // Every mutation drains the token buffer first, so no action — a tool start,
+  // a turn's end, a session switch, a thread cap — can ever observe a thread
+  // that is behind the token stream. Ordering holds by construction rather
+  // than by remembering to flush in each handler; a no-op when nothing is
+  // pending (one Map size check).
+  const set: typeof rawSet = (partial) => {
+    flushTokens();
+    rawSet(partial);
+  };
+
+  function flushTokens() {
+    if (tokenFlushTimer != null) {
+      window.clearTimeout(tokenFlushTimer);
+      tokenFlushTimer = null;
+    }
+    if (pendingTokens.size === 0) return;
+    const batch = [...pendingTokens.entries()];
+    pendingTokens.clear();
+    rawSet((s) => {
+      const threads = { ...s.threads };
+      const liveTokens = { ...s.liveTokens };
+      const tokensPerSecond = { ...s.tokensPerSecond };
+      let touched = false;
+      for (const [id, p] of batch) {
+        // A session with no cached thread (evicted, or never viewed) drops its
+        // tokens — the transcript persists on the backend and viewing the chat
+        // rebuilds from there. Same rule the per-event path always applied.
+        if (threads[id] === undefined) continue;
+        touched = true;
+        threads[id] = appendToken(threads[id], p.text);
+        // Tick the usage meter up live as the reply streams, matching the
+        // backend's ~4-chars-per-token estimate; snapped exact at turn end.
+        liveTokens[id] = (liveTokens[id] ?? 0) + p.est;
+        if (p.tps !== null) tokensPerSecond[id] = p.tps;
+      }
+      return touched ? { threads, liveTokens, tokensPerSecond } : {};
+    });
+  }
+
+  /** Apply `fn` to a session's cached thread. A session with no thread in the
+   *  cache (evicted under the running cap) is left alone rather than given a
+   *  stub thread holding only this change: the transcript is persisted, and
+   *  viewing the chat rebuilds the whole thread from it. */
+  const withThread = (s: AppState, id: string, fn: (items: Item[]) => Item[]): Partial<AppState> =>
+    s.threads[id] === undefined ? {} : { threads: { ...s.threads, [id]: fn(s.threads[id]) } };
+
   // Non-reactive per-session sample for the tokens/sec readout: the start of the
   // current streaming burst and tokens seen in it. A burst resets after a gap
   // (tool calls), so the rate reflects active decoding, not idle time.
@@ -716,6 +845,7 @@ export const useStore = create<AppState>((set, get) => {
   // (user bubble + streaming assistant bubble) must already be in the thread.
   function driveTurn(id: string, text: string, paths: string[], retry: boolean) {
     genSamples.delete(id); // each turn starts a fresh speed measurement
+    lastActive.set(id, Date.now());
     set((s) => ({
       runStatus: { ...s.runStatus, [id]: "running" },
       // Clear any stale live estimate so this turn's meter starts from the
@@ -727,9 +857,7 @@ export const useStore = create<AppState>((set, get) => {
     let recovering = false;
     const turn = retry ? retryTurn(id) : runTurn(id, text, paths);
     turn
-      .then((final) =>
-        set((s) => ({ threads: { ...s.threads, [id]: finalizeAssistant(s.threads[id] ?? [], final) } })),
-      )
+      .then((final) => set((s) => withThread(s, id, (t) => finalizeAssistant(t, final))))
       .catch((e) => {
         // No failure is a dead end: a 401 swaps the reply for an inline
         // key-entry card, and everything else (out of credits, a provider
@@ -740,17 +868,13 @@ export const useStore = create<AppState>((set, get) => {
         const message = String(e);
         const auth = isAuthError(message);
         recovering = true;
-        set((s) => {
-          const thread = s.threads[id] ?? [];
-          return {
-            threads: {
-              ...s.threads,
-              [id]: auth
-                ? appendApiKeyPrompt(thread, text, paths)
-                : appendRetryPrompt(thread, text, paths, message),
-            },
-          };
-        });
+        set((s) =>
+          withThread(s, id, (thread) =>
+            auth
+              ? appendApiKeyPrompt(thread, text, paths)
+              : appendRetryPrompt(thread, text, paths, message),
+          ),
+        );
       })
       .finally(() => {
         // A canvas "writing" signal that never produced a doc (or errored) must
@@ -784,7 +908,7 @@ export const useStore = create<AppState>((set, get) => {
         // pinned in any open chat, both need to see it move. Unconditional:
         // gating this on homeOpen once left an open chat's strip showing
         // "riding" forever after the turn ended.
-        void get().refreshLedger();
+        void refreshLedgerAfterSeen(id);
       });
   }
 
@@ -792,9 +916,14 @@ export const useStore = create<AppState>((set, get) => {
   // drive it. A pending retry card is dropped — the new prompt supersedes it (its
   // dangling user turn is still in the transcript for the model to answer).
   function runTurnFor(id: string, text: string, paths: string[]) {
-    set((s) => ({
-      threads: { ...s.threads, [id]: startTurn(dropRetryPrompts(s.threads[id] ?? []), text, paths) },
-    }));
+    // The visible chat always gets its thread (created here on a first send);
+    // a background chat draining its queue after its thread was evicted runs
+    // headless instead of growing a stub thread holding only this turn.
+    set((s) =>
+      s.session?.session_id === id || s.threads[id] !== undefined
+        ? { threads: { ...s.threads, [id]: startTurn(dropRetryPrompts(s.threads[id] ?? []), text, paths) } }
+        : {},
+    );
     driveTurn(id, text, paths, false);
   }
 
@@ -905,21 +1034,9 @@ export const useStore = create<AppState>((set, get) => {
       set((s) => {
         const threads = capThreadSessions({ ...s.threads, [info.session_id]: [] }, s.runStatus, info.session_id);
         return {
+          ...sweepCached(s, threads),
           session: info,
-          infos: { ...retainCached(s.infos, threads), [info.session_id]: info },
-          threads,
-          canvases: retainCached(s.canvases, threads),
-          activeCanvas: retainCached(s.activeCanvas, threads),
-          codeReview: retainCached(s.codeReview, threads),
-          fleets: retainFleets(s.fleets, new Set(Object.keys(threads))),
-          queues: retainCached(s.queues, threads),
-          canvasWriting: retainCached(s.canvasWriting, threads),
-          streamingTool: retainCached(s.streamingTool, threads),
-          streamingCanvas: retainCached(s.streamingCanvas, threads),
-          liveTokens: retainCached(s.liveTokens, threads),
-          sessionUsage: retainCached(s.sessionUsage, threads),
-          tokensPerSecond: retainCached(s.tokensPerSecond, threads),
-          compression: retainCached(s.compression, threads),
+          infos: { ...retainCached(s.infos, threads, s.runStatus), [info.session_id]: info },
         };
       });
       get().refreshHistory();
@@ -928,6 +1045,15 @@ export const useStore = create<AppState>((set, get) => {
     resume: async (id) => {
       if (id === get().session?.session_id) return;
       const view = await resumeSession(id);
+      // A mid-turn chat whose thread was released under the running-session
+      // cap: the view can't carry its transcript (the agent holds its lock),
+      // but the persisted messages read independently of it. Rebuild from
+      // those and open a bubble for the rest of the reply still streaming in.
+      let rehydrated: Item[] | undefined;
+      if (view.running && get().threads[id] === undefined) {
+        const messages = await sessionMessages(id).catch(() => []);
+        rehydrated = resumeMidTurn(transcriptToItems(messages));
+      }
       set((s) => {
         // A mid-turn chat (`running`) keeps its live in-memory thread + info; a
         // cold history session seeds its thread and info from the transcript.
@@ -935,7 +1061,9 @@ export const useStore = create<AppState>((set, get) => {
         // error, out of credits, or the app closed) gets an inline retry card
         // so the chat can be continued with one click.
         let seeded: Item[] | undefined;
-        if (!view.running && s.threads[id] === undefined) {
+        if (view.running && s.threads[id] === undefined) {
+          seeded = rehydrated;
+        } else if (!view.running && s.threads[id] === undefined) {
           seeded = transcriptToItems(view.messages);
           if (endsMidTurn(view.messages)) {
             seeded = appendRetryPrompt(
@@ -955,25 +1083,17 @@ export const useStore = create<AppState>((set, get) => {
         const runStatus = { ...s.runStatus };
         if (runStatus[id] === "unread") delete runStatus[id]; // viewing it clears the dot
         return {
+          ...sweepCached(s, threads),
           session: infos[id] ?? view.info,
-          threads,
-          infos: retainCached(infos, threads),
+          infos: retainCached(infos, threads, s.runStatus),
           runStatus,
-          canvases: retainCached(s.canvases, threads),
-          activeCanvas: retainCached(s.activeCanvas, threads),
-          codeReview: retainCached(s.codeReview, threads),
-          fleets: retainFleets(s.fleets, new Set(Object.keys(threads))),
-          queues: retainCached(s.queues, threads),
-          canvasWriting: retainCached(s.canvasWriting, threads),
-          streamingTool: retainCached(s.streamingTool, threads),
-          streamingCanvas: retainCached(s.streamingCanvas, threads),
-          liveTokens: retainCached(s.liveTokens, threads),
-          sessionUsage: retainCached(s.sessionUsage, threads),
-          tokensPerSecond: retainCached(s.tokensPerSecond, threads),
-          compression: retainCached(s.compression, threads),
         };
       });
       get().refreshHistory();
+      // Opening the chat is looking at it: its "finished while you were away"
+      // flag comes off — durably, so it stays off across restarts — and the
+      // board repaints once the mark has landed.
+      void markSeenThenRefresh(id);
     },
 
     removeSession: async (id) => {
@@ -984,7 +1104,11 @@ export const useStore = create<AppState>((set, get) => {
       // The purge — one chat from the sidebar or the whole archive at once:
       // parallel deletes, one state sweep, one history+board refresh.
       await Promise.all(ids.map((id) => deleteSession(id)));
-      for (const id of ids) genSamples.delete(id);
+      for (const id of ids) {
+        genSamples.delete(id);
+        lastActive.delete(id);
+        pendingTokens.delete(id);
+      }
       const gone = new Set(ids);
       const wasCurrent = gone.has(get().session?.session_id ?? "");
       // Forget every per-session slice so nothing lingers for deleted chats.
@@ -1115,21 +1239,9 @@ export const useStore = create<AppState>((set, get) => {
       set((s) => {
         const threads = capThreadSessions({ ...s.threads, [info.session_id]: [] }, s.runStatus, info.session_id);
         return {
+          ...sweepCached(s, threads),
           session: info,
-          infos: { ...retainCached(s.infos, threads), [info.session_id]: info },
-          threads,
-          canvases: retainCached(s.canvases, threads),
-          activeCanvas: retainCached(s.activeCanvas, threads),
-          codeReview: retainCached(s.codeReview, threads),
-          fleets: retainFleets(s.fleets, new Set(Object.keys(threads))),
-          queues: retainCached(s.queues, threads),
-          canvasWriting: retainCached(s.canvasWriting, threads),
-          streamingTool: retainCached(s.streamingTool, threads),
-          streamingCanvas: retainCached(s.streamingCanvas, threads),
-          liveTokens: retainCached(s.liveTokens, threads),
-          sessionUsage: retainCached(s.sessionUsage, threads),
-          tokensPerSecond: retainCached(s.tokensPerSecond, threads),
-          compression: retainCached(s.compression, threads),
+          infos: { ...retainCached(s.infos, threads, s.runStatus), [info.session_id]: info },
         };
       }),
 
@@ -1639,18 +1751,21 @@ export const useStore = create<AppState>((set, get) => {
       const secs = (now - smp.start) / 1000;
       // Need a small window before the rate is meaningful; otherwise keep the last.
       const tps = secs >= 0.3 ? smp.tokens / secs : null;
-      set((s) => ({
-        threads: { ...s.threads, [session]: appendToken(s.threads[session], token) },
-        // Tick the usage meter up live as the reply streams, matching the
-        // backend's ~4-chars-per-token estimate; snapped exact at turn end.
-        liveTokens: { ...s.liveTokens, [session]: (s.liveTokens[session] ?? 0) + est },
-        ...(tps !== null
-          ? { tokensPerSecond: { ...s.tokensPerSecond, [session]: tps } }
-          : {}),
-      }));
+      lastActive.set(session, now);
+      // Buffer, don't set: the flush (on the timer, or ahead of the next store
+      // mutation, whichever comes first) lands the whole burst in one copy.
+      const p = pendingTokens.get(session) ?? { text: "", est: 0, tps: null };
+      p.text += token;
+      p.est += est;
+      if (tps !== null) p.tps = tps;
+      pendingTokens.set(session, p);
+      if (tokenFlushTimer == null) tokenFlushTimer = window.setTimeout(flushTokens, TOKEN_FLUSH_MS);
     },
 
+    flushTokens,
+
     ingestTool: (e) => {
+      lastActive.set(e.session, Date.now());
       // A landed plan or trail update repaints the board — and the trail strip
       // pinned in any open chat — mid-turn (the agent persists the snapshot as
       // the call lands, and refreshLedgerSoon absorbs bursts). Not gated on

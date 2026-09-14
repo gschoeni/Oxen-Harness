@@ -305,10 +305,13 @@ export function Inspector({ sessionId }: { sessionId: string }) {
   const toolTokens = useMemo(() => tools.reduce((sum, t) => sum + estJsonTokens(t), 0), [tools]);
 
   // The raw view shows the full request shape the model receives: the tool
-  // definitions plus the transcript.
+  // definitions plus the transcript. Pretty-printing a long transcript is a
+  // multi-megabyte string (every tool result, every canvas doc, indented), so
+  // it is only built while the Raw tab is showing — the Chat and Readable
+  // views never pay for it, and it is released when the tab changes.
   const rawJson = useMemo(
-    () => JSON.stringify({ tools, messages: messages ?? [] }, null, 2),
-    [tools, messages],
+    () => (mode === "raw" ? JSON.stringify({ tools, messages: messages ?? [] }, null, 2) : ""),
+    [mode, tools, messages],
   );
 
   const ctxPct =

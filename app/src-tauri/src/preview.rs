@@ -3,9 +3,17 @@
 //!
 //! The Rust side owns the webview (creation, bounds, show/hide, navigation);
 //! the frontend drives it through the `preview_*` commands as its placeholder
-//! mounts, resizes, and unmounts. One child webview per session, labeled
-//! `preview-<session>`, so switching chats swaps which one is visible. The
-//! webview loads external (localhost) content and therefore gets no Tauri IPC.
+//! mounts, resizes, and unmounts. Webviews are labeled `preview-<session>`,
+//! but at most ONE exists at a time — the last session attached. A hidden
+//! WKWebView is not free: it keeps its own WebContent/Networking/GPU helper
+//! processes alive (80–250 MB each with a dev build in it), so parking one
+//! per chat the user ever previewed would grow the app by a browser tab per
+//! session. Switching chats therefore *destroys* the previous session's
+//! webview and re-creates it (pointed at the same, still-running dev server)
+//! if the user comes back; only an overlay/tab flip within the same chat keeps
+//! the webview hidden so it re-shows instantly with its in-page state intact.
+//! The webview loads external (localhost) content and therefore gets no Tauri
+//! IPC.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,9 +38,10 @@ pub(crate) fn label_for(session: &str) -> String {
 }
 
 /// Bridges dev-server lifecycle changes to the UI (`preview://status`), one
-/// sink per session. On stop/error it also hides that session's webview —
-/// there is nothing live to show, and a dead pane must never linger over the
-/// chat.
+/// sink per session. On stop/error it also *closes* that session's webview —
+/// there is nothing live to show, a dead pane must never linger over the
+/// chat, and a page whose server is gone is not worth the helper processes
+/// keeping it warm (a restart re-creates the webview on the next attach).
 pub(crate) struct TauriPreviewSink {
     pub(crate) app: AppHandle,
     pub(crate) session: String,
@@ -44,10 +53,7 @@ impl PreviewSink for TauriPreviewSink {
             status.phase,
             harness_preview::PreviewPhase::Starting | harness_preview::PreviewPhase::Ready
         ) {
-            if let Some(webview) = self.app.webviews().get(&label_for(&self.session)) {
-                let _ = webview.hide();
-                mark_hidden(&self.session);
-            }
+            close(&self.app, &self.session);
         }
         // A fresh (re)start begins with a clean console slate, and the page
         // sitting in the webview belongs to the *old* process — force the next
@@ -183,6 +189,20 @@ static DETACH_EPOCH: AtomicU64 = AtomicU64::new(0);
 /// than photographing a frame that may predate the change it's verifying.
 static SHOWN: StdMutex<Option<String>> = StdMutex::new(None);
 
+/// The session whose webview survives a [`detach_all`] (hidden, not closed):
+/// the last one [`attach`] was called for. Distinct from [`SHOWN`], which
+/// flips to `None` the moment the view is hidden — this is "whose webview is
+/// worth keeping warm", and it stays set while an overlay is up so the same
+/// chat re-shows instantly with its in-page state (route, scroll, form
+/// fields) intact. Every *other* session's webview is destroyed on the next
+/// attach or detach; see the module docs for why.
+static CURRENT: StdMutex<Option<String>> = StdMutex::new(None);
+
+/// The session id a `preview-*` label belongs to.
+fn session_of(label: &str) -> Option<&str> {
+    label.strip_prefix(LABEL_PREFIX)
+}
+
 /// Whether `session`'s preview is the one on screen right now. Only the
 /// macOS screenshot path consults this (WebKit throttles hidden webviews);
 /// the cfg keeps it from being dead code on other targets.
@@ -222,10 +242,16 @@ fn forget_navigated_url(session: &str) {
 }
 
 /// Show `session`'s preview webview at `bounds`, creating it (pointed at
-/// `url`, with the console-bridge script injected) on first use, navigating it
-/// when the server moved (a restart on a new port) or was restarted on the
-/// same URL (the page in the view is dead), and hiding every other session's
-/// preview.
+/// `url`, with the console-bridge script injected) when it doesn't exist,
+/// navigating it when the server moved (a restart on a new port) or was
+/// restarted on the same URL (the page in the view is dead), and *destroying*
+/// every other session's preview webview.
+///
+/// Called at frame rate during a splitter drag, so the common path (the
+/// webview exists; reposition it) does no allocation beyond the label and
+/// touches no other webview. Creation happens once per chat switch — the
+/// previous session's webview was closed, so coming back re-creates one
+/// against the same URL; its dev server never went anywhere.
 pub(crate) fn attach(
     app: &AppHandle,
     session: &str,
@@ -237,9 +263,19 @@ pub(crate) fn attach(
     let target: Url = url.parse().map_err(|e| format!("bad preview url: {e}"))?;
     let epoch = DETACH_EPOCH.load(Ordering::SeqCst);
 
+    // From here on this is the session whose webview a detach keeps warm.
+    *CURRENT.lock().unwrap() = Some(session.to_string());
     for (other_label, webview) in app.webviews() {
         if other_label.starts_with(LABEL_PREFIX) && other_label != label {
-            let _ = webview.hide();
+            // Not hidden — closed. A hidden webview for a chat the user just
+            // left would keep a full WebKit process tree alive for as long as
+            // the app runs; re-creating it on return costs one localhost page
+            // load instead.
+            if let Some(other) = session_of(&other_label) {
+                forget_navigated_url(other);
+                mark_hidden(other);
+            }
+            let _ = webview.close();
         }
     }
 
@@ -309,13 +345,29 @@ fn is_loopback(url: &Url) -> bool {
     )
 }
 
-/// Hide every preview webview (tab switched away, overlay opened, pane closed).
+/// Take every preview webview off screen (tab switched away, overlay opened,
+/// pane closed, chat switched).
+///
+/// The current session's webview (the last one attached) is only *hidden*:
+/// this is also the path an overlay or a tab flip takes, and re-creating the
+/// view for those would reload the user's app mid-test — losing its route,
+/// scroll position, and any form state — for a command palette. Every other
+/// session's webview is *closed*. The frontend can't tell us which kind of
+/// detach this is, so the trade is explicit: at most one idle WebKit process
+/// tree stays resident (the last chat previewed), never one per chat.
 pub(crate) fn detach_all(app: &AppHandle) {
     DETACH_EPOCH.fetch_add(1, Ordering::SeqCst);
     *SHOWN.lock().unwrap() = None;
+    let keep = CURRENT.lock().unwrap().clone();
     for (label, webview) in app.webviews() {
-        if label.starts_with(LABEL_PREFIX) {
+        let Some(session) = session_of(&label) else {
+            continue;
+        };
+        if keep.as_deref() == Some(session) {
             let _ = webview.hide();
+        } else {
+            forget_navigated_url(session);
+            let _ = webview.close();
         }
     }
 }
@@ -339,10 +391,18 @@ pub(crate) fn invalidate(session: &str) {
     forget_navigated_url(session);
 }
 
-/// Destroy `session`'s preview webview entirely (its server is gone).
+/// Destroy `session`'s preview webview entirely (its server is gone, or the
+/// chat was deleted). Also gives up its claim to survive the next detach —
+/// a later attach for the same chat starts from a fresh webview.
 pub(crate) fn close(app: &AppHandle, session: &str) {
     forget_navigated_url(session);
     mark_hidden(session);
+    {
+        let mut current = CURRENT.lock().unwrap();
+        if current.as_deref() == Some(session) {
+            *current = None;
+        }
+    }
     if let Some(webview) = app.webviews().get(&label_for(session)) {
         let _ = webview.close();
     }

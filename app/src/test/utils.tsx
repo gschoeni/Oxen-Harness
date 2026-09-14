@@ -6,6 +6,9 @@ import { resetIpc } from "./ipcMock";
 
 /** Reset IPC mocks, UI prefs, localStorage, and the global store to a clean slate. */
 export function resetAll() {
+  // Streamed tokens buffer outside the store; a burst left pending by one
+  // test must not land in the next test's threads.
+  useStore.getState().flushTokens();
   resetIpc();
   resetUiState();
   localStorage.clear();

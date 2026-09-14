@@ -10,6 +10,7 @@ import {
   finalizeAssistant,
   lastUserText,
   resolveRecoveryPrompt,
+  resumeMidTurn,
   startTurn,
   toolEnd,
   toolStart,
@@ -293,5 +294,55 @@ describe("concurrent tool calls", () => {
     items = toolEnd(items, "read_file", "done", 2);
     const tool = items.find((i) => i.kind === "tool");
     expect(tool && tool.kind === "tool" && tool.result).toBe("done");
+  });
+});
+
+describe("thread: rejoining a reply mid-stream", () => {
+  it("resumeMidTurn opens a partial bubble that the final text replaces in full", () => {
+    // The transcript so far, then a bubble for the tail of a reply whose
+    // head streamed while the thread was out of memory.
+    let items = resumeMidTurn(transcriptToItems([{ role: "user", content: "hi" }]));
+    expect(items[items.length - 1]).toMatchObject({ kind: "assistant", streaming: true, partial: true });
+    items = appendToken(items, " world");
+    // Only a tail was seen — the returned final is the whole reply, so it wins.
+    items = finalizeAssistant(items, "hello world");
+    expect(assistantText(items)[0]).toMatchObject({ text: "hello world", streaming: false });
+    expect(assistantText(items)[0].partial).toBeUndefined();
+  });
+
+  it("a partial bubble keeps its streamed tail when the turn returns nothing", () => {
+    const items = finalizeAssistant(appendToken(resumeMidTurn([]), "tail"), "");
+    expect(assistantText(items)[0].text).toBe("tail");
+  });
+
+  it("a normal bubble still prefers what it streamed over the final", () => {
+    const items = finalizeAssistant(appendToken(startTurn([], "q"), "streamed"), "final");
+    expect(assistantText(items)[0].text).toBe("streamed");
+  });
+});
+
+describe("thread: transcriptToItems hides the agent's tool-image hand-off", () => {
+  it("drops the synthetic user bubble but keeps the tool card and reply", () => {
+    const items = transcriptToItems([
+      { role: "user", content: "make an ox" },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          { id: "c1", type: "function", function: { name: "generate_image", arguments: '{"prompt":"an ox"}' } },
+        ],
+      },
+      { role: "tool", tool_call_id: "c1", content: "Generated 1 image with flux:\n- generations/a.png (64×36)" },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "The image(s) produced by the tool call above:" },
+          { type: "image_url", image_url: { url: "/abs/generations/a.png" } },
+        ],
+      },
+      { role: "assistant", content: "Here it is." },
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "tool", "assistant"]);
+    expect(items.filter((i) => i.kind === "user").map((i) => (i as { text: string }).text)).toEqual(["make an ox"]);
   });
 });

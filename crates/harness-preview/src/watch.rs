@@ -15,7 +15,12 @@ const DEBOUNCE: Duration = Duration::from_millis(300);
 /// Directory/file names whose changes never warrant a reload: VCS internals,
 /// dependency and build output trees (the dev server's own artifacts would
 /// otherwise cause reload loops), and our own per-project config dir.
-const IGNORED: &[&str] = &[
+///
+/// Shared with the desktop's Files-tree watcher (via [`is_ignored_name`]),
+/// which has the same problem in a different costume: a `cargo build` or
+/// `npm install` under an un-filtered recursive watch is tens of thousands of
+/// events, each relativized and shipped to the UI.
+pub const IGNORED: &[&str] = &[
     ".git",
     "node_modules",
     "target",
@@ -81,14 +86,17 @@ fn runs_package_script(command: &str) -> bool {
         .any(|runner| command.contains(runner))
 }
 
+/// Whether a single path segment names an ignored tree or file (see
+/// [`IGNORED`]) — for callers that already walk a path's components.
+pub fn is_ignored_name(name: &str) -> bool {
+    IGNORED.contains(&name)
+}
+
 /// Whether a changed path is project content worth reloading for.
 fn relevant(root: &Path, path: &Path) -> bool {
     let rel = path.strip_prefix(root).unwrap_or(path);
-    !rel.components().any(|c| {
-        c.as_os_str()
-            .to_str()
-            .is_some_and(|name| IGNORED.contains(&name))
-    })
+    !rel.components()
+        .any(|c| c.as_os_str().to_str().is_some_and(is_ignored_name))
 }
 
 /// How the polling fallback paces its scans. Coarser than FSEvents, but a

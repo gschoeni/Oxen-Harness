@@ -1,11 +1,78 @@
 import { useEffect, useState } from "react";
 import "./hljs.css";
 
-// highlight.js is heavy, so it's loaded on demand (and cached) the first time any
-// code is highlighted — keeping it out of the app's startup bundle.
-let hljsReady: Promise<typeof import("highlight.js").default> | null = null;
+/** The grammars the app bundles, each as its own lazy chunk. Explicit thunks
+ *  (not a templated `import()`): Vite only code-splits dynamic imports it can
+ *  see statically, and a bare-specifier template would either fail to resolve
+ *  or pull the whole `lib/languages` directory into one chunk.
+ *
+ *  The set is every language `langForPath` can name (pinned by a test against
+ *  `PATH_LANGUAGES`) plus what shows up in chat replies regardless of any
+ *  file: shells, config formats, diffs, SQL, Dockerfiles, markup. That is ~30
+ *  grammars instead of highlight.js's 192 — the full build was a ~970 KB chunk
+ *  the app kept resident from the first highlighted line on. */
+export const GRAMMARS: Record<string, () => Promise<{ default: import("highlight.js").LanguageFn }>> = {
+  bash: () => import("highlight.js/lib/languages/bash"),
+  c: () => import("highlight.js/lib/languages/c"),
+  cpp: () => import("highlight.js/lib/languages/cpp"),
+  csharp: () => import("highlight.js/lib/languages/csharp"),
+  css: () => import("highlight.js/lib/languages/css"),
+  diff: () => import("highlight.js/lib/languages/diff"),
+  dockerfile: () => import("highlight.js/lib/languages/dockerfile"),
+  go: () => import("highlight.js/lib/languages/go"),
+  ini: () => import("highlight.js/lib/languages/ini"),
+  java: () => import("highlight.js/lib/languages/java"),
+  javascript: () => import("highlight.js/lib/languages/javascript"),
+  json: () => import("highlight.js/lib/languages/json"),
+  kotlin: () => import("highlight.js/lib/languages/kotlin"),
+  less: () => import("highlight.js/lib/languages/less"),
+  markdown: () => import("highlight.js/lib/languages/markdown"),
+  php: () => import("highlight.js/lib/languages/php"),
+  plaintext: () => import("highlight.js/lib/languages/plaintext"),
+  python: () => import("highlight.js/lib/languages/python"),
+  ruby: () => import("highlight.js/lib/languages/ruby"),
+  rust: () => import("highlight.js/lib/languages/rust"),
+  scala: () => import("highlight.js/lib/languages/scala"),
+  scss: () => import("highlight.js/lib/languages/scss"),
+  shell: () => import("highlight.js/lib/languages/shell"),
+  sql: () => import("highlight.js/lib/languages/sql"),
+  swift: () => import("highlight.js/lib/languages/swift"),
+  typescript: () => import("highlight.js/lib/languages/typescript"),
+  xml: () => import("highlight.js/lib/languages/xml"),
+  yaml: () => import("highlight.js/lib/languages/yaml"),
+};
+
+/** Aliases the chat commonly names that no bundled grammar declares itself.
+ *  (Most of the usual ones — js/ts/py/sh/rs/yml/md/html/toml/… — come from the
+ *  grammar files' own `aliases`, so registering the grammar is enough.) */
+const EXTRA_ALIASES: Record<string, string[]> = {
+  shell: ["zsh", "fish"],
+  bash: ["shell-script"],
+  xml: ["vue"],
+  json: ["jsonc", "json5"],
+  plaintext: ["log"],
+};
+
+// highlight.js's core is loaded on demand (and cached) the first time any code
+// is highlighted, with the curated grammars registered into it in the same
+// step — nothing of it sits in the startup bundle, and only the grammar chunks
+// listed above are ever fetched.
+let hljsReady: Promise<typeof import("highlight.js/lib/core").default> | null = null;
 export function loadHljs() {
-  if (!hljsReady) hljsReady = import("highlight.js").then((m) => m.default);
+  if (!hljsReady) {
+    hljsReady = Promise.all([
+      import("highlight.js/lib/core"),
+      ...Object.entries(GRAMMARS).map(async ([name, load]) => [name, (await load()).default] as const),
+    ]).then(([core, ...grammars]) => {
+      const hljs = core.default;
+      for (const [name, fn] of grammars) {
+        hljs.registerLanguage(name, fn);
+        const extra = EXTRA_ALIASES[name];
+        if (extra) hljs.registerAliases(extra, { languageName: name });
+      }
+      return hljs;
+    });
+  }
   return hljsReady;
 }
 

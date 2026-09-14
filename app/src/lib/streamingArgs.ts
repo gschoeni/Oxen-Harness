@@ -101,6 +101,12 @@ const EXT_LANG: Record<string, string> = {
   dockerfile: "dockerfile",
 };
 
+/** Every distinct highlight.js language name `langForPath` can produce. The
+ *  highlighter registers exactly these grammars (plus a few chat staples), so a
+ *  language mapped here but not bundled would silently render as plain text —
+ *  a test pins the two lists together. */
+export const PATH_LANGUAGES: readonly string[] = [...new Set(Object.values(EXT_LANG))];
+
 /** A highlight.js language for a path, by extension (or undefined → auto-detect). */
 export function langForPath(path: string | null | undefined): string | undefined {
   if (!path) return undefined;

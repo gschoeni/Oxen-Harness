@@ -48,7 +48,17 @@ function imageRefs(content: MessageContent | null | undefined): string[] {
 
 export type Item =
   | { id: string; kind: "user"; text: string; images?: string[] }
-  | { id: string; kind: "assistant"; text: string; streaming: boolean; error?: boolean }
+  | {
+      id: string;
+      kind: "assistant";
+      text: string;
+      streaming: boolean;
+      error?: boolean;
+      /** The bubble was opened mid-reply (see `resumeMidTurn`): its text is
+       *  only the tail streamed since, so the turn's returned `final` — the
+       *  whole reply — wins when the bubble settles. */
+      partial?: boolean;
+    }
   | { id: string; kind: "notice"; text: string }
   // An inline API-key entry card, shown in place of a reply when a turn failed
   // authentication (a 401). It carries the failed prompt so the turn can be
@@ -142,6 +152,16 @@ export function appendToken(prev: Item[], token: string): Item[] {
   return capThread(next);
 }
 
+/** Rejoin a chat that is mid-reply after its live thread was released from
+ *  the cache (a background run evicted under the running-session cap): the
+ *  persisted transcript renders as usual, then an in-flight bubble opens so
+ *  the tokens still arriving land somewhere and the activity indicator shows.
+ *  Whatever streamed before the rejoin is gone from memory — the bubble is
+ *  marked `partial` so the turn's final text replaces it in full. */
+export function resumeMidTurn(prev: Item[]): Item[] {
+  return capThread([...prev, { id: uid(), kind: "assistant", text: "", streaming: true, partial: true }]);
+}
+
 /** Begin a tool chip with the call's arguments. Retire an empty "thinking"
  *  bubble it supersedes, or finalize a non-empty preamble bubble (e.g. "I'll
  *  build that…") so its activity indicator hands off to the tool chip. */
@@ -233,9 +253,11 @@ export function finalizeAssistant(prev: Item[], final: string, error = false): I
   for (let i = next.length - 1; i >= 0; i--) {
     const it = next[i];
     if (it.kind === "assistant" && it.streaming) {
-      const text = it.text || final || "";
+      // A bubble opened mid-reply holds only a tail of the text; the returned
+      // final is the whole reply, so it takes precedence there.
+      const text = (it.partial ? final || it.text : it.text || final) || "";
       if (text === "") next.splice(i, 1);
-      else next[i] = { ...it, text, streaming: false, error };
+      else next[i] = { ...it, text, streaming: false, error, partial: undefined };
       return capThread(next);
     }
   }

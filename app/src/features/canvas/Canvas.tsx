@@ -100,11 +100,13 @@ function CanvasView({ doc }: { doc: CanvasDoc }) {
     case "svg":
       return <Sandboxed content={doc.content} />;
     case "code":
-      // Committed docs are one-shot renders (keyed on id+content above), so
-      // auto-detection for a missing language is a single affordable pass.
+      // No auto-detection even for a committed doc: a canvas can be re-shown
+      // and updated many times over a session, and `highlightAuto` runs every
+      // registered grammar over the whole document. A doc that names no
+      // language renders as plain text.
       return (
         <pre className="canvas-code hljs-theme">
-          <HighlightedCode code={doc.content} language={doc.language} />
+          <HighlightedCode code={doc.content} language={doc.language} autoDetect={false} />
         </pre>
       );
     default:

@@ -38,7 +38,7 @@ pub use tools::{
     PreviewScreenshotTool, StartDevServerTool, StopDevServerTool, DEV_SERVER_LOGS_TOOL,
     PREVIEW_CONSOLE_TOOL, PREVIEW_SCREENSHOT_TOOL, START_DEV_SERVER_TOOL, STOP_DEV_SERVER_TOOL,
 };
-pub use watch::hmr_capable;
+pub use watch::{hmr_capable, is_ignored_name, IGNORED as WATCH_IGNORED};
 
 /// Errors from starting or supervising a dev server.
 #[derive(Debug, thiserror::Error)]

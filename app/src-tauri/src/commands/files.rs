@@ -238,7 +238,10 @@ pub(crate) fn git_status(root: String) -> Result<Option<Vec<GitFileState>>, Stri
         let path = field[3..].to_string();
         // A rename carries the source path as its own NUL field right after.
         let original_path = if index == 'R' || worktree == 'R' {
-            fields.next().map(str::to_string)
+            fields
+                .next()
+                .filter(|src| !src.is_empty())
+                .map(str::to_string)
         } else {
             None
         };
@@ -577,6 +580,39 @@ mod tests {
             git_status(dir.display().to_string()).unwrap(),
             Some(Vec::new())
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The status cap applies WHILE streaming and degrades to a shorter list
+    /// of whole records — never a half-cut path, never `None` (which would
+    /// hide the section as if this weren't a repository).
+    #[test]
+    fn git_status_caps_a_huge_tree_to_whole_records() {
+        let dir = workspace("gitstatuscap");
+        git_init(&dir);
+        let names: Vec<String> = (0..40)
+            .map(|i| format!("untracked-file-{i:02}.txt"))
+            .collect();
+        for name in &names {
+            fs::write(dir.join(name), "x").unwrap();
+        }
+        // Each record is "?? <name>\0" ≈ 25 bytes; a 100-byte cap fits a few.
+        let states = git_status_capped(&dir.display().to_string(), 100)
+            .unwrap()
+            .expect("still a repository");
+        assert!(!states.is_empty());
+        assert!(states.len() < names.len());
+        for state in &states {
+            assert!(
+                names.contains(&state.path),
+                "partial record leaked through: {:?}",
+                state.path
+            );
+            assert_eq!(state.status, "untracked");
+        }
+        // The full list still comes back uncapped.
+        let all = git_status(dir.display().to_string()).unwrap().unwrap();
+        assert_eq!(all.len(), names.len());
         fs::remove_dir_all(dir).unwrap();
     }
 

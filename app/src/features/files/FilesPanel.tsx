@@ -76,7 +76,7 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
       if (!workspace) return;
       try {
         const list = await fsListDir(workspace, dir);
-        setEntries((prev) => ({ ...prev, [dir]: list }));
+        setEntries((prev) => cacheListing(prev, dir, list, expandedRef.current));
         setError(null);
       } catch (e) {
         setError(String(e));
@@ -96,9 +96,11 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
     if (workspace) void loadDir("");
   }, [workspace, loadDir]);
 
+  // Only the listings on screen are re-fetched: an expanded folder under a
+  // collapsed parent has no rows showing (and no cached listing to refresh).
   const refresh = useCallback(() => {
     void loadDir("");
-    for (const dir of expanded) void loadDir(dir);
+    for (const dir of expanded) if (isVisible(dir, expanded)) void loadDir(dir);
     void loadGit();
   }, [loadDir, loadGit, expanded]);
 
@@ -149,19 +151,33 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
     [openInViewer],
   );
 
+  /** Open a folder: list it, plus any folders below it that are still marked
+   *  expanded — their listings were released when this one collapsed, and
+   *  they need to be back before their rows can show. */
+  function expandDir(path: string, prev: Set<string>): Set<string> {
+    const next = new Set(prev).add(path);
+    if (!entries[path]) void loadDir(path);
+    for (const dir of next) {
+      if (dir !== path && isUnder(dir, path) && !entries[dir] && isVisible(dir, next)) void loadDir(dir);
+    }
+    return next;
+  }
+
   function toggleDir(path: string) {
     setSelected(new Set([path]));
     setTargetDir(path);
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
+    if (expanded.has(path)) {
+      // Collapse: the rows disappear, so their listings go too. The nested
+      // expanded flags stay, so re-opening restores the same shape.
+      setEntries((prev) => dropSubtree(prev, path));
+      setExpanded((prev) => {
+        const next = new Set(prev);
         next.delete(path);
-      } else {
-        next.add(path);
-        if (!entries[path]) void loadDir(path);
-      }
-      return next;
-    });
+        return next;
+      });
+    } else {
+      setExpanded((prev) => expandDir(path, prev));
+    }
   }
 
   function clickFile(e: MouseEvent, path: string) {
@@ -189,8 +205,7 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
   }
 
   function startCreate(isDir: boolean) {
-    setExpanded((prev) => (targetDir ? new Set(prev).add(targetDir) : prev));
-    if (targetDir && !entries[targetDir]) void loadDir(targetDir);
+    if (targetDir && !expanded.has(targetDir)) setExpanded((prev) => expandDir(targetDir, prev));
     setCreating({ dir: targetDir, isDir });
   }
 

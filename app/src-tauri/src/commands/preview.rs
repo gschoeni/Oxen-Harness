@@ -10,7 +10,9 @@ use crate::preview::{self, Bounds};
 use crate::state::AppState;
 
 /// Show `session`'s preview webview over the placeholder at `bounds`
-/// (CSS pixels). Creates the webview on first call; later calls reposition it.
+/// (CSS pixels). Creates the webview when the session has none (first mount,
+/// or the user came back to this chat — switching away destroys it); later
+/// calls reposition it.
 ///
 /// Serialized app-wide: the frontend calls this on every layout tick (a
 /// splitter drag fires at frame rate), and two concurrent calls at first mount
@@ -43,7 +45,9 @@ pub(crate) async fn preview_attach(
     preview::attach(&app, &session, &url, &bounds, Some(console_port))
 }
 
-/// Hide all preview webviews (tab switch, overlay opened, pane closed).
+/// Take every preview webview off screen (tab switch, overlay opened, pane
+/// closed, chat switched). Only the current chat's is kept (hidden); the rest
+/// are destroyed — see `preview::detach_all` for the memory reasoning.
 #[tauri::command]
 pub(crate) fn preview_detach(app: AppHandle) {
     preview::detach_all(&app);

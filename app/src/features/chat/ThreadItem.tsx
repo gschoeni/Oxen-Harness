@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { Markdown } from "../../components/ui/Markdown";
+import { useThrottled } from "../../lib/useThrottled";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { ToolCall } from "./ToolCall";
 import { ApiKeyPrompt } from "./ApiKeyPrompt";
@@ -42,22 +43,38 @@ export const ThreadItem = memo(function ThreadItem({ item }: { item: Item }) {
   }
 
   if (item.kind === "assistant") {
-    return (
-      <div className={`msg assistant ${item.error ? "error" : ""}`}>
-        <div className="role">Oxen</div>
-        {item.text ? (
-          item.error ? <div className="body">{item.text}</div> : <Markdown text={item.text} />
-        ) : null}
-        {/* Keep an activity indicator visible the whole time the bubble is
-            streaming — including the silent stretch while the model writes a
-            tool call's arguments (a canvas document, clarifying questions) after
-            a short preamble, when the bubble already has text. */}
-        {item.streaming && (
-          <ThinkingIndicator writing={!!item.text} trailing={!!item.text} />
-        )}
-      </div>
-    );
+    return <AssistantBubble item={item} />;
   }
 
   return <ToolCall item={item} />;
 });
+
+/** How often a streaming reply re-parses its Markdown. Tokens land in the
+ *  store every ~50 ms; parsing a long reply that often is the single biggest
+ *  cost of a fast stream, and nobody reads faster than ten repaints a second. */
+const STREAM_MARKDOWN_MS = 100;
+
+function AssistantBubble({ item }: { item: Extract<Item, { kind: "assistant" }> }) {
+  // Throttle only while streaming: the moment the bubble settles, the final
+  // text must render at once (not up to 100 ms later), so the settled item
+  // bypasses the throttled value entirely.
+  const throttled = useThrottled(item.text, STREAM_MARKDOWN_MS);
+  const text = item.streaming ? throttled : item.text;
+  return (
+    <div className={`msg assistant ${item.error ? "error" : ""}`}>
+      <div className="role">Oxen</div>
+      {text ? (
+        item.error ? <div className="body">{text}</div> : <Markdown text={text} />
+      ) : null}
+      {/* Keep an activity indicator visible the whole time the bubble is
+          streaming — including the silent stretch while the model writes a
+          tool call's arguments (a canvas document, clarifying questions) after
+          a short preamble, when the bubble already has text. The indicator
+          reads the live text, not the throttled one, so it flips to "writing"
+          on the first token. */}
+      {item.streaming && (
+        <ThinkingIndicator writing={!!item.text} trailing={!!item.text} />
+      )}
+    </div>
+  );
+}

@@ -463,8 +463,205 @@ describe("store: code review", () => {
   });
 });
 
-describe("store: fleet retention", () => {
-  it("keeps a fleet as long as the chat it runs in is cached", async () => {
+describe("store: token coalescing", () => {
+  const seed = (id = "s1") =>
+    useStore.setState({
+      session: { ...ipc.sampleSession, session_id: id },
+      infos: { [id]: { ...ipc.sampleSession, session_id: id } },
+      threads: { [id]: [{ id: "a", kind: "assistant", text: "", streaming: true }] },
+    });
+  const text = (id = "s1") =>
+    (useStore.getState().threads[id] ?? [])
+      .flatMap((it) => (it.kind === "assistant" ? [it.text] : []))
+      .join("|");
+
+  it("buffers a burst and lands it as one thread update on the timer", () => {
+    vi.useFakeTimers();
+    try {
+      seed();
+      const before = useStore.getState().threads.s1;
+      useStore.getState().ingestToken("s1", "Hel");
+      useStore.getState().ingestToken("s1", "lo");
+      useStore.getState().ingestToken("s1", ", world");
+      // Nothing has touched the store yet — same array identity.
+      expect(useStore.getState().threads.s1).toBe(before);
+      expect(useStore.getState().liveTokens.s1 ?? 0).toBe(0);
+
+      let renders = 0;
+      const unsub = useStore.subscribe(() => renders++);
+      vi.advanceTimersByTime(50);
+      unsub();
+      expect(renders).toBe(1); // three tokens, one copy
+      expect(text()).toBe("Hello, world");
+      expect(useStore.getState().liveTokens.s1).toBeCloseTo("Hello, world".length / 4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes pending tokens ahead of any other store mutation, keeping order", () => {
+    vi.useFakeTimers();
+    try {
+      seed();
+      useStore.getState().ingestToken("s1", "I'll look");
+      // A tool start arrives before the timer: the preamble must settle into
+      // its bubble BEFORE the chip, exactly as if every token had landed alone.
+      useStore.getState().ingestTool({ session: "s1", name: "read_file", phase: "start", detail: "{}" });
+      expect(useStore.getState().threads.s1.map((it) => it.kind)).toEqual(["assistant", "tool"]);
+      expect(useStore.getState().threads.s1[0]).toMatchObject({ text: "I'll look", streaming: false });
+      expect(vi.getTimerCount()).toBe(0); // the flush cancelled its own timer
+
+      // Tokens after the tool end land in the fresh bubble, not the old one.
+      useStore.getState().ingestTool({ session: "s1", name: "read_file", phase: "end", detail: "ok" });
+      useStore.getState().ingestToken("s1", "Found it");
+      useStore.getState().flushTokens();
+      expect(text()).toBe("I'll look|Found it");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps sessions apart and drops tokens for a session with no cached thread", () => {
+    vi.useFakeTimers();
+    try {
+      seed("a");
+      useStore.setState({
+        threads: {
+          a: [{ id: "a", kind: "assistant", text: "", streaming: true }],
+          b: [{ id: "b", kind: "assistant", text: "", streaming: true }],
+        },
+      });
+      useStore.getState().ingestToken("a", "A1");
+      useStore.getState().ingestToken("b", "B1");
+      useStore.getState().ingestToken("evicted", "lost");
+      useStore.getState().ingestToken("a", "A2");
+      vi.advanceTimersByTime(50);
+      expect(text("a")).toBe("A1A2");
+      expect(text("b")).toBe("B1");
+      // No stub thread is conjured for a session that isn't cached (same rule
+      // the per-event path always applied).
+      expect(useStore.getState().threads.evicted).toBeUndefined();
+      expect(useStore.getState().liveTokens.evicted).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a turn's end never races its own tokens", async () => {
+    let finishTurn!: (v: string) => void;
+    ipc.runTurn.mockImplementationOnce(() => new Promise((r) => (finishTurn = r)));
+    useStore.setState({
+      session: { ...ipc.sampleSession, session_id: "s1" },
+      infos: { s1: { ...ipc.sampleSession, session_id: "s1" } },
+      threads: { s1: [] },
+    });
+    useStore.getState().send("go");
+    useStore.getState().ingestToken("s1", "streamed reply");
+    finishTurn("streamed reply"); // the backend returns the same text it streamed
+    await vi.waitFor(() => expect(useStore.getState().runStatus.s1).toBeUndefined());
+    // The buffered text settled into the bubble (not lost, not duplicated).
+    expect(text()).toBe("streamed reply");
+  });
+});
+
+describe("store: thread cache under many running sessions", () => {
+  const info = (id: string) => ({ ...ipc.sampleSession, session_id: id });
+  const bubble = (id: string): import("../features/chat/thread").Item[] => [
+    { id: `${id}-a`, kind: "assistant", text: `${id} says`, streaming: true },
+  ];
+
+  it("protects only the most recently active running sessions (plus the current one)", async () => {
+    // Nine background chats mid-turn — a fleet — plus the one in view.
+    const ids = ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"];
+    useStore.setState({
+      session: info("cur"),
+      infos: Object.fromEntries([...ids, "cur"].map((id) => [id, info(id)])),
+      threads: Object.fromEntries([...ids, "cur"].map((id) => [id, bubble(id)])),
+      runStatus: Object.fromEntries(ids.map((id) => [id, "running" as const])),
+      queues: { r1: [{ text: "later", attachments: [] }] },
+    });
+    // r1 is the oldest by insertion but just swung a tool — activity ranks it
+    // first; r2/r3 (old, idle) are the ones released.
+    useStore.getState().ingestTool({ session: "r1", name: "git", phase: "start", detail: "" });
+    await useStore.getState().startNewSession();
+
+    const kept = Object.keys(useStore.getState().threads);
+    expect(kept).toContain("new-session-id");
+    expect(kept).toContain("r1");
+    expect(kept).not.toContain("r2");
+    expect(kept).not.toContain("r3");
+    expect(kept.filter((id) => id.startsWith("r"))).toHaveLength(6);
+    // "cur" is no longer current and not running: it's a plain cached thread,
+    // and the cap is already spent on protected ones.
+    expect(kept).not.toContain("cur");
+
+    // The evicted chats are still running: their live state stays put — only
+    // the (rebuildable) thread was released.
+    expect(useStore.getState().infos.r2).toBeDefined();
+    expect(useStore.getState().queues.r1).toHaveLength(1);
+    expect(useStore.getState().runStatus.r2).toBe("running");
+
+    // Tokens for an evicted session are dropped safely — no stub thread.
+    useStore.getState().ingestToken("r2", "still going");
+    useStore.getState().flushTokens();
+    expect(useStore.getState().threads.r2).toBeUndefined();
+  });
+
+  it("a running chat whose thread was released rebuilds it from the persisted transcript when viewed", async () => {
+    useStore.setState({
+      session: info("cur"),
+      infos: { cur: info("cur"), bg: info("bg") },
+      threads: { cur: [] },
+      runStatus: { bg: "running" },
+    });
+    // Mid-turn: the view can't read the agent, but the DB can be read.
+    ipc.resumeSession.mockResolvedValueOnce({ info: info("bg"), messages: [], running: true });
+    ipc.sessionMessages.mockResolvedValueOnce([
+      { role: "user", content: "long task" },
+      { role: "assistant", content: "step one done" },
+    ]);
+    await useStore.getState().resume("bg");
+    expect(ipc.sessionMessages).toHaveBeenCalledWith("bg");
+    const kinds = useStore.getState().threads.bg.map((it) => it.kind);
+    expect(kinds).toEqual(["user", "assistant", "assistant"]);
+    expect(useStore.getState().threads.bg[2]).toMatchObject({ streaming: true, partial: true });
+
+    // The rest of the reply streams into the reopened bubble.
+    useStore.getState().ingestToken("bg", " and two");
+    useStore.getState().flushTokens();
+    expect(useStore.getState().threads.bg[2]).toMatchObject({ text: " and two" });
+  });
+
+  it("a running chat that still has its thread is never re-read from the transcript", async () => {
+    useStore.setState({
+      session: info("cur"),
+      infos: { cur: info("cur"), bg: info("bg") },
+      threads: { cur: [], bg: bubble("bg") },
+      runStatus: { bg: "running" },
+    });
+    ipc.resumeSession.mockResolvedValueOnce({ info: info("bg"), messages: [], running: true });
+    await useStore.getState().resume("bg");
+    expect(ipc.sessionMessages).not.toHaveBeenCalled();
+    expect(useStore.getState().threads.bg).toHaveLength(1);
+  });
+
+  it("a session switch trims staged snippets and preview errors along with threads", async () => {
+    useStore.setState({
+      session: info("cur"),
+      infos: { cur: info("cur"), old: info("old") },
+      threads: { old: [], a: [], b: [], c: [], cur: [] },
+      snippets: { old: [{ path: "x.ts", start: 1, end: 2, code: "let x" }], cur: [] },
+      previewErrors: { old: "boom", cur: undefined },
+    });
+    await useStore.getState().startNewSession();
+    expect(useStore.getState().threads.old).toBeUndefined();
+    expect(useStore.getState().snippets.old).toBeUndefined();
+    expect(useStore.getState().previewErrors).not.toHaveProperty("old");
+  });
+});
+
+describe("retainFleets", () => {
+  it("keeps a fleet as long as the chat it runs in is cached or running", async () => {
     const { retainFleets, fleetsFor } = await import("./store");
     const lane = { name: "a", id: "l", status: "running" as const, activity: "", tail: "", tokens: 0 };
     const fleets = {
@@ -478,5 +675,19 @@ describe("store: fleet retention", () => {
     expect(Object.keys(kept)).toEqual(["fleet-1", "fleet-3"]);
     expect(fleetsFor(kept, "kept").map(([id]) => id)).toEqual(["fleet-1", "fleet-3"]);
     expect(fleetsFor(kept, "gone")).toEqual([]);
+  });
+});
+
+describe("capThreadSessions", () => {
+  it("ranks running sessions by activity, then by recency of insertion", async () => {
+    const { capThreadSessions } = await import("./store");
+    const threads = Object.fromEntries(
+      ["a", "b", "c", "d", "e", "f", "g", "h"].map((id) => [id, [] as import("../features/chat/thread").Item[]]),
+    );
+    const runStatus = Object.fromEntries(Object.keys(threads).map((id) => [id, "running" as const]));
+    // "a" is oldest but most active; with no other activity the newest six
+    // by insertion fill the remaining protected slots.
+    const kept = Object.keys(capThreadSessions(threads, runStatus, "cur", new Map([["a", 10]])));
+    expect(kept).toEqual(["a", "d", "e", "f", "g", "h"]);
   });
 });
