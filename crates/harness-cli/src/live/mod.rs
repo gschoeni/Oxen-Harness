@@ -39,9 +39,13 @@
 //! - [`layout`] — queue focus navigation and overflow-window planning.
 //! - [`text`] — line rendering (windowing, word-wrap, the themed prompt).
 //! - [`terminal`] — the raw-mode RAII guard and the input-forwarding thread.
+//! - [`region`] — region writes with the tracked spinner tail.
+//! - [`advance`] — the row estimate that lets the pinned area follow the
+//!   conversation after a picker left a void under it.
 //!
 //! [`MessageQueue`]: crate::queue::MessageQueue
 
+mod advance;
 mod card;
 mod completion;
 mod composer;
@@ -67,7 +71,7 @@ pub(crate) use card::summarize_result;
 pub(crate) use turn::{read_idle, run_prompt, tool_target, Idle};
 
 use std::io::Write;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossterm::event::{KeyEvent, KeyEventKind};
@@ -77,6 +81,7 @@ use crate::markdown::MarkdownStream;
 use crate::render::truncate;
 use crate::theme::{LiveSpinner, Ui};
 
+use advance::Advance;
 use completion::CompletionItem;
 use composer::{Composer, History};
 use keys::{apply_buf, classify_key, KeyAction, KeyIntent, Mode};
@@ -141,6 +146,14 @@ struct Live {
     out: Sink,
     /// Region writes with the tracked tail line (the spinner) — see [`region`].
     region: RegionWriter,
+    /// Rows the output cursor has advanced, fed by every region writer.
+    advance: Advance,
+    /// `Some` while the pinned area follows the conversation (see [`Follow`]).
+    follow: Option<Follow>,
+    /// Set while [`Live::with_tail_lifted`] holds a synchronized-output frame
+    /// open, so a paint it triggers doesn't open a nested one (the inner
+    /// frame's end would present the half-finished outer one).
+    in_frame: bool,
     md: Option<MarkdownStream<CrlfWriter>>,
     /// The spinner's animation state; its on-screen line is the region tail,
     /// pushed via [`Live::sync_tail`].
@@ -236,11 +249,28 @@ struct Live {
 }
 
 impl Live {
+    /// A layout on the real terminal. Once a conversation is under way (see
+    /// [`CONVERSATION_STARTED`]) the cursor is probed now — before the input
+    /// thread starts reading — so the pinned area starts right under the
+    /// output instead of re-opening a void under it.
     fn new(ui: Ui, cols: u16, rows: u16) -> Self {
-        Self::with_sink(ui, cols, rows, Sink::stdout())
+        let mut live = Self::with_sink(ui, cols, rows, Sink::stdout());
+        if CONVERSATION_STARTED.load(Ordering::Relaxed) {
+            if let Some(row) = live.out.probe_cursor_row() {
+                live.follow_from(row);
+            }
+        }
+        live
+    }
+
+    /// Mark the conversation as begun: every layout from here on follows it
+    /// (the landing before the first prompt stays anchored under the banner).
+    pub(super) fn conversation_started() {
+        CONVERSATION_STARTED.store(true, Ordering::Relaxed);
     }
 
     fn with_sink(ui: Ui, cols: u16, rows: u16, out: Sink) -> Self {
+        let advance = Advance::new(cols);
         let fleet = FleetHub::global();
         let composer_target = fleet.lock().composer_target();
         let mut composer = Composer::new();
@@ -249,7 +279,10 @@ impl Live {
             ui,
             cols,
             rows,
-            region: RegionWriter::new(out.clone()),
+            region: RegionWriter::new(out.clone(), advance.clone()),
+            advance,
+            follow: None,
+            in_frame: false,
             out,
             md: None,
             spinner: None,
@@ -280,6 +313,48 @@ impl Live {
             last_write: events::LastWrite::Blank,
             notice: None,
         }
+    }
+
+    /// Start following the conversation from `row`, the output cursor's
+    /// current row. The region bottom is settled by the next paint or
+    /// [`Live::follow_conversation`].
+    pub(super) fn follow_from(&mut self, row: u16) {
+        let _ = self.advance.take_rows();
+        self.follow = Some(Follow { row, bottom: row });
+    }
+
+    /// Back to the anchored layout (pinned area on the bottom rows).
+    pub(super) fn unfollow(&mut self) {
+        self.follow = None;
+    }
+
+    /// Write content into the scroll region (newlines become `\r\n`) where
+    /// the output cursor lives: the tail (the spinner) is lifted first, the
+    /// region grown if the pinned area is following the conversation, and
+    /// the tail redrawn below — one synchronized frame (mode 2026), so the
+    /// spinner never visibly blinks out between its lift and its redraw.
+    pub(super) fn region_write(&mut self, text: &str) {
+        self.with_tail_lifted(|live| live.region.write_content(text));
+    }
+
+    /// Run `write` with the tail out of the way, then settle the layout under
+    /// what it wrote and put the tail back — the one place the lift → write →
+    /// grow → redraw order lives.
+    pub(super) fn with_tail_lifted(&mut self, write: impl FnOnce(&mut Self)) {
+        let synced = !self.suspended() && self.region.has_tail() && !self.in_frame;
+        if synced {
+            let _ = write!(self.out, "{}", crate::ansi::SYNC_BEGIN);
+            self.in_frame = true;
+        }
+        self.region.lift_tail();
+        write(self);
+        self.follow_conversation();
+        self.region.redraw_tail();
+        if synced {
+            let _ = write!(self.out, "{}", crate::ansi::SYNC_END);
+            self.in_frame = false;
+        }
+        let _ = self.out.flush();
     }
 
     /// Pin (or clear) the one-line notice under the composer, repainting only
@@ -362,7 +437,7 @@ impl Live {
             Some(kept) => card::expanded_block(&ui, kept, self.cols as usize),
             None => vec![format!("  {}", ui.dim("nothing to expand yet"))],
         };
-        self.region.write(&format!("{}\n", block.join("\n")));
+        self.region_write(&format!("{}\n", block.join("\n")));
         self.request_paint();
     }
 
@@ -772,6 +847,9 @@ impl Live {
     fn handle_resize(&mut self, cols: u16, rows: u16, items: &[String]) {
         self.cols = cols;
         self.rows = rows;
+        // A reflow moves every row; the cursor estimate is worthless now.
+        self.advance.set_cols(cols);
+        self.unfollow();
         self.sync_queue(items);
         self.render_forcing_region();
         self.sync_tail();
@@ -819,12 +897,22 @@ impl Live {
         let Some(lease) = self.suspension.take() else {
             return;
         };
-        lease.reclaim();
+        let out = self.out.clone();
+        let row = lease.reclaim(|| out.probe_cursor_row());
         self.region.set_muted(false);
         self.refresh_title();
         // The picker reset the scroll region; start from the full-height
         // bottom so the forced repaint below clears every row it reserves.
         self.region_bottom = region_bottom(self.rows);
+        // The card's rows are blank now and the conversation above them
+        // can't be scrolled back: carve the region right under the tool's
+        // last line (the decision echo) and let it walk down from there —
+        // see [`Follow`]. Without a probe answer the layout anchors at the
+        // bottom as it always did.
+        match row {
+            Some(row) => self.follow_from(row),
+            None => self.unfollow(),
+        }
         self.begin_thinking();
         self.render_forcing_region();
     }

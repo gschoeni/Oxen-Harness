@@ -108,7 +108,7 @@ impl Live {
     /// compression savings · context meters · divider rule · queue table ·
     /// composer box). The reserved height and the paint walk both derive from
     /// the returned plan, so they cannot disagree.
-    fn pinned_plan(&self) -> PinnedPlan {
+    pub(super) fn pinned_plan(&self) -> PinnedPlan {
         let len = self.previews.len();
         // Reserve frame rows up front so the header/footer borders never push the
         // last line of streamed output off-screen.
@@ -168,12 +168,63 @@ impl Live {
         PinnedPlan { sections }
     }
 
+    /// The scroll region's bottom row for this paint. Anchored, it is the
+    /// plan's: everything above the reserved rows. Following the
+    /// conversation (see [`super::Follow`]) it is the row the output cursor
+    /// has reached plus what the spinner needs under it — never lower than
+    /// carved before, and never past the anchor, where following ends.
+    fn region_target(&mut self, plan: &PinnedPlan) -> u16 {
+        let anchor = plan.region_bottom(self.rows);
+        let Some(mut follow) = self.follow else {
+            return anchor;
+        };
+        follow.row = follow.row.saturating_add(self.advance.take_rows() as u16);
+        let extra = if self.spinner.is_some() {
+            self.region.tail_extra()
+        } else {
+            0
+        };
+        follow.bottom = follow.bottom.max(follow.row.saturating_add(extra));
+        if follow.bottom >= anchor {
+            self.unfollow();
+            anchor
+        } else {
+            self.follow = Some(follow);
+            follow.bottom
+        }
+    }
+
+    /// Grow the region under output that just landed, while the pinned area
+    /// follows the conversation. Called with the tail lifted, before it is
+    /// redrawn, so the spinner's rows are carved before it needs them
+    /// (drawing it first would scroll the conversation a row for nothing).
+    /// Cheap when nothing moved: the plan is only built once a row is owed.
+    pub(super) fn follow_conversation(&mut self) {
+        let Some(follow) = self.follow else {
+            return;
+        };
+        if self.suspended() {
+            return;
+        }
+        let extra = if self.spinner.is_some() {
+            self.region.tail_extra()
+        } else {
+            0
+        };
+        if self.advance.pending_rows() == 0 && follow.row.saturating_add(extra) <= follow.bottom {
+            return;
+        }
+        self.paint(false);
+    }
+
     fn paint(&mut self, force_region: bool) {
         if self.suspended() {
             return;
         }
         let plan = self.pinned_plan();
-        let new_bottom = plan.region_bottom(self.rows);
+        let new_bottom = self.region_target(&plan);
+        // The spinner's breathing rows need a region three rows tall.
+        self.region.set_padded(new_bottom >= 3);
 
         let mut buf = String::new();
         if force_region || new_bottom != self.region_bottom {
@@ -200,8 +251,13 @@ impl Live {
         buf.push_str("\x1b8");
         // Synchronized output (mode 2026): the terminal holds the whole frame
         // and presents it at once, so the clear-then-rewrite of every pinned
-        // row can never be seen half-painted.
-        let _ = write!(self.out, "{SYNC_BEGIN}{buf}{SYNC_END}");
+        // row can never be seen half-painted. Inside a region write's frame
+        // (see `Live::with_tail_lifted`) the paint rides that one instead.
+        if self.in_frame {
+            let _ = write!(self.out, "{buf}");
+        } else {
+            let _ = write!(self.out, "{SYNC_BEGIN}{buf}{SYNC_END}");
+        }
         let _ = self.out.flush();
     }
 

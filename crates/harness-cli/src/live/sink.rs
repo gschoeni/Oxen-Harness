@@ -20,7 +20,11 @@ pub(super) struct Sink(SinkInner);
 enum SinkInner {
     Stdout,
     #[cfg(test)]
-    Capture(Arc<Mutex<Vec<u8>>>),
+    Capture {
+        buf: Arc<Mutex<Vec<u8>>>,
+        /// What a cursor-position probe answers (see [`Sink::probe_cursor_row`]).
+        cursor_row: Arc<Mutex<Option<u16>>>,
+    },
 }
 
 impl Sink {
@@ -33,7 +37,25 @@ impl Sink {
     #[cfg(test)]
     pub(super) fn capture() -> (Self, CaptureHandle) {
         let buf = Arc::new(Mutex::new(Vec::new()));
-        (Self(SinkInner::Capture(buf.clone())), CaptureHandle { buf })
+        let cursor_row = Arc::new(Mutex::new(None));
+        (
+            Self(SinkInner::Capture {
+                buf: buf.clone(),
+                cursor_row: cursor_row.clone(),
+            }),
+            CaptureHandle { buf, cursor_row },
+        )
+    }
+
+    /// Where the output cursor is (1-based row): asked of the terminal for
+    /// stdout (see [`super::terminal::probe_cursor_row`]), preset by the test
+    /// for a capture.
+    pub(super) fn probe_cursor_row(&self) -> Option<u16> {
+        match &self.0 {
+            SinkInner::Stdout => super::terminal::probe_cursor_row(),
+            #[cfg(test)]
+            SinkInner::Capture { cursor_row, .. } => *cursor_row.lock().unwrap(),
+        }
     }
 }
 
@@ -42,7 +64,7 @@ impl Write for Sink {
         match &self.0 {
             SinkInner::Stdout => io::stdout().lock().write(buf),
             #[cfg(test)]
-            SinkInner::Capture(shared) => {
+            SinkInner::Capture { buf: shared, .. } => {
                 shared.lock().unwrap().extend_from_slice(buf);
                 Ok(buf.len())
             }
@@ -53,7 +75,7 @@ impl Write for Sink {
         match &self.0 {
             SinkInner::Stdout => io::stdout().lock().write_all(buf),
             #[cfg(test)]
-            SinkInner::Capture(shared) => {
+            SinkInner::Capture { buf: shared, .. } => {
                 shared.lock().unwrap().extend_from_slice(buf);
                 Ok(())
             }
@@ -64,7 +86,7 @@ impl Write for Sink {
         match &self.0 {
             SinkInner::Stdout => io::stdout().flush(),
             #[cfg(test)]
-            SinkInner::Capture(_) => Ok(()),
+            SinkInner::Capture { .. } => Ok(()),
         }
     }
 }
@@ -73,11 +95,25 @@ impl Write for Sink {
 #[cfg(test)]
 pub(super) struct CaptureHandle {
     buf: Arc<Mutex<Vec<u8>>>,
+    cursor_row: Arc<Mutex<Option<u16>>>,
 }
 
 #[cfg(test)]
 impl CaptureHandle {
     pub(super) fn bytes(&self) -> Vec<u8> {
         self.buf.lock().unwrap().clone()
+    }
+
+    /// Append bytes as if something outside [`Live`] painted them — what a
+    /// cooked-mode picker draws while the layout is suspended.
+    ///
+    /// [`Live`]: super::Live
+    pub(super) fn inject(&self, bytes: &[u8]) {
+        self.buf.lock().unwrap().extend_from_slice(bytes);
+    }
+
+    /// Preset what the next cursor-position probe reports (1-based row).
+    pub(super) fn set_cursor_row(&self, row: Option<u16>) {
+        *self.cursor_row.lock().unwrap() = row;
     }
 }

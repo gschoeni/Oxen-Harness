@@ -45,6 +45,15 @@ pub(super) fn capture_live(cols: u16, rows: u16) -> (Live, CaptureHandle) {
     (live, handle)
 }
 
+/// A capturing [`Live`] that starts by following the conversation from
+/// `cursor_row` (1-based) — what `Live::new` does on the real terminal once a
+/// conversation is under way, with the cursor probe answered by the test.
+pub(super) fn capture_live_at(cols: u16, rows: u16, cursor_row: u16) -> (Live, CaptureHandle) {
+    let (mut live, handle) = capture_live(cols, rows);
+    live.follow_from(cursor_row);
+    (live, handle)
+}
+
 /// Replay everything the captured [`Live`] painted through a terminal emulator
 /// and return the resulting screen. `prelude` is written first, with the
 /// cursor left wherever it ends — exactly what `LiveTerminal::new` does (it

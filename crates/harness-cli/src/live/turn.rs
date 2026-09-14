@@ -55,14 +55,16 @@ pub(crate) async fn run_prompt(
     let fleet_hub = crate::fleet_ui::FleetHub::global();
     let _live = fleet_hub.mark_live();
 
+    // The layout comes first: it probes the cursor (a reply on stdin) and
+    // must do so before anything else reads the input stream.
+    Live::conversation_started();
+    let state = Rc::new(RefCell::new(Live::new(ui.clone(), cols, rows)));
     // The input thread only ever reads key/resize events and forwards them; it
     // never writes to the terminal. `stop` ends it; `paused` makes it yield the
     // event stream to an interactive tool (the picker) mid-turn.
     let stop = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
     let (mut rx, input) = spawn_input(&stop, &paused);
-
-    let state = Rc::new(RefCell::new(Live::new(ui.clone(), cols, rows)));
     // Show the meters in their pinned slots from the start of the turn.
     {
         let mut s = state.borrow_mut();
@@ -196,6 +198,8 @@ pub(crate) async fn read_idle(
 ) -> Result<Idle> {
     let term = LiveTerminal::new(ui.decorates())?;
     let (rows, cols) = (term.rows, term.cols);
+    // Layout before the input thread: a cursor probe needs the stream quiet.
+    let state = Rc::new(RefCell::new(Live::new(ui.clone(), cols, rows)));
     let stop = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
     let (mut rx, input) = spawn_input(&stop, &paused);
@@ -206,7 +210,6 @@ pub(crate) async fn read_idle(
     let _live = fleet_hub.mark_live();
     let background = background_hint(ui).await;
 
-    let state = Rc::new(RefCell::new(Live::new(ui.clone(), cols, rows)));
     {
         let mut s = state.borrow_mut();
         s.history = History::with_entries(history.clone());
@@ -373,9 +376,10 @@ pub(crate) async fn read_idle(
     // Echo the submission into the scrollback (cooked mode) so it stays above
     // whatever output the turn/command prints next — mirroring how a typed
     // prompt used to remain on screen. The teardown left the cursor *on* the
-    // blank row under the last line of output (the spinner's old row), so one
-    // newline first keeps that row blank and the prompt one row clear of the
-    // reply — the same single blank row that separates every block.
+    // blank row under the last line of output (where the spinner's blank
+    // lead row sat), so one newline first keeps that row blank and the prompt
+    // one row clear of the reply — the same single blank row that separates
+    // every block.
     if let Idle::Submit(text) = &result {
         let (_, styled) = composer_prompt(ui, queue.len());
         println!("\n{styled}{}", ui.cream(text));

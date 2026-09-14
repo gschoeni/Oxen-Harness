@@ -54,16 +54,26 @@ impl ScreenSuspension {
         }
     }
 
-    /// Reclaim the screen after the tool finishes: re-enter raw mode, resume
-    /// input forwarding, and hide the cursor again (the caller follows with a
-    /// forced full repaint that carves the region under the tool's output).
-    pub(super) fn reclaim(mut self) {
+    /// Reclaim the screen after the tool finishes: re-enter raw mode, ask
+    /// `probe` where the tool left the cursor (raw mode is on and the input
+    /// thread still paused, so a cursor-position reply can't be raced for),
+    /// then resume input forwarding and hide the cursor again. The caller
+    /// follows with a forced full repaint that carves the region under the
+    /// tool's output — at the probed row when it answered.
+    pub(super) fn reclaim(mut self, probe: impl FnOnce() -> Option<u16>) -> Option<u16> {
         self.reclaimed = true;
-        self.restore();
+        let _ = crossterm::terminal::enable_raw_mode();
+        let row = probe();
+        self.resume();
+        row
     }
 
     fn restore(&mut self) {
         let _ = crossterm::terminal::enable_raw_mode();
+        self.resume();
+    }
+
+    fn resume(&mut self) {
         self.paused.store(false, Ordering::Relaxed);
         let mut w = self.out.clone();
         let _ = write!(w, "{}", resume_sequence());

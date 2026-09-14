@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+use super::advance::Advance;
 use super::sink::Sink;
 use crossterm::event::{
     self, Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
@@ -200,13 +201,17 @@ pub(super) fn region_bottom(rows: u16) -> u16 {
 
 /// A `Write` adapter that rewrites bare `\n` as `\r\n`, which raw mode requires
 /// to avoid stair-stepped output. `MarkdownStream` writes through this.
+///
+/// It also reports every byte to the region's row tracker, so the layout can
+/// follow the output cursor down (see [`Advance`]).
 pub(super) struct CrlfWriter {
     out: Sink,
+    advance: Advance,
 }
 
 impl CrlfWriter {
-    pub(super) fn over(out: Sink) -> Self {
-        Self { out }
+    pub(super) fn tracked(out: Sink, advance: Advance) -> Self {
+        Self { out, advance }
     }
 }
 
@@ -222,11 +227,35 @@ impl Write for CrlfWriter {
             translated.push(b);
         }
         self.out.write_all(&translated)?;
+        self.advance.note(buf);
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
         self.out.flush()
+    }
+}
+
+/// The output cursor's row (1-based), asked of the terminal with a
+/// cursor-position report — or `None` when there is no terminal to ask, or
+/// one that once failed to answer (a terminal that never replies would
+/// otherwise cost the query's two-second wait every time).
+///
+/// Call it in raw mode while nothing else reads the input stream (the
+/// forwarding thread not yet spawned, or paused for a picker): the reply
+/// arrives on stdin, and a concurrent reader would race for it.
+pub(super) fn probe_cursor_row() -> Option<u16> {
+    use std::io::IsTerminal;
+    static BROKEN: AtomicBool = AtomicBool::new(false);
+    if BROKEN.load(Ordering::Relaxed) || !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return None;
+    }
+    match crossterm::cursor::position() {
+        Ok((_, row)) => Some(row.saturating_add(1)),
+        Err(_) => {
+            BROKEN.store(true, Ordering::Relaxed);
+            None
+        }
     }
 }
 

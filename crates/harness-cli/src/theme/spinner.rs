@@ -95,12 +95,17 @@ impl Spinner {
 /// Build one rendered spinner frame: `glyph  verb… target  (elapsed)`, fully
 /// painted. The `target` (a file/command/query) is shown dimmed after the verb
 /// when present, so a running tool says *what* it's acting on.
+/// One frame of the status line. With `max_cols` the verb (and target) is
+/// ellipsized so the whole line fits — a line that soft-wraps would take two
+/// rows where the live layout has budgeted one and corrupt every erase that
+/// follows.
 fn spinner_frame(
     style: &SpinnerStyle,
     verbs: &[String],
     target: Option<&str>,
     start: Instant,
     rhythm: &Rhythm,
+    max_cols: Option<usize>,
 ) -> String {
     let glyph = &style.glyphs[rhythm.glyph_index(style.glyphs.len())];
     let verb = &verbs[rhythm.phrase_index()];
@@ -108,11 +113,19 @@ fn spinner_frame(
         Some(t) if !t.is_empty() => format!("{verb}… {t}"),
         _ => format!("{verb}…"),
     };
+    let time = format!("({})", elapsed(start));
+    let verb = match max_cols {
+        Some(max) => {
+            let fixed = crate::width::str_width(glyph) + 4 + crate::width::str_width(&time);
+            crate::width::fit(&verb, max.saturating_sub(fixed).max(4))
+        }
+        None => verb,
+    };
     format!(
         "{}  {}  {}",
         paint(glyph, style.glyph_rgb),
         paint(&verb, style.text_rgb),
-        paint(&format!("({})", elapsed(start)), style.dim_rgb),
+        paint(&time, style.dim_rgb),
     )
 }
 
@@ -125,7 +138,7 @@ fn run_spinner(stop: &AtomicBool, verbs: &[String], target: Option<&str>, style:
     let _ = out.flush();
 
     while !stop.load(Ordering::Relaxed) {
-        let line = spinner_frame(style, verbs, target, start, &rhythm);
+        let line = spinner_frame(style, verbs, target, start, &rhythm, None);
         let _ = write!(out, "\r{line}\x1b[K");
         let _ = out.flush();
         rhythm.tick();
@@ -173,14 +186,17 @@ impl LiveSpinner {
         })
     }
 
-    /// The current frame's status line (glyph + verb + target + elapsed), painted.
-    pub(crate) fn line(&self) -> String {
+    /// The current frame's status line (glyph + verb + target + elapsed),
+    /// painted and fitted into `max_cols` cells (the verb and target are
+    /// ellipsized), so it can never soft-wrap onto a second row.
+    pub(crate) fn line_fitted(&self, max_cols: usize) -> String {
         spinner_frame(
             &self.style,
             &self.verbs,
             self.target.as_deref(),
             self.start,
             &self.rhythm,
+            Some(max_cols),
         )
     }
 

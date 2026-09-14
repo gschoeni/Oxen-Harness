@@ -15,7 +15,6 @@ use crate::event_lines::{cue_for, Cue, NextSpinner};
 use crate::markdown::MarkdownStream;
 use crate::theme::LiveSpinner;
 
-use super::terminal::CrlfWriter;
 use super::Live;
 
 /// The kind of the last write into the scroll region, for block spacing.
@@ -49,8 +48,10 @@ impl Live {
         self.md = None;
         self.write_region("\n");
         self.last_write = LastWrite::Blank;
-        self.begin_thinking();
+        // Carve the region before the spinner claims its rows in it.
         self.render();
+        self.begin_thinking();
+        self.flush_paint();
     }
 
     /// Flush any open Markdown and stop the spinner at the end of a turn.
@@ -244,8 +245,7 @@ impl Live {
             // before a tool call) costs no row at all.
             let lead = self.last_write != LastWrite::Blank;
             self.md = Some(
-                MarkdownStream::new(self.ui.clone(), CrlfWriter::over(self.out.clone()))
-                    .with_leading_break(lead),
+                MarkdownStream::new(self.ui.clone(), self.region.crlf()).with_leading_break(lead),
             );
             // Keep a live indicator going *below* the streamed text so a pause
             // mid-response (or a long, not-yet-complete line such as a code block)
@@ -254,16 +254,16 @@ impl Live {
         }
         // Newly completed markdown lines land where the spinner sits; the tail
         // is lifted for the write and redrawn on the fresh line below. (The
-        // markdown stream owns its writer, so the lift/redraw pair brackets the
-        // push here instead of going through `RegionWriter::write`.)
-        self.region.lift_tail();
-        if let Some(md) = self.md.as_mut() {
-            md.push(t);
-            if md.emitted() {
-                self.last_write = LastWrite::Text;
+        // markdown stream owns its writer, so the push happens inside the
+        // lift/redraw dance instead of going through `Live::region_write`.)
+        self.with_tail_lifted(|live| {
+            if let Some(md) = live.md.as_mut() {
+                md.push(t);
+                if md.emitted() {
+                    live.last_write = LastWrite::Text;
+                }
             }
-        }
-        self.region.redraw_tail();
+        });
         self.request_paint();
     }
 
@@ -301,10 +301,23 @@ impl Live {
 
     /// Push the spinner's current frame to the region tail (and repaint the
     /// composer). The tail is the single owner of the spinner's on-screen
-    /// line — nothing else writes raw erase sequences for it.
+    /// line — nothing else writes raw erase sequences for it. While the
+    /// pinned area follows the conversation the region is grown first, so a
+    /// freshly started spinner has its rows without scrolling the output.
     pub(super) fn sync_tail(&mut self) {
         if self.spinner.is_some() {
-            let line = self.spinner.as_ref().map(|sp| sp.line());
+            if !self.region.has_tail() {
+                self.follow_conversation();
+                // A fresh tail: decide its footprint from the region it will
+                // be drawn in (the carved bottom, or the anchor before the
+                // first paint has carved anything).
+                let anchor = self.pinned_plan().region_bottom(self.rows);
+                self.region.set_padded(self.region_bottom.min(anchor) >= 3);
+            }
+            // Fitted to the width: a wrapped spinner would take two rows
+            // where the tail budgets one.
+            let max = self.cols.saturating_sub(1) as usize;
+            let line = self.spinner.as_ref().map(|sp| sp.line_fitted(max));
             self.region.set_tail(line);
             self.request_paint();
         }
@@ -319,9 +332,9 @@ impl Live {
     fn write_region(&mut self, text: &str) {
         // A line landing right under streamed text gets one blank row first.
         if self.last_write == LastWrite::Text && text != "\n" {
-            self.region.write("\n");
+            self.region_write("\n");
         }
-        self.region.write(text);
+        self.region_write(text);
         self.last_write = if text.ends_with("\n\n") || text == "\n" {
             LastWrite::Blank
         } else {

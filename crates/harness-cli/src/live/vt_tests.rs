@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crossterm::event::KeyCode;
 use harness_agent::AgentEvent;
 
-use super::test_support::{capture_live, key, rows_text, screen};
+use super::test_support::{capture_live, capture_live_at, key, rows_text, screen};
 
 fn token(t: &str) -> AgentEvent {
     AgentEvent::Token(t.to_string())
@@ -50,8 +50,9 @@ fn vt100_emulates_the_scroll_region_machinery() {
 }
 
 /// Streaming tokens with spinner ticks interleaved: the finished markdown
-/// lines stack in the region, the spinner rides exactly one row below the
-/// last content line, and `finish()` leaves no spinner remnant behind.
+/// lines stack in the region, the spinner rides below the last content line
+/// with one blank row above it and one below, and `finish()` leaves no
+/// spinner remnant behind.
 #[test]
 fn streaming_keeps_the_spinner_below_the_output_and_finish_clears_it() {
     let (mut live, handle) = capture_live(40, 12);
@@ -65,13 +66,25 @@ fn streaming_keeps_the_spinner_below_the_output_and_finish_clears_it() {
     live.on_event(&token("line\n"), &paused);
 
     // Mid-stream: content rows are clean, the spinner is the single non-blank
-    // row directly below the last content line.
+    // row under the output, breathing one blank row on each side.
     let rows = rows_text(&screen(&handle, 40, 12, ""));
     let alpha = rows.iter().position(|r| r == "alpha line").expect("alpha");
     assert_eq!(rows[alpha + 1], "beta line", "content stacks in order");
+    assert_eq!(
+        rows[alpha + 2],
+        "",
+        "one blank row must separate the output from the spinner:\n{}",
+        rows.join("\n")
+    );
     assert!(
-        !rows[alpha + 2].is_empty(),
-        "spinner must ride one row below the output:\n{}",
+        !rows[alpha + 3].is_empty(),
+        "spinner must ride two rows below the output:\n{}",
+        rows.join("\n")
+    );
+    assert_eq!(
+        rows[alpha + 4],
+        "",
+        "one blank row must follow the spinner:\n{}",
         rows.join("\n")
     );
 
@@ -79,10 +92,71 @@ fn streaming_keeps_the_spinner_below_the_output_and_finish_clears_it() {
     let rows = rows_text(&screen(&handle, 40, 12, ""));
     let alpha = rows.iter().position(|r| r == "alpha line").expect("alpha");
     assert_eq!(rows[alpha + 1], "beta line");
+    for r in alpha + 2..alpha + 5 {
+        assert_eq!(
+            rows[r],
+            "",
+            "finish must leave no spinner remnant on row {r}:\n{}",
+            rows.join("\n")
+        );
+    }
+}
+
+/// With the region full, the padded spinner still shows exactly one blank
+/// row between the last line of output and itself, and exactly one between
+/// itself and the divider — the breathing room survives the scrolling.
+#[test]
+fn the_spinner_breathes_one_row_each_side_at_the_bottom_of_a_full_region() {
+    let (mut live, handle) = capture_live(40, 12);
+    live.begin_turn(&[]);
+    for i in 1..=20 {
+        live.print_line(&format!("line {i}"));
+    }
+    live.tick_spinner();
+
+    let rows = rows_text(&screen(&handle, 40, 12, ""));
+    let divider = rows
+        .iter()
+        .position(|r| r.starts_with("──"))
+        .expect("divider");
     assert_eq!(
-        rows[alpha + 2],
+        rows[divider - 1],
         "",
-        "finish must leave no spinner remnant:\n{}",
+        "blank row under the spinner:\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        !rows[divider - 2].is_empty() && !rows[divider - 2].starts_with("line"),
+        "spinner two rows above the divider:\n{}",
+        rows.join("\n")
+    );
+    assert_eq!(
+        rows[divider - 3],
+        "",
+        "blank row above the spinner:\n{}",
+        rows.join("\n")
+    );
+    assert_eq!(
+        rows[divider - 4],
+        "line 20",
+        "last output line above that:\n{}",
+        rows.join("\n")
+    );
+}
+
+/// A region too short for the padded spinner (a tiny terminal) falls back to
+/// the bare one-row tail rather than scrolling the spinner into scrollback.
+#[test]
+fn a_tiny_region_uses_a_bare_spinner() {
+    let (mut live, handle) = capture_live(40, 4);
+    live.begin_turn(&[]);
+    live.print_line("only");
+    live.tick_spinner();
+    let rows = rows_text(&screen(&handle, 40, 4, ""));
+    let only = rows.iter().position(|r| r == "only").expect("only");
+    assert!(
+        !rows[only + 1].is_empty() && !rows[only + 1].starts_with("──"),
+        "bare spinner directly under the output:\n{}",
         rows.join("\n")
     );
 }
@@ -109,9 +183,263 @@ fn print_line_during_a_spinner_lands_clean_and_moves_the_spinner_down() {
         "the announcement row must hold nothing but the announcement:\n{}",
         rows.join("\n")
     );
+    assert_eq!(
+        rows[at + 1],
+        "",
+        "blank row under the announcement:\n{}",
+        rows.join("\n")
+    );
     assert!(
-        !rows[at + 1].is_empty(),
+        !rows[at + 2].is_empty(),
         "spinner must be redrawn below the announcement:\n{}",
+        rows.join("\n")
+    );
+}
+
+/// The void a tall picker leaves behind: its card scrolled the conversation
+/// up, and once erased those rows are blank for good. Reclaiming must carve
+/// the region right under the decision echo (the probed cursor row) and let
+/// the pinned area walk down with the output — no gap between the spinner
+/// and the divider, no nudging of rows already on screen — until it reaches
+/// the terminal's bottom rows and anchors there as usual.
+#[test]
+fn a_void_left_by_a_picker_is_closed_by_following_the_conversation() {
+    let (mut live, handle) = capture_live(40, 12);
+    let paused = Arc::new(AtomicBool::new(false));
+    live.begin_turn(&[]);
+    for i in 1..=8 {
+        live.print_line(&format!("line {i}"));
+    }
+    let approval = AgentEvent::ApprovalPending {
+        name: "shell".into(),
+        command: "rm -rf ./build".into(),
+    };
+    live.on_event(&approval, &paused);
+
+    // What the cooked-mode picker does: draw a ten-row card at the cursor
+    // (scrolling most of the conversation away), then erase it and leave a
+    // two-row echo in its place — eight blank rows under the cursor.
+    let card: String = (1..=10).map(|i| format!("card {i}\r\n")).collect();
+    handle.inject(card.as_bytes());
+    handle
+        .inject(b"\x1b[10A\r\x1b[J[approval] rm -rf ./build\r\n\xe2\x9c\x93 chosen: Run once\r\n");
+    let (cursor_row, _) = screen(&handle, 40, 12, "").screen().cursor_position();
+    handle.set_cursor_row(Some(cursor_row + 1));
+
+    live.on_event(
+        &AgentEvent::ApprovalResolved {
+            name: "shell".into(),
+            command: "rm -rf ./build".into(),
+            decision: "approved".into(),
+        },
+        &paused,
+    );
+    live.tick_spinner();
+
+    let rows = rows_text(&screen(&handle, 40, 12, ""));
+    let approved = rows
+        .iter()
+        .position(|r| r.contains("approved — rm -rf ./build"))
+        .expect("decision line");
+    let divider = rows
+        .iter()
+        .position(|r| r.starts_with("──"))
+        .expect("divider");
+    assert_eq!(
+        rows[approved + 1],
+        "",
+        "blank row under the decision:\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        !rows[approved + 2].is_empty(),
+        "spinner:\n{}",
+        rows.join("\n")
+    );
+    assert_eq!(
+        rows[approved + 3],
+        "",
+        "blank row under the spinner:\n{}",
+        rows.join("\n")
+    );
+    assert_eq!(
+        divider,
+        approved + 4,
+        "the divider must sit right under the spinner's breathing row, not at the bottom:\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        rows[divider + 2..].iter().all(String::is_empty),
+        "the void moves below the composer:\n{}",
+        rows.join("\n")
+    );
+
+    // Output walks the pinned area down one row per line, never nudging the
+    // rows already on screen…
+    live.print_line("after 1");
+    live.tick_spinner();
+    let rows = rows_text(&screen(&handle, 40, 12, ""));
+    assert!(
+        rows[approved].contains("approved — rm -rf ./build"),
+        "no nudge:\n{}",
+        rows.join("\n")
+    );
+    assert_eq!(
+        rows[approved + 1],
+        "after 1",
+        "output lands where the spinner sat:\n{}",
+        rows.join("\n")
+    );
+    let divider = rows
+        .iter()
+        .position(|r| r.starts_with("──"))
+        .expect("divider");
+    assert_eq!(
+        divider,
+        approved + 5,
+        "divider walked down one row:\n{}",
+        rows.join("\n")
+    );
+
+    // …until it reaches the bottom rows and anchors there for good.
+    for i in 2..=8 {
+        live.print_line(&format!("after {i}"));
+    }
+    live.tick_spinner();
+    let rows = rows_text(&screen(&handle, 40, 12, ""));
+    assert!(
+        rows.last().is_some_and(|r| !r.is_empty()),
+        "composer back on the bottom row:\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        rows[10].starts_with("──"),
+        "divider anchored above it:\n{}",
+        rows.join("\n")
+    );
+    assert_eq!(
+        rows[9],
+        "",
+        "blank row under the spinner:\n{}",
+        rows.join("\n")
+    );
+    assert!(!rows[8].is_empty(), "spinner:\n{}", rows.join("\n"));
+    assert_eq!(
+        rows[7],
+        "",
+        "blank row above the spinner:\n{}",
+        rows.join("\n")
+    );
+    assert_eq!(rows[6], "after 8", "last output line:\n{}", rows.join("\n"));
+}
+
+/// Once a conversation is under way a layout starts right under it: the
+/// idle prompt after a short reply sits one blank row below the output, the
+/// rest of the screen empty beneath the composer — not the composer on the
+/// bottom row with a void above it.
+#[test]
+fn a_layout_started_mid_conversation_sits_right_under_the_output() {
+    let prelude = "reply line 1\r\nreply line 2\r\n";
+    let (mut live, handle) = capture_live_at(40, 12, 3);
+    live.render();
+    let rows = rows_text(&screen(&handle, 40, 12, prelude));
+    assert_eq!(rows[1], "reply line 2");
+    assert_eq!(
+        rows[2],
+        "",
+        "one blank row under the output:\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        rows[3].starts_with("──"),
+        "divider right under it:\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        !rows[4].is_empty(),
+        "composer under the divider:\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        rows[5..].iter().all(String::is_empty),
+        "nothing below:\n{}",
+        rows.join("\n")
+    );
+}
+
+/// The spinner's breathing rows vanish when the turn ends; the layout that
+/// follows (the idle prompt) closes up under the output instead of leaving
+/// three blank rows above the divider.
+#[test]
+fn the_idle_layout_after_a_turn_closes_the_spinners_rows() {
+    let (mut live, handle) = capture_live(40, 12);
+    live.begin_turn(&[]);
+    for i in 1..=20 {
+        live.print_line(&format!("line {i}"));
+    }
+    live.tick_spinner();
+    live.finish();
+    // The turn's layout is torn down (chrome erased, cursor parked under the
+    // output) and the idle layout probes the cursor there.
+    let region_bottom = live.region_bottom;
+    handle.inject(super::terminal::teardown_sequence(region_bottom, 12).as_bytes());
+    let (cursor_row, _) = screen(&handle, 40, 12, "").screen().cursor_position();
+    let (mut idle, idle_handle) = capture_live_at(40, 12, cursor_row + 1);
+    idle.render();
+    let mut all = handle.bytes();
+    all.extend(idle_handle.bytes());
+    let mut parser = vt100::Parser::new(12, 40, 0);
+    parser.process(&all);
+    let rows = rows_text(&parser);
+    let last = rows
+        .iter()
+        .rposition(|r| r == "line 20")
+        .expect("last output line");
+    assert_eq!(
+        rows[last + 1],
+        "",
+        "one blank row under the output:\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        rows[last + 2].starts_with("──"),
+        "divider right under that blank row:\n{}",
+        rows.join("\n")
+    );
+}
+
+/// Without a probe answer (no terminal to ask) reclaiming anchors the
+/// layout at the bottom as it always did — no following, no surprises.
+#[test]
+fn reclaim_without_a_cursor_probe_anchors_at_the_bottom() {
+    let (mut live, handle) = capture_live(40, 12);
+    let paused = Arc::new(AtomicBool::new(false));
+    live.begin_turn(&[]);
+    live.print_line("line 1");
+    live.on_event(
+        &AgentEvent::ApprovalPending {
+            name: "shell".into(),
+            command: "ls".into(),
+        },
+        &paused,
+    );
+    live.on_event(
+        &AgentEvent::ApprovalResolved {
+            name: "shell".into(),
+            command: "ls".into(),
+            decision: "approved".into(),
+        },
+        &paused,
+    );
+    let rows = rows_text(&screen(&handle, 40, 12, ""));
+    assert!(
+        rows[10].starts_with("──"),
+        "divider on its anchored row:\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        !rows[11].is_empty(),
+        "composer on the bottom row:\n{}",
         rows.join("\n")
     );
 }
