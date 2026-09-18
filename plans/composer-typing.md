@@ -96,3 +96,25 @@ Verification before the follow-up review:
 - The user's running app was a debug build whose original Vite server stopped
   during investigation; restarting that development instance is required to
   load the edits. No running user app or draft was deliberately restarted.
+
+Follow-up review after `60d7bb9`:
+
+1. Consolidate the native input attributes and composition guard so chat and
+   project prompts cannot drift. Applied the small `lib/promptInput.ts` module.
+   Keep its types native to the DOM; no React declaration merging is needed.
+2. Keep the controlled textarea and existing sizing. The measured React work
+   does not justify switching to an uncontrolled editor or adding scheduling.
+3. Defer project-page render isolation: it is a separate potential hot path,
+   but this run has not established that it contributes to the reported hitch.
+
+Post-review checks: TypeScript and all 613 frontend tests passed; all 1,338 Rust
+tests passed (5 skipped); workspace Clippy passed. Workspace fmt and bridge
+Clippy still have the previously recorded unrelated failures. Chrome and WebKit
+passed the native-input and composition checks on both prompts again. Build
+cache garbage collection completed after the first test pass (3.9 GB reclaimed)
+and was run again after final checks.
+
+The profiling server also logged full-app HMR invalidations from unrelated
+edits to shared UI modules during this run. These are another possible source
+of pauses in a development build; the trace does not establish that a reload
+coincided with the user's originally reported keystrokes.

@@ -3,6 +3,7 @@ import { ArrowLeft, Check, ExternalLink, FileImage, FileText, FolderOpen, GitBra
 import { Button, IconButton, Modal } from "../../components/ui";
 import { addProjectContext, getConnection, openExternal, pickProjectContext, removeProjectContext, updateProject } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
+import { isComposingKey, PROMPT_INPUT_PROPS } from "../../lib/promptInput";
 import type { Project, ProjectContext, StartupModelChoice } from "../../lib/types";
 import { ModelPicker } from "../chat/ModelPicker";
 import { ProjectTrail } from "../ledger/ProjectTrail";
@@ -156,16 +157,13 @@ export function ProjectHome({
           <form className="project-composer" onSubmit={(event) => void submit(event)}>
             <textarea
               aria-label="Ask about this project"
-              spellCheck={false}
-              autoCorrect="off"
-              autoCapitalize="off"
-              {...{ writingsuggestions: "false" }}
+              {...PROMPT_INPUT_PROPS}
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               placeholder="What should we work on?"
               rows={4}
               onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+                if (isComposingKey(event.nativeEvent)) return;
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   event.currentTarget.form?.requestSubmit();

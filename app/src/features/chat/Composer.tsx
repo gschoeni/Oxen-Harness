@@ -7,6 +7,7 @@ import { ModelPicker } from "./ModelPicker";
 import { parseSlashCommand, slashSuggestions } from "./slashCommands";
 import { isAudioPath, isImagePath, isVideoPath } from "../../lib/attachments";
 import { useComposerSize } from "./useComposerSize";
+import { isComposingKey, PROMPT_INPUT_PROPS } from "../../lib/promptInput";
 
 /** A file staged in the prompt bar, waiting to go out with the next message. */
 export interface StagedAttachment {
@@ -148,10 +149,7 @@ export function Composer({
           <textarea
             ref={ref}
             rows={1}
-            spellCheck={false}
-            autoCorrect="off"
-            autoCapitalize="off"
-            {...{ writingsuggestions: "false" }}
+            {...PROMPT_INPUT_PROPS}
             value={value}
             placeholder={
               busy
@@ -163,8 +161,7 @@ export function Composer({
               setSlashIndex(0);
             }}
             onKeyDown={(e) => {
-              // WebKit can report the IME's final Enter with only keyCode 229.
-              if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+              if (isComposingKey(e.nativeEvent)) return;
               if (suggestions.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
                 e.preventDefault();
                 setSlashIndex((i) =>

@@ -143,3 +143,4 @@ When adding a new file to the project, update this document map.
 
 - `app/src/features/chat/useComposerSize.ts` — frame-batched textarea sizing for webviews without native content sizing; regression coverage in `Composer.test.tsx`.
 - `plans/composer-typing.md` — typing-path diagnosis, browser checks, and review record.
+- `app/src/lib/promptInput.ts` — native text-service opt-outs and IME key handling shared by chat and project prompts.
