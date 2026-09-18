@@ -61,3 +61,38 @@ Post-review verification:
   no Rust files were edited for this fix.
 - `scripts/gc-target.py` completed after testing, reclaiming 1.6 GB on its first
   pass. Browser profiling fixtures were removed after use.
+
+## Follow-up: first-use native input (2026-09-18)
+
+The user still feels a first-use hitch after the layout fix. Profiling the full
+React app with synthetic IPC data in Chrome and Playwright WebKit showed typing
+updates around 0–1 ms, without reproducing a long rendering stall. This fixture
+does not reproduce the user's real history, native text services, or OS keyboard
+input, so it cannot rule out a desktop-only stall.
+
+Both the chat and project-start prompt left native text services enabled.
+[WebKit documents](https://webkit.org/blog/15865/webkit-features-in-safari-18-0/)
+that inline predictions default to enabled, and can be disabled per element
+using `writingsuggestions="false"`. Both prompts now disable these suggestions,
+spellchecking, autocorrection, and automatic capitalization. This intentionally
+removes native spelling underlines/corrections from prompt fields; it is a
+targeted mitigation, not proof that those services caused the reported hitch.
+
+The same input audit found Enter intercepted during native composition. Both
+prompts now leave composing keys to the IME, including WebKit's keyCode 229
+commit event, then send normally on a subsequent Enter. Four regression cases
+failed before the guards and pass after them.
+
+Verification before the follow-up review:
+
+- Chrome and WebKit verified all four native-input attributes on both prompt
+  surfaces, retained composing text, and rendered the full app successfully.
+- TypeScript passed. Frontend tests: 612 passed, one unrelated MediaPage budget
+  save test failed. All 1,338 Rust tests passed (5 skipped).
+- Workspace fmt and bridge Clippy retain their existing failures. The first
+  workspace Clippy/TypeScript attempts also caught temporarily inconsistent
+  protocol/tab changes being edited elsewhere in this shared worktree; no such
+  files were changed for this task.
+- The user's running app was a debug build whose original Vite server stopped
+  during investigation; restarting that development instance is required to
+  load the edits. No running user app or draft was deliberately restarted.

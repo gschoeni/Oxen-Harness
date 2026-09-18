@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -27,6 +27,25 @@ function project(overrides: Partial<Project> = {}): Project {
 beforeEach(() => {
   resetAll();
 });
+
+it.each([{ isComposing: true }, { keyCode: 229 }])(
+  "does not submit a project prompt while native composition is committing (%j)",
+  (nativeEvent) => {
+    render(<ProjectHome project={project()} onBack={() => {}} onProjectChanged={() => {}} />);
+    const box = screen.getByRole("textbox", { name: "Ask about this project" });
+    const submit = vi.spyOn(HTMLFormElement.prototype, "requestSubmit").mockImplementation(() => {});
+    try {
+      fireEvent.change(box, { target: { value: "日本語" } });
+      expect(fireEvent.keyDown(box, { key: "Enter", ...nativeEvent })).toBe(true);
+      expect(submit).not.toHaveBeenCalled();
+      expect(box).toHaveValue("日本語");
+      fireEvent.keyDown(box, { key: "Enter" });
+      expect(submit).toHaveBeenCalledOnce();
+    } finally {
+      submit.mockRestore();
+    }
+  },
+);
 
 describe("the project's repository card", () => {
   it("saves a well-formed namespace/name and keeps the other fields", async () => {

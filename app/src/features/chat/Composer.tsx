@@ -148,6 +148,10 @@ export function Composer({
           <textarea
             ref={ref}
             rows={1}
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
+            {...{ writingsuggestions: "false" }}
             value={value}
             placeholder={
               busy
@@ -159,6 +163,8 @@ export function Composer({
               setSlashIndex(0);
             }}
             onKeyDown={(e) => {
+              // WebKit can report the IME's final Enter with only keyCode 229.
+              if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
               if (suggestions.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
                 e.preventDefault();
                 setSlashIndex((i) =>

@@ -102,6 +102,21 @@ describe("composer media tray", () => {
 });
 
 describe("composer typing", () => {
+  it.each([{ isComposing: true }, { keyCode: 229 }])(
+    "keeps Enter in the input while a native composition is committing (%j)",
+    (nativeEvent) => {
+      const onSend = vi.fn();
+      render(<Composer busy={false} onSend={onSend} onStop={() => {}} onAttach={() => {}} />);
+      const box = screen.getByRole("textbox");
+      fireEvent.change(box, { target: { value: "日本語" } });
+      expect(fireEvent.keyDown(box, { key: "Enter", ...nativeEvent })).toBe(true);
+      expect(onSend).not.toHaveBeenCalled();
+      expect(box).toHaveValue("日本語");
+      fireEvent.keyDown(box, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith("日本語");
+    },
+  );
+
   it("updates text immediately without measuring layout or re-rendering the toolbar", () => {
     mount([]);
     const box = screen.getByRole("textbox");

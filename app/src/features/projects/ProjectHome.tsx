@@ -156,11 +156,16 @@ export function ProjectHome({
           <form className="project-composer" onSubmit={(event) => void submit(event)}>
             <textarea
               aria-label="Ask about this project"
+              spellCheck={false}
+              autoCorrect="off"
+              autoCapitalize="off"
+              {...{ writingsuggestions: "false" }}
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               placeholder="What should we work on?"
               rows={4}
               onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   event.currentTarget.form?.requestSubmit();
