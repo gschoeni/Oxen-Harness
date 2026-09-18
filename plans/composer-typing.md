@@ -39,4 +39,25 @@ its store subscriptions and busy prop still update independently.
 
 ## Review
 
-Pending the dedicated post-commit review and verification pass.
+Reviewed the feature diff after commit `586ed15` for modularity, maintainability,
+readability, idiomatic React, and pragmatism:
+
+1. Keep measurement lifecycle in its small hook and use a single toolbar memo
+   boundary. No need to memoize the full chat or move the draft into the store.
+2. Consolidate the two animation-frame test doubles. One used a queue while the
+   other retained an already-fired callback, which could mask scheduling bugs.
+   Applied a shared queue with cancellation and one-shot flush semantics.
+3. Keep the native path free of JS measurements and avoid a hidden measuring
+   textarea or a new autosizing dependency. No additional production refactor
+   was warranted.
+
+Post-review verification:
+
+- TypeScript and all 591 frontend tests passed again.
+- Workspace Clippy passed. Nextest with four test threads and fail-fast
+  disabled passed all 1,332 tests (5 skipped), including the preview crash
+  tests that failed under the initial heavier parallel load.
+- Workspace fmt and bridge Clippy still report the unrelated issues above;
+  no Rust files were edited for this fix.
+- `scripts/gc-target.py` completed after testing, reclaiming 1.6 GB on its first
+  pass. Browser profiling fixtures were removed after use.

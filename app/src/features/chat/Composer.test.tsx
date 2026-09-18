@@ -43,6 +43,22 @@ function mount(attachments = three) {
   return { onRemove, onClear };
 }
 
+function mockAnimationFrames() {
+  const frames = new Map<number, FrameRequestCallback>();
+  let next = 0;
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    frames.set(++next, callback);
+    return next;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { frames.delete(id); });
+  const flush = () => act(() => {
+    const pending = [...frames.values()];
+    frames.clear();
+    pending.forEach((callback) => callback(0));
+  });
+  return { frames, flush };
+}
+
 describe("composer media tray", () => {
   it("counts what is staged, per kind", () => {
     expect(attachmentCountLabel(three)).toBe("2 images · 1 video");
@@ -100,18 +116,7 @@ describe("composer typing", () => {
 
   it("coalesces fallback resizing and shrinks again after sending", () => {
     vi.stubGlobal("CSS", { supports: () => false });
-    const frames = new Map<number, FrameRequestCallback>();
-    let next = 0;
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      frames.set(++next, callback);
-      return next;
-    });
-    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { frames.delete(id); });
-    const flush = () => act(() => {
-      const pending = [...frames.values()];
-      frames.clear();
-      pending.forEach((callback) => callback(0));
-    });
+    const { frames, flush } = mockAnimationFrames();
     const onSend = vi.fn();
     const { unmount } = render(
       <Composer busy={false} onSend={onSend} onStop={() => {}} onAttach={() => {}} />,
@@ -166,28 +171,23 @@ describe("composer typing", () => {
       observe() {}
       disconnect = disconnect;
     });
-    let frame: FrameRequestCallback = () => {};
-    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      frame = callback;
-      return 1;
-    });
+    const { frames, flush } = mockAnimationFrames();
     const { unmount } = render(
       <Composer busy={false} onSend={() => {}} onStop={() => {}} onAttach={() => {}} />,
     );
     const box = screen.getByRole("textbox");
     const measure = vi.spyOn(box, "scrollHeight", "get").mockReturnValue(40);
-    act(() => frame(0));
+    flush();
     const resize = (width: number) => act(() => observerCallback(
       [{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver,
     ));
     resize(500);
-    act(() => frame(0));
-    raf.mockClear();
+    flush();
     resize(500);
-    expect(raf).not.toHaveBeenCalled();
+    expect(frames.size).toBe(0);
     measure.mockReturnValue(100);
     resize(250);
-    act(() => frame(0));
+    flush();
     expect(box.style.height).toBe("100px");
     unmount();
     expect(disconnect).toHaveBeenCalledOnce();
