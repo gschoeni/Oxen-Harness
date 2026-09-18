@@ -7,7 +7,7 @@ vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 import { Chat } from "./Chat";
 import { TitleBar } from "../../TitleBar";
 import { useStore } from "../../lib/store";
-import { transcriptToItems } from "./thread";
+import { startTurn, transcriptToItems } from "./thread";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
 
@@ -103,6 +103,23 @@ describe("Chat", () => {
     expect(screen.getByLabelText(/Tumbleweed Dodge\. Press up, up, down, down to play/i)).toBeInTheDocument();
     expect(screen.queryByText(/Send a message to begin on your trail/i)).not.toBeInTheDocument();
     expect(screen.getByText("Explain this codebase")).toBeInTheDocument();
+  });
+
+  it("keeps the hero up when a fresh chat holds only system notices", async () => {
+    render(<Chat />);
+    // `/location` (and other local commands) drop a notice into an otherwise
+    // empty thread; that must not replace the hero with a lone faint line.
+    act(() => useStore.getState().addNotice("Location set to Southern Oregon."));
+    expect(screen.getByText("Location set to Southern Oregon.")).toBeInTheDocument();
+    expect(screen.getByText("OXEN TRAIL")).toBeInTheDocument();
+    expect(screen.getByText("Explain this codebase")).toBeInTheDocument();
+    // The first real message starts the conversation view.
+    act(() => {
+      const s = useStore.getState();
+      useStore.setState({ threads: { s1: startTurn(s.threads.s1 ?? [], "howdy") } });
+    });
+    expect(screen.queryByText("OXEN TRAIL")).not.toBeInTheDocument();
+    expect(screen.getByText("Location set to Southern Oregon.")).toBeInTheDocument();
   });
 
   it("starts the hero game only after the full start combo", async () => {

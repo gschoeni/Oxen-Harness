@@ -61,6 +61,9 @@ export function Chat() {
   // Read the current chat's thread / queue / run state straight from the store —
   // it owns them so they persist while this chat streams in the background.
   const items = useStore((s) => (s.session ? s.threads[s.session.session_id] : undefined)) ?? NO_ITEMS;
+  // A local command (e.g. `/location`) can drop a notice into a chat nobody
+  // has written in yet; only a real message swaps the hero for the thread.
+  const started = items.some((it) => it.kind !== "notice");
   const queueEntries = useStore((s) => (s.session ? s.queues[s.session.session_id] : undefined));
   const queue = queueEntries?.map((q) => q.text) ?? NO_QUEUE;
   const running = useStore((s) => !!s.session && s.runStatus[s.session.session_id] === "running");
@@ -241,9 +244,12 @@ export function Chat() {
           </button>
         )}
         <div className="messages" ref={scrollRef} onScroll={onScroll} onWheel={onWheel}>
-          {items.length === 0 ? (
+          {!started ? (
             <div className="chat-empty" ref={contentRef}>
               <Hero examples={EXAMPLES} busy={running} onPick={submit} />
+              {items.map((it) => (
+                <ThreadItem key={it.id} item={it} />
+              ))}
             </div>
           ) : (
             <div className="thread" ref={contentRef}>
@@ -254,7 +260,7 @@ export function Chat() {
             </div>
           )}
         </div>
-        {items.length > 0 && paused && (
+        {started && paused && (
           <button
             className="scroll-bottom"
             onClick={() => scrollToBottom()}
@@ -304,11 +310,11 @@ export function Chat() {
       )}
       <QuestionPrompt />
       <ApprovalPrompt />
-      {gameDockOpen && items.length > 0 && <GameDock />}
-      {items.length > 0 && <TokenMeter />}
+      {gameDockOpen && started && <GameDock />}
+      {started && <TokenMeter />}
       <Composer
         busy={running}
-        focusKey={items.length === 0 ? sessionId : undefined}
+        focusKey={started ? undefined : sessionId}
         onSend={submit}
         onStop={stop}
         onAttach={attach}
