@@ -138,3 +138,8 @@ When adding a new file to the project, update this document map.
 ## Error handling audit (2026-09-13)
 
 - `plans/error-handling-audit.md` — propagated-error fixes, remaining lock/FFI findings, regression coverage, and verification record.
+
+## Composer responsiveness (2026-09-18)
+
+- `app/src/features/chat/useComposerSize.ts` — frame-batched textarea sizing for webviews without native content sizing; regression coverage in `Composer.test.tsx`.
+- `plans/composer-typing.md` — typing-path diagnosis, browser checks, and review record.

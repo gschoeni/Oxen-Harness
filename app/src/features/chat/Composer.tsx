@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { memo, useEffect, useRef, useState, type DragEvent } from "react";
 import { ArrowUp, FileText, Film, Music, Paperclip, Square } from "lucide-react";
 import { AttachmentImage } from "./AttachmentImage";
 import { CodeReviewPicker } from "./CodeReviewPicker";
@@ -6,6 +6,7 @@ import { CompressionPicker } from "./CompressionPicker";
 import { ModelPicker } from "./ModelPicker";
 import { parseSlashCommand, slashSuggestions } from "./slashCommands";
 import { isAudioPath, isImagePath, isVideoPath } from "../../lib/attachments";
+import { useComposerSize } from "./useComposerSize";
 
 /** A file staged in the prompt bar, waiting to go out with the next message. */
 export interface StagedAttachment {
@@ -67,6 +68,7 @@ export function Composer({
   const [slashIndex, setSlashIndex] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
   const suggestions = slashSuggestions(value);
+  useComposerSize(ref, value);
 
   // Focus the composer when an empty chat is opened (new chat / initial mount).
   useEffect(() => {
@@ -78,14 +80,6 @@ export function Composer({
     if (!text) return;
     onSend(text);
     setValue("");
-    if (ref.current) ref.current.style.height = "auto";
-  }
-
-  function resize() {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }
 
   function chooseSlash(index: number) {
@@ -163,7 +157,6 @@ export function Composer({
             onChange={(e) => {
               setValue(e.target.value);
               setSlashIndex(0);
-              resize();
             }}
             onKeyDown={(e) => {
               if (suggestions.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
@@ -241,14 +234,22 @@ export function Composer({
           Drop to attach
         </span>
       </div>
-      <div className="composer-toolbar">
-        <ModelPicker disabled={busy} />
-        <CompressionPicker disabled={busy} />
-        <CodeReviewPicker disabled={busy} />
-      </div>
+      <ComposerToolbar busy={busy} />
     </form>
   );
 }
+
+// Draft changes don't affect the pickers; their own store subscriptions still
+// update model/compression labels as sessions change.
+const ComposerToolbar = memo(function ComposerToolbar({ busy }: { busy: boolean }) {
+  return (
+    <div className="composer-toolbar">
+      <ModelPicker disabled={busy} />
+      <CompressionPicker disabled={busy} />
+      <CodeReviewPicker disabled={busy} />
+    </div>
+  );
+});
 
 /** A tile's picture: the image itself, or a kind icon for video/audio/files. */
 function TrayPreview({ attachment }: { attachment: StagedAttachment }) {

@@ -1019,6 +1019,8 @@
 }
 .composer textarea {
   flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
   resize: none;
   background: transparent;
   color: var(--text);
@@ -1027,6 +1029,13 @@
   font: inherit;
   line-height: 1.5;
   max-height: 200px;
+}
+@supports (field-sizing: content) {
+  .composer textarea {
+    field-sizing: content;
+    /* Keep the idle/cleared prompt one line high, including its padding. */
+    min-height: calc(1.5em + 2 * var(--space-2));
+  }
 }
 .composer textarea::placeholder {
   color: var(--text-tertiary);

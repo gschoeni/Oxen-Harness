@@ -1,13 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
+vi.mock("./ModelPicker", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./ModelPicker")>();
+  return { ModelPicker: vi.fn(original.ModelPicker) };
+});
 
 import { resetAll } from "../../test/utils";
 import { Composer, attachmentCountLabel } from "./Composer";
+import { ModelPicker } from "./ModelPicker";
+import { useStore } from "../../lib/store";
+import { sampleSession } from "../../test/ipcMock";
 
 beforeEach(resetAll);
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 const three = [
   { path: "/w/generations/a.png", name: "a.png" },
@@ -71,5 +82,114 @@ describe("composer media tray", () => {
     await userEvent.type(box, "hi");
     await userEvent.keyboard("{Backspace}");
     expect(onRemove).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("composer typing", () => {
+  it("updates text immediately without measuring layout or re-rendering the toolbar", () => {
+    mount([]);
+    const box = screen.getByRole("textbox");
+    const measure = vi.spyOn(box, "scrollHeight", "get").mockReturnValue(36);
+    vi.mocked(ModelPicker).mockClear();
+    fireEvent.change(box, { target: { value: "a quick draft" } });
+    expect(box).toHaveValue("a quick draft");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    expect(measure).not.toHaveBeenCalled();
+    expect(ModelPicker).not.toHaveBeenCalled();
+  });
+
+  it("coalesces fallback resizing and shrinks again after sending", () => {
+    vi.stubGlobal("CSS", { supports: () => false });
+    const frames = new Map<number, FrameRequestCallback>();
+    let next = 0;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.set(++next, callback);
+      return next;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { frames.delete(id); });
+    const flush = () => act(() => {
+      const pending = [...frames.values()];
+      frames.clear();
+      pending.forEach((callback) => callback(0));
+    });
+    const onSend = vi.fn();
+    const { unmount } = render(
+      <Composer busy={false} onSend={onSend} onStop={() => {}} onAttach={() => {}} />,
+    );
+    const box = screen.getByRole("textbox");
+    const measure = vi.spyOn(box, "scrollHeight", "get").mockReturnValue(300);
+    fireEvent.change(box, { target: { value: "first line\nsecond line" } });
+    fireEvent.change(box, { target: { value: "first line\nsecond line\nthird line" } });
+    expect(measure).not.toHaveBeenCalled();
+    expect(frames.size).toBe(1);
+    flush();
+    expect(measure).toHaveBeenCalledTimes(1);
+    expect(box.style.height).toBe("200px");
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("first line\nsecond line\nthird line");
+    expect(box).toHaveValue("");
+    measure.mockReturnValue(36);
+    flush();
+    expect(box.style.height).toBe("36px");
+    fireEvent.change(box, { target: { value: "pending" } });
+    unmount();
+    expect(frames.size).toBe(0);
+  });
+
+  it("leaves sizing to the browser when field-sizing is available", () => {
+    vi.stubGlobal("CSS", { supports: () => true });
+    const raf = vi.spyOn(window, "requestAnimationFrame");
+    mount([]);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "native sizing" } });
+    expect(raf).not.toHaveBeenCalled();
+  });
+
+  it("keeps the toolbar live when the session or run state changes", () => {
+    const props = { onSend: vi.fn(), onStop: vi.fn(), onAttach: vi.fn() };
+    const { rerender } = render(<Composer {...props} busy={false} focusKey="first" />);
+    act(() => useStore.setState({ session: { ...sampleSession, model: "new-model" } }));
+    expect(screen.getByText("new-model")).toBeInTheDocument();
+    rerender(<Composer {...props} busy={true} focusKey="second" />);
+    expect(screen.getByRole("textbox")).toHaveFocus();
+    expect(screen.getByTitle("Finish the current turn to switch models")).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "queued draft" } });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(props.onSend).toHaveBeenCalledWith("queued draft");
+  });
+
+  it("resizes the fallback on width changes without looping on height changes", () => {
+    vi.stubGlobal("CSS", { supports: () => false });
+    let observerCallback: ResizeObserverCallback = () => {};
+    const disconnect = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: ResizeObserverCallback) { observerCallback = callback; }
+      observe() {}
+      disconnect = disconnect;
+    });
+    let frame: FrameRequestCallback = () => {};
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frame = callback;
+      return 1;
+    });
+    const { unmount } = render(
+      <Composer busy={false} onSend={() => {}} onStop={() => {}} onAttach={() => {}} />,
+    );
+    const box = screen.getByRole("textbox");
+    const measure = vi.spyOn(box, "scrollHeight", "get").mockReturnValue(40);
+    act(() => frame(0));
+    const resize = (width: number) => act(() => observerCallback(
+      [{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver,
+    ));
+    resize(500);
+    act(() => frame(0));
+    raf.mockClear();
+    resize(500);
+    expect(raf).not.toHaveBeenCalled();
+    measure.mockReturnValue(100);
+    resize(250);
+    act(() => frame(0));
+    expect(box.style.height).toBe("100px");
+    unmount();
+    expect(disconnect).toHaveBeenCalledOnce();
   });
 });

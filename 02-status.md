@@ -642,6 +642,14 @@ inspection covered light/dark and a 390px viewport with no horizontal overflow.
 The dedicated review/refactor pass is complete and documented in
 `plans/subagent-hardening.md`.
 
+## Composer responsiveness — 2026-09-18
+
+Removed synchronous textarea layout reads and toolbar rerenders from typing.
+Native content sizing has a frame-batched fallback for older webviews, including
+rewrapping when the chat width changes. Chrome/WebKit checks and all 591 frontend
+tests passed. Wider Rust check blockers and the review record are tracked in
+`plans/composer-typing.md`.
+
 ## Chat scroll following — 2026-09-13
 
 Fixed unexpected loss of automatic scrolling: streaming and layout changes follow
