@@ -2,10 +2,10 @@
 // window, above every column and overlay. It is the window's drag handle and
 // double-clicks to zoom — exactly like a native title bar — so no pane below
 // ever has to fake its own. The active project names the window; the chat's
-// utility buttons (project home, arcade, inspector) sit at its right edge,
-// clear of the macOS traffic lights on the left.
+// utility buttons (project home, arcade, inspector, settings) sit at its
+// right edge, clear of the macOS traffic lights on the left.
 
-import { Activity, Code2, Files, Gamepad2 } from "lucide-react";
+import { Activity, Code2, Files, Gamepad2, Settings } from "lucide-react";
 import { setUi } from "./lib/uiState";
 import { useActiveProject, useStore } from "./lib/store";
 
@@ -51,6 +51,7 @@ export function TitleBar() {
   });
   const setHomeOpen = useStore((s) => s.setHomeOpen);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
+  const openSettings = useStore((s) => s.openSettings);
 
   function openLedger() {
     setUi("homeView", "ledger");
@@ -102,6 +103,14 @@ export function TitleBar() {
           aria-label="Inspect this chat's transcript"
         >
           <Code2 size={15} />
+        </button>
+        <button
+          className="dev-view-btn"
+          onClick={() => openSettings()}
+          title="Settings"
+          aria-label="Open Settings"
+        >
+          <Settings size={15} />
         </button>
       </div>
     </header>

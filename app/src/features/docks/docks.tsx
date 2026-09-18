@@ -24,9 +24,8 @@
 // for every dock).
 
 import type { ReactNode } from "react";
-import { Compass, FileCode2, FolderTree, Globe, Images, MessagesSquare, NotebookPen } from "lucide-react";
+import { Compass, FileCode2, FolderTree, Globe, Images, NotebookPen } from "lucide-react";
 import { useStore } from "../../lib/store";
-import { Sidebar } from "../history/Sidebar";
 import { Canvas } from "../canvas/Canvas";
 import { Preview } from "../preview/Preview";
 import { Browser } from "../browser/Browser";
@@ -38,8 +37,8 @@ import { ProjectsNav } from "../projects/ProjectsNav";
 export type DockSide = "left" | "right";
 
 /** Column chrome rendered above the tab strip, per side. The left column
- *  carries the Projects back-link — top-level navigation that outlives
- *  whichever dock (Chats / Files) is active below it. */
+ *  carries the Home back-link — top-level navigation that outlives whichever
+ *  dock is active below it. */
 export function ColumnNav({ side }: { side: DockSide }) {
   return side === "left" ? <ProjectsNav /> : null;
 }
@@ -58,9 +57,8 @@ export interface DockSpec {
   useAvailable: () => boolean;
   /** The dock's content. `onResizeStart` wires the column's drag handle. */
   render: (props: { onResizeStart?: (e: React.PointerEvent) => void }) => ReactNode;
-  /** Docks the user can't collapse away (the chat list is the app's spine —
-   *  but it can still be collapsed to a rail; this is for future docks that
-   *  must always render). */
+  /** Docks the user can't collapse away (none today — every dock can still
+   *  fold to a rail; this is for future docks that must always render). */
   alwaysOpen?: boolean;
 }
 
@@ -106,23 +104,17 @@ function useGalleryAvailable(): boolean {
 
 export const DOCKS: DockSpec[] = [
   {
-    id: "history",
-    side: "left",
-    title: "Chats",
-    icon: <MessagesSquare size={16} />,
-    defaultWidth: 272,
-    minWidth: 208,
-    useAvailable: () => true,
-    render: ({ onResizeStart }) => <Sidebar onResizeStart={onResizeStart} />,
-  },
-  {
+    // The left column's spine: always present, so the Home link, the collapse
+    // toggle, and ⌘B are there before a project is open (the panel shows a
+    // hint until one is). Chats aren't a dock — they're the tab strip above
+    // the chat, with the history a click away (see features/tabs).
     id: "files",
     side: "left",
     title: "Files",
     icon: <FolderTree size={16} />,
     defaultWidth: 280,
     minWidth: 216,
-    useAvailable: () => useStore((s) => !!s.session?.workspace),
+    useAvailable: () => true,
     render: ({ onResizeStart }) => <FilesPanel onResizeStart={onResizeStart} />,
   },
   {

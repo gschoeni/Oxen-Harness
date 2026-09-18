@@ -1,0 +1,341 @@
+/* The history modal: search on top, the chat rows below in three bands,
+   the keyboard hint at the foot. Rows carry the same status dot as the tabs. */
+
+.history-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* The modal body scrolls; pin the search row to its top edge. */
+  margin: calc(-1 * var(--space-5));
+  padding: var(--space-4) var(--space-5) var(--space-3);
+}
+.history-controls {
+  position: sticky;
+  top: calc(-1 * var(--space-4));
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-5)) 0;
+  padding: var(--space-4) var(--space-5) var(--space-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--separator);
+}
+.history-search {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-h-lg);
+  padding: 0 var(--space-3);
+  background: var(--bg);
+  color: var(--text-tertiary);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.history-search:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--separator-strong));
+  box-shadow: var(--frame-shadow), var(--focus-ring);
+}
+.history-search input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-md);
+}
+.history-search input::placeholder {
+  color: var(--text-tertiary);
+}
+.history-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+/* This project ⇄ all projects: a two-way switch in the label voice. */
+.history-scope {
+  display: flex;
+  flex-shrink: 0;
+  padding: 2px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.history-scope-btn {
+  height: calc(var(--control-h-lg) - 4px);
+  padding: 0 var(--space-3);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius-sm) - 2px);
+  color: var(--text-tertiary);
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.history-scope-btn:hover {
+  color: var(--text);
+}
+.history-scope-btn.active {
+  background: var(--bg);
+  border-color: var(--separator);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 160px;
+}
+.history-hint {
+  /* Pinned to the modal's bottom edge while the list scrolls under it. */
+  position: sticky;
+  bottom: calc(-1 * var(--space-3));
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0 calc(-1 * var(--space-5)) calc(-1 * var(--space-3));
+  padding: var(--space-2) var(--space-5) var(--space-3);
+  background: var(--surface);
+  border-top: 1px solid var(--separator);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.history-hint kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: var(--text-3xs);
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-xs);
+}
+
+/* --- Section heads ------------------------------------------------------- */
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+  color: var(--text-tertiary);
+}
+.history-head:not(:first-child) {
+  margin-top: var(--space-3);
+}
+.history-count {
+  min-width: 1.6em;
+  padding: 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: center;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border-radius: var(--radius-pill);
+}
+/* "Needs you": the loose ends, in the same warning voice as the home card's
+   "N need you" pill — the number here IS that number. */
+.history-head.needs,
+.history-head.needs .history-count {
+  color: var(--warning);
+}
+.history-head.needs .history-count {
+  background: var(--warning-soft);
+}
+
+/* --- Rows ---------------------------------------------------------------- */
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.history-item.highlighted {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.history-item.active {
+  background: var(--accent-tint-strong);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--separator));
+  color: var(--text);
+}
+/* A loose end's frame and reason take the color of its dot, so the row says
+   one thing: amber to act, green to look, red to rescue. */
+.history-item.needy {
+  border-color: color-mix(in srgb, var(--warning) 22%, transparent);
+}
+.history-item.needy.active {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--separator));
+}
+.history-item.needy.check {
+  border-color: color-mix(in srgb, var(--green) 22%, transparent);
+}
+.history-item.needy.broken {
+  border-color: color-mix(in srgb, var(--danger) 22%, transparent);
+}
+/* Settled: tied off, nothing owed — quieted, but still a click away. */
+.history-item.settled {
+  opacity: 0.66;
+}
+.history-item.settled.highlighted,
+.history-item.settled.active {
+  opacity: 1;
+}
+/* The main clickable area of a row (everything but the delete icon). */
+.history-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.history-text {
+  flex: 1;
+  min-width: 0;
+}
+.history-title {
+  display: block;
+  font-size: var(--text-md);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The reason a chat needs the user — one quiet line under the title. */
+.history-need {
+  display: block;
+  margin-top: 1px;
+  font-size: var(--text-xs);
+  color: var(--warning);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.history-item.check .history-need {
+  color: var(--green);
+}
+.history-item.broken .history-need {
+  color: var(--danger);
+}
+.history-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  margin-top: 1px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.history-date,
+.history-sep {
+  flex-shrink: 0;
+}
+.history-sep {
+  opacity: 0.6;
+}
+.history-model,
+.history-project {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Already in the strip: a small mark, so opening it reads as "jump to". */
+.history-tab-mark {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  font-family: var(--font-display);
+  font-size: var(--label-size);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+  color: var(--text-tertiary);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-xs);
+}
+/* Subtle delete icon, revealed on row hover / highlight. */
+.history-delete {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--text-tertiary);
+  opacity: 0;
+  cursor: pointer;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.history-item:hover .history-delete,
+.history-item.highlighted .history-delete,
+.history-delete:focus-visible {
+  opacity: 1;
+}
+.history-delete:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.history-empty {
+  padding: var(--space-5) var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* --- Delete confirmation ------------------------------------------------- */
+.delete-confirm-text {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1.6;
+}
+.delete-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}

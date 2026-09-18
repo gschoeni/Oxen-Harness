@@ -10,7 +10,10 @@ import "./questions.css";
  *  the chat input (rather than a blocking, all-at-once modal). */
 export function QuestionPrompt() {
   const payload = useStore((s) => s.question);
-  if (!payload) return null;
+  // Only the chat that asked shows the card; a question from a background
+  // chat lights that chat's tab instead, and the card is there on arrival.
+  const forThisChat = useStore((s) => !!s.question && s.question.session === s.session?.session_id);
+  if (!payload || !forThisChat) return null;
   // Keyed by id so a new batch resets the stepper.
   return <QuestionStepper key={payload.id} payload={payload} />;
 }

@@ -241,6 +241,9 @@ export const ledgerMarkSeen = () => invoke<number>("ledger_mark_seen");
 /** Record that the user just looked at one thread (opened its chat, or
  *  watched its turn end); returns the new mark. */
 export const sessionMarkSeen = (id: string) => invoke<number>("session_mark_seen", { id });
+/** Name a chat; a blank name lets it title itself by its first message again. */
+export const renameSession = (id: string, title: string) =>
+  invoke<void>("rename_session", { id, title });
 /** Git overviews for workspaces, keyed by path; non-repos are absent. */
 export const workspaceGit = (paths: string[]) =>
   invoke<Record<string, GitOverview>>("workspace_git", { paths });

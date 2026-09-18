@@ -126,9 +126,13 @@ describe("FilesPanel", () => {
     await waitFor(() => expect(useStore.getState().filesReveal).toBeNull());
   });
 
-  it("renders nothing without a workspace", () => {
-    const { container } = render(<FilesPanel />);
-    expect(container).toBeEmptyDOMElement();
+  it("without a workspace, keeps the column's chrome and says where a project comes from", () => {
+    // The dock is always on; its header still carries the collapse toggle.
+    render(<FilesPanel />);
+    expect(screen.getByText("No project")).toBeInTheDocument();
+    expect(screen.getByText(/Pick a project from Home/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse left panel" })).toBeInTheDocument();
+    expect(fsListDir).not.toHaveBeenCalled();
   });
 
   it("shows git changes VS Code-style and opens a diff tab on click", async () => {

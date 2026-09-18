@@ -154,7 +154,7 @@ export function DockColumn({
         </div>
       )}
       <div className="dock-body">{active?.render({ onResizeStart: beginResize })}</div>
-      {/* The left dock renders its own toggle inside the sidebar header (next
+      {/* The left dock renders its own toggle inside the Files header (next
           to the project name); the right column has no shared header of its
           own, so the toggle is pinned into its panel's header band. */}
       {side === "right" && <DockToggle side="right" />}

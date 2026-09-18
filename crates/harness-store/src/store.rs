@@ -245,6 +245,20 @@ pub const TRAIL_STATE: &str = "trail";
 /// clears a loose end the user has yet to open.
 pub const SEEN_STATE: &str = "seen";
 
+/// `session_state` key for a name the user gave the chat (a JSON string).
+/// Absent, a chat is titled by its first user message; present, this wins
+/// everywhere a title is read ([`HistoryStore::list_sessions`],
+/// [`HistoryStore::ledger_rows`]). Written by [`HistoryStore::rename_session`].
+pub const TITLE_STATE: &str = "title";
+
+/// The user's name for a chat from its raw [`TITLE_STATE`] payload, or `None`
+/// when there is none worth showing (absent, malformed, or blank).
+fn custom_title(raw: Option<String>) -> Option<String> {
+    raw.and_then(|raw| serde_json::from_str::<String>(&raw).ok())
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
 /// `session_state` key for the agent's stream-rule repeat counters (which
 /// once-per-session reminders have already fired).
 pub const RULE_HISTORY_STATE: &str = "rule_history";
@@ -750,10 +764,11 @@ impl HistoryStore {
     /// List sessions that hold at least one user message, newest first.
     ///
     /// Each summary carries the first user message as a title so the UI can show
-    /// a readable label. Brand-new sessions that only contain the seeded system
-    /// prompt are omitted — they have no user turn to title them with. The
-    /// title is clipped in SQL ([`TITLE_CHARS`]) so the whole history list
-    /// stays small no matter how much was pasted into an opening prompt.
+    /// a readable label — unless the user named the chat, in which case that
+    /// name wins ([`TITLE_STATE`]). Brand-new sessions that only contain the
+    /// seeded system prompt are omitted — they have no user turn to title them
+    /// with. The title is clipped in SQL ([`TITLE_CHARS`]) so the whole history
+    /// list stays small no matter how much was pasted into an opening prompt.
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, HistoryError> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(&format!(
@@ -763,32 +778,53 @@ impl HistoryStore {
                          AND m.content IS NOT NULL
                        ORDER BY m.seq ASC LIMIT 1) AS title,
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count,
-                    s.review_status, s.source
+                    s.review_status, s.source,
+                    (SELECT raw_json FROM session_state t
+                       WHERE t.session_id = s.id AND t.key = ?1) AS custom_title
              FROM sessions s
              WHERE s.parent_session = ''
              ORDER BY s.created_at DESC",
         ))?;
-        let rows = stmt.query_map([], |row| {
-            Ok(SessionSummary {
-                id: row.get(0)?,
-                workspace: row.get(1)?,
-                model: row.get(2)?,
-                created_at: row.get(3)?,
-                title: row.get(4)?,
-                message_count: row.get(5)?,
-                review_status: row.get(6)?,
-                source: row.get(7)?,
-            })
+        let rows = stmt.query_map([TITLE_STATE], |row| {
+            Ok((
+                row.get::<_, Option<String>>(8)?,
+                SessionSummary {
+                    id: row.get(0)?,
+                    workspace: row.get(1)?,
+                    model: row.get(2)?,
+                    created_at: row.get(3)?,
+                    title: row.get(4)?,
+                    message_count: row.get(5)?,
+                    review_status: row.get(6)?,
+                    source: row.get(7)?,
+                },
+            ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let summary = row?;
+            let (custom, mut summary) = row?;
             // Skip sessions with no user turn (e.g. opened but never used).
             if summary.title.is_some() {
+                if let Some(name) = custom_title(custom) {
+                    summary.title = Some(name);
+                }
                 out.push(summary);
             }
         }
         Ok(out)
+    }
+
+    /// Give a session a name of the user's choosing, shown in place of its
+    /// first-message title everywhere. Whitespace-only clears the name, so the
+    /// chat goes back to titling itself. Clipped to [`TITLE_CHARS`] like the
+    /// titles it replaces.
+    pub fn rename_session(&self, session_id: &str, title: &str) -> Result<(), HistoryError> {
+        let name: String = title.trim().chars().take(TITLE_CHARS).collect();
+        if name.is_empty() {
+            self.clear_session_state(session_id, TITLE_STATE)
+        } else {
+            self.save_session_state(session_id, TITLE_STATE, &name)
+        }
     }
 
     /// Everything the Ledger needs about every native session, in one query.
@@ -813,7 +849,8 @@ impl HistoryStore {
                     COALESCE(last.role, ''),
                     COALESCE(substr(reply.content, 1, {PREVIEW_CHARS}), ''),
                     plan.raw_json, trail.raw_json, settle.raw_json, s.review_status,
-                    COALESCE(CAST(seen.raw_json AS INTEGER), 0)
+                    COALESCE(CAST(seen.raw_json AS INTEGER), 0),
+                    named.raw_json
              FROM sessions s
              LEFT JOIN (SELECT session_id,
                                COUNT(*) AS msg_count,
@@ -843,12 +880,22 @@ impl HistoryStore {
                     ON settle.session_id = s.id AND settle.key = ?3
              LEFT JOIN session_state seen
                     ON seen.session_id = s.id AND seen.key = ?4
+             LEFT JOIN session_state named
+                    ON named.session_id = s.id AND named.key = ?5
              WHERE s.source = '' AND s.parent_session = ''
              ORDER BY last_activity DESC",
         ))?;
-        let rows = stmt.query_map([PLAN_STATE, TRAIL_STATE, SETTLE_STATE, SEEN_STATE], |row| {
+        let params = [
+            PLAN_STATE,
+            TRAIL_STATE,
+            SETTLE_STATE,
+            SEEN_STATE,
+            TITLE_STATE,
+        ];
+        let rows = stmt.query_map(params, |row| {
             Ok((
                 row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(14)?,
                 LedgerRow {
                     id: row.get(0)?,
                     workspace: row.get(1)?,
@@ -869,9 +916,9 @@ impl HistoryStore {
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (title, mut ledger_row) = row?;
+            let (title, custom, mut ledger_row) = row?;
             if let Some(title) = title {
-                ledger_row.title = title;
+                ledger_row.title = custom_title(custom).unwrap_or(title);
                 out.push(ledger_row);
             }
         }
@@ -2219,6 +2266,38 @@ mod tests {
 
         let err = store.session_meta("does-not-exist").unwrap_err();
         assert!(matches!(err, HistoryError::SessionNotFound(_)));
+    }
+
+    #[test]
+    fn a_users_name_for_a_session_outranks_its_first_message_until_cleared() {
+        let store = store();
+        let id = store.create_session(&meta()).unwrap();
+        store
+            .append_message(&id, &Message::user("fix the flaky parser test"))
+            .unwrap();
+
+        store.rename_session(&id, "  Parser flake  ").unwrap();
+        assert_eq!(
+            store.list_sessions().unwrap()[0].title.as_deref(),
+            Some("Parser flake")
+        );
+        assert_eq!(store.ledger_rows().unwrap()[0].title, "Parser flake");
+
+        // A blank name means "title yourself again".
+        store.rename_session(&id, "   ").unwrap();
+        assert_eq!(
+            store.list_sessions().unwrap()[0].title.as_deref(),
+            Some("fix the flaky parser test")
+        );
+        assert_eq!(
+            store.ledger_rows().unwrap()[0].title,
+            "fix the flaky parser test"
+        );
+
+        // A name never lists a chat that has no user turn.
+        let fresh = store.create_session(&meta()).unwrap();
+        store.rename_session(&fresh, "Not yet").unwrap();
+        assert!(store.list_sessions().unwrap().iter().all(|s| s.id != fresh));
     }
 
     #[test]

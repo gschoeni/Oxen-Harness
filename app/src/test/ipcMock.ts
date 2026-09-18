@@ -347,6 +347,7 @@ export const settleSession = vi.fn(async (_id: string, note?: string) => ({
 export const reopenSession = vi.fn(async () => {});
 export const ledgerMarkSeen = vi.fn(async () => Math.floor(Date.now() / 1000));
 export const sessionMarkSeen = vi.fn(async (_id: string) => Math.floor(Date.now() / 1000));
+export const renameSession = vi.fn(async (_id: string, _title: string) => {});
 export const workspaceGit = vi.fn(async () => ({}));
 export const openProject = vi.fn(async (path: string) => ({
   path,
@@ -608,6 +609,7 @@ export function resetIpc() {
   reopenSession.mockReset().mockResolvedValue(undefined);
   ledgerMarkSeen.mockReset().mockResolvedValue(Math.floor(Date.now() / 1000));
   sessionMarkSeen.mockReset().mockResolvedValue(Math.floor(Date.now() / 1000));
+  renameSession.mockReset().mockResolvedValue(undefined);
   workspaceGit.mockReset().mockResolvedValue({});
   getDefaultProjectLocation.mockReset().mockResolvedValue(null);
   setDefaultProjectLocation.mockReset().mockImplementation(async (path: string) => path);

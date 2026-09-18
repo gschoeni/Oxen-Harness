@@ -4,7 +4,14 @@
 // transcript-level facts the snapshot carries and the settle marks; nothing in
 // this module invents state that could drift from the truth.
 
-import type { GitOverview, LedgerEntry, Project } from "../../lib/types";
+import type {
+  ApprovalRequestEvent,
+  GitOverview,
+  LedgerEntry,
+  LedgerSnapshot,
+  Project,
+  RunStatus,
+} from "../../lib/types";
 import { basename } from "../../lib/format";
 
 /** Where a thread stands, in trail language. Exactly one applies:
@@ -140,6 +147,55 @@ export interface BoardInputs {
 const DAY = 86_400;
 
 /** Fold the raw inputs into the board. */
+/** The store slices the board is folded from. */
+export interface BoardSlices {
+  ledger: LedgerSnapshot | null;
+  ledgerGit: Record<string, GitOverview>;
+  projects: Project[];
+  runStatus: Record<string, RunStatus | undefined>;
+  approvals: Record<string, ApprovalRequestEvent | undefined>;
+}
+
+/** The board as the app sees it right now: the snapshot's verdicts with the
+ *  live run statuses and pending approvals layered on top. Null until the
+ *  first snapshot lands. The one assembly every reader shares — the Ledger
+ *  page through `useBoard`, the store when it opens a project's threads. */
+export function boardFromState(s: BoardSlices, now = Math.floor(Date.now() / 1000)): Board | null {
+  if (!s.ledger) return null;
+  // The snapshot's running set survives restarts; live run statuses cover
+  // turns started since it was taken. Union, never either alone.
+  const running = new Set(s.ledger.running);
+  for (const [id, status] of Object.entries(s.runStatus)) {
+    if (status === "running") running.add(id);
+  }
+  // A pending approval means the agent is parked mid-turn on the user.
+  const waiting = new Set(
+    Object.entries(s.approvals)
+      .filter(([, request]) => request !== undefined)
+      .map(([session]) => session),
+  );
+  return deriveBoard({
+    entries: s.ledger.entries,
+    running,
+    waiting,
+    lastSeen: s.ledger.last_seen,
+    projects: s.projects,
+    git: s.ledgerGit,
+    now,
+  });
+}
+
+/** A project's open threads as a working set, most pressing first: the
+ *  ones with a claim on the user in urgency order, then the rest newest
+ *  first. Settled and archived threads are left out — nothing is owed there. */
+export function openThreadIds(board: Board | null, workspace: string): string[] {
+  const train = board?.trains.find((t) => t.workspace === workspace);
+  if (!train) return [];
+  return [...train.threads]
+    .sort((a, b) => needRank(a) - needRank(b) || b.entry.last_activity_at - a.entry.last_activity_at)
+    .map((t) => t.entry.id);
+}
+
 export function deriveBoard(inputs: BoardInputs): Board {
   const { entries, running, lastSeen, projects, git, now } = inputs;
   const waiting = inputs.waiting ?? new Set<string>();

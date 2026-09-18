@@ -80,6 +80,17 @@ pub(crate) async fn session_mark_seen(
     state.service.mark_session_seen(&id)
 }
 
+/// Give a chat a name of the user's choosing; blank clears it so the chat
+/// titles itself by its first message again.
+#[tauri::command]
+pub(crate) async fn rename_session(
+    state: State<'_, AppState>,
+    id: String,
+    title: String,
+) -> Result<(), String> {
+    state.service.rename_session(&id, &title)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

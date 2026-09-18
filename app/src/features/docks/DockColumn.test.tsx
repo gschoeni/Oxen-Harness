@@ -49,13 +49,13 @@ beforeEach(() => {
 describe("Dock columns", () => {
   it("the left dock collapses to a rail and comes back", async () => {
     render(<DockColumn side="left" />);
-    // The chat list is always available, so the column renders.
+    // The Files dock is always available, so the column renders.
     expect(screen.getByRole("button", { name: "Collapse left panel" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Collapse left panel" }));
     expect(useStore.getState().dockCollapsed.left).toBe(true);
-    // Collapsed: a rail with an expand button, no chat list.
-    expect(screen.queryByText("New chat")).not.toBeInTheDocument();
+    // Collapsed: a rail with an expand button, no file tree.
+    expect(screen.queryByRole("navigation", { name: "Project files" })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Expand left panel" }));
     expect(useStore.getState().dockCollapsed.left).toBe(false);

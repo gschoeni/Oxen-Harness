@@ -12,6 +12,7 @@ import { TasksPanel } from "./TasksPanel";
 import { MediaPanel } from "./MediaPanel";
 import { Plan } from "./Plan";
 import { TrailStrip } from "../ledger/TrailStrip";
+import { ChatTabs } from "../tabs/ChatTabs";
 import { Composer } from "./Composer";
 import { Queue } from "./Queue";
 import { Hero } from "./Hero";
@@ -212,6 +213,7 @@ export function Chat() {
       onDragOver={onDragOver}
       onDrop={onInternalDrop}
     >
+      <ChatTabs />
       <div className="messages-wrap">
         <TrailStrip />
         <Plan />

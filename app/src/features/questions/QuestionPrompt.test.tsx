@@ -11,6 +11,7 @@ import { resetAll } from "../../test/utils";
 import type { QuestionPayload } from "../../lib/types";
 
 const single: QuestionPayload = {
+  session: "s1",
   id: "q0",
   questions: [
     {
@@ -27,10 +28,16 @@ const single: QuestionPayload = {
 
 beforeEach(() => {
   resetAll();
-  useStore.setState({ question: single });
+  useStore.setState({ session: { ...ipc.sampleSession, session_id: "s1" }, question: single });
 });
 
 describe("QuestionPrompt", () => {
+  it("a background chat's question stays off this chat's screen", () => {
+    useStore.setState({ session: { ...ipc.sampleSession, session_id: "other" } });
+    render(<QuestionPrompt />);
+    expect(screen.queryByText(single.questions[0].question)).toBeNull();
+  });
+
   it("renders the current question and its options", () => {
     useStore.setState({ question: single });
     render(<QuestionPrompt />);
@@ -60,6 +67,7 @@ describe("QuestionPrompt", () => {
   it("asks multiple questions one at a time, then submits all answers", async () => {
     useStore.setState({
       question: {
+        session: "s1",
         id: "q1",
         questions: [
           {

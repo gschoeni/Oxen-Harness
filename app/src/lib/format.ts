@@ -93,3 +93,12 @@ export function relPath(path: string, root?: string | null): string {
   }
   return path;
 }
+
+/** A compact model label: drop the provider prefix and any date suffix so
+ *  `anthropic/claude-sonnet-4-5-20250929` reads as `claude-sonnet-4-5`. */
+export function shortModel(model: string): string {
+  const id = (model ?? "").trim();
+  if (!id) return "";
+  const name = id.split("/").pop() ?? id;
+  return name.replace(/-\d{6,8}$/, "");
+}

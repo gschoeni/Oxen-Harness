@@ -49,6 +49,8 @@ export function resetAll() {
     rightTab: {},
     browserUrl: null,
     leftTab: null,
+    chatTabs: {},
+    historyOpen: false,
     filesReveal: null,
     editorTabs: {},
     fsChange: null,
@@ -58,5 +60,6 @@ export function resetAll() {
     settingsOpen: false,
     settingsPage: "connection",
     question: null,
+    approvals: {},
   });
 }

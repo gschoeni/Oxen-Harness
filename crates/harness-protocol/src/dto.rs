@@ -337,6 +337,13 @@ pub struct SettleRequest {
     pub note: String,
 }
 
+/// A request to give a session a name of the user's choosing. A blank name
+/// clears it, so the session titles itself by its first message again.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RenameRequest {
+    pub title: String,
+}
+
 /// One thread as the Ledger renders it: a native session with everything that
 /// decides where its wagon sits — freshness, plan progress, whether it stopped
 /// mid-turn, and whether it has been tied off. Workspace-level facts (git

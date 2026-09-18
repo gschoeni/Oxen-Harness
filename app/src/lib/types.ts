@@ -457,6 +457,9 @@ export interface Question {
 }
 
 export interface QuestionPayload {
+  /** The chat that asked — a background chat's question lights its tab, not
+   *  the visible chat's card. */
+  session: string;
   id: string;
   questions: Question[];
 }

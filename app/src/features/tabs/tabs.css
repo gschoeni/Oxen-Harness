@@ -1,0 +1,304 @@
+/* The chat tab strip: one row above the messages, in the surface color so it
+   reads as chrome — the chat itself stays on --bg below.
+
+   Layout, left to right: the tabs, then "+" right where the next tab will
+   appear, then the history at the far edge. The tab region sizes to its
+   tabs and gives way when the row is full: tabs shrink to their minimum,
+   then the region scrolls (fade edges say so) — never wraps, and "+" never
+   scrolls out of reach because it lives outside the scroller. */
+
+.chat-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  min-height: 40px;
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface);
+  border-bottom: 1px solid var(--separator);
+}
+.chat-tabs-scroll {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  /* Room for the drop indicators and focus rings at the ends. */
+  padding: 2px 3px;
+  margin: -2px -3px;
+}
+.chat-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+/* Hidden tabs past an edge: fade that edge so the strip reads as scrollable. */
+.chat-tabs-scroll[data-overflow~="left"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px);
+  mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+.chat-tabs-scroll[data-overflow~="right"] {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 28px);
+  mask-image: linear-gradient(to left, transparent, #000 28px);
+}
+.chat-tabs-scroll[data-overflow~="left"][data-overflow~="right"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+
+/* A tab: dot · title · close, sized to its title (a short name makes a short
+   tab) within bounds. The active one lifts onto the chat's own background
+   with the same framing the dock tabs use, so "selected" looks the same on
+   every strip in the app. */
+.chat-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 1 auto;
+  /* Never squeezed past a readable title: the strip scrolls instead. */
+  min-width: 140px;
+  max-width: 220px;
+  height: 30px;
+  padding: 0 var(--space-1) 0 var(--space-3);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.chat-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.chat-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.chat-tab.active {
+  background: var(--bg);
+  border-color: var(--separator);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+.chat-tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Renaming in place: the title becomes a bare field in the same slot, the
+   tab's frame taking the focus ring so the row doesn't jump. */
+.chat-tab.editing {
+  max-width: 320px;
+  background: var(--bg);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--separator));
+  box-shadow: var(--focus-ring);
+  cursor: text;
+}
+.chat-tab-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+}
+/* The close glyph earns its space only on hover, focus, and the active tab —
+   a strip of ten × marks is noise. */
+.chat-tab-close {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.chat-tab:hover .chat-tab-close,
+.chat-tab.active .chat-tab-close,
+.chat-tab-close:focus-visible {
+  opacity: 1;
+}
+.chat-tab-close:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* Reordering by drag: the lifted tab fades, and the slot it would land in is
+   a 2px accent rule on the neighbour's edge. */
+.chat-tab.dragging {
+  opacity: 0.4;
+}
+.chat-tab.drop-before {
+  box-shadow: -3px 0 0 0 var(--accent);
+}
+.chat-tab.drop-after {
+  box-shadow: 3px 0 0 0 var(--accent);
+}
+
+/* A tab that needs the user, or lost its reply, tints its frame as well as
+   its dot: readable across a room, not just up close. */
+.chat-tab.needs {
+  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+}
+.chat-tab.needs.active {
+  border-color: color-mix(in srgb, var(--warning) 60%, var(--separator));
+}
+.chat-tab.broken {
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.chat-tab.broken.active {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--separator));
+}
+
+/* --- The status dot ------------------------------------------------------
+   Shared by tabs and history rows. Idle is faint and still; needs and broken
+   are solid, in their color, with a soft halo; running breathes. Check is a
+   hollow ring — an open loop — so it never reads as "running" in a theme
+   whose accent is green. */
+.status-dot {
+  position: relative;
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--text-tertiary);
+  opacity: 0.35;
+}
+.status-dot.running {
+  background: var(--accent);
+  opacity: 1;
+  animation: run-breathe 1.5s ease-in-out infinite;
+}
+.status-dot.running::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-pill);
+  border: 1.5px solid var(--accent);
+  animation: run-ripple 1.5s var(--ease) infinite;
+}
+.status-dot.needs {
+  background: var(--warning);
+  opacity: 1;
+  box-shadow: 0 0 0 3px var(--warning-soft);
+}
+.status-dot.check {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+  border: 2px solid var(--green);
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--green-soft);
+}
+.status-dot.broken {
+  background: var(--danger);
+  opacity: 1;
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+@keyframes run-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.18); opacity: 1; }
+}
+@keyframes run-ripple {
+  0% { transform: scale(1); opacity: 0.55; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-dot.running,
+  .status-dot.running::after {
+    animation: none;
+  }
+}
+
+/* --- The strip's buttons: new chat beside the tabs, the history at the end */
+.chat-tabs-new {
+  margin-left: 2px;
+}
+.chat-tabs-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.chat-tabs-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.chat-tabs-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--separator);
+}
+/* Closed chats that need the user: the number rides the history button in
+   the warning voice, so nothing owed is out of sight for being out of a tab. */
+.chat-tabs-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-3xs);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--warning);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent);
+  border-radius: var(--radius-pill);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* --- The tab's right-click menu ------------------------------------------
+   Pinned at the pointer; the shared .menu inside is positioned relative to
+   this anchor. */
+.chat-tab-menu {
+  position: fixed;
+  z-index: var(--z-dropdown);
+  width: 0;
+  height: 0;
+}
+.chat-tab-menu .menu {
+  top: 0;
+  left: 0;
+  width: 220px;
+}
+.chat-tab-menu-danger {
+  color: var(--danger);
+}

@@ -6,6 +6,7 @@ import { useStore } from "./store";
 import { getUi } from "./uiState";
 import * as ipc from "../test/ipcMock";
 import { resetAll } from "../test/utils";
+import type { LedgerEntry } from "./types";
 
 beforeEach(resetAll);
 
@@ -703,5 +704,244 @@ describe("capThreadSessions", () => {
     // by insertion fill the remaining protected slots.
     const kept = Object.keys(capThreadSessions(threads, runStatus, "cur", new Map([["a", 10]])));
     expect(kept).toEqual(["a", "d", "e", "f", "g", "h"]);
+  });
+});
+
+describe("store: chat tabs", () => {
+  const W = ipc.sampleSession.workspace;
+  const info = (id: string) => ({ ...ipc.sampleSession, session_id: id });
+  const summary = (id: string) => ({
+    id,
+    workspace: W,
+    model: "m",
+    created_at: 1,
+    title: id,
+    message_count: 2,
+    review_status: "" as const,
+    source: "",
+  });
+  /** Make `resume(id)` answer with a cold transcript for that id. */
+  const coldResume = () =>
+    ipc.resumeSession.mockImplementation(async (id = "") => ({
+      info: info(id),
+      messages: [],
+      running: false,
+    }));
+  const tabs = () => useStore.getState().chatTabs[W];
+
+  it("a new chat opens as a tab in its project's strip, persisted", async () => {
+    await useStore.getState().startNewSession();
+    expect(tabs()).toEqual(["new-session-id"]);
+    expect(getUi("chatTabs")).toEqual({ [W]: ["new-session-id"] });
+  });
+
+  it("opening a chat appends its tab once; reopening keeps the order", async () => {
+    coldResume();
+    useStore.setState({ session: info("a"), chatTabs: { [W]: ["a"] } });
+    await useStore.getState().resume("b");
+    await useStore.getState().resume("c");
+    await useStore.getState().resume("b");
+    expect(tabs()).toEqual(["a", "b", "c"]);
+    expect(useStore.getState().session?.session_id).toBe("b");
+  });
+
+  it("closing a background tab leaves the visible chat alone", async () => {
+    useStore.setState({ session: info("a"), chatTabs: { [W]: ["a", "b"] } });
+    await useStore.getState().closeTab("b");
+    expect(tabs()).toEqual(["a"]);
+    expect(ipc.resumeSession).not.toHaveBeenCalled();
+    expect(useStore.getState().session?.session_id).toBe("a");
+  });
+
+  it("closing the visible chat lands on its right neighbour, else its left", async () => {
+    coldResume();
+    useStore.setState({ session: info("b"), chatTabs: { [W]: ["a", "b", "c"] } });
+    await useStore.getState().closeTab("b");
+    expect(tabs()).toEqual(["a", "c"]);
+    expect(useStore.getState().session?.session_id).toBe("c");
+
+    await useStore.getState().closeTab("c");
+    expect(tabs()).toEqual(["a"]);
+    expect(useStore.getState().session?.session_id).toBe("a");
+  });
+
+  it("closing the last tab opens a fresh chat — unless it already is one", async () => {
+    // "a" has history, so closing it leaves nothing to show: mint a new chat.
+    useStore.setState({ session: info("a"), sessions: [summary("a")], chatTabs: { [W]: ["a"] } });
+    await useStore.getState().closeTab("a");
+    expect(ipc.newSession).toHaveBeenCalledOnce();
+    expect(tabs()).toEqual(["new-session-id"]);
+
+    // The fresh chat is the only tab and untouched: closing it stays put
+    // rather than minting orphans.
+    await useStore.getState().closeTab("new-session-id");
+    expect(ipc.newSession).toHaveBeenCalledOnce();
+    expect(tabs()).toEqual(["new-session-id"]);
+  });
+
+  it("close others keeps one tab and shows it", async () => {
+    coldResume();
+    useStore.setState({ session: info("a"), chatTabs: { [W]: ["a", "b", "c"] } });
+    await useStore.getState().closeOtherTabs("c");
+    expect(tabs()).toEqual(["c"]);
+    expect(useStore.getState().session?.session_id).toBe("c");
+  });
+
+  it("close to the right drops the tabs after it, showing it if the visible chat went", async () => {
+    coldResume();
+    useStore.setState({ session: info("a"), chatTabs: { [W]: ["a", "b", "c", "d"] } });
+    await useStore.getState().closeTabsRight("c");
+    expect(tabs()).toEqual(["a", "b", "c"]);
+    expect(useStore.getState().session?.session_id).toBe("a"); // untouched
+
+    await useStore.getState().closeTabsRight("b");
+    expect(tabs()).toEqual(["a", "b"]);
+    expect(useStore.getState().session?.session_id).toBe("a");
+
+    useStore.setState({ session: info("b") });
+    await useStore.getState().closeTabsRight("a");
+    expect(tabs()).toEqual(["a"]);
+    expect(useStore.getState().session?.session_id).toBe("a");
+  });
+
+  it("deleting chats drops their tabs; deleting the visible one lands on a survivor", async () => {
+    coldResume();
+    useStore.setState({ session: info("b"), chatTabs: { [W]: ["a", "b", "c"] } });
+    await useStore.getState().removeSessions(["b", "c"]);
+    expect(tabs()).toEqual(["a"]);
+    expect(useStore.getState().session?.session_id).toBe("a");
+    expect(ipc.newSession).not.toHaveBeenCalled();
+  });
+
+  it("pruning sheds tabs the history doesn't know, keeping the visible chat", () => {
+    useStore.setState({
+      session: info("fresh"),
+      sessions: [summary("a")],
+      chatTabs: { [W]: ["a", "gone", "fresh"], "/other": ["stale"] },
+    });
+    useStore.getState().pruneTabs();
+    expect(useStore.getState().chatTabs).toEqual({ [W]: ["a", "fresh"] });
+    expect(getUi("chatTabs")).toEqual({ [W]: ["a", "fresh"] });
+  });
+});
+
+describe("store: renaming a chat", () => {
+  it("patches the listed title at once, writes it, then re-reads the list and board", async () => {
+    useStore.setState({
+      sessions: [{ id: "a", workspace: "/w", model: "m", created_at: 1, title: "first words", message_count: 2, review_status: "", source: "" }],
+    });
+    await useStore.getState().renameSession("a", "  Parser flake ");
+    expect(ipc.renameSession).toHaveBeenCalledWith("a", "Parser flake");
+    expect(ipc.listSessions).toHaveBeenCalled();
+    expect(ipc.ledgerSnapshot).toHaveBeenCalled();
+  });
+
+  it("a blank name clears the custom title without touching the list", async () => {
+    useStore.setState({
+      sessions: [{ id: "a", workspace: "/w", model: "m", created_at: 1, title: "first words", message_count: 2, review_status: "", source: "" }],
+    });
+    ipc.listSessions.mockResolvedValueOnce([] as never);
+    await useStore.getState().renameSession("a", "   ");
+    expect(ipc.renameSession).toHaveBeenCalledWith("a", "");
+  });
+});
+
+describe("store: chat tabs, hardened", () => {
+  const W = ipc.sampleSession.workspace;
+  const info = (id: string) => ({ ...ipc.sampleSession, session_id: id });
+
+  it("moveTab reorders within the strip and persists; a no-op move writes nothing", () => {
+    useStore.setState({ chatTabs: { [W]: ["a", "b", "c"] } });
+    useStore.getState().moveTab("c", "a");
+    expect(useStore.getState().chatTabs[W]).toEqual(["c", "a", "b"]);
+    expect(getUi("chatTabs")).toEqual({ [W]: ["c", "a", "b"] });
+    const before = useStore.getState().chatTabs;
+    useStore.getState().moveTab("c", "a");
+    expect(useStore.getState().chatTabs).toBe(before);
+  });
+
+  it("removing a project drops its strip", async () => {
+    useStore.setState({ chatTabs: { [W]: ["a"], "/gone": ["x", "y"] } });
+    await useStore.getState().removeProject("/gone");
+    expect(useStore.getState().chatTabs).toEqual({ [W]: ["a"] });
+  });
+
+  it("closing the visible chat falls back to a fresh chat when its neighbour won't open", async () => {
+    ipc.resumeSession.mockRejectedValueOnce(new Error("no such session"));
+    useStore.setState({ session: info("a"), chatTabs: { [W]: ["a", "b"] } });
+    await useStore.getState().closeTab("a");
+    expect(ipc.newSession).toHaveBeenCalledOnce();
+    expect(useStore.getState().session?.session_id).toBe("new-session-id");
+    // The dead neighbour is gone from the strip too.
+    expect(useStore.getState().chatTabs[W]).toEqual(["new-session-id"]);
+  });
+
+  it("refreshHistory says whether the list loaded, keeping the old one when it didn't", async () => {
+    useStore.setState({ sessions: [{ id: "keep", workspace: W, model: "m", created_at: 1, title: "t", message_count: 1, review_status: "", source: "" }] });
+    ipc.listSessions.mockRejectedValueOnce(new Error("backend away"));
+    expect(await useStore.getState().refreshHistory()).toBe(false);
+    expect(useStore.getState().sessions.map((s) => s.id)).toEqual(["keep"]);
+    expect(await useStore.getState().refreshHistory()).toBe(true);
+  });
+});
+
+describe("store: entering a project opens its loose ends as tabs", () => {
+  const now = Math.floor(Date.now() / 1000);
+  // The fresh chat a project opens with roots in that project.
+  beforeEach(() => {
+    ipc.newSession.mockImplementation(async () => ({ ...ipc.sampleSession, session_id: "new-session-id", workspace: "/w" }));
+  });
+  const entry = (id: string, workspace: string, extra: Partial<LedgerEntry> = {}): LedgerEntry => ({
+    id,
+    workspace,
+    model: "m",
+    created_at: now - 86_400,
+    last_activity_at: now - 3_600,
+    title: id,
+    last_reply: "",
+    message_count: 2,
+    mid_turn: false,
+    plan: null,
+    trail: null,
+    settle: null,
+    review_status: "",
+    seen_at: 0,
+    ...extra,
+  });
+
+  it("opens open threads (needs you first, then newest), skipping settled and archived ones", async () => {
+    ipc.ledgerSnapshot.mockResolvedValue({
+      entries: [
+        entry("older", "/w", { last_activity_at: now - 7_200 }),
+        entry("newer", "/w"),
+        // The reply never arrived: needs the user, so it leads.
+        entry("dangling", "/w", { mid_turn: true, last_activity_at: now - 10_000 }),
+        entry("tied", "/w", { settle: { settled_at: now - 60, note: "" } }),
+        entry("archived", "/w", { last_activity_at: now - 20 * 86_400 }),
+        entry("elsewhere", "/other"),
+      ],
+      running: [],
+      last_seen: now,
+    });
+    await useStore.getState().prepareProject("/w");
+    expect(useStore.getState().chatTabs["/w"]).toEqual(["dangling", "newer", "older", "new-session-id"]);
+    expect(useStore.getState().chatTabs["/other"]).toBeUndefined();
+  });
+
+  it("keeps tabs already open where they were, adding only what's missing", async () => {
+    ipc.ledgerSnapshot.mockResolvedValue({
+      entries: [entry("a", "/w"), entry("b", "/w", { last_activity_at: now - 7_200 })],
+      running: [],
+      last_seen: now,
+    });
+    useStore.setState({ chatTabs: { "/w": ["b", "mine"] } });
+    await useStore.getState().prepareProject("/w");
+    expect(useStore.getState().chatTabs["/w"]).toEqual(["b", "mine", "a", "new-session-id"]);
+  });
+
+  it("a project with nothing on the trail just gets the fresh chat", async () => {
+    ipc.newSession.mockImplementation(async () => ({ ...ipc.sampleSession, session_id: "new-session-id", workspace: "/quiet" }));
+    await useStore.getState().prepareProject("/quiet");
+    expect(useStore.getState().chatTabs["/quiet"]).toEqual(["new-session-id"]);
   });
 });

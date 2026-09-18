@@ -122,6 +122,7 @@ The Ledger (the home board of threads across every project):
 GET    /v1/ledger                    → LedgerSnapshot {entries, running, last_seen}
 POST   /v1/ledger/seen               record "the user just looked" → new mark (unix secs)
 POST   /v1/sessions/{id}/seen        record "the user just looked at THIS thread" → new mark
+POST   /v1/sessions/{id}/title       name a chat: {title} (blank = title by first message again)
 POST   /v1/sessions/{id}/settle      tie a thread off: {note?} → SettleState
 DELETE /v1/sessions/{id}/settle      bring it back to the trail
 ```

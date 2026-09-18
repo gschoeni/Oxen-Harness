@@ -24,6 +24,8 @@ export interface UiState {
   projectsSort?: string;
   /** Whether the code editor + diff viewer wrap long lines. */
   editorWrap?: boolean;
+  /** Open chat tabs per project (workspace path → session ids, strip order). */
+  chatTabs?: Record<string, string[]>;
 }
 
 let cache: UiState = {};
@@ -44,6 +46,7 @@ const LEGACY_KEYS: Record<keyof UiState, string> = {
   projectsSort: "oxen-harness.projects-sort",
   // Never lived in localStorage (born after the ui.json move).
   editorWrap: "oxen-editor-wrap",
+  chatTabs: "oxen-chat-tabs",
 };
 
 /** Load ui.json into the cache. Awaited in `main.tsx` before the store module

@@ -2,9 +2,9 @@
 // surface that renders threads (the Ledger page, a project's trail section).
 // Null until the first snapshot lands.
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useStore } from "../../lib/store";
-import { deriveBoard, type Board } from "./ledger";
+import { boardFromState, type Board, type Thread } from "./ledger";
 
 export function useBoard(): Board | null {
   const ledger = useStore((s) => s.ledger);
@@ -13,28 +13,30 @@ export function useBoard(): Board | null {
   const runStatus = useStore((s) => s.runStatus);
   const approvals = useStore((s) => s.approvals);
 
+  return useMemo(
+    () => boardFromState({ ledger, ledgerGit, projects, runStatus, approvals }),
+    [ledger, runStatus, approvals, projects, ledgerGit],
+  );
+}
+
+/** Every thread the board has a verdict on, by session — the lookup the tab
+ *  strip and the history rows share. A chat can be reached without ever
+ *  visiting Home, so this fetches the snapshot once if nothing has; the store
+ *  keeps it fresh from there. Archived ("lost") threads are left out on
+ *  purpose: the amnesty means they never nag. */
+export function useThreads(): Map<string, Thread> {
+  const ledger = useStore((s) => s.ledger);
+  const refreshLedger = useStore((s) => s.refreshLedger);
+  useEffect(() => {
+    if (!ledger) void refreshLedger();
+  }, [ledger, refreshLedger]);
+  const board = useBoard();
   return useMemo(() => {
-    if (!ledger) return null;
-    // The snapshot's running set survives restarts; live run statuses cover
-    // turns started since it was taken. Union, never either alone.
-    const running = new Set(ledger.running);
-    for (const [id, status] of Object.entries(runStatus)) {
-      if (status === "running") running.add(id);
+    const map = new Map<string, Thread>();
+    for (const train of board?.trains ?? []) {
+      for (const thread of train.threads) map.set(thread.entry.id, thread);
     }
-    // A pending approval means the agent is parked mid-turn on the user.
-    const waiting = new Set(
-      Object.entries(approvals)
-        .filter(([, request]) => request !== undefined)
-        .map(([session]) => session),
-    );
-    return deriveBoard({
-      entries: ledger.entries,
-      running,
-      waiting,
-      lastSeen: ledger.last_seen,
-      projects,
-      git: ledgerGit,
-      now: Math.floor(Date.now() / 1000),
-    });
-  }, [ledger, runStatus, approvals, projects, ledgerGit]);
+    for (const thread of board?.settled ?? []) map.set(thread.entry.id, thread);
+    return map;
+  }, [board]);
 }

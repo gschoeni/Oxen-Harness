@@ -138,6 +138,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/v1/ledger", get(ledger_snapshot))
         .route("/v1/ledger/seen", post(ledger_mark_seen))
         .route("/v1/sessions/{id}/seen", post(session_mark_seen))
+        .route("/v1/sessions/{id}/title", post(rename_session))
         .route(
             "/v1/sessions/{id}/settle",
             post(settle_session).delete(reopen_session),
@@ -405,6 +406,18 @@ async fn session_mark_seen(
 ) -> ApiResult<Json<i64>> {
     authorize(&state, &headers, None)?;
     Ok(Json(state.service.mark_session_seen(&id)?))
+}
+
+/// Name a chat; a blank name lets it title itself by its first message again.
+async fn rename_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<harness_protocol::RenameRequest>,
+) -> ApiResult<StatusCode> {
+    authorize(&state, &headers, None)?;
+    state.service.rename_session(&id, &request.title)?;
+    Ok(StatusCode::OK)
 }
 
 /// Tie off a thread, optionally with a one-line closing note.

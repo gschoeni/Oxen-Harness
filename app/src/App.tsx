@@ -8,6 +8,8 @@ import { planColumns, type ColumnPlan, type LayoutPlan } from "./features/docks/
 import { Settings } from "./features/settings/Settings";
 import { HomePage } from "./features/ledger/HomePage";
 import { InspectorDrawer } from "./features/inspector/Inspector";
+import { HistoryModal } from "./features/history/HistoryModal";
+import { useChatTabShortcuts } from "./features/tabs/shortcuts";
 import { activeTheme, fsUnwatch, fsWatch } from "./lib/ipc";
 import { useStore } from "./lib/store";
 import "./app.css";
@@ -16,10 +18,12 @@ export default function App() {
   const applyTheme = useStore((s) => s.applyTheme);
   const loadSession = useStore((s) => s.loadSession);
   const refreshHistory = useStore((s) => s.refreshHistory);
+  const pruneTabs = useStore((s) => s.pruneTabs);
   const refreshTotalTokens = useStore((s) => s.refreshTotalTokens);
   const loadCloudModels = useStore((s) => s.loadCloudModels);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const homeOpen = useStore((s) => s.homeOpen);
+  const historyOpen = useStore((s) => s.historyOpen);
   const sessionId = useStore((s) => s.session?.session_id);
   const workspace = useStore((s) => s.session?.workspace ?? null);
   const syncPreview = useStore((s) => s.syncPreview);
@@ -30,6 +34,7 @@ export default function App() {
   // The solver keeps every column on screen when the window shrinks.
   const layout = useLayoutPlan();
   useDockShortcuts();
+  useChatTabShortcuts();
 
   // A freshly opened/resumed chat may already have a running server (they
   // outlive agent eviction) — sync its status so the pane reappears.
@@ -47,13 +52,18 @@ export default function App() {
   }, [workspace]);
 
   // Load the active theme, current session, and history once at startup.
+  // The tab strip restores from the last run, then sheds any tab whose chat
+  // the history doesn't know — once both have landed, so the visible chat is
+  // never mistaken for a stale one. A history that failed to load proves
+  // nothing, so the tabs stay until a load that does.
   useEffect(() => {
     activeTheme().then(applyTheme).catch(() => {});
-    loadSession().catch(() => {});
-    refreshHistory();
+    Promise.all([loadSession().catch(() => {}), refreshHistory()]).then(([, loaded]) => {
+      if (loaded) pruneTabs();
+    });
     refreshTotalTokens();
     loadCloudModels();
-  }, [applyTheme, loadSession, refreshHistory, refreshTotalTokens, loadCloudModels]);
+  }, [applyTheme, loadSession, refreshHistory, pruneTabs, refreshTotalTokens, loadCloudModels]);
 
   // Agent event subscriptions (tokens, tools, usage, canvas, questions) are set
   // up once in `startAgentEventBridge` (see main.tsx) — outside React's lifecycle
@@ -81,6 +91,7 @@ export default function App() {
           and closing it returns to whatever it covered. */}
       {homeOpen && <HomePage />}
       {settingsOpen && <Settings />}
+      {historyOpen && <HistoryModal />}
       <InspectorDrawer />
     </div>
   );

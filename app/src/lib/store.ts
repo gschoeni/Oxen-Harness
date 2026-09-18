@@ -15,6 +15,7 @@ import {
   gitStatus,
   ledgerMarkSeen,
   sessionMarkSeen,
+  renameSession as renameSessionIpc,
   ledgerSnapshot,
   listCloudModels,
   listProjects,
@@ -71,9 +72,20 @@ import {
   transcriptToItems,
   type Item,
 } from "../features/chat/thread";
+import { boardFromState, openThreadIds } from "../features/ledger/ledger";
 import { partialCanvasDoc } from "./streamingArgs";
 import { withSnippetContext } from "./snippets";
 import { getUi, setUi } from "./uiState";
+import {
+  movedTab,
+  neighbourTab,
+  parseChatTabs,
+  stripOf,
+  withoutStrip,
+  withoutTabs,
+  withTab,
+  type ChatTabs,
+} from "./chatTabs";
 import type {
   ApprovalEvent,
   ApprovalRequestEvent,
@@ -157,6 +169,31 @@ function loadDockLayout(): DockLayout {
 function saveDockLayout(layout: DockLayout) {
   setUi("docks", layout);
 }
+
+/** The store patch that installs a tab layout and persists it in one step,
+ *  so no caller can change the strip and forget the write. */
+function tabsPatch(chatTabs: ChatTabs): Pick<AppState, "chatTabs"> {
+  setUi("chatTabs", chatTabs);
+  return { chatTabs };
+}
+
+/** The patch that gives the chat about to be shown its tab. Every session
+ *  swap applies it, so "the visible chat has a tab" holds by construction. */
+function tabFor(s: AppState, info: SessionInfo): Partial<AppState> {
+  const next = withTab(s.chatTabs, info.workspace, info.session_id);
+  return next === s.chatTabs ? {} : tabsPatch(next);
+}
+
+/** A chat nothing has touched: no persisted turn, no live thread, not
+ *  running. Closing the last such tab would only mint another in its place. */
+function isFreshChat(s: AppState, id: string): boolean {
+  return (
+    !s.sessions.some((x) => x.id === id) &&
+    s.runStatus[id] !== "running" &&
+    (s.threads[id]?.length ?? 0) === 0
+  );
+}
+
 
 /** The right-column dock ids a user can pick as the active tab
  *  (see `features/docks/docks.tsx`). */
@@ -526,6 +563,14 @@ interface AppState {
   /** Which left-dock is active when more than one has content (a dock id from
    *  the registry). App-wide: the file tree follows the workspace, not the chat. */
   leftTab: string | null;
+  /** The chat tabs open per project (workspace path → session ids in strip
+   *  order). The visible chat is the active tab and always has one. A tab is
+   *  a bookmark, not a process: closing it never stops the agent behind it.
+   *  Persisted across runs. */
+  chatTabs: ChatTabs;
+  /** Whether the chat history modal (search every chat, open one as a tab)
+   *  is showing. */
+  historyOpen: boolean;
   /** A workspace-relative path the Files dock should expand to, select, and
    *  scroll into view (the Gallery's "Reveal in Files"). `tick` makes the
    *  same path revealable twice; the panel clears it once done. */
@@ -571,10 +616,20 @@ interface AppState {
   /** Open/close the floating game dock. */
   setGameDockOpen: (open: boolean) => void;
   applyTheme: (t: Theme) => void;
-  refreshHistory: () => Promise<void>;
+  /** Re-read the history list (and projects). Resolves true when it loaded,
+   *  false when the previous lists were kept after a transient failure. */
+  refreshHistory: () => Promise<boolean>;
   loadSession: () => Promise<void>;
   startNewSession: () => Promise<void>;
+  /** The "+" and ⌘T: a fresh chat — unless the visible one is still untouched,
+   *  in which case it's already the fresh chat and minting another would only
+   *  pile up empty sessions. */
+  newChat: () => Promise<void>;
   resume: (id: string) => Promise<void>;
+  /** Name a chat (a tab's double-click). Blank clears the name, so the chat
+   *  titles itself by its first message again. The list and the board update
+   *  in place first; the backend write follows. */
+  renameSession: (id: string, title: string) => Promise<void>;
   /** Permanently delete a chat; if it was the current one, open a fresh chat. */
   removeSession: (id: string) => Promise<void>;
   /** Permanently delete many chats at once (the archive purge): one state
@@ -597,6 +652,11 @@ interface AppState {
   openProjectHome: (path: string) => void;
   /** Make project-scoped surfaces point at a project without creating a chat. */
   selectProject: (path: string) => Promise<void>;
+  /** Open every thread of `workspace` that still has something owed — needs
+   *  the user, or simply isn't tied off yet — as tabs, most pressing first.
+   *  Entering a project calls this so its loose ends are in the strip on
+   *  arrival; tabs already open keep their place. */
+  openProjectThreads: (workspace: string) => Promise<void>;
   /** Prepare a known project and fresh chat while keeping its home visible. */
   prepareProject: (path: string, model?: StartupModelChoice) => Promise<void>;
   /** Switch to a known project and enter its fresh chat. */
@@ -759,8 +819,25 @@ interface AppState {
   closeBrowser: () => void;
   /** Switch the current chat's right-panel tab (preview / canvas / browser / editor). */
   setRightTab: (tab: RightTabId) => void;
-  /** Switch the left column's active tab (chats / files). */
+  /** Switch the left column's active dock (a dock id from the registry). */
   setLeftTab: (id: string) => void;
+  /** Close a chat tab. Closing the visible chat lands on its neighbour (the
+   *  tab to its right, else left); closing the last one opens a fresh chat.
+   *  The agent behind a closed tab keeps running — the history badge counts
+   *  it once it needs the user. */
+  closeTab: (id: string) => Promise<void>;
+  /** Close every tab in `id`'s project except `id`, and show it. */
+  closeOtherTabs: (id: string) => Promise<void>;
+  /** Close the tabs after `id` in strip order; show `id` if the visible chat
+   *  was among them. */
+  closeTabsRight: (id: string) => Promise<void>;
+  /** Reorder a tab within its strip: just before `before`, or last when null. */
+  moveTab: (id: string, before: string | null) => void;
+  /** Drop tabs for chats the history no longer lists — run once the list has
+   *  loaded at boot, so a chat deleted or never started in a previous run
+   *  doesn't come back as a dead tab. The visible chat is always kept. */
+  pruneTabs: () => void;
+  setHistoryOpen: (open: boolean) => void;
   /** Show the Files dock and reveal a workspace-relative path in its tree. */
   revealInFiles: (path: string) => void;
   clearFilesReveal: () => void;
@@ -1052,6 +1129,8 @@ export const useStore = create<AppState>((rawSet, get) => {
     rightTab: {},
     browserUrl: null,
     leftTab: null,
+    chatTabs: parseChatTabs(getUi("chatTabs")),
+    historyOpen: false,
     filesReveal: null,
     editorTabs: {},
     fsChange: null,
@@ -1090,14 +1169,17 @@ export const useStore = create<AppState>((rawSet, get) => {
         // Projects derive from sessions' workspaces, so refresh both together.
         const [sessions, projects] = await Promise.all([listSessions(), listProjects()]);
         set({ sessions, projects });
+        return true;
       } catch {
         /* leave the previous lists in place on a transient error */
+        return false;
       }
     },
 
     loadSession: async () => {
       const info = await sessionInfo();
       set((s) => ({
+        ...tabFor(s, info),
         session: info,
         infos: { ...s.infos, [info.session_id]: info },
         threads: capThreadSessions(
@@ -1115,11 +1197,18 @@ export const useStore = create<AppState>((rawSet, get) => {
         const threads = capThreadSessions({ ...s.threads, [info.session_id]: [] }, s.runStatus, info.session_id);
         return {
           ...sweepCached(s, threads),
+          ...tabFor(s, info),
           session: info,
           infos: { ...retainCached(s.infos, threads, s.runStatus), [info.session_id]: info },
         };
       });
       get().refreshHistory();
+    },
+
+    newChat: async () => {
+      const s = get();
+      if (s.session && isFreshChat(s, s.session.session_id)) return;
+      await s.startNewSession();
     },
 
     resume: async (id) => {
@@ -1162,9 +1251,11 @@ export const useStore = create<AppState>((rawSet, get) => {
         const infos = view.running ? s.infos : { ...s.infos, [id]: view.info };
         const runStatus = { ...s.runStatus };
         if (runStatus[id] === "unread") delete runStatus[id]; // viewing it clears the dot
+        const session = infos[id] ?? view.info;
         return {
           ...sweepCached(s, threads),
-          session: infos[id] ?? view.info,
+          ...tabFor(s, session),
+          session,
           infos: retainCached(infos, threads, s.runStatus),
           runStatus,
         };
@@ -1174,6 +1265,19 @@ export const useStore = create<AppState>((rawSet, get) => {
       // flag comes off — durably, so it stays off across restarts — and the
       // board repaints once the mark has landed.
       void markSeenThenRefresh(id);
+    },
+
+    renameSession: async (id, title) => {
+      const name = title.trim();
+      // Only a listed chat can be patched in place; a fresh one takes the
+      // name once its first turn lands and the list picks it up.
+      if (name) {
+        set((s) => ({
+          sessions: s.sessions.map((x) => (x.id === id ? { ...x, title: name } : x)),
+        }));
+      }
+      await renameSessionIpc(id, name);
+      await Promise.all([get().refreshHistory(), get().refreshLedger()]);
     },
 
     removeSession: async (id) => {
@@ -1190,7 +1294,17 @@ export const useStore = create<AppState>((rawSet, get) => {
         pendingTokens.delete(id);
       }
       const gone = new Set(ids);
-      const wasCurrent = gone.has(get().session?.session_id ?? "");
+      const current = get().session?.session_id ?? "";
+      const wasCurrent = gone.has(current);
+      // If the visible chat is among them, land on its nearest surviving
+      // tab — the strip with the other deleted ids already gone.
+      const strip = stripOf(get().chatTabs, current)?.[1] ?? [];
+      const landing = wasCurrent
+        ? neighbourTab(
+            strip.filter((id) => id === current || !gone.has(id)),
+            current,
+          )
+        : null;
       // Forget every per-session slice so nothing lingers for deleted chats.
       set((s) => {
         const drop = <T,>(rec: Record<string, T>) => {
@@ -1199,6 +1313,7 @@ export const useStore = create<AppState>((rawSet, get) => {
           return copy;
         };
         return {
+          ...tabsPatch(withoutTabs(s.chatTabs, ids)),
           session: wasCurrent ? null : s.session,
           threads: drop(s.threads),
           infos: drop(s.infos),
@@ -1229,8 +1344,9 @@ export const useStore = create<AppState>((rawSet, get) => {
         };
       });
       await Promise.all([get().refreshHistory(), get().refreshLedger()]);
-      // If we deleted the chat in view, drop into a fresh one so the UI isn't empty.
-      if (wasCurrent) await get().startNewSession();
+      // The chat in view is gone: show its neighbour, or a fresh chat when it
+      // was the strip's last, so the UI is never empty.
+      if (wasCurrent) await (landing ? get().resume(landing) : get().startNewSession());
     },
 
     setHomeOpen: (homeOpen) => {
@@ -1293,8 +1409,20 @@ export const useStore = create<AppState>((rawSet, get) => {
       await get().refreshHistory();
     },
 
+    openProjectThreads: async (workspace) => {
+      // A chat can be reached before Home ever loaded the board.
+      if (!get().ledger) await get().refreshLedger();
+      set((s) => {
+        const ids = openThreadIds(boardFromState(s), workspace);
+        const next = ids.reduce((tabs, id) => withTab(tabs, workspace, id), s.chatTabs);
+        return next === s.chatTabs ? {} : tabsPatch(next);
+      });
+    },
+
     prepareProject: async (path, model) => {
       await setActiveProject(path);
+      // The project's loose ends first, so the fresh chat lands beside them.
+      await get().openProjectThreads(path);
       if (model?.local) {
         await get().switchToLocalModel(model.id);
       } else {
@@ -1310,6 +1438,12 @@ export const useStore = create<AppState>((rawSet, get) => {
 
     removeProject: async (path) => {
       await deleteProject(path);
+      // Its tabs go with it: a strip for a project that no longer exists
+      // would only come back as dead tabs if the folder were re-added.
+      set((s) => {
+        const next = withoutStrip(s.chatTabs, path);
+        return next === s.chatTabs ? {} : tabsPatch(next);
+      });
       // Both lists must forget it: the projects (cards, quiet rows) and the
       // board snapshot (its threads no longer make a train).
       await Promise.all([get().refreshHistory(), get().refreshLedger()]);
@@ -1320,6 +1454,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         const threads = capThreadSessions({ ...s.threads, [info.session_id]: [] }, s.runStatus, info.session_id);
         return {
           ...sweepCached(s, threads),
+          ...tabFor(s, info),
           session: info,
           infos: { ...retainCached(s.infos, threads, s.runStatus), [info.session_id]: info },
         };
@@ -2217,6 +2352,67 @@ export const useStore = create<AppState>((rawSet, get) => {
       if (get().dockCollapsed.left) get().setDockCollapsed("left", false);
       set({ leftTab: id });
     },
+
+    closeTab: async (id) => {
+      const s = get();
+      const strip = stripOf(s.chatTabs, id);
+      if (!strip) return;
+      const ids = strip[1];
+      const current = s.session?.session_id;
+      // The only tab, and an untouched fresh chat: closing it would just mint
+      // another empty one in its place. Stay put.
+      if (id === current && ids.length === 1 && isFreshChat(s, id)) return;
+      const landing = neighbourTab(ids, id);
+      set((s) => tabsPatch(withoutTabs(s.chatTabs, [id])));
+      if (id !== current) return;
+      // A neighbour that won't open (deleted behind our back) must not leave
+      // the closed chat on screen with no tab: fall through to a fresh one.
+      if (landing) {
+        try {
+          await get().resume(landing);
+          return;
+        } catch {
+          set((s) => tabsPatch(withoutTabs(s.chatTabs, [landing])));
+        }
+      }
+      await get().startNewSession();
+    },
+
+    closeOtherTabs: async (id) => {
+      const strip = stripOf(get().chatTabs, id);
+      if (!strip) return;
+      set((s) => tabsPatch({ ...s.chatTabs, [strip[0]]: [id] }));
+      if (get().session?.session_id !== id) await get().resume(id);
+    },
+
+    closeTabsRight: async (id) => {
+      const strip = stripOf(get().chatTabs, id);
+      if (!strip) return;
+      const [workspace, ids] = strip;
+      const kept = ids.slice(0, ids.indexOf(id) + 1);
+      if (kept.length === ids.length) return;
+      set((s) => tabsPatch({ ...s.chatTabs, [workspace]: kept }));
+      const current = get().session?.session_id;
+      if (current && !kept.includes(current)) await get().resume(id);
+    },
+
+    moveTab: (id, before) =>
+      set((s) => {
+        const next = movedTab(s.chatTabs, id, before);
+        return next === s.chatTabs ? {} : tabsPatch(next);
+      }),
+
+    pruneTabs: () =>
+      set((s) => {
+        const known = new Set(s.sessions.map((x) => x.id));
+        if (s.session) known.add(s.session.session_id);
+        const stale = Object.values(s.chatTabs)
+          .flat()
+          .filter((id) => !known.has(id));
+        return stale.length ? tabsPatch(withoutTabs(s.chatTabs, stale)) : {};
+      }),
+
+    setHistoryOpen: (historyOpen) => set({ historyOpen }),
 
     refreshGitStatus: async (root) => {
       try {

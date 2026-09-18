@@ -1,5 +1,5 @@
 /* Dock columns: the resizable, collapsible panels flanking the chat. The
-   column itself only frames its dock — the dock's own CSS (sidebar.css,
+   column itself only frames its dock — the dock's own CSS (files.css,
    canvas.css, preview.css) still styles the content. */
 
 .dock-column {
@@ -131,8 +131,8 @@
   border-color: var(--accent);
 }
 
-/* Left: at the end of the project-title row, its right edge on the column's
-   content edge — the same line as the New chat button and the chat rows. */
+/* Left: at the end of the Files header row, its right edge on the column's
+   content edge — the same line as the header's own controls. */
 .dock-toggle.left {
   margin-left: auto;
 }

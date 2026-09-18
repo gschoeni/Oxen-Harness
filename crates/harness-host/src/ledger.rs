@@ -120,6 +120,17 @@ impl SessionService {
         Ok(seen)
     }
 
+    /// Give a chat a name of the user's choosing (blank clears it). Every
+    /// title read — the history list, the Ledger, a tab — shows it from then
+    /// on; the transcript itself is untouched.
+    pub fn rename_session(&self, session: &str, title: &str) -> Result<(), String> {
+        let store = self.store()?;
+        store.session_meta(session).map_err(|e| e.to_string())?;
+        store
+            .rename_session(session, title)
+            .map_err(|e| e.to_string())
+    }
+
     /// Record that the user just looked at the board, returning the new mark.
     /// The *next* visit renders its "since you left" story against this.
     pub fn mark_ledger_seen(&self) -> Result<i64, String> {

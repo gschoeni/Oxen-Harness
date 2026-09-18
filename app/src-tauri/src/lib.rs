@@ -29,6 +29,8 @@ mod browser;
 mod cli_open;
 mod commands;
 mod events;
+#[cfg(target_os = "macos")]
+mod menu;
 mod preview;
 #[cfg(target_os = "macos")]
 mod snapshot;
@@ -82,7 +84,7 @@ pub fn run() -> Result<(), tauri::Error> {
     // could add to it. Ours from this run is not started yet, so this only
     // ever touches servers whose owning host is gone.
     let _ = harness_local::reap_stale_servers();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // First, so no other plugin runs in a doomed second instance: when the
         // app is already open, a new launch (`oxen-harness ui <dir>`) forwards
         // its argv + cwd to the running instance and exits.
@@ -121,7 +123,13 @@ pub fn run() -> Result<(), tauri::Error> {
                     own
                 })
                 .build(),
-        )
+        );
+    // macOS gets a menu bar whether asked or not (Tauri's default when none is
+    // set), and that default claims ⌘W for Close Window. Ours leaves the key
+    // to the chat tab strip. Other platforms keep no menu bar, as before.
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(menu::app_menu);
+    builder
         // The shared session service needs the app handle (its event sink and
         // native-preview hooks emit into this window), so state is wired in
         // setup — after the handle exists, before any command can run.
@@ -200,6 +208,7 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::ledger::reopen_session,
             commands::ledger::ledger_mark_seen,
             commands::ledger::session_mark_seen,
+            commands::ledger::rename_session,
             commands::ledger::workspace_git,
             commands::browser::browser_attach,
             commands::browser::browser_detach,
