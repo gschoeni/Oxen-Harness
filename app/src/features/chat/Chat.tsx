@@ -8,6 +8,7 @@ import { getDragPaths, hasDragPaths } from "../files/dnd";
 import type { CodeSnippet } from "../../lib/types";
 import { ThreadItem } from "./ThreadItem";
 import { FleetPanel } from "./FleetPanel";
+import { AgentView } from "./AgentView";
 import { TasksPanel } from "./TasksPanel";
 import { MediaPanel } from "./MediaPanel";
 import { Plan } from "./Plan";
@@ -90,6 +91,9 @@ export function Chat() {
     canvasWriting || (!!activeCanvasId && !!sessionCanvases?.some((d) => d.id === activeCanvasId));
   const showReopenCanvas = !!lastCanvas && !canvasShowing;
 
+  // A subagent opened from the lane strip takes the thread column over: its
+  // transcript and composer, under the tabs, until Esc or the back chip.
+  const agentLane = useStore((s) => (s.session ? s.agentView[s.session.session_id] : undefined));
   const [attachments, setAttachments] = useState<{ path: string; name: string }[]>([]);
   const { scrollRef, contentRef, paused, scrollToBottom, onScroll, onWheel } =
     useChatScroll(sessionId, items);
@@ -203,6 +207,15 @@ export function Chat() {
     const paths = attachments.map((a) => a.path);
     setAttachments([]);
     send(text, paths);
+  }
+
+  if (sessionId && agentLane) {
+    return (
+      <main className="chat">
+        <ChatTabs />
+        <AgentView key={agentLane} session={sessionId} lane={agentLane} />
+      </main>
+    );
   }
 
   return (

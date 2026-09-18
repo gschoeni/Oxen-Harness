@@ -247,8 +247,8 @@ struct Live {
     /// `/model` argument completion, cached so we don't rescan on every keystroke.
     model_items: Option<Vec<CompletionItem>>,
     /// The shared fleet hub: while a `spawn_agents` fleet runs mid-turn, its
-    /// lanes paint as a pinned block above the meters, and alt+digits switch
-    /// which lane's output is being watched.
+    /// lanes paint as a pinned block above the meters, and ↑/↓ (empty
+    /// composer) or alt+digits switch which lane's output is being watched.
     fleet: Arc<FleetHub>,
     /// Advances the fleet block's spinner glyphs on the turn ticker.
     fleet_frame: usize,
@@ -568,10 +568,20 @@ impl Live {
     }
 
     /// Fleet lane switching through the shared reducer ([`crate::fleet_ui::
-    /// apply_fleet_key`], with the `Shared` vocabulary): alt+digits watch a
-    /// lane, alt+0 the overview — bare digits keep typing into the composer.
-    /// Only consumes the key while a fleet is actually running.
+    /// apply_fleet_key`], with the `Shared` vocabulary), shaped like Claude
+    /// Code's agent view: ↑/↓ on an empty, idle composer walk the agent rows,
+    /// Esc returns to the main chat while a lane is watched (from the main
+    /// chat it still cancels the turn), and alt+digits / alt+arrows work at
+    /// any time — bare digits keep typing into the composer. While a fleet is
+    /// on screen the arrows outrank history recall and queue browsing from an
+    /// empty box; a draft, once typed, gets the arrows back. Only consumes the
+    /// key while a fleet is actually running.
     fn handle_fleet_key(&mut self, key: &KeyEvent) -> bool {
+        let mode = self.mode();
+        let plain = crate::fleet_ui::PlainKeys {
+            arrows: mode == Mode::Compose && self.composer.is_empty(),
+            esc: mode != Mode::Edit,
+        };
         let handled = {
             let mut board = self.fleet.lock();
             if board.navigate(key.code, key.modifiers) {
@@ -582,6 +592,7 @@ impl Live {
                     key.code,
                     key.modifiers,
                     crate::fleet_ui::FleetKeys::Shared,
+                    plain,
                 )
             } else {
                 false
@@ -672,8 +683,9 @@ impl Live {
         if key.kind != KeyEventKind::Press {
             return KeyAction::None;
         }
-        // Fleet lane switching (alt+digits) outranks composing — but only
-        // while a fleet is actually on screen.
+        // Fleet lane switching (↑/↓ from an empty box, Esc while watching,
+        // alt+digits) outranks composing — but only while a fleet is actually
+        // on screen.
         if self.handle_fleet_key(&key) {
             return KeyAction::Redraw;
         }
@@ -1005,7 +1017,7 @@ mod tests {
     use super::test_support::{alt, ctrl, key, live};
     use super::*;
 
-    // --- Fleet lane switching (alt+digits act only while a fleet runs) -----
+    // --- Fleet lane switching (fleet keys act only while a fleet runs) -----
 
     /// The idle composer has no ticker: it wakes for the fleet block only
     /// while a fleet is on the hub, plus one tick after the last one leaves
@@ -1097,6 +1109,114 @@ mod tests {
 
         // Cleared hub: back to pass-through.
         assert!(!l.handle_fleet_key(&alt(KeyCode::Char('1'))));
+    }
+
+    /// The Claude Code shape: with agents on screen, ↑/↓ from an empty
+    /// composer pick an agent, and the box then addresses that agent. A draft
+    /// keeps the arrows for itself (caret line / history), so typing is never
+    /// hijacked mid-thought; alt+arrows still switch then.
+    #[test]
+    fn arrows_walk_the_agents_only_from_an_empty_composer() {
+        use crate::fleet_ui::{FleetHub, FleetState};
+
+        let mut l = live(80, 24);
+        let hub = Arc::new(FleetHub::default());
+        hub.install("t", FleetState::new(&["scan".into(), "trace".into()], None));
+        l.fleet = hub.clone();
+
+        assert!(matches!(
+            l.handle_key(key(KeyCode::Down), 0),
+            KeyAction::Redraw
+        ));
+        assert_eq!(hub.lock().primary().unwrap().focused, Some(0));
+        assert_eq!(l.composer_target, "t:0");
+        assert!(matches!(
+            l.handle_key(key(KeyCode::Down), 0),
+            KeyAction::Redraw
+        ));
+        assert_eq!(hub.lock().primary().unwrap().focused, Some(1));
+        assert!(matches!(
+            l.handle_key(key(KeyCode::Down), 0),
+            KeyAction::Redraw
+        ));
+        assert_eq!(
+            hub.lock().primary().unwrap().focused,
+            None,
+            "↓ past the last agent returns to the main chat"
+        );
+        assert_eq!(l.composer_target, "main");
+        assert!(matches!(
+            l.handle_key(key(KeyCode::Up), 0),
+            KeyAction::Redraw
+        ));
+        assert_eq!(hub.lock().primary().unwrap().focused, Some(1));
+
+        // A draft gets the arrows back: ↑ recalls history / moves the caret,
+        // never the watch.
+        l.history.push("earlier");
+        for ch in "half".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        l.handle_key(key(KeyCode::Up), 0);
+        assert_eq!(hub.lock().primary().unwrap().focused, Some(1));
+        assert_eq!(l.composer.text(), "earlier", "↑ recalled history instead");
+        // …while the alt chord still switches mid-draft.
+        assert!(l.handle_fleet_key(&alt(KeyCode::Left)));
+        assert_eq!(hub.lock().primary().unwrap().focused, Some(0));
+
+        // No fleet: the arrows are ordinary composer keys again.
+        hub.clear();
+        l.composer.set_text("");
+        assert!(!l.handle_fleet_key(&key(KeyCode::Down)));
+    }
+
+    /// Esc is staged like Claude Code's: watching an agent, it steps back to
+    /// the main chat (keeping the draft for that agent); from the main chat
+    /// it cancels the turn as always. An inline queue edit keeps Esc for
+    /// itself.
+    #[test]
+    fn escape_returns_to_main_chat_before_it_cancels_the_turn() {
+        use crate::fleet_ui::{FleetHub, FleetState};
+
+        let mut l = live(80, 24);
+        let hub = Arc::new(FleetHub::default());
+        hub.install("t", FleetState::new(&["scan".into()], None));
+        l.fleet = hub.clone();
+
+        assert!(l.handle_fleet_key(&key(KeyCode::Down)));
+        assert_eq!(l.composer_target, "t:0");
+        for ch in "for scan".chars() {
+            l.handle_key(key(KeyCode::Char(ch)), 0);
+        }
+        assert!(matches!(
+            l.handle_key(key(KeyCode::Esc), 0),
+            KeyAction::Redraw
+        ));
+        assert_eq!(hub.lock().primary().unwrap().focused, None);
+        assert_eq!(l.composer_target, "main");
+        assert_eq!(
+            l.composer.text(),
+            "",
+            "the main chat has its own (empty) draft"
+        );
+        assert_eq!(hub.draft("t:0"), "for scan", "the agent's draft is kept");
+        // From the main chat, Esc reaches the composer and cancels the turn.
+        assert!(matches!(
+            l.handle_key(key(KeyCode::Esc), 0),
+            KeyAction::CancelTurn
+        ));
+        assert_eq!(hub.lock().primary().unwrap().focused, None);
+
+        // An open inline edit owns Esc even while a lane is watched.
+        assert!(l.handle_fleet_key(&key(KeyCode::Down)));
+        l.sync_queue(&["queued".into()]);
+        l.focus = l.focus.up(1);
+        l.begin_edit("queued");
+        assert!(matches!(
+            l.handle_key(key(KeyCode::Esc), 1),
+            KeyAction::CancelEdit
+        ));
+        assert_eq!(hub.lock().primary().unwrap().focused, Some(0));
     }
 
     // --- Live wiring (no TTY: handle_key + buffer state, never paint) ------

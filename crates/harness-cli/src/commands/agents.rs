@@ -219,7 +219,10 @@ pub(crate) async fn handle_repl(
                     .lock()
                     .watch_lane(&row.id)
                 {
-                    Ok(format!("Watching {} · alt+x stops this agent", row.label))
+                    Ok(format!(
+                        "Watching {} · Esc returns to main chat · Alt+X stops this agent",
+                        row.label
+                    ))
                 } else {
                     Err("Agent has finished; use /agents read or show".into())
                 }
@@ -402,8 +405,8 @@ fn help(ui: &Ui, example: Option<&str>) {
     let id = example.unwrap_or("<id>");
     for line in [
         format!("Watch an agent    /agents watch {id}"),
-        "Switch live      Alt+← / → previous / next · Alt+1–9 jump to a row".into(),
-        "Main chat        Alt+0 · the header always shows where Enter sends".into(),
+        "Switch live      ↑ / ↓ with an empty box · Alt+← / → any time · Alt+1–9 jump to a row".into(),
+        "Main chat        Esc while watching (or Alt+0) · the header always shows where Enter sends".into(),
         "Switch fleets    Alt+[ / ] when multiple fleets are running".into(),
         format!("Send a direction /agents send {id} check the tests too"),
         format!("Stop one         /agents stop {id} · or Alt+X while watching"),

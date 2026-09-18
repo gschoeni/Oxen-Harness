@@ -729,6 +729,14 @@ interface AppState {
   steerLane: (session: string, lane: string, text: string) => Promise<boolean>;
   /** Open the inspector on a running lane and follow it live. */
   watchLane: (lane: string) => void;
+  /** The subagent open in a chat's thread column, per session: its lane id,
+   *  or absent/null for the chat itself. Opening a lane swaps the messages
+   *  and composer for that agent's transcript and a composer that steers it
+   *  (running) or follows it up (finished); the parent keeps streaming
+   *  underneath. Per session, so switching tabs keeps each chat's view. */
+  agentView: Record<string, string | null | undefined>;
+  openAgent: (session: string, lane: string) => void;
+  closeAgent: (session: string) => void;
   /** The chat's background tasks changed on the backend. */
   ingestTasksChanged: (e: TasksChangedEvent) => void;
   /** Re-fetch a chat's background tasks. */
@@ -1117,6 +1125,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     mediaFocus: null,
     pendingAttachments: [],
     inspectorLive: false,
+    agentView: {},
     queues: {},
     canvases: {},
     activeCanvas: {},
@@ -1891,6 +1900,10 @@ export const useStore = create<AppState>((rawSet, get) => {
     },
 
     watchLane: (lane) => set({ inspector: { sessionId: lane, review: null }, inspectorLive: true }),
+
+    openAgent: (session, lane) => set((s) => ({ agentView: { ...s.agentView, [session]: lane } })),
+
+    closeAgent: (session) => set((s) => ({ agentView: { ...s.agentView, [session]: null } })),
 
     ingestTasksChanged: (e) => set((s) => ({ tasks: { ...s.tasks, [e.session]: e.tasks } })),
 

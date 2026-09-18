@@ -304,7 +304,7 @@ Two things happen on their own and are always announced: a background
 command that finishes has its output delivered to the model at the next
 round (`⚙ background task 3 finished — output delivered to the model`), and
 when the harness re-calls the model with a corrective — a reply that
-announced work without doing it, an uncharted trail, a repeated call — a
+announced work without doing it, a stalled plan, a repeated call — a
 `↻ nudge: …` line says why. The desktop app has the same live queue and
 tool chips.
 
@@ -460,16 +460,21 @@ Ask naturally: “Review the filesystem code; split the work across a few agents
 
 **CLI:** type `/agents` to open the chooser. Use ↑/↓ and Enter to watch a
 working agent or read a finished answer. During a turn, the numbered live rows
-show the current selection and where Enter sends your message:
+show the current selection and where Enter sends your message. Navigation
+works like Claude Code's agent view: with an empty composer, ↑/↓ walk the
+agents, and Esc steps back to the main chat before it ever cancels the turn.
 
 | Action | Control |
 | --- | --- |
-| Previous / next agent | Alt+← / Alt+→ |
+| Previous / next agent | ↑ / ↓ (empty composer) · Alt+← / Alt+→ (any time) |
 | Jump to a numbered row | Alt+1–9 |
-| Return to main chat | Alt+0 |
+| Return to main chat | Esc while watching an agent · Alt+0 |
 | Switch active fleets | Alt+[ / Alt+] |
 | Send a direction to the watched agent | Enter |
 | Stop the watched agent | Alt+X |
+
+Once you have typed a draft, ↑/↓ belong to the draft again (caret line,
+history); the Alt chords still switch, and each agent keeps its own draft.
 
 `/agents list` prints stable short IDs. Use an ID or a unique name with
 `/agents watch`, `read`, `show`, `stop`, or `patch`. Send text with
@@ -479,9 +484,14 @@ show the current selection and where Enter sends your message:
 that use Option for special characters, configure Option as Alt/Meta or use the
 commands. Plain terminals print milestones and the agent list.
 
-**Desktop:** the Agents panel keeps working and finished agents together,
-with descendants indented. Select a row for output, transcript, steering, or a
-follow-up. Failed sends keep the draft; stop requests show “Stopping…” until
+**Desktop:** the Agents strip under the thread keeps working and finished
+agents together, with descendants indented. Click a row and the agent opens in
+place of the thread column: its full transcript (the brief it was given, its
+tool calls, its reply), a bar with its state and actions, and the same
+composer as the chat. While it works, Enter sends a direction it picks up on
+its next step; once it has finished, Enter follows it up and the agent runs
+again. Esc, or the chip at the top left, returns to the chat, which keeps
+streaming underneath. Step between agents with the arrows in the bar. Failed sends keep the draft; stop requests show “Stopping…” until
 the agent settles. Scrolling upward pauses output following. Isolated edits
 have **Review changes**, then **Apply changes** for the exact reviewed patch.
 Conflicts leave the workspace unchanged.

@@ -8,8 +8,8 @@
 //!   whoever runs the fleet (the review pipeline, the `spawn_agents` sink).
 //! - [`BlockPainter`] — the cooked-mode display (e.g. `/code-review`): a
 //!   background thread repaints the block in place, and owns the keyboard in
-//!   raw mode so **1-9 focus a lane** (showing its live output tail), **esc**
-//!   returns to the overview, and **ctrl-c** stops the fleet:
+//!   raw mode so **1-9 or ↑/↓ focus a lane** (showing its live output tail),
+//!   **esc** returns to the overview, and **ctrl-c** stops the fleet:
 //!
 //! ```text
 //!   ⠧ diff-scan     Reading the trail guide… src/parser.rs   12.3k tok · 8s
@@ -18,12 +18,15 @@
 //!   ── watching diff-scan ──────────────────────────────────────────────
 //!     …the enclosing function re-checks the bounds, but the early return
 //!     on line 84 skips it when the cache is cold…
-//!   1-3 watch a lane · esc overview · ctrl-c stop
+//!   1–3 watch · ↑/↓ or Tab next · Esc overview · Ctrl+C stop fleet
 //! ```
 //!
 //! - [`pinned_lines`] — the same block, composed for the live composer's
 //!   pinned area (which owns the terminal during interactive turns); there the
-//!   composer's key loop drives focus with **alt+1-9 / alt+0**.
+//!   composer's key loop drives focus the way Claude Code's agent view does:
+//!   **↑/↓ on an empty composer** walk the rows, **Esc** returns to the main
+//!   chat (and only then cancels the turn), with **alt+1-9 / alt+0 / alt+←→**
+//!   kept as chords that also work mid-draft.
 //!
 //! On terminals without color/animation everything degrades to plain
 //! milestone lines printed by the state's owner.
@@ -667,32 +670,70 @@ pub(crate) fn block_lines(
 /// hint advertises is always what the keys actually do.
 #[derive(Clone, Copy)]
 pub(crate) enum FleetKeys {
-    /// The cooked-mode painter owns the keyboard exclusively: bare digits
-    /// focus lanes (and alt+digits too, so live-mode muscle memory carries),
-    /// esc/0 return to the overview, tab cycles, ctrl-c stops the fleet.
+    /// The cooked-mode painter owns the keyboard exclusively: bare digits and
+    /// ↑/↓ focus lanes (and alt+digits too, so live-mode muscle memory
+    /// carries), esc/0 return to the overview, tab cycles, ctrl-c stops the
+    /// fleet.
     Owned,
-    /// The live composer shares the keyboard with typing: only alt+digits act
-    /// on the fleet (bare digits must keep typing into the composer).
+    /// The live composer shares the keyboard with typing. Bare ↑/↓ walk the
+    /// rows only while the composer is empty and idle (see [`PlainKeys`]),
+    /// Esc returns to the main chat only while a lane is watched (so from the
+    /// main chat it still cancels the turn), and alt+digits / alt+arrows act
+    /// regardless — bare digits must keep typing into the composer.
     Shared,
+}
+
+/// Which unmodified keys a `Shared` keyboard may lend the fleet right now.
+/// The live composer decides per keystroke: arrows are free only when they
+/// have no draft line, history entry or queued row to move through, and Esc
+/// is free unless an inline queue edit is open (Esc discards that edit).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlainKeys {
+    pub(crate) arrows: bool,
+    pub(crate) esc: bool,
+}
+
+impl PlainKeys {
+    /// Everything is free — what an `Owned` keyboard always has.
+    pub(crate) const ALL: PlainKeys = PlainKeys {
+        arrows: true,
+        esc: true,
+    };
 }
 
 /// Apply one keystroke to the fleet state under the given key vocabulary.
 /// Returns whether the key was consumed (a `Shared` caller passes unconsumed
-/// keys on to the composer).
+/// keys on to the composer). `plain` only matters for `Shared`.
 pub(crate) fn apply_fleet_key(
     state: &mut FleetState,
     code: crossterm::event::KeyCode,
     mods: crossterm::event::KeyModifiers,
     keys: FleetKeys,
+    plain: PlainKeys,
 ) -> bool {
     use crossterm::event::{KeyCode, KeyModifiers};
-    let digits_ok = matches!(keys, FleetKeys::Owned) || mods.contains(KeyModifiers::ALT);
+    let owned = matches!(keys, FleetKeys::Owned);
+    let alt = mods.contains(KeyModifiers::ALT);
+    let bare = mods.is_empty();
+    let digits_ok = owned || alt;
+    let arrows_ok = bare && (owned || plain.arrows);
+    // Esc on a shared keyboard is only the fleet's while a lane is watched:
+    // from the main chat it must fall through and cancel the turn as usual.
+    let esc_ok = bare && (owned || (plain.esc && state.focused.is_some()));
     match code {
-        KeyCode::Right if mods.contains(KeyModifiers::ALT) => {
+        KeyCode::Right if alt => {
             state.focus_next();
             true
         }
-        KeyCode::Left if mods.contains(KeyModifiers::ALT) => {
+        KeyCode::Left if alt => {
+            state.focus_previous();
+            true
+        }
+        KeyCode::Down if arrows_ok => {
+            state.focus_next();
+            true
+        }
+        KeyCode::Up if arrows_ok => {
             state.focus_previous();
             true
         }
@@ -704,17 +745,15 @@ pub(crate) fn apply_fleet_key(
             state.focus(None);
             true
         }
-        KeyCode::Esc if matches!(keys, FleetKeys::Owned) => {
+        KeyCode::Esc if esc_ok => {
             state.focus(None);
             true
         }
-        KeyCode::Tab if matches!(keys, FleetKeys::Owned) => {
+        KeyCode::Tab if owned => {
             state.focus_next();
             true
         }
-        KeyCode::Char('c')
-            if matches!(keys, FleetKeys::Owned) && mods.contains(KeyModifiers::CONTROL) =>
-        {
+        KeyCode::Char('c') if owned && mods.contains(KeyModifiers::CONTROL) => {
             state.stop();
             true
         }
@@ -729,35 +768,51 @@ pub(crate) fn apply_fleet_key(
 
 fn hint_line(state: &FleetState, keys: FleetKeys) -> String {
     let n = state.lanes.len().min(9);
-    let (select, back) = match keys {
-        FleetKeys::Owned => (format!("1–{n} watch"), "0 overview"),
-        FleetKeys::Shared => (format!("Alt+1–{n} watch"), "Alt+0 main chat"),
+    let focused = state.focused.and_then(|i| state.lanes.get(i));
+    let mut parts: Vec<String> = match (keys, focused) {
+        (FleetKeys::Owned, Some(_)) => vec![
+            format!("1–{n} watch"),
+            "↑/↓ or Tab next".into(),
+            "Esc overview".into(),
+            "X stop agent".into(),
+            "Ctrl+C stop fleet".into(),
+        ],
+        (FleetKeys::Owned, None) => vec![
+            format!("1–{n} watch"),
+            "↑/↓ or Tab next".into(),
+            "Ctrl+C stop fleet".into(),
+        ],
+        (FleetKeys::Shared, None) => vec![
+            "↑/↓ watch an agent".into(),
+            "Enter sends to main chat".into(),
+        ],
+        (FleetKeys::Shared, Some(lane)) if lane.status == LaneStatus::Running => vec![
+            "↑/↓ switch".into(),
+            "Esc main chat".into(),
+            format!("Enter sends to {}", lane.label),
+            "Alt+X stop".into(),
+        ],
+        (FleetKeys::Shared, Some(lane)) => vec![
+            "↑/↓ switch".into(),
+            format!(
+                "{} is {}",
+                lane.label,
+                if lane.status == LaneStatus::Queued {
+                    "queued"
+                } else {
+                    "finished"
+                }
+            ),
+            "Esc main chat to send".into(),
+        ],
     };
-    let target = match state.focused.and_then(|i| state.lanes.get(i)) {
-        Some(lane) if lane.status == LaneStatus::Running && matches!(keys, FleetKeys::Shared) => {
-            format!("Enter sends to {} · Alt+X stop", lane.label)
-        }
-        Some(lane) if matches!(keys, FleetKeys::Shared) => format!(
-            "{} is {} · return to main chat to send",
-            lane.label,
-            if lane.status == LaneStatus::Queued {
-                "queued"
-            } else {
-                "finished"
-            }
-        ),
-        Some(_) => "X stop agent · Ctrl+C stop fleet".to_string(),
-        None if matches!(keys, FleetKeys::Shared) => "Enter sends to main chat".to_string(),
-        None => "Tab next agent · Ctrl+C stop fleet".to_string(),
-    };
-    let mut hint = format!("{select} · Alt+←/→ previous/next · {back} · {target}");
     if state.fleet_count > 1 {
-        hint.push_str(" · Alt+[ / ] switch fleet");
+        parts.push("Alt+[ / ] switch fleet".into());
     }
     if let Some(budget) = state.budget_readout() {
-        hint.push_str(&format!(" · {budget}"));
+        parts.push(budget);
     }
-    hint
+    parts.join(" · ")
 }
 
 /// Compose one painted lane line, fitted to `width` columns.
@@ -1036,7 +1091,13 @@ fn poll_keys(hub: &FleetHub) {
         let Some(state) = board.primary_mut() else {
             continue;
         };
-        apply_fleet_key(state, key.code, key.modifiers, FleetKeys::Owned);
+        apply_fleet_key(
+            state,
+            key.code,
+            key.modifiers,
+            FleetKeys::Owned,
+            PlainKeys::ALL,
+        );
     }
 }
 
@@ -1110,7 +1171,7 @@ pub(crate) fn print_lane_completed(
 }
 
 /// The fleet block composed for the live composer's pinned area (which paints
-/// and drives keys itself — alt+digits — so this is just the lines).
+/// and drives keys itself — ↑/↓, Esc, alt+digits — so this is just the lines).
 pub(crate) fn pinned_lines(
     ui: &Ui,
     state: &FleetState,
@@ -1152,6 +1213,7 @@ mod tests {
             KeyCode::Right,
             KeyModifiers::ALT,
             FleetKeys::Shared,
+            NO_PLAIN,
         );
         assert_eq!(board.composer_target(), "main");
         apply_fleet_key(
@@ -1159,6 +1221,7 @@ mod tests {
             KeyCode::Left,
             KeyModifiers::ALT,
             FleetKeys::Shared,
+            NO_PLAIN,
         );
         assert_eq!(board.composer_target(), "lane-b");
         assert!(!board.watch_lane("missing"));
@@ -1166,61 +1229,109 @@ mod tests {
 
     #[test]
     fn fleet_key_vocabularies_share_one_reducer() {
-        use super::{apply_fleet_key, FleetKeys, FleetState};
+        use super::{apply_fleet_key, FleetKeys, FleetState, PlainKeys};
         let mut s = FleetState::new(&["a".into(), "b".into()], None);
-        // Owned (cooked painter): bare digits focus, esc → overview, tab
-        // cycles — and alt+digits work too, so live muscle memory carries.
-        assert!(apply_fleet_key(
-            &mut s,
-            KeyCode::Char('2'),
-            KeyModifiers::NONE,
-            FleetKeys::Owned
-        ));
+        // Owned (cooked painter): bare digits focus, esc → overview, tab and
+        // ↑/↓ cycle — and alt+digits work too, so live muscle memory carries.
+        let owned = |s: &mut FleetState, code, mods| {
+            apply_fleet_key(s, code, mods, FleetKeys::Owned, PlainKeys::ALL)
+        };
+        assert!(owned(&mut s, KeyCode::Char('2'), KeyModifiers::NONE));
         assert_eq!(s.focused, Some(1));
-        assert!(apply_fleet_key(
-            &mut s,
-            KeyCode::Esc,
-            KeyModifiers::NONE,
-            FleetKeys::Owned
-        ));
+        assert!(owned(&mut s, KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(s.focused, None);
-        assert!(apply_fleet_key(
+        assert!(owned(&mut s, KeyCode::Char('1'), KeyModifiers::ALT));
+        assert_eq!(s.focused, Some(0));
+        assert!(owned(&mut s, KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(s.focused, Some(1));
+        assert!(owned(&mut s, KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            s.focused, None,
+            "↓ past the last lane wraps to the overview"
+        );
+        assert!(owned(&mut s, KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(
+            s.focused,
+            Some(1),
+            "↑ from the overview lands on the last lane"
+        );
+
+        // Shared (live composer): bare digits always pass through; ↑/↓ and
+        // Esc pass through while the composer has something for them.
+        let shared = |s: &mut FleetState, code, mods, plain| {
+            apply_fleet_key(s, code, mods, FleetKeys::Shared, plain)
+        };
+        assert!(!shared(
             &mut s,
             KeyCode::Char('1'),
-            KeyModifiers::ALT,
-            FleetKeys::Owned
+            KeyModifiers::NONE,
+            PlainKeys::ALL
+        ));
+        assert!(!shared(&mut s, KeyCode::Up, KeyModifiers::NONE, NO_PLAIN));
+        assert!(!shared(&mut s, KeyCode::Esc, KeyModifiers::NONE, NO_PLAIN));
+        assert_eq!(s.focused, Some(1), "pass-through keys must not refocus");
+        // With an empty, idle composer the arrows walk the rows like Claude
+        // Code's agent view, and Esc steps back to the main chat…
+        assert!(shared(
+            &mut s,
+            KeyCode::Up,
+            KeyModifiers::NONE,
+            PlainKeys::ALL
         ));
         assert_eq!(s.focused, Some(0));
-        assert!(apply_fleet_key(
-            &mut s,
-            KeyCode::Tab,
-            KeyModifiers::NONE,
-            FleetKeys::Owned
-        ));
-        assert_eq!(s.focused, Some(1));
-        // Shared (live composer): bare digits/esc pass through to the
-        // composer; only alt+digits act on the fleet.
-        assert!(!apply_fleet_key(
-            &mut s,
-            KeyCode::Char('1'),
-            KeyModifiers::NONE,
-            FleetKeys::Shared
-        ));
-        assert!(!apply_fleet_key(
+        assert!(shared(
             &mut s,
             KeyCode::Esc,
             KeyModifiers::NONE,
-            FleetKeys::Shared
+            PlainKeys::ALL
         ));
-        assert_eq!(s.focused, Some(1), "pass-through keys must not refocus");
-        assert!(apply_fleet_key(
+        assert_eq!(s.focused, None);
+        // …but from the main chat Esc is not the fleet's: it must still reach
+        // the composer and cancel the turn.
+        assert!(!shared(
+            &mut s,
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            PlainKeys::ALL
+        ));
+        assert_eq!(s.focused, None);
+        assert!(shared(
+            &mut s,
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            PlainKeys::ALL
+        ));
+        assert_eq!(s.focused, Some(0));
+        // Esc is free to step back even mid-draft (the draft is kept per
+        // target), just not while an inline queue edit owns it.
+        let mid_draft = PlainKeys {
+            arrows: false,
+            esc: true,
+        };
+        assert!(shared(&mut s, KeyCode::Esc, KeyModifiers::NONE, mid_draft));
+        assert_eq!(s.focused, None);
+        // Alt chords keep working whatever the composer holds.
+        assert!(shared(
+            &mut s,
+            KeyCode::Char('2'),
+            KeyModifiers::ALT,
+            NO_PLAIN
+        ));
+        assert_eq!(s.focused, Some(1));
+        assert!(shared(
             &mut s,
             KeyCode::Char('0'),
             KeyModifiers::ALT,
-            FleetKeys::Shared
+            NO_PLAIN
         ));
         assert_eq!(s.focused, None);
     }
+
+    /// A shared keyboard whose composer is busy: nothing bare is free.
+    const NO_PLAIN: PlainKeys = PlainKeys {
+        arrows: false,
+        esc: false,
+    };
 
     use super::*;
 
@@ -1331,10 +1442,11 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("1–2 watch"));
+        assert!(text.contains("↑/↓ or Tab next"));
         assert!(text.contains("scan"));
         assert!(text.contains("trace"));
 
-        // Focused: lanes + rule + tail rows + hint, alt vocabulary for live.
+        // Focused: lanes + rule + tail rows + hint, the live vocabulary.
         s.focus(Some(0));
         let lines = block_lines(&s, &style(), 80, 30, 0, FleetKeys::Shared);
         let text = lines
@@ -1344,8 +1456,16 @@ mod tests {
             .join("\n");
         assert!(text.contains("── watching scan"));
         assert!(text.contains("digging into the parser"));
-        assert!(text.contains("Alt+1–2 watch"));
+        assert!(text.contains("↑/↓ switch · Esc main chat"));
         assert!(hint_line(&s, FleetKeys::Shared).contains("Enter sends to scan"));
+        s.focus(None);
+        let overview = hint_line(&s, FleetKeys::Shared);
+        assert!(overview.contains("↑/↓ watch an agent"));
+        assert!(overview.contains("Enter sends to main chat"));
+        assert!(
+            !overview.contains("Alt+"),
+            "the live hint leads with the plain keys"
+        );
         assert!(text.contains("›  1"));
     }
 

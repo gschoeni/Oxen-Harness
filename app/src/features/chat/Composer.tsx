@@ -48,6 +48,8 @@ export function Composer({
   attachments = [],
   onRemoveAttachment,
   onClearAttachments,
+  placeholder,
+  toolbar = true,
 }: {
   busy: boolean;
   // Changes whenever a fresh/empty chat becomes active (e.g. "New chat"), so we
@@ -55,7 +57,9 @@ export function Composer({
   focusKey?: string;
   onSend: (text: string) => void;
   onStop: () => void;
-  onAttach: () => void;
+  /** Opens the file picker; absent where attachments don't apply (a
+   *  subagent's composer), and the paperclip goes with it. */
+  onAttach?: () => void;
   /** File drags over the composer itself (the textarea would otherwise treat
    *  a drop as text): forwarded to the chat's drop handling. */
   onDragOver?: (e: DragEvent<HTMLElement>) => void;
@@ -64,6 +68,12 @@ export function Composer({
   attachments?: StagedAttachment[];
   onRemoveAttachment?: (index: number) => void;
   onClearAttachments?: () => void;
+  /** What the empty prompt says, idle and mid-run. The chat's defaults speak
+   *  of the agent; a subagent's view speaks of directions and follow-ups. */
+  placeholder?: { idle: string; busy: string };
+  /** The model / compression / review pickers under the prompt. Off for a
+   *  subagent, which runs on the model it was spawned with. */
+  toolbar?: boolean;
 }) {
   const [value, setValue] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
@@ -137,15 +147,17 @@ export function Composer({
           </div>
         )}
         <div className="composer-row">
-          <button
-            type="button"
-            className="attach"
-            aria-label="Attach images, video, audio, or PDFs"
-            title="Attach images, video, audio, or PDFs"
-            onClick={onAttach}
-          >
-            <Paperclip size={18} />
-          </button>
+          {onAttach && (
+            <button
+              type="button"
+              className="attach"
+              aria-label="Attach images, video, audio, or PDFs"
+              title="Attach images, video, audio, or PDFs"
+              onClick={onAttach}
+            >
+              <Paperclip size={18} />
+            </button>
+          )}
           <textarea
             ref={ref}
             rows={1}
@@ -153,8 +165,8 @@ export function Composer({
             value={value}
             placeholder={
               busy
-                ? "Queue a message… (sends when the agent is free)"
-                : "Ask the agent to build, fix, or explain something…"
+                ? (placeholder?.busy ?? "Queue a message… (sends when the agent is free)")
+                : (placeholder?.idle ?? "Ask the agent to build, fix, or explain something…")
             }
             onChange={(e) => {
               setValue(e.target.value);
@@ -237,7 +249,7 @@ export function Composer({
           Drop to attach
         </span>
       </div>
-      <ComposerToolbar busy={busy} />
+      {toolbar && <ComposerToolbar busy={busy} />}
     </form>
   );
 }

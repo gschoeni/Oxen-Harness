@@ -2,15 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
-import { agentRows, FleetPanel } from "./FleetPanel";
+import { FleetPanel } from "./FleetPanel";
+import { agentRows } from "./agentRows";
 import { useStore } from "../../lib/store";
 import type { AgentSummary } from "../../lib/types";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
-const saved = (
-  id = "lane-0",
-  extra: Partial<AgentSummary> = {},
-): AgentSummary => ({
+
+const saved = (id = "lane-0", extra: Partial<AgentSummary> = {}): AgentSummary => ({
   id,
   label: "diff-scan",
   fleet: "f1",
@@ -22,15 +21,11 @@ const saved = (
   created_at: 1,
   ...extra,
 });
+
 async function start(fleet = "f1", names = ["diff-scan", "callers"]) {
   await act(async () => {
     const s = useStore.getState();
-    s.ingestFleetStarted({
-      session: "s1",
-      fleet,
-      agents: names,
-      source: "review",
-    });
+    s.ingestFleetStarted({ session: "s1", fleet, agents: names, source: "review" });
     names.forEach((name, agent) =>
       s.ingestFleetAgent({
         session: "s1",
@@ -45,6 +40,7 @@ async function start(fleet = "f1", names = ["diff-scan", "callers"]) {
     );
   });
 }
+
 beforeEach(() => {
   resetAll();
   useStore.setState({
@@ -53,7 +49,8 @@ beforeEach(() => {
     infos: { s1: { ...ipc.sampleSession, session_id: "s1" } },
   });
 });
-describe("agent hub", () => {
+
+describe("the lane strip", () => {
   it("stays quiet until there are agents, then combines overlapping fleets", async () => {
     const { container } = render(<FleetPanel />);
     expect(container).toBeEmptyDOMElement();
@@ -63,6 +60,7 @@ describe("agent hub", () => {
     expect(screen.getByText("3 working")).toBeInTheDocument();
     expect(screen.getByText("explore")).toBeInTheDocument();
   });
+
   it("shows durable results after completion without duplicate rows", async () => {
     render(<FleetPanel />);
     await start("f1", ["diff-scan"]);
@@ -71,50 +69,32 @@ describe("agent hub", () => {
     expect(await screen.findByText("4 candidates")).toBeInTheDocument();
     expect(screen.getAllByText("diff-scan")).toHaveLength(1);
     expect(screen.getByText("1 finished")).toBeInTheDocument();
-    await userEvent.click(screen.getByTitle("Watch diff-scan"));
-    await userEvent.click(
-      screen.getByRole("button", { name: "Follow diff-scan" }),
-    );
-    expect(useStore.getState().inspector?.sessionId).toBe("f1-0");
   });
-  it("retains steering drafts after failure and across selection", async () => {
+
+  it("opens an agent in the thread column and marks the open row", async () => {
     render(<FleetPanel />);
     await start();
-    await userEvent.click(screen.getByTitle("Watch diff-scan"));
-    ipc.interjectAgent.mockRejectedValueOnce(new Error("Connection lost"));
-    const box = screen.getByRole("textbox", { name: "Steer diff-scan" });
-    await userEvent.type(box, "check the tests{Enter}");
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Connection lost",
-    );
-    expect(box).toHaveValue("check the tests");
-    await userEvent.click(screen.getByTitle("Watch callers"));
-    await userEvent.click(screen.getByTitle("Watch diff-scan"));
-    expect(
-      screen.getByRole("textbox", { name: "Steer diff-scan" }),
-    ).toHaveValue("check the tests");
-    await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(ipc.interjectAgent).toHaveBeenLastCalledWith(
-      "s1",
-      "f1-0",
-      "check the tests",
-    );
-    expect(
-      screen.getByRole("textbox", { name: "Steer diff-scan" }),
-    ).toHaveValue("");
+    await userEvent.click(screen.getByTitle("Open diff-scan"));
+    expect(useStore.getState().agentView.s1).toBe("f1-0");
+    expect(screen.getByTitle("Open diff-scan").closest(".agent-hub-row")).toHaveClass("selected");
+    expect(screen.getByTitle("Open callers").closest(".agent-hub-row")).not.toHaveClass("selected");
   });
-  it("keeps a message if the agent finishes before delivery", async () => {
+
+  it("cannot open an agent still waiting for a slot", async () => {
+    await act(async () => {
+      useStore
+        .getState()
+        .ingestFleetStarted({ session: "s1", fleet: "f1", agents: ["diff-scan"], source: "turn" });
+    });
     render(<FleetPanel />);
-    await start();
-    ipc.interjectAgent.mockResolvedValueOnce(false);
-    await userEvent.click(screen.getByTitle("Watch diff-scan"));
-    const box = screen.getByRole("textbox", { name: "Steer diff-scan" });
-    await userEvent.type(box, "another check{Enter}");
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Your message is saved",
-    );
-    expect(box).toHaveValue("another check");
+    const row = await screen.findByTitle("diff-scan is waiting for a slot");
+    expect(row).toBeDisabled();
+    await userEvent.click(row);
+    expect(useStore.getState().agentView.s1).toBeUndefined();
+    // Let the strip's refresh of the hub land before the test ends.
+    await act(async () => {});
   });
+
   it("acknowledges stopping until the terminal event arrives", async () => {
     render(<FleetPanel />);
     await start();
@@ -136,10 +116,9 @@ describe("agent hub", () => {
       }),
     );
     expect(screen.getByText("Stopped")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Stop callers" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop callers" })).not.toBeInTheDocument();
   });
+
   it("reports stop errors and permits retry", async () => {
     render(<FleetPanel />);
     await start();
@@ -149,54 +128,7 @@ describe("agent hub", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Offline");
     expect(stop).toBeEnabled();
   });
-  it("reviews the exact patch before applying and retains it after conflicts", async () => {
-    ipc.listAgents.mockResolvedValue([saved("lane-0", { has_patch: true })]);
-    ipc.agentPatch.mockResolvedValue("diff --git a/test b/test\n+fixed\n");
-    render(<FleetPanel />);
-    await userEvent.click(await screen.findByTitle("Watch diff-scan"));
-    expect(
-      screen.queryByRole("button", { name: "Apply changes" }),
-    ).not.toBeInTheDocument();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Review changes" }),
-    );
-    expect(screen.getByLabelText("Agent changes")).toHaveTextContent("+fixed");
-    ipc.applyAgentPatch.mockRejectedValueOnce(
-      new Error("Patch conflicts with local edits"),
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Apply changes" }),
-    );
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Patch conflicts",
-    );
-    expect(ipc.applyAgentPatch).toHaveBeenCalledWith(
-      "s1",
-      "lane-0",
-      "diff --git a/test b/test\n+fixed\n",
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Apply changes" }),
-    );
-    expect(screen.getByRole("button", { name: "Applied" })).toBeDisabled();
-  });
-  it("continues a finished agent with a follow-up", async () => {
-    ipc.listAgents.mockResolvedValue([saved()]);
-    render(<FleetPanel />);
-    await userEvent.click(await screen.findByTitle("Watch diff-scan"));
-    await userEvent.type(
-      screen.getByRole("textbox", { name: "Follow up with diff-scan" }),
-      "fix candidate 2{Enter}",
-    );
-    expect(ipc.followUpAgent).toHaveBeenCalledWith(
-      "s1",
-      "lane-0",
-      "fix candidate 2",
-    );
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Follow-up complete",
-    );
-  });
+
   it("reconciles queued placeholders with history and honors persisted completion", () => {
     const agent = saved("durable-id", { status: "running" });
     const fleet = {
@@ -204,14 +136,7 @@ describe("agent hub", () => {
       source: "turn" as const,
       focused: null,
       lanes: [
-        {
-          id: "",
-          name: "diff-scan",
-          status: "queued" as const,
-          activity: "",
-          tail: "",
-          tokens: 0,
-        },
+        { id: "", name: "diff-scan", status: "queued" as const, activity: "", tail: "", tokens: 0 },
       ],
     };
     const rows = agentRows([agent], [["f1", fleet]]);

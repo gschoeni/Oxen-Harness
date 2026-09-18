@@ -1,0 +1,334 @@
+/* The agent view: a subagent's thread and composer in place of the chat's.
+   It borrows the chat's own surfaces (.messages-wrap, .thread, .msg, the
+   composer) so an agent reads exactly like a conversation, and adds only the
+   bar above — a breadcrumb back to the chat, the agent's state, and its few
+   actions — plus the assignment card, the live footer, and the patch card. */
+
+.agent-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  animation: agent-view-in var(--dur) var(--ease);
+}
+@keyframes agent-view-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* --- The bar: chat › agent · state · meta … switch · changes · transcript · stop --- */
+.agent-view-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--separator);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.agent-view-bar button {
+  font: inherit;
+  cursor: pointer;
+}
+.agent-view-bar button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.agent-view-bar button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.agent-view-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  max-width: 200px;
+  height: 28px;
+  padding: 0 var(--space-2) 0 var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.agent-view-back span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-view-back:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.agent-view-crumb {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.agent-view-name {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-view-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.agent-view-status.running,
+.agent-view-status.queued {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--separator));
+}
+.agent-view-status.failed {
+  color: var(--danger);
+}
+.agent-view-meta {
+  display: flex;
+  gap: var(--space-3);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+.agent-view-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-view-spacer {
+  flex: 1;
+}
+.agent-view-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+.agent-view-actions > button,
+.agent-view-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.agent-view-actions > button:hover:not(:disabled),
+.agent-view-switch button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.agent-view-actions > button.active {
+  background: var(--bg);
+  border-color: var(--separator);
+  color: var(--text);
+}
+.agent-view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-right: var(--space-1);
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.agent-view-switch button {
+  width: 26px;
+  padding: 0;
+  justify-content: center;
+}
+.agent-view-switch > span {
+  padding: 0 4px;
+  white-space: nowrap;
+}
+.agent-view-stop {
+  color: var(--danger) !important;
+}
+.agent-view-stop:hover:not(:disabled) {
+  background: var(--danger-soft, color-mix(in srgb, var(--danger) 12%, transparent)) !important;
+}
+
+/* --- The thread --- */
+.agent-view-thread {
+  padding-top: var(--space-5);
+}
+/* The brief the chat handed this agent: a quiet, left-ruled block, not a
+   bubble — you didn't say it. */
+.agent-view-assignment {
+  align-self: stretch;
+  padding: var(--space-1) var(--space-4);
+  border-left: 2px solid var(--separator-strong);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-view-assignment-label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: var(--text-3xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+/* A message sent from here that the transcript hasn't shown yet. */
+.msg.user.pending {
+  opacity: 0.72;
+}
+.agent-view-pending-note {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-2xs);
+  font-style: italic;
+  color: var(--text-tertiary);
+}
+/* The live footer while the agent works: the theme's spinner phrase, then
+   the lane's rolling readout underneath in mono. */
+.agent-view-live {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-self: stretch;
+  min-width: 0;
+}
+.agent-view-activity {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- The patch card, above the composer --- */
+.agent-view-patch {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 740px;
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-5) 0;
+}
+.agent-view-patch-card {
+  overflow: hidden;
+  background: var(--surface);
+  border: var(--frame-border-w) solid var(--separator-strong);
+  border-radius: var(--frame-radius);
+  box-shadow: var(--frame-shadow);
+}
+.agent-view-patch-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.agent-view-patch-head strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.agent-view-patch-head button {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.agent-view-patch-head button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.agent-view-patch-head button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.agent-view-apply {
+  border-color: var(--separator-strong) !important;
+}
+.agent-view-patch pre {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: var(--space-2) 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  white-space: pre;
+  color: var(--text-secondary);
+}
+.agent-view-patch .diff-line.file {
+  color: var(--text);
+  font-weight: 600;
+}
+.agent-view-patch .diff-line.hunk {
+  color: var(--accent);
+}
+
+/* A send or apply that failed, with the one action that fixes it. */
+.agent-view-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 740px;
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-5) 0;
+  font-size: var(--text-xs);
+  color: var(--danger);
+}
+.agent-view-error button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .agent-view-meta,
+  .agent-view-back span {
+    display: none;
+  }
+}

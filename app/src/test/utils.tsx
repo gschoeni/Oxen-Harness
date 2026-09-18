@@ -33,6 +33,7 @@ export function resetAll() {
     trailDust: {},
     trailActivity: {},
     fleets: {},
+    agentView: {},
     codeReview: {},
     queues: {},
     canvases: {},

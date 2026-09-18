@@ -286,7 +286,7 @@ pub(crate) async fn read_idle(
                     Some(Residual::Submit(line)) => {
                         // At idle, Enter sends (vs. queueing during a turn) —
                         // unless a background lane is being watched
-                        // (alt+digit), in which case it steers that lane,
+                        // (↑/↓ or alt+digit), in which case it steers that lane,
                         // exactly as it does mid-turn.
                         let trimmed = line.trim().to_string();
                         if trimmed.is_empty() {
@@ -454,7 +454,7 @@ fn steer_watched_lane(text: &str) -> Option<Result<String, String>> {
         {
             Ok(lane.label.clone())
         } else {
-            Err(format!("{} is not accepting messages. Draft kept · Alt+0 returns to main chat · /agents follow-up {} <message> continues it", lane.label, lane.id))
+            Err(format!("{} is not accepting messages. Draft kept · Esc returns to main chat · /agents follow-up {} <message> continues it", lane.label, lane.id))
         },
     )
 }
@@ -598,7 +598,7 @@ async fn run_one_turn(
                                     // Nothing to send.
                                 } else if stackable(trimmed) {
                                     // Steer the running turn — or, while a
-                                    // fleet lane is being watched (alt+digit),
+                                    // fleet lane is being watched (↑/↓, alt+digit),
                                     // that lane: the message is delivered at
                                     // its next safe point (not queued for
                                     // after). Ctrl+Enter / Ctrl+Q stack a
