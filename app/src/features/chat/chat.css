@@ -674,91 +674,45 @@
 }
 
 /* --- Queue --- */
-.queue {
-  max-width: 740px;
-  margin: 0 auto;
-  width: 100%;
-  padding: 0 var(--space-5);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.queue-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-family: var(--font-display);
-  font-size: var(--label-size);
-  font-weight: 400;
-  text-transform: var(--label-transform);
-  letter-spacing: var(--label-spacing);
-  color: var(--text-tertiary);
-  padding: 0 var(--space-1);
-}
+/* Builds on .fleet-panel; only what differs from a lane of subagents lives here. */
 .queue-note {
-  font-family: var(--font-ui);
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 400;
-  font-size: var(--text-sm);
+  margin-left: 0;
+  flex: 1;
 }
 .queue-clear {
   margin-left: auto;
-  background: transparent;
-  border: none;
-  color: var(--text-tertiary);
-  font-family: var(--font-ui);
-  font-size: var(--text-sm);
-  text-transform: none;
-  letter-spacing: 0;
-  padding: 2px var(--space-2);
-  border-radius: var(--radius-xs);
 }
 .queue-clear:hover {
-  background: var(--surface-2);
   color: var(--text);
+  border-color: var(--text-tertiary);
 }
-.queue-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  background: var(--surface);
-  border: 1px solid var(--separator);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-3);
+/* A queued message is not a lane you can watch: no pointer, no hover. */
+.fleet-lane.queue-item {
+  cursor: default;
+}
+.fleet-lane.queue-item:hover {
+  background: transparent;
 }
 .queue-idx {
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   display: grid;
   place-items: center;
   border-radius: var(--radius-pill);
   background: var(--accent-tint-strong);
   color: var(--text-secondary);
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .queue-text {
   flex: 1;
   min-width: 0;
   color: var(--text);
-  font-size: var(--text-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.queue-x {
-  flex-shrink: 0;
-  background: transparent;
-  border: none;
-  color: var(--text-tertiary);
-  border-radius: var(--radius-xs);
-  padding: 2px 6px;
-}
-.queue-x:hover {
-  background: var(--surface-2);
-  color: var(--text);
 }
 
 /* --- Pending attachments --- */
@@ -1698,3 +1652,53 @@
 .media-upload.compact {
   padding: 2px 8px 4px;
 }
+
+/* ---- the thread's standing, pinned atop the chat --------------------------- */
+
+.chat-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+}
+.chat-status-text {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-status-action {
+  flex: none;
+  padding: 2px var(--space-2);
+  background: none;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+  cursor: pointer;
+}
+.chat-status-action:hover { color: var(--text); border-color: var(--separator-strong); }
+/* The session id, tail-clipped; copies on click. */
+.chat-session-id {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px var(--space-2);
+  background: none;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-3xs);
+  cursor: pointer;
+}
+.chat-session-id:hover, .chat-session-id.copied { color: var(--text); }
