@@ -109,7 +109,7 @@ describe("The Oxen Trail", () => {
     // Continue (dismissing any message screens, taking option 2 on decisions)
     // until the journey ends.
     for (let i = 0; i < 400 && s.phase !== "over"; i++) {
-      s = s.phase === "trail" ? G.handleKey(s, "1") : G.handleKey(s, s.phase === "river" ? "3" : s.phase === "choice" ? "2" : "Enter");
+      s = s.phase === "trail" ? G.handleKey(s, "1") : G.handleKey(s, s.phase === "river" ? (s.food >= s.party.filter((m: any) => m.alive).length * 6 ? "3" : "2") : s.phase === "choice" ? "2" : "Enter");
     }
     expect(s.phase).toBe("over");
     expect(typeof s.score).toBe("number");
@@ -263,7 +263,7 @@ describe("The Oxen Trail", () => {
     const right: any = G.handlePointer!(card, { kind: "tap", x: 0.8, y: 0.7 });
     expect(right.food).toBe(trail.food);
     // A tap on the trail menu picks the row under it: row 3 cycles pace.
-    const paced: any = G.handlePointer!(trail, { kind: "tap", x: 0.5, y: 108 / 136 });
+    const paced: any = G.handlePointer!(trail, { kind: "tap", x: 0.7, y: 98 / 136 });
     expect(paced.pace).toBe(1);
   });
 
@@ -286,5 +286,56 @@ describe("The Oxen Trail", () => {
     const trail: any = press(s1, "Enter");
     const win: any = G.handleKey({ ...trail, miles: 2039, nextLandmark: 9 }, "1");
     expect(win.sfx.some((e: any) => e.name === "good" || e.name === "best")).toBe(true);
+  });
+});
+
+describe("Trail decisions", () => {
+  it("rests at camp for food and days, healing only living travelers", () => {
+    const trail = press(G.initialState(), "1", "Enter");
+    const party = trail.party.map((m: any, i: number) => ({ ...m, health: i ? 40 : 0, alive: i > 0 }));
+    const camp = press({ ...trail, party, health: 40 }, "6");
+    expect(camp.phase).toBe("camp");
+    const rested = press(camp, "1");
+    expect(rested.day).toBe(trail.day + 2);
+    expect(rested.food).toBe(trail.food - 24);
+    expect(rested.party[1].health).toBe(54);
+    expect(rested.party[0].alive).toBe(false);
+    expect(rested.party[0].health).toBe(0);
+  });
+
+  it("allows one forage and scout per leg, with explicit resource costs", () => {
+    const trail = press(G.initialState(), "1", "Enter");
+    let s = press(trail, "6", "2", "Enter", "6", "2");
+    expect(s.food).toBe(trail.food + 45);
+    expect(s.day).toBe(trail.day + 1);
+    s = press({ ...s, phase: "camp" }, "3");
+    expect(s.scouted).toBe(true);
+    expect(s.food).toBe(trail.food + 35);
+    seedRng(42);
+    const ordinary = press({ ...trail, nextLandmark: 9 }, "1");
+    seedRng(42);
+    const scouted = press({ ...trail, nextLandmark: 9, scouted: true, foraged: true }, "1");
+    expect(scouted.miles).toBe(ordinary.miles + 25);
+    expect(scouted.scouted).toBe(false);
+    expect(scouted.foraged).toBe(false);
+  });
+
+  it("keeps the fort after Green River on the route", () => {
+    const trail = press(G.initialState(), "1", "Enter");
+    const river = press({ ...trail, miles: 1000, nextLandmark: 5, food: 2000 }, "1");
+    expect(river.phase).toBe("river");
+    expect(river.nextLandmark).toBe(6);
+    const crossed = press(river, "3", "Enter");
+    expect(crossed.nextLandmark).toBe(6);
+    expect(crossed.day).toBe(river.day + 2);
+    expect(crossed.food).toBe(river.food - 30);
+  });
+
+  it("refuses recovery without the supplies instead of healing for free", () => {
+    const trail = press(G.initialState(), "1", "Enter");
+    const result = press({ ...trail, food: 0, health: 40 }, "6", "1");
+    expect(result.day).toBe(trail.day);
+    expect(result.health).toBe(40);
+    expect(result.msgTitle).toBe("Not enough provisions");
   });
 });

@@ -17,8 +17,8 @@ function live() {
   return { ...s, obstacles: [], pickups: [], nextSpawn: 1e9, nextCoin: 1e9 };
 }
 
-function weed(lane: number, row: number, kind = "weed") {
-  return { id: 9000 + row, kind, lane, laneVis: lane, row, speed: 1, spin: 0, bounced: false, bounceDir: 1, scored: false };
+function weed(lane: number, row: number, kind: "weed" | "big" | "log" | "bouncer" = "weed") {
+  return { id: 9000 + row, kind, lane, laneVis: lane, row, speed: 1, spin: 0, bounced: false, bounceDir: 1, scored: false, puffed: false };
 }
 
 describe("Tumbleweed Dodge", () => {
@@ -205,5 +205,34 @@ describe("Tumbleweed Dodge", () => {
     expect(G.handlePointer!(s, { kind: "tap", x: 0.9, y: 0.8 }).oxLane).toBe(2);
     expect(G.handlePointer!(s, { kind: "tap", x: 0.5, y: 0.1 }).hop).toBeCloseTo(HOP_TIME);
     expect(G.handlePointer!(s, { kind: "swipe", x: 0.5, y: 0.5, dir: "ArrowLeft" }).oxLane).toBe(0);
+  });
+});
+
+describe("Dodge mastery", () => {
+  it("buffers a hop just before the cooldown expires", () => {
+    const s = G.handleKey({ ...live(), hopCooldown: 0.07 }, "ArrowUp");
+    const hopped = run(s, 0.1);
+    expect(hopped.hop).toBeGreaterThan(0);
+    expect(hopped.sfx.at(-1)?.name).toBe("hop");
+  });
+
+  it("earns a Stampede through coins, then smashes hazards and attracts every lane", () => {
+    let s = G.update({ ...live(), courage: 96, pickups: [{ id: 1, kind: "coin", lane: 1, row: OX_ROW }] }, 1 / 60);
+    expect(s.stampede).toBeGreaterThan(4);
+    expect(s.courage).toBe(0);
+    s = G.update({ ...s, obstacles: [weed(1, OX_ROW)], pickups: [{ id: 2, kind: "coin", lane: 0, row: OX_ROW }] }, 1 / 60);
+    expect(s.phase).toBe("run");
+    expect(s.obstacles).toHaveLength(0);
+    expect(s.pickups).toHaveLength(0);
+    expect(s.popups.some((p) => p.text.includes("SMASH"))).toBe(true);
+    expect(run({ ...s, obstacles: [], pickups: [] }, 6).stampede).toBe(0);
+  });
+
+  it("gives a shield break a recovery window against a second obstacle", () => {
+    let s = G.update({ ...live(), shield: true, obstacles: [weed(1, OX_ROW), weed(1, OX_ROW - 0.5)] }, 1 / 60);
+    expect(s.shield).toBe(false);
+    expect(s.invincible).toBeGreaterThan(0);
+    s = run(s, 0.4);
+    expect(s.phase).toBe("run");
   });
 });

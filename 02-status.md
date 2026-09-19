@@ -657,3 +657,13 @@ until the reader scrolls up; returning to the bottom, using the arrow, sending a
 prompt, or switching chats resumes following. Twelve regression tests and real
 browser checks cover the behavior. See `plans/chat-scroll.md` for verification
 and existing workspace check blockers.
+
+## Prairie arcade — 2026-09-18
+
+All three existing cabinets now have richer pixel scenery and distinct mastery
+mechanics: Dodge's earned Stampede, Hunt's focused shots and hit streaks, and
+Trail's camp recovery/foraging/scouting with visible resource and river risks.
+Cabinet controls sit outside the playfield, with explicit play/pause/menu buttons
+and automatic pause when returning to the composer. River crossings no longer
+skip the following landmark. See `plans/arcade-delight.md` for research,
+verification, remaining workspace blockers, and the dedicated polish pass.

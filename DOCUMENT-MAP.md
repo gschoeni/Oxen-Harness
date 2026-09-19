@@ -150,3 +150,10 @@ When adding a new file to the project, update this document map.
 - `crates/harness-media/src/library.rs` — `MediaSource` / `SourceOrigin`: each reference traced to the chat attachment, earlier generation, or project file it came from; `agent_prompt` and the hub's `provider` record on every manifest row.
 - `app/src/features/media/GalleryPanel.tsx` — the Gallery dock shows the grid or one generation, never both; back button, prev/next stepper, arrow keys.
 - `app/src/features/media/GenerationDetail.tsx` — one generation in full: prompt, request, output, the lineage trail (inputs above, outputs below, library items open in place), identity, and the raw manifest row.
+
+## Prairie arcade — 2026-09-18
+
+- `plans/arcade-delight.md` — game-design research, mechanics, browser checks, and review record for all three cabinets.
+- `app/src/features/chat/games/arcadeArt.tsx` — deterministic pixel vistas, terrain texture, trees, wagon, and title plaques.
+- `app/src/features/chat/games/arcade.css` — cabinet controls outside the playfield, explicit play/pause buttons, and dock sizing.
+- `app/src/features/chat/games/{tumbleweed,hunt,oregonTrail}.tsx` — runner Stampede, focused hunting, and the Trail's camp/river decisions; regression tests beside each game.

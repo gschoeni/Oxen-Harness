@@ -263,3 +263,30 @@ describe("Hunting Season", () => {
     expect(s.seasonOver).toBe(true);
   });
 });
+
+describe("Hunt precision", () => {
+  it("aims a tap at its position, including upward shots", () => {
+    const t = tripPointer(quiet(), { kind: "tap", x: 0.5, y: 0.1 });
+    expect(t.bullets[0].vy).toBeLessThan(0);
+    expect(t.bullets[0].vx).toBeCloseTo(0);
+  });
+
+  it("charges while still, spends focus on a shot, and drops a bear in one shot", () => {
+    const bear = { ...deerAt(COLS / 2 + 10, ROWS / 2 - 1), kind: "bear" as const, hp: 2 };
+    let t = run(quiet({ animals: [bear] }), 0.9);
+    expect(t.focus).toBe(1);
+    t = tripKey(t, " ");
+    expect(t.focus).toBe(0);
+    t = run(t, 0.4);
+    expect(t.animals[0].dead).toBe(true);
+    expect(t.precisionScore).toBeGreaterThan(0);
+    expect(t.hitStreak).toBe(1);
+  });
+
+  it("walking breaks focus and missed shots break a hit streak", () => {
+    let t = run(tripKey({ ...quiet(), focus: 1 }, "ArrowRight"), 0.3);
+    expect(t.focus).toBe(0);
+    t = run(tripKey({ ...quiet(), hitStreak: 3 }, " "), 1);
+    expect(t.hitStreak).toBe(0);
+  });
+});

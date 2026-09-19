@@ -1,0 +1,69 @@
+/* Cabinet chrome stays outside the playfield, including at dock widths. */
+.hero-game .arcade-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: #101714;
+  border-bottom: 1px solid #354239;
+}
+.hero-game .hero-game-tabs,
+.hero-game .hero-game-switches {
+  position: static;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.hero-game .hero-game-switches { margin-left: auto; }
+.hero-game .hero-game-tab,
+.hero-game .hero-game-switch {
+  min-height: 28px;
+  padding: var(--space-1) var(--space-2);
+  border-width: 1px;
+  font-size: var(--text-3xs);
+  letter-spacing: 0.04em;
+  box-shadow: none;
+}
+.hero-game .hero-game-tab.active { background: #eed6a4; border-color: #eed6a4; color: #172119; }
+.hero-game .hero-game-stage { overflow: hidden; outline: none; }
+.hero-game .hero-game-stage:focus-visible { outline: 2px solid #eed6a4; outline-offset: -2px; }
+.hero-game .hero-game-canvas { image-rendering: pixelated; }
+.hero-game .arcade-controls {
+  padding: var(--space-2) var(--space-3);
+  background: #101714;
+  border-top: 1px solid #354239;
+  color: #d5ddce;
+  text-align: center;
+  font: 11px/1.5 var(--font-readout);
+}
+.hero-game .hero-prompt-start { padding: var(--space-3); background: #101714; border-top: 1px solid #354239; }
+.hero-game .arcade-play {
+  display: flex;
+  width: 100%;
+  border: 1px solid #cfb882;
+  background: #eed6a4;
+  color: #172119;
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+  box-shadow: 0 3px 0 #7d6945;
+}
+.hero-game .arcade-play:hover { background: #ffe8bb; }
+.hero-game .arcade-play:active { transform: translateY(2px); box-shadow: 0 1px 0 #7d6945; }
+.hero-game .arcade-play .hero-game-combo kbd {
+  width: 16px;
+  height: 16px;
+  font-size: var(--text-3xs);
+  color: #172119;
+  background: transparent;
+  border: 1px solid #7d6945;
+  box-shadow: none;
+}
+.hero-game .arcade-play .hero-game-combo kbd.combo-hit { background: #172119; color: #eed6a4; }
+.hero-game button:focus-visible { outline: 2px solid #fff5d8; outline-offset: 2px; }
+.hero-game .hero-game-start-label { margin-left: auto; font-size: var(--text-xs); letter-spacing: 0.15em; opacity: 1; }
+.game-dock:has(.hero-game) { width: 460px; }
+@media (prefers-reduced-motion: reduce) {
+  .hero-game * { animation: none !important; transition: none !important; }
+  .hero-game .arcade-play:active { transform: none; }
+}

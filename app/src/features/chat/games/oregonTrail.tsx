@@ -12,6 +12,7 @@
 // draw happens inside `handleKey`, so a daily-seeded trail replays identically
 // for the same key presses.
 
+import { Pine, TitlePlaque, Vista, Wagon } from "./arcadeArt";
 import type { ThemePalette } from "../../../lib/types";
 import {
   clamp,
@@ -37,9 +38,9 @@ import {
   type SfxEvent,
 } from "./gameKit";
 import type { SfxName } from "./sfx";
-import { HuntScene, newTrip, terrainForMiles, tripKey, tripKeyUp, tripPause, tripResult, tripUpdate, type HuntTrip } from "./hunt";
+import { HuntScene, newTrip, terrainForMiles, tripKey, tripKeyUp, tripPause, tripPointer, tripResult, tripUpdate, type HuntTrip } from "./hunt";
 
-type Phase = "occupation" | "store" | "trail" | "hunt" | "message" | "choice" | "river" | "over";
+type Phase = "camp" | "occupation" | "store" | "trail" | "hunt" | "message" | "choice" | "river" | "over";
 type Tone = "good" | "bad" | "neutral";
 
 interface Member {
@@ -95,6 +96,8 @@ interface OregonState {
   atFort: boolean;
   weather: string;
   lastLeg: LegSummary | null;
+  foraged: boolean;
+  scouted: boolean;
 
   // message card
   msgTitle: string;
@@ -187,7 +190,6 @@ function dateStr(day: number) {
 
 const living = (s: OregonState) => s.party.filter((m) => m.alive);
 const aliveCount = (s: OregonState) => living(s).length;
-const healthWord = (h: number) => (h > 75 ? "Good" : h > 50 ? "Fair" : h > 25 ? "Poor" : "Very poor");
 const shortName = (name: string) => (name === "Wagon Boss" ? "Boss" : name);
 
 // ---- the all-time table and the last grave -----------------------------------
@@ -277,6 +279,8 @@ function freshGame(best = loadBest("trail")): OregonState {
     atFort: false,
     weather: "Fair",
     lastLeg: null,
+    foraged: false,
+    scouted: false,
     msgTitle: "",
     msgLines: [],
     msgTone: "neutral",
@@ -782,7 +786,7 @@ function travel(s: OregonState): OregonState {
   const food = Math.max(0, s.food - eat);
 
   const landmark = LANDMARKS[s.nextLandmark];
-  let base = 110 + s.oxen * 8 + PACE_MILES[s.pace] + randInt(0, 26);
+  let base = 110 + s.oxen * 8 + PACE_MILES[s.pace] + randInt(0, 26) + (s.scouted ? 25 : 0);
   if (s.health < 45) base -= 25;
   base = Math.max(35, base);
 
@@ -811,6 +815,8 @@ function travel(s: OregonState): OregonState {
       weather,
       atFort: false,
       lastLeg: { miles: miles - s.miles, ate, dh },
+      foraged: false,
+      scouted: false,
     },
     dh,
   );
@@ -845,14 +851,21 @@ function travel(s: OregonState): OregonState {
   return { ...next, phase: "trail" };
 }
 
+function riverSafety(s: OregonState, ford: boolean): number {
+  const rough = s.weather === "Rainy" || s.weather === "Snow";
+  return ford ? (rough ? 0.45 : 0.8) : (rough ? 0.75 : 0.9);
+}
+
 function crossRiver(s: OregonState, choice: number): OregonState {
   const river = s.riverName;
-  const next = { ...s, nextLandmark: s.nextLandmark + 1, phase: "trail" as Phase, riverName: "" };
+  const next = { ...s, phase: "trail" as Phase, riverName: "" };
   const deep = rand();
 
   if (choice === 3) {
     // Wait for better conditions, then cross safely.
-    return toMessage({ ...next, day: s.day + randInt(1, 3) }, `You wait at the ${river}`, ["The waters calm after a few days", "and you cross without trouble."], "neutral", "trail");
+    const cost = aliveCount(s) * 6;
+    if (s.food < cost) return toMessage(s, "Not enough provisions", [`Waiting needs ${cost} lb of food.`, "Float, ford, or take the ferry."], "bad", "river");
+    return toMessage({ ...next, day: s.day + 2, food: s.food - cost }, `You wait at the ${river}`, [`Two days and ${cost} lb of food later,`, "you cross without trouble."], "neutral", "trail");
   }
   if (choice === 4) {
     if (s.cash < FERRY_COST) return s;
@@ -860,7 +873,7 @@ function crossRiver(s: OregonState, choice: number): OregonState {
   }
 
   const ford = choice === 1;
-  const disaster = ford ? deep > 0.55 : deep > 0.78; // fording is riskier
+  const disaster = deep > riverSafety(s, ford); // fording is riskier
 
   if (!disaster) {
     return toMessage(next, `You cross the ${river}`, ford ? ["You ford the river and reach", "the far bank safely."] : ["You caulk the wagon and float", "across without a hitch."], "good", "trail");
@@ -975,7 +988,21 @@ function storeKey(s: OregonState, key: string): OregonState {
   return s;
 }
 
+function campKey(s: OregonState, key: string): OregonState {
+  if (key === "4" || key === "Enter") return { ...s, phase: "trail" };
+  const cost = key === "1" ? aliveCount(s) * 6 : key === "3" ? 10 : 0;
+  if (s.food < cost) return toMessage(s, "Not enough provisions", [`You need ${cost} lb of food.`, "Try foraging or hunting first."], "bad", "camp");
+  if (key === "1") return toMessage(hurtAll({ ...s, food: s.food - cost, day: s.day + 2 }, 14),
+    "A night by the fire", [`Two days rest · −${cost} lb of food`, "Each living traveler heals +14."], "good", "trail");
+  if (key === "2" && !s.foraged) return toMessage({ ...s, foraged: true, food: s.food + 45, day: s.day + 1 },
+    "A little prairie bounty", ["Wild berries and roots: +45 lb.", "One day spent. Fresh ground next leg."], "good", "trail");
+  if (key === "3" && !s.scouted) return toMessage({ ...s, scouted: true, food: s.food - 10, day: s.day + 1 },
+    "A better way through", ["One day scouting · −10 lb of food", "Next leg: +25 miles of progress."], "good", "trail");
+  return s;
+}
+
 function trailKey(s: OregonState, key: string): OregonState {
+  if (key === "6") return { ...s, phase: "camp" };
   if (key === "1") return travel(s);
   if (key === "2") return startHunt(s);
   if (key === "3") return { ...s, pace: (s.pace + 1) % PACE_NAMES.length };
@@ -1008,6 +1035,8 @@ function occupationKey(s: OregonState, key: string): OregonState {
 
 function oregonKeyInner(s: OregonState, key: string): OregonState {
   switch (s.phase) {
+    case "camp":
+      return campKey(s, key);
     case "occupation":
       return occupationKey(s, key);
     case "choice":
@@ -1041,8 +1070,8 @@ function oregonKey(s: OregonState, key: string): OregonState {
 // Pointer play: taps land on whatever the screen shows at that height, so the
 // numbered menus work by touch without a keyboard. Layout constants mirror the
 // render functions below.
-const MENU_TOP = 88;
-const MENU_STEP = 10;
+const MENU_TOP = 98;
+const MENU_STEP = 12;
 const RIVER_TOP = 86;
 const RIVER_STEP = 11;
 
@@ -1051,6 +1080,7 @@ function rowAt(yFrac: number, top: number, step: number, count: number) {
 }
 
 function oregonPointer(s: OregonState, p: PointerInput): OregonState {
+  if (s.phase === "hunt" && s.hunt && !s.hunt.done) return withHunt(s, tripPointer(s.hunt, p));
   if (p.kind === "swipe") return oregonKey(s, pointerAsKey(p));
   switch (s.phase) {
     case "message":
@@ -1061,17 +1091,19 @@ function oregonPointer(s: OregonState, p: PointerInput): OregonState {
     case "river":
       return oregonKey(s, String(rowAt(p.y, RIVER_TOP, RIVER_STEP, 4) + 1));
     case "trail":
-      return oregonKey(s, String(rowAt(p.y, MENU_TOP, MENU_STEP, s.atFort ? 5 : 4) + 1));
+      return oregonKey(s, String((p.x < 0.5 ? [1, 2, 6] : [3, 4, 5])[rowAt(p.y, MENU_TOP, MENU_STEP, 3)]));
     case "store":
       if (p.y < 1 / 3) return oregonKey(s, "ArrowUp");
       if (p.y > 2 / 3) return oregonKey(s, "ArrowDown");
       if (p.x < 0.35) return oregonKey(s, "ArrowLeft");
       if (p.x > 0.65) return oregonKey(s, "ArrowRight");
       return oregonKey(s, "Enter");
+    case "camp":
+      return oregonKey(s, String(rowAt(p.y, 69, 15, 4) + 1));
     case "occupation":
-      return oregonKey(s, String(Math.min(3, Math.floor(p.y * 3) + 1)));
+      return oregonKey(s, String(rowAt(p.y, 62, 16, 3) + 1));
     case "hunt":
-      return oregonKey(s, " ");
+      return s.hunt && !s.hunt.done ? withHunt(s, tripPointer(s.hunt, p)) : oregonKey(s, "Enter");
     default:
       return s;
   }
@@ -1119,7 +1151,6 @@ function screenColors(p: ThemePalette) {
 
 type ScreenColors = ReturnType<typeof screenColors>;
 
-const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);
 
 /** The status header: a progress bar marked with every landmark ahead and
     behind, and a wagon inching toward Oregon. */
@@ -1194,62 +1225,50 @@ function StoreScreen(s: OregonState, sc: ScreenColors) {
   );
 }
 
-/** One traveler as `Name ▮▮▮▯`: four blocks of health, red when ailing. */
-function MemberRow({ m, x, y, sc }: { m: Member; x: number; y: number; sc: ScreenColors }) {
-  const blocks = m.alive ? Math.max(m.health > 0 ? 1 : 0, Math.round(m.health / 25)) : 0;
-  const color = !m.alive ? sc.dim : m.ailment ? sc.bad : m.health > 50 ? sc.good : sc.accent;
+function TrailScreen(s: OregonState, sc: ScreenColors, p: ThemePalette) {
+  const c = sceneColors(p);
+  const foodNeeded = RATION_LB[s.rations] * aliveCount(s);
+  const next = LANDMARKS[s.nextLandmark];
+  const menus = [
+    ["1  Travel onward", "2  Hunt for food", "6  Make camp"],
+    [`3  ${PACE_NAMES[s.pace]} / ${PACE_H[s.pace] > 0 ? "+" : ""}${PACE_H[s.pace]} HP`, `4  ${RATION_NAMES[s.rations]} / ${RATION_H[s.rations] > 0 ? "+" : ""}${RATION_H[s.rations]} HP`, s.atFort ? "5  Trade at the fort" : "5  Trade at next fort"],
+  ];
   return (
     <g>
-      <Line x={x} y={y} c={m.alive ? sc.fg : sc.dim} size={7}>{m.alive ? shortName(m.name) : `†${shortName(m.name)}`}</Line>
-      {[0, 1, 2, 3].map((i) => (
-        <rect key={i} x={x + 30 + i * 4} y={y - 5} width={3} height={4} fill={color} opacity={i < blocks ? 1 : 0.25} />
-      ))}
+      {Header(s, sc)}
+      <svg x={8} y={30} width={128} height={55} viewBox="0 0 288 136" preserveAspectRatio="xMidYMid slice">
+        <Vista c={c} horizon={18} travel={s.miles / 4} night={s.weather === "Cold" || s.weather === "Snow"} />
+        <Pine x={8} y={31} c={c} scale={1.8} />
+        <Wagon x={26} y={23} c={c} />
+        <PxText x={144} y={17} size={9} fill={c.snow} shadow={c.sky} anchor="middle">{s.atFort ? "AT THE TRADING POST" : s.weather.toUpperCase()}</PxText>
+      </svg>
+      <Line x={144} y={37} c={sc.accent} size={7}>{next ? `${Math.max(0, next.mile - s.miles)} mi to ${next.name}` : "Oregon awaits"}</Line>
+      <Line x={144} y={48} c={s.food < foodNeeded ? sc.bad : sc.fg} size={7}>{`FOOD ${Math.round(s.food)} · NEED ${foodNeeded}`}</Line>
+      <Line x={144} y={58} c={sc.fg} size={7}>{`AMMO ${s.bullets} · CASH $${Math.round(s.cash)}`}</Line>
+      <Line x={144} y={68} c={sc.dim} size={7}>{`OXEN ${s.oxen} · COATS ${s.clothing} · KITS ${s.misc}`}</Line>
+      {s.party.map((m, i) => <g key={m.name}>
+        <rect x={145 + i * 26} y={74} width={21} height={3} fill={sc.frame} />
+        <rect x={145 + i * 26} y={74} width={21 * (m.alive ? m.health / 100 : 0)} height={3} fill={m.health < 40 ? sc.bad : sc.good} />
+        <Line x={155 + i * 26} y={84} c={m.alive ? sc.fg : sc.dim} size={5.5} anchor="middle">{m.alive ? shortName(m.name).slice(0, 4) : "RIP"}</Line>
+      </g>)}
+      <rect x={8} y={89} width={272} height={42} fill={sc.frame} opacity={0.12} />
+      {menus.map((column, col) => column.map((text, row) => <Line key={text} x={14 + col * 136} y={MENU_TOP + row * MENU_STEP} c={col === 1 && row === 2 && !s.atFort ? sc.dim : sc.accent} size={7}>{text}</Line>))}
     </g>
   );
 }
 
-function TrailScreen(s: OregonState, sc: ScreenColors) {
-  const paceNote = ["+0 mi", `+${PACE_MILES[1]} mi`, `+${PACE_MILES[2]} mi`][s.pace];
-  const paceHealth = ["health ↑", "health ↓", "health ↓↓"][s.pace];
-  const rationNote = `${RATION_LB[s.rations] * aliveCount(s)} lb/leg`;
-  const rationHealth = ["health ↑", "health ↓", "health ↓↓"][s.rations];
-  const menu = [
-    "1  Continue on the trail",
-    "2  Hunt for food",
-    `3  Pace: ${PACE_NAMES[s.pace]}`.padEnd(22) + `${paceNote} · ${paceHealth}`,
-    `4  Rations: ${RATION_NAMES[s.rations]}`.padEnd(22) + `${rationNote} · ${rationHealth}`,
-  ];
-  if (s.atFort) menu.push(`5  Trade for supplies`);
-  const stats = [
-    `Food ${Math.round(s.food)} lb`.padEnd(16) + `Oxen ${s.oxen}`.padEnd(10) + `Health: ${healthWord(s.health)}`,
-    `Bullets ${s.bullets}`.padEnd(16) + `Clothes ${s.clothing}`.padEnd(10) + `Weather: ${s.weather}`,
-    `Medicine ${s.misc}`.padEnd(16) + `Cash $${Math.round(s.cash)}`,
-  ];
-  const leg = s.lastLeg;
-  const ailing = s.party.filter((m) => m.alive && m.ailment);
-  return (
-    <g>
-      {Header(s, sc)}
-      {leg ? (
-        <Line x={10} y={33} c={sc.dim} size={7}>{`Last leg: ${signed(Math.round(leg.miles))} mi · −${Math.round(leg.ate)} lb food · health ${signed(leg.dh)}`}</Line>
-      ) : (
-        <Line x={10} y={33} c={sc.dim} size={7}>{`${OCCUPATIONS[s.occupation].name}'s wagon, ready to roll`}</Line>
-      )}
-      {s.party.map((m, i) => (
-        <MemberRow key={m.name} m={m} x={10 + i * 54} y={44} sc={sc} />
-      ))}
-      {ailing.length > 0 && (
-        <Line x={10} y={53} c={sc.bad} size={7}>{ailing.map((m) => `${shortName(m.name)}: ${m.ailment}`).join("  ")}</Line>
-      )}
-      {stats.map((line, i) => (
-        <Line key={i} x={10} y={62 + i * 9} c={s.health > 50 || i !== 0 ? sc.fg : sc.bad} size={8}>{line}</Line>
-      ))}
-      {menu.map((line, i) => (
-        <Line key={line} x={12} y={MENU_TOP + i * MENU_STEP} c={sc.accent} size={8}>{line}</Line>
-      ))}
-      {!s.atFort && <Line x={W - 10} y={H - 5} c={sc.dim} size={7} anchor="end">esc makes camp</Line>}
-    </g>
-  );
+function CampScreen(s: OregonState, sc: ScreenColors) {
+  return <g>
+    {Header(s, sc)}
+    <PxText x={W / 2} y={42} size={12} fill={sc.accent} shadow={sc.bg} anchor="middle">BY THE CAMPFIRE</PxText>
+    <Line x={W / 2} y={53} c={sc.dim} size={7} anchor="middle">A little preparation goes a long way.</Line>
+    {[
+      `1  Rest: +14 health · 2 days · ${aliveCount(s) * 6} lb`,
+      s.foraged ? "2  Foraged here · travel to find more" : "2  Forage: +45 lb of food · 1 day",
+      s.scouted ? "3  Route scouted · +25 mi next leg" : "3  Scout: +25 mi next leg · 1 day · 10 lb",
+      "4  Break camp and return to the trail",
+    ].map((line, i) => <Line key={i} x={16} y={69 + i * 15} c={i === 1 && s.foraged || i === 2 && s.scouted ? sc.dim : sc.accent} size={7}>{line}</Line>)}
+  </g>;
 }
 
 function HuntScreen(s: OregonState, sc: ScreenColors, p: ThemePalette) {
@@ -1270,9 +1289,9 @@ function RiverScreen(s: OregonState, sc: ScreenColors) {
     <g>
       {Header(s, sc)}
       <PxText x={W / 2} y={44} size={11} fill={sc.accent} shadow={sc.bg} anchor="middle">{`THE ${s.riverName.toUpperCase()}`}</PxText>
-      <Line x={W / 2} y={58} c={sc.dim} size={8} anchor="middle">The river blocks the trail. How</Line>
-      <Line x={W / 2} y={68} c={sc.dim} size={8} anchor="middle">will you get the wagon across?</Line>
-      {["1  Ford the river", "2  Caulk the wagon and float", "3  Wait for conditions to improve", `4  Take the ferry ($${FERRY_COST})`].map((line, i) => (
+      <Line x={W / 2} y={58} c={sc.dim} size={8} anchor="middle">{`${s.weather} weather · ${s.weather === "Rainy" || s.weather === "Snow" ? "swollen waters" : "calm waters"}`}</Line>
+      <Line x={W / 2} y={68} c={sc.dim} size={7} anchor="middle">Weigh the risk. Protect your people.</Line>
+      {[`1  Ford · ${Math.round(riverSafety(s, true) * 100)}% safe`, `2  Float · ${Math.round(riverSafety(s, false) * 100)}% safe`, `3  Wait · safe · 2 days / ${aliveCount(s) * 6} lb`, `4  Ferry · safe · $${FERRY_COST} / 1 day`].map((line, i) => (
         <Line key={line} x={20} y={RIVER_TOP + i * RIVER_STEP} c={i === 3 && s.cash < FERRY_COST ? sc.dim : sc.accent} size={8}>{line}</Line>
       ))}
     </g>
@@ -1373,6 +1392,10 @@ function OregonRender(s: OregonState, p: ThemePalette) {
   let body: React.JSX.Element;
   let label: string;
   switch (s.phase) {
+    case "camp":
+      body = CampScreen(s, sc);
+      label = "The Oxen Trail: make camp — rest, forage, or scout";
+      break;
     case "occupation":
       body = OccupationScreen(s, sc);
       label = "The Oxen Trail: choose your occupation";
@@ -1402,7 +1425,7 @@ function OregonRender(s: OregonState, p: ThemePalette) {
       label = s.arrived ? "The Oxen Trail: you reached Oregon" : "The Oxen Trail: the party has perished";
       break;
     default:
-      body = TrailScreen(s, sc);
+      body = TrailScreen(s, sc, p);
       label = "The Oxen Trail: on the trail — choose your next move";
   }
   return (
@@ -1418,59 +1441,20 @@ function OregonRender(s: OregonState, p: ThemePalette) {
     the all-time table on the right, and last run's grave by the trail. */
 function OregonAttract(p: ThemePalette) {
   const c = sceneColors(p);
-  const hz = 20;
   const table = loadTable().slice(0, 3);
   const tomb = loadTomb();
   return (
     <GameFrame label="The Oxen Trail title screen: a wagon bound for Oregon">
-      <Px x={0} y={0} w={COLS} h={ROWS} fill={c.sky} />
-      <Px x={58} y={3} w={5} h={5} fill={c.sun} />
-      {poly([[0, hz], [12, 12], [24, hz - 2], [36, 9], [48, hz - 2], [60, 13], [72, hz - 1], [72, hz]], c.mountain)}
-      <Px x={0} y={hz} w={COLS} h={ROWS - hz} fill={c.grass} />
-      {poly([[30, hz], [42, hz], [56, ROWS], [16, ROWS]], c.trail, 0.5)}
-      {/* wagon + ox team */}
-      {(() => {
-        const x = 30;
-        const y = 24;
-        const bars = [];
-        for (let i = 0; i <= 10; i++) {
-          const top = 4 - Math.round(4 * Math.sin((Math.PI * i) / 10));
-          bars.push(<Px key={i} x={x + i} y={y + top} w={1} h={4 - top} fill={c.snow} />);
-        }
-        return (
-          <g>
-            {bars}
-            <Px x={x} y={y + 4} w={11} h={2} fill={c.mountain} />
-            <Px x={x + 1} y={y + 6} w={2} h={1} fill={c.line} />
-            <Px x={x + 8} y={y + 6} w={2} h={1} fill={c.line} />
-            {/* oxen with realistic horns — light base, dark tips curving up */}
-            <Px x={x + 11} y={y + 1} w={2} h={1} fill={c.ox} />
-            <Px x={x + 13} y={y + 1} w={2} h={1} fill={c.ox} />
-            <Px x={x + 10} y={y + 0} w={1} h={1} fill={c.line} />
-            <Px x={x + 15} y={y + 0} w={1} h={1} fill={c.line} />
-            <Px x={x + 13} y={y + 2} w={5} h={3} fill={c.ox} />
-            <Px x={x + 12} y={y + 2} w={1} h={2} fill={c.ox} />
-          </g>
-        );
-      })()}
-      {/* last run's grave, off the trail to the left */}
-      {tomb && (
-        <g>
-          <Px x={6} y={25} w={7} h={7} fill={c.mountainBack} />
-          <Px x={7} y={24} w={5} h={1} fill={c.mountainBack} />
-          <Px x={7} y={26} w={5} h={1} fill={c.sky} o={0.5} />
-          <Line x={9.5 * U} y={32.4 * U} c={c.text} size={5} anchor="middle">{`RIP ${shortName(tomb.name)}`}</Line>
-        </g>
-      )}
-      {/* the all-time table */}
-      <g>
-        <Line x={W - 8} y={19 * U} c={c.accent} size={6} anchor="end">BEST TRAILS</Line>
-        {table.map((e, i) => (
-          <Line key={i} x={W - 8} y={(21.5 + i * 2) * U} c={e.name === "You" ? c.accent : c.text} size={5.5} anchor="end">{`${e.name} ${e.score}`}</Line>
-        ))}
-      </g>
-      <PxText x={(COLS * U) / 2} y={7 * U} size={15} fill={c.accent} shadow="#000" anchor="middle">THE OXEN TRAIL</PxText>
-      <PxText x={(COLS * U) / 2} y={11 * U} size={7} fill={c.text} shadow="#000" anchor="middle">Guide your wagon to Oregon</PxText>
+      <Vista c={c} horizon={21} />
+      {poly([[30, 21], [33, 21], [56, ROWS], [20, ROWS]], c.trail, 0.3)}
+      <Pine x={6} y={30} c={c} scale={2.1} />
+      <Pine x={16} y={24} c={c} scale={1.1} />
+      <Wagon x={27} y={24} c={c} />
+      <TitlePlaque c={c} eyebrow="02 / PRAIRIE ARCADE · EVERY WAGON HAS A STORY" title="THE OXEN TRAIL" subtitle="2,040 MILES · 5 TRAVELERS · YOUR CHOICES" />
+      <rect x={211} y={76} width={72} height={42} fill={c.sky} opacity={0.8} />
+      <Line x={W - 10} y={86} c={c.accent} size={6} anchor="end">BEST TRAILS</Line>
+      {table.map((e, i) => <Line key={i} x={W - 10} y={96 + i * 8} c={c.snow} size={6} anchor="end">{`${e.name} ${e.score}`}</Line>)}
+      {tomb && <Line x={8} y={H - 5} c={c.snow} size={5.5}>{`IN MEMORY OF ${shortName(tomb.name).toUpperCase()}`}</Line>}
     </GameFrame>
   );
 }

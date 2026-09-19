@@ -9,6 +9,7 @@
 // make necessary, and death that is juicy (hit-stop, shake, debris, a tumbling
 // ox) but never slow — any arrow key restarts instantly.
 
+import { Pine, TitlePlaque, Vista } from "./arcadeArt";
 import type { ThemePalette } from "../../../lib/types";
 import {
   burst,
@@ -91,6 +92,10 @@ interface RunnerState {
   squash: number; // seconds of landing squash left
   hop: number; // seconds left airborne (0 = grounded)
   hopCooldown: number;
+  hopBuffer: number;
+  invincible: number;
+  courage: number;
+  stampede: number;
   shield: boolean;
 
   // the trail
@@ -140,7 +145,9 @@ const RUTS_HORIZON = [33.8, 38.2];
 
 const LANE_TWEEN = 0.09; // seconds per lane change
 const HOP_TIME = 0.42;
-const HOP_COOLDOWN = 1.1;
+const HOP_COOLDOWN = 0.75;
+const HOP_BUFFER = 0.14;
+const STAMPEDE_SECONDS = 5;
 const HOP_HEIGHT = 5; // cells at the apex
 const BOUNCE_ROW = HZ + 9;
 const MULT_MAX = 8;
@@ -202,12 +209,16 @@ function resetRunner(best = 0, wrecks: Wreck[] = []): RunnerState {
     squash: 0,
     hop: 0,
     hopCooldown: 0,
+    hopBuffer: 0,
+    invincible: 0,
+    courage: 0,
+    stampede: 0,
     shield: false,
     obstacles: [],
     pickups: [],
     nextSpawn: READY_TIME + 0.6,
     nextCoin: READY_TIME + 1.4,
-    nextShieldIn: 40 + rand() * 20,
+    nextShieldIn: 12 + rand() * 6,
     wave: 0,
     waveT: 0,
     dist: 0,
@@ -253,10 +264,11 @@ function runnerKey(state: RunnerState, key: string): RunnerState {
     return { ...state, oxLane: clamp(state.oxLane + dir, 0, LANES_BOTTOM.length - 1), queuedLane: null };
   }
   if (key === "ArrowUp" || key === " ") {
-    if (state.hop > 0 || state.hopCooldown > 0) return state;
+    if (state.hop > 0 || state.hopCooldown > 0) return { ...state, hopBuffer: HOP_BUFFER };
     return {
       ...state,
       hop: HOP_TIME,
+      hopBuffer: 0,
       hopCooldown: HOP_COOLDOWN,
       particles: [...state.particles, ...burst(laneX(state.laneVis, OX_ROW), OX_ROW + 3, 4, "dust", 6, 0.3)],
       sfx: pushSfx(state.sfx, "hop"),
@@ -367,13 +379,14 @@ function spawnCoin(s: RunnerState): RunnerState {
 
 function bonus(s: RunnerState, x: number, y: number, text: string, pts: number, bump: boolean, big = false): RunnerState {
   const mult = bump ? Math.min(MULT_MAX, s.mult + 1) : s.mult;
-  const gained = pts * s.mult;
+  const gained = pts * s.mult * (s.stampede > 0 ? 2 : 1);
   return {
     ...s,
     score: s.score + gained,
     mult,
     maxMult: Math.max(s.maxMult, mult),
     multTimer: MULT_DECAY,
+    courage: s.stampede > 0 ? 0 : Math.min(100, s.courage + (bump ? 22 : 8)),
     popups: [...s.popups, { x: x * U, y: y * U, text: text ? `${text} +${gained}` : `+${gained}`, life: 0.9, max: 0.9, big }],
   };
 }
@@ -386,6 +399,7 @@ function crash(s: RunnerState, ob: Obstacle): RunnerState {
     return {
       ...s,
       shield: false,
+      invincible: 0.7,
       obstacles: s.obstacles.filter((o) => o.id !== ob.id),
       hitStop: 0.12 * motionScale(),
       shake: 0.3,
@@ -480,7 +494,7 @@ function runnerUpdate(state: RunnerState, rawDt: number): RunnerState {
   }
 
   // Distance points, scaled by the multiplier — keeping it high is the game.
-  const score = s.score + dt * 10 * mult * (phase === "run" ? 1 : 0);
+  const score = s.score + dt * 10 * mult * (s.stampede > 0 ? 2 : 1) * (phase === "run" ? 1 : 0);
 
   s = {
     ...s,
@@ -494,6 +508,9 @@ function runnerUpdate(state: RunnerState, rawDt: number): RunnerState {
     squash,
     hop,
     hopCooldown,
+    hopBuffer: Math.max(0, s.hopBuffer - dt),
+    invincible: s.stampede > 0 && s.stampede <= dt ? 0.7 : Math.max(0, s.invincible - dt),
+    stampede: Math.max(0, s.stampede - dt),
     dist,
     particles,
     sfx,
@@ -506,6 +523,8 @@ function runnerUpdate(state: RunnerState, rawDt: number): RunnerState {
     popups: stepPopups(s.popups, rawDt),
     banner: s.banner && s.banner.life - rawDt > 0 ? { ...s.banner, life: s.banner.life - rawDt } : null,
   };
+
+  if (s.hopBuffer > 0 && s.hopCooldown === 0 && s.hop === 0) s = runnerKey(s, "ArrowUp");
 
   // Move obstacles; bouncers wobble, puff dust as a tell, then hop one lane at
   // BOUNCE_ROW.
@@ -544,7 +563,7 @@ function runnerUpdate(state: RunnerState, rawDt: number): RunnerState {
   // Pickups: coins chain toward a multiplier bump; horseshoes grant a shield.
   const oxX = laneX(s.laneVis, OX_ROW);
   for (const p of pickups) {
-    const near = Math.abs(p.lane - s.laneVis) < 0.5 && Math.abs(p.row - OX_ROW) < 1.8;
+    const near = (s.stampede > 0 || Math.abs(p.lane - s.laneVis) < 0.5) && Math.abs(p.row - OX_ROW) < 1.8;
     if (!near) continue;
     pickups = pickups.filter((q) => q.id !== p.id);
     if (p.kind === "shield") {
@@ -559,6 +578,13 @@ function runnerUpdate(state: RunnerState, rawDt: number): RunnerState {
   }
   pickups = pickups.filter((p) => p.row < ROWS + 2);
 
+  if (s.courage >= 100 && s.stampede === 0) {
+    s = { ...s, courage: 0, stampede: STAMPEDE_SECONDS,
+      banner: { text: "STAMPEDE · SMASH + DOUBLE POINTS", life: 1.5 },
+      sfx: pushSfx(s.sfx, "milestone"),
+      particles: [...s.particles, ...burst(oxX, OX_ROW, 18, "spark", 18, 0.7)] };
+  }
+
   // Obstacles: collide, graze, or hop.
   const airborne = s.hop > 0;
   for (const o of obstacles) {
@@ -568,7 +594,14 @@ function runnerUpdate(state: RunnerState, rawDt: number): RunnerState {
     const inLane = o.kind === "log" ? true : laneGap < 0.55;
 
     if (inLane && Math.abs(dRow) < hitRows) {
-      if (!airborne) return crash(s, o);
+      if (s.stampede > 0) {
+        obstacles = obstacles.filter((q) => q.id !== o.id);
+        s = bonus(s, oxX, OX_ROW - 7, "SMASH", 30, false);
+        s = { ...s, particles: [...s.particles, ...burst(oxX, o.row, 8, "shard", 16, 0.5)], sfx: pushSfx(s.sfx, "chain") };
+        continue;
+      }
+      if (s.invincible > 0) continue;
+      if (!airborne) return crash({ ...s, obstacles, pickups }, o);
       // Passing overhead: reward once per obstacle.
       if (!o.scored) {
         obstacles = obstacles.map((q) => (q.id === o.id ? { ...q, scored: true } : q));
@@ -661,21 +694,12 @@ function Prairie({ c, dist }: { c: SceneColors; dist: number }) {
 
   return (
     <g>
-      <Px x={0} y={0} w={COLS} h={ROWS} fill={c.sky} />
-      {/* pixel sun with rays */}
-      <Px x={57} y={2} w={5} h={5} fill={c.sun} />
-      <Px x={56} y={4} w={1} h={1} fill={c.sun} o={0.7} />
-      <Px x={62} y={4} w={1} h={1} fill={c.sun} o={0.7} />
-      <Px x={59} y={1} w={1} h={1} fill={c.sun} o={0.7} />
-      <Px x={59} y={7} w={1} h={1} fill={c.sun} o={0.7} />
-      {/* mountain ranges along the horizon */}
-      {poly([[0, HZ], [8, 5], [16, 9], [26, 3], [36, 8], [47, 4], [57, 9], [65, 6], [72, 9], [72, HZ]], c.mountainBack, 0.6)}
-      {poly([[0, HZ], [10, 7], [20, HZ - 1], [30, 6], [40, HZ - 1], [50, 7], [62, HZ - 1], [72, 8], [72, HZ]], c.mountain)}
-      {poly([[28, 8], [30, 6], [32, 8]], c.snow)}
-      {poly([[48, 9], [50, 7], [52, 9]], c.snow)}
-      {/* prairie and the trail converging on the pass */}
-      <Px x={0} y={HZ} w={COLS} h={ROWS - HZ} fill={c.grass} />
+      <Vista c={c} horizon={HZ} travel={dist} />
+      <Pine x={6} y={19} c={c} scale={1.1} />
+      <Pine x={66} y={26} c={c} scale={1.5} />
       {poly([[29, HZ], [43, HZ], [59, ROWS], [13, ROWS]], c.trail, 0.5)}
+      {poly([[29, HZ], [30, HZ], [15, ROWS], [13, ROWS]], c.sun, 0.35)}
+      {poly([[42, HZ], [43, HZ], [59, ROWS], [57, ROWS]], c.sky, 0.3)}
       {ruts}
       {tufts}
     </g>
@@ -727,6 +751,12 @@ function OxSprite({ x, y, step, fill, shadow, lean = 0, squash = 0, spin = 0, li
         <Px x={1} y={2} w={1} h={1} fill={shadow} />
         {/* body and tail */}
         <Px x={3} y={1} w={7} h={4} fill={fill} />
+        <Px x={3} y={4} w={7} h={1} fill={shadow} o={0.22} />
+        <Px x={8} y={2} w={2} h={2} fill={shadow} o={0.12} />
+        <Px x={3} y={1} w={1} h={3} fill="#bb563f" />
+        <Px x={4} y={2} w={1.5} h={0.5} fill="#f0be8c" />
+        <Px x={0} y={3} w={2} h={1} fill={shadow} o={0.28} />
+        <Px x={1.5} y={2} w={0.5} h={0.5} fill="#fff7db" />
         <Px x={10} y={2} w={1} h={1} fill={fill} />
         {/* galloping legs (tucked while airborne) */}
         {lift > 0 ? (
@@ -994,6 +1024,11 @@ function Hud({ s, c }: { s: RunnerState; c: SceneColors }) {
           <rect x={67} y={29} width={1} height={4} fill={s.newBest ? c.accent : c.snow} />
         </g>
       )}
+      <rect x={W / 2 - 39} y={7} width={78} height={18} fill={c.sky} opacity={0.85} />
+      <PxText x={W / 2} y={15} size={6} fill={c.accent} shadow={c.sky} anchor="middle">
+        {s.stampede > 0 ? `STAMPEDE ${Math.ceil(s.stampede)}s · x2` : "BUILD YOUR STAMPEDE"}
+      </PxText>
+      {Array.from({ length: 10 }, (_, i) => <rect key={i} x={W / 2 - 34 + i * 7} y={19} width={5} height={3} fill={c.accent} opacity={i < (s.stampede > 0 ? s.stampede / STAMPEDE_SECONDS : s.courage / 100) * 10 ? 1 : 0.2} />)}
       {/* multiplier with its decay bar */}
       <PxText x={W - 8} y={17} size={11} fill={multColor} shadow={c.sky} anchor="end">{`x${s.mult}`}</PxText>
       <rect x={W - 8 - 22} y={20} width={22} height={2} fill={c.sky} opacity={0.6} />
@@ -1035,6 +1070,11 @@ function RunnerRender(state: RunnerState, p: ThemePalette) {
       <g transform={shakeTransform(s.shake, 3)}>
         <Prairie c={c} dist={s.dist} />
         <DayCycle dist={s.dist} />
+        {s.stampede > 0 && <g opacity={0.5 * motionScale()}>
+          {Array.from({ length: 12 }, (_, i) => <Px key={i} x={i % 2 ? 3 + i : COLS - 3 - i} y={HZ + (i * 5 + Math.floor(s.time * 25)) % (ROWS - HZ)} w={0.5} h={3} fill={c.accent} />)}
+          <rect x={2} y={2} width={W - 4} height={ROWS * U - 4} fill="none" stroke={c.accent} strokeWidth={2} />
+        </g>}
+        {s.obstacles.filter((o) => o.kind === "log" && o.row < OX_ROW - 6).map((o) => <PxText key={`tell${o.id}`} x={W / 2} y={52} size={7} fill={c.accent} shadow={c.sky} anchor="middle">↑ HOP THE LOG</PxText>)}
         {onFire && <rect x={0} y={0} width={W} height={ROWS * U} fill={c.danger} opacity={(0.06 + 0.04 * Math.sin(s.time * 12)) * motionScale()} />}
         {s.wrecks.map((w, i) =>
           w.row < HZ ? null : <WreckSprite key={`w${i}`} x={laneX(w.lane, w.row)} y={w.row} fill={c.weed} dark={c.line} />,
@@ -1069,7 +1109,7 @@ function RunnerRender(state: RunnerState, p: ThemePalette) {
             <RiderSprite rider={s.rider} c={c} x={laneX(s.laneVis, OX_ROW) + 0.5} y={OX_ROW + 1.5} step={1 - oxStep} tint={onFire ? c.danger : c.accent} />
           </g>
         )}
-        <RiderSprite rider={s.rider} c={c} x={laneX(s.laneVis, OX_ROW)} y={OX_ROW} step={dead ? 0 : oxStep} lean={dead ? 0 : lean} squash={s.squash > 0 ? 0.18 : 0} spin={spin} lift={lift} />
+        <RiderSprite rider={s.rider} c={c} tint={s.stampede > 0 || s.invincible > 0 ? c.sun : undefined} x={laneX(s.laneVis, OX_ROW)} y={OX_ROW} step={dead ? 0 : oxStep} lean={dead ? 0 : lean} squash={s.squash > 0 ? 0.18 : 0} spin={spin} lift={lift} />
         {s.shield && !dead && (
           <g opacity={0.5 + 0.3 * Math.sin(s.time * 10)}>
             <rect x={(laneX(s.laneVis, OX_ROW) - 7) * U} y={(OX_ROW - 5 - lift) * U} width={14 * U} height={10 * U} fill="none" stroke={c.accent} strokeWidth={U / 2} />
@@ -1122,12 +1162,10 @@ function RunnerAttract(p: ThemePalette) {
       <Prairie c={c} dist={0} />
       <WagonSprite x={39} y={15} canvas={c.snow} wood={c.mountain} dark={c.sky} />
       <RiderSprite rider={rider} c={c} x={31} y={24} step={0} />
-      <PxText x={(COLS * U) / 2} y={7 * U} size={15} fill={c.accent} shadow="#000" anchor="middle">
-        TUMBLEWEED DODGE
-      </PxText>
-      <PxText x={(COLS * U) / 2} y={10.5 * U} size={7} fill={c.text} shadow="#000" anchor="middle">
-        {best > 0 ? `BEST ${pad4(best)} · graze weeds, chain coins, hop logs` : "graze weeds, chain coins, hop logs"}
-      </PxText>
+      <WeedSprite x={51} y={25} spin={0.3} size="mid" fill={c.weed} dark={c.sky} />
+      <CoinSprite x={21} y={21} t={0} fill={c.sun} bright={c.snow} />
+      <CoinSprite x={24} y={17} t={0} fill={c.sun} bright={c.snow} />
+      <TitlePlaque c={c} eyebrow="01 / PRAIRIE ARCADE · CHASE THE RUSH" title="TUMBLEWEED DODGE" subtitle={best > 0 ? `BEST ${pad4(best)} · COINS + CLOSE CALLS = STAMPEDE` : "COINS + CLOSE CALLS = STAMPEDE"} />
       {/* rider select: unlocked by distance, chosen with 1/2/3 */}
       <g>
         {RIDERS.map((r, i) => {
@@ -1158,7 +1196,7 @@ export const TumbleweedDodgeGame: HeroGameDefinition<RunnerState> = {
   update: runnerUpdate,
   render: RunnerRender,
   renderAttract: RunnerAttract,
-  help: "← → lanes · ↑ hop · ↓ drop · tap or swipe works too · esc makes camp",
+  help: "← → steer · ↑ / space hop · ↓ drop · coins + close calls charge Stampede",
 };
 
 // Exposed for tests.

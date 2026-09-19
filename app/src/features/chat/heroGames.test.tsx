@@ -67,3 +67,21 @@ describe("HeroGame wrapper", () => {
     play.mockRestore();
   });
 });
+
+it("offers explicit keyboard-accessible play and pause controls", async () => {
+  render(<HeroGame gameName="hunt" palette={palette} />);
+  await userEvent.click(screen.getByRole("button", { name: /play hunting season/i }));
+  expect(stage()).toHaveFocus();
+  await userEvent.click(screen.getByRole("button", { name: /pause game/i }));
+  expect(screen.getByRole("status")).toHaveTextContent("PAUSED");
+  await userEvent.click(screen.getByRole("button", { name: /resume game/i }));
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+it("pauses when focus moves into the composer", () => {
+  render(<><HeroGame gameName="hunt" palette={palette} /><textarea aria-label="Message" /></>);
+  fireEvent.pointerDown(stage(), { clientX: 50, clientY: 50 });
+  fireEvent.pointerUp(stage(), { clientX: 50, clientY: 50 });
+  fireEvent.focusIn(screen.getByRole("textbox"));
+  expect(screen.getByRole("status")).toHaveTextContent("PAUSED");
+});

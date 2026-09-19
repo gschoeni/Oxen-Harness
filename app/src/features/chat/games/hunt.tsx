@@ -12,6 +12,7 @@
 // trip as pure state; `HuntGame` wraps five trips (one per terrain zone along
 // the trail) into a scored "season" for the arcade cabinet.
 
+import { FieldTexture, Pine, TitlePlaque, Vista } from "./arcadeArt";
 import type { ThemePalette } from "../../../lib/types";
 import {
   burst,
@@ -22,7 +23,6 @@ import {
   motionScale,
   Particles,
   pickRand,
-  poly,
   Popups,
   pushSfx,
   Px,
@@ -161,6 +161,7 @@ interface Animal {
 }
 
 interface Bullet {
+  damage: number;
   id: number;
   x: number;
   y: number;
@@ -233,6 +234,9 @@ export interface HuntTrip {
   tickAt: number;
   /** Countdown from the mauling to the trip's end. */
   mauledIn: number;
+  focus: number;
+  hitStreak: number;
+  precisionScore: number;
 }
 
 // Playable field: HUD rows on top, the wrapper's help line along the bottom.
@@ -313,6 +317,9 @@ export function newTrip(opts: HuntTripOptions): HuntTrip {
     swipeWalk: null,
     tickAt: 0,
     mauledIn: 0,
+    focus: 0,
+    hitStreak: 0,
+    precisionScore: 0,
   };
 }
 
@@ -330,15 +337,16 @@ function fire(t: HuntTrip): HuntTrip {
   const len = Math.hypot(h.fx, h.fy) || 1;
   const vx = (h.fx / len) * BULLET_SPEED;
   const vy = (h.fy / len) * BULLET_SPEED;
-  const bullet: Bullet = { id: nextId++, x: h.x + h.fx * 2, y: h.y + h.fy * 2, vx, vy };
+  const bullet: Bullet = { damage: t.focus >= 1 ? 2 : 1, id: nextId++, x: h.x + h.fx * 2, y: h.y + h.fy * 2, vx, vy };
   return {
     ...t,
     bullets: [...t.bullets, bullet],
     bulletsLeft: t.bulletsLeft - 1,
     bulletsUsed: t.bulletsUsed + 1,
     fireCooldown: FIRE_COOLDOWN,
+    focus: 0,
     hunter: { ...h, flash: 0.08, recoil: 0.1 },
-    sfx: pushSfx(t.sfx, "shot"),
+    sfx: pushSfx(t.sfx, t.focus >= 1 ? "bigKill" : "shot"),
   };
 }
 
@@ -370,7 +378,12 @@ export function tripKeyUp(t: HuntTrip, key: string): HuntTrip {
 /** Taps fire; swipes walk that way for a beat (trackpad play). */
 export function tripPointer(t: HuntTrip, p: PointerInput): HuntTrip {
   if (t.done) return t;
-  if (p.kind === "tap" || !p.dir) return fire(t);
+  if (p.kind === "tap" || !p.dir) {
+    const dx = clamp(p.x, 0, 1) * COLS - t.hunter.x;
+    const dy = clamp(p.y, 0, 1) * ROWS - t.hunter.y;
+    const length = Math.hypot(dx, dy);
+    return fire(length < 1 ? t : { ...t, hunter: { ...t.hunter, fx: dx / length, fy: dy / length } });
+  }
   const dx = p.dir === "ArrowLeft" ? -1 : p.dir === "ArrowRight" ? 1 : 0;
   const dy = p.dir === "ArrowUp" ? -1 : p.dir === "ArrowDown" ? 1 : 0;
   return { ...t, swipeWalk: { dx, dy, until: t.clock + SWIPE_WALK }, hunter: { ...t.hunter, fx: dx, fy: dy } };
@@ -539,6 +552,7 @@ export function tripUpdate(t: HuntTrip, dt: number): HuntTrip {
     else if (tryMove(t, hunter.x, ny)) hunter = { ...hunter, y: ny };
   }
 
+  const focus = hunter.walking || hunter.down > 0 || t.fireCooldown > 0 ? 0 : Math.min(1, t.focus + dt / 0.75);
   let particles = stepParticles(t.particles, dt, 20);
   let popups = stepPopups(t.popups, dt);
   const shake = Math.max(0, t.shake - dt);
@@ -568,6 +582,8 @@ export function tripUpdate(t: HuntTrip, dt: number): HuntTrip {
 
   // Bullets fly in sub-steps of one cell so a fast round can't tunnel through
   // a squirrel.
+  let hitStreak = t.hitStreak;
+  let precisionScore = t.precisionScore;
   let shotLbs = t.shotLbs;
   let kills = t.kills;
   let hitStop = 0;
@@ -584,11 +600,13 @@ export function tripUpdate(t: HuntTrip, dt: number): HuntTrip {
       y += (b.vy * dt) / steps;
       if (x < -1 || x > COLS + 1 || y < FIELD_TOP - 2 || y > FIELD_BOTTOM + 2) {
         alive = false;
+        hitStreak = 0;
         break;
       }
       if (t.obstacles.some((o) => o.solid && inside(x, y, o))) {
         particles = [...particles, ...burst(x, y, 3, "spark", 10, 0.25)];
         alive = false;
+        hitStreak = 0;
         break;
       }
       const idx = animals.findIndex((a) => !a.dead && inside(x, y, { x: a.x, y: a.y, w: ANIMALS[a.kind].w, h: ANIMALS[a.kind].h }));
@@ -597,11 +615,14 @@ export function tripUpdate(t: HuntTrip, dt: number): HuntTrip {
         const spec = ANIMALS[a.kind];
         const cx = a.x + spec.w / 2;
         const cy = a.y + spec.h / 2;
-        if (a.hp > 1) {
+        hitStreak += 1;
+        const points = 10 * Math.min(hitStreak, 5) + (b.damage === 2 ? 15 : 0);
+        precisionScore += points;
+        if (a.hp > b.damage) {
           // Winged it: it bolts, and you'll need a second round. A bear does
           // worse than bolt — it rears up and comes for you.
           const bear = a.kind === "bear";
-          animals = animals.map((o, i) => (i === idx ? { ...o, hp: o.hp - 1, spooked: true, moving: true, charging: bear, rear: bear ? REAR_UP : 0, retarget: 0 } : o));
+          animals = animals.map((o, i) => (i === idx ? { ...o, hp: o.hp - b.damage, spooked: true, moving: true, charging: bear, rear: bear ? REAR_UP : 0, retarget: 0 } : o));
           popups = [...popups, { x: cx * U, y: a.y * U - 2, text: "HIT!", life: 0.6, max: 0.6 }];
           particles = [...particles, ...burst(cx, cy, 4, "dust", 8, 0.4)];
           sfx = pushSfx(sfx, "hit", ...(bear ? (["growl"] as const) : []));
@@ -612,7 +633,7 @@ export function tripUpdate(t: HuntTrip, dt: number): HuntTrip {
           hitStop = 0.06 * motionScale();
           if (spec.lbs >= 100) newShake = 0.25;
           sfx = pushSfx(sfx, spec.lbs >= 100 ? "bigKill" : "kill");
-          popups = [...popups, { x: cx * U, y: a.y * U - 2, text: `+${spec.lbs} lb`, life: 0.9, max: 0.9, big: spec.lbs >= 50 }];
+          popups = [...popups, { x: cx * U, y: a.y * U - 2, text: `${b.damage === 2 ? "FOCUS! " : ""}+${spec.lbs} lb · +${points}`, life: 0.9, max: 0.9, big: spec.lbs >= 50 }];
           particles = [...particles, ...burst(cx, cy, spec.lbs >= 100 ? 10 : 6, "dust", 10, 0.5)];
           if (shotLbs >= t.quota && !endIn) {
             endIn = 0.8;
@@ -678,6 +699,9 @@ export function tripUpdate(t: HuntTrip, dt: number): HuntTrip {
     popups,
     shake: newShake,
     fireCooldown,
+    focus,
+    hitStreak,
+    precisionScore,
     elapsed: Math.min(elapsed, t.seconds),
     nextSpawn,
     shotLbs,
@@ -726,19 +750,19 @@ function ObstacleSprite({ o, c }: { o: Obstacle; c: SceneColors }) {
     case "tree":
       return (
         <g>
-          <Px x={x} y={y} w={w} h={3} fill={c.line} />
-          <Px x={x + 1} y={y - 1} w={w - 2} h={1} fill={c.line} />
-          <Px x={x + 1} y={y + 1} w={1} h={1} fill={c.snow} o={0.25} />
-          <Px x={x + 2} y={y + 3} w={1} h={2} fill={c.mountain} />
+          <Px x={x + 2} y={y + 2} w={1} h={3} fill={c.mountain} />
+          <Px x={x + 2} y={y + 3} w={0.5} h={2} fill={c.sun} o={0.4} />
+          <Px x={x} y={y} w={w} h={3} fill={c.sky} />
+          <Px x={x + 1} y={y - 1} w={w - 2} h={1} fill={c.grass} />
+          <Px x={x} y={y} w={w - 0.5} h={2.5} fill={c.grass} />
+          <Px x={x + 2.5} y={y + 1} w={2} h={2} fill={c.sky} o={0.5} />
+          <Px x={x + 0.5} y={y} w={2} h={0.5} fill={c.sun} o={0.65} />
+          <Px x={x} y={y + 1} w={1} h={0.5} fill={c.sun} o={0.35} />
+          <Px x={x + 2} y={y + 2} w={0.5} h={0.5} fill={c.sun} o={0.4} />
         </g>
       );
     case "pine":
-      return (
-        <g>
-          {poly([[x + 1.5, y - 1], [x + w, y + 3], [x, y + 3]], c.line)}
-          <Px x={x + 1} y={y + 3} w={1} h={2} fill={c.mountain} />
-        </g>
-      );
+      return <Pine x={x + 1} y={y + h} c={c} scale={0.8} />;
     case "rock":
       return (
         <g>
@@ -800,6 +824,8 @@ function animalPixels(kind: AnimalKind, step: number, c: SceneColors, tell = fal
         <g>
           <Px x={0} y={1} w={4} h={1} fill={c.accent} />
           <Px x={3} y={0} w={1} h={1} fill={c.accent} />
+          <Px x={3.5} y={0.25} w={0.5} h={0.5} fill={c.sky} />
+          <Px x={0.5} y={1.5} w={2.5} h={0.5} fill={c.mountain} />
           <Px x={4} y={-1} w={1} h={1} fill={c.line} o={0.8} />
           {/* the tell: ears up before it bounds */}
           {tell && <Px x={3} y={-1} w={1} h={1} fill={c.accent} />}
@@ -882,10 +908,12 @@ function HunterSprite({ h, c }: { h: Hunter; c: SceneColors }) {
       <Px x={px - 1} y={py - 2} w={3} h={1} fill={c.mountain} />
       <Px x={px} y={py - 1} w={1} h={1} fill={c.snow} />
       <Px x={px - 1} y={py} w={3} h={1} fill={c.text} />
+      <Px x={px - 1} y={py} w={1} h={1.5} fill={c.mountain} />
+      <Px x={px + 0.5} y={py - 1} w={0.5} h={0.5} fill={c.sky} />
       <Px x={px - 1} y={py + 1} w={1} h={1} fill={c.text} />
       <Px x={px + 1} y={py + 1} w={1} h={1} fill={c.text} />
       {rifle}
-      {h.flash > 0 && <Px x={px + h.fx * 4 - 1} y={py + h.fy * 4 - 1} w={3} h={3} fill={c.accent} o={0.9 * motionScale()} />}
+      {h.flash > 0 && <Px x={Math.round(px + h.fx * 4 - 1)} y={Math.round(py + h.fy * 4 - 1)} w={3} h={3} fill={c.accent} o={0.9 * motionScale()} />}
     </g>
   );
 }
@@ -903,7 +931,7 @@ function Weather({ t, c }: { t: HuntTrip; c: SceneColors }) {
     case "eastForest": {
       const drift = Math.floor((k * 1.5) % COLS);
       return (
-        <g opacity={0.22}>
+        <g opacity={0.08}>
           <Px x={drift - COLS} y={8} w={COLS} h={3} fill={c.snow} />
           <Px x={drift} y={8} w={COLS} h={3} fill={c.snow} />
           <Px x={COLS - drift * 0.6 - COLS} y={20} w={COLS} h={2} fill={c.snow} />
@@ -957,11 +985,23 @@ export function HuntScene({ t, p, hud = true }: { t: HuntTrip; p: ThemePalette; 
     <g transform={shakeTransform(t.shake)}>
       <Px x={0} y={0} w={COLS} h={ROWS} fill={groundColor(t.terrain, c)} />
       {t.terrain === "mountains" && <Px x={0} y={0} w={COLS} h={ROWS} fill={c.mountainBack} o={0.15} />}
+      <FieldTexture c={c} desert={t.terrain === "desert"} />
       <Weather t={t} c={c} />
+      {t.obstacles.filter((o) => o.solid).map((o, i) => <Px key={`shadow${i}`} x={o.x + 1} y={o.y + o.h - 1} w={o.w + 2} h={1.5} fill={c.sky} o={0.35} />)}
+      {t.animals.filter((a) => !a.dead).map((a) => <Px key={`shadow${a.id}`} x={a.x} y={a.y + ANIMALS[a.kind].h} w={ANIMALS[a.kind].w + 1} h={0.5} fill={c.sky} o={0.35} />)}
       {t.obstacles.filter((o) => !o.solid).map((o, i) => <ObstacleSprite key={`d${i}`} o={o} c={c} />)}
       {t.animals.filter((a) => a.dead).map((a) => <AnimalSprite key={a.id} a={a} c={c} />)}
       {t.animals.filter((a) => !a.dead).map((a) => <AnimalSprite key={a.id} a={a} c={c} />)}
       {t.obstacles.filter((o) => o.solid).map((o, i) => <ObstacleSprite key={`s${i}`} o={o} c={c} />)}
+      {!t.done && t.hunter.down === 0 && <g opacity={0.65}>
+        {[5, 8, 11, 14].map((distance) => {
+          const norm = Math.hypot(t.hunter.fx, t.hunter.fy) || 1;
+          return <Px key={distance} x={Math.round(t.hunter.x + t.hunter.fx / norm * distance)} y={Math.round(t.hunter.y + t.hunter.fy / norm * distance)} w={0.5} h={0.5} fill={c.snow} />;
+        })}
+        <rect x={(t.hunter.x - 2) * U} y={(t.hunter.y + 3) * U} width={4 * U} height={2} fill={c.sky} />
+        <rect x={(t.hunter.x - 2) * U} y={(t.hunter.y + 3) * U} width={4 * U * t.focus} height={2} fill={c.accent} />
+        {t.focus >= 1 && <rect x={(t.hunter.x - 3) * U} y={(t.hunter.y - 3) * U} width={6 * U} height={6 * U} stroke={c.accent} strokeWidth={1} fill="none" strokeDasharray="3 5" />}
+      </g>}
       <HunterSprite h={t.hunter} c={c} />
       {t.bullets.map((b) => {
         const len = Math.hypot(b.vx, b.vy) || 1;
@@ -972,6 +1012,7 @@ export function HuntScene({ t, p, hud = true }: { t: HuntTrip; p: ThemePalette; 
           </g>
         );
       })}
+      {t.hitStreak > 1 && <Line x={W - 6} y={22} c={c.accent} size={7} anchor="end">{`STREAK x${Math.min(t.hitStreak, 5)}`}</Line>}
       <Particles ps={t.particles} fill={c.snow} spark={c.accent} />
       <Popups ps={t.popups} fill={c.text} shadow="#000" />
       {hud && (
@@ -1051,9 +1092,11 @@ function finishTrip(s: HuntState): HuntState {
   const t = s.trip;
   const r = tripResult(t);
   const bonus = t.doneReason === "full" ? Math.round(t.seconds - t.elapsed) * 2 : 0;
-  const score = s.score + r.carried + bonus;
+  const cleanBonus = t.doneReason === "full" && r.wasted === 0 ? 25 : 0;
+  const score = s.score + r.carried + bonus + t.precisionScore + cleanBonus;
   const lines = [`Carried ${r.carried} lb of ${r.shot} lb shot`];
-  if (t.quota < t.carryCap) lines.push(`${TERRAIN_NAMES[t.terrain].split(" ").pop()} quota: ${t.quota} lb`);
+  if (t.precisionScore > 0) lines.push(`Precision +${t.precisionScore}`);
+  if (cleanBonus > 0) lines.push("NO WASTE +25");
   if (r.wasted > 0) lines.push(`${r.wasted} lb left to waste`);
   if (bonus > 0) lines.push(`Full bag bonus +${bonus}`);
   if (t.doneReason === "mauled") lines.push("A bear got you — trip cut short");
@@ -1118,7 +1161,7 @@ function huntUpdate(s: HuntState, dt: number): HuntState {
 }
 
 function Card({ title, lines, c, foot }: { title: string; lines: string[]; c: SceneColors; foot: string }) {
-  const h = 40 + lines.length * 11;
+  const h = 30 + lines.length * 10;
   const y = (H - h) / 2;
   return (
     <g>
@@ -1126,7 +1169,7 @@ function Card({ title, lines, c, foot }: { title: string; lines: string[]; c: Sc
       <rect x={14} y={y} width={W - 28} height={h} fill="none" stroke={c.accent} strokeWidth={1} opacity={0.9} />
       <PxText x={W / 2} y={y + 17} size={11} fill={c.accent} shadow="#000" anchor="middle">{title}</PxText>
       {lines.map((line, i) => (
-        <Line key={i} x={W / 2} y={y + 32 + i * 11} c={c.text} size={8} anchor="middle">{line}</Line>
+        <Line key={i} x={W / 2} y={y + 29 + i * 10} c={c.text} size={8} anchor="middle">{line}</Line>
       ))}
       <Line x={W / 2} y={H - 10} c={c.text} size={7} anchor="middle">{foot}</Line>
     </g>
@@ -1153,7 +1196,7 @@ function HuntRender(s: HuntState, p: ThemePalette) {
         <g>
           <Px x={0} y={ROWS - 3} w={COLS} h={3} fill="#000" o={0.45} />
           <Line x={W / 2} y={H - 4} c={c.text} size={6} anchor="middle">
-            {t.elapsed < 4 ? "← ↑ ↓ → walk · space fires · esc makes camp" : `TRIP ${s.tripIndex + 1}/${TERRAIN_ORDER.length} · ${TERRAIN_NAMES[t.terrain].toUpperCase()} · SCORE ${s.score}`}
+            {t.elapsed < 4 ? "ARROWS move · SPACE fire · stand still to FOCUS" : `TRIP ${s.tripIndex + 1}/5 · ${t.focus >= 1 ? "FOCUS READY" : "STAND STILL TO FOCUS"} · ${s.score + t.precisionScore} PTS`}
           </Line>
         </g>
       )}
@@ -1191,18 +1234,18 @@ function HuntAttract(p: ThemePalette) {
   const hunter: Hunter = { x: 28, y: 23, fx: 1, fy: 0, walking: false, recoil: 0, flash: 0, down: 0 };
   return (
     <GameFrame label="Hunting Season title screen: a hunter faces a buffalo on the plains">
-      <Px x={0} y={0} w={COLS} h={ROWS} fill={c.grass} />
-      <Px x={0} y={0} w={COLS} h={12} fill={c.sky} />
-      <Px x={60} y={3} w={4} h={4} fill={c.sun} />
-      {poly([[0, 12], [14, 6], [26, 11], [40, 5], [54, 10], [66, 7], [72, 11], [72, 12]], c.mountain)}
+      <Vista c={c} horizon={16} />
+      <Pine x={6} y={26} c={c} scale={2.3} />
+      <Pine x={64} y={27} c={c} scale={2.6} />
+      <Pine x={57} y={22} c={c} scale={1.4} />
       {[[6, 16], [20, 30], [50, 15], [62, 28], [36, 29]].map(([x, y], i) => (
         <ObstacleSprite key={i} o={{ kind: "tuft", x, y, w: 2, h: 1, solid: false }} c={c} />
       ))}
       <AnimalSprite a={buffalo} c={c} />
       <AnimalSprite a={rabbit} c={c} />
       <HunterSprite h={hunter} c={c} />
-      <PxText x={W / 2} y={7 * U} size={15} fill={c.accent} shadow="#000" anchor="middle">HUNTING SEASON</PxText>
-      <PxText x={W / 2} y={11 * U} size={7} fill={c.text} shadow="#000" anchor="middle">Bring back 100 lb · arrows or swipe walk · space or tap fires</PxText>
+      <TitlePlaque c={c} eyebrow="03 / PRAIRIE ARCADE · MAKE EVERY SHOT COUNT" title="HUNTING SEASON" subtitle="5 BIOMES · PRECISION STREAKS · ONE AMMO BOX" />
+      <PxText x={W / 2} y={126} size={6.5} fill={c.snow} shadow={c.sky} anchor="middle">STAND STILL TO FOCUS · TAP A TARGET TO AIM + FIRE</PxText>
     </GameFrame>
   );
 }

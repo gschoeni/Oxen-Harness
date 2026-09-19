@@ -5,6 +5,7 @@ import { playSfx, setSfxPreference, sfxPreference, unlockSfx } from "./games/sfx
 import { TumbleweedDodgeGame } from "./games/tumbleweed";
 import { OxenTrailGame } from "./games/oregonTrail";
 import { HuntGame } from "./games/hunt";
+import "./games/arcade.css";
 
 export type { HeroGameDefinition } from "./games/gameKit";
 
@@ -73,6 +74,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
   const [sound, setSound] = useState(() => (variant === "dock" ? false : sfxPreference()));
   const [daily, setDaily] = useState(() => dailyPreference());
   const lastSfx = useRef(0);
+  const stageRef = useRef<HTMLDivElement>(null);
   const pointerStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const entries = Object.entries(HERO_GAMES) as [string, AnyHeroGameDefinition][];
   const showTabs = !!onSelectGame && entries.length > 1;
@@ -95,13 +97,14 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
     setState((current: any) => (definition.onStart ? definition.onStart(current) : definition.initialState()));
     setPaused(false);
     setPlaying(true);
+    stageRef.current?.focus();
     if (sound) playSfx("start");
   }, [definition, gameName, sound]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       // Keys aimed at the composer (or any input) never reach the game.
-      if (isEditableTarget(e)) return;
+      if (isEditableTarget(e) || e.repeat || (e.target as HTMLElement | null)?.closest("button")) return;
 
       if (!playing) {
         if (!(e.key in ARROW_GLYPHS)) {
@@ -127,6 +130,12 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
       if (e.key === "Escape") {
         setPlaying(false);
         setPaused(false);
+        return;
+      }
+      if (e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setPaused((value) => !value);
+        if (definition.onPause) setState((current: any) => definition.onPause!(current));
         return;
       }
       // Any key resumes from a pause; the key itself is swallowed so a resume
@@ -170,9 +179,14 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
     function onVisibility() {
       if (document.hidden) pause();
     }
+    function onFocus(e: FocusEvent) {
+      if (isEditableTarget(e)) pause();
+    }
+    document.addEventListener("focusin", onFocus);
     window.addEventListener("blur", pause);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
+      document.removeEventListener("focusin", onFocus);
       window.removeEventListener("blur", pause);
       document.removeEventListener("visibilitychange", onVisibility);
     };
@@ -242,6 +256,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
     const s0 = pointerStart.current;
     pointerStart.current = null;
     if (!s0 || (e.target as HTMLElement).closest("button")) return;
+    stageRef.current?.focus();
     const rect = e.currentTarget.getBoundingClientRect();
     const dx = e.clientX - rect.left - s0.x;
     const dy = e.clientY - rect.top - s0.y;
@@ -272,8 +287,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
 
   return (
     <div className="hero-game" data-variant={variant} aria-label={label}>
-      <div className="hero-game-stage" onPointerDown={onPointerDown} onPointerUp={onPointerUp} onPointerCancel={() => (pointerStart.current = null)}>
-        {!playing && definition.renderAttract ? definition.renderAttract(palette) : definition.render(state, palette)}
+      <div className="arcade-toolbar">
         {showTabs && !playing && (
           <div className="hero-game-tabs" role="tablist" aria-label="Choose a game">
             {entries.map(([key, def]) => (
@@ -301,18 +315,25 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
             {sound ? "♪ ON" : "♪ OFF"}
           </button>
         </div>
+          {playing && <>
+            <button className="hero-game-switch" aria-label={paused ? "Resume game" : "Pause game"} onClick={() => {
+              setPaused(!paused);
+              if (definition.onPause) setState((current: any) => definition.onPause!(current));
+              stageRef.current?.focus();
+            }}>{paused ? "RESUME" : "PAUSE"}</button>
+            <button className="hero-game-switch" aria-label="Back to arcade menu" onClick={() => { setPlaying(false); setPaused(false); }}>MENU</button>
+          </>}
+      </div>
+      <div ref={stageRef} tabIndex={0} className="hero-game-stage" aria-label={`${definition.title} playfield`} onPointerDown={onPointerDown} onPointerUp={onPointerUp} onPointerCancel={() => (pointerStart.current = null)}>
+        {!playing && definition.renderAttract ? definition.renderAttract(palette) : definition.render(state, palette)}
         {playing && paused && (
           <div className="hero-game-pause" role="status">
             <span>PAUSED</span>
             <small>press any key</small>
           </div>
         )}
-        {playing && !paused && definition.help && (
-          <div className="hero-game-help" aria-hidden="true">
-            {definition.help}
-          </div>
-        )}
       </div>
+      {playing && definition.help && <div className="arcade-controls">{definition.help}</div>}
       {/* The start bar lives below the screen art (not over it): the hint line,
           then the ↑↑↓↓ combo you enter to play. */}
       {!playing && (
@@ -323,7 +344,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
               <span className="pixel-caret" aria-hidden="true" />
             </span>
           )}
-          <span className="hero-game-start" aria-hidden="true">
+          <button className="hero-game-start arcade-play" onClick={start} aria-label={`Play ${definition.title}`}>
             <span className="hero-game-combo">
               {START_COMBO.map((key, i) => (
                 <kbd key={i} className={i < combo ? "combo-hit" : undefined}>
@@ -331,8 +352,8 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
                 </kbd>
               ))}
             </span>
-            <span className="hero-game-start-label">or click to hit the trail</span>
-          </span>
+            <span className="hero-game-start-label">PLAY <span aria-hidden="true">↵</span></span>
+          </button>
         </div>
       )}
     </div>
