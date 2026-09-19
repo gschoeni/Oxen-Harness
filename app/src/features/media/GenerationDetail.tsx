@@ -61,7 +61,6 @@ export function GenerationDetail({
             <Button
               type="button"
               size="sm"
-              variant="outline"
               onClick={() => stageAttachment(`${workspace}/${item.path}`)}
               title="Attach to your next message as a reference"
             >
@@ -69,12 +68,12 @@ export function GenerationDetail({
             </Button>
           )}
           {item.path && (
-            <Button type="button" size="sm" variant="outline" onClick={() => openInViewer([item.path!])}>
+            <Button type="button" size="sm" onClick={() => openInViewer([item.path!])}>
               <FileCode2 size={13} /> Open in editor
             </Button>
           )}
           {item.path && (
-            <Button type="button" size="sm" variant="outline" onClick={() => revealInFiles(item.path!)}>
+            <Button type="button" size="sm" onClick={() => revealInFiles(item.path!)}>
               <FolderTree size={13} /> Reveal in Files
             </Button>
           )}
@@ -83,7 +82,6 @@ export function GenerationDetail({
             <Button
               type="button"
               size="sm"
-              variant="outline"
               onClick={() => void resume(item.session)}
               title="Open the chat that asked for this"
             >
@@ -410,7 +408,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
     });
   };
   return (
-    <Button type="button" size="sm" variant="outline" onClick={copy}>
+    <Button type="button" size="sm" onClick={copy}>
       {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Copied" : label}
     </Button>
   );
