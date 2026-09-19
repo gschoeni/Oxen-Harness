@@ -135,3 +135,29 @@ it("does not open disabled or empty selectors and closes when disabled", async (
   );
   expect(screen.getByRole("combobox")).toBeDisabled();
 });
+
+it("keeps an active option when the available choices change while open", async () => {
+  const change = vi.fn();
+  const { rerender } = render(
+    <Select
+      label="Work view"
+      value="file"
+      options={options}
+      onValueChange={change}
+    />,
+  );
+  const trigger = screen.getByRole("combobox");
+  await userEvent.click(trigger);
+  rerender(
+    <Select
+      label="Work view"
+      value="file"
+      options={[options[1], options[2]]}
+      onValueChange={change}
+    />,
+  );
+  const next = screen.getByRole("option", { name: "Oxen workflow" });
+  expect(trigger).toHaveAttribute("aria-activedescendant", next.id);
+  await userEvent.keyboard("{Enter}");
+  expect(change).toHaveBeenCalledWith("workflow");
+});

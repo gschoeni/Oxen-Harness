@@ -300,6 +300,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.menu-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: var(--space-half);
+}
+.menu-description {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .menu-hint {
   flex-shrink: 0;
   font-family: var(--font-readout, monospace);

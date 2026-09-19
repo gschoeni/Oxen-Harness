@@ -38,9 +38,13 @@ The work-view picker now uses a shared `Select` over the existing menu primitive
 module icons, descriptions, selected-state checks, keyboard/typeahead, and a
 viewport-aware portal. It preserves compatible open files and uses the same
 native-overlay behavior as the other app menus. `app/README.md` documents it as
-the default for new single-choice selectors. Frontend/browser verification and
-the dedicated polish pass are recorded with this change; unrelated ongoing
-`CallContext` changes currently block the Rust verification commands.
+the default for new single-choice selectors. Dedicated review fixed dynamic
+option removal and upward menu positioning. Verification: 633 frontend tests,
+TypeScript, production build, browser checks, formatting and native Clippy passed.
+Nextest passed 1,368 tests (5 skipped, one existing test reported leaky). Workspace
+Clippy remains blocked by an unrelated `too_many_arguments` warning in
+`harness-agent/src/agent/tools.rs::run_repaired` during the `CallContext` refactor.
+See `plans/shared-select.md` for the review and verification record.
 
 ## Live View Studio — 2026-09-18
 

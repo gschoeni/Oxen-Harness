@@ -129,20 +129,6 @@
 .select-option .menu-name {
   font-weight: 500;
 }
-.menu-copy {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  gap: var(--space-half);
-}
-.menu-description {
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
-  line-height: 1.45;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
 @media (prefers-reduced-motion: reduce) {
   .select-trigger,
   .select-chevron {

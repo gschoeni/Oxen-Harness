@@ -44,7 +44,13 @@ export function Select({
   const typed = useRef({ text: "", at: 0 });
   const id = useId();
   const selected = options.find((option) => option.value === value);
-  const unavailable = disabled || !options.some((option) => !option.disabled);
+  const enabled = options.filter((option) => !option.disabled);
+  const activeValue = (
+    enabled.find((option) => option.value === highlighted) ??
+    enabled.find((option) => option.value === value) ??
+    enabled[0]
+  )?.value;
+  const unavailable = disabled || !enabled.length;
   const expanded = open && !unavailable;
 
   function items() {
@@ -59,7 +65,6 @@ export function Select({
     if (restoreFocus) trigger.current?.focus();
   }
   function show(fallback: "first" | "last" = "first") {
-    const enabled = options.filter((option) => !option.disabled);
     setHighlighted(
       enabled.find((option) => option.value === value)?.value ??
         (fallback === "last"
@@ -85,26 +90,39 @@ export function Select({
         Math.max(anchor.width, 360),
         window.innerWidth - edge * 2,
       );
-      const height = Math.min(popover.current.scrollHeight, 640);
+      const height = Math.min(
+        popover.current.querySelector(".menu")?.scrollHeight ?? 0,
+        640,
+      );
       const below = window.innerHeight - anchor.bottom - gap - edge;
       const above = anchor.top - gap - edge;
       const upwards = below < height && above > below;
       const maxHeight = Math.max(0, upwards ? above : below);
-      setPosition({
+      const next: CSSProperties = {
         left: Math.max(
           edge,
           Math.min(anchor.left, window.innerWidth - width - edge),
         ),
-        top: upwards
-          ? Math.max(edge, anchor.top - gap - Math.min(height, maxHeight))
-          : anchor.bottom + gap,
+        top: upwards ? undefined : anchor.bottom + gap,
+        bottom: upwards ? window.innerHeight - anchor.top + gap : undefined,
         width,
         maxHeight: Math.min(640, maxHeight),
-      });
+      };
+      setPosition((previous) =>
+        Object.keys(next).every(
+          (key) =>
+            previous[key as keyof CSSProperties] ===
+            next[key as keyof CSSProperties],
+        )
+          ? previous
+          : next,
+      );
     }
     place();
     const observer = new ResizeObserver(place);
     if (trigger.current) observer.observe(trigger.current);
+    const menu = popover.current?.querySelector(".menu");
+    if (menu) observer.observe(menu);
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     return () => {
@@ -117,9 +135,9 @@ export function Select({
   useEffect(() => {
     if (expanded)
       items()
-        .find((item) => item.dataset.value === highlighted)
+        .find((item) => item.dataset.value === activeValue)
         ?.scrollIntoView({ block: "nearest" });
-  }, [expanded, highlighted]);
+  }, [expanded, activeValue]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -154,7 +172,7 @@ export function Select({
     }
     const rows = items();
     if (!rows.length) return;
-    const current = rows.findIndex((row) => row.dataset.value === highlighted);
+    const current = rows.findIndex((row) => row.dataset.value === activeValue);
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       event.stopPropagation();
@@ -210,7 +228,7 @@ export function Select({
         aria-controls={expanded ? id : undefined}
         aria-activedescendant={
           expanded
-            ? `${id}-${options.findIndex((option) => option.value === highlighted)}`
+            ? `${id}-${options.findIndex((option) => option.value === activeValue)}`
             : undefined
         }
         disabled={unavailable}
@@ -254,7 +272,7 @@ export function Select({
                 <MenuItem
                   key={option.value}
                   id={`${id}-${index}`}
-                  data-highlighted={option.value === highlighted}
+                  data-highlighted={option.value === activeValue}
                   onPointerDown={(event) => event.preventDefault()}
                   onPointerMove={() => {
                     setKeyboard(false);
