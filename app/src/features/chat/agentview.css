@@ -19,15 +19,16 @@
   }
 }
 
-/* --- The bar: chat › agent · state · meta … switch · changes · transcript · stop --- */
+/* --- The bar: ‹ agent  ● state · tokens · time … switch · changes · transcript · stop
+   It sits on the page background, not a second surface, so the agent's
+   thread reads as the same page with a title line, not a panel inside one. */
 .agent-view-bar {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
   flex-shrink: 0;
-  min-height: 44px;
-  padding: var(--space-2) var(--space-4);
-  background: var(--surface);
+  min-height: 40px;
+  padding: var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--separator);
   font-size: var(--text-sm);
   color: var(--text-secondary);
@@ -44,14 +45,11 @@
   outline: none;
   box-shadow: var(--focus-ring);
 }
-/* The way out. A bare chevron reads as decoration next to the breadcrumb, so
-   it gets the outline of a control; .icon-btn supplies the size and hover. */
+/* The way out: a chevron at the left edge of the title line, where a back
+   control lives on every platform. .icon-btn supplies the size and hover. */
 .agent-view-back {
   flex-shrink: 0;
-  border: 1px solid var(--separator-strong);
-}
-.agent-view-back:hover {
-  border-color: var(--text-tertiary);
+  margin-right: calc(-1 * var(--space-1));
 }
 .agent-view-name {
   margin: 0;
@@ -63,40 +61,52 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.agent-view-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  height: 22px;
-  padding: 0 9px;
-  border: 1px solid var(--separator);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-2xs);
-  color: var(--text-tertiary);
-  white-space: nowrap;
-}
-.agent-view-status.running,
-.agent-view-status.queued {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--separator));
-}
-.agent-view-status.failed {
-  color: var(--danger);
-}
-.agent-view-meta {
+/* One readout: the state, then the numbers, dot-separated. The state carries
+   a coloured dot instead of a pill so the line stays quiet. */
+.agent-view-state {
   display: flex;
-  gap: var(--space-3);
+  align-items: center;
   min-width: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   font-variant-numeric: tabular-nums;
 }
-.agent-view-meta > span {
+.agent-view-state > span {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.agent-view-state > span + span::before {
+  content: "·";
+  margin: 0 var(--space-2);
+}
+.agent-view-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+.agent-view-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.agent-view-status.running,
+.agent-view-status.queued {
+  color: var(--accent);
+}
+.agent-view-status.running::before {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.agent-view-status.done {
+  color: var(--green);
+}
+.agent-view-status.failed {
+  color: var(--danger);
 }
 .agent-view-spacer {
   flex: 1;

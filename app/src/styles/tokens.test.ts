@@ -54,7 +54,7 @@ const BASELINE: Record<string, number> = {
   "/src/features/approvals/approvals.css": 3,
   "/src/features/canvas/canvas.css": 4,
   "/src/features/chat/agents.css": 34,
-  "/src/features/chat/agentview.css": 5,
+  "/src/features/chat/agentview.css": 3,
   "/src/features/chat/apikey.css": 2,
   "/src/features/chat/chat.css": 47,
   "/src/features/chat/gamedock.css": 5,

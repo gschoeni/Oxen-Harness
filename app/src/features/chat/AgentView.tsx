@@ -241,13 +241,8 @@ export function AgentView({ session, lane }: { session: string; lane: string }) 
           {label}
         </h2>
         {row && (
-          <span className={`agent-view-status ${row.status}`}>
-            {running && <span className="agent-hub-dot" aria-hidden="true" />}
-            {stopping ? "Stopping…" : statusLabel(row.status)}
-          </span>
-        )}
-        {row && (
-          <span className="agent-view-meta">
+          <span className="agent-view-state">
+            <span className={`agent-view-status ${row.status}`}>{stopping ? "Stopping…" : statusLabel(row.status)}</span>
             {row.model && <span>{row.model}</span>}
             {row.tokens > 0 && <span>{compactTokens(row.tokens)} tokens</span>}
             {row.elapsed_secs > 0 && <span>{clock(row.elapsed_secs)}</span>}
