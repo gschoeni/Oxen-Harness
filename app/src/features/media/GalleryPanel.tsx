@@ -2,19 +2,21 @@
 // newest first, with what's still rendering at the top. Fed by the project's
 // `media://changed` events (the whole library each time) plus a cold load,
 // and re-read when the watcher sees the output folder change (a file edited
-// or deleted outside the app). Selecting a tile opens a detail pane below the
-// grid: the prompt, model, parameters, cost, references, and the actions that
-// feed the next prompt — "Use as reference" stages the file for the composer.
+// or deleted outside the app). The dock shows one thing at a time: the grid,
+// or one generation in full (`GenerationDetail`) with the header turned into
+// a back button and a prev/next stepper over the filtered feed. Arrow keys
+// step, Escape returns to the grid, and the tile last looked at stays
+// highlighted so the way back lands where you left.
 
-import { useEffect, useMemo, useState, type DragEvent, type PointerEvent } from "react";
-import { Check, Copy, FileCode2, FolderTree, Images, Paperclip, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type PointerEvent } from "react";
+import { IconButton } from "../../components/ui";
+import { ChevronLeft, ChevronRight, Images } from "lucide-react";
 import { useStore } from "../../lib/store";
 import type { MediaItem } from "../../lib/types";
-import { fmtUsd, isInFlight, whenLabel } from "../../lib/media";
-import { useAssetSrc } from "../files/useAssetSrc";
+import { isInFlight } from "../../lib/media";
 import { useFsChangedUnder } from "../files/useFsChanged";
 import { MediaTile } from "./MediaTile";
-import { setDragPaths } from "../files/dnd";
+import { GenerationDetail } from "./GenerationDetail";
 import "./media.css";
 
 type Filter = "all" | "image" | "video";
@@ -31,6 +33,7 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
   const [filter, setFilter] = useState<Filter>("all");
   const [thisChat, setThisChat] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [viewing, setViewing] = useState(false);
   const [bust, setBust] = useState(0);
 
   useEffect(() => {
@@ -48,10 +51,11 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
     if (workspace) void refreshMedia(workspace);
   });
 
-  // A chat card asked for one item: select it and scroll it into view.
+  // A chat card asked for one item: open it in full.
   useEffect(() => {
     if (!mediaFocus) return;
     setSelected(mediaFocus);
+    setViewing(true);
     setFilter("all");
     setThisChat(false);
     clearMediaFocus();
@@ -67,13 +71,83 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
       ),
     [items, filter, thisChat, sessionId],
   );
-  const detail = selected ? items.find((i) => i.id === selected) ?? null : null;
+  const detail = viewing && selected ? items.find((i) => i.id === selected) ?? null : null;
+  const position = detail ? shown.findIndex((i) => i.id === detail.id) : -1;
+  const step = useCallback(
+    (delta: number) => {
+      if (position < 0) return;
+      const next = shown[position + delta];
+      if (next) setSelected(next.id);
+    },
+    [position, shown],
+  );
+  const open = (id: string) => {
+    setSelected(id);
+    setViewing(true);
+  };
+  const back = () => setViewing(false);
+
+  // Keys work anywhere in the window while a generation is open, except in
+  // a field the user is typing into.
+  useEffect(() => {
+    if (!detail) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key === "ArrowLeft") step(-1);
+      else if (e.key === "ArrowRight") step(1);
+      else if (e.key === "Escape") back();
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detail, step]);
+
   const inFlight = items.filter(isInFlight).length;
   const uploading = useStore((s) => (workspace ? s.mediaUploads[workspace] : undefined))?.filter(
     (u) => u.status === "uploading" || u.status === "presigning",
   ).length ?? 0;
 
   if (!workspace) return null;
+  if (detail) {
+    return (
+      <aside className="canvas gallery" aria-label="Gallery">
+        {onResizeStart && <div className="canvas-resizer" onPointerDown={onResizeStart} />}
+        <header className="canvas-head gallery-head">
+          <IconButton type="button" size="sm" onClick={back} aria-label="Back to all generations" title="Back (Esc)">
+            <ChevronLeft size={15} />
+          </IconButton>
+          <span className="gallery-position">
+            {position >= 0 ? `${position + 1} of ${shown.length}` : "1 generation"}
+          </span>
+          <div className="gallery-nav">
+            <IconButton
+              type="button"
+              size="sm"
+              onClick={() => step(-1)}
+              disabled={position <= 0}
+              aria-label="Previous generation"
+              title="Previous (←)"
+            >
+              <ChevronLeft size={15} />
+            </IconButton>
+            <IconButton
+              type="button"
+              size="sm"
+              onClick={() => step(1)}
+              disabled={position < 0 || position >= shown.length - 1}
+              aria-label="Next generation"
+              title="Next (→)"
+            >
+              <ChevronRight size={15} />
+            </IconButton>
+          </div>
+        </header>
+        <GenerationDetail item={detail} workspace={workspace} bust={bust} onOpen={open} />
+      </aside>
+    );
+  }
   return (
     <aside className="canvas gallery" aria-label="Gallery">
       {onResizeStart && <div className="canvas-resizer" onPointerDown={onResizeStart} />}
@@ -124,162 +198,13 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
                 workspace={workspace}
                 bust={bust}
                 selected={item.id === selected}
-                onSelect={() => setSelected(item.id === selected ? null : item.id)}
+                onSelect={() => open(item.id)}
                 onCancel={() => cancelMedia(item.id)}
               />
             ))}
           </div>
         </div>
       )}
-      {detail && <DetailPane item={detail} workspace={workspace} bust={bust} onClose={() => setSelected(null)} />}
     </aside>
-  );
-}
-
-function DetailPane({
-  item,
-  workspace,
-  bust,
-  onClose,
-}: {
-  item: MediaItem;
-  workspace: string;
-  bust: number;
-  onClose: () => void;
-}) {
-  const src = useAssetSrc(workspace, item.path ?? "", bust);
-  const poster = useAssetSrc(workspace, item.poster ?? "", bust);
-  const stageAttachment = useStore((s) => s.stageAttachment);
-  const openInViewer = useStore((s) => s.openInViewer);
-  const revealInFiles = useStore((s) => s.revealInFiles);
-  const [copied, setCopied] = useState(false);
-  const params = Object.entries(item.params ?? {}).filter(([, v]) => v !== null && v !== undefined && v !== "");
-  const parent = useStore((s) =>
-    item.parent && s.session?.workspace ? s.media[s.session.workspace]?.find((m) => m.path === item.parent) : undefined,
-  );
-  const copyPrompt = () => {
-    void navigator.clipboard?.writeText(item.prompt).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
-  return (
-    <div className="gallery-detail" aria-label="Generation details">
-      <div className="gallery-detail-preview">
-        {item.path && src ? (
-          item.kind === "video" ? (
-            <video
-              src={src}
-              controls
-              autoPlay
-              muted
-              loop
-              playsInline
-              preload="metadata"
-              poster={item.poster && poster ? poster : undefined}
-              draggable
-              onDragStart={(e: DragEvent) => setDragPaths(e.dataTransfer, [`${workspace}/${item.path}`])}
-              title="Drag into the chat to attach"
-            />
-          ) : (
-            <img
-              src={src}
-              alt={item.prompt}
-              draggable
-              onDragStart={(e: DragEvent) => setDragPaths(e.dataTransfer, [`${workspace}/${item.path}`])}
-              title="Drag into the chat to attach"
-            />
-          )
-        ) : (
-          <div className="gallery-detail-nofile">{item.error ?? item.status}</div>
-        )}
-        <button type="button" className="gallery-detail-close" onClick={onClose} aria-label="Close details">
-          <X size={13} />
-        </button>
-      </div>
-      <div className="gallery-detail-body">
-        <p className="gallery-detail-prompt">{item.prompt}</p>
-        <div className="gallery-detail-meta">
-          <span className="gallery-detail-model" title={item.model}>
-            {item.model}
-          </span>
-          <span>{whenLabel(item.created_at)}</span>
-          {item.cost_usd !== null && <span>{fmtUsd(item.cost_usd)}</span>}
-          {item.width && item.height && (
-            <span>
-              {item.width}×{item.height}
-            </span>
-          )}
-          <span className={`gallery-status ${item.status}`}>{item.status.replace("_", " ")}</span>
-        </div>
-        {params.length > 0 && (
-          <div className="gallery-params">
-            {params.map(([k, v]) => (
-              <span key={k} className="gallery-param">
-                <span className="gallery-param-key">{k}</span> {String(v)}
-              </span>
-            ))}
-          </div>
-        )}
-        {item.refs.length > 0 && (
-          <div className="gallery-refs">
-            <span className="gallery-refs-label">refs</span>
-            {item.refs.map((r) => (
-              <RefThumb key={r} workspace={workspace} path={r} />
-            ))}
-          </div>
-        )}
-        {item.parent && (
-          <div className="gallery-parent">
-            from <code>{parent?.path ?? item.parent}</code>
-          </div>
-        )}
-        <div className="gallery-actions">
-          {item.path && (
-            <button
-              type="button"
-              className="gallery-action"
-              onClick={() => stageAttachment(`${workspace}/${item.path}`)}
-              title="Attach to your next message as a reference"
-            >
-              <Paperclip size={13} /> Use as reference
-            </button>
-          )}
-          {item.path && (
-            <button type="button" className="gallery-action" onClick={() => openInViewer([item.path!])}>
-              <FileCode2 size={13} /> Open in editor
-            </button>
-          )}
-          {item.path && (
-            <button type="button" className="gallery-action" onClick={() => revealInFiles(item.path!)}>
-              <FolderTree size={13} /> Reveal in Files
-            </button>
-          )}
-          <button type="button" className="gallery-action" onClick={copyPrompt}>
-            {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Copied" : "Copy prompt"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RefThumb({ workspace, path }: { workspace: string; path: string }) {
-  const src = useAssetSrc(workspace, path, 0);
-  const name = path.split("/").pop() ?? path;
-  if (!src) return <span className="gallery-ref-chip">{name}</span>;
-  return path.match(/\.(png|jpe?g|webp|gif)$/i) ? (
-    <img
-      className="gallery-ref-thumb"
-      src={src}
-      alt={name}
-      title={`${path} — drag into the chat to attach`}
-      draggable
-      onDragStart={(e: DragEvent) => setDragPaths(e.dataTransfer, [`${workspace}/${path}`])}
-    />
-  ) : (
-    <span className="gallery-ref-chip" title={path}>
-      {name}
-    </span>
   );
 }

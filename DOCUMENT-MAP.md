@@ -144,3 +144,9 @@ When adding a new file to the project, update this document map.
 - `app/src/features/chat/useComposerSize.ts` — frame-batched textarea sizing for webviews without native content sizing; regression coverage in `Composer.test.tsx`.
 - `plans/composer-typing.md` — typing-path diagnosis, browser checks, and review record.
 - `app/src/lib/promptInput.ts` — native text-service opt-outs and IME key handling shared by chat and project prompts.
+
+## Media provenance and the gallery's single view (2026-09-18)
+
+- `crates/harness-media/src/library.rs` — `MediaSource` / `SourceOrigin`: each reference traced to the chat attachment, earlier generation, or project file it came from; `agent_prompt` and the hub's `provider` record on every manifest row.
+- `app/src/features/media/GalleryPanel.tsx` — the Gallery dock shows the grid or one generation, never both; back button, prev/next stepper, arrow keys.
+- `app/src/features/media/GenerationDetail.tsx` — one generation in full: prompt, request, output, the lineage trail (inputs above, outputs below, library items open in place), identity, and the raw manifest row.

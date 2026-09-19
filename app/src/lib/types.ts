@@ -883,6 +883,31 @@ export interface MediaItem {
   completed_at: number | null;
   parent: string | null;
   seed: unknown;
+  /** Where each reference came from, in request order (the provenance
+   *  behind `refs`). Empty on rows recorded before it was tracked. */
+  sources: MediaSource[];
+  /** The prompt as the agent wrote it, when rewriting reference labels
+   *  changed what the hub got (`prompt`). */
+  agent_prompt: string | null;
+  /** The hub's completed generation record, verbatim. */
+  provider: unknown;
+}
+
+/** One reference's provenance: the stored copy, the file it was made from,
+ *  and how that file got into the request. */
+export interface MediaSource {
+  /** The project-relative copy under `refs/` (the matching `refs` entry). */
+  path: string;
+  origin: "attachment" | "generation" | "file";
+  /** The chip label the request used (`[Image #1]`), when it came from the chat. */
+  label: string | null;
+  /** The original file: absolute for an attachment from outside the project,
+   *  project-relative otherwise. */
+  source: string;
+  /** The library item whose output this is, for a `generation` origin. */
+  generation: string | null;
+  kind: string;
+  sha256: string;
 }
 
 /** `media://changed` — the whole media library of a project after a

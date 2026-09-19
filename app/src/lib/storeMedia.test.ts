@@ -30,6 +30,9 @@ export const sampleItem = (over: Partial<MediaItem> = {}): MediaItem => ({
   completed_at: 1_789_000_010,
   parent: null,
   seed: null,
+  sources: [],
+  agent_prompt: null,
+  provider: null,
   ...over,
 });
 

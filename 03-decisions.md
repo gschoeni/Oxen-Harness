@@ -970,3 +970,30 @@ stylesheet against a checked-in baseline: a file may only go down, a new file
 starts at zero, and the test fails with the offending declarations. The chat
 column width is banned outright. Migrate a file, lower its number — the
 remaining work is listed in `04-backlog.md`.
+
+## Media provenance (2026-09-18)
+
+**Every generation records where it came from, in the manifest row itself.**
+`refs` only ever held the content-addressed copies under `generations/refs/`,
+which loses what the file was: a `MediaSource` per reference now keeps the
+origin (`attachment` from the chat, an earlier `generation` named by id, or a
+project `file`), the chip label the request used, the original path, the kind,
+and the full SHA-256. The row also keeps `agent_prompt` (what the agent wrote,
+when rewriting `[Image #N]` labels changed what the hub got) and `provider`,
+the hub's completed record verbatim. `refs` stays for readers that only need
+paths; rows written before this read back with empty provenance.
+
+*Why:* a generated asset is user state that outlives the chat. Tracing it to
+its inputs, the chat that asked, and the exact request the provider served has
+to work from the project folder alone, without the harness's history database.
+A generation used as a reference resolves to its library item even when it
+reached the request through a chip (the user dragged it back into the chat), so
+the trail links generations to generations, not to hashes. Lineage in the
+other direction (what was made *from* an asset) is derived at read time from
+the library, never stored, so it can't go stale.
+
+**The Gallery dock shows one thing at a time.** The grid, or one generation in
+full with the header turned into back / prev / next. The old pane-below-the-grid
+overlay couldn't give the frame room without hiding the metadata, and vice
+versa; the single view gives the lineage trail and the raw row the space to be
+read.

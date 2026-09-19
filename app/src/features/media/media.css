@@ -194,82 +194,156 @@
   }
 }
 
-/* --- detail pane --- */
+/* --- header while one generation is open --- */
+.gallery-position {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.gallery-nav {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+/* --- one generation in full --- */
+/* Replaces the grid: the frame on top, the metadata scrolling under it. */
 .gallery-detail {
-  flex-shrink: 0;
-  max-height: 70%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--separator-strong);
-  background: var(--surface);
   overflow: auto;
+  background: var(--surface);
 }
-/* The whole frame, as big as the dock allows: tiles crop to squares, so
-   this is where the real aspect ratio shows. */
+/* The whole frame, as big as the dock allows and never more: tiles crop
+   to squares, so this is where the real aspect ratio shows. The box clips
+   and the picture sizes itself inside it, so a tall frame can't run over
+   the text below. */
 .gallery-detail-preview {
+  flex-shrink: 0;
   position: relative;
-  background: #000;
   display: grid;
   place-items: center;
-  min-height: 200px;
-  max-height: min(60vh, 560px);
+  min-height: 160px;
+  max-height: min(52vh, 560px);
+  overflow: hidden;
+  background: #000;
 }
 .gallery-detail-preview img,
 .gallery-detail-preview video {
-  width: 100%;
-  max-height: min(60vh, 560px);
-  object-fit: contain;
-  object-position: center;
   display: block;
+  max-width: 100%;
+  max-height: min(52vh, 560px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
 }
 .gallery-detail-nofile {
   padding: var(--space-4);
   color: var(--text-tertiary);
   font-size: var(--text-sm);
 }
-.gallery-detail-close {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--separator-strong);
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  color: var(--text);
-  cursor: pointer;
-}
 .gallery-detail-body {
   display: flex;
   flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+.gallery-detail-mode {
+  align-self: flex-start;
+}
+.gallery-detail-mode button {
+  height: calc(var(--btn-h-sm) - 4px);
+  font-size: var(--text-xs);
+}
+.gallery-section {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-3);
+}
+/* Section labels: small caps, tracked, the tertiary ink — a heading that
+   organizes without competing with the content it labels. */
+.gallery-section-label {
+  margin: 0;
+  font-size: var(--text-3xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
 }
 .gallery-detail-prompt {
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   line-height: 1.5;
   color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
 }
-.gallery-detail-meta {
+.gallery-detail-sent {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--text-tertiary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* Facts: a two-column ledger, label left in the tertiary ink, value right.
+   The label column is fixed so the values align down the whole view. */
+.gallery-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.gallery-fact {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+.gallery-fact dt {
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gallery-fact dd {
+  margin: 0;
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1) var(--space-3);
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
+  gap: var(--space-1) var(--space-2);
+  align-items: baseline;
+  color: var(--text);
   font-variant-numeric: tabular-nums;
+  word-break: break-word;
 }
-.gallery-detail-model {
+.gallery-facts.params .gallery-fact {
+  grid-template-columns: minmax(84px, 40%) minmax(0, 1fr);
+}
+.gallery-facts-aside {
+  color: var(--text-tertiary);
+}
+.gallery-facts-error {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+.gallery-mono {
   font-family: var(--font-mono);
+  font-size: var(--text-2xs);
   color: var(--text-secondary);
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.gallery-path {
+  direction: rtl;
+  text-align: left;
 }
 .gallery-status.succeeded {
   color: var(--green);
@@ -278,75 +352,147 @@
 .gallery-status.timed_out {
   color: var(--danger);
 }
-.gallery-params {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-}
-.gallery-param {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  padding: 1px 6px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-}
-.gallery-param-key {
+.gallery-lineage-none {
+  margin: 0;
+  font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
-.gallery-refs {
+/* The trail: a rail down the left with a dot per link. Inputs sit above
+   this generation, outputs below, so reading top to bottom is reading the
+   file's history. */
+.gallery-trail {
+  --rail: 7px;
+  --dot: 7px;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 calc(var(--rail) + var(--space-3));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.gallery-trail::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--rail) - 1px);
+  top: var(--space-3);
+  bottom: var(--space-3);
+  width: 2px;
+  background: var(--separator-strong);
+  border-radius: 1px;
+}
+.gallery-trail-row {
+  position: relative;
+}
+.gallery-trail-row::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--space-3) - var(--dot) / 2 - 1px);
+  top: 50%;
+  width: var(--dot);
+  height: var(--dot);
+  margin-top: calc(-1 * var(--dot) / 2);
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--separator-strong);
+  box-sizing: border-box;
+}
+.gallery-trail-row.self::before {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.gallery-trail-row.out::before {
+  border-color: var(--accent);
+}
+.gallery-trail-link {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
-.gallery-refs-label {
-  font-size: var(--text-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
+.gallery-trail-link:hover {
+  background: var(--accent-tint);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--separator));
 }
-.gallery-ref-thumb {
-  width: 36px;
-  height: 36px;
+.gallery-trail-link.static {
+  cursor: default;
+}
+.gallery-trail-link.static:hover {
+  background: transparent;
+  border-color: transparent;
+}
+.gallery-trail-row.self .gallery-trail-link {
+  background: var(--surface-2);
+}
+.gallery-trail-thumb {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
   object-fit: cover;
   border-radius: var(--radius-xs);
   border: 1px solid var(--separator);
+  background: var(--surface-2);
 }
-.gallery-ref-chip {
+.gallery-trail-thumb.blank {
+  display: block;
+}
+.gallery-trail-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+.gallery-trail-title {
+  font-size: var(--text-xs);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gallery-trail-detail {
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The raw view: the manifest row, as written. */
+.gallery-raw-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.gallery-raw-json {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator);
+  background: var(--surface-2);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  padding: 1px 6px;
-  border-radius: var(--radius-pill);
-  background: var(--accent-tint-strong);
-  color: var(--accent);
-}
-.gallery-parent {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 60vh;
+  overflow: auto;
 }
 .gallery-actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
 }
-.gallery-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  font-size: var(--text-xs);
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--separator-strong);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.gallery-action:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
 /* --- the project page's media card --- */
 .project-media-empty {
   margin: 0;

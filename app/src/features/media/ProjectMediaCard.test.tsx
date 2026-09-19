@@ -33,6 +33,9 @@ export const item = (over: Partial<MediaItem> = {}): MediaItem => ({
   completed_at: null,
   parent: null,
   seed: null,
+  sources: [],
+  agent_prompt: null,
+  provider: null,
   ...over,
 });
 
