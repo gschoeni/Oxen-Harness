@@ -850,11 +850,18 @@ impl Agent {
                 .usage_store
                 .meta_add_i64("total_tokens_used", total as i64);
         }
-        // A lane's call comes out of the tree's shared wallet; the root's
-        // own calls are the session budget's business.
+        // A lane's call comes out of the tree's shared wallet at what it
+        // bills for (see [`budget::billable_tokens`]); the root's own calls
+        // are the session budget's business.
         if self.config.depth > 0 {
             if let Some(tree) = &self.config.tree {
-                tree.charge_tokens(total as u64);
+                let billable = budget::billable_tokens(
+                    prompt_tokens,
+                    completion_tokens,
+                    outcome.cached_prompt_tokens,
+                    outcome.cache_write_tokens,
+                );
+                tree.charge_tokens(billable as u64);
             }
         }
     }
@@ -1131,6 +1138,52 @@ fn build_user_message(
 mod tests {
     use super::*;
     use crate::test_support::test_session;
+
+    /// The wallet every lane of a turn shares is spent in billable tokens:
+    /// a lane whose context is mostly served from the prompt cache pays for
+    /// the uncached slice and its reply, not for re-sending what it already
+    /// sent. Otherwise a lane reading many pages spends quadratically in
+    /// tool rounds while the bill grows linearly.
+    #[tokio::test]
+    async fn a_lane_charges_the_tree_only_for_uncached_tokens() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose_with_usage(
+                "done", 1000, 50, 800,
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+        let tree = Arc::new(crate::TreeBudget::default());
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "m");
+        let mut lane = Agent::new(
+            OxenClient::new(server.url(), "k", "m"),
+            harness_tools::ToolRegistry::new(),
+            store,
+            session,
+            AgentConfig {
+                system_prompt: None,
+                depth: 1,
+                tree: Some(tree.clone()),
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        lane.run_turn("go", |_| {}).await.unwrap();
+        assert_eq!(
+            tree.usage().tokens,
+            250,
+            "1000 prompt - 800 cached + 50 reply"
+        );
+        assert_eq!(tree.usage().requests, 1);
+        // The lane's own meter still reports the gross figure the provider
+        // processed; that is what a context readout is for.
+        assert_eq!(lane.tokens_used(), 1050);
+    }
 
     /// A cold resume must re-teach the read-before-edit guard everything this
     /// transcript already read — the reads are in the resumed model's context,

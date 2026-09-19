@@ -17,7 +17,10 @@ use serde::Serialize;
 /// root turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TreeLimits {
-    /// Tokens (prompt + completion) every lane of the tree may spend together.
+    /// Tokens every lane of the tree may spend together, counted as the
+    /// provider bills them: uncached prompt + cache writes + completion (see
+    /// `budget::billable_tokens`). A cached prefix re-sent on every tool
+    /// round costs the wallet nothing, as it costs the bill nothing.
     pub max_tokens: u64,
     /// Model calls every lane may make together.
     pub max_requests: u32,
@@ -38,6 +41,7 @@ impl Default for TreeLimits {
 /// Where a tree stands against its limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TreeUsage {
+    /// Billable tokens spent so far (see [`TreeLimits::max_tokens`]).
     pub tokens: u64,
     pub requests: u32,
     pub spawns: u32,

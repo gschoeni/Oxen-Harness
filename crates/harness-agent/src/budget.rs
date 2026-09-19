@@ -138,6 +138,31 @@ pub fn reported_full_prompt(usage: &harness_llm::types::Usage) -> usize {
     }
 }
 
+/// What one call actually costs, in tokens the provider bills at the full
+/// rate: the prompt minus what it served from its cache, plus what it wrote
+/// into the cache (a premium, so it counts in full), plus the reply. The two
+/// cache-counting styles are told apart the same way as
+/// [`reported_full_prompt`]: when the cache detail fits inside `prompt`, the
+/// prompt included it; when it doesn't, the prompt already excluded it.
+///
+/// This is the unit the tree budget spends. Charging the gross prompt would
+/// bill a lane for re-sending its (cached) context on every tool round, so
+/// a lane reading many pages would spend quadratically in rounds while the
+/// bill grew linearly.
+pub fn billable_tokens(
+    prompt: usize,
+    completion: usize,
+    cached: usize,
+    cache_write: usize,
+) -> usize {
+    let uncached_prompt = if cached + cache_write <= prompt {
+        prompt - cached
+    } else {
+        prompt + cache_write
+    };
+    uncached_prompt + completion
+}
+
 /// Estimate the tokens generated in an assembled reply (text + tool calls).
 pub fn estimate_completion_tokens(content: &str, tool_calls: &[ToolCall]) -> usize {
     let mut chars = content.len();
@@ -181,6 +206,17 @@ pub fn prompt_budget(window: usize, response_reserve: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn billable_tokens_charge_only_what_the_provider_bills() {
+        // OpenAI style: the prompt includes the cached part.
+        assert_eq!(billable_tokens(1000, 50, 800, 0), 250);
+        // Anthropic style: the prompt excludes cache reads and writes, so
+        // the reads cost nothing extra and the writes count in full.
+        assert_eq!(billable_tokens(200, 50, 800, 100), 350);
+        // No cache detail at all: the whole prompt is billed.
+        assert_eq!(billable_tokens(1000, 50, 0, 0), 1050);
+    }
 
     #[test]
     fn context_windows_match_known_families() {

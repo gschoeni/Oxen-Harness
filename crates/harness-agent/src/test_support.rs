@@ -54,6 +54,31 @@ pub(crate) fn retry_test_agent(url: String, retry: RetryPolicy) -> Agent {
     Agent::new(client, ToolRegistry::new(), store, session, config).unwrap()
 }
 
+/// SSE body for a prose reply whose final chunk reports usage the way an
+/// OpenAI-style endpoint does: `prompt_tokens` includes the cached part,
+/// which `prompt_tokens_details.cached_tokens` then names.
+pub(crate) fn sse_prose_with_usage(
+    text: &str,
+    prompt: u32,
+    completion: u32,
+    cached: u32,
+) -> String {
+    let chunk = serde_json::json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": text },
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+            "prompt_tokens_details": { "cached_tokens": cached }
+        }
+    });
+    format!("data: {chunk}\n\ndata: [DONE]\n\n")
+}
+
 /// SSE for a reply that calls a tool named `snap` with empty args.
 /// One streamed reply that calls `name` with `arguments` (a JSON value).
 pub(crate) fn sse_tool_call(id: &str, name: &str, arguments: serde_json::Value) -> String {
