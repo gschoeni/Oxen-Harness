@@ -473,6 +473,8 @@ impl BackgroundTasks {
         };
 
         let _ = tokio::fs::remove_file(&entry.log_path).await;
+        // The entry is gone: a host list that still shows it would be stale.
+        self.bump();
         Some((exit, stdout, stderr, marker))
     }
 
@@ -521,6 +523,9 @@ impl BackgroundTasks {
         }
         if retire {
             let _ = tokio::fs::remove_file(&log_path).await;
+            // Retiring changes the set a host lists, just as a spawn or exit
+            // does; without the wake, the finished row lingers on screen.
+            self.bump();
         }
 
         let skipped_note = if skipped > 0 {
@@ -912,6 +917,38 @@ mod registry_tests {
         assert!(listed[0].killed);
         assert_eq!(listed[0].exit_code, None);
         assert_eq!(listed[0].last_line, "one");
+    }
+
+    /// A finished task's row must leave a host's list the moment its output
+    /// is delivered, whichever path retires it: the model reading the final
+    /// `task_output` (or the host announcing it), or a foreground `run_shell`
+    /// collecting its streams.
+    #[tokio::test]
+    async fn retiring_a_finished_task_wakes_a_watcher_with_an_empty_list() {
+        let tasks = BackgroundTasks::in_temp();
+        let root = std::env::temp_dir();
+        for retire_via_output in [true, false] {
+            let id = tasks
+                .spawn("echo done", &root, 4_000, &Default::default())
+                .await
+                .unwrap();
+            tasks.wait(id, Duration::from_secs(10)).await.unwrap();
+            let mut changes = tasks.changes();
+            changes.mark_unchanged();
+            assert!(!tasks.snapshot().await.is_empty());
+
+            if retire_via_output {
+                let report = tasks.output(id).await.unwrap();
+                assert!(report.contains("task entry retired"), "{report}");
+            } else {
+                assert!(tasks.take_streams(id).await.is_some());
+            }
+            assert!(
+                changes.has_changed().unwrap(),
+                "retiring a task (via output: {retire_via_output}) must wake list watchers"
+            );
+            assert!(tasks.snapshot().await.is_empty());
+        }
     }
 }
 
