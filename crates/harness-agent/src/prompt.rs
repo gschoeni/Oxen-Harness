@@ -345,6 +345,17 @@ pub(crate) const WRAP_UP_NUDGE: &str = "<system-reminder>You are near this task'
 Wrap up now: finish the current step, then give your final report with what you did, \
 what you verified, and what is left. Do not start new work.</system-reminder>";
 
+/// The follow-up a lane gets when it is run again after failing on the
+/// provider (see `FleetSpawner::retry_transient_failures`): pick up, don't
+/// start over.
+pub(crate) fn lane_retry_prompt(error: &str) -> String {
+    format!(
+        "Your previous attempt stopped with an error before you could finish: {error}. What \
+         you already read and found is above. Continue from where you left off and finish \
+         the task; do not start over."
+    )
+}
+
 /// The one warning a lane gets as its allowance runs low (see
 /// `ALLOWANCE_WARN_PERCENT_LEFT`): wrap up on purpose, not by being stopped.
 pub(crate) fn allowance_nudge(left: u64, cap: u64) -> String {

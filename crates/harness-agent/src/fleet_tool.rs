@@ -31,7 +31,9 @@ use crate::agent::Agent;
 use crate::config::AgentConfig;
 use crate::error::AgentError;
 use crate::fleet::{run_fleet, FleetEvent, FleetLimits, FleetSink, SpawnAgent, SubagentTask};
-use crate::lane::{lane_budget, render_results, AgentTree, LiveLane, SubagentResult};
+use crate::lane::{
+    lane_budget, render_results, AgentTree, FailureKind, LaneStatus, LiveLane, SubagentResult,
+};
 use harness_llm::types::ChatMessage;
 
 /// Stable identifier the model uses to call the fleet tool.
@@ -273,6 +275,7 @@ impl FleetSpawner {
                 |index: usize, cancel| {
                     let mut agent = self.build_agent(&labels[index], &fleet, None, cancel)?;
                     agent.make_tool_less(system);
+                    self.tree_budget().open_as_leaf(agent.session_id());
                     Ok(agent)
                 },
             )
@@ -966,6 +969,9 @@ impl FleetSpawner {
                 })
             })
             .collect();
+        let results = self
+            .retry_transient_failures(sink, fleet, results, limits, &cancel)
+            .await;
         // The trajectory: one line per fleet with every lane's verdict and
         // spend, beside the turn's other developer-log events, so a tree
         // can be reconstructed after the fact (`jq 'select(.fleet == …)'`).
@@ -991,6 +997,119 @@ impl FleetSpawner {
             }),
         );
         Ok((results, cancel.is_cancelled()))
+    }
+}
+
+/// How long a lane that failed on the provider waits before its one
+/// automatic retry: past the burst that rate-limited it, short enough that
+/// the fleet doesn't idle.
+const LANE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+
+impl FleetSpawner {
+    /// A lane that failed on the provider — a rate limit, or its retries
+    /// spent on transient errors — is run once more from where it stopped,
+    /// after a pause, before its failure is reported. Its transcript is
+    /// persisted, so the retry is a follow-up: it keeps what it read and
+    /// found. Failures a lane can't outrun (auth, a context that won't fit,
+    /// a tool) are reported as they are, for the user to take over.
+    async fn retry_transient_failures(
+        &self,
+        sink: &Arc<dyn FleetSink>,
+        fleet: &str,
+        mut results: Vec<SubagentResult>,
+        limits: FleetLimits,
+        cancel: &CancellationToken,
+    ) -> Vec<SubagentResult> {
+        if self.store.is_none() || cancel.is_cancelled() {
+            return results;
+        }
+        let tree = self.tree_budget();
+        let retry: Vec<usize> = results
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                r.status == LaneStatus::Failed
+                    && matches!(
+                        r.failure,
+                        Some(FailureKind::RateLimit | FailureKind::Provider)
+                    )
+                    && !r.id.is_empty()
+                    && tree.exhausted(&r.id).is_none()
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if retry.is_empty() {
+            return results;
+        }
+        let (_, config) = self.endpoint_snapshot();
+        crate::errlog::record(
+            config.error_log.as_deref(),
+            "lanes_retried",
+            serde_json::json!({
+                "session": self.session(),
+                "fleet": fleet,
+                "lanes": retry.iter().map(|&i| serde_json::json!({
+                    "id": results[i].id, "label": results[i].label, "error": results[i].summary,
+                })).collect::<Vec<_>>(),
+            }),
+        );
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return results,
+            _ = tokio::time::sleep(LANE_RETRY_DELAY) => {}
+        }
+        let ids: Vec<String> = retry.iter().map(|&i| results[i].id.clone()).collect();
+        let labels: Vec<String> = retry.iter().map(|&i| results[i].label.clone()).collect();
+        let tasks: Vec<SubagentTask> = retry
+            .iter()
+            .map(|&i| {
+                SubagentTask::new(
+                    results[i].label.clone(),
+                    crate::prompt::lane_retry_prompt(&results[i].summary),
+                )
+            })
+            .collect();
+        let guard = SinkGuard::open(
+            sink.clone(),
+            self.live.clone(),
+            fleet,
+            &labels,
+            cancel.clone(),
+        );
+        let parent = self.session();
+        tree.expect_lanes(parent.as_deref(), ids.len() as u32);
+        let outcomes = run_fleet(
+            |index: usize, lane_cancel: CancellationToken| {
+                self.resume_lane(&ids[index], &labels[index], fleet, lane_cancel)
+            },
+            tasks,
+            FleetLimits::with_concurrency(limits.concurrency),
+            cancel.clone(),
+            |event| sink.event(fleet, event),
+        )
+        .await;
+        drop(guard);
+        self.tree.finish_fleet(fleet);
+        match outcomes {
+            Ok(outcomes) => {
+                let budget = lane_budget(results.len());
+                let spill = self.tools.overflow_store();
+                for (k, outcome) in outcomes.iter().enumerate() {
+                    results[retry[k]] = outcome.record.clone().unwrap_or_else(|| {
+                        SubagentResult::from_outcome(outcome, fleet, budget, spill.map(Arc::as_ref))
+                    });
+                }
+            }
+            Err(error) => {
+                tree.forget_lanes(parent.as_deref(), ids.len() as u32);
+                crate::errlog::record(
+                    config.error_log.as_deref(),
+                    "lane_retry_failed",
+                    serde_json::json!({ "session": self.session(), "fleet": fleet, "error": error.to_string() }),
+                );
+            }
+        }
+        results
     }
 }
 
@@ -2369,6 +2488,61 @@ mod tests {
         assert_eq!(out.matches("— done").count(), 3, "{out}");
         assert_eq!(peak.load(Ordering::SeqCst), 1, "never two calls at once");
         assert_eq!(sp.tree_budget().free_slots(), 1, "every slot handed back");
+    }
+
+    /// A lane the provider rate-limited past its retries is not reported
+    /// dead on arrival: after a pause it is resumed once with a follow-up,
+    /// and its second attempt's result is what the parent sees.
+    #[tokio::test]
+    async fn a_lane_that_failed_on_the_provider_is_retried_once_from_where_it_stopped() {
+        let mut server = mockito::Server::new_async().await;
+        let limited = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_body("slow down")
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let recovered = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                "Continue from where you left off".into(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("recovered: the answer"))
+            .expect(1)
+            .create_async()
+            .await;
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let parent = store.create_session(&SessionMeta::default()).unwrap();
+        let sp = Arc::new(
+            FleetSpawner::new(
+                OxenClient::new(server.url(), "k", "claude-opus-4-8"),
+                ToolRegistry::new(),
+                AgentConfig {
+                    system_prompt: None,
+                    retry: crate::config::RetryPolicy {
+                        rate_limit_max_attempts: 2,
+                        ..crate::test_support::fast_retry(2)
+                    },
+                    ..AgentConfig::default()
+                },
+            )
+            .with_store(store.clone())
+            .with_session(parent.clone()),
+        );
+        let out = FleetTool::new(sp.clone(), Arc::new(RecordingSink::default()))
+            .invoke(serde_json::json!({ "agents": [{ "name": "scan", "prompt": "TASK go" }] }))
+            .await
+            .unwrap();
+        limited.assert_async().await;
+        recovered.assert_async().await;
+        assert!(out.contains("### scan — done"), "{out}");
+        assert!(out.contains("recovered: the answer"), "{out}");
+        // One lane, one session: the retry resumed it rather than spawning.
+        assert_eq!(store.lanes_of(&parent).unwrap().len(), 1);
+        assert!(sp.tree().live().is_empty());
     }
 
     #[tokio::test]

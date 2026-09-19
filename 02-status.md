@@ -740,6 +740,11 @@ each, in `crates/harness-agent`:
 - lanes are warned at a fifth of their allowance, the subagent prompt names
   the allowance, and `spawn_agents` results carry a budget line;
 - lane usage is recorded per lane, with `usage_for_tree` for the roll-up.
+- follow-ups the same day: lane model calls are capped in flight across the
+  whole tree (`max_tree_parallel`, default 4); tool-less leaves spend from
+  their parent's remaining allowance instead of slicing it; a lane that
+  failed on the provider is retried once from where it stopped; `map_agents`
+  lanes are named for their items.
 
 Verification: harness-agent 189 unit + 12 integration tests, harness-store 65,
 workspace clippy and fmt clean.

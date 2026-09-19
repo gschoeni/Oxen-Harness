@@ -292,6 +292,29 @@ impl TreeBudget {
         );
     }
 
+    /// Re-open `lane` as a tool-less leaf: one call, one answer. It takes no
+    /// slice of its own — its allowance is whatever its parent has left,
+    /// unreserved, and its spend folds into the parent like any lane's.
+    /// Carving a parent's last 16k into 5k slices for three one-shot
+    /// questions starved the questions; reserving them starved the parent.
+    pub fn open_as_leaf(&self, lane: &str) {
+        let mut state = self.state.lock().expect("tree budget poisoned");
+        let Some((parent_key, cap)) = state.wallets.get(lane).map(|w| (w.parent.clone(), w.cap))
+        else {
+            return;
+        };
+        let left = match state.wallets.get_mut(&parent_key) {
+            Some(parent) => {
+                parent.reserved = parent.reserved.saturating_sub(cap);
+                parent.left()
+            }
+            None => self.limits.max_tokens,
+        };
+        if let Some(leaf) = state.wallets.get_mut(lane) {
+            leaf.cap = left.max(1);
+        }
+    }
+
     /// Close `lane`'s wallet (and any child it left open): its spend folds
     /// into its parent, the rest of its allowance goes back.
     pub fn release_lane(&self, lane: &str) {
@@ -534,6 +557,29 @@ mod tests {
             .free_slots(),
             1
         );
+    }
+
+    #[test]
+    fn leaves_share_their_parents_remaining_allowance_instead_of_slicing_it() {
+        let budget = TreeBudget::new(TreeLimits {
+            max_tokens: 100_000,
+            ..Default::default()
+        });
+        budget.expect_lanes(None, 1);
+        budget.open_lane(None, "p");
+        budget.charge_tokens("p", 84_000);
+        // Three one-shot questions from a parent with 16k left: each may
+        // spend the whole 16k, and the parent keeps it all for itself too.
+        budget.expect_lanes(Some("p"), 3);
+        for leaf in ["q1", "q2", "q3"] {
+            budget.open_lane(Some("p"), leaf);
+            budget.open_as_leaf(leaf);
+            assert_eq!(budget.allowance(leaf).unwrap().cap, 16_000, "{leaf}");
+        }
+        assert_eq!(budget.allowance("p").unwrap().left(), 16_000);
+        budget.charge_tokens("q1", 5_000);
+        budget.release_lane("q1");
+        assert_eq!(budget.allowance("p").unwrap().spent, 89_000);
     }
 
     #[test]

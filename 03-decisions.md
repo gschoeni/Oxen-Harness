@@ -1123,3 +1123,24 @@ where a fleet's tokens went can be read back afterwards.
 *Why not simply raise the limit:* the limit was never the problem; the unit
 and the cliff were. A bigger wallet under the old rules bought a bigger
 collapse.
+
+**Concurrency is capped at the tree, and lanes recover from the provider**
+(2026-09-19)
+- *One cap the provider sees.* Per-fleet parallelism bounds one fleet; three
+  fleets at two depths ran a dozen calls at once and drew 429s. A semaphore
+  on the tree budget bounds lane model calls in flight across every fleet at
+  every depth (`TreeLimits::max_parallel`, default 4, `max_tree_parallel` in
+  `limits.json`). A lane holds its slot only around a model call, never
+  across a tool call or a wait on its own fleet, so a parent can't starve
+  its children.
+- *Leaves don't take slices.* A tool-less leaf (`ask_model`, `map_agents`
+  with `leaf`) makes one call: it spends against its parent's whole
+  remaining allowance instead of carving it (`TreeBudget::open_as_leaf`).
+  Three one-shot questions from a parent with 16k left each got 5k before.
+- *A provider failure is retried once, from where the lane stopped.* A lane
+  that fails on a rate limit or with its transient retries spent is resumed
+  after a pause with a follow-up ("continue, don't start over"); its second
+  attempt is what the parent sees. Failures a lane can't outrun — auth, a
+  context that won't fit, a tool — are reported as they are, and the user
+  takes over from the agent view: its composer follows up any finished
+  lane, failed ones included.
