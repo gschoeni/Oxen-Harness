@@ -106,6 +106,13 @@ impl TreeBudget {
         state.requests += 1;
         Ok(())
     }
+    /// Admit the one tool-free call a lane makes to write up after its
+    /// wallet is spent (see `Agent::final_report`). Counted, never refused:
+    /// the report is what makes a stopped lane's result usable, and the
+    /// caller bounds it to one per turn.
+    pub fn reserve_report(&self) {
+        self.state.lock().expect("tree budget poisoned").requests += 1;
+    }
     pub fn charge_tokens(&self, tokens: u64) {
         let mut state = self.state.lock().expect("tree budget poisoned");
         state.tokens = state.tokens.saturating_add(tokens);

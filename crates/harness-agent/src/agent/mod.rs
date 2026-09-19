@@ -88,9 +88,9 @@ pub struct Agent {
     usage_session: Option<String>,
     /// Model rounds the most recent turn took (see [`Agent::rounds_last_turn`]).
     pub(crate) rounds_last_turn: u32,
-    /// Whether the most recent turn ended because a budget (session or
-    /// tree) was spent rather than because the model finished.
-    stopped_by_budget: bool,
+    /// Why the most recent turn ended early, when a budget rather than the
+    /// model ended it (see [`TurnStop`]).
+    stop: Option<TurnStop>,
     /// Where a snapshot of the transcript goes right before a
     /// `spawn_agents` call runs, so a `fork: true` lane can inherit it
     /// (see [`Agent::set_fork_slot`]).
@@ -164,6 +164,19 @@ pub struct Agent {
     /// How often each rule has fired, so a reminder the model has already seen
     /// isn't repeated every round.
     rule_history: crate::rules::RuleHistory,
+}
+
+/// Why a turn ended before the model finished on its own. A lane's parent
+/// reads this to label the result honestly: a spent wallet and a round cap
+/// are different stories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnStop {
+    /// The session's own spend ceiling ([`crate::SessionBudget`]).
+    SessionBudget,
+    /// The tree wallet every lane of the turn shares ([`crate::TreeBudget`]).
+    TreeBudget,
+    /// The turn's round cap ([`crate::RoundBudget`]), with the cap it hit.
+    RoundBudget(u32),
 }
 
 /// What one model call cost beyond its token counts: the cache-read/write
@@ -266,7 +279,7 @@ impl Agent {
             persist_transcript: true,
             usage_session: None,
             rounds_last_turn: 0,
-            stopped_by_budget: false,
+            stop: None,
             fork_slot: None,
             lane_lifecycle: None,
             attachments,
@@ -338,7 +351,7 @@ impl Agent {
             persist_transcript: true,
             usage_session: None,
             rounds_last_turn: 0,
-            stopped_by_budget: false,
+            stop: None,
             fork_slot: None,
             lane_lifecycle: None,
             attachments,
@@ -709,9 +722,19 @@ impl Agent {
         self.rounds_last_turn
     }
 
-    /// Whether the most recent turn was cut short by a spent budget.
+    /// Whether the most recent turn was cut short by a spent token budget
+    /// (the session's or the tree's). A round cap is reported separately
+    /// through [`Agent::turn_stop`].
     pub fn stopped_by_budget(&self) -> bool {
-        self.stopped_by_budget
+        matches!(
+            self.stop,
+            Some(TurnStop::SessionBudget | TurnStop::TreeBudget)
+        )
+    }
+
+    /// What ended the most recent turn early, if a budget did.
+    pub fn turn_stop(&self) -> Option<TurnStop> {
+        self.stop
     }
 
     /// Share the session's fork slot (from its `FleetSpawner`) so lanes

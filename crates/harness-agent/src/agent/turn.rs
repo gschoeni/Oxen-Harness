@@ -10,6 +10,7 @@
 use harness_llm::stream::AssembledMessage;
 use harness_llm::types::ChatMessage;
 use harness_llm::Attachment;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::AgentError;
 use crate::event::AgentEvent;
@@ -210,7 +211,7 @@ impl Agent {
             ..TurnState::default()
         };
         self.rounds_last_turn = 0;
-        self.stopped_by_budget = false;
+        self.stop = None;
         // A root turn starts its tree's wallet over; lanes spend from it.
         if self.config.depth == 0 {
             if let Some(tree) = &self.config.tree {
@@ -248,28 +249,36 @@ impl Agent {
             // Stop gracefully at the session's spend ceiling rather than
             // silently running past it.
             if let Some(message) = self.session_budget_stop(prompt_tokens, &mut turn) {
-                self.stopped_by_budget = true;
+                self.stop = Some(super::TurnStop::SessionBudget);
                 self.push(ChatMessage::assistant(message.clone()))?;
                 return Ok(message);
             }
-            // Likewise the tree's shared wallet: a lane stops with what it
-            // has (best-so-far) once the turn's agents have spent it.
-            if let Some(message) = self.tree_budget_stop() {
-                self.stopped_by_budget = true;
-                self.push(ChatMessage::assistant(message.clone()))?;
-                return Ok(message);
+            // Likewise the tree's shared wallet: once the turn's agents have
+            // spent it, a lane gets one tool-free call to write up what it
+            // has, so its parent receives findings rather than a notice.
+            if let Some(reason) = self.tree_budget_stop() {
+                self.stop = Some(super::TurnStop::TreeBudget);
+                return self
+                    .final_report(&reason, turn.rounds, &cancel, &mut on_event)
+                    .await;
             }
 
             // Likewise the turn's round budget: a wrap-up reminder first,
-            // then a stop — a lane that never converges must not spend the
-            // fleet's whole allowance.
+            // then the same final report — a lane that never converges must
+            // not spend the fleet's whole allowance, but what it found so
+            // far is still worth having.
             turn.rounds += 1;
             self.rounds_last_turn = turn.rounds;
             if let Some(budget) = self.config.round_budget {
                 if turn.rounds > budget.stop_at {
-                    let message = self.round_budget_stop_message(budget.stop_at);
-                    self.push(ChatMessage::assistant(message.clone()))?;
-                    return Ok(message);
+                    self.stop = Some(super::TurnStop::RoundBudget(budget.stop_at));
+                    let reason = format!(
+                        "this task reached its budget of {} model rounds without finishing",
+                        budget.stop_at
+                    );
+                    return self
+                        .final_report(&reason, turn.rounds, &cancel, &mut on_event)
+                        .await;
                 }
                 if turn.rounds == budget.wrap_up_at {
                     turn.set_nudge(
@@ -308,10 +317,11 @@ impl Agent {
             }
             if self.config.depth > 0 {
                 if let Some(tree) = &self.config.tree {
-                    if let Err(message) = tree.reserve_request() {
-                        self.stopped_by_budget = true;
-                        self.push(ChatMessage::assistant(message.clone()))?;
-                        return Ok(message);
+                    if let Err(reason) = tree.reserve_request() {
+                        self.stop = Some(super::TurnStop::TreeBudget);
+                        return self
+                            .final_report(&reason, turn.rounds, &cancel, &mut on_event)
+                            .await;
                     }
                 }
             }
@@ -410,7 +420,6 @@ impl Agent {
         }
     }
 
-    /// The closing message when a turn hits its round budget.
     /// Park a tool result longer than [`AgentConfig::tool_result_cap`] in
     /// the registry's overflow store, returning its head plus the handle.
     /// Retrievals are never re-parked (the model asked for exactly that),
@@ -438,7 +447,7 @@ impl Agent {
     }
 
     /// Whether the tree budget stops this lane here (never the root, whose
-    /// own spend the session budget bounds), and the message to end on.
+    /// own spend the session budget bounds), and why.
     fn tree_budget_stop(&self) -> Option<String> {
         if self.config.depth == 0 {
             return None;
@@ -453,18 +462,87 @@ impl Agent {
                 "reason": reason,
             }),
         );
-        Some(format!(
-            "Stopped: {reason}. The work so far is in the transcript above; report what you \
-             have."
-        ))
+        Some(reason)
     }
 
-    fn round_budget_stop_message(&self, stop_at: u32) -> String {
-        format!(
-            "Stopped: this task reached its budget of {stop_at} model rounds without \
-             finishing. The work so far is in the transcript above; narrow the task or \
-             run it again with a more specific brief."
-        )
+    /// The one call a turn stopped by a budget still gets: tool-free, with
+    /// the stop and an instruction to write up riding along as a nudge
+    /// (never persisted). Its reply is the turn's final reply, so a lane's
+    /// parent gets findings — what it read, what it concluded, what is left
+    /// — instead of the stop notice. Bounded by construction: the turn
+    /// returns right after it, whatever the model does. A turn stopped
+    /// before its first round has nothing to report and gets the notice
+    /// alone: a queue of lanes behind an empty wallet must not each buy a
+    /// call to say so.
+    async fn final_report<F>(
+        &mut self,
+        reason: &str,
+        rounds_so_far: u32,
+        cancel: &CancellationToken,
+        on_event: &mut F,
+    ) -> Result<String, AgentError>
+    where
+        F: FnMut(&AgentEvent),
+    {
+        if rounds_so_far == 0 {
+            let notice = format!("Stopped before starting: {reason}.");
+            self.push(ChatMessage::assistant(notice.clone()))?;
+            return Ok(notice);
+        }
+        crate::errlog::record(
+            self.config.error_log.as_deref(),
+            "final_report",
+            serde_json::json!({
+                "session": self.session_id(),
+                "depth": self.config.depth,
+                "reason": reason,
+            }),
+        );
+        on_event(&AgentEvent::Nudged {
+            reason: format!("stopped: {reason} — asked for its final report"),
+        });
+        if self.config.depth > 0 {
+            if let Some(tree) = &self.config.tree {
+                tree.reserve_report();
+            }
+        }
+        let nudge = ChatMessage::user(prompt::final_report_nudge(reason));
+        let raw_prompt_tokens = budget::estimate_prompt_tokens(&self.messages, &[]);
+        let prompt_tokens = self.calibrated(raw_prompt_tokens);
+        let (outbound, report) = self.prepare_outbound();
+        self.report_compression(&report, on_event);
+        let outbound_len = outbound.len();
+        let (assembled, outcome, _) = self
+            .stream_reply(outbound, &[], Some(&nudge), cancel, on_event)
+            .await?;
+        self.rule_history.next_round();
+        if cancel.is_cancelled() {
+            self.save_rule_history()?;
+            return self.finish_cancelled(&assembled, raw_prompt_tokens, prompt_tokens, outcome);
+        }
+        let outcome = self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens, outcome);
+        self.log_request(
+            prompt_tokens,
+            outbound_len,
+            &assembled,
+            &outcome,
+            cache::PrefixDiff::First,
+            true,
+        );
+        // A model that answers the write-up with a tool call it can't make
+        // (or nothing) still leaves the parent a truthful notice.
+        let text = match assembled.content.trim() {
+            "" => format!("Stopped: {reason}. The work so far is in the transcript above."),
+            report => report.to_string(),
+        };
+        self.push(ChatMessage::assistant(text.clone()))?;
+        on_event(&AgentEvent::Usage {
+            tokens_used: self.tokens_used,
+            context_tokens: self.context_tokens(),
+            prompt_tokens_used: self.prompt_tokens_used,
+            completion_tokens_used: self.completion_tokens_used,
+        });
+        Ok(text)
     }
 
     /// Fold matched stream rules into the turn: arm their reminder for the
@@ -973,6 +1051,19 @@ mod tests {
             .expect(3)
             .create_async()
             .await;
+        // Past the cap the turn gets one tool-free call to write up; the
+        // reminder names the cap, and the reply is the turn's final text.
+        let report = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("budget of 3 model rounds".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose(
+                "what I found before the cap",
+            ))
+            .expect(1)
+            .create_async()
+            .await;
         let store = Arc::new(HistoryStore::open_in_memory().unwrap());
         let session = test_session(&store, "claude-opus-4-8");
         let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
@@ -989,9 +1080,68 @@ mod tests {
         let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
         let text = agent.run_turn("go", |_| {}).await.unwrap();
         calls.assert_async().await;
-        assert!(text.contains("budget of 3 model rounds"), "{text}");
+        report.assert_async().await;
+        assert_eq!(text, "what I found before the cap");
+        assert_eq!(agent.turn_stop(), Some(crate::TurnStop::RoundBudget(3)));
+        assert!(
+            !agent.stopped_by_budget(),
+            "a round cap is not a spent wallet"
+        );
         // The loop guard would also have caught this eventually, but the
         // budget got there first: three rounds, not six.
+    }
+
+    /// A lane whose tree wallet runs dry is not cut off mid-thought: it gets
+    /// exactly one more call, with no tools, to report what it has. The
+    /// wallet admits that call over its limit and counts it.
+    #[tokio::test]
+    async fn a_spent_lane_gets_one_tool_free_call_to_report() {
+        let mut server = mockito::Server::new_async().await;
+        let work = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_snap_call())
+            .expect(1)
+            .create_async()
+            .await;
+        let report = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("shared budget of 1 tokens".into()),
+                mockito::Matcher::Regex("Tools are no longer available".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose(
+                "findings so far: two of three files read",
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+        let tree = Arc::new(crate::TreeBudget::new(crate::TreeLimits {
+            max_tokens: 1,
+            ..Default::default()
+        }));
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            depth: 1,
+            tree: Some(tree.clone()),
+            ..AgentConfig::default()
+        };
+        let mut lane = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+        let text = lane.run_turn("go", |_| {}).await.unwrap();
+        work.assert_async().await;
+        report.assert_async().await;
+        assert_eq!(text, "findings so far: two of three files read");
+        assert!(lane.stopped_by_budget());
+        assert_eq!(lane.turn_stop(), Some(crate::TurnStop::TreeBudget));
+        assert_eq!(tree.usage().requests, 2, "the report call is counted");
+        // Nothing more: a spent lane does not go around again.
+        assert!(tree.exhausted().is_some());
     }
 
     /// A rule that fires on `.unwrap()` anywhere in the reply.

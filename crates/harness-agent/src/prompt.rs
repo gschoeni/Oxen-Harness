@@ -429,6 +429,17 @@ pub(crate) const WRAP_UP_NUDGE: &str = "<system-reminder>You are near this task'
 Wrap up now: finish the current step, then give your final report with what you did, \
 what you verified, and what is left. Do not start new work.</system-reminder>";
 
+/// The reminder that rides with the one call a budget-stopped turn still
+/// gets (see `Agent::final_report`): no tools, one reply, the deliverable.
+pub(crate) fn final_report_nudge(reason: &str) -> String {
+    format!(
+        "<system-reminder>Stopped: {reason}. Tools are no longer available and this is your \
+         last reply. Give your final report now — what you found, what you verified, and what \
+         is left — in the shape you were asked for, with the specifics (paths, names, numbers, \
+         verdicts). Do not describe what you would do next.</system-reminder>"
+    )
+}
+
 pub(crate) const LOOP_NUDGE: &str =
     "You have made the same tool call with identical arguments several times in a row, \
      and it returned the identical result each time — repeating it again will not produce \

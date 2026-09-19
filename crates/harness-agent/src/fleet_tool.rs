@@ -2164,7 +2164,8 @@ mod tests {
             .create_async()
             .await;
         // A one-token wallet: the first lane's single call spends it, so the
-        // second lane (one slot, so it runs after) stops before calling.
+        // second lane (one slot, so it runs after) is stopped before its
+        // first call — and, having done nothing, buys no call to say so.
         let sp = Arc::new(FleetSpawner::new(
             OxenClient::new(server.url(), "k", "claude-opus-4-8"),
             ToolRegistry::new(),
@@ -2197,6 +2198,7 @@ mod tests {
             ),
             "{out}"
         );
+        assert!(out.contains("Stopped before starting"), "{out}");
         assert!(sp.tree_budget().usage().tokens > 0);
     }
 
