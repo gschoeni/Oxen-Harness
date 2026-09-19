@@ -360,6 +360,7 @@ impl SessionServiceBuilder {
             crash_announced: StdMutex::new(HashMap::new()),
             session_refs: StdMutex::new(HashMap::new()),
             media_libraries: StdMutex::new(HashMap::new()),
+            workbenches: StdMutex::new(HashMap::new()),
         }
     }
 }
@@ -408,6 +409,7 @@ pub struct SessionService {
     store: Result<Arc<HistoryStore>, String>,
     /// Builds clients for model ids.
     pub client_factory: ClientFactory,
+    pub(crate) workbenches: StdMutex<HashMap<String, Arc<crate::workbench::Workbench>>>,
     /// Host-specific extension points.
     pub hooks: HostHooks,
     /// Per-session agents — a cache, never the source of truth.
@@ -832,8 +834,17 @@ impl SessionService {
         model_label: &str,
         context_window: Option<usize>,
         workspace_root: &Path,
-    ) -> AgentConfig {
+    ) -> Result<AgentConfig, String> {
+        let gate = Arc::new(harness_permissions::PermissionGate::new(
+            workspace_root,
+            Arc::new(HostApprover {
+                sink: self.sink.clone(),
+                session: session.into(),
+                pending: self.pending_approvals.clone(),
+            }),
+        ));
         tools.register_typed(CanvasTool::new(Arc::new(HostCanvasSink {
+            root: workspace_root.into(),
             sink: self.sink.clone(),
             session: session.to_string(),
         })));
@@ -907,6 +918,37 @@ impl SessionService {
             Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
         )
         .with_asides(tools.asides());
+        let workbench = Arc::new(crate::workbench::Workbench {
+            docs: harness_runtime::documents::Documents::new(workspace_root)
+                .map_err(|e| e.to_string())?,
+            session: session.into(),
+            sink: self.sink.clone(),
+            gate: gate.clone(),
+            client: (self.client_factory)(harness_core::DEFAULT_MODEL),
+            store: self.store()?,
+            media: Arc::new(harness_media::MediaContext::new(
+                session,
+                workspace_root,
+                harness_runtime::media::prefs_for(workspace_root),
+                harness_runtime::media::api(),
+                self.refs_for(session),
+                self.media_library_for(workspace_root),
+                Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
+            )),
+            display: StdMutex::new(serde_json::json!({"status":"unavailable"})),
+            runs: StdMutex::new(HashMap::new()),
+            failures: StdMutex::new(HashMap::new()),
+        });
+        self.workbenches
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(session.into(), workbench.clone());
+        let view_host: Arc<dyn harness_tools::views::ViewHost> =
+            Arc::new(crate::workbench::WorkbenchView(workbench));
+        tools.register_typed(harness_tools::views::ListViewsTool(view_host.clone()));
+        tools.register_typed(harness_tools::views::OpenViewTool(view_host.clone()));
+        tools.register_typed(harness_tools::views::InspectViewTool(view_host.clone()));
+        tools.register_typed(harness_tools::views::RunWorkflowTool(view_host));
         let (media_models, generate_image, generate_video, media_status) =
             harness_media::session_tools(media_ctx);
         tools.register_typed(media_models);
@@ -949,7 +991,7 @@ impl SessionService {
             harness_runtime::project::prompt_section(workspace_root)
         );
         let limits = harness_runtime::limits::load();
-        AgentConfig {
+        Ok(AgentConfig {
             model: model_label.to_string(),
             system_prompt: Some(system_prompt),
             context_window,
@@ -1001,16 +1043,9 @@ impl SessionService {
             // prompts carried over the protocol (agent.approval_request ↔
             // answer_approval). Fleet/review subagents get the gate's
             // auto-deny form automatically.
-            permissions: Some(Arc::new(harness_permissions::PermissionGate::new(
-                workspace_root,
-                Arc::new(HostApprover {
-                    sink: self.sink.clone(),
-                    session: session.to_string(),
-                    pending: self.pending_approvals.clone(),
-                }),
-            ))),
+            permissions: Some(gate),
             ..AgentConfig::default()
-        }
+        })
     }
 
     /// Register the `spawn_agents` tool on a session's registry: the spawner
@@ -1074,7 +1109,7 @@ impl SessionService {
             model_label,
             context_window,
             workspace_root,
-        );
+        )?;
         self.register_fleet(
             &session,
             &mut tools,
@@ -1117,7 +1152,7 @@ impl SessionService {
             model_label,
             context_window,
             workspace_root,
-        );
+        )?;
         self.register_fleet(
             &session_id,
             &mut tools,

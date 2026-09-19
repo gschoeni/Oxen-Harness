@@ -1,3 +1,6 @@
+import { navigate, travel, type WorkContext } from "../features/workbench/context";
+import { resolveView } from "../features/workbench/registry";
+import type { ViewTarget } from "../workbench-sdk";
 // Global app state. Chats are multi-session: each chat owns a thread, a run
 // status, and a send queue keyed by session id, so a chat keeps streaming in the
 // background after you switch to (or start) another. The store — not the Chat
@@ -197,7 +200,7 @@ function isFreshChat(s: AppState, id: string): boolean {
 
 /** The right-column dock ids a user can pick as the active tab
  *  (see `features/docks/docks.tsx`). */
-export type RightTabId = "preview" | "canvas" | "browser" | "editor" | "gallery";
+export type RightTabId = string;
 
 /** One parallel subagent as shown in the chat's fleet panel. */
 export interface FleetLane {
@@ -431,6 +434,10 @@ function reconcileQueueTexts(previous: QueuedPrompt[] = [], texts: string[]): Qu
 }
 
 interface AppState {
+  workContexts: Record<string, WorkContext>;
+  openWorkView: (session: string, target: ViewTarget, agent?: boolean) => void;
+  travelWorkView: (offset: number) => void;
+  pinWorkView: () => void;
   mode: Mode;
   theme: Theme | null;
   /** Which empty-state hero game the player has chosen (persisted). Null falls
@@ -907,7 +914,31 @@ export const useStore = create<AppState>((rawSet, get) => {
   // pending (one Map size check).
   const set: typeof rawSet = (partial) => {
     flushTokens();
-    rawSet(partial);
+    rawSet((previous) => {
+      const patch = typeof partial === "function" ? partial(previous) : partial;
+      if (patch.workContexts || (!patch.rightTab && !patch.editorTabs && !("browserUrl" in patch) && !patch.activeCanvas)) return patch;
+      const next = { ...previous, ...patch };
+      const workContexts = { ...previous.workContexts };
+      const rightTab = { ...next.rightTab };
+      for (const [session, view] of Object.entries(next.rightTab)) {
+        const pane = next.editorTabs[session];
+        const changed = view !== previous.rightTab[session] || pane !== previous.editorTabs[session] || next.activeCanvas[session] !== previous.activeCanvas[session] || (view === "browser" && next.session?.session_id === session && next.browserUrl !== previous.browserUrl);
+        if (!changed) continue;
+        if (workContexts[session]?.pinned) { rightTab[session] = workContexts[session].current.view; continue; }
+        const paths = pane?.tabs[pane.active];
+        const target: ViewTarget = { view };
+        if (view === "editor" && paths?.length) {
+          target.paths = paths; target.path = paths.length === 1 ? paths[0] : undefined;
+          target.view = target.path ? resolveView(target.path) : "editor";
+        }
+        if (view === "canvas") target.id = next.activeCanvas[session] ?? undefined;
+        if (view === "browser") target.url = next.browserUrl ?? undefined;
+        rightTab[session] = target.view;
+        workContexts[session] = navigate(workContexts[session], target);
+      }
+      setUi("workContexts", workContexts);
+      return { ...patch, rightTab, workContexts };
+    });
   };
 
   function flushTokens() {
@@ -1135,7 +1166,30 @@ export const useStore = create<AppState>((rawSet, get) => {
     previews: {},
     previewClosed: {},
     previewErrors: {},
-    rightTab: {},
+    workContexts: getUi("workContexts") ?? {},
+    rightTab: Object.fromEntries(Object.entries(getUi("workContexts") ?? {}).map(([id, ctx]) => [id, ctx.current.view])),
+    openWorkView: (session, target, agent = false) => {
+      set((s) => {
+        if (agent && s.workContexts[session]?.pinned) return {};
+        const workContexts = { ...s.workContexts, [session]: navigate(s.workContexts[session], target) };
+        setUi("workContexts", workContexts);
+        return { workContexts, rightTab: { ...s.rightTab, [session]: target.view },
+          ...(target.view === "editor" && (target.paths || target.path) ? { editorTabs: { ...s.editorTabs, [session]: addEditorTab(s.editorTabs[session], target.paths ?? [target.path!]) } } : {}),
+          ...(target.view === "canvas" && target.id ? { activeCanvas: { ...s.activeCanvas, [session]: target.id } } : {}),
+          ...(!agent ? { dockCollapsed: { ...s.dockCollapsed, right: false } } : {}),
+        };
+      });
+    },
+    travelWorkView: (offset) => {
+      const s = get(), id = s.session?.session_id; if (!id || !s.workContexts[id]) return;
+      const context = travel(s.workContexts[id], offset);
+      s.openWorkView(id, context.current);
+      const workContexts = { ...get().workContexts, [id]: context }; setUi("workContexts", workContexts); set({workContexts});
+    },
+    pinWorkView: () => set((s) => {
+      const id = s.session?.session_id; if (!id || !s.workContexts[id]) return {};
+      const workContexts = { ...s.workContexts, [id]: { ...s.workContexts[id], pinned: !s.workContexts[id].pinned } }; setUi("workContexts", workContexts); return { workContexts };
+    }),
     browserUrl: null,
     leftTab: null,
     chatTabs: parseChatTabs(getUi("chatTabs")),
@@ -2326,7 +2380,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       get().setRightTab("browser");
     },
 
-    closeBrowser: () => set({ browserUrl: null }),
+    closeBrowser: () => { const s=get(); set({browserUrl:null}); if(s.session) s.openWorkView(s.session.session_id,{view:"welcome"}); },
 
     setDockWidth: (side, width) =>
       set((s) => {
@@ -2345,19 +2399,14 @@ export const useStore = create<AppState>((rawSet, get) => {
     toggleDock: (side) => get().setDockCollapsed(side, !get().dockCollapsed[side]),
 
     setRightTab: (tab) => {
-      // Picking a dock means "show me this" — expand the column if the user
-      // had collapsed it, or the click would do nothing visible.
-      if (get().dockCollapsed.right) get().setDockCollapsed("right", false);
-      set((s) => {
-        const cur = s.session?.session_id;
-        if (!cur) return {};
-        return {
-          rightTab: { ...s.rightTab, [cur]: tab },
-          // Choosing the Preview tab means "show me the preview" — a pane the
-          // user closed earlier must reopen, or the tab would be a dead click.
-          ...(tab === "preview" ? { previewClosed: { ...s.previewClosed, [cur]: false } } : {}),
-        };
-      });
+      const s=get(), id=s.session?.session_id; if(!id)return;
+      const pane=s.editorTabs[id], paths=pane?.tabs[pane.active];
+      const target: ViewTarget={view:tab};
+      if(tab==="editor" && paths?.length) { target.paths=paths; target.path=paths.length===1 ? paths[0]:undefined; target.view=target.path ? resolveView(target.path):tab; }
+      if(tab==="browser")target.url=s.browserUrl ?? undefined;
+      if(tab==="canvas")target.id=s.activeCanvas[id] ?? undefined;
+      s.openWorkView(id,target);
+      if(tab==="preview")set({previewClosed:{...s.previewClosed,[id]:false}});
     },
 
     setLeftTab: (id) => {

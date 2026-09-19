@@ -207,3 +207,16 @@ live registration removed. Clients can fetch history immediately on completion.
 children are 0), `model`, `stop`, and `has_patch`, in addition to the existing
 fields. Cancel and interject acknowledgments must be checked: an agent may
 finish between selection and delivery. Keep unsent text when delivery fails.
+
+
+## Workbench API
+
+`POST /v1/sessions/{id}/workbench/{action}` uses the normal bearer authorization
+and binds all paths and runs to the recorded session workspace. The same actions
+are exposed by the desktop `workbench_request` command. See
+[the workbench guide](app/WORKBENCH.md) for payloads and lifecycle behavior.
+
+`view.open` emits `{session, view, path}` and requests a view change within that
+conversation. `view.context` emits `{session, path, text}` to add context to the
+composer without sending a message automatically. Renderer state is explicitly
+reported through `report`; opening a file does not imply that it was rendered.

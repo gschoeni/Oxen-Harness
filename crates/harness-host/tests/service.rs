@@ -570,3 +570,65 @@ async fn agent_patch_requires_ownership_and_exact_review_and_applies_in_subdirec
         "after\n"
     );
 }
+
+#[tokio::test]
+async fn workflow_uses_oxen_rewrite_records_outputs_and_rejects_stale_runs() {
+    use serde_json::json;
+    let workspace = tempfile::tempdir().unwrap();
+    let mut server = mockito::Server::new_async().await;
+    let mock=server.mock("POST","/chat/completions").with_header("content-type","application/json").with_body(json!({"choices":[{"message":{"role":"assistant","content":"A luminous cabin above the clouds."}}],"usage":{"prompt_tokens":10,"completion_tokens":8}}).to_string()).expect(1).create_async().await;
+    let service = service_for(
+        server.url(),
+        Arc::new(CollectingSink::default()),
+        workspace.path(),
+    );
+    let session = service.new_session().await.unwrap().session_id;
+    let graph = json!({"version":1,"title":"Rewrite","nodes":[{"id":"p","kind":"prompt","position":{"x":0,"y":0},"config":{"text":"cabin in clouds"}},{"id":"r","kind":"rewrite","position":{"x":1,"y":0}},{"id":"o","kind":"output","position":{"x":2,"y":0}}],"edges":[{"id":"a","source":"p","target":"r","target_port":"prompt"},{"id":"b","source":"r","target":"o","target_port":"input"}]});
+    let doc = service
+        .save_document(&session, "test.graph.json", &graph.to_string(), None)
+        .await
+        .unwrap();
+    let engine = service.workbench(&session).await.unwrap();
+    assert!(engine
+        .start(&doc.path, Some("stale"))
+        .await
+        .unwrap_err()
+        .contains("changed on disk"));
+    let run = engine.start(&doc.path, Some(&doc.revision)).await.unwrap();
+    let done = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let run = engine.status(&run.id).unwrap();
+            if run.status != "queued" && run.status != "running" {
+                break run;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(done.status, "succeeded", "{:?}", done.error);
+    assert_eq!(
+        done.nodes["o"].outputs[0].value,
+        "A luminous cabin above the clouds."
+    );
+    assert_eq!(
+        service
+            .store()
+            .unwrap()
+            .usage_for_session(&session)
+            .unwrap()
+            .completion_tokens,
+        8
+    );
+    mock.assert_async().await;
+    assert!(service
+        .read_document("unknown-session", "test.graph.json")
+        .unwrap_err()
+        .contains("unknown work context"));
+    engine.gate.set_plan_mode(true);
+    assert!(engine
+        .start(&doc.path, None)
+        .await
+        .unwrap_err()
+        .contains("plan"));
+}

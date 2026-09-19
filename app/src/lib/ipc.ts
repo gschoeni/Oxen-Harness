@@ -821,3 +821,15 @@ export const newTheme = (brief: string) => invoke<Theme>("new_theme", { brief })
 export const agentPatch = (session: string, lane: string) => invoke<string>("agent_patch", { session, lane });
 export const followUpAgent = (session: string, lane: string, text: string) => invoke<string>("follow_up_agent", { session, lane, text });
 export const applyAgentPatch = (session: string, lane: string, patch: string) => invoke<void>("apply_agent_patch", { session, lane, patch });
+
+export const workbenchRequest = <T>(session: string, action: string, payload: Record<string, unknown> = {}) =>
+  invoke<T>("workbench_request", { session, action, payload });
+export const onViewOpen = (handler: (event: { session: string; view: string; path?: string }) => void) =>
+  listen<{ session: string; view: string; path?: string }>("view://open", (event) => handler(event.payload));
+
+export const viewPackagesRequest = <T>(action:string, payload:Record<string,unknown> = {}) => invoke<T>("view_packages_request",{action,...payload});
+export const viewPackageMount = (session:string,id:string,path:string|undefined,bounds:{x:number;y:number;width:number;height:number}) => invoke<string>("view_package_mount",{session,id,path,bounds,theme:Object.fromEntries(["--bg","--surface","--surface-2","--text","--text-secondary","--text-tertiary","--accent","--border","--font-ui"].map(key=>[key,getComputedStyle(document.documentElement).getPropertyValue(key)]))});
+export const viewPackageMove = (label:string,bounds:{x:number;y:number;width:number;height:number},visible:boolean) => invoke<void>("view_package_move",{label,bounds,visible});
+export const viewPackageClose = (label:string) => invoke<void>("view_package_close",{label});
+
+export const onViewContext = (handler:(event:{session:string;path?:string;text:string})=>void) => listen<{session:string;path?:string;text:string}>("view://context",event=>handler(event.payload));

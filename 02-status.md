@@ -32,6 +32,23 @@
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
 > **652 Rust tests + 230 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
 
+## Workbench views and Oxen workflows — 2026-09-18
+
+Implemented bundled module discovery, a public view SDK, conversation-owned
+view navigation, revision-aware document drafts, and reviewed installable local
+view packages. The first custom module is a drag/drop Oxen node graph covering
+prompt rewriting, images, video, image/video upscaling, and collected outputs.
+Agent tools can discover, open, inspect and explicitly run saved graphs. Run
+snapshots/results are durable; edits never execute automatically. Canvas
+artifacts now persist as project files. See [the guide](app/WORKBENCH.md).
+
+Initial full verification: 1,346 Rust tests passed under nextest (5 skipped),
+618 frontend tests passed, TypeScript and workspace/native Clippy passed.
+Browser verification exercised node addition, settings and saving with no
+page errors and no independent right-panel tabs. The graph also builds as an
+independent package. Live paid generation and Windows/Linux native rendering
+have not been exercised. Dedicated lifecycle/review polish is in progress.
+
 ## Phase 16 — Durable projects
 
 **Status:** ✅ Complete

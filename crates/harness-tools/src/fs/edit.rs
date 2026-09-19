@@ -163,7 +163,7 @@ impl TypedTool for EditFileTool {
 
         // Held for the whole read-modify-write: two fleet lanes editing one
         // file queue up instead of both writing over the same original.
-        let _guard = self.state.lock(&path).await;
+        let _guard = self.state.lock(&path).await?;
         let raw = tokio::fs::read_to_string(&path)
             .await
             .map_err(|e| ToolError::Execution(format!("read {}: {e}", path.display())))?;

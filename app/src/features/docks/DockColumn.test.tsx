@@ -79,24 +79,25 @@ describe("Dock columns", () => {
     expect(saved?.widths.right).toBe(640);
   });
 
-  it("a side with nothing docked renders no column", () => {
+  it("an empty conversation offers the work view picker", () => {
     // No dev server, no canvas → the right side has no docks at all.
     const { container } = render(<DockColumn side="right" />);
-    expect(container).toBeEmptyDOMElement();
+    expect(container.querySelector(".workbench")).toBeInTheDocument();
+    expect(screen.getByRole("combobox",{name:"Work view"})).toBeInTheDocument();
   });
 
-  it("shows tabs only when a side has more than one dock with content", async () => {
+  it("uses one view picker without a second tab strip", async () => {
     previewReady();
     const { rerender } = render(<DockColumn side="right" />);
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
 
     openCanvas();
     rerender(<DockColumn side="right" />);
-    expect(screen.getByRole("tab", { name: /Preview/ })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /Canvas/ })).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox",{name:"Work view"})).toHaveValue("canvas");
 
     // The canvas took the panel when it opened; switching back is one click.
-    await userEvent.click(screen.getByRole("tab", { name: /Preview/ }));
+    await userEvent.selectOptions(screen.getByRole("combobox",{name:"Work view"}), "preview");
     expect(useStore.getState().rightTab.s1).toBe("preview");
   });
 
@@ -106,8 +107,8 @@ describe("Dock columns", () => {
     act(() => useStore.getState().setDockCollapsed("right", true));
     render(<DockColumn side="right" />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Open Preview" }));
+    await userEvent.click(screen.getByRole("button", { name: "Open Work view" }));
     expect(useStore.getState().dockCollapsed.right).toBe(false);
-    expect(useStore.getState().rightTab.s1).toBe("preview");
+    expect(useStore.getState().rightTab.s1).toBe("canvas");
   });
 });

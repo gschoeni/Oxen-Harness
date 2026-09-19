@@ -246,6 +246,18 @@ pub enum ProtocolEvent {
     /// The `open_file` tool asked the UI to show workspace-relative files.
     #[serde(rename = "agent.open_file")]
     OpenFile { session: String, paths: Vec<String> },
+    #[serde(rename = "view.context")]
+    ViewContext {
+        session: String,
+        path: Option<String>,
+        text: String,
+    },
+    #[serde(rename = "view.open")]
+    ViewOpen {
+        session: String,
+        view: String,
+        path: Option<String>,
+    },
 
     // --- Fleet lanes ----------------------------------------------------------
     /// A fleet of parallel subagents is spinning up; `agents` is the lane
@@ -396,6 +408,8 @@ impl ProtocolEvent {
             Self::Canvas { .. } => "agent.canvas",
             Self::CanvasWriting { .. } => "agent.canvas_writing",
             Self::OpenFile { .. } => "agent.open_file",
+            Self::ViewOpen { .. } => "view.open",
+            Self::ViewContext { .. } => "view.context",
             Self::FleetStarted { .. } => "fleet.started",
             Self::FleetAgent { .. } => "fleet.agent",
             Self::FleetActivity { .. } => "fleet.agent_activity",
@@ -443,6 +457,8 @@ impl ProtocolEvent {
             | Self::Canvas { session, .. }
             | Self::CanvasWriting { session }
             | Self::OpenFile { session, .. }
+            | Self::ViewOpen { session, .. }
+            | Self::ViewContext { session, .. }
             | Self::FleetStarted { session, .. }
             | Self::FleetAgent { session, .. }
             | Self::FleetActivity { session, .. }

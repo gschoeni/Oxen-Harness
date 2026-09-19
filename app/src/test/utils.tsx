@@ -48,6 +48,7 @@ export function resetAll() {
     previewClosed: {},
     previewErrors: {},
     rightTab: {},
+    workContexts: {},
     browserUrl: null,
     leftTab: null,
     chatTabs: {},

@@ -89,6 +89,7 @@ impl harness_permissions::CommandApprover for HostApprover {
 /// Bridges the agent's `canvas` tool to the client's side panel. One sink per
 /// agent, so it carries that agent's session id.
 pub struct HostCanvasSink {
+    pub root: std::path::PathBuf,
     pub sink: Arc<dyn EventSink>,
     pub session: String,
 }
@@ -96,6 +97,30 @@ pub struct HostCanvasSink {
 #[async_trait]
 impl CanvasSink for HostCanvasSink {
     async fn show(&self, doc: &CanvasDoc) -> Result<Option<String>, ToolError> {
+        let docs = harness_runtime::documents::Documents::new(&self.root)
+            .map_err(|e| ToolError::Execution(e.to_string()))?;
+        let key = harness_runtime::documents::revision_of(
+            format!("{}:{}", self.session, doc.id).as_bytes(),
+        );
+        let path = format!(".oxen-harness/canvas/{key}.canvas.json");
+        let before = match docs.read(&path) {
+            Ok(doc) => Some(doc),
+            Err(harness_runtime::documents::DocumentError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                None
+            }
+            Err(e) => return Err(ToolError::Execution(e.to_string())),
+        };
+        let content =
+            serde_json::to_string_pretty(doc).map_err(|e| ToolError::Execution(e.to_string()))?;
+        docs.save(
+            &path,
+            &content,
+            before.as_ref().map(|d| d.revision.as_str()),
+        )
+        .await
+        .map_err(|e| ToolError::Execution(e.to_string()))?;
         self.sink.emit(ProtocolEvent::Canvas {
             session: self.session.clone(),
             id: doc.id.clone(),
@@ -104,8 +129,14 @@ impl CanvasSink for HostCanvasSink {
             language: doc.language.clone(),
             content: doc.content.clone(),
         });
-        // The panel itself is the user-visible result; no extra note needed.
-        Ok(None)
+        self.sink.emit(ProtocolEvent::ViewOpen {
+            session: self.session.clone(),
+            view: "canvas".into(),
+            path: Some(path.clone()),
+        });
+        Ok(Some(format!(
+            "Saved to {path}. Edit this JSON file to update the canvas."
+        )))
     }
 }
 

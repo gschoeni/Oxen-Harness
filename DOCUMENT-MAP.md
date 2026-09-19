@@ -111,6 +111,7 @@ Context is finite. Load what's relevant, not everything.
 | Document | When to pull in |
 |----------|-----------------|
 | [plans/workbench-views.md](plans/workbench-views.md) | Proposed right-panel extension architecture, unified agent/view tabs, filesystem-backed state, view SDK/packages, migration phases, and acceptance gates |
+| [plans/workbench-implementation.md](plans/workbench-implementation.md) | Active implementation checklist, baseline checks, verification and review record for pluggable views |
 
 ### Reference — Pull in when you need specifics
 
@@ -157,3 +158,25 @@ When adding a new file to the project, update this document map.
 - `app/src/features/chat/games/arcadeArt.tsx` — deterministic pixel vistas, terrain texture, trees, wagon, and title plaques.
 - `app/src/features/chat/games/arcade.css` — cabinet controls outside the playfield, explicit play/pause buttons, and dock sizing.
 - `app/src/features/chat/games/{tumbleweed,hunt,oregonTrail}.tsx` — runner Stampede, focused hunting, and the Trail's camp/river decisions; regression tests beside each game.
+
+## Workbench modules and workflows
+
+| File | Purpose |
+|------|---------|
+| `app/WORKBENCH.md` | User workflow guide, bundled-module SDK, installed package contract. |
+| `app/src/workbench-sdk/` | Public view/document API, shared draft store, injected browser SDK. |
+| `app/src/features/workbench/` | Conversation contexts, registry, host chrome, package manager/native mounting. |
+| `app/src/modules/` | Auto-discovered bundled view adapters and Oxen workflow reference. |
+| `app/scripts/build-workflow-view.mjs` | Builds the graph as an independent installed package. |
+| `app/src-tauri/src/view_packages.rs` | Constrained native package surfaces, IPC bridge and asset protocol. |
+| `app/src-tauri/src/commands/workbench.rs` | Desktop transport for common workbench actions. |
+| `crates/harness-runtime/src/documents.rs` | Revision checks, atomic writes, previous-version recovery, path validation. |
+| `crates/harness-runtime/src/workflow.rs` | Versioned graph schema, typed node/edge validation and ordering. |
+| `crates/harness-runtime/src/workflow_run.rs` | Explicit execution and durable immutable run snapshots/results. |
+| `crates/harness-runtime/src/views.rs` | Host view discovery and file routing. |
+| `crates/harness-runtime/src/view_packages.rs` | Reviewed content hashes, local package snapshots and permission manifests. |
+| `crates/harness-host/src/workbench.rs` | Session-scoped host tools, Oxen executors, document and workflow transport API. |
+| `crates/harness-tools/src/views.rs` | Host-neutral list/open/inspect/run workflow tool contracts. |
+| `crates/harness-tools/src/path_lock.rs` | File-write locks shared by independent agent and UI writers. |
+| `examples/views/notes/` | Ready-to-install plain-JavaScript document view. |
+| `examples/views/workflow/` | The bundled Oxen graph built and installed through the package SDK. |

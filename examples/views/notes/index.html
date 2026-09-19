@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project notes</title><link rel="stylesheet" href="notes.css">
+<main><small>PROJECT NOTES</small><h1>A place to think.</h1><p>Your agent can read and edit these same notes on disk.</p>
+<label>Project file<input id="path" value="notes/ideas.json"></label>
+<div class="actions"><button id="load">Open</button><button id="create">Create new</button></div>
+<label>Title<input id="title" placeholder="An idea worth keeping"></label>
+<label>Notes<textarea id="body" rows="14" placeholder="Start writing…"></textarea></label>
+<div class="actions"><button id="save">Save notes</button><span id="status" role="status">Open a note or create a new one.</span></div>
+<pre id="error" role="alert"></pre></main><script src="notes.js"></script></html>

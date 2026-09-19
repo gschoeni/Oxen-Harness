@@ -45,16 +45,9 @@ export function Canvas({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =>
       <header className="canvas-head">
         <div className="canvas-tabs">
           {doc && docs && docs.length > 1 ? (
-            docs.map((d) => (
-              <button
-                key={d.id}
-                className={`canvas-tab ${d.id === doc.id ? "active" : ""}`}
-                onClick={() => setActiveCanvas(d.id)}
-                title={d.title}
-              >
-                {d.title}
-              </button>
-            ))
+            <select aria-label="Canvas document" value={doc.id} onChange={e=>setActiveCanvas(e.target.value)}>
+              {docs.map(d=><option key={d.id} value={d.id}>{d.title}</option>)}
+            </select>
           ) : (
             <span className="canvas-title">{doc ? doc.title : "Canvas"}</span>
           )}
@@ -88,7 +81,7 @@ export function Canvas({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =>
   );
 }
 
-function CanvasView({ doc }: { doc: CanvasDoc }) {
+export function CanvasView({ doc }: { doc: CanvasDoc }) {
   switch (doc.format) {
     case "markdown":
       return (

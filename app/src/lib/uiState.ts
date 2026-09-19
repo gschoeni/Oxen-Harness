@@ -12,6 +12,7 @@ import { loadUiState, saveUiState } from "./ipc";
 
 /** Keys the app persists. One flat object — the backend stores it opaquely. */
 export interface UiState {
+  workContexts?: Record<string, import("../features/workbench/context").WorkContext>;
   /** Color mode ("light" | "dark"); absent → follow the OS. */
   mode?: string;
   /** Selected hero game for the empty state. */
@@ -39,6 +40,7 @@ let dirty = false;
 
 /** localStorage keys this state lived under before it moved to ui.json. */
 const LEGACY_KEYS: Record<keyof UiState, string> = {
+  workContexts: "oxen-work-contexts",
   mode: "oxen-ui-mode",
   heroGame: "oxen-hero-game",
   docks: "oxen-docks",

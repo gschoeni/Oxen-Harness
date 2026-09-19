@@ -51,7 +51,7 @@ export function DockColumn({
   const setRightTab = useStore((s) => s.setRightTab);
   const setLeftTab = useStore((s) => s.setLeftTab);
   const pickTab = (id: string) =>
-    side === "right" ? setRightTab(id as RightTabId) : setLeftTab(id);
+    side === "right" ? (id === "workbench" ? undefined : setRightTab(id as RightTabId)) : setLeftTab(id);
 
   // Expand this column out of its rail. If the window is too small to fit it
   // at its wanted width, a bare un-collapse would be a dead click (the layout

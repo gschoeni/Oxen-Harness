@@ -49,6 +49,7 @@ pub struct MediaContext {
     /// Where a background video's report goes; without it `wait: false`
     /// falls back to waiting inline.
     pub asides: Option<Asides>,
+    batch_prefix: Option<String>,
     catalog: tokio::sync::OnceCell<Arc<Catalog>>,
     feed: std::sync::OnceLock<Arc<crate::events::CompletionFeed>>,
     uploader: std::sync::OnceLock<Arc<crate::upload::HubUploader>>,
@@ -74,6 +75,7 @@ impl MediaContext {
             library,
             sink,
             asides: None,
+            batch_prefix: None,
             catalog: tokio::sync::OnceCell::new(),
             feed: std::sync::OnceLock::new(),
             uploader: std::sync::OnceLock::new(),
@@ -86,6 +88,51 @@ impl MediaContext {
                 .build()
                 .unwrap_or_default(),
         }
+    }
+
+    /// Associate exactly this node's paid jobs with its durable run record.
+    pub fn with_batch_prefix(mut self, prefix: String) -> Self {
+        self.batch_prefix = Some(prefix);
+        self
+    }
+
+    pub async fn generate_workflow(
+        self: &Arc<Self>,
+        kind: MediaKind,
+        prompt: String,
+        model: String,
+        refs: Vec<String>,
+        parameters: Map<String, Value>,
+    ) -> Result<Vec<MediaItem>, ToolError> {
+        let prefix = self.batch_prefix.as_ref().ok_or_else(|| {
+            ToolError::Execution("workflow generation needs a unique batch prefix".into())
+        })?;
+        let report = run_generation(
+            self,
+            GenerateRequest {
+                kind,
+                prompt,
+                model: Some(model),
+                refs,
+                typed: vec![],
+                count: 1,
+                name: None,
+                parent: None,
+                extra: parameters,
+                wait: true,
+            },
+        )
+        .await?;
+        let items: Vec<_> = self
+            .library
+            .items()
+            .into_iter()
+            .filter(|item| item.batch.starts_with(&format!("{prefix}:")))
+            .collect();
+        if items.is_empty() {
+            return Err(ToolError::Execution(report));
+        }
+        Ok(items)
     }
 
     pub fn with_asides(mut self, asides: Asides) -> Self {
@@ -103,7 +150,7 @@ impl MediaContext {
         self.api.as_ref().filter(|a| !a.api_key.trim().is_empty())
     }
 
-    async fn catalog(&self) -> Result<Arc<Catalog>, ToolError> {
+    pub async fn catalog(&self) -> Result<Arc<Catalog>, ToolError> {
         self.catalog
             .get_or_try_init(|| async {
                 let base = self
@@ -614,7 +661,9 @@ async fn run_generation(
         &req.prompt,
         &mut body,
     )?;
-    body.insert("prompt".into(), Value::String(prompt.clone()));
+    if prepared.model.has_param("prompt") {
+        body.insert("prompt".into(), Value::String(prompt.clone()));
+    }
 
     // Enqueue.
     body.insert("model".into(), Value::String(prepared.model.id.clone()));
@@ -636,6 +685,10 @@ async fn run_generation(
         .map_err(queue_error)?;
     let created_at = now_unix();
     let batch = format!("{created_at:x}-{}", &ids[0][..ids[0].len().min(8)]);
+    let batch = match &ctx.batch_prefix {
+        Some(prefix) => format!("{prefix}:{batch}"),
+        None => batch,
+    };
     let duration_secs = if req.kind == MediaKind::Video {
         crate::catalog::duration_secs(&prepared.model, &prepared.params)
     } else {

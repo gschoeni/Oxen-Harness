@@ -68,7 +68,7 @@ impl TypedTool for WriteFileTool {
         let path = self.workspace.resolve(&args.path)?;
         // Held across the check and the write so a concurrent lane can't slip
         // a change in between them.
-        let _guard = self.state.lock(&path).await;
+        let _guard = self.state.lock(&path).await?;
         // Creating a new file is unrestricted; replacing one wholesale is an
         // edit by another name and answers to the same contract.
         let before = match tokio::fs::read_to_string(&path).await {

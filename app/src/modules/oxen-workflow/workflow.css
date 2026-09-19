@@ -1,0 +1,360 @@
+.workflow-view {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+}
+.workflow-toolbar {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.workflow-toolbar > div {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.workflow-toolbar strong {
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-toolbar span,
+.workflow-footer,
+.workflow-run-status {
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+}
+.workflow-view button,
+.workflow-welcome button {
+  cursor: pointer;
+}
+.workflow-toolbar button,
+.workflow-empty button,
+.workbench-conflict button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--text);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+}
+.workflow-toolbar .workflow-run {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+.workflow-view button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.workflow-stage {
+  flex: 1;
+  min-height: 180px;
+  position: relative;
+  background: var(--surface);
+}
+.workflow-stage .react-flow {
+  --xy-background-color: var(--surface);
+  --xy-minimap-background-color: var(--bg);
+  --xy-minimap-mask-background-color: color-mix(in srgb, var(--surface) 70%, transparent);
+  --xy-controls-button-background-color: var(--bg);
+  --xy-controls-button-color: var(--text);
+  --xy-edge-stroke: var(--text-tertiary);
+  --xy-edge-stroke-selected: var(--accent);
+}
+.workflow-stage .react-flow__minimap {
+  width: 110px;
+  height: 65px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.oxen-node {
+  width: 230px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px #0000000a;
+  overflow: visible;
+}
+.oxen-node.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-tint-strong);
+}
+.oxen-node[data-status="running"] {
+  border-color: var(--accent);
+}
+.oxen-node[data-status="failed"] {
+  border-color: #c65e4b;
+}
+.oxen-node-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--accent-tint);
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-xs);
+}
+.oxen-node-head strong {
+  flex: 1;
+}
+.oxen-node[data-kind="image"] .oxen-node-head,
+.oxen-node[data-kind="upscale"] .oxen-node-head {
+  background: color-mix(in srgb, #92a77f 15%, var(--bg));
+}
+.oxen-node[data-kind="video"] .oxen-node-head,
+.oxen-node[data-kind="video_upscale"] .oxen-node-head {
+  background: color-mix(in srgb, #9b8ab3 15%, var(--bg));
+}
+.oxen-node-body {
+  padding: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.oxen-node-body p {
+  margin: 0;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.oxen-node-body small {
+  overflow-wrap: anywhere;
+}
+.oxen-node-ports {
+  padding: var(--space-1) 0 var(--space-2);
+}
+.oxen-port {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-2xs);
+}
+.oxen-port small {
+  color: var(--text-tertiary);
+}
+.oxen-port.output {
+  justify-content: flex-end;
+}
+.oxen-port .react-flow__handle {
+  top: 50%;
+  background: var(--accent);
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--bg);
+}
+.oxen-port .react-flow__handle[data-kind="image"] {
+  background: #799b64;
+}
+.oxen-port .react-flow__handle[data-kind="video"] {
+  background: #9b8ab3;
+}
+.workflow-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: var(--space-3);
+  pointer-events: none;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  padding: var(--space-5);
+  text-align: center;
+}
+.workflow-empty button {
+  pointer-events: auto;
+}
+.workflow-palette {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: 5;
+  width: 260px;
+  max-height: calc(100% - var(--space-5));
+  overflow: auto;
+  background: var(--bg);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px #0002;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.workflow-palette > strong,
+.workflow-eyebrow {
+  font-size: var(--text-3xs);
+  letter-spacing: 0.14em;
+  color: var(--text-tertiary);
+}
+.workflow-palette > span {
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+}
+.workflow-palette button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  text-align: left;
+  color: var(--text);
+}
+.workflow-palette button:hover {
+  background: var(--surface);
+}
+.workflow-palette button > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+}
+.workflow-palette button strong {
+  font-size: var(--text-xs);
+}
+.workflow-palette button small {
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+}
+.workflow-inspector {
+  max-height: 42%;
+  overflow: auto;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.workflow-inspector > header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  margin-bottom: var(--space-3);
+}
+.workflow-inspector code {
+  color: var(--text-tertiary);
+  flex: 1;
+  font-size: var(--text-2xs);
+}
+.workflow-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+.workflow-fields .wide {
+  grid-column: 1 / -1;
+}
+.workflow-fields label,
+.workflow-welcome label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  min-width: 0;
+}
+.workflow-fields input,
+.workflow-fields select,
+.workflow-fields textarea,
+.workflow-welcome input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--text);
+  padding: var(--space-2);
+  font-size: var(--text-xs);
+}
+.workflow-fields textarea {
+  min-height: 72px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.workflow-fields input[type="checkbox"] {
+  width: auto;
+  align-self: flex-start;
+}
+.workflow-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.workflow-footer > span {
+  flex: 1;
+}
+.workflow-footer button,
+.workflow-run-status button,
+.workflow-outputs button {
+  border: 0;
+  padding: var(--space-1);
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+.workflow-run-status {
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.workflow-run-status p {
+  width: 100%;
+  margin: var(--space-1) 0;
+}
+.workflow-outputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.workflow-outputs figure {
+  margin: 0;
+  max-width: 100%;
+  font-size: var(--text-xs);
+}
+.workflow-outputs img,
+.workflow-outputs video {
+  max-width: 100%;
+  max-height: 180px;
+  border-radius: var(--radius-sm);
+}
+.workflow-outputs figure p {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+.workflow-welcome {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.workflow-welcome > svg {
+  color: var(--accent);
+  margin-top: var(--space-4);
+}
+.workflow-welcome h2 {
+  line-height: 1.3;
+}

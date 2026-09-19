@@ -185,6 +185,10 @@ impl TypedTool for CanvasTool {
          `canvas` again with the SAME `id` and the full updated content."
     }
 
+    fn concurrency(&self) -> crate::Concurrency {
+        crate::Concurrency::Exclusive
+    }
+
     async fn run(&self, args: CanvasArgs) -> Result<String, ToolError> {
         let doc = build_doc(args).map_err(ToolError::InvalidArguments)?;
         let note = self.sink.show(&doc).await?;

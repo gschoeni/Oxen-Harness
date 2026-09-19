@@ -167,6 +167,10 @@ pub fn build_router(config: ServerConfig) -> Router {
         )
         .route("/v1/sessions/{id}/tasks", get(list_tasks))
         .route("/v1/sessions/{id}/tasks/{task}/kill", post(kill_task))
+        .route(
+            "/v1/sessions/{id}/workbench/{action}",
+            post(workbench_request),
+        )
         .route("/v1/media", get(list_media))
         .route("/v1/media/{generation}/cancel", post(cancel_media))
         .route("/v1/media/prefs", get(media_prefs).put(set_media_prefs))
@@ -874,6 +878,21 @@ async fn follow_up_agent(
         state
             .service
             .follow_up_agent(&id, &agent, &request.text)
+            .await?,
+    ))
+}
+
+async fn workbench_request(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((session, action)): Path<(String, String)>,
+    Json(payload): Json<serde_json::Value>,
+) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(
+        state
+            .service
+            .workbench_request(&session, &action, payload)
             .await?,
     ))
 }

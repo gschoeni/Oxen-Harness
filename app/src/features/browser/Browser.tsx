@@ -16,7 +16,7 @@ import { useOverlayOpen } from "../preview/useOverlayOpen";
 import "../preview/preview.css";
 
 export function Browser({ onResizeStart }: { onResizeStart?: (e: PointerEvent) => void }) {
-  const url = useStore((s) => s.browserUrl);
+  const url = useStore((s) => s.session ? s.workContexts[s.session.session_id]?.current.url ?? null : null);
   const closeBrowser = useStore((s) => s.closeBrowser);
   const overlayOpen = useOverlayOpen();
   const frameRef = useRef<HTMLDivElement>(null);

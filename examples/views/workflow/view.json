@@ -1,0 +1,14 @@
+{
+  "api_version": 1,
+  "id": "org.oxen.workflow",
+  "title": "Oxen workflow package",
+  "description": "The same Oxen graph module running as an independently built view package.",
+  "entry": "index.html",
+  "file_patterns": ["*.graph.json"],
+  "permissions": {
+    "read": ["workflows/**", ".oxen-harness/workflow-runs/**"],
+    "write": ["workflows/**"],
+    "assets": ["assets/**", "generations/**"],
+    "actions": ["workflow.run"]
+  }
+}

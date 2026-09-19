@@ -31,6 +31,7 @@ mod config;
 pub mod config_repo;
 pub mod connection;
 pub mod context_files;
+pub mod documents;
 pub mod limits;
 pub mod media;
 pub mod models;
@@ -40,6 +41,10 @@ pub mod repo_tool;
 pub mod rules;
 pub mod skills;
 pub mod tools;
+pub mod view_packages;
+pub mod views;
+pub mod workflow;
+pub mod workflow_run;
 
 /// A process-wide lock serializing tests that mutate global env vars / the shared
 /// config dir (`connection` and `models` both redirect `OXEN_HARNESS_DIR`). Cargo

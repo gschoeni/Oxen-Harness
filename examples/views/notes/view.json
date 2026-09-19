@@ -1,0 +1,14 @@
+{
+  "api_version": 1,
+  "id": "org.oxen.notes",
+  "title": "Project notes",
+  "description": "A tiny independent, installable view backed by notes/*.json.",
+  "entry": "index.html",
+  "file_patterns": ["notes/*.json"],
+  "permissions": {
+    "read": ["notes/*.json"],
+    "write": ["notes/*.json"],
+    "assets": [],
+    "actions": []
+  }
+}

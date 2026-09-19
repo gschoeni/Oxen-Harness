@@ -759,3 +759,19 @@ export function resetIpc() {
 export const agentPatch = vi.fn().mockResolvedValue("");
 export const followUpAgent = vi.fn().mockResolvedValue("Done");
 export const applyAgentPatch = vi.fn().mockResolvedValue(undefined);
+
+export const onViewOpen = vi.fn(async (_handler: unknown) => () => {});
+export const workbenchRequest = vi.fn(async (_session: string, action: string, payload: Record<string, unknown> = {}): Promise<unknown> => {
+  if (action === "read") { const body = await fsReadFile(sampleSession.workspace, String(payload.path)); return {path:payload.path,content:body.content,revision:body.content}; }
+  if (action === "save") { await fsWriteFile(sampleSession.workspace,String(payload.path),String(payload.content)); return {path:payload.path,content:payload.content,revision:payload.content}; }
+  if (action === "list") return {views:[],nodes:[]};
+  if (action === "models") return [];
+  return null;
+});
+
+export const viewPackagesRequest = vi.fn(async()=>[]);
+export const viewPackageMount = vi.fn(async()=>"test-view");
+export const viewPackageMove = vi.fn(async()=>{});
+export const viewPackageClose = vi.fn(async()=>{});
+
+export const onViewContext = vi.fn(async (_handler:unknown)=>()=>{});

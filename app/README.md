@@ -163,3 +163,9 @@ cargo tauri build   # or: npm run build
 
 > Note: bundling is disabled by default in `tauri.conf.json` (`bundle.active`
 > = false). Set it to `true` and add app icons to produce installers.
+
+### Custom work views
+
+The right panel follows the conversation above the agent. Choose **Oxen workflow**
+to connect generation nodes, or **Manage views** to install a local package.
+See [WORKBENCH.md](WORKBENCH.md) for workflows, the module SDK, and examples.

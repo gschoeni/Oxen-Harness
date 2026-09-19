@@ -1,0 +1,93 @@
+.workbench {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--bg);
+}
+.workbench-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-7) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  min-height: 42px;
+}
+.workbench-head select {
+  max-width: 45%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.workbench-resource {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.workbench-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+.workbench-content > .canvas {
+  height: 100%;
+}
+.workbench-welcome {
+  padding: var(--space-6);
+  max-width: 52rem;
+  margin: auto;
+  overflow: auto;
+  max-height: 100%;
+}
+.workbench-welcome h2 {
+  font-size: var(--text-xl);
+  margin: var(--space-4) 0 var(--space-2);
+}
+.workbench-welcome p {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+.workbench-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+.workbench-choices button {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  text-align: left;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.workbench-choices button:hover {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+.workbench-choices span {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.workbench-error,
+.workbench-conflict {
+  padding: var(--space-3);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+}
+.workbench-conflict {
+  border-left: 3px solid var(--accent);
+}

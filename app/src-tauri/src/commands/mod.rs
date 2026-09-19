@@ -37,3 +37,5 @@ pub(crate) mod tools;
 pub(crate) mod turn;
 pub(crate) mod ui;
 pub(crate) mod watch;
+
+pub(crate) mod workbench;

@@ -7,6 +7,7 @@
 
 import {
   useCallback,
+  useMemo,
   useEffect,
   useRef,
   useState,
@@ -21,14 +22,14 @@ import {
   FileDiff,
   Film,
   Image as ImageIcon,
-  Images,
   MessageSquarePlus,
   Save,
   WrapText,
   X,
 } from "lucide-react";
 import { useStore } from "../../lib/store";
-import { fsReadFile, fsWriteFile } from "../../lib/ipc";
+import { useDocument } from "../../workbench-sdk";
+import { useWorkbenchAPI } from "../workbench/api";
 import { useAssetSrc } from "./useAssetSrc";
 import { basename } from "../../lib/format";
 import { isImagePath, isVideoPath } from "../../lib/attachments";
@@ -100,20 +101,12 @@ export function EditorPane({ onResizeStart }: { onResizeStart?: (e: PointerEvent
           aria-label="Resize editor"
         />
       )}
-      {tabs.length > 1 && (
-        <div className="editor-tabs" role="tablist" aria-label="Open files">
-          {tabs.map((tab, i) => (
-            <Tab
-              key={tabKey(tab)}
-              tab={tab}
-              active={i === active}
-              dirty={!!dirtyTabs[tabKey(tab)]}
-              onActivate={() => activateTab(i)}
-              onClose={() => requestCloseTab(i)}
-            />
-          ))}
-        </div>
-      )}
+      {tabs.length > 1 && <div className="canvas-head">
+        <select aria-label="Open files" value={active} onChange={e=>activateTab(Number(e.target.value))}>
+          {tabs.map((tab,i)=><option key={tabKey(tab)} value={i}>{basename(tab[0])}{dirtyTabs[tabKey(tab)] ? " · edited" : ""}</option>)}
+        </select>
+        <button className="icon-btn sm" aria-label="Close current file" onClick={()=>requestCloseTab(active)}><X size={14}/></button>
+      </div>}
       {tabs.map((tab, i) => {
         const key = tabKey(tab);
         const single = tab.length === 1 ? tab[0] : null;
@@ -142,65 +135,6 @@ export function EditorPane({ onResizeStart }: { onResizeStart?: (e: PointerEvent
         );
       })}
     </aside>
-  );
-}
-
-// ---- one tab in the strip ----------------------------------------------------
-
-function Tab({
-  tab,
-  active,
-  dirty,
-  onActivate,
-  onClose,
-}: {
-  tab: string[];
-  active: boolean;
-  dirty: boolean;
-  onActivate: () => void;
-  onClose: () => void;
-}) {
-  const gallery = tab.length > 1;
-  const path = tab[0];
-  const diff = !gallery && isDiffPath(path);
-  const name = gallery ? `${tab.length} images` : basename(diff ? diffTarget(path) : path);
-  const icon = gallery ? (
-    <Images size={12} aria-hidden="true" />
-  ) : diff ? (
-    <FileDiff size={12} aria-hidden="true" />
-  ) : isVideoPath(path) ? (
-    <Film size={12} aria-hidden="true" />
-  ) : isImagePath(path) ? (
-    <ImageIcon size={12} aria-hidden="true" />
-  ) : (
-    <FileCode2 size={12} aria-hidden="true" />
-  );
-  return (
-    <div
-      className={`editor-tab${active ? " active" : ""}${dirty ? " dirty" : ""}`}
-      role="tab"
-      aria-selected={active}
-      title={gallery ? tab.join("\n") : diff ? `${diffTarget(path)} — diff` : path}
-      onClick={onActivate}
-      onAuxClick={(e) => {
-        // Middle-click closes, like every tabbed editor.
-        if (e.button === 1) onClose();
-      }}
-    >
-      {icon}
-      <span className="editor-tab-name">{name}</span>
-      <button
-        className="editor-tab-close"
-        aria-label={dirty ? `Close ${name} (unsaved changes)` : `Close ${name}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-      >
-        <span className="editor-tab-dot" aria-hidden="true" />
-        <X size={12} aria-hidden="true" />
-      </button>
-    </div>
   );
 }
 
@@ -239,68 +173,22 @@ function CodeView({
   const renderer = rendererFor(path);
   const [mode, setMode] = useState<"preview" | "raw">(renderer?.defaultMode ?? "raw");
 
-  const [loaded, setLoaded] = useState<{ doc: string; truncated: boolean } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
-  // Briefly true after a successful save so the header can confirm it landed.
-  const [justSaved, setJustSaved] = useState(false);
-  const [selection, setSelection] = useState<EditorSelection | null>(null);
-  const buffer = useRef("");
-  const savedTimer = useRef<number | undefined>(undefined);
-
-  useEffect(() => {
-    onDirtyChange?.(dirty);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dirty]);
-  useEffect(() => () => window.clearTimeout(savedTimer.current), []);
-
-  async function load() {
-    try {
-      const body = await fsReadFile(workspace, path);
-      buffer.current = body.content;
-      setLoaded({ doc: body.content, truncated: body.truncated });
-      setDirty(false);
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace, path]);
-
-  // The agent may have rewritten this very file during its turn: pick up the
-  // new content when the turn ends — but never over unsaved edits.
-  const wasRunning = useRef(running);
-  useEffect(() => {
-    if (wasRunning.current && !running && !dirty) void load();
-    wasRunning.current = running;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running]);
-
-  // Any process rewrote this file on disk: reload — but unsaved edits win
-  // (the user's buffer is never clobbered; saving overwrites the disk copy).
-  // Our own saves echo back here as a same-content reload, which is free:
-  // CodeMirror only rebuilds when the loaded text actually differs.
-  useFsChanged(workspace, [path], () => {
-    if (!dirty) void load();
-  });
-
+  const session = useStore(s=>s.session?.session_id ?? "");
+  const target = useMemo(()=>({view:"editor",path}),[path]);
+  const api = useWorkbenchAPI({session,workspace,target});
+  const document = useDocument(api,path);
+  const loaded = document.snapshot ? {doc:document.content,truncated:false} : null;
+  const dirty = document.dirty;
+  const [error,setError] = useState<string|null>(null);
+  const [justSaved,setJustSaved] = useState(false);
+  const [selection,setSelection] = useState<EditorSelection|null>(null);
+  const buffer = useRef(document.content); buffer.current = document.content;
+  useEffect(()=>{onDirtyChange?.(dirty);},[dirty,onDirtyChange]);
+  useEffect(()=>{if(justSaved){const timer=setTimeout(()=>setJustSaved(false),2000);return()=>clearTimeout(timer);}},[justSaved]);
+  useEffect(()=>{if(!running)void document.reload();},[running]);
   async function save() {
-    if (!dirty || loaded?.truncated) return;
-    try {
-      await fsWriteFile(workspace, path, buffer.current);
-      setLoaded((prev) => (prev ? { ...prev, doc: buffer.current } : prev));
-      setDirty(false);
-      setError(null);
-      setJustSaved(true);
-      window.clearTimeout(savedTimer.current);
-      savedTimer.current = window.setTimeout(() => setJustSaved(false), 2000);
-    } catch (e) {
-      setError(String(e));
-    }
+    if(!dirty)return;
+    try {await document.save();setError(null);setJustSaved(true);}catch(e){setError(String(e));}
   }
 
   return (
@@ -358,10 +246,9 @@ function CodeView({
             <WrapText size={14} />
           </button>
           {renderer && (
-            <div className="editor-mode" role="tablist" aria-label="View mode">
+            <div className="editor-mode" role="group" aria-label="View mode">
               <button
-                role="tab"
-                aria-selected={mode === "preview"}
+                aria-pressed={mode === "preview"}
                 className={mode === "preview" ? "active" : ""}
                 onClick={() => setMode("preview")}
               >
@@ -369,8 +256,7 @@ function CodeView({
                 {renderer.label}
               </button>
               <button
-                role="tab"
-                aria-selected={mode === "raw"}
+                aria-pressed={mode === "raw"}
                 className={mode === "raw" ? "active" : ""}
                 onClick={() => setMode("raw")}
               >
@@ -382,7 +268,10 @@ function CodeView({
           <CloseButton onClose={onClose} />
         </div>
       </header>
-      {error && <p className="editor-error">{error}</p>}
+      {(error || document.error) && <p className="editor-error" role="alert">{error || document.error}</p>}
+      {document.conflict && <div className="workbench-conflict" role="alert">File changed on disk. Your edits are preserved.
+        <button onClick={()=>document.resolve("disk")}>Use disk version</button><button onClick={()=>document.resolve("draft")}>Keep my draft</button>
+      </div>}
       <div className="editor-body">
         {loaded &&
           renderer &&
@@ -397,7 +286,7 @@ function CodeView({
               wrap={wrap}
               onChange={(doc) => {
                 buffer.current = doc;
-                setDirty(doc !== loaded.doc);
+                document.edit(doc);
               }}
               onSelection={setSelection}
               onSave={() => void save()}

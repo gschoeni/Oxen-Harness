@@ -1016,3 +1016,25 @@ views that users can install without rebuilding the app.
 These are user-confirmed product requirements, not shipped behavior. API,
 packaging, isolation, migration, and verification proposals are in
 [`plans/workbench-views.md`](plans/workbench-views.md).
+
+
+## Workbench implementation — 2026-09-18
+
+- A work context belongs to a conversation; only the top conversation tabs
+  switch contexts. The right column owns a picker/history, never another tab strip.
+- Bundled modules are discovered from `modules/*/index.tsx` and consume the
+  public WorkbenchAPI. The Oxen workflow is also built independently as an
+  installed package to exercise the boundary.
+- Shared editable documents use revision compare-and-save, process-wide path
+  locks and atomic replacement. A user draft cannot silently overwrite agent
+  edits. Previous saved content is retained; unsaved drafts live for the app session.
+- Graph execution uses a saved immutable snapshot, typed dependencies and
+  sequential Oxen operations. Explicit Run is the billing boundary. Stop
+  finishes the current paid operation before skipping later nodes. No automatic
+  retry after failure/restart; jobs might have been billed.
+- Installed JavaScript runs in a dedicated native webview. Package assets are
+  copied after exact-hash review, with no install scripts. The only child-view
+  invoke is an instance-bound capability bridge; main core permissions target
+  the main webview specifically. An iframe in the privileged view is not a
+  portable isolation boundary. Package rendering is native-desktop only;
+  document/workflow APIs remain transport-independent.

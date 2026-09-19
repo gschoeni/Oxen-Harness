@@ -37,6 +37,7 @@ pub mod fs;
 pub mod gh;
 pub mod git;
 mod http_body;
+pub mod path_lock;
 pub mod plan;
 pub mod process;
 pub mod retrieve;
@@ -47,6 +48,7 @@ pub mod steer;
 pub mod tasks;
 pub mod trail;
 pub mod viewer;
+pub mod views;
 pub mod web;
 pub mod web_fetch;
 

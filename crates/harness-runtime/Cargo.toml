@@ -23,12 +23,12 @@ schemars = { workspace = true }
 globset = "0.4"
 sha2 = "0.10"
 thiserror = { workspace = true }
+tokio = { workspace = true }
+tempfile = "3"
 
 [dev-dependencies]
 regex = "1"
-tempfile = "3"
 mockito = "1"
-tokio = { workspace = true }
 
 [lints]
 workspace = true

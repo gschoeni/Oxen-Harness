@@ -19,7 +19,7 @@
 //! So: reads record a whole-file fingerprint, writes verify it first, and
 //! every mutation holds a per-path lock for its whole read-modify-write.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::hash::Hasher;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -114,7 +114,6 @@ pub struct FileState {
     /// a session behaves as it always did.
     require_read: bool,
     snapshots: Mutex<VecDeque<(PathBuf, Snapshot)>>,
-    locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     rules: Mutex<Vec<PathRule>>,
     surfaced: Mutex<HashSet<String>>,
 }
@@ -144,7 +143,6 @@ impl FileState {
         Self {
             require_read,
             snapshots: Mutex::new(VecDeque::new()),
-            locks: Mutex::new(HashMap::new()),
             rules: Mutex::new(Vec::new()),
             surfaced: Mutex::new(HashSet::new()),
         }
@@ -297,18 +295,11 @@ impl FileState {
     /// Hold this path for the duration of a read-modify-write. Different paths
     /// never block each other; the same path serializes, so two fleet lanes
     /// editing one file queue instead of clobbering.
-    pub async fn lock(&self, path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
-        let key = canonical(path);
-        let mutex = {
-            let mut locks = self.locks.lock().expect("path lock map");
-            // Reclaim locks nobody holds before the map can grow without
-            // bound in a long session.
-            if locks.len() > MAX_TRACKED_PATHS {
-                locks.retain(|_, m| Arc::strong_count(m) > 1);
-            }
-            locks.entry(key).or_default().clone()
-        };
-        mutex.lock_owned().await
+    pub async fn lock(
+        &self,
+        path: &Path,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, crate::ToolError> {
+        crate::path_lock::lock(path).await
     }
 
     /// The conventions governing `rel` that haven't been surfaced yet this
@@ -507,19 +498,19 @@ mod tests {
     #[tokio::test]
     async fn different_paths_do_not_block_each_other() {
         let state = FileState::gated();
-        let _held = state.lock(Path::new("/tmp/oxen-lock-a")).await;
+        let _held = state.lock(Path::new("/tmp/oxen-lock-a")).await.unwrap();
         // Would hang if the lock were global rather than per path.
-        let _other = state.lock(Path::new("/tmp/oxen-lock-b")).await;
+        let _other = state.lock(Path::new("/tmp/oxen-lock-b")).await.unwrap();
     }
 
     #[tokio::test]
     async fn the_same_path_serializes() {
         let state = FileState::gated();
-        let held = state.lock(Path::new("/tmp/oxen-lock-same")).await;
+        let held = state.lock(Path::new("/tmp/oxen-lock-same")).await.unwrap();
         let waiter = {
             let state = state.clone();
             tokio::spawn(async move {
-                let _guard = state.lock(Path::new("/tmp/oxen-lock-same")).await;
+                let _guard = state.lock(Path::new("/tmp/oxen-lock-same")).await.unwrap();
                 "second"
             })
         };
