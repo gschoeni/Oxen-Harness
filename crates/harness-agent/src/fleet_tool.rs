@@ -2018,7 +2018,6 @@ mod tests {
             sp.tree().live().is_empty(),
             "a settled lane leaves the registry"
         );
-        // Lane spend is the parent's spend.
         // The lane's spend is its own row set, rolled up into its parent's
         // tree — so a fleet's cost can be read back per lane afterwards.
         let own = store.usage_for_session(&id).unwrap();

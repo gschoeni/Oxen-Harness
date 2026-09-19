@@ -548,6 +548,8 @@ impl Agent {
             return self.finish_cancelled(&assembled, raw_prompt_tokens, prompt_tokens, outcome);
         }
         let outcome = self.account_for_usage(&assembled, raw_prompt_tokens, prompt_tokens, outcome);
+        // Logged as a first request: a one-off with no tools is no cache
+        // diagnostic worth relating to the rounds before it.
         self.log_request(
             prompt_tokens,
             outbound_len,

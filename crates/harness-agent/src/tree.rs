@@ -115,15 +115,19 @@ struct BudgetState {
 }
 
 impl BudgetState {
-    /// The wallet a lane spends from, creating the root's on first use. A
-    /// parent that never opened as a lane (a side agent, a test) spends
-    /// from the root.
-    fn wallet_of(&mut self, key: &str, max_tokens: u64) -> &mut Wallet {
-        let key = if key != ROOT && !self.wallets.contains_key(key) {
+    /// The wallet `key` spends from: its own, or the root's for a parent
+    /// that never opened as a lane (a side agent, a test).
+    fn resolve<'a>(&self, key: &'a str) -> &'a str {
+        if key != ROOT && !self.wallets.contains_key(key) {
             ROOT
         } else {
             key
-        };
+        }
+    }
+
+    /// The wallet `key` spends from, creating the root's on first use.
+    fn wallet_of(&mut self, key: &str, max_tokens: u64) -> &mut Wallet {
+        let key = self.resolve(key);
         self.wallets
             .entry(key.to_string())
             .or_insert_with(|| Wallet {
@@ -202,7 +206,7 @@ impl TreeBudget {
     /// share when it opens.
     pub fn admit_spawn(&self, parent: Option<&str>, count: u32) -> Result<(), String> {
         let mut state = self.state.lock().expect("tree budget poisoned");
-        if let Some(reason) = self.reason(&mut state, key(parent)) {
+        if let Some(reason) = self.reason(&state, key(parent)) {
             return Err(reason);
         }
         if state.spawns.saturating_add(count) > self.limits.max_spawns {
@@ -243,17 +247,12 @@ impl TreeBudget {
     /// parent has left for the lanes it expects.
     pub fn open_lane(&self, parent: Option<&str>, lane: &str) {
         let mut state = self.state.lock().expect("tree budget poisoned");
-        let max_tokens = self.limits.max_tokens;
-        let parent_wallet = state.wallet_of(key(parent), max_tokens);
+        let parent_key = state.resolve(key(parent)).to_string();
+        let parent_wallet = state.wallet_of(&parent_key, self.limits.max_tokens);
         let share = u64::from(parent_wallet.expected.max(1));
         let cap = (parent_wallet.left() / share).max(1);
         parent_wallet.expected = parent_wallet.expected.saturating_sub(1);
         parent_wallet.reserved = parent_wallet.reserved.saturating_add(cap);
-        let parent_key = if key(parent) != ROOT && state.wallets.contains_key(key(parent)) {
-            key(parent).to_string()
-        } else {
-            ROOT.to_string()
-        };
         state.wallets.insert(
             lane.to_string(),
             Wallet {
@@ -278,7 +277,7 @@ impl TreeBudget {
     /// Admit a model round for `lane` atomically before sending it.
     pub fn reserve_request(&self, lane: &str) -> Result<(), String> {
         let mut state = self.state.lock().expect("tree budget poisoned");
-        if let Some(reason) = self.reason(&mut state, lane) {
+        if let Some(reason) = self.reason(&state, lane) {
             return Err(reason);
         }
         state.requests += 1;
@@ -309,7 +308,7 @@ impl TreeBudget {
 
     /// Why `lane` may not call the model again, if it may not: the tree's
     /// ceilings first, then the lane's own allowance.
-    fn reason(&self, state: &mut BudgetState, lane: &str) -> Option<String> {
+    fn reason(&self, state: &BudgetState, lane: &str) -> Option<String> {
         if state.tokens >= self.limits.max_tokens {
             return Some(format!(
                 "the agents of this turn have spent their shared budget of {} tokens",
@@ -332,7 +331,7 @@ impl TreeBudget {
         })
     }
     pub fn exhausted(&self, lane: &str) -> Option<String> {
-        self.reason(&mut self.state.lock().expect("tree budget poisoned"), lane)
+        self.reason(&self.state.lock().expect("tree budget poisoned"), lane)
     }
     /// What `parent` (`None`: the root turn) has left to fund more lanes.
     pub fn remaining_for(&self, parent: Option<&str>) -> u64 {
