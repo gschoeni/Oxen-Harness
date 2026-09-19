@@ -124,3 +124,20 @@ re-run checks in a separate polish commit.
   and sound-focus behavior.
 - Existing staged renames and unrelated working changes remain outside both
   arcade commits. Temporary browser fixture files were removed after checking.
+
+### Follow-up: Dodge title-screen label readability
+
+The rider labels used the display-text shadow at a small font size, making the
+letters appear doubled. Locked labels also used a dark border color directly
+over the scenery. Render each label once in the pixel readout font, slightly
+larger, on a solid footer. Give the three choices equal columns and use the
+theme's text color for locked riders. Selection and unlock behavior are unchanged.
+
+- Chrome and WebKit: visually checked desktop, dock, and 390px viewport;
+  labels fit their columns and unlocked rider selection still works.
+- TypeScript and all 622 frontend tests pass.
+- Workspace and Tauri bridge Clippy pass; Nextest passes 1,352 tests (5 skipped).
+- Workspace formatting check remains blocked by unrelated view-development
+  work in the host, runtime, and tools crates. No Rust files changed in this fix.
+- Review: the fix stays in the title renderer, reuses the theme/grid primitives,
+  and avoids changing shared display typography. No further refactor warranted.

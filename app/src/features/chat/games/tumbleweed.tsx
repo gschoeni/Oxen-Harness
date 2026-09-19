@@ -1167,16 +1167,18 @@ function RunnerAttract(p: ThemePalette) {
       <CoinSprite x={24} y={17} t={0} fill={c.sun} bright={c.snow} />
       <TitlePlaque c={c} eyebrow="01 / PRAIRIE ARCADE · CHASE THE RUSH" title="TUMBLEWEED DODGE" subtitle={best > 0 ? `BEST ${pad4(best)} · COINS + CLOSE CALLS = STAMPEDE` : "COINS + CLOSE CALLS = STAMPEDE"} />
       {/* rider select: unlocked by distance, chosen with 1/2/3 */}
-      <g>
+      <g fontFamily="var(--font-readout)" fontSize={8} textAnchor="middle">
+        <Px x={0} y={ROWS - 5} w={COLS} h={5} fill={c.sky} />
+        <Px x={0} y={ROWS - 5} w={COLS} h={0.25} fill={c.line} />
         {RIDERS.map((r, i) => {
           const open = unlocked.includes(r.id);
           const current = r.id === rider;
           const label = `${i + 1} ${current ? `[${r.label}]` : r.label}${open ? "" : ` (${r.yards} yd)`}`;
-          const x = (COLS * U) / 2 + (i - 1) * 72;
+          const x = ((i + 0.5) * COLS * U) / RIDERS.length;
           return (
-            <PxText key={r.id} x={x} y={(ROWS - 2.2) * U} size={7} fill={open ? (current ? c.accent : c.text) : c.line} shadow="#000" anchor="middle">
+            <text key={r.id} x={x} y={(ROWS - 2) * U} fill={current ? c.accent : c.text} opacity={open ? 1 : 0.8}>
               {label}
-            </PxText>
+            </text>
           );
         })}
       </g>
