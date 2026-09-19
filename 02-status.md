@@ -721,3 +721,25 @@ Arcade polish verified: 88 game tests, TypeScript, production build, and
 Chrome/WebKit checks pass. The full frontend has 606 passing tests and two
 unrelated sizing-baseline failures; current Rust checks and cache GC are
 blocked by the existing API/lint failures documented in the feature plan.
+
+## Recent — subagent budgets that scale (2026-09-19)
+
+Diagnosed from a real run (session `18c059a7`): nineteen research agents spent
+the 1.5M-token tree wallet in fifty seconds because the wallet charged the
+gross prompt of every tool round, then every lane died at once with a notice
+it could not act on, and the parent redid the work itself. Landed, one commit
+each, in `crates/harness-agent`:
+
+- the tree budget charges billable tokens (uncached prompt + cache writes +
+  completion);
+- a budget-stopped turn makes one tool-free final-report call, and a round
+  cap is reported as `LaneStop::Rounds`;
+- every lane opens with a wallet carved from its parent's remaining budget,
+  folded back on close; admission refuses fleets the budget can't fund;
+- lanes compress stale tool output and compact past 300k chars;
+- lanes are warned at a fifth of their allowance, the subagent prompt names
+  the allowance, and `spawn_agents` results carry a budget line;
+- lane usage is recorded per lane, with `usage_for_tree` for the roll-up.
+
+Verification: harness-agent 189 unit + 12 integration tests, harness-store 65,
+workspace clippy and fmt clean.

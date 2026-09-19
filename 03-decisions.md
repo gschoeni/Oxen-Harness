@@ -1085,3 +1085,41 @@ packaging, isolation, migration, and verification proposals are in
 - Source-specific diagnostic reports survive restarts, but restoring state never
   executes package code. Browser test payloads preserve every result within a
   UTF-8 byte budget, and uncaught runtime errors fail the smoke check.
+
+## Subagent budgets (2026-09-19)
+
+**The tree budget counts what the provider bills, carved into a wallet per
+lane** (2026-09-19)
+A run of nineteen research agents emptied the 1.5M-token tree wallet in
+fifty seconds and every lane came back as a stop notice. Four things were
+wrong, and each is now a rule:
+
+- *Bill, not traffic.* The wallet is charged uncached prompt + cache writes +
+  completion (`budget::billable_tokens`), not prompt + completion. A lane
+  re-sends its whole context every tool round; charging that made a lane's
+  spend quadratic in rounds while the bill, with the prefix cached, grew
+  linearly.
+- *A wallet per lane.* A lane opens with an equal share of what its parent has
+  left (the root pool at the top, the spawning lane's allowance below), funds
+  its own fleet from that share, and folds its spend back into its parent
+  when it closes. One greedy lane cannot starve its siblings, and admission
+  refuses a fleet the remaining budget can't fund at `MIN_LANE_TOKENS` a lane
+  — with the number — instead of starting lanes that stop after a call.
+- *A stopped turn reports.* A lane stopped by any budget (tree, allowance, or
+  round cap) gets exactly one more call with no tools and a reminder to write
+  up; that reply is its result. A lane stopped before its first round has
+  nothing to report and gets the notice alone. Round-cap stops are labeled
+  as such (`LaneStop::Rounds`), not as a spent wallet.
+- *Nobody learns of the budget by dying of it.* A lane is warned once at a
+  fifth of its allowance left; the subagent prompt says the allowance exists;
+  every `spawn_agents` result ends with what the turn's agents have spent and
+  what remains to fund more from here.
+
+Lanes also compress stale tool output (unless compression is explicitly off)
+and compact past `LANE_RESIDENT_CHARS`, and a persisted lane records usage
+under its own session (`HistoryStore::usage_for_tree` rolls a chat up), so
+where a fleet's tokens went can be read back afterwards.
+
+*Why not simply raise the limit:* the limit was never the problem; the unit
+and the cliff were. A bigger wallet under the old rules bought a bigger
+collapse.

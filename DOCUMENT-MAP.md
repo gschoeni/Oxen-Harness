@@ -39,7 +39,7 @@ oxen-harness/
     harness-local/           — Local models: extensible GGUF catalog (Qwen3 + Bonsai), downloads + disk tracking, llama-server launcher.
     harness-theme/           — Configurable themes (palette + voice): built-ins, TOML/JSON load/save with partial overrides, active-theme store.
     harness-agent/           — The agent (Ralph) loop (llm + tools + store); the fleet (run_fleet: N parallel detached subagents, FleetLimits clocks) + the model-facing spawn_agents tool (FleetSpawner/FleetSink);
-                                 lane.rs (a lane's typed SubagentResult + the AgentTree of running lanes), lane_tools.rs (send_to_agent / read_agent), tree.rs (the TreeBudget every lane of a turn shares),
+                                 lane.rs (a lane's typed SubagentResult + the AgentTree of running lanes), lane_tools.rs (send_to_agent / read_agent), tree.rs (the TreeBudget: one billable-token pool per root turn, carved into a wallet per lane),
                                  ask_tool.rs (ask_model: batched tool-less leaf calls), map_tool.rs (map_agents: one lane per item, memoized);
                                  worktree.rs (per-lane git checkouts for editing fleets); config.rs ModelRoles (route work to cheaper models) + RetryPolicy fallback chains;
                                  rules.rs (stream rules: regex corrections that watch the reply and fire only on a match, plus DRAFT_SYSTEM/DraftedRule — model-written rules, self-verified). agent/ splits the loop: turn (the cycle),
