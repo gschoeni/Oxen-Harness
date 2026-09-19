@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use harness_tools::{Asides, Concurrency, ToolError, TypedTool};
+use harness_tools::{Asides, CallContext, Concurrency, ToolError, TypedTool};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -96,6 +96,9 @@ impl MediaContext {
         self
     }
 
+    /// Run one generation for a workflow node rather than a model tool
+    /// call; `call` is whatever the workflow knows about who asked (at least
+    /// the session), so the output still traces back.
     pub async fn generate_workflow(
         self: &Arc<Self>,
         kind: MediaKind,
@@ -103,6 +106,7 @@ impl MediaContext {
         model: String,
         refs: Vec<String>,
         parameters: Map<String, Value>,
+        call: &CallContext,
     ) -> Result<Vec<MediaItem>, ToolError> {
         let prefix = self.batch_prefix.as_ref().ok_or_else(|| {
             ToolError::Execution("workflow generation needs a unique batch prefix".into())
@@ -121,6 +125,7 @@ impl MediaContext {
                 extra: parameters,
                 wait: true,
             },
+            call,
         )
         .await?;
         let items: Vec<_> = self
@@ -257,7 +262,7 @@ impl TypedTool for MediaModelsTool {
          schema before using one for the first time. Free — no generation happens."
     }
 
-    async fn run(&self, args: MediaModelsArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: MediaModelsArgs, _call: &CallContext) -> Result<String, ToolError> {
         let catalog = self.ctx.catalog().await?;
         if let Some(id) = args.id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             let Some(model) = catalog.get(id) else {
@@ -488,7 +493,7 @@ impl TypedTool for GenerateImageTool {
         Concurrency::Exclusive
     }
 
-    async fn run(&self, a: GenerateImageArgs) -> Result<String, ToolError> {
+    async fn run(&self, a: GenerateImageArgs, call: &CallContext) -> Result<String, ToolError> {
         let mut typed = Vec::new();
         if let Some(v) = a.aspect_ratio {
             typed.push(("aspect_ratio", Value::String(v)));
@@ -510,6 +515,7 @@ impl TypedTool for GenerateImageTool {
                 extra: a.extra.unwrap_or_default(),
                 wait: true,
             },
+            call,
         )
         .await
     }
@@ -540,7 +546,7 @@ impl TypedTool for GenerateVideoTool {
         Concurrency::Exclusive
     }
 
-    async fn run(&self, a: GenerateVideoArgs) -> Result<String, ToolError> {
+    async fn run(&self, a: GenerateVideoArgs, call: &CallContext) -> Result<String, ToolError> {
         let mut typed = Vec::new();
         if let Some(v) = a.duration {
             typed.push(("duration", Value::from(v)));
@@ -571,6 +577,7 @@ impl TypedTool for GenerateVideoTool {
                 extra: a.extra.unwrap_or_default(),
                 wait: a.wait.unwrap_or(false),
             },
+            call,
         )
         .await
     }
@@ -595,6 +602,7 @@ struct Prepared {
 async fn run_generation(
     ctx: &Arc<MediaContext>,
     req: GenerateRequest,
+    call: &CallContext,
 ) -> Result<String, ToolError> {
     let Some(queue) = ctx.queue() else {
         return Ok(no_key_result());
@@ -699,7 +707,11 @@ async fn run_generation(
         .enumerate()
         .map(|(i, id)| MediaItem {
             id: id.clone(),
-            session: ctx.session.clone(),
+            // A lane shares its parent's tools, so the call — not the
+            // context the tools were built for — names the chat that asked.
+            session: call.session.clone().unwrap_or_else(|| ctx.session.clone()),
+            turn_seq: call.turn_seq,
+            call_id: call.call_id.clone(),
             batch: batch.clone(),
             index: i as u32 + 1,
             kind: req.kind,
@@ -1694,7 +1706,7 @@ impl TypedTool for MediaStatusTool {
          are delivered to you automatically, so don't call this in a loop."
     }
 
-    async fn run(&self, args: MediaStatusArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: MediaStatusArgs, _call: &CallContext) -> Result<String, ToolError> {
         if args.cancel == Some(true) {
             let id = args
                 .id
@@ -1942,8 +1954,14 @@ mod tests {
         let mocks = hub_ok(&mut server, "g1").await;
 
         let tool = GenerateImageTool { ctx: ctx.clone() };
+        // A lane shares its parent's tools: the call names the chat, not the
+        // context the tools were built for.
+        let call = CallContext::new("lane-7", Some(12), "call_42");
         let out = tool
-            .invoke(json!({"prompt": "an ox like [Image #1]", "model": "flux-mini", "aspect_ratio": "1:1", "name": "Big Ox"}))
+            .invoke_from(
+                json!({"prompt": "an ox like [Image #1]", "model": "flux-mini", "aspect_ratio": "1:1", "name": "Big Ox"}),
+                &call,
+            )
             .await
             .unwrap();
         assert!(out.starts_with("Generated 1 image with flux-mini"), "{out}");
@@ -1974,6 +1992,9 @@ mod tests {
         assert_eq!(items.len(), 1);
         let item = &items[0];
         assert_eq!(item.status, MediaStatus::Succeeded);
+        assert_eq!(item.session, "lane-7");
+        assert_eq!(item.turn_seq, Some(12));
+        assert_eq!(item.call_id.as_deref(), Some("call_42"));
         assert_eq!(item.cost_usd, Some(0.01));
         assert_eq!(item.params["aspect_ratio"], "1:1");
         assert_eq!(item.seed, Some(json!(7)));

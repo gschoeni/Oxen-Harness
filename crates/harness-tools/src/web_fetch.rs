@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use harness_core::text::truncate_with_marker;
 
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 /// Tool name for [`WebFetchTool`].
 pub const WEB_FETCH_TOOL: &str = "web_fetch";
@@ -87,7 +87,7 @@ impl TypedTool for WebFetchTool {
          Don't use it for questions answerable from what you already know."
     }
 
-    async fn run(&self, args: WebFetchArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: WebFetchArgs, _call: &CallContext) -> Result<String, ToolError> {
         let url = normalize_url(&args.url)?;
         let max_chars = args
             .max_chars

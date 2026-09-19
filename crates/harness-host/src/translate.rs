@@ -371,6 +371,8 @@ pub fn media_item(item: harness_media::MediaItem) -> harness_protocol::MediaItem
     harness_protocol::MediaItem {
         id: item.id,
         session: item.session,
+        turn_seq: item.turn_seq,
+        call_id: item.call_id,
         batch: item.batch,
         index: item.index,
         kind: item.kind.as_str().to_string(),

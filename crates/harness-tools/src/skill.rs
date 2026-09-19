@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 /// The tool name the model calls to load a skill.
 pub const SKILL_TOOL: &str = "skill";
@@ -196,7 +196,7 @@ impl TypedTool for SkillTool {
         &self.description
     }
 
-    async fn run(&self, args: SkillArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: SkillArgs, _call: &CallContext) -> Result<String, ToolError> {
         let Some(skill) = self.skills.iter().find(|s| s.name == args.name) else {
             let known = self
                 .skills

@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::sandbox::Workspace;
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 use super::relative_to;
 use super::state::FileState;
@@ -69,7 +69,7 @@ impl TypedTool for ReadFileTool {
          arguments — match only the content after the tab."
     }
 
-    async fn run(&self, args: ReadFileArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: ReadFileArgs, _call: &CallContext) -> Result<String, ToolError> {
         let path = self.workspace.resolve(&args.path)?;
 
         // A picture is shown, not dumped: the result carries an attach marker

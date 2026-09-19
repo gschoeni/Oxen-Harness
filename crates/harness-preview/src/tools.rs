@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use harness_tools::{ToolError, TypedTool};
+use harness_tools::{CallContext, ToolError, TypedTool};
 use serde::Deserialize;
 
 use crate::config::{self, SavedServer};
@@ -160,7 +160,11 @@ impl TypedTool for StartDevServerTool {
          dev_server_logs, stop with stop_dev_server)."
     }
 
-    async fn run(&self, args: StartDevServerArgs) -> Result<String, ToolError> {
+    async fn run(
+        &self,
+        args: StartDevServerArgs,
+        _call: &CallContext,
+    ) -> Result<String, ToolError> {
         let command = args.command.trim().to_string();
         if command.is_empty() {
             return Err(ToolError::InvalidArguments(
@@ -298,7 +302,11 @@ impl TypedTool for PreviewScreenshotTool {
          start_dev_server preview."
     }
 
-    async fn run(&self, _args: PreviewScreenshotArgs) -> Result<String, ToolError> {
+    async fn run(
+        &self,
+        _args: PreviewScreenshotArgs,
+        _call: &CallContext,
+    ) -> Result<String, ToolError> {
         // A server that died mid-turn (a syntax error crashed vite) is the
         // common case here. Say so — with its dying words — instead of the
         // useless "no preview": this error is how the model finds out.
@@ -392,7 +400,11 @@ impl TypedTool for PreviewConsoleTool {
          looks broken — a blank screen usually left an error here."
     }
 
-    async fn run(&self, args: PreviewConsoleArgs) -> Result<String, ToolError> {
+    async fn run(
+        &self,
+        args: PreviewConsoleArgs,
+        _call: &CallContext,
+    ) -> Result<String, ToolError> {
         let lines = self
             .lens
             .console_tail(args.lines.unwrap_or(40).clamp(1, 200));
@@ -422,7 +434,11 @@ impl TypedTool for StopDevServerTool {
          switching the project to a different server setup."
     }
 
-    async fn run(&self, _args: StopDevServerArgs) -> Result<String, ToolError> {
+    async fn run(
+        &self,
+        _args: StopDevServerArgs,
+        _call: &CallContext,
+    ) -> Result<String, ToolError> {
         if self.ctx.manager.stop(&self.ctx.session).await {
             Ok("Dev server stopped.".into())
         } else {
@@ -449,7 +465,7 @@ impl TypedTool for DevServerLogsTool {
          exercising the app, or to see request/error logs."
     }
 
-    async fn run(&self, args: DevServerLogsArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: DevServerLogsArgs, _call: &CallContext) -> Result<String, ToolError> {
         let Some(server) = self.ctx.manager.get(&self.ctx.session) else {
             return Ok(
                 "No dev server has been started for this session. Use start_dev_server.".into(),

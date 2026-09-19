@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::time::Duration;
 
 use crate::sandbox::Workspace;
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 /// Tool name for [`GitTool`].
 pub const GIT_TOOL: &str = "git";
@@ -80,7 +80,7 @@ impl TypedTool for GitTool {
          `push` pushes the current branch (setting its upstream on first push)."
     }
 
-    async fn run(&self, args: GitArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: GitArgs, _call: &CallContext) -> Result<String, ToolError> {
         match args.operation {
             GitOperation::Status => self.run_git(&["status".into(), "--short".into()]).await,
             GitOperation::Diff => self.run_git(&["diff".into()]).await,

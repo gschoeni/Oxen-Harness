@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use async_trait::async_trait;
 use harness_llm::OxenClient;
 use harness_store::{HistoryStore, SessionMeta};
-use harness_tools::{ToolError, ToolRegistry, TypedTool};
+use harness_tools::{CallContext, ToolError, ToolRegistry, TypedTool};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -1301,7 +1301,7 @@ impl TypedTool for FleetTool {
         harness_tools::Concurrency::Exclusive
     }
 
-    async fn run(&self, args: FleetArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: FleetArgs, _call: &CallContext) -> Result<String, ToolError> {
         if args.agents.is_empty() {
             return Err(ToolError::InvalidArguments(
                 "spawn_agents needs at least one agent".into(),
@@ -1693,6 +1693,7 @@ mod tests {
             .invoke(
                 harness_tools::READ_FILE_TOOL,
                 serde_json::json!({"path":"shared.txt"}),
+                &harness_tools::CallContext::default(),
             )
             .await
             .unwrap();
@@ -1767,6 +1768,7 @@ mod tests {
                 .invoke(
                     harness_tools::READ_FILE_TOOL,
                     serde_json::json!({"path": "shared.txt"}),
+                    &harness_tools::CallContext::default(),
                 )
                 .await
                 .unwrap();
@@ -1774,6 +1776,7 @@ mod tests {
                 .invoke(
                     harness_tools::WRITE_FILE_TOOL,
                     serde_json::json!({"path": "shared.txt", "contents": contents}),
+                    &harness_tools::CallContext::default(),
                 )
                 .await
                 .unwrap();

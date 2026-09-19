@@ -16,7 +16,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 /// The tool name the model calls (and front ends special-case for rendering).
 pub const PLAN_TOOL: &str = "update_plan";
@@ -197,7 +197,7 @@ impl TypedTool for PlanTool {
          work; a plan-only turn wastes a round trip."
     }
 
-    async fn run(&self, args: PlanArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: PlanArgs, _call: &CallContext) -> Result<String, ToolError> {
         let items = validate_plan(args.plan).map_err(ToolError::InvalidArguments)?;
         Ok(render(&items))
     }

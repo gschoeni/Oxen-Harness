@@ -51,6 +51,10 @@ own:
   human_tokens}`, and `json::first_object` (lenient pull-the-JSON-out-of-a-model-reply).
 - **`harness-config`** — the single source of truth for where state lives
   (`~/.oxen-harness/…`), atomic + schema-versioned JSON IO, and `.env` secrets.
+- **`harness-http`** — the one retry schedule (`Backoff`, `Retry-After`,
+  `send_with_retry`) behind every HTTP call: model endpoint, hub, web tools,
+  model downloads. A leaf over `reqwest`, so the tool crates share it without
+  linking the LLM client.
 - **capabilities** — each an independent, self-contained skill: the LLM client
   and streaming (`harness-llm`), the built-in tools (`harness-tools`), verbatim
   history + fine-tuning export (`harness-store`), themes (`harness-theme`),
@@ -109,7 +113,7 @@ The crate seams are designed so common extensions touch one place:
 
 | To add… | Do this |
 |---|---|
-| **A tool** | Implement the [`TypedTool`](crates/harness-tools/src/lib.rs) trait (typed args struct; doc comments become the model-facing schema), expose a `*_TOOL` name constant, register it with `with_typed` in the `ToolRegistry`, and add its name to the registry completeness test. Override `concurrency()` to `Exclusive` if it mutates the workspace or runs a process — shared tools in one reply run together, exclusive ones run alone. Full recipe: ["Adding a built-in tool"](AGENTS.md#adding-a-built-in-tool) in AGENTS.md. |
+| **A tool** | Implement the [`TypedTool`](crates/harness-tools/src/lib.rs) trait (typed args struct; doc comments become the model-facing schema), expose a `*_TOOL` name constant, register it with `with_typed` in the `ToolRegistry`, and add its name to the registry completeness test. Override `concurrency()` to `Exclusive` if it mutates the workspace or runs a process — shared tools in one reply run together, exclusive ones run alone. `run` also receives the `CallContext` (session, turn seq, the model's call id) for tools that stamp what they make. Full recipe: ["Adding a built-in tool"](AGENTS.md#adding-a-built-in-tool) in AGENTS.md. |
 | **A read-only mode** | Plan mode is a latch on the permission gate (`PermissionGate::set_plan_mode`, [`harness-permissions/src/lib.rs`](crates/harness-permissions/src/lib.rs)) that outranks every mode; the CLI's [`commands/plan.rs`](crates/harness-cli/src/commands/plan.rs) flips it and runs an approved plan file as a prompt. |
 | **A custom command** | No code: drop `<name>.md` in `.oxen-harness/commands/` (project) or `~/.oxen-harness/commands/` (global); `$ARGUMENTS`/`$1…` are filled in. Discovery + expansion live in [`harness-runtime/src/commands.rs`](crates/harness-runtime/src/commands.rs); the CLI consults them in [`custom_commands.rs`](crates/harness-cli/src/custom_commands.rs). |
 | **A media surface** | Image/video generation lives in [`harness-media`](crates/harness-media/src/lib.rs): `MediaContext` (session, workspace, prefs, hub API, `MediaRefs`, `MediaLibrary`, a `MediaSink` for spend confirmation) → `session_tools` → four `TypedTool`s registered per host next to `canvas`/`open_file`. Hosts forward the library's change feed as `media.changed` (whole list) and stage a turn's attachments into `MediaRefs` under `[Image #N]` labels. Prompt gating: `OptionalTools::media`. |

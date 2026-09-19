@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use harness_llm::ToolCall;
 use harness_permissions::ToolEffect;
-use harness_tools::{Concurrency, Tool, ToolError};
+use harness_tools::{CallContext, Concurrency, Tool, ToolError};
 
 use crate::event::AgentEvent;
 
@@ -62,11 +62,13 @@ pub(super) struct PreparedCall {
 enum Prepared {
     /// Run the tool with these parsed arguments; `note` is prefixed to the
     /// result when the call was healed or the gate rewrote it (a
-    /// move-to-trash, say).
+    /// move-to-trash, say). `context` tells the tool which session, turn,
+    /// and call is asking.
     Run {
         tool: Arc<dyn Tool>,
         args: serde_json::Value,
         note: Option<String>,
+        context: CallContext,
     },
     /// Nothing runs: this is the call's whole result (a gate refusal, an
     /// unknown tool, or arguments that didn't parse).
@@ -82,11 +84,16 @@ enum Executed {
     /// (with its approval prompt) only runs on the turn's task with the
     /// event sink in hand — so the wave hands them back to be gated and
     /// run sequentially rather than running them here.
-    Regate {
-        tool: Arc<dyn Tool>,
-        repaired: serde_json::Value,
-        note: Option<String>,
-    },
+    Regate(Repaired),
+}
+
+/// A call the tool bounced and a schema repair rewrote: everything needed
+/// to gate it again and run it.
+struct Repaired {
+    tool: Arc<dyn Tool>,
+    args: serde_json::Value,
+    note: Option<String>,
+    context: CallContext,
 }
 
 /// Group a reply's calls into waves by their tools' concurrency: a run of
@@ -177,6 +184,7 @@ impl Agent {
         index: usize,
         call: &ToolCall,
         reply_truncated: bool,
+        turn_seq: Option<i64>,
         on_event: &mut F,
     ) -> PreparedCall
     where
@@ -184,6 +192,7 @@ impl Agent {
     {
         let name = call.function.name.clone();
         let call_id = call.id.clone();
+        let context = CallContext::new(self.session_id.clone(), turn_seq, call_id.clone());
         let resolved = |message: String| PreparedCall {
             index,
             call_id: call_id.clone(),
@@ -251,7 +260,12 @@ impl Agent {
             call_id,
             name,
             display_arguments,
-            outcome: Prepared::Run { tool, args, note },
+            outcome: Prepared::Run {
+                tool,
+                args,
+                note,
+                context,
+            },
         }
     }
 
@@ -299,8 +313,13 @@ impl Agent {
     async fn execute_prepared(outcome: Prepared) -> Executed {
         match outcome {
             Prepared::Resolved(message) => Executed::Done(non_empty(message)),
-            Prepared::Run { tool, args, note } => {
-                let output = match tool.invoke(args.clone()).await {
+            Prepared::Run {
+                tool,
+                args,
+                note,
+                context,
+            } => {
+                let output = match tool.invoke(args.clone(), &context).await {
                     Ok(output) => output,
                     // Rejected arguments get one repair pass against the
                     // tool's own schema ("20" → 20, "yes" → true, a JSON
@@ -310,11 +329,12 @@ impl Agent {
                     Err(ToolError::InvalidArguments(reason)) => {
                         match super::repair::coerce_to_schema(&tool.parameters_schema(), &args) {
                             Some(repaired) => {
-                                return Executed::Regate {
+                                return Executed::Regate(Repaired {
                                     tool,
-                                    repaired,
+                                    args: repaired,
                                     note,
-                                }
+                                    context,
+                                })
                             }
                             None => format!("tool error: {}", ToolError::InvalidArguments(reason)),
                         }
@@ -334,14 +354,18 @@ impl Agent {
         &self,
         call_id: &str,
         name: &str,
-        tool: Arc<dyn Tool>,
-        repaired: serde_json::Value,
-        note: Option<String>,
+        repair: Repaired,
         on_event: &mut F,
     ) -> String
     where
         F: FnMut(&AgentEvent),
     {
+        let Repaired {
+            tool,
+            args: repaired,
+            note,
+            context,
+        } = repair;
         let (args, note) = match &self.config.permissions {
             None => (repaired, note),
             Some(gate) => {
@@ -359,7 +383,7 @@ impl Agent {
             }
         };
         let work = async move {
-            match tool.invoke(args).await {
+            match tool.invoke(args, &context).await {
                 Ok(output) => format!("{COERCED_NOTE}\n{output}"),
                 Err(e) => format!("tool error: {e}"),
             }
@@ -498,13 +522,8 @@ impl Agent {
     {
         match executed {
             Some(Executed::Done(result)) => result,
-            Some(Executed::Regate {
-                tool,
-                repaired,
-                note,
-            }) => {
-                self.run_repaired(call_id, name, tool, repaired, note, on_event)
-                    .await
+            Some(Executed::Regate(repair)) => {
+                self.run_repaired(call_id, name, repair, on_event).await
             }
             None => CRASHED_RESULT.to_string(),
         }
@@ -635,7 +654,7 @@ mod tests {
 
     use async_trait::async_trait;
     use harness_store::HistoryStore;
-    use harness_tools::{ToolRegistry, TypedTool};
+    use harness_tools::{CallContext, ToolRegistry, TypedTool};
 
     use crate::test_support::{sse_prose, test_session};
     use crate::{AgentConfig, AgentEvent};
@@ -744,7 +763,11 @@ mod tests {
         fn concurrency(&self) -> Concurrency {
             Concurrency::Exclusive
         }
-        async fn run(&self, args: RecordingShellArgs) -> Result<String, ToolError> {
+        async fn run(
+            &self,
+            args: RecordingShellArgs,
+            _call: &CallContext,
+        ) -> Result<String, ToolError> {
             self.0.lock().unwrap().push(args.command.clone());
             Ok(format!("ran {}", args.command))
         }
@@ -912,7 +935,11 @@ mod tests {
         fn parameters_schema(&self) -> serde_json::Value {
             serde_json::json!({ "type": "object", "properties": {} })
         }
-        async fn invoke(&self, _args: serde_json::Value) -> Result<String, ToolError> {
+        async fn invoke(
+            &self,
+            _args: serde_json::Value,
+            _call: &CallContext,
+        ) -> Result<String, ToolError> {
             panic!("boom");
         }
     }
@@ -931,7 +958,11 @@ mod tests {
         fn parameters_schema(&self) -> serde_json::Value {
             serde_json::json!({ "type": "object", "properties": {} })
         }
-        async fn invoke(&self, _args: serde_json::Value) -> Result<String, ToolError> {
+        async fn invoke(
+            &self,
+            _args: serde_json::Value,
+            _call: &CallContext,
+        ) -> Result<String, ToolError> {
             Ok("pong".into())
         }
     }

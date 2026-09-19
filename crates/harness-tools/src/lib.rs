@@ -176,6 +176,53 @@ impl Asides {
     }
 }
 
+/// Where a tool call comes from: the chat it belongs to, the turn within
+/// that chat, and the model's own id for the call.
+///
+/// The agent builds one per call and hands it to [`Tool::invoke`] /
+/// [`TypedTool::run`], so a tool that makes something durable — a generated
+/// image, a canvas document, a background task — can stamp it with enough to
+/// trace it back to the exact request later, and a tool that talks to the
+/// host can say which call it is speaking for. Every field is optional
+/// because not every caller is the agent: [`CallContext::default()`] is a
+/// call from nowhere, which is what tests and hosts invoking a tool
+/// directly use.
+///
+/// The fields are plain so a host can build one; new ones may be added, so
+/// construct it with `..Default::default()` outside this crate.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallContext {
+    /// The session (chat) whose turn made the call. A subagent's lane is its
+    /// own session, so this names the agent that actually called, not the
+    /// root chat that spawned it.
+    #[serde(default)]
+    pub session: Option<String>,
+    /// The persisted `seq` of the user message that started the turn — the
+    /// same address the history store's rewind API uses for a turn. `None`
+    /// when the transcript isn't persisted.
+    #[serde(default)]
+    pub turn_seq: Option<i64>,
+    /// The model's id for this tool call, as carried by the assistant
+    /// message's `tool_calls` and the `ToolStart` / `ToolEnd` events.
+    #[serde(default)]
+    pub call_id: Option<String>,
+}
+
+impl CallContext {
+    /// A call the agent makes on behalf of a session's turn.
+    pub fn new(
+        session: impl Into<String>,
+        turn_seq: Option<i64>,
+        call_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            session: Some(session.into()),
+            turn_seq,
+            call_id: Some(call_id.into()),
+        }
+    }
+}
+
 /// A capability the agent can invoke during the loop — the raw, dyn-dispatched
 /// form the registry stores.
 ///
@@ -198,8 +245,13 @@ pub trait Tool: Send + Sync {
     fn parameters_schema(&self) -> serde_json::Value;
 
     /// Execute the tool with model-provided arguments, returning a string
-    /// result that is appended to the transcript as a `tool` message.
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError>;
+    /// result that is appended to the transcript as a `tool` message. `call`
+    /// says which session, turn, and model call is asking.
+    async fn invoke(
+        &self,
+        args: serde_json::Value,
+        call: &CallContext,
+    ) -> Result<String, ToolError>;
 
     /// How this tool may be scheduled next to the other calls of one reply.
     /// Defaults to [`Concurrency::Shared`]; override for anything with side
@@ -224,7 +276,7 @@ pub trait Tool: Send + Sync {
 ///    [`ToolRegistry::default_for_workspace_with_web_key`] for the built-in set).
 ///
 /// ```
-/// use harness_tools::{ToolError, ToolRegistry, TypedTool};
+/// use harness_tools::{CallContext, ToolError, ToolRegistry, TypedTool};
 ///
 /// /// What `echo` accepts. Field doc comments are shown to the model.
 /// #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -246,7 +298,7 @@ pub trait Tool: Send + Sync {
 ///         "Echo the provided text back, optionally repeated."
 ///     }
 ///
-///     async fn run(&self, args: EchoArgs) -> Result<String, ToolError> {
+///     async fn run(&self, args: EchoArgs, _call: &CallContext) -> Result<String, ToolError> {
 ///         Ok(args.text.repeat(args.times.unwrap_or(1).max(1)))
 ///     }
 /// }
@@ -254,6 +306,10 @@ pub trait Tool: Send + Sync {
 /// let registry = ToolRegistry::new().with_typed(EchoTool);
 /// assert!(registry.get("echo").is_some());
 /// ```
+///
+/// `run` also receives the [`CallContext`] — which session, turn, and model
+/// call is asking — for tools that record provenance or address the host;
+/// most tools ignore it.
 ///
 /// Optional fields are `Option<T>` (or `#[serde(default)]`) and are omitted from
 /// the schema's `required` list automatically; enums derive to JSON `enum`
@@ -271,8 +327,9 @@ pub trait TypedTool: Send + Sync {
     /// when to use it.
     fn description(&self) -> &str;
 
-    /// Execute the tool with already-validated, typed arguments.
-    async fn run(&self, args: Self::Args) -> Result<String, ToolError>;
+    /// Execute the tool with already-validated, typed arguments. `call` says
+    /// which session, turn, and model call is asking.
+    async fn run(&self, args: Self::Args, call: &CallContext) -> Result<String, ToolError>;
 
     /// How this tool may be scheduled next to the other calls of one reply
     /// (see [`Concurrency`]). Defaults to shared; override for anything that
@@ -281,16 +338,28 @@ pub trait TypedTool: Send + Sync {
         Concurrency::Shared
     }
 
-    /// Parse raw JSON arguments and run — exactly what the registry does when
-    /// the model calls the tool. Provided; useful in tests and for hosts that
-    /// hold a concrete tool.
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError>
+    /// Parse raw JSON arguments and run on behalf of `call` — exactly what
+    /// the registry does when the model calls the tool. Provided.
+    async fn invoke_from(
+        &self,
+        args: serde_json::Value,
+        call: &CallContext,
+    ) -> Result<String, ToolError>
     where
         Self: Sized,
     {
         let parsed: Self::Args =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
-        self.run(parsed).await
+        self.run(parsed, call).await
+    }
+
+    /// [`Self::invoke_from`] for a call from nowhere: what tests and hosts
+    /// holding a concrete tool use when no turn is asking.
+    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError>
+    where
+        Self: Sized,
+    {
+        self.invoke_from(args, &CallContext::default()).await
     }
 }
 
@@ -418,8 +487,12 @@ impl<T: TypedTool> Tool for TypedAdapter<T> {
     fn parameters_schema(&self) -> serde_json::Value {
         schema_for::<T::Args>()
     }
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
-        self.0.invoke(args).await
+    async fn invoke(
+        &self,
+        args: serde_json::Value,
+        call: &CallContext,
+    ) -> Result<String, ToolError> {
+        self.0.invoke_from(args, call).await
     }
     fn concurrency(&self) -> Concurrency {
         self.0.concurrency()
@@ -492,7 +565,11 @@ impl Tool for CustomTool {
         Concurrency::Exclusive
     }
 
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
+    async fn invoke(
+        &self,
+        args: serde_json::Value,
+        _call: &CallContext,
+    ) -> Result<String, ToolError> {
         match &self.spec.action {
             CustomToolAction::HttpPost { url } => {
                 let res = self
@@ -761,13 +838,18 @@ impl ToolRegistry {
             .collect()
     }
 
-    /// Dispatch a model tool call to the matching tool.
-    pub async fn invoke(&self, name: &str, args: serde_json::Value) -> Result<String, ToolError> {
+    /// Dispatch a model tool call to the matching tool, on behalf of `call`.
+    pub async fn invoke(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        call: &CallContext,
+    ) -> Result<String, ToolError> {
         let tool = self
             .tools
             .get(name)
             .ok_or_else(|| ToolError::UnknownTool(name.to_string()))?;
-        tool.invoke(args).await
+        tool.invoke(args, call).await
     }
 
     /// Construct the default tool set rooted at a workspace: fs read/write/edit,
@@ -879,7 +961,7 @@ mod tests {
             "Echo the provided text back."
         }
 
-        async fn run(&self, args: EchoArgs) -> Result<String, ToolError> {
+        async fn run(&self, args: EchoArgs, _call: &CallContext) -> Result<String, ToolError> {
             Ok(args.text)
         }
     }
@@ -900,12 +982,50 @@ mod tests {
         assert_eq!(params["required"][0], "text");
     }
 
+    /// Echoes who asked, so a test can see the context arrive intact.
+    struct WhoAskedTool;
+    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    struct WhoAskedArgs {}
+    #[async_trait]
+    impl TypedTool for WhoAskedTool {
+        const NAME: &'static str = "who_asked";
+        type Args = WhoAskedArgs;
+        fn description(&self) -> &str {
+            "say who asked"
+        }
+        async fn run(&self, _: WhoAskedArgs, call: &CallContext) -> Result<String, ToolError> {
+            Ok(serde_json::to_string(call).map_err(|e| ToolError::Execution(e.to_string()))?)
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_hands_the_call_context_to_the_tool() {
+        let registry = ToolRegistry::new().with_typed(WhoAskedTool);
+        let call = CallContext::new("s1", Some(12), "call_7");
+        let out = registry
+            .invoke("who_asked", serde_json::json!({}), &call)
+            .await
+            .unwrap();
+        let seen: CallContext = serde_json::from_str(&out).unwrap();
+        assert_eq!(seen, call);
+
+        // The convenience entry point is a call from nowhere.
+        let out = WhoAskedTool.invoke(serde_json::json!({})).await.unwrap();
+        let seen: CallContext = serde_json::from_str(&out).unwrap();
+        assert_eq!(seen, CallContext::default());
+        assert_eq!(seen.session, None);
+    }
+
     #[tokio::test]
     async fn registry_dispatches_by_name() {
         let registry = ToolRegistry::new().with_typed(EchoTool);
         assert_eq!(registry.len(), 1);
         let out = registry
-            .invoke("echo", serde_json::json!({"text": "moo"}))
+            .invoke(
+                "echo",
+                serde_json::json!({"text": "moo"}),
+                &CallContext::default(),
+            )
             .await
             .unwrap();
         assert_eq!(out, "moo");
@@ -915,7 +1035,11 @@ mod tests {
     async fn typed_dispatch_rejects_bad_arguments() {
         let registry = ToolRegistry::new().with_typed(EchoTool);
         let err = registry
-            .invoke("echo", serde_json::json!({"text": 42}))
+            .invoke(
+                "echo",
+                serde_json::json!({"text": 42}),
+                &CallContext::default(),
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArguments(_)));
@@ -925,7 +1049,7 @@ mod tests {
     async fn registry_errors_on_unknown_tool() {
         let registry = ToolRegistry::new();
         let err = registry
-            .invoke("nope", serde_json::json!({}))
+            .invoke("nope", serde_json::json!({}), &CallContext::default())
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::UnknownTool(_)));
@@ -940,6 +1064,7 @@ mod tests {
             .invoke(
                 shell::RUN_SHELL_TOOL,
                 serde_json::json!({"command": "grep -c needle hay.txt"}),
+                &CallContext::default(),
             )
             .await
             .unwrap();
@@ -954,6 +1079,7 @@ mod tests {
             .invoke(
                 shell::RUN_SHELL_TOOL,
                 serde_json::json!({"command": "grep -c needle hay.txt"}),
+                &CallContext::default(),
             )
             .await
             .unwrap();
@@ -964,6 +1090,7 @@ mod tests {
             .invoke(
                 shell::RUN_SHELL_TOOL,
                 serde_json::json!({"command": "cat hay.txt"}),
+                &CallContext::default(),
             )
             .await
             .unwrap();
@@ -992,7 +1119,10 @@ mod tests {
         let result = rooted
             .get(fs::READ_FILE_TOOL)
             .unwrap()
-            .invoke(serde_json::json!({"path":"sample"}))
+            .invoke(
+                serde_json::json!({"path":"sample"}),
+                &CallContext::default(),
+            )
             .await
             .unwrap();
         assert!(result.contains("lane"));

@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use harness_media::{repo_web_url, HubRepos, MediaApi, NewRepo};
-use harness_tools::{Choice, Concurrency, Question, QuestionAsker, ToolError, TypedTool};
+use harness_tools::{
+    CallContext, Choice, Concurrency, Question, QuestionAsker, ToolError, TypedTool,
+};
 use serde::Deserialize;
 
 use crate::project;
@@ -135,7 +137,7 @@ impl TypedTool for CreateRepositoryTool {
         Concurrency::Exclusive
     }
 
-    async fn run(&self, args: Self::Args) -> Result<String, ToolError> {
+    async fn run(&self, args: Self::Args, _call: &CallContext) -> Result<String, ToolError> {
         let Some(api) = &self.api else {
             return Ok(REPO_NO_KEY.to_string());
         };

@@ -84,6 +84,8 @@ describe("MediaToolCall", () => {
           {
             id: "g1",
             session: "s1",
+            turn_seq: null,
+            call_id: null,
             batch: "b",
             index: 1,
             kind: "image",

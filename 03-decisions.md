@@ -992,6 +992,23 @@ the trail links generations to generations, not to hashes. Lineage in the
 other direction (what was made *from* an asset) is derived at read time from
 the library, never stored, so it can't go stale.
 
+**Tools are told who is asking.** (2026-09-19) Every tool call now
+receives a `harness_tools::CallContext`: the session, the turn (the persisted
+`seq` of the user message that started it, the same address the rewind API
+uses), and the model's id for the call. The agent builds it in
+`prepare_tool` and carries it with the prepared call through execution and
+schema repair; `ToolRegistry::invoke`, `Tool::invoke`, and `TypedTool::run`
+all take it, and `TypedTool::invoke(args)` stays as the call-from-nowhere
+convenience for tests and hosts. Media rows record `turn_seq` and `call_id`
+and take their `session` from the call, so a lane's generation names the
+lane, not the root chat whose tools it shares.
+
+*Why an explicit argument, not a task-local:* the context is part of a
+tool's contract, and a library that other hosts build on should say so in
+the signature. Everything a call may need later (a progress sink, a
+cancellation token, the call's position in the reply) has a home in the same
+struct, added with `..Default::default()` compatibility.
+
 **The Gallery dock shows one thing at a time.** The grid, or one generation in
 full with the header turned into back / prev / next. The old pane-below-the-grid
 overlay couldn't give the frame room without hiding the metadata, and vice

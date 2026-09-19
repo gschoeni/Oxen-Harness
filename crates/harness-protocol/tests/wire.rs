@@ -271,6 +271,8 @@ fn fleet_event_wire_shapes() {
         items: vec![harness_protocol::MediaItem {
             id: "dc9f746b".into(),
             session: "s1".into(),
+            turn_seq: Some(12),
+            call_id: Some("call_7".into()),
             batch: "b1".into(),
             index: 1,
             kind: "video".into(),

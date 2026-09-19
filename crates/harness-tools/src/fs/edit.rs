@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::sandbox::Workspace;
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 use super::relative_to;
 use super::state::{self, FileState};
@@ -156,7 +156,7 @@ impl TypedTool for EditFileTool {
          meant."
     }
 
-    async fn run(&self, args: EditFileArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: EditFileArgs, _call: &CallContext) -> Result<String, ToolError> {
         let path = self.workspace.resolve(&args.path)?;
         let display = args.path.clone();
         let edits = args.replacements()?;

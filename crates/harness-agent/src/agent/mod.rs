@@ -910,6 +910,15 @@ impl Agent {
         self.push_with(message, true)
     }
 
+    /// The address of the turn now running: the `seq` of the last message
+    /// persisted when the turn started, which is the user message that
+    /// started it (a fresh turn pushes it first; a retried turn re-drives a
+    /// transcript that ends on it). `None` when the transcript isn't
+    /// persisted, so there is no seq to come back to.
+    fn current_turn_seq(&self) -> Option<i64> {
+        (self.persist_transcript && self.last_persisted_seq >= 0).then_some(self.last_persisted_seq)
+    }
+
     fn push_with(&mut self, message: ChatMessage, synthetic: bool) -> Result<(), AgentError> {
         if self.persist_transcript {
             let raw = serde_json::to_string(&message)?;
@@ -1409,7 +1418,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_oversized_tool_result_is_parked_behind_a_handle() {
-        use harness_tools::{ToolError, TypedTool};
+        use harness_tools::{CallContext, ToolError, TypedTool};
 
         /// A tool whose result is far past the cap.
         struct BigTool;
@@ -1422,7 +1431,7 @@ mod tests {
             fn description(&self) -> &str {
                 "big"
             }
-            async fn run(&self, _: NoArgs) -> Result<String, ToolError> {
+            async fn run(&self, _: NoArgs, _call: &CallContext) -> Result<String, ToolError> {
                 Ok((1..=5_000)
                     .map(|n| format!("row {n} of a very long listing"))
                     .collect::<Vec<_>>()

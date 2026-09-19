@@ -17,7 +17,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use harness_tools::{Concurrency, ToolError, TypedTool};
+use harness_tools::{CallContext, Concurrency, ToolError, TypedTool};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -163,7 +163,7 @@ impl TypedTool for MapAgentsTool {
         Concurrency::Exclusive
     }
 
-    async fn run(&self, args: MapAgentsArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: MapAgentsArgs, call: &CallContext) -> Result<String, ToolError> {
         let count = args.items.iter().filter(|i| !i.trim().is_empty()).count();
         if count == 0 || count > MAX_MAP_ITEMS {
             return Err(ToolError::InvalidArguments(format!(
@@ -204,9 +204,10 @@ impl TypedTool for MapAgentsTool {
             };
             if args.wait == Some(false) {
                 if let Some(asides) = self.asides.clone() {
+                    let call = call.clone();
                     tokio::spawn(async move {
                         let _admission = admission;
-                        let body = match me.run(args).await {
+                        let body = match me.run(args, &call).await {
                             Ok(text) => text,
                             Err(e) => format!("the map run failed: {e}"),
                         };
@@ -220,7 +221,7 @@ impl TypedTool for MapAgentsTool {
                 }
             }
             let _admission = admission;
-            return me.run(args).await;
+            return me.run(args, call).await;
         }
         let items: Vec<String> = args
             .items

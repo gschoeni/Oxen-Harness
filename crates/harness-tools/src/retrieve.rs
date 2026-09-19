@@ -18,7 +18,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use harness_compress::CcrStore;
 
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 pub const RETRIEVE_ORIGINAL_TOOL: &str = "retrieve_original";
 
@@ -69,7 +69,7 @@ impl TypedTool for RetrieveOriginalTool {
          (spawn_agents / ask_model `inputs`). Read only what you need."
     }
 
-    async fn run(&self, args: RetrieveArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: RetrieveArgs, _call: &CallContext) -> Result<String, ToolError> {
         // Accept the bare hash or a pasted marker (`<<ccr:HASH note>>`).
         let hash = args
             .hash
@@ -166,24 +166,30 @@ mod tests {
         let tool = RetrieveOriginalTool::new(store);
 
         let out = tool
-            .run(RetrieveArgs {
-                hash: hash.clone(),
-                lines: None,
-                grep: None,
-                chunks: None,
-            })
+            .run(
+                RetrieveArgs {
+                    hash: hash.clone(),
+                    lines: None,
+                    grep: None,
+                    chunks: None,
+                },
+                &CallContext::default(),
+            )
             .await
             .unwrap();
         assert_eq!(out, "the full original output");
 
         // A pasted marker (with note) resolves too.
         let out = tool
-            .run(RetrieveArgs {
-                hash: format!("<<ccr:{hash} 42_rows_offloaded>>"),
-                lines: None,
-                grep: None,
-                chunks: None,
-            })
+            .run(
+                RetrieveArgs {
+                    hash: format!("<<ccr:{hash} 42_rows_offloaded>>"),
+                    lines: None,
+                    grep: None,
+                    chunks: None,
+                },
+                &CallContext::default(),
+            )
             .await
             .unwrap();
         assert_eq!(out, "the full original output");
@@ -206,18 +212,28 @@ mod tests {
         };
 
         assert_eq!(
-            tool.run(ask(Some("3-4"), None, None)).await.unwrap(),
+            tool.run(ask(Some("3-4"), None, None), &CallContext::default())
+                .await
+                .unwrap(),
             "3: line 3\n4: line 4"
         );
         assert_eq!(
-            tool.run(ask(None, Some("NEEDLE"), None)).await.unwrap(),
+            tool.run(ask(None, Some("NEEDLE"), None), &CallContext::default())
+                .await
+                .unwrap(),
             "5: line 5\n6: line 6\n7: line 7 needle\n8: line 8\n9: line 9"
         );
-        assert!(tool.run(ask(Some("x"), None, None)).await.is_err());
+        assert!(tool
+            .run(ask(Some("x"), None, None), &CallContext::default())
+            .await
+            .is_err());
 
         // Chunks come back parked, each readable on its own, none of the
         // content in the reply.
-        let listing = tool.run(ask(None, None, Some(3))).await.unwrap();
+        let listing = tool
+            .run(ask(None, None, Some(3)), &CallContext::default())
+            .await
+            .unwrap();
         assert!(listing.starts_with("3 pieces of 10 lines:"), "{listing}");
         assert!(!listing.contains("line 1\n"), "{listing}");
         let markers: Vec<&str> = listing
@@ -239,12 +255,15 @@ mod tests {
     async fn unknown_hash_returns_guidance_not_an_error() {
         let tool = RetrieveOriginalTool::new(Arc::new(CcrStore::default()));
         let out = tool
-            .run(RetrieveArgs {
-                hash: "ffffffffffff".into(),
-                lines: None,
-                grep: None,
-                chunks: None,
-            })
+            .run(
+                RetrieveArgs {
+                    hash: "ffffffffffff".into(),
+                    lines: None,
+                    grep: None,
+                    chunks: None,
+                },
+                &CallContext::default(),
+            )
             .await
             .unwrap();
         assert!(out.contains("No stored content"));
@@ -254,12 +273,15 @@ mod tests {
     async fn empty_hash_is_invalid_arguments() {
         let tool = RetrieveOriginalTool::new(Arc::new(CcrStore::default()));
         let err = tool
-            .run(RetrieveArgs {
-                hash: "  ".into(),
-                lines: None,
-                grep: None,
-                chunks: None,
-            })
+            .run(
+                RetrieveArgs {
+                    hash: "  ".into(),
+                    lines: None,
+                    grep: None,
+                    chunks: None,
+                },
+                &CallContext::default(),
+            )
             .await;
         assert!(matches!(err, Err(ToolError::InvalidArguments(_))));
     }

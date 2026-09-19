@@ -16,7 +16,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 /// The tool name the model calls (and front ends special-case for rendering).
 pub const ASK_USER_TOOL: &str = "ask_user_question";
@@ -149,7 +149,7 @@ impl TypedTool for AskUserTool {
          option; the UI adds free text automatically."
     }
 
-    async fn run(&self, args: AskArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: AskArgs, _call: &CallContext) -> Result<String, ToolError> {
         let questions = args.questions;
         validate_questions(&questions).map_err(ToolError::InvalidArguments)?;
         match self.asker.ask(&questions).await? {

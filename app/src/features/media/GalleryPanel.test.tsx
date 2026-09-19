@@ -13,6 +13,8 @@ import type { MediaItem } from "../../lib/types";
 const item = (over: Partial<MediaItem> = {}): MediaItem => ({
   id: "g1",
   session: "s1",
+  turn_seq: 4,
+  call_id: "call_1",
   batch: "b1",
   index: 1,
   kind: "image",
@@ -147,6 +149,8 @@ describe("GalleryPanel", () => {
     expect(screen.getByText("took 21s")).toBeInTheDocument();
     expect(screen.getByText("16:9")).toBeInTheDocument();
     expect(screen.getByText("this chat")).toBeInTheDocument();
+    expect(screen.getByText("turn #4")).toBeInTheDocument();
+    expect(screen.getByText("call_1")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Open chat/ })).toBeNull();
 
     await userEvent.click(screen.getByRole("tab", { name: "Raw" }));

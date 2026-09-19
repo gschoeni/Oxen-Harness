@@ -981,7 +981,11 @@ mod tests {
             fn description(&self) -> &str {
                 "noop"
             }
-            async fn run(&self, _: NoopArgs) -> Result<String, harness_tools::ToolError> {
+            async fn run(
+                &self,
+                _: NoopArgs,
+                _call: &harness_tools::CallContext,
+            ) -> Result<String, harness_tools::ToolError> {
                 Ok("ok".into())
             }
         }

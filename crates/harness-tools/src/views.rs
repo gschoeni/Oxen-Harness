@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct OpenViewArgs {
@@ -76,7 +76,7 @@ impl TypedTool for DevelopViewTool {
     fn concurrency(&self) -> crate::Concurrency {
         crate::Concurrency::Exclusive
     }
-    async fn run(&self, args: DevelopViewArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: DevelopViewArgs, _call: &CallContext) -> Result<String, ToolError> {
         result(self.0.develop(args).await?)
     }
 }
@@ -106,7 +106,7 @@ impl TypedTool for RunWorkflowTool {
     fn concurrency(&self) -> crate::Concurrency {
         crate::Concurrency::Exclusive
     }
-    async fn run(&self, args: RunWorkflowArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: RunWorkflowArgs, _call: &CallContext) -> Result<String, ToolError> {
         result(self.0.run_workflow(args).await?)
     }
 }
@@ -129,7 +129,7 @@ impl TypedTool for ListViewsTool {
          and the current view. Views read project files: use normal file tools to \
          edit their content. Discover the workflow graph schema here."
     }
-    async fn run(&self, _: EmptyViewArgs) -> Result<String, ToolError> {
+    async fn run(&self, _: EmptyViewArgs, _call: &CallContext) -> Result<String, ToolError> {
         result(self.0.list().await?)
     }
 }
@@ -143,7 +143,7 @@ impl TypedTool for OpenViewTool {
          then open its path (e.g. a .graph.json Oxen workflow). Opening never runs \
          a workflow or spends money. Background conversations keep their own view."
     }
-    async fn run(&self, args: OpenViewArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: OpenViewArgs, _call: &CallContext) -> Result<String, ToolError> {
         result(self.0.open(args).await?)
     }
 }
@@ -157,7 +157,7 @@ impl TypedTool for InspectViewTool {
          validation errors, display status and reported selection/unsaved edits. \
          Read the source with read_file; an absent renderer has no live UI state."
     }
-    async fn run(&self, _: EmptyViewArgs) -> Result<String, ToolError> {
+    async fn run(&self, _: EmptyViewArgs, _call: &CallContext) -> Result<String, ToolError> {
         result(self.0.inspect().await?)
     }
 }

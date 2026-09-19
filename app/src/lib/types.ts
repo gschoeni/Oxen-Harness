@@ -863,6 +863,11 @@ export interface TasksChangedEvent {
 export interface MediaItem {
   id: string;
   session: string;
+  /** The turn within that chat: the persisted seq of the user message that
+   *  started it. Null on rows recorded before it was tracked. */
+  turn_seq: number | null;
+  /** The model's id for the tool call that made it. */
+  call_id: string | null;
   batch: string;
   index: number;
   kind: "image" | "video";

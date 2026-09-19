@@ -68,6 +68,14 @@ pub struct MediaItem {
     pub id: String,
     /// The chat that asked for it.
     pub session: String,
+    /// The turn within that chat: the persisted `seq` of the user message
+    /// that started it (the history store's rewind address). Absent on rows
+    /// recorded before it was tracked, or when nothing was persisted.
+    #[serde(default)]
+    pub turn_seq: Option<i64>,
+    /// The model's id for the tool call that made it, when a tool call did.
+    #[serde(default)]
+    pub call_id: Option<String>,
     /// Groups the outputs of one tool call (a 2×2 contact sheet).
     #[serde(default)]
     pub batch: String,
@@ -547,6 +555,8 @@ mod tests {
         MediaItem {
             id: id.into(),
             session: "s1".into(),
+            turn_seq: None,
+            call_id: None,
             batch: "b1".into(),
             index: 1,
             kind: MediaKind::Image,

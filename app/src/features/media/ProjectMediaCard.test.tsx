@@ -13,6 +13,8 @@ import type { MediaItem } from "../../lib/types";
 export const item = (over: Partial<MediaItem> = {}): MediaItem => ({
   id: "g1",
   session: "s1",
+  turn_seq: null,
+  call_id: null,
   batch: "b1",
   index: 1,
   kind: "image",

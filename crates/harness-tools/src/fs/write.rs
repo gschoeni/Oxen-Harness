@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::sandbox::Workspace;
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 use super::relative_to;
 use super::state::FileState;
@@ -64,7 +64,7 @@ impl TypedTool for WriteFileTool {
          for changes to part of a file)."
     }
 
-    async fn run(&self, args: WriteFileArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: WriteFileArgs, _call: &CallContext) -> Result<String, ToolError> {
         let path = self.workspace.resolve(&args.path)?;
         // Held across the check and the write so a concurrent lane can't slip
         // a change in between them.

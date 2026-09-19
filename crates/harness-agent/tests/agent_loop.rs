@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use harness_agent::{Agent, AgentConfig, AgentEvent};
 use harness_llm::OxenClient;
 use harness_store::HistoryStore;
-use harness_tools::{Tool, ToolError, ToolRegistry};
+use harness_tools::{CallContext, Tool, ToolError, ToolRegistry};
 
 struct AddTool;
 
@@ -30,7 +30,11 @@ impl Tool for AddTool {
             "required": ["a", "b"]
         })
     }
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
+    async fn invoke(
+        &self,
+        args: serde_json::Value,
+        _call: &CallContext,
+    ) -> Result<String, ToolError> {
         let a = args["a"]
             .as_i64()
             .ok_or_else(|| ToolError::InvalidArguments("a".into()))?;
@@ -489,7 +493,11 @@ impl Tool for SleepTool {
             harness_tools::Concurrency::Shared
         }
     }
-    async fn invoke(&self, args: serde_json::Value) -> Result<String, ToolError> {
+    async fn invoke(
+        &self,
+        args: serde_json::Value,
+        _call: &CallContext,
+    ) -> Result<String, ToolError> {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         Ok(format!("done:{}", args["tag"].as_str().unwrap_or("")))
     }

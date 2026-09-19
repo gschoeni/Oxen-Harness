@@ -81,6 +81,10 @@ struct TurnState {
     budget_warned: bool,
     /// Model rounds so far this turn, for the round budget.
     rounds: u32,
+    /// The persisted `seq` of the user message that started the turn — the
+    /// turn's address for everything a tool call makes (see
+    /// `harness_tools::CallContext`). `None` when nothing is persisted.
+    turn_seq: Option<i64>,
 }
 
 impl TurnState {
@@ -201,7 +205,10 @@ impl Agent {
         let window = self.context_window();
         let budget = budget::prompt_budget(window, self.config.effective_response_reserve());
 
-        let mut turn = TurnState::default();
+        let mut turn = TurnState {
+            turn_seq: self.current_turn_seq(),
+            ..TurnState::default()
+        };
         self.rounds_last_turn = 0;
         self.stopped_by_budget = false;
         // A root turn starts its tree's wallet over; lanes spend from it.
@@ -749,7 +756,7 @@ impl Agent {
         let mut prepared = Vec::with_capacity(calls.len());
         for (index, call) in calls.iter().enumerate() {
             prepared.push(
-                self.prepare_tool(index, call, reply_truncated, on_event)
+                self.prepare_tool(index, call, reply_truncated, turn.turn_seq, on_event)
                     .await,
             );
         }
@@ -1667,7 +1674,11 @@ mod tests {
         fn description(&self) -> &str {
             "pretend to run a command"
         }
-        async fn run(&self, _: FakeShellArgs) -> Result<String, harness_tools::ToolError> {
+        async fn run(
+            &self,
+            _: FakeShellArgs,
+            _call: &harness_tools::CallContext,
+        ) -> Result<String, harness_tools::ToolError> {
             Ok("FAKE-SHELL-OK".into())
         }
     }
@@ -1909,6 +1920,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_tool_learns_which_session_turn_and_call_asked() {
+        use harness_tools::CallContext;
+
+        /// Keeps every context it was run with.
+        struct WhoAskedTool(Arc<std::sync::Mutex<Vec<CallContext>>>);
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        struct WhoAskedArgs {}
+        #[async_trait::async_trait]
+        impl harness_tools::TypedTool for WhoAskedTool {
+            const NAME: &'static str = "who_asked";
+            type Args = WhoAskedArgs;
+            fn description(&self) -> &str {
+                "say who asked"
+            }
+            async fn run(
+                &self,
+                _: WhoAskedArgs,
+                call: &CallContext,
+            ) -> Result<String, harness_tools::ToolError> {
+                self.0.lock().unwrap().push(call.clone());
+                Ok("noted".into())
+            }
+        }
+
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_tool_call(
+                "call_42",
+                "who_asked",
+                serde_json::json!({}),
+            ))
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("noted".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("done"))
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut tools = ToolRegistry::new();
+        tools.register_typed(WhoAskedTool(seen.clone()));
+        let config = AgentConfig {
+            system_prompt: None,
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, tools, store.clone(), session.clone(), config).unwrap();
+
+        let out = agent.run_turn("who am I", |_| {}).await.unwrap();
+        assert_eq!(out, "done");
+
+        // The turn is addressed by the user message that started it — the
+        // same seq a rewind would go back to.
+        let (turn_seq, _) = store.user_turns(&session).unwrap().pop().unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.as_slice(),
+            &[CallContext::new(session.clone(), Some(turn_seq), "call_42")]
+        );
+    }
+
+    #[tokio::test]
     async fn image_marker_in_a_tool_result_attaches_the_image() {
         // A tool that "captures" an image file and marks it in its result.
         struct SnapTool(std::path::PathBuf);
@@ -1921,7 +2003,11 @@ mod tests {
             fn description(&self) -> &str {
                 "take a snapshot"
             }
-            async fn run(&self, _: SnapArgs) -> Result<String, harness_tools::ToolError> {
+            async fn run(
+                &self,
+                _: SnapArgs,
+                _call: &harness_tools::CallContext,
+            ) -> Result<String, harness_tools::ToolError> {
                 // A minimal 1x1 PNG so attachment classification sees an image.
                 const PNG: &[u8] = &[
                     0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D',
@@ -2198,7 +2284,11 @@ mod tests {
             fn description(&self) -> &str {
                 "always returns the same thing"
             }
-            async fn run(&self, _: EchoArgs) -> Result<String, harness_tools::ToolError> {
+            async fn run(
+                &self,
+                _: EchoArgs,
+                _call: &harness_tools::CallContext,
+            ) -> Result<String, harness_tools::ToolError> {
                 Ok("the same output".into())
             }
         }

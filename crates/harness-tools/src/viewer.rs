@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::{sandbox::Workspace, ToolError, TypedTool};
+use crate::{sandbox::Workspace, CallContext, ToolError, TypedTool};
 
 /// The tool name the model calls (and front ends special-case for rendering).
 pub const OPEN_FILE_TOOL: &str = "open_file";
@@ -95,7 +95,7 @@ impl TypedTool for OpenFileTool {
          Don't open every file you touch; open the one or two that matter."
     }
 
-    async fn run(&self, args: OpenFileArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: OpenFileArgs, _call: &CallContext) -> Result<String, ToolError> {
         let path = args.path.trim();
         if path.is_empty() {
             return Err(ToolError::InvalidArguments(

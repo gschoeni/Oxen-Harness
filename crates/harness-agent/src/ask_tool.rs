@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use harness_tools::{ToolError, TypedTool};
+use harness_tools::{CallContext, ToolError, TypedTool};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -73,7 +73,7 @@ impl TypedTool for AskModelTool {
          needs tools."
     }
 
-    async fn run(&self, args: AskModelArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: AskModelArgs, _call: &CallContext) -> Result<String, ToolError> {
         let prompts: Vec<String> = args
             .prompts
             .into_iter()

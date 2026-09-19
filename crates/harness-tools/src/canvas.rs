@@ -17,7 +17,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 /// The tool name the model calls (and front ends special-case for rendering).
 pub const CANVAS_TOOL: &str = "canvas";
@@ -189,7 +189,7 @@ impl TypedTool for CanvasTool {
         crate::Concurrency::Exclusive
     }
 
-    async fn run(&self, args: CanvasArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: CanvasArgs, _call: &CallContext) -> Result<String, ToolError> {
         let doc = build_doc(args).map_err(ToolError::InvalidArguments)?;
         let note = self.sink.show(&doc).await?;
         let mut msg = format!(

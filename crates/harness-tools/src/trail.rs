@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 /// The tool name the model calls (and front ends special-case for rendering).
 pub const TRAIL_TOOL: &str = "update_trail";
@@ -199,7 +199,7 @@ impl TypedTool for TrailTool {
          exchanges."
     }
 
-    async fn run(&self, args: TrailArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: TrailArgs, _call: &CallContext) -> Result<String, ToolError> {
         let trail =
             validate_trail(args.title, args.waypoints).map_err(ToolError::InvalidArguments)?;
         Ok(render(&trail))

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::sandbox::Workspace;
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 use globset::GlobBuilder;
 use regex::RegexBuilder;
@@ -49,7 +49,7 @@ impl TypedTool for FindFilesTool {
          recurse. Respects .gitignore. Returns paths, most-recently-modified first."
     }
 
-    async fn run(&self, args: FindFilesArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: FindFilesArgs, _call: &CallContext) -> Result<String, ToolError> {
         let pattern = args.pattern;
         let max_results = args
             .max_results
@@ -142,7 +142,7 @@ impl TypedTool for SearchTool {
          restrict with `path` (a subdir or file) and `glob` (a filename filter like `*.rs`)."
     }
 
-    async fn run(&self, args: SearchArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: SearchArgs, _call: &CallContext) -> Result<String, ToolError> {
         let pattern = args.pattern;
         let glob = args.glob;
         let mode = args.output_mode;

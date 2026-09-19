@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::sandbox::Workspace;
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 pub mod intercept;
 pub mod session;
@@ -252,7 +252,7 @@ impl TypedTool for ShellTool {
          `write_file`/`edit_file` over redirects/`sed`."
     }
 
-    async fn run(&self, args: ShellArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: ShellArgs, _call: &CallContext) -> Result<String, ToolError> {
         let command = &args.command;
         // A redirect is a *result*, not an error: an error reads as a
         // malfunction and gets retried, a result gets acted on.

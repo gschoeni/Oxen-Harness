@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use harness_tools::{Concurrency, ToolError, TypedTool};
+use harness_tools::{CallContext, Concurrency, ToolError, TypedTool};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -68,7 +68,7 @@ impl TypedTool for SendToAgentTool {
         Concurrency::Exclusive
     }
 
-    async fn run(&self, args: SendToAgentArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: SendToAgentArgs, _call: &CallContext) -> Result<String, ToolError> {
         let _admission = self.spawner.admit_fleet(1)?;
         let id = args.agent.trim().to_string();
         let label = self
@@ -140,7 +140,7 @@ impl TypedTool for ReadAgentTool {
          need. Read-only; it does not run the agent."
     }
 
-    async fn run(&self, args: ReadAgentArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: ReadAgentArgs, _call: &CallContext) -> Result<String, ToolError> {
         let id = args.agent.trim();
         let store = self
             .spawner

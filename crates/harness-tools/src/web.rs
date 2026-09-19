@@ -14,7 +14,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 /// Tool name for [`WebSearchTool`].
 pub const WEB_SEARCH_TOOL: &str = "web_search";
@@ -117,7 +117,7 @@ impl TypedTool for WebSearchTool {
          workspace."
     }
 
-    async fn run(&self, args: WebSearchArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: WebSearchArgs, _call: &CallContext) -> Result<String, ToolError> {
         let query = &args.query;
         let count = args.count.unwrap_or(DEFAULT_RESULTS).clamp(1, MAX_RESULTS);
         let api_key = self.resolve_key().ok_or_else(|| {

@@ -492,8 +492,21 @@ impl Executor for Workbench {
                 } else {
                     prompt
                 };
+                // A workflow node is not a model tool call: the session is
+                // all the provenance it has.
+                let call = harness_tools::CallContext {
+                    session: Some(self.session.clone()),
+                    ..Default::default()
+                };
                 let items = media
-                    .generate_workflow(kind, prompt.into(), self.model(node), references, params)
+                    .generate_workflow(
+                        kind,
+                        prompt.into(),
+                        self.model(node),
+                        references,
+                        params,
+                        &call,
+                    )
                     .await
                     .map_err(|e| e.to_string())?;
                 items

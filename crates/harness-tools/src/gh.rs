@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::time::Duration;
 
 use crate::sandbox::Workspace;
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 /// Tool name for [`GhTool`].
 pub const GH_TOOL: &str = "gh";
@@ -77,7 +77,7 @@ impl TypedTool for GhTool {
          gh installed and authenticated."
     }
 
-    async fn run(&self, args: GhArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: GhArgs, _call: &CallContext) -> Result<String, ToolError> {
         match args.operation {
             GhOperation::PrView => {
                 self.run_gh(&[

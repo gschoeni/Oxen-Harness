@@ -33,7 +33,7 @@ use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{watch, Mutex};
 
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 /// Tool name for [`TaskOutputTool`].
 pub const TASK_OUTPUT_TOOL: &str = "task_output";
@@ -821,7 +821,7 @@ impl TypedTool for TaskOutputTool {
          this only to look in on one mid-run, never in a poll loop."
     }
 
-    async fn run(&self, args: TaskOutputArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: TaskOutputArgs, _call: &CallContext) -> Result<String, ToolError> {
         let wait_ms = args.wait_ms.unwrap_or(0).min(MAX_TASK_WAIT_MS);
         if wait_ms > 0 {
             let wait = self
@@ -875,7 +875,7 @@ impl TypedTool for KillTaskTool {
         "Terminate a background task started by run_shell (kills its whole process group)."
     }
 
-    async fn run(&self, args: KillTaskArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: KillTaskArgs, _call: &CallContext) -> Result<String, ToolError> {
         self.tasks.kill(args.task_id).await
     }
 }

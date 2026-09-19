@@ -201,7 +201,15 @@ function Details({ item, workspace, onOpen }: { item: MediaItem; workspace: stri
             <span className="gallery-mono" title={item.session}>
               {item.session === sessionId ? "this chat" : shortId(item.session)}
             </span>
+            {item.turn_seq !== null && <span className="gallery-facts-aside">turn #{item.turn_seq}</span>}
           </Fact>
+          {item.call_id && (
+            <Fact label="Call">
+              <span className="gallery-mono" title="The model's id for the tool call that made it">
+                {item.call_id}
+              </span>
+            </Fact>
+          )}
           <Fact label="Generation">
             <span className="gallery-mono" title={item.id}>
               {item.id}

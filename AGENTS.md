@@ -166,7 +166,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::sandbox::Workspace;
-use crate::{ToolError, TypedTool};
+use crate::{CallContext, ToolError, TypedTool};
 
 /// Tool name for [`WordCountTool`].
 pub const WORD_COUNT_TOOL: &str = "word_count";
@@ -199,7 +199,7 @@ impl TypedTool for WordCountTool {
          long a document is."
     }
 
-    async fn run(&self, args: WordCountArgs) -> Result<String, ToolError> {
+    async fn run(&self, args: WordCountArgs, _call: &CallContext) -> Result<String, ToolError> {
         let path = self.workspace.resolve(&args.path)?;
         let text = tokio::fs::read_to_string(&path).await?;
         Ok(format!("{} words", text.split_whitespace().count()))
@@ -234,6 +234,12 @@ Conventions worth copying from the existing tools:
   `enum`s, and invalid values are rejected before your `run` is ever called.
 - **All file access goes through `Workspace::resolve`** so a tool can't escape
   the project directory.
+- **`run` also receives a `CallContext`**: the session, the turn (the seq of
+  the user message that started it), and the model's id for the call. A tool
+  that makes something durable (a generated image, a canvas document) stamps
+  it with those so it traces back to the exact request; most tools ignore the
+  argument. Tests and hosts holding a concrete tool use `tool.invoke(args)`,
+  a call from nowhere, or `invoke_from(args, &call)` to say who is asking.
 - **Tests live right beside the tool** in a `#[cfg(test)] mod tests` — invoke it
   with `tool.invoke(serde_json::json!({...}))` exactly as the model would (see
   `fs.rs` for examples).

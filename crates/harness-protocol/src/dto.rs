@@ -162,6 +162,13 @@ pub struct MediaItem {
     pub id: String,
     /// The chat that asked for it.
     pub session: String,
+    /// The turn within that chat: the persisted `seq` of the user message
+    /// that started it. Absent on older rows.
+    #[serde(default)]
+    pub turn_seq: Option<i64>,
+    /// The model's id for the tool call that made it.
+    #[serde(default)]
+    pub call_id: Option<String>,
     /// Groups the outputs of one tool call.
     #[serde(default)]
     pub batch: String,
