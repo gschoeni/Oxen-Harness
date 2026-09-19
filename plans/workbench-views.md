@@ -46,6 +46,7 @@ the current tab's right-hand context without introducing another tab system.
 | [`canvas.rs`](../crates/harness-tools/src/canvas.rs), [`HostCanvasSink`](../crates/harness-host/src/bridges.rs) | Stable document IDs, streaming previews, existing tool compatibility | Desktop emits content as events; durable content is recovered through chat history rather than ordinary project documents |
 | [`viewer.rs`](../crates/harness-tools/src/viewer.rs) | `open_file` validates paths and delegates through a host interface | File opening cannot select a community view |
 | [`harness-preview`](../crates/harness-preview/src/lib.rs), [`preview.rs`](../app/src-tauri/src/preview.rs) | Dev-server lifecycle, logs, console feedback, native browser surface | Native view bounds, visibility, screenshots, and resource cleanup require a host adapter |
+| [`Browser.tsx`](../app/src/features/browser/Browser.tsx), [`browser.rs`](../app/src-tauri/src/browser.rs) | Link interception and a native HTTP(S) browser surface | Browser URL/native view are app-wide today; navigation must belong to the originating top-tab context |
 | [`harness-media`](../crates/harness-media/src/library.rs), [`GalleryPanel`](../app/src/features/media/GalleryPanel.tsx) | Project outputs and append-only `generations/manifest.jsonl`, job lifecycle | Gallery is coupled to global UI state; expose its existing service through the view contract |
 | [`uiState.ts`](../app/src/lib/uiState.ts) | File-backed personal preferences in `~/.oxen-harness/ui.json` | Add versioned workbench instance/layout restoration |
 
@@ -196,6 +197,10 @@ late loads/events must carry their original session and instance IDs. Reopening
 a conversation from history also restores its right-hand context. Changing the
 view inside a tab does not create or reset the conversation. An explicit new
 top-level tab uses the existing new-chat flow; it never silently forks a chat.
+Move the Browser's app-wide URL into this context too. Native surfaces can be
+reused with bounded resource ownership, but a late navigation event must never
+replace another tab's view. Persist navigation references rather than claiming
+an arbitrary remote website's live DOM is a filesystem-backed document.
 
 Canvas compatibility: keep `canvas` arguments and stable IDs. New completed
 calls persist content and metadata under `.oxen-harness/artifacts/`, then emit a
@@ -353,6 +358,7 @@ surface counts and verify recovery from a hung renderer on supported platforms.
 | Module | Durable state | Agent interaction | Host-specific work |
 | --- | --- | --- | --- |
 | Website preview | Existing website source and preview settings | Edit source; start/restart existing preview service; read logs/console; supported screenshots | Native-surface bounds, visibility, navigation, disposal; screenshots advertise platform support |
+| Link browser | Per-context URL/navigation references in personal restoration state | Open links in the originating context; read saved research through normal files | Reuse the existing native browser and navigation guard; remote page content has no project-file privileges |
 | Image/video gallery | Existing output files and `manifest.jsonl` | Existing media tools create/cancel jobs; inspect output paths; optionally save selection/collection documents | Reuse `harness-media` queue, spend confirmation, library and events |
 | Documents/canvas | Markdown, code, HTML/SVG and artifact metadata | Existing `canvas` compatibility plus ordinary file edits | Streaming overlay, existing sandboxed renderers, durable save |
 | Node graph | Versioned `*.graph.json`, stable nodes/edges, parameters, authoring positions | Read/edit the graph; inspect selection/validation; explicitly run supported operations | Validate connections; delegate a small set of executable node types to existing host services |
@@ -384,7 +390,7 @@ verification and accepted decisions as implementation progresses.
 | **0. Baseline and context contract** | Characterize current dock behavior; define one top tab = agent session + current right-hand context | Regressions encode switching/restoring both panels together, background routing, and dirty-buffer survival; document the native-surface requirements |
 | **1. Workbench host and unified navigation** | Generic definitions and instances, separate store slice, lifecycle, shared frame; wrap current right docks and remove secondary tab strips | New bundled view requires its module plus registration; no new `RightTabId` variant, `App.tsx` branch, or domain-specific central-store field; only the existing top tabs switch work contexts |
 | **2. Document service** | Revisioned read/save, shared write coordination, reference-counted watch/reconcile, schema diagnostics, canvas persistence | Agent, UI, and external file edits update a view; stale UI saves are refused; malformed/deleted files and restarts retain recoverable data |
-| **3. Agent contract and built-in migration** | List/open/inspect tools and protocol, `open_file` resolver, Preview/Gallery/Canvas/Editor adapters, headless semantics | Both a user and an agent can operate each existing surface through the common contract; native preview and media job behavior remain intact |
+| **3. Agent contract and built-in migration** | List/open/inspect tools and protocol, `open_file` resolver, Preview/Gallery/Canvas/Editor/Browser adapters, headless semantics | Both a user and an agent can operate each existing surface through the common contract; native preview, link navigation and media job behavior remain intact |
 | **4. Bundled graph reference** | Editable graph module and small Oxen-backed runner exercise the same public contract as existing views | New user clones an example, opens a workflow context, edits visually and via agent, runs it explicitly, and sees persistent outputs; graph renderer needs no private app imports |
 | **5. Installable views and SDK** | Cross-platform isolation spike, manifest validation/discovery, constrained renderer host, scoped broker, local package install/enable/update/rollback, development template | The graph renderer also works as an installed package without rebuilding the app; scope bypass, incompatible version, crash, and uninstall tests pass; native adapters remain separately trusted |
 | **6. Presets and contributor finish** | Shareable workflow presets, per-context defaults/restore, authoring guide and example packages | Switching Website → Images → Workflow changes agent and right-hand context together; a contributor builds a new view from the guide without editing core routing or adding another tab strip |
@@ -473,6 +479,8 @@ The planning review applied these concrete improvements:
    mount state, including the limitation of unrelated external writers.
 4. Make native isolation an acceptance gate instead of assuming an iframe
    inherits a safe Tauri permission boundary.
+5. Post-commit completeness review: include the Browser's app-wide navigation
+   in the context migration, so link opens also obey the unified top-tab model.
 
 Documentation validation: local source links resolved, the illustrative JSON
 manifest parsed, and whitespace/code-fence checks passed. Runtime suites were
