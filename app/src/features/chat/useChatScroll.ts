@@ -1,20 +1,23 @@
 import { useCallback, useLayoutEffect, useRef, useState, type WheelEvent } from "react";
 
-type Position = { top: number; height: number; viewport: number; width: number };
-const position = (el: HTMLElement): Position => ({
-  top: el.scrollTop,
-  height: el.scrollHeight,
-  viewport: el.clientHeight,
-  width: el.clientWidth,
-});
-const atBottom = (p: Position) => p.height - p.viewport - p.top <= 1;
+/** Within a pixel or two of the end counts as the bottom: WebKit reports
+ *  fractional scroll offsets, so an exact comparison flickers. */
+const atBottom = (el: HTMLElement) => el.scrollHeight - el.clientHeight - el.scrollTop <= 2;
 
-/** Follow output until the reader scrolls up; layout changes aren't user intent. */
+/** Keep the chat pinned to its live tail until the reader scrolls up, and
+ *  resume the moment they return to the bottom (by hand or via the arrow).
+ *
+ *  Two signals mean "the reader moved up": a scroll event whose offset is
+ *  smaller than the last one we saw, and an upward wheel gesture. The wheel
+ *  matters on its own because a fast stream can pin the tail again before the
+ *  gesture's scroll event arrives, which would otherwise swallow the intent.
+ *  Nothing else can lower the offset: our pins only move down, and the
+ *  browser clamps a shrinking thread to the bottom, where we re-follow. */
 export function useChatScroll(sessionId: string | undefined, items: unknown) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const following = useRef(true);
-  const previous = useRef<Position | null>(null);
+  const lastTop = useRef(0);
   const [paused, setPaused] = useState(false);
 
   const follow = useCallback((value: boolean) => {
@@ -25,10 +28,8 @@ export function useChatScroll(sessionId: string | undefined, items: unknown) {
   const pin = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    // Instant movement avoids mistaking intermediate animation frames for a
-    // user scroll, and lets rapid streaming updates reach the bottom each frame.
     el.scrollTop = el.scrollHeight;
-    previous.current = position(el);
+    lastTop.current = el.scrollTop;
   }, []);
 
   const scrollToBottom = useCallback(() => {
@@ -44,19 +45,16 @@ export function useChatScroll(sessionId: string | undefined, items: unknown) {
     if (following.current) pin();
   }, [items, pin]);
 
+  // Both matter: images/code can grow without a new message, and panels or
+  // the composer can shrink the viewport without changing the thread.
   useLayoutEffect(() => {
     const viewport = scrollRef.current;
     const content = contentRef.current;
     if (!viewport || !content) return;
-    // Both matter: images/code can grow without a new message, and panels or
-    // the composer can shrink the viewport without changing the thread.
     const observer = new ResizeObserver(() => {
       if (following.current) pin();
-      else {
-        const current = position(viewport);
-        previous.current = current;
-        if (atBottom(current)) follow(true);
-      }
+      else if (atBottom(viewport)) follow(true);
+      lastTop.current = viewport.scrollTop;
     });
     observer.observe(viewport);
     observer.observe(content);
@@ -66,14 +64,9 @@ export function useChatScroll(sessionId: string | undefined, items: unknown) {
   function onScroll() {
     const el = scrollRef.current;
     if (!el) return;
-    const current = position(el);
-    const last = previous.current;
-    if (atBottom(current)) follow(true);
-    else if (
-      last && current.top < last.top && current.height === last.height &&
-      current.viewport === last.viewport && current.width === last.width
-    ) follow(false);
-    previous.current = current;
+    if (atBottom(el)) follow(true);
+    else if (el.scrollTop < lastTop.current) follow(false);
+    lastTop.current = el.scrollTop;
   }
 
   function onWheel(event: WheelEvent<HTMLDivElement>) {
@@ -84,8 +77,6 @@ export function useChatScroll(sessionId: string | undefined, items: unknown) {
       target && target !== el; target = target.parentElement) {
       if (target.scrollTop > 0 && /auto|scroll/.test(getComputedStyle(target).overflowY)) return;
     }
-    // Record intent before the next token/resize can arrive, including when
-    // browser scroll anchoring changes the geometry during this gesture.
     follow(false);
   }
 
