@@ -59,6 +59,16 @@ beforeEach(() => {
 });
 
 describe("the agent view", () => {
+  it("leaves through one chevron button, with no text to mistake for a breadcrumb", async () => {
+    ipc.listAgents.mockResolvedValue([saved()]);
+    render(<AgentView session="s1" lane="lane-0" />);
+    const back = await screen.findByRole("button", { name: "Back to the chat" });
+    expect(back).toHaveTextContent("");
+    expect(back).toHaveClass("icon-btn");
+    fireEvent.click(back);
+    expect(useStore.getState().agentView.s1).toBeNull();
+  });
+
   it("shows the agent's transcript with its brief as an assignment, not a bubble", async () => {
     ipc.listAgents.mockResolvedValue([saved()]);
     render(<AgentView session="s1" lane="lane-0" />);

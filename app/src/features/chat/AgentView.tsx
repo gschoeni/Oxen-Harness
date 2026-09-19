@@ -13,7 +13,7 @@
 // the thread at once, and the persisted transcript takes over as it lands.
 
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
-import { ArrowDown, ArrowLeft, ChevronDown, ChevronUp, FileDiff, ScrollText, Square, X } from "lucide-react";
+import { ArrowDown, ChevronDown, ChevronLeft, ChevronUp, FileDiff, ScrollText, Square, X } from "lucide-react";
 import { agentPatch, applyAgentPatch, followUpAgent, sessionMessages } from "../../lib/ipc";
 import { fleetsFor, useStore } from "../../lib/store";
 import { compactTokens } from "../../lib/format";
@@ -59,7 +59,6 @@ export function AgentView({ session, lane }: { session: string; lane: string }) 
   const stopLane = useStore((s) => s.stopLane);
   const steer = useStore((s) => s.steerLane);
   const openInspector = useStore((s) => s.openInspector);
-  const chatTitle = useStore((s) => s.sessions.find((x) => x.id === session)?.title?.trim() || null);
 
   const rows = useMemo(() => agentRows(agents ?? [], fleetsFor(fleets, session)), [agents, fleets, session]);
   const row = rows.find((r) => r.id === lane);
@@ -231,17 +230,13 @@ export function AgentView({ session, lane }: { session: string; lane: string }) 
     <section className="agent-view" aria-label={`Agent ${label}`} onKeyDown={onKeyDown}>
       <header className="agent-view-bar">
         <button
-          className="agent-view-back"
+          className="icon-btn sm agent-view-back"
           onClick={() => close(session)}
           aria-label="Back to the chat"
           title="Back to the chat (Esc)"
         >
-          <ArrowLeft size={15} />
-          <span>{chatTitle ?? "Chat"}</span>
+          <ChevronLeft size={16} />
         </button>
-        <span className="agent-view-crumb" aria-hidden="true">
-          ›
-        </span>
         <h2 className="agent-view-name" title={lane}>
           {label}
         </h2>

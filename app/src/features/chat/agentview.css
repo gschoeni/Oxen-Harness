@@ -44,34 +44,14 @@
   outline: none;
   box-shadow: var(--focus-ring);
 }
+/* The way out. A bare chevron reads as decoration next to the breadcrumb, so
+   it gets the outline of a control; .icon-btn supplies the size and hover. */
 .agent-view-back {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
   flex-shrink: 0;
-  max-width: 200px;
-  height: 28px;
-  padding: 0 var(--space-2) 0 var(--space-1);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
-}
-.agent-view-back span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  border: 1px solid var(--separator-strong);
 }
 .agent-view-back:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-.agent-view-crumb {
-  color: var(--text-tertiary);
-  flex-shrink: 0;
+  border-color: var(--text-tertiary);
 }
 .agent-view-name {
   margin: 0;
