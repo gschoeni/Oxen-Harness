@@ -115,7 +115,7 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
       <aside className="canvas gallery" aria-label="Gallery">
         {onResizeStart && <div className="canvas-resizer" onPointerDown={onResizeStart} />}
         <header className="canvas-head gallery-head">
-          <IconButton type="button" size="sm" onClick={back} aria-label="Back to all generations" title="Back (Esc)">
+          <IconButton type="button" className="sm" onClick={back} aria-label="Back to all generations" title="Back (Esc)">
             <ChevronLeft size={15} />
           </IconButton>
           <span className="gallery-position">
@@ -124,7 +124,7 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
           <div className="gallery-nav">
             <IconButton
               type="button"
-              size="sm"
+              className="sm"
               onClick={() => step(-1)}
               disabled={position <= 0}
               aria-label="Previous generation"
@@ -134,7 +134,7 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
             </IconButton>
             <IconButton
               type="button"
-              size="sm"
+              className="sm"
               onClick={() => step(1)}
               disabled={position < 0 || position >= shown.length - 1}
               aria-label="Next generation"

@@ -505,6 +505,9 @@ describe("the board", () => {
         completed_at: null,
         parent: null,
         seed: null,
+        sources: [],
+        agent_prompt: null,
+        provider: null,
       },
     ]);
     render(<HomePage />);

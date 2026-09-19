@@ -66,7 +66,7 @@ const BASELINE: Record<string, number> = {
   "/src/features/inspector/dev.css": 6,
   "/src/features/ledger/ledger.css": 28,
   "/src/features/logs/logs.css": 4,
-  "/src/features/media/media.css": 7,
+  "/src/features/media/media.css": 5,
   "/src/features/models/models.css": 4,
   "/src/features/preview/preview.css": 7,
   "/src/features/projects/projects.css": 2,
