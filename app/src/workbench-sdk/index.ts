@@ -22,6 +22,8 @@ export interface ViewModule {
   id: string;
   title: string;
   description: string;
+  /** Small monochrome picker icon. Views without one use a shared fallback. */
+  icon?: ComponentType<{ size?: number; className?: string }>;
   /** Higher priority wins; an explicit user choice always wins over matching. */
   priority?: number;
   /** Serializable metadata lets the agent discover and open bundled views. */

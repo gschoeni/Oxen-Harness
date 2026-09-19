@@ -14,13 +14,9 @@
   border-bottom: 1px solid var(--border);
   min-height: 42px;
 }
-.workbench-head select {
-  max-width: 45%;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: var(--text-sm);
-  font-weight: 600;
+.workbench-view-select {
+  max-width: 55%;
+  flex-shrink: 0;
 }
 .workbench-resource {
   flex: 1;

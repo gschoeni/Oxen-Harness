@@ -32,6 +32,16 @@
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
 > **652 Rust tests + 230 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
 
+## Shared view selector — 2026-09-19
+
+The work-view picker now uses a shared `Select` over the existing menu primitives:
+module icons, descriptions, selected-state checks, keyboard/typeahead, and a
+viewport-aware portal. It preserves compatible open files and uses the same
+native-overlay behavior as the other app menus. `app/README.md` documents it as
+the default for new single-choice selectors. Frontend/browser verification and
+the dedicated polish pass are recorded with this change; unrelated ongoing
+`CallContext` changes currently block the Rust verification commands.
+
 ## Live View Studio — 2026-09-18
 
 Built a no-recompile package authoring loop: project scaffolds, live immutable

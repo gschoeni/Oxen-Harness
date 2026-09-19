@@ -113,6 +113,31 @@ never hardcode colors/spacing.
 
 ### Design system (`src/styles/tokens.css`)
 
+Use `Select` from `components/ui` as the default for new single-choice selectors.
+It builds on the shared `Menu` primitives and provides icons, optional descriptions,
+selected-state checks, keyboard navigation and typeahead, dismissal, and a
+viewport-aware portal. Native work surfaces hide under its menu automatically.
+Keep `Menu` for specialized pickers with custom actions or search.
+
+```tsx
+<Select
+  label="Work view"
+  value={view}
+  onValueChange={setView}
+  options={[
+    { value: "gallery", label: "Gallery", icon: <Images size={16} />,
+      description: "Browse generated images and videos." },
+  ]}
+/>
+```
+
+`label` supplies the accessible name and menu heading. Options have stable string
+values; `disabled` works on the selector and individual options. Supply a
+`placeholder` for an empty value. Focus stays on the combobox while arrows,
+Home/End, and typing move the active option; Enter/Space selects, Escape cancels,
+and Tab continues through the surrounding form. Native form submission is still
+the caller's responsibility.
+
 A small, semantic **design-token** layer inspired by the minimal chrome of Claude
 and Cursor's agent window:
 

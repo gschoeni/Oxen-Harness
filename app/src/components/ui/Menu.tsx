@@ -2,9 +2,14 @@
 // and any other popover list. Token-driven, no feature logic: the caller owns
 // the trigger button and the open state (via useMenuState), this file owns the
 // popover chrome, rows, and keyboard behavior.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Check } from "lucide-react";
-import type { ReactNode, RefObject } from "react";
+import type {
+  ButtonHTMLAttributes,
+  HTMLAttributes,
+  ReactNode,
+  RefObject,
+} from "react";
 
 /** Open/close state with the standard dismissal behavior: outside click and
  *  Escape both close. Attach `ref` to the wrapper containing trigger + menu. */
@@ -19,7 +24,8 @@ export function useMenuState(): {
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
@@ -37,24 +43,40 @@ export function useMenuState(): {
 
 /** The popover surface. Arrow keys move focus between the menu's items (a
  *  roving listbox), so the pickers are keyboard-navigable, not click-only. */
-export function Menu({ className = "", children }: { className?: string; children: ReactNode }) {
+export function Menu({
+  className = "",
+  children,
+  onKeyDown: handleKeyDown,
+  ...props
+}: HTMLAttributes<HTMLDivElement>) {
   const ref = useRef<HTMLDivElement>(null);
 
-  function onKeyDown(e: React.KeyboardEvent) {
+  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    handleKeyDown?.(e);
+    if (e.defaultPrevented) return;
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     const items = Array.from(
-      ref.current?.querySelectorAll<HTMLButtonElement>(".menu-item:not(:disabled)") ?? [],
+      ref.current?.querySelectorAll<HTMLButtonElement>(
+        ".menu-item:not(:disabled)",
+      ) ?? [],
     );
     if (items.length === 0) return;
     e.preventDefault();
     const current = items.indexOf(document.activeElement as HTMLButtonElement);
     const delta = e.key === "ArrowDown" ? 1 : -1;
-    const next = current < 0 ? 0 : (current + delta + items.length) % items.length;
+    const next =
+      current < 0 ? 0 : (current + delta + items.length) % items.length;
     items[next].focus();
   }
 
   return (
-    <div className={`menu ${className}`} role="listbox" ref={ref} onKeyDown={onKeyDown}>
+    <div
+      {...props}
+      className={`menu ${className}`}
+      role="listbox"
+      ref={ref}
+      onKeyDown={onKeyDown}
+    >
       {children}
     </div>
   );
@@ -78,30 +100,51 @@ export function MenuItem({
   checkSlot,
   icon,
   name,
+  description,
   hint,
   onSelect,
+  className = "",
+  ...props
 }: {
   active?: boolean;
   manage?: boolean;
   checkSlot?: ReactNode;
   icon?: ReactNode;
   name: ReactNode;
+  description?: ReactNode;
   hint?: ReactNode;
   onSelect: () => void;
-}) {
+} & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "name" | "onSelect">) {
+  const descriptionId = useId();
   return (
     <button
+      {...props}
       type="button"
-      className={["menu-item", active ? "active" : "", manage ? "manage" : ""]
+      className={[
+        "menu-item",
+        active ? "active" : "",
+        manage ? "manage" : "",
+        className,
+      ]
         .filter(Boolean)
         .join(" ")}
       onClick={onSelect}
       role="option"
       aria-selected={active}
+      aria-describedby={description ? descriptionId : props["aria-describedby"]}
     >
       {checkSlot ?? <Check size={15} className="menu-check" />}
       {icon}
-      <span className="menu-name">{name}</span>
+      {description ? (
+        <span className="menu-copy">
+          <span className="menu-name">{name}</span>
+          <span className="menu-description" id={descriptionId}>
+            {description}
+          </span>
+        </span>
+      ) : (
+        <span className="menu-name">{name}</span>
+      )}
       {hint !== undefined && <span className="menu-hint">{hint}</span>}
     </button>
   );

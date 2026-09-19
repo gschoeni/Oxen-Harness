@@ -1,0 +1,151 @@
+.select-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: var(--frame-border-w) solid var(--separator);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.select-trigger:hover:not(:disabled),
+.select-trigger[aria-expanded="true"] {
+  background: var(--surface-2);
+  border-color: var(--separator-strong);
+}
+.select-trigger:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: var(--space-half);
+}
+.select-trigger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-trigger-icon,
+.select-option-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.select-trigger-icon {
+  color: var(--text-secondary);
+}
+.select-trigger-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.select-chevron {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.select-trigger[aria-expanded="true"] .select-chevron {
+  transform: rotate(180deg);
+}
+.select-popover {
+  position: fixed;
+  z-index: calc(var(--z-drawer) + 1);
+  display: flex;
+}
+.select-menu.menu {
+  position: relative;
+  border-width: 1px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+  width: 100%;
+  max-height: inherit;
+  padding: var(--space-2);
+  overscroll-behavior: contain;
+}
+.select-menu .menu-head {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  font-size: var(--text-3xs);
+  font-weight: 600;
+}
+.select-option.menu-item {
+  gap: var(--space-3);
+  padding: var(--space-3);
+  margin-bottom: var(--space-half);
+}
+.select-option:last-child {
+  margin-bottom: 0;
+}
+.select-option.active {
+  background: var(--accent-tint);
+}
+.select-option:hover:not(:disabled),
+.select-option[data-highlighted="true"] {
+  background: var(--surface-2);
+  outline: none;
+}
+.select-menu[data-keyboard="true"] .select-option[data-highlighted="true"] {
+  box-shadow: inset 0 0 0 2px var(--focus);
+}
+.select-option.active:hover,
+.select-option.active[data-highlighted="true"] {
+  background: var(--accent-soft);
+}
+.select-option:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.select-option .menu-check {
+  order: 3;
+  margin-left: auto;
+}
+.select-option-icon {
+  width: var(--control-h);
+  height: var(--control-h);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  background: var(--bg);
+}
+.select-option-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.select-option.active .select-option-icon {
+  color: var(--accent);
+  border-color: var(--accent-soft);
+  background: var(--accent-tint);
+}
+.select-option .menu-name {
+  font-weight: 500;
+}
+.menu-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: var(--space-half);
+}
+.menu-description {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: reduce) {
+  .select-trigger,
+  .select-chevron {
+    transition: none;
+  }
+}

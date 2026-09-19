@@ -94,10 +94,11 @@ describe("Dock columns", () => {
     openCanvas();
     rerender(<DockColumn side="right" />);
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox",{name:"Work view"})).toHaveValue("canvas");
+    expect(screen.getByRole("combobox",{name:"Work view"})).toHaveTextContent("Canvas");
 
-    // The canvas took the panel when it opened; switching back is one click.
-    await userEvent.selectOptions(screen.getByRole("combobox",{name:"Work view"}), "preview");
+    // The same picker controls the conversation's current work surface.
+    await userEvent.click(screen.getByRole("combobox", { name: "Work view" }));
+    await userEvent.click(screen.getByRole("option", { name: "Preview" }));
     expect(useStore.getState().rightTab.s1).toBe("preview");
   });
 

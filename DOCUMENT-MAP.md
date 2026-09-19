@@ -193,3 +193,10 @@ When adding a new file to the project, update this document map.
 - `app/src/features/workbench/PackageSurface.tsx` — native surface lifecycle shared by development previews and installed packages.
 - `app/src/features/workbench/PackageSurface.test.tsx` — preview generations remount without rebuilding surfaces during status polling.
 - `plans/view-studio.md` — implementation and review record for the live builder loop.
+
+## Shared selectors — 2026-09-19
+
+- `app/src/components/ui/Select.tsx` — default single-choice selector over shared menus; icons, descriptions, keyboard/typeahead and viewport positioning.
+- `app/src/components/ui/Select.test.tsx` — selection, accessible descriptions, dismissal, disabled options and keyboard behavior.
+- `app/src/components/ui/select.css` — theme-aware selector trigger and menu styling.
+- `app/src/features/workbench/Workbench.test.tsx` — module presentation and compatible resource preservation when selecting a view.

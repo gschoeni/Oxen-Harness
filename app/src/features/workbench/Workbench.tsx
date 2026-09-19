@@ -1,5 +1,6 @@
 import { Component, Suspense, useEffect, type ReactNode, type PointerEvent } from "react";
-import { ArrowLeft, ArrowRight, Pin, Workflow } from "lucide-react";
+import { ArrowLeft, ArrowRight, Pin, Workflow, PanelsTopLeft } from "lucide-react";
+import { Select } from "../../components/ui";
 import { useStore } from "../../lib/store";
 import { workbenchRequest } from "../../lib/ipc";
 import { views, viewById, useViewRegistry } from "./registry";
@@ -97,25 +98,24 @@ function WorkbenchContent({
         >
           <ArrowRight size={14} />
         </button>
-        <select
-          aria-label="Work view"
-          value={module ? target.view : "welcome"}
-          onChange={(e) => {
-            const next = viewById(e.target.value);
+        <Select
+          className="workbench-view-select"
+          label="Work view"
+          placeholder="Choose a view"
+          value={module ? target.view : ""}
+          options={views().map((view) => {
+            const Icon = view.icon ?? PanelsTopLeft;
+            return { value: view.id, label: view.title, description: view.description, icon: <Icon size={16} /> };
+          })}
+          onValueChange={(value) => {
+            const next = viewById(value);
             api.open({
-              view: e.target.value,
+              view: value,
               path: target.path && next?.matches?.(target.path) ? target.path : undefined,
               paths: target.paths?.filter((path) => next?.matches?.(path)),
             });
           }}
-        >
-          <option value="welcome">Choose a view</option>
-          {views().map((view) => (
-            <option key={view.id} value={view.id}>
-              {view.title}
-            </option>
-          ))}
-        </select>
+        />
         <span className="workbench-resource" title={target.path ?? target.url}>
           {target.path?.split("/").pop() ?? target.url ?? ""}
         </span>

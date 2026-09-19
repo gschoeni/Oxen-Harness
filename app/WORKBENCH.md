@@ -152,6 +152,11 @@ normal authentication. Actions include `read`, `save`, `list`, `open`, `inspect`
 
 ## Build a view with your agent
 
+Bundled modules can supply an optional `icon` component alongside their `title`
+and `description`. The work-view selector displays all three; modules without an
+icon, including installed packages, receive a shared fallback. Icons are local UI
+metadata and are not sent to the agent or added to package permissions.
+
 Choose **View Studio** in the work-view picker. Create a starter in a folder such
 as `views/storyboard`, or open an existing package folder. Review its file grants
 and choose **Start live preview**. Your agent can edit those files immediately;

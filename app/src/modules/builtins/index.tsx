@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { FileText, Images, PanelTop, PanelsTopLeft, Globe } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { useDocument, type ViewProps } from "../../workbench-sdk";
 import type { CanvasDoc } from "../../lib/types";
@@ -13,6 +14,7 @@ export default [
   {
     id: "editor",
     title: "File",
+    icon: FileText,
     description: "Read and edit project files.",
     priority: -100,
     matches: () => true,
@@ -21,18 +23,21 @@ export default [
   {
     id: "gallery",
     title: "Gallery",
+    icon: Images,
     description: "Browse generated images and videos.",
     component: () => <GalleryPanel />,
   },
   {
     id: "preview",
     title: "Preview",
+    icon: PanelTop,
     description: "See your running website.",
     component: () => <Preview />,
   },
   {
     id: "canvas",
     title: "Canvas",
+    icon: PanelsTopLeft,
     description: "Documents made by the agent.",
     priority: 90,
     matches: (path: string) => path.endsWith(".canvas.json"),
@@ -41,6 +46,7 @@ export default [
   {
     id: "browser",
     title: "Browser",
+    icon: Globe,
     description: "Explore links from your conversation.",
     component: () => <Browser />,
   },

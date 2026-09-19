@@ -1,5 +1,7 @@
 // Design-system primitives. Token-driven, no feature logic.
 import "./ui.css";
+export { Select } from "./Select";
+export type { SelectOption, SelectProps } from "./Select";
 import { X } from "lucide-react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
