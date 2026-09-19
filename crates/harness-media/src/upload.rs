@@ -393,7 +393,6 @@ impl HubUploader {
             }
         }
     }
-
 }
 
 fn hex(bytes: &[u8]) -> String {

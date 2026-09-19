@@ -1315,7 +1315,9 @@ mod tests {
             panic!("expected parts");
         };
         assert!(
-            !parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. })),
+            !parts
+                .iter()
+                .any(|p| matches!(p, ContentPart::ImageUrl { .. })),
             "a text-only model must never be sent an image part"
         );
         match &parts[1] {
@@ -1334,7 +1336,9 @@ mod tests {
         let Some(MessageContent::Parts(parts)) = &outbound.last().unwrap().content else {
             panic!("expected parts");
         };
-        assert!(matches!(&parts[1], ContentPart::ImageUrl { image_url } if image_url.url.starts_with("data:image/png")));
+        assert!(
+            matches!(&parts[1], ContentPart::ImageUrl { image_url } if image_url.url.starts_with("data:image/png"))
+        );
 
         // Unknown capability (None) also sends the image — only a known "no" strips.
         agent.set_accepts_images(None);

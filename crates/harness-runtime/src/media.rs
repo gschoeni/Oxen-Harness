@@ -93,10 +93,16 @@ mod tests {
 
             let tmp = tempfile::tempdir().unwrap();
             // No project remote → the global one.
-            assert_eq!(prefs_for(tmp.path()).hub_repo.as_deref(), Some("ox/playground"));
+            assert_eq!(
+                prefs_for(tmp.path()).hub_repo.as_deref(),
+                Some("ox/playground")
+            );
             crate::project::set_remote_repo(tmp.path(), Some("ox/my-app")).unwrap();
             assert_eq!(prefs_for(tmp.path()).hub_repo.as_deref(), Some("ox/my-app"));
-            assert_eq!(prefs_for(tmp.path()).hub_target(), Some(("ox".into(), "my-app".into())));
+            assert_eq!(
+                prefs_for(tmp.path()).hub_target(),
+                Some(("ox".into(), "my-app".into()))
+            );
         });
     }
 }

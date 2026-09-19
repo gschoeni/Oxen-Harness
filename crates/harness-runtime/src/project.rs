@@ -47,8 +47,12 @@ pub fn parse_remote_repo(raw: &str) -> Option<(String, String)> {
     let ok = !ns.is_empty()
         && !name.is_empty()
         && !name.contains('/')
-        && ns.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        && ns
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
     ok.then(|| (ns.to_string(), name.to_string()))
 }
 
@@ -117,7 +121,10 @@ pub fn save(root: &Path, config: &ProjectConfig) -> Result<ProjectConfig, Runtim
 /// settings page, and the CLI subcommand share.
 pub fn set_remote_repo(root: &Path, remote: Option<&str>) -> Result<ProjectConfig, RuntimeError> {
     let mut config = load(root);
-    config.remote_repo = remote.map(str::trim).filter(|r| !r.is_empty()).map(str::to_string);
+    config.remote_repo = remote
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(str::to_string);
     save(root, &config)
 }
 
@@ -330,7 +337,10 @@ mod tests {
 
         let saved = set_remote_repo(root, Some(" /ox/my-app/ ")).unwrap();
         assert_eq!(saved.remote_repo.as_deref(), Some("ox/my-app"));
-        assert_eq!(load(root).remote_target(), Some(("ox".into(), "my-app".into())));
+        assert_eq!(
+            load(root).remote_target(),
+            Some(("ox".into(), "my-app".into()))
+        );
         assert!(prompt_section(root).contains("Remote Oxen repository: ox/my-app"));
 
         // Other fields survive the setter.
@@ -353,8 +363,14 @@ mod tests {
             let err = set_remote_repo(tmp.path(), Some(bad)).unwrap_err();
             assert!(err.to_string().contains("namespace/name"), "{bad}: {err}");
         }
-        assert_eq!(parse_remote_repo("ox/my-app"), Some(("ox".into(), "my-app".into())));
-        assert_eq!(parse_remote_repo("ox/my_app.v2"), Some(("ox".into(), "my_app.v2".into())));
+        assert_eq!(
+            parse_remote_repo("ox/my-app"),
+            Some(("ox".into(), "my-app".into()))
+        );
+        assert_eq!(
+            parse_remote_repo("ox/my_app.v2"),
+            Some(("ox".into(), "my_app.v2".into()))
+        );
     }
 
     #[test]

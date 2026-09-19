@@ -212,9 +212,7 @@ async fn main() -> Result<()> {
         }
         Some(TopCommand::Trace { action }) => return commands::trace::run_trace(action, &ui),
         Some(TopCommand::Oxen { action }) => return commands::oxen::run_oxen(action, &ui),
-        Some(TopCommand::Project { action }) => {
-            return commands::project::run_project(action, &ui)
-        }
+        Some(TopCommand::Project { action }) => return commands::project::run_project(action, &ui),
         Some(TopCommand::Ui {
             path,
             gallery,

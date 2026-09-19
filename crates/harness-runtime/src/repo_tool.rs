@@ -60,7 +60,11 @@ pub struct CreateRepositoryTool {
 }
 
 impl CreateRepositoryTool {
-    pub fn new(root: impl Into<PathBuf>, api: Option<MediaApi>, asker: Arc<dyn QuestionAsker>) -> Self {
+    pub fn new(
+        root: impl Into<PathBuf>,
+        api: Option<MediaApi>,
+        asker: Arc<dyn QuestionAsker>,
+    ) -> Self {
         Self {
             root: root.into(),
             api,
@@ -70,13 +74,21 @@ impl CreateRepositoryTool {
     }
 
     /// Route hub calls elsewhere (a mock server in tests).
-    pub fn with_hub(mut self, repos: impl Fn(&MediaApi) -> HubRepos + Send + Sync + 'static) -> Self {
+    pub fn with_hub(
+        mut self,
+        repos: impl Fn(&MediaApi) -> HubRepos + Send + Sync + 'static,
+    ) -> Self {
         self.repos = Arc::new(repos);
         self
     }
 
     /// Ask for a go-ahead. `Ok(None)` = nobody to ask.
-    async fn confirm(&self, question: String, go: &str, go_detail: String) -> Result<Option<bool>, ToolError> {
+    async fn confirm(
+        &self,
+        question: String,
+        go: &str,
+        go_detail: String,
+    ) -> Result<Option<bool>, ToolError> {
         let q = Question {
             question,
             header: "Repository".to_string(),
@@ -129,11 +141,21 @@ impl TypedTool for CreateRepositoryTool {
         };
         let hub = (self.repos)(api);
 
-        let name = match args.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        let name = match args
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
             Some(n) => n.to_string(),
             None => folder_slug(&self.root),
         };
-        let namespace = match args.namespace.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        let namespace = match args
+            .namespace
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
             Some(ns) => ns.to_string(),
             None => hub.whoami().await.map_err(hub_err)?,
         };
@@ -194,7 +216,12 @@ impl TypedTool for CreateRepositoryTool {
                 .map(str::trim)
                 .filter(|d| !d.is_empty())
                 .map(str::to_string)
-                .unwrap_or_else(|| format!("{} — managed with oxen-harness.", project::load(&self.root).name));
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} — managed with oxen-harness.",
+                        project::load(&self.root).name
+                    )
+                });
             hub.create_repo(NewRepo {
                 name: &name,
                 namespace: Some(&namespace),
@@ -205,13 +232,20 @@ impl TypedTool for CreateRepositoryTool {
             .await
             .map_err(hub_err)?;
         }
-        project::set_remote_repo(&self.root, Some(&full))
-            .map_err(|e| ToolError::Execution(format!("could not save the project's repository: {e}")))?;
+        project::set_remote_repo(&self.root, Some(&full)).map_err(|e| {
+            ToolError::Execution(format!("could not save the project's repository: {e}"))
+        })?;
 
         let mut out = format!(
             "{} {url}{} and set it as this project's default repository (`{full}`).",
             if exists { "Adopted" } else { "Created" },
-            if exists { "" } else if public { " (public)" } else { " (private)" },
+            if exists {
+                ""
+            } else if public {
+                " (public)"
+            } else {
+                " (private)"
+            },
         );
         out.push_str(&point_oxen_remote(&self.root, &url));
         out.push_str(
@@ -253,7 +287,13 @@ fn folder_slug(root: &Path) -> String {
         .unwrap_or_else(|| "project".to_string());
     let slug: String = raw
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string();
@@ -278,7 +318,10 @@ mod tests {
 
     #[async_trait]
     impl QuestionAsker for ScriptedAsker {
-        async fn ask(&self, questions: &[Question]) -> Result<Option<Vec<QuestionAnswer>>, ToolError> {
+        async fn ask(
+            &self,
+            questions: &[Question],
+        ) -> Result<Option<Vec<QuestionAnswer>>, ToolError> {
             self.asked.lock().unwrap().extend(questions.iter().cloned());
             Ok(self.answer.map(|label| {
                 questions
@@ -293,9 +336,19 @@ mod tests {
         }
     }
 
-    fn tool(root: &Path, server: &mockito::Server, answer: Option<&'static str>) -> (CreateRepositoryTool, Arc<ScriptedAsker>) {
-        let asker = Arc::new(ScriptedAsker { answer, asked: Mutex::new(Vec::new()) });
-        let api = MediaApi { base_url: format!("{}/api/ai", server.url()), api_key: "key".into() };
+    fn tool(
+        root: &Path,
+        server: &mockito::Server,
+        answer: Option<&'static str>,
+    ) -> (CreateRepositoryTool, Arc<ScriptedAsker>) {
+        let asker = Arc::new(ScriptedAsker {
+            answer,
+            asked: Mutex::new(Vec::new()),
+        });
+        let api = MediaApi {
+            base_url: format!("{}/api/ai", server.url()),
+            api_key: "key".into(),
+        };
         let t = CreateRepositoryTool::new(root, Some(api), asker.clone());
         (t, asker)
     }
@@ -306,11 +359,21 @@ mod tests {
         let root = tmp.path().join("My App");
         std::fs::create_dir(&root).unwrap();
         let mut server = mockito::Server::new_async().await;
-        let _me = server.mock("GET", "/api/users/me").with_body(r#"{"user":{"username":"greg"}}"#).create_async().await;
-        let _exists = server.mock("GET", "/api/repos/greg/My-App").with_status(404).create_async().await;
+        let _me = server
+            .mock("GET", "/api/users/me")
+            .with_body(r#"{"user":{"username":"greg"}}"#)
+            .create_async()
+            .await;
+        let _exists = server
+            .mock("GET", "/api/repos/greg/My-App")
+            .with_status(404)
+            .create_async()
+            .await;
         let create = server
             .mock("POST", "/api/repos/")
-            .match_body(mockito::Matcher::PartialJsonString(r#"{"name":"My-App","namespace":"greg","visibility":"private"}"#.into()))
+            .match_body(mockito::Matcher::PartialJsonString(
+                r#"{"name":"My-App","namespace":"greg","visibility":"private"}"#.into(),
+            ))
             .with_status(201)
             .with_body("{}")
             .create_async()
@@ -320,45 +383,99 @@ mod tests {
         let out = tool.invoke(serde_json::json!({})).await.unwrap();
         create.assert_async().await;
         assert!(out.contains("Created"), "{out}");
-        assert!(out.contains(&format!("{}/greg/My-App", server.url())), "{out}");
-        assert_eq!(project::load(&root).remote_repo.as_deref(), Some("greg/My-App"));
+        assert!(
+            out.contains(&format!("{}/greg/My-App", server.url())),
+            "{out}"
+        );
+        assert_eq!(
+            project::load(&root).remote_repo.as_deref(),
+            Some("greg/My-App")
+        );
         let asked = asker.asked.lock().unwrap();
         assert_eq!(asked.len(), 1);
-        assert!(asked[0].question.contains("Create the private repository `greg/My-App`"), "{}", asked[0].question);
+        assert!(
+            asked[0]
+                .question
+                .contains("Create the private repository `greg/My-App`"),
+            "{}",
+            asked[0].question
+        );
     }
 
     #[tokio::test]
     async fn adopts_an_existing_repository_without_posting() {
         let tmp = tempfile::tempdir().unwrap();
         let mut server = mockito::Server::new_async().await;
-        let _exists = server.mock("GET", "/api/repos/ox/art").with_status(200).with_body("{}").create_async().await;
-        let create = server.mock("POST", "/api/repos/").expect(0).create_async().await;
+        let _exists = server
+            .mock("GET", "/api/repos/ox/art")
+            .with_status(200)
+            .with_body("{}")
+            .create_async()
+            .await;
+        let create = server
+            .mock("POST", "/api/repos/")
+            .expect(0)
+            .create_async()
+            .await;
         project::set_remote_repo(tmp.path(), Some("ox/old")).unwrap();
 
         let (tool, asker) = tool(tmp.path(), &server, Some("Use it"));
-        let out = tool.invoke(serde_json::json!({"name": "art", "namespace": "ox"})).await.unwrap();
+        let out = tool
+            .invoke(serde_json::json!({"name": "art", "namespace": "ox"}))
+            .await
+            .unwrap();
         create.assert_async().await;
         assert!(out.contains("Adopted"), "{out}");
-        assert_eq!(project::load(tmp.path()).remote_repo.as_deref(), Some("ox/art"));
+        assert_eq!(
+            project::load(tmp.path()).remote_repo.as_deref(),
+            Some("ox/art")
+        );
         let asked = asker.asked.lock().unwrap();
-        assert!(asked[0].question.contains("already exists"), "{}", asked[0].question);
-        assert!(asked[0].question.contains("replaces the current default `ox/old`"), "{}", asked[0].question);
+        assert!(
+            asked[0].question.contains("already exists"),
+            "{}",
+            asked[0].question
+        );
+        assert!(
+            asked[0]
+                .question
+                .contains("replaces the current default `ox/old`"),
+            "{}",
+            asked[0].question
+        );
     }
 
     #[tokio::test]
     async fn a_decline_or_no_user_changes_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let mut server = mockito::Server::new_async().await;
-        let _exists = server.mock("GET", "/api/repos/ox/art").with_status(404).create_async().await;
-        let create = server.mock("POST", "/api/repos/").expect(0).create_async().await;
+        let _exists = server
+            .mock("GET", "/api/repos/ox/art")
+            .with_status(404)
+            .create_async()
+            .await;
+        let create = server
+            .mock("POST", "/api/repos/")
+            .expect(0)
+            .create_async()
+            .await;
 
         let (declined, _) = tool(tmp.path(), &server, Some("Cancel"));
-        let out = declined.invoke(serde_json::json!({"name": "art", "namespace": "ox"})).await.unwrap();
+        let out = declined
+            .invoke(serde_json::json!({"name": "art", "namespace": "ox"}))
+            .await
+            .unwrap();
         assert!(out.contains("declined"), "{out}");
 
         let (nobody, _) = tool(tmp.path(), &server, None);
-        let out = nobody.invoke(serde_json::json!({"name": "art", "namespace": "ox"})).await.unwrap();
-        assert!(out.contains("oxen-harness project set-repo ox/art"), "{out}");
+        let out = nobody
+            .invoke(serde_json::json!({"name": "art", "namespace": "ox"}))
+            .await
+            .unwrap();
+        assert!(
+            out.contains("oxen-harness project set-repo ox/art"),
+            "{out}"
+        );
 
         create.assert_async().await;
         assert_eq!(project::load(tmp.path()).remote_repo, None);
@@ -367,9 +484,15 @@ mod tests {
     #[tokio::test]
     async fn without_a_key_it_says_so_and_never_asks() {
         let tmp = tempfile::tempdir().unwrap();
-        let asker = Arc::new(ScriptedAsker { answer: Some("Create"), asked: Mutex::new(Vec::new()) });
+        let asker = Arc::new(ScriptedAsker {
+            answer: Some("Create"),
+            asked: Mutex::new(Vec::new()),
+        });
         let tool = CreateRepositoryTool::new(tmp.path(), None, asker.clone());
-        let out = tool.invoke(serde_json::json!({"name": "art"})).await.unwrap();
+        let out = tool
+            .invoke(serde_json::json!({"name": "art"}))
+            .await
+            .unwrap();
         assert_eq!(out, REPO_NO_KEY);
         assert!(asker.asked.lock().unwrap().is_empty());
     }
@@ -378,9 +501,16 @@ mod tests {
     async fn a_bad_name_is_refused_before_any_hub_call() {
         let tmp = tempfile::tempdir().unwrap();
         let mut server = mockito::Server::new_async().await;
-        let any = server.mock("GET", mockito::Matcher::Any).expect(0).create_async().await;
+        let any = server
+            .mock("GET", mockito::Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
         let (tool, _) = tool(tmp.path(), &server, Some("Create"));
-        let out = tool.invoke(serde_json::json!({"name": "a/b", "namespace": "ox"})).await.unwrap();
+        let out = tool
+            .invoke(serde_json::json!({"name": "a/b", "namespace": "ox"}))
+            .await
+            .unwrap();
         assert!(out.contains("isn't a valid repository name"), "{out}");
         any.assert_async().await;
     }

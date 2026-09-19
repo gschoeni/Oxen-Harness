@@ -200,7 +200,11 @@ mod tests {
     use super::*;
 
     fn repos(server: &mockito::Server) -> HubRepos {
-        HubRepos::new(reqwest::Client::new(), format!("{}/api", server.url()), "key")
+        HubRepos::new(
+            reqwest::Client::new(),
+            format!("{}/api", server.url()),
+            "key",
+        )
     }
 
     #[tokio::test]
@@ -218,15 +222,35 @@ mod tests {
     #[tokio::test]
     async fn exists_maps_404_and_403_to_false_and_401_to_unauthorized() {
         let mut server = mockito::Server::new_async().await;
-        let _a = server.mock("GET", "/api/repos/ox/a").with_status(200).with_body("{}").create_async().await;
-        let _b = server.mock("GET", "/api/repos/ox/b").with_status(404).create_async().await;
-        let _c = server.mock("GET", "/api/repos/ox/c").with_status(403).create_async().await;
-        let _d = server.mock("GET", "/api/repos/ox/d").with_status(401).create_async().await;
+        let _a = server
+            .mock("GET", "/api/repos/ox/a")
+            .with_status(200)
+            .with_body("{}")
+            .create_async()
+            .await;
+        let _b = server
+            .mock("GET", "/api/repos/ox/b")
+            .with_status(404)
+            .create_async()
+            .await;
+        let _c = server
+            .mock("GET", "/api/repos/ox/c")
+            .with_status(403)
+            .create_async()
+            .await;
+        let _d = server
+            .mock("GET", "/api/repos/ox/d")
+            .with_status(401)
+            .create_async()
+            .await;
         let r = repos(&server);
         assert!(r.repo_exists("ox", "a").await.unwrap());
         assert!(!r.repo_exists("ox", "b").await.unwrap());
         assert!(!r.repo_exists("ox", "c").await.unwrap());
-        assert!(matches!(r.repo_exists("ox", "d").await, Err(HubError::Unauthorized)));
+        assert!(matches!(
+            r.repo_exists("ox", "d").await,
+            Err(HubError::Unauthorized)
+        ));
     }
 
     #[tokio::test]
@@ -235,7 +259,9 @@ mod tests {
         let _m = server
             .mock("POST", "/api/repos/")
             .match_body(mockito::Matcher::AllOf(vec![
-                mockito::Matcher::PartialJsonString(r#"{"name":"art","namespace":"ox","visibility":"private"}"#.into()),
+                mockito::Matcher::PartialJsonString(
+                    r#"{"name":"art","namespace":"ox","visibility":"private"}"#.into(),
+                ),
             ]))
             .with_status(201)
             .with_body(r#"{"repository":{"name":"art"}}"#)
@@ -263,16 +289,34 @@ mod tests {
             .create_async()
             .await;
         let err = repos(&server)
-            .create_repo(NewRepo { name: "art", namespace: None, description: "", public: false, workbench: false })
+            .create_repo(NewRepo {
+                name: "art",
+                namespace: None,
+                description: "",
+                public: false,
+                workbench: false,
+            })
             .await
             .unwrap_err();
-        assert!(matches!(err, HubError::Api { status: 422, ref message } if message == "name already taken"), "{err}");
+        assert!(
+            matches!(err, HubError::Api { status: 422, ref message } if message == "name already taken"),
+            "{err}"
+        );
     }
 
     #[test]
     fn web_url_strips_the_api_suffixes() {
-        assert_eq!(repo_web_url("https://hub.oxen.ai/api/ai", "ox", "art"), "https://hub.oxen.ai/ox/art");
-        assert_eq!(repo_web_url("https://hub.oxen.ai/api", "ox", "art"), "https://hub.oxen.ai/ox/art");
-        assert_eq!(repo_web_url("http://localhost:3001/", "ox", "art"), "http://localhost:3001/ox/art");
+        assert_eq!(
+            repo_web_url("https://hub.oxen.ai/api/ai", "ox", "art"),
+            "https://hub.oxen.ai/ox/art"
+        );
+        assert_eq!(
+            repo_web_url("https://hub.oxen.ai/api", "ox", "art"),
+            "https://hub.oxen.ai/ox/art"
+        );
+        assert_eq!(
+            repo_web_url("http://localhost:3001/", "ox", "art"),
+            "http://localhost:3001/ox/art"
+        );
     }
 }

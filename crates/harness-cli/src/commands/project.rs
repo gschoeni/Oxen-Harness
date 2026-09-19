@@ -47,7 +47,12 @@ pub(crate) fn run_project(action: ProjectAction, ui: &Ui) -> Result<()> {
                 println!("  {} {}", ui.dim("goal   "), config.description);
             }
             match &config.remote_repo {
-                Some(repo) => println!("  {} {} {}", ui.dim("remote "), repo, ui.dim(&remote_url(repo))),
+                Some(repo) => println!(
+                    "  {} {} {}",
+                    ui.dim("remote "),
+                    repo,
+                    ui.dim(&remote_url(repo))
+                ),
                 None => println!(
                     "  {} {}",
                     ui.dim("remote "),
@@ -84,7 +89,11 @@ fn resolve_root(path: Option<PathBuf>) -> Result<PathBuf> {
         Some(p) => p,
         None => std::env::current_dir().context("could not read the current directory")?,
     };
-    anyhow::ensure!(root.is_dir(), "project folder does not exist: {}", root.display());
+    anyhow::ensure!(
+        root.is_dir(),
+        "project folder does not exist: {}",
+        root.display()
+    );
     Ok(root.canonicalize().unwrap_or(root))
 }
 
