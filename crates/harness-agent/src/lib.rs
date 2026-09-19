@@ -54,7 +54,7 @@ pub mod tree;
 #[cfg(test)]
 mod test_support;
 
-pub use agent::Agent;
+pub use agent::{Agent, TurnStop};
 pub use ask_tool::{AskModelTool, ASK_MODEL_TOOL};
 pub use cache::PromptCacheMode;
 pub use config::{AgentConfig, ModelRoles, RetryPolicy, Role, RoundBudget, SessionBudget};

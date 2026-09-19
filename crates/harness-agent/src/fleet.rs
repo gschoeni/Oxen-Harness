@@ -134,6 +134,8 @@ pub enum LaneStop {
     /// A spent budget (the tree's shared wallet, or the session's) ended
     /// the lane's turn before the model finished.
     Budget,
+    /// The lane hit its round cap without converging.
+    Rounds(u32),
 }
 
 impl std::fmt::Display for LaneStop {
@@ -148,7 +150,8 @@ impl std::fmt::Display for LaneStop {
                 after.as_secs()
             ),
             LaneStop::Cancelled => write!(f, "stopped early (cancelled)"),
-            LaneStop::Budget => write!(f, "stopped early (the agents' shared budget is spent)"),
+            LaneStop::Budget => write!(f, "stopped early (its token budget is spent)"),
+            LaneStop::Rounds(cap) => write!(f, "stopped after {cap} model rounds (its round cap)"),
         }
     }
 }
@@ -472,7 +475,7 @@ where
                 let turn = async {
                     let text = agent.run_turn(task.prompt, &on_event).await?;
                     match &task.output_schema {
-                        Some(schema) if !lane_cancel.is_cancelled() && !agent.stopped_by_budget() =>
+                        Some(schema) if !lane_cancel.is_cancelled() && agent.turn_stop().is_none() =>
                             agent.coerce_structured(text, schema, &on_event).await,
                         _ => Ok((text, None)),
                     }
@@ -500,9 +503,12 @@ where
                 Some(LaneStop::TimedOut(limits.lane_timeout))
             } else if lane_cancel.is_cancelled() {
                 Some(LaneStop::Cancelled)
-            } else if agent.stopped_by_budget() {
-                Some(LaneStop::Budget)
-            } else { None };
+            } else {
+                agent.turn_stop().map(|stop| match stop {
+                    crate::TurnStop::RoundBudget(cap) => LaneStop::Rounds(cap),
+                    crate::TurnStop::SessionBudget | crate::TurnStop::TreeBudget => LaneStop::Budget,
+                })
+            };
             let (result, structured) = match result {
                 Ok((text, structured)) => (Ok(text), structured),
                 Err(error) => (Err(error), None),

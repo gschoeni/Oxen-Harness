@@ -381,9 +381,10 @@ pub struct ModelUsage {
 /// paths) record empty/zero detail rather than fabricating values.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UsageDetail<'a> {
-    /// The session that spent these tokens — for a detached side agent or
-    /// fleet lane, the session that spawned it. Empty only when nothing
-    /// claims the spend.
+    /// The session that spent these tokens: a fleet lane's own id (roll a
+    /// tree up with `HistoryStore::usage_for_tree`), or for a detached side
+    /// agent the session that spawned it. Empty only when nothing claims
+    /// the spend.
     pub session_id: &'a str,
     /// What kind of call this was: `"turn"` (a turn-loop round), `"summary"`
     /// (compaction), `"oneshot"` (side completions), or empty when unknown.
@@ -1358,6 +1359,29 @@ impl HistoryStore {
         conn.query_row(
             "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0)
              FROM usage_events WHERE session_id = ?1",
+            [session_id],
+            |row| {
+                Ok(SessionUsage {
+                    prompt_tokens: row.get(0)?,
+                    completion_tokens: row.get(1)?,
+                })
+            },
+        )
+        .map_err(HistoryError::from)
+    }
+
+    /// One session's spend plus everything its lanes, their lanes, and so
+    /// on spent: what a chat cost, subagents included.
+    pub fn usage_for_tree(&self, session_id: &str) -> Result<SessionUsage, HistoryError> {
+        let conn = self.lock()?;
+        conn.query_row(
+            "WITH RECURSIVE tree(id) AS (
+                 SELECT ?1
+                 UNION ALL
+                 SELECT s.id FROM sessions s JOIN tree ON s.parent_session = tree.id
+             )
+             SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0)
+             FROM usage_events WHERE session_id IN (SELECT id FROM tree)",
             [session_id],
             |row| {
                 Ok(SessionUsage {
@@ -2545,6 +2569,44 @@ mod tests {
         let store = store();
         store.record_model_usage("m", "unpriced", 0, 0).unwrap();
         assert!(store.model_usage_breakdown().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_sessions_tree_usage_rolls_up_its_lanes() {
+        let store = store();
+        let root = store.create_session(&SessionMeta::default()).unwrap();
+        let lane = store
+            .create_session(&SessionMeta {
+                parent_session: root.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+        let leaf = store
+            .create_session(&SessionMeta {
+                parent_session: lane.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+        for (session, prompt) in [(&root, 100), (&lane, 10), (&leaf, 1)] {
+            store
+                .record_model_usage_detailed(
+                    "m",
+                    "oxen_cloud",
+                    prompt,
+                    1,
+                    &UsageDetail {
+                        session_id: session,
+                        kind: "turn",
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        assert_eq!(store.usage_for_session(&root).unwrap().prompt_tokens, 100);
+        assert_eq!(store.usage_for_tree(&root).unwrap().prompt_tokens, 111);
+        assert_eq!(store.usage_for_tree(&root).unwrap().completion_tokens, 3);
+        assert_eq!(store.usage_for_tree(&lane).unwrap().prompt_tokens, 11);
+        assert_eq!(store.usage_for_tree(&leaf).unwrap().prompt_tokens, 1);
     }
 
     #[test]

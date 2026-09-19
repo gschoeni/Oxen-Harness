@@ -33,6 +33,36 @@ pub(crate) fn sse_prose(text: &str) -> String {
     format!("data: {chunk}\n\ndata: [DONE]\n\n")
 }
 
+/// One streamed tool call whose final chunk reports `prompt`/`completion`
+/// usage (nothing cached), so a test can make one round cost what it likes.
+pub(crate) fn sse_tool_call_with_usage(
+    id: &str,
+    name: &str,
+    prompt: u32,
+    completion: u32,
+) -> String {
+    let chunk = serde_json::json!({
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "content": "",
+                "tool_calls": [{
+                    "index": 0,
+                    "id": id,
+                    "function": { "name": name, "arguments": "{}" }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }],
+        "usage": {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion
+        }
+    });
+    format!("data: {chunk}\n\ndata: [DONE]\n\n")
+}
+
 /// A retry policy with near-zero waits so backoff tests run instantly.
 pub(crate) fn fast_retry(max_attempts: u32) -> RetryPolicy {
     RetryPolicy::from_backoff(harness_llm::Backoff::instant(max_attempts), Vec::new())
@@ -48,6 +78,31 @@ pub(crate) fn retry_test_agent(url: String, retry: RetryPolicy) -> Agent {
         ..AgentConfig::default()
     };
     Agent::new(client, ToolRegistry::new(), store, session, config).unwrap()
+}
+
+/// SSE body for a prose reply whose final chunk reports usage the way an
+/// OpenAI-style endpoint does: `prompt_tokens` includes the cached part,
+/// which `prompt_tokens_details.cached_tokens` then names.
+pub(crate) fn sse_prose_with_usage(
+    text: &str,
+    prompt: u32,
+    completion: u32,
+    cached: u32,
+) -> String {
+    let chunk = serde_json::json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": text },
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+            "prompt_tokens_details": { "cached_tokens": cached }
+        }
+    });
+    format!("data: {chunk}\n\ndata: [DONE]\n\n")
 }
 
 /// SSE for a reply that calls a tool named `snap` with empty args.

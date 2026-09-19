@@ -129,8 +129,10 @@ You were spawned by another agent for one task and it will read only your final 
 so make that reply the deliverable: specific, complete, and as short as the task allows \
 (paths, names, numbers, verdicts — not a narrative of what you did). You may spawn agents of \
 your own for large or parallel reading, but batch: give each a substantial, self-contained \
-chunk rather than one agent per item, and do the small work yourself. You cannot ask the \
-user anything; if you are blocked (a command needs approval, something is ambiguous), say \
+chunk rather than one agent per item, and do the small work yourself. You work within a \
+token allowance; when a reminder says it is nearly spent, finish the step you are on and \
+report — a report you write beats one you are cut off from. You cannot ask the user \
+anything; if you are blocked (a command needs approval, something is ambiguous), say \
 exactly what and why in your reply.";
 
 /// Appended to a leaf's system prompt: it answers from what it is given.
@@ -139,8 +141,10 @@ You were spawned by another agent for one task and it will read only your final 
 so make that reply the deliverable: specific, complete, and as short as the task allows \
 (paths, names, numbers, verdicts — not a narrative of what you did). Answer from what you \
 are given and what you can read yourself; there are no further agents to delegate to. You \
-cannot ask the user anything; if you are blocked (a command needs approval, something is \
-ambiguous), say exactly what and why in your reply.";
+work within a token allowance; when a reminder says it is nearly spent, finish the step you \
+are on and report — a report you write beats one you are cut off from. You cannot ask the \
+user anything; if you are blocked (a command needs approval, something is ambiguous), say \
+exactly what and why in your reply.";
 
 /// The prompt appendix for a subagent at `depth` under a `max_depth` cap.
 pub fn subagent_appendix(depth: u8, max_depth: u8) -> &'static str {
@@ -340,6 +344,27 @@ pub(crate) const PLAN_STALL_NUDGE: &str =
 pub(crate) const WRAP_UP_NUDGE: &str = "<system-reminder>You are near this task's round budget. \
 Wrap up now: finish the current step, then give your final report with what you did, \
 what you verified, and what is left. Do not start new work.</system-reminder>";
+
+/// The one warning a lane gets as its allowance runs low (see
+/// `ALLOWANCE_WARN_PERCENT_LEFT`): wrap up on purpose, not by being stopped.
+pub(crate) fn allowance_nudge(left: u64, cap: u64) -> String {
+    format!(
+        "<system-reminder>You have about {left} tokens of your {cap}-token allowance left. \
+         Wrap up now: finish the current step, then give your final report with what you \
+         found, what you verified, and what is left. Do not start new reading.</system-reminder>"
+    )
+}
+
+/// The reminder that rides with the one call a budget-stopped turn still
+/// gets (see `Agent::final_report`): no tools, one reply, the deliverable.
+pub(crate) fn final_report_nudge(reason: &str) -> String {
+    format!(
+        "<system-reminder>Stopped: {reason}. Tools are no longer available and this is your \
+         last reply. Give your final report now — what you found, what you verified, and what \
+         is left — in the shape you were asked for, with the specifics (paths, names, numbers, \
+         verdicts). Do not describe what you would do next.</system-reminder>"
+    )
+}
 
 pub(crate) const LOOP_NUDGE: &str =
     "You have made the same tool call with identical arguments several times in a row, \

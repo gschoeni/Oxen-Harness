@@ -302,9 +302,19 @@ impl AgentConfig {
     ///   stopped instead of spending the fleet's whole allowance;
     /// - the system prompt gains the lane or leaf appendix for its depth
     ///   (see [`crate::prompt::subagent_appendix`]);
+    /// - stale tool output is compressed out of its requests unless the
+    ///   parent switched compression off entirely, and its resident context
+    ///   is capped at [`LANE_RESIDENT_CHARS`]: a lane reads page after page
+    ///   and re-sends every one on every round, which is where a fleet's
+    ///   tokens went before either;
     /// - it sits one level deeper in the tree and shares the tree budget.
     pub fn for_subagent(&self) -> AgentConfig {
         let mut config = self.clone();
+        if config.compression != CompressionMode::Off {
+            config.compression = CompressionMode::On;
+        }
+        config.max_resident_context_chars =
+            config.max_resident_context_chars.min(LANE_RESIDENT_CHARS);
         config.model = config.roles.resolve(Role::Smol, &config.model).to_owned();
         // A lane on a different model has different limits; the parent's
         // catalog facts must not be mistaken for the child's.
@@ -381,6 +391,11 @@ impl Default for AgentConfig {
     }
 }
 
+/// The most text a lane keeps resident before compacting, about 75k
+/// tokens: enough to hold a task's worth of reading, small enough that a
+/// lane can't grow a six-figure context it re-sends every round.
+pub const LANE_RESIDENT_CHARS: usize = 300_000;
+
 /// The default [`AgentConfig::tool_result_cap`]: about 7.5k tokens, so a
 /// whole file or build log still reads inline while a repository dump or a
 /// giant grep is parked.
@@ -407,6 +422,37 @@ mod tests {
         // Roles are independent: configuring one doesn't route the others.
         assert_eq!(roles.resolve(Role::Summary, "opus"), "opus");
         assert_eq!(roles.resolve(Role::Default, "opus"), "opus");
+    }
+
+    #[test]
+    fn a_subagent_compresses_and_compacts_sooner_than_its_parent() {
+        let parent = AgentConfig {
+            compression: CompressionMode::Audit,
+            ..AgentConfig::default()
+        };
+        let lane = parent.for_subagent();
+        assert_eq!(
+            lane.compression,
+            CompressionMode::On,
+            "audit measures; a lane acts"
+        );
+        assert_eq!(lane.max_resident_context_chars, LANE_RESIDENT_CHARS);
+
+        // An explicit off stays off: the user turned it off for a reason.
+        let off = AgentConfig {
+            compression: CompressionMode::Off,
+            ..AgentConfig::default()
+        }
+        .for_subagent();
+        assert_eq!(off.compression, CompressionMode::Off);
+
+        // A parent already tighter than the lane ceiling is not loosened.
+        let tight = AgentConfig {
+            max_resident_context_chars: 50_000,
+            ..AgentConfig::default()
+        }
+        .for_subagent();
+        assert_eq!(tight.max_resident_context_chars, 50_000);
     }
 
     #[test]

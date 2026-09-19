@@ -86,8 +86,8 @@ pub struct FleetSpawner {
     /// back and resumed) and their spend lands in its ledger. `None` (tests)
     /// keeps lanes in memory.
     store: Option<Arc<HistoryStore>>,
-    /// The session lanes are spawned from — their `parent_session`, and
-    /// where their spend is attributed (see [`FleetSpawner::set_session`]).
+    /// The session lanes are spawned from — their `parent_session` (see
+    /// [`FleetSpawner::set_session`]).
     /// A slot rather than a builder argument: the CLI registers the tool
     /// before its session exists.
     session: StdMutex<Option<String>>,
@@ -505,7 +505,8 @@ impl FleetSpawner {
             reserved: self.reserved.clone(),
             tree: tree.clone(),
         };
-        tree.admit_spawn(lanes).map_err(ToolError::Execution)?;
+        tree.admit_spawn(self.session().as_deref(), lanes)
+            .map_err(ToolError::Execution)?;
         Ok(admission)
     }
 
@@ -840,8 +841,10 @@ impl FleetSpawner {
         Ok(store.clone())
     }
 
-    /// What every lane gets after construction: spend attributed to the
-    /// spawning session, its stop token, and a place in the live registry.
+    /// What every lane gets after construction: its stop token, its wallet,
+    /// and a place in the live registry. A persisted lane keeps its own
+    /// usage ledger (see `HistoryStore::usage_for_tree` for the roll-up), so
+    /// where a fleet's tokens went can be read back per lane.
     fn adopt(
         &self,
         agent: &mut Agent,
@@ -850,10 +853,9 @@ impl FleetSpawner {
         cancel: CancellationToken,
         workspace: Option<Arc<crate::worktree::LaneWorktree>>,
     ) -> Result<(), AgentError> {
-        if let Some(session) = self.session() {
-            agent.set_usage_session(session);
-        }
         agent.set_cancel_token(cancel.clone());
+        self.tree_budget()
+            .open_lane(self.session().as_deref(), agent.session_id());
         self.tree
             .try_register(LiveLane {
                 id: agent.session_id().to_string(),
@@ -870,6 +872,7 @@ impl FleetSpawner {
             label: label.to_string(),
             fleet: fleet.to_string(),
             tree: self.tree.clone(),
+            budget: self.tree_budget(),
             store: agent.history_store().clone(),
             workspace,
             spill: self.overflow_store(),
@@ -918,6 +921,10 @@ impl FleetSpawner {
         );
         let tree = self.tree_budget();
         let _inflight = InFlight::begin(tree.clone());
+        // The lanes about to open split this session's remaining allowance.
+        let parent = self.session();
+        let count = tasks.len() as u32;
+        tree.expect_lanes(parent.as_deref(), count);
         let outcomes = run_fleet(spawn, tasks, limits, cancel.clone(), |event| {
             sink.event(fleet, event);
             // Spend changed: let the host show where the tree stands.
@@ -939,7 +946,10 @@ impl FleetSpawner {
             }
         })
         .await
-        .map_err(|e| ToolError::Execution(e.to_string()))?;
+        .map_err(|e| {
+            tree.forget_lanes(parent.as_deref(), count);
+            ToolError::Execution(e.to_string())
+        })?;
         drop(guard); // normal teardown; the guard covers the abnormal paths
         self.tree.finish_fleet(fleet);
 
@@ -1437,8 +1447,24 @@ impl FleetTool {
             out.push_str(&patches_section(lanes, &mut results, spill.as_deref()));
         }
         drop(lanes);
+        out.push_str(&budget_footer(&spawner));
         Ok(out.trim_end().to_string())
     }
+}
+
+/// One line the parent can plan on: what this turn's agents have spent of
+/// the tree so far, and what is left to fund more agents from here. Before
+/// this the parent learned the budget existed only when a lane died of it.
+fn budget_footer(spawner: &FleetSpawner) -> String {
+    let tree = spawner.tree_budget();
+    let usage = tree.usage();
+    let limits = tree.limits();
+    let left = tree.remaining_for(spawner.session().as_deref());
+    format!(
+        "\n\nBudget: this turn's agents have spent {} of {} tokens ({} of {} agents); about {} \
+         tokens remain for more agents from here.",
+        usage.tokens, limits.max_tokens, usage.spawns, limits.max_spawns, left
+    )
 }
 
 #[cfg(test)]
@@ -1979,8 +2005,15 @@ mod tests {
             sp.tree().live().is_empty(),
             "a settled lane leaves the registry"
         );
-        // Lane spend is the parent's spend.
-        assert!(store.usage_for_session(&parent).unwrap().prompt_tokens > 0);
+        // The lane's spend is its own row set, rolled up into its parent's
+        // tree — so a fleet's cost can be read back per lane afterwards.
+        let own = store.usage_for_session(&id).unwrap();
+        assert!(own.prompt_tokens > 0);
+        assert_eq!(store.usage_for_session(&parent).unwrap().prompt_tokens, 0);
+        assert_eq!(
+            store.usage_for_tree(&parent).unwrap().prompt_tokens,
+            own.prompt_tokens
+        );
 
         // The full reply is readable, sliceable, and greppable by id — and a
         // session that isn't one of this chat's lanes is refused.
@@ -2142,16 +2175,23 @@ mod tests {
     #[tokio::test]
     async fn a_lane_stops_with_what_it_has_when_the_tree_wallet_is_spent() {
         let mut server = mockito::Server::new_async().await;
+        // The first lane's single call bills more than the whole pool.
         server
             .mock("POST", "/chat/completions")
             .with_status(200)
             .with_header("content-type", "text/event-stream")
-            .with_body(sse_prose("first lane's answer"))
+            .with_body(crate::test_support::sse_prose_with_usage(
+                "first lane's answer",
+                25_000,
+                50,
+                0,
+            ))
             .expect(1)
             .create_async()
             .await;
-        // A one-token wallet: the first lane's single call spends it, so the
-        // second lane (one slot, so it runs after) stops before calling.
+        // A 20k pool admits two lanes (10k each), but the first spends the
+        // tree, so the second (one slot, so it runs after) is stopped before
+        // its first call — and, having done nothing, buys no call to say so.
         let sp = Arc::new(FleetSpawner::new(
             OxenClient::new(server.url(), "k", "claude-opus-4-8"),
             ToolRegistry::new(),
@@ -2159,7 +2199,7 @@ mod tests {
                 system_prompt: None,
                 tree: Some(Arc::new(crate::tree::TreeBudget::new(
                     crate::tree::TreeLimits {
-                        max_tokens: 1,
+                        max_tokens: 20_000,
                         ..Default::default()
                     },
                 ))),
@@ -2179,12 +2219,101 @@ mod tests {
         assert!(out.contains("### first — done"), "{out}");
         assert!(out.contains("first lane's answer"), "{out}");
         assert!(
-            out.contains(
-                "### second — partial — stopped early (the agents' shared budget is spent)"
-            ),
+            out.contains("### second — partial — stopped early (its token budget is spent)"),
             "{out}"
         );
+        assert!(out.contains("Stopped before starting"), "{out}");
         assert!(sp.tree_budget().usage().tokens > 0);
+    }
+
+    /// One lane's appetite is its own problem: the tree's pool is carved
+    /// into equal allowances, so a lane that overspends is stopped (and
+    /// files its report) while its sibling finishes untouched.
+    #[tokio::test]
+    async fn a_greedy_lane_stops_at_its_allowance_while_its_sibling_finishes() {
+        let mut server = mockito::Server::new_async().await;
+        // Two lanes split a 30k pool: 15k each. The greedy lane's first
+        // round bills 20k, so its next round is its write-up.
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("TASK-GREEDY".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_tool_call_with_usage(
+                "c1", "snap", 20_000, 50,
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("TASK-GREEDY".into()),
+                mockito::Matcher::Regex("spent its allowance of 15000 tokens".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("greedy: half the pages read"))
+            .expect(1)
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("TASK-CALM".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("calm: done"))
+            .expect(1)
+            .create_async()
+            .await;
+        let sp = Arc::new(FleetSpawner::new(
+            OxenClient::new(server.url(), "k", "claude-opus-4-8"),
+            ToolRegistry::new(),
+            AgentConfig {
+                system_prompt: None,
+                tree: Some(Arc::new(crate::tree::TreeBudget::new(
+                    crate::tree::TreeLimits {
+                        max_tokens: 30_000,
+                        ..Default::default()
+                    },
+                ))),
+                ..AgentConfig::default()
+            },
+        ));
+        let out = FleetTool::new(sp.clone(), Arc::new(RecordingSink::default()))
+            .invoke(serde_json::json!({
+                "agents": [
+                    { "name": "greedy", "prompt": "TASK-GREEDY" },
+                    { "name": "calm", "prompt": "TASK-CALM" }
+                ],
+                "max_parallel": 2
+            }))
+            .await
+            .unwrap();
+        assert!(
+            out.contains("### greedy — partial — stopped early (its token budget is spent)"),
+            "{out}"
+        );
+        assert!(out.contains("greedy: half the pages read"), "{out}");
+        assert!(out.contains("### calm — done"), "{out}");
+        assert!(out.contains("calm: done"), "{out}");
+        let usage = sp.tree_budget().usage();
+        assert!(
+            usage.tokens < 30_000,
+            "the tree itself was never spent: {usage:?}"
+        );
+        assert!(
+            out.contains("Budget: this turn's agents have spent")
+                && out.contains("of 30000 tokens (2 of 24 agents)"),
+            "the parent is told where the budget stands: {out}"
+        );
+        // Both wallets are closed with the fleet; the pool holds their spend.
+        assert!(sp.tree_budget().allowance("greedy").is_none());
+        let err = sp.tree_budget().admit_spawn(None, 1).unwrap_err();
+        assert!(
+            err.contains("can't fund 1"),
+            "20k of 30k spent leaves too little: {err}"
+        );
     }
 
     #[tokio::test]

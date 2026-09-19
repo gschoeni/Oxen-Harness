@@ -122,6 +122,23 @@ fn render(template: &str, item: &str, index: usize) -> String {
 }
 
 /// Whether an item is a parked-content handle rather than plain text.
+/// Most characters of an item shown in its lane's label.
+const LABEL_ITEM_CHARS: usize = 40;
+
+/// What a lane is called in the agents hub and the results document: its
+/// ordinal (so results map back to items, and identical items stay
+/// distinct) and the head of the item itself, so a fleet over "Vikings @
+/// Falcons", "Browns @ Ravens", … reads as those games, not as "item 3".
+/// A parked handle says nothing about its content, so it keeps the number.
+fn lane_label(index: usize, item: &str) -> String {
+    if as_handle(item).is_some() {
+        return format!("item {}", index + 1);
+    }
+    let head =
+        harness_core::text::ellipsize(&harness_core::text::collapse_ws(item), LABEL_ITEM_CHARS);
+    format!("{} · {head}", index + 1)
+}
+
 fn as_handle(item: &str) -> Option<&str> {
     let trimmed = item.trim();
     let inner = trimmed.strip_prefix("<<ccr:")?.strip_suffix(">>")?;
@@ -342,7 +359,7 @@ impl MapAgentsTool {
     ) -> Result<Vec<SubagentResult>, ToolError> {
         self.spawner
             .tree_budget()
-            .admit_spawn(pending.len() as u32)
+            .admit_spawn(self.spawner.session().as_deref(), pending.len() as u32)
             .map_err(ToolError::Execution)?;
         let spill = self.spawner.overflow_store();
         let tasks: Vec<SubagentTask> = pending
@@ -354,7 +371,7 @@ impl MapAgentsTool {
                     prompt.push_str("\n\n");
                     prompt.push_str(&inputs_section(&[hash.to_string()], spill.as_deref()));
                 }
-                SubagentTask::new(format!("item {}", index + 1), prompt).with_schema(schema.clone())
+                SubagentTask::new(lane_label(index, item), prompt).with_schema(schema.clone())
             })
             .collect();
         let labels: Vec<String> = tasks.iter().map(|t| t.label.clone()).collect();
@@ -400,8 +417,7 @@ impl MapAgentsTool {
                     })?;
                     user = format!("## Input\n\n{content}\n\n---\n\n{user}");
                 }
-                Ok(SubagentTask::new(format!("item {}", index + 1), user)
-                    .with_schema(schema.clone()))
+                Ok(SubagentTask::new(lane_label(index, item), user).with_schema(schema.clone()))
             })
             .collect::<Result<Vec<_>, ToolError>>()?;
         self.spawner
@@ -418,7 +434,7 @@ impl MapAgentsTool {
     ) -> Result<String, ToolError> {
         self.spawner
             .tree_budget()
-            .admit_spawn(1)
+            .admit_spawn(self.spawner.session().as_deref(), 1)
             .map_err(ToolError::Execution)?;
         let prompt = format!(
             "{reduce_prompt}\n\n## The rows to reduce ({} items)\n\n{document}",
@@ -452,6 +468,22 @@ impl MapAgentsTool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_lane_is_named_for_its_item() {
+        assert_eq!(
+            super::lane_label(2, "Vikings @ Falcons"),
+            "3 · Vikings @ Falcons"
+        );
+        assert_eq!(
+            super::lane_label(
+                0,
+                "  a  long\nitem that goes on well past the label width  "
+            ),
+            "1 · a long item that goes on well past the l…"
+        );
+        assert_eq!(super::lane_label(4, "<<ccr:abc chunk>>"), "item 5");
+    }
+
     use std::sync::Arc;
 
     use harness_llm::OxenClient;
@@ -583,10 +615,10 @@ mod tests {
         });
         let out = tool.invoke(args.clone()).await.unwrap();
         // One row per item, in item order, the failed one a typed row.
-        assert!(out.contains("### item 1 — done"), "{out}");
+        assert!(out.contains("### 1 · ITEM-a — done"), "{out}");
         assert!(out.contains("ITEM-a looks fine"), "{out}");
-        assert!(out.contains("### item 2 — done"), "{out}");
-        assert!(out.contains("### item 3 — failed (provider)"), "{out}");
+        assert!(out.contains("### 2 · ITEM-b — done"), "{out}");
+        assert!(out.contains("### 3 · ITEM-c — failed (provider)"), "{out}");
         assert_eq!(store.lanes_of(&parent).unwrap().len(), 3);
 
         // Re-issued: a and b replay from the memo (their mocks admit one call
