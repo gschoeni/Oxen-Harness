@@ -54,9 +54,12 @@ impl Permissions {
             "asset" => &self.assets,
             _ => return false,
         };
-        patterns
-            .iter()
-            .any(|p| globset::Glob::new(p).is_ok_and(|g| g.compile_matcher().is_match(path)))
+        patterns.iter().any(|p| {
+            globset::GlobBuilder::new(p)
+                .literal_separator(true)
+                .build()
+                .is_ok_and(|g| g.compile_matcher().is_match(path))
+        })
     }
     pub fn action(&self, action: &str) -> bool {
         self.actions.iter().any(|a| a == action)
@@ -78,6 +81,9 @@ fn collect(
     files: &mut BTreeMap<String, Vec<u8>>,
     total: &mut usize,
 ) -> Result<(), String> {
+    if relative_dir.components().count() > 16 {
+        return Err("view package directories exceed 16 levels".into());
+    }
     for entry in
         std::fs::read_dir(root.join(relative_dir)).map_err(|e| format!("read view assets: {e}"))?
     {
@@ -121,6 +127,12 @@ fn collect(
 }
 
 fn inspect_files(source: &Path) -> Result<(Package, BTreeMap<String, Vec<u8>>), String> {
+    if std::fs::symlink_metadata(source)
+        .map_err(|e| e.to_string())?
+        .is_symlink()
+    {
+        return Err("view package root cannot be a symlink".into());
+    }
     let mut files = BTreeMap::new();
     collect(source, Path::new(""), &mut files, &mut 0)?;
     let manifest: Manifest = serde_json::from_slice(
@@ -286,8 +298,19 @@ pub fn assets(package: &Package) -> Result<Documents, String> {
         return Err("invalid view digest".into());
     }
     let docs = Documents::new(root()?).map_err(|e| e.to_string())?;
-    Documents::new(docs.resolve(&package.digest).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+    let assets = Documents::new(docs.resolve(&package.digest).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    verify_assets(&assets, package)?;
+    Ok(assets)
+}
+
+fn verify_assets(assets: &Documents, package: &Package) -> Result<(), String> {
+    if inspect(assets.root())?.digest != package.digest {
+        return Err(
+            "installed view assets no longer match the approved hash; reinstall the package".into(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -336,5 +359,26 @@ mod tests {
         package(source.path());
         std::os::unix::fs::symlink("/etc/passwd", source.path().join("escape")).unwrap();
         assert!(inspect(source.path()).unwrap_err().contains("symlinks"));
+    }
+    #[test]
+    fn permission_patterns_do_not_expand_single_star_across_directories() {
+        let permissions = Permissions {
+            read: vec!["notes/*.json".into()],
+            ..Default::default()
+        };
+        assert!(permissions.allows("read", "notes/a.json"));
+        assert!(!permissions.allows("read", "notes/private/a.json"));
+    }
+    #[test]
+    fn changed_installed_assets_cannot_execute_under_an_old_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        package(dir.path());
+        let approved = inspect(dir.path()).unwrap();
+        let docs = Documents::new(dir.path()).unwrap();
+        verify_assets(&docs, &approved).unwrap();
+        std::fs::write(dir.path().join("index.html"), "changed executable").unwrap();
+        assert!(verify_assets(&docs, &approved)
+            .unwrap_err()
+            .contains("approved hash"));
     }
 }

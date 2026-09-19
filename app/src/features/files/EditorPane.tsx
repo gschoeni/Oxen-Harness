@@ -1,9 +1,5 @@
-// The Editor dock: whatever the Files tree opened, as a strip of tabs. Each
-// tab is one text file (CodeMirror editor with dirty tracking, ⌘S save, and
-// "Add to chat" for the highlighted selection), one image or video rendered
-// natively via the asset protocol, or a multi-selection of images shown as a
-// gallery grid. Every tab stays mounted so unsaved edits survive switching.
-// Media can be dragged straight into the chat to become attachments.
+// Shared drafts survive navigation; the file picker selects a resource within
+// the conversation context. Media can be dragged into chat as attachments.
 
 import {
   useCallback,
@@ -27,6 +23,7 @@ import {
   WrapText,
   X,
 } from "lucide-react";
+import { fsReadFile } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { useDocument } from "../../workbench-sdk";
 import { useWorkbenchAPI } from "../workbench/api";
@@ -65,28 +62,11 @@ export function EditorPane({ onResizeStart }: { onResizeStart?: (e: PointerEvent
   if (!workspace || !pane?.tabs.length) return null;
   const { tabs, active } = pane;
 
+  // Drafts belong to the shared document store, so closing a surface is safe.
   function requestCloseTab(index: number) {
-    const key = tabKey(tabs[index]);
-    if (dirtyTabs[key] && !window.confirm(`Discard unsaved changes to ${basename(tabs[index][0])}?`)) return;
-    setDirtyTabs((m) => {
-      const next = { ...m };
-      delete next[key];
-      return next;
-    });
     closeTab(index);
   }
-
   function requestClosePane() {
-    const unsaved = tabs.filter((t) => dirtyTabs[tabKey(t)]);
-    if (
-      unsaved.length &&
-      !window.confirm(
-        unsaved.length === 1
-          ? `Discard unsaved changes to ${basename(unsaved[0][0])}?`
-          : `Discard unsaved changes in ${unsaved.length} files?`
-      )
-    )
-      return;
     closeViewer();
   }
 
@@ -101,12 +81,29 @@ export function EditorPane({ onResizeStart }: { onResizeStart?: (e: PointerEvent
           aria-label="Resize editor"
         />
       )}
-      {tabs.length > 1 && <div className="canvas-head">
-        <select aria-label="Open files" value={active} onChange={e=>activateTab(Number(e.target.value))}>
-          {tabs.map((tab,i)=><option key={tabKey(tab)} value={i}>{basename(tab[0])}{dirtyTabs[tabKey(tab)] ? " · edited" : ""}</option>)}
-        </select>
-        <button className="icon-btn sm" aria-label="Close current file" onClick={()=>requestCloseTab(active)}><X size={14}/></button>
-      </div>}
+      {tabs.length > 1 && (
+        <div className="canvas-head">
+          <select
+            aria-label="Open files"
+            value={active}
+            onChange={(e) => activateTab(Number(e.target.value))}
+          >
+            {tabs.map((tab, i) => (
+              <option key={tabKey(tab)} value={i}>
+                {basename(tab[0])}
+                {dirtyTabs[tabKey(tab)] ? " · edited" : ""}
+              </option>
+            ))}
+          </select>
+          <button
+            className="icon-btn sm"
+            aria-label="Close current file"
+            onClick={() => requestCloseTab(active)}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
       {tabs.map((tab, i) => {
         const key = tabKey(tab);
         const single = tab.length === 1 ? tab[0] : null;
@@ -115,7 +112,9 @@ export function EditorPane({ onResizeStart }: { onResizeStart?: (e: PointerEvent
           body = <Gallery workspace={workspace} paths={tab} onClose={requestClosePane} />;
         } else if (single && isDiffPath(single)) {
           // Checked before extension sniffing: `diff:photo.png` is a diff.
-          body = <DiffView workspace={workspace} path={diffTarget(single)} onClose={requestClosePane} />;
+          body = (
+            <DiffView workspace={workspace} path={diffTarget(single)} onClose={requestClosePane} />
+          );
         } else if (single && (isImagePath(single) || isVideoPath(single))) {
           body = <MediaView workspace={workspace} path={single} onClose={requestClosePane} />;
         } else if (single) {
@@ -173,22 +172,61 @@ function CodeView({
   const renderer = rendererFor(path);
   const [mode, setMode] = useState<"preview" | "raw">(renderer?.defaultMode ?? "raw");
 
-  const session = useStore(s=>s.session?.session_id ?? "");
-  const target = useMemo(()=>({view:"editor",path}),[path]);
-  const api = useWorkbenchAPI({session,workspace,target});
-  const document = useDocument(api,path);
-  const loaded = document.snapshot ? {doc:document.content,truncated:false} : null;
+  const session = useStore((s) => s.session?.session_id ?? "");
+  const target = useMemo(() => ({ view: "editor", path }), [path]);
+  const api = useWorkbenchAPI({ session, workspace, target });
+  const document = useDocument(api, path);
+  const [largePreview, setLargePreview] = useState<string>();
+  const oversized = document.error?.includes("editable document limit") ?? false;
+  useEffect(() => {
+    if (!oversized) {
+      setLargePreview(undefined);
+      return;
+    }
+    let live = true;
+    void fsReadFile(workspace, path)
+      .then((body) => {
+        if (live) setLargePreview(body.content);
+      })
+      .catch((reason) => {
+        if (live) setError(String(reason));
+      });
+    return () => {
+      live = false;
+    };
+  }, [workspace, path, oversized]);
+  const loaded = document.snapshot
+    ? { doc: document.content, truncated: false }
+    : largePreview !== undefined
+      ? { doc: largePreview, truncated: true }
+      : null;
   const dirty = document.dirty;
-  const [error,setError] = useState<string|null>(null);
-  const [justSaved,setJustSaved] = useState(false);
-  const [selection,setSelection] = useState<EditorSelection|null>(null);
-  const buffer = useRef(document.content); buffer.current = document.content;
-  useEffect(()=>{onDirtyChange?.(dirty);},[dirty,onDirtyChange]);
-  useEffect(()=>{if(justSaved){const timer=setTimeout(()=>setJustSaved(false),2000);return()=>clearTimeout(timer);}},[justSaved]);
-  useEffect(()=>{if(!running)void document.reload();},[running]);
+  const [error, setError] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
+  const [selection, setSelection] = useState<EditorSelection | null>(null);
+  const buffer = useRef(document.content);
+  buffer.current = document.content;
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    if (justSaved) {
+      const timer = setTimeout(() => setJustSaved(false), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [justSaved]);
+  useEffect(() => {
+    if (!running) void document.reload();
+  }, [running]);
   async function save() {
-    if(!dirty)return;
-    try {await document.save();setError(null);setJustSaved(true);}catch(e){setError(String(e));}
+    if (!dirty) return;
+    try {
+      await document.save();
+      setError(null);
+      setJustSaved(true);
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   return (
@@ -222,7 +260,12 @@ function CodeView({
             </button>
           )}
           {dirty && (
-            <button className="icon-btn sm" aria-label="Save file" title="Save (⌘S)" onClick={() => void save()}>
+            <button
+              className="icon-btn sm"
+              aria-label="Save file"
+              title="Save (⌘S)"
+              onClick={() => void save()}
+            >
               <Save size={14} />
             </button>
           )}
@@ -268,10 +311,18 @@ function CodeView({
           <CloseButton onClose={onClose} />
         </div>
       </header>
-      {(error || document.error) && <p className="editor-error" role="alert">{error || document.error}</p>}
-      {document.conflict && <div className="workbench-conflict" role="alert">File changed on disk. Your edits are preserved.
-        <button onClick={()=>document.resolve("disk")}>Use disk version</button><button onClick={()=>document.resolve("draft")}>Keep my draft</button>
-      </div>}
+      {(error || (document.error && !largePreview)) && (
+        <p className="editor-error" role="alert">
+          {error || document.error}
+        </p>
+      )}
+      {document.conflict && (
+        <div className="workbench-conflict" role="alert">
+          File changed on disk. Your edits are preserved.
+          <button onClick={() => document.resolve("disk")}>Use disk version</button>
+          <button onClick={() => document.resolve("draft")}>Keep my draft</button>
+        </div>
+      )}
       <div className="editor-body">
         {loaded &&
           renderer &&
@@ -286,7 +337,7 @@ function CodeView({
               wrap={wrap}
               onChange={(doc) => {
                 buffer.current = doc;
-                document.edit(doc);
+                if (!loaded.truncated) document.edit(doc);
               }}
               onSelection={setSelection}
               onSave={() => void save()}
@@ -300,8 +351,15 @@ function CodeView({
 
 // ---- one image or video ------------------------------------------------------
 
-
-function MediaView({ workspace, path, onClose }: { workspace: string; path: string; onClose: () => void }) {
+function MediaView({
+  workspace,
+  path,
+  onClose,
+}: {
+  workspace: string;
+  path: string;
+  onClose: () => void;
+}) {
   const abs = `${workspace}/${path}`;
   // The asset URL is stable, so a changed file would show its cached pixels —
   // bust the cache whenever the watcher sees this path rewritten.
@@ -313,7 +371,11 @@ function MediaView({ workspace, path, onClose }: { workspace: string; path: stri
     <>
       <header className="canvas-head editor-head">
         <div className="editor-path" title={path}>
-          {video ? <Film size={14} aria-hidden="true" /> : <ImageIcon size={14} aria-hidden="true" />}
+          {video ? (
+            <Film size={14} aria-hidden="true" />
+          ) : (
+            <ImageIcon size={14} aria-hidden="true" />
+          )}
           <span className="editor-fname">{basename(path)}</span>
         </div>
         <div className="editor-actions">

@@ -153,9 +153,7 @@ pub fn run() -> Result<(), tauri::Error> {
         .register_uri_scheme_protocol("viewasset", view_packages::protocol)
         .invoke_handler(|invoke: tauri::ipc::Invoke<tauri::Wry>| {
             let label = invoke.message.webview_ref().label();
-            if label != "main"
-                && !(label.starts_with("view-") && invoke.message.command() == "view_bridge")
-            {
+            if !view_packages::command_allowed(label, invoke.message.command()) {
                 invoke
                     .resolver
                     .reject("This webview has no access to application commands");

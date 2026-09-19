@@ -26,9 +26,15 @@ export function useWorkbenchAPI(context: ViewContext): WorkbenchAPI {
         );
       },
       addToChat: (text) =>
-        useStore
-          .getState()
-          .addSnippet({ path: target.path ?? "Work view", code: text, start: 1, end: 1 }),
+        useStore.setState((state) => ({
+          snippets: {
+            ...state.snippets,
+            [session]: [
+              ...(state.snippets[session] ?? []),
+              { path: target.path ?? "Work view", code: text, start: 1, end: 1 },
+            ],
+          },
+        })),
     };
   }, [session, workspace, target]);
 }

@@ -39,6 +39,11 @@ export interface ViewModule {
   description: string;
   /** Higher priority wins; an explicit user choice always wins over matching. */
   priority?: number;
+  /** Serializable metadata lets the agent discover and open bundled views. */
+  filePatterns?: string[];
+  requiresFile?: boolean;
+  documentSchema?: Record<string, unknown>;
+  agentVisible?: boolean;
   matches?: (path: string) => boolean;
   component: ComponentType<ViewProps>;
 }

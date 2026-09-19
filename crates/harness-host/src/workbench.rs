@@ -28,9 +28,71 @@ pub struct Workbench {
     pub gate: Arc<harness_permissions::PermissionGate>,
     pub client: Result<harness_llm::OxenClient, String>,
     pub store: Arc<harness_store::HistoryStore>,
+    pub lifecycle: Arc<WorkbenchLifecycle>,
+}
+
+pub struct WorkbenchLifecycle {
+    pub renderer_views: Mutex<Vec<harness_runtime::views::ViewDefinition>>,
     pub display: Mutex<Value>,
     pub runs: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub failures: Mutex<HashMap<String, String>>,
+}
+impl Default for WorkbenchLifecycle {
+    fn default() -> Self {
+        Self {
+            renderer_views: Mutex::new(Vec::new()),
+            display: Mutex::new(json!({"status":"unavailable"})),
+            runs: Mutex::new(HashMap::new()),
+            failures: Mutex::new(HashMap::new()),
+        }
+    }
+}
+impl std::ops::Deref for Workbench {
+    type Target = WorkbenchLifecycle;
+    fn deref(&self) -> &Self::Target {
+        &self.lifecycle
+    }
+}
+
+struct RunReservation {
+    lifecycle: Arc<WorkbenchLifecycle>,
+    id: String,
+}
+impl RunReservation {
+    fn acquire(lifecycle: Arc<WorkbenchLifecycle>, flag: Arc<AtomicBool>) -> Result<Self, String> {
+        {
+            let mut runs = lifecycle.runs.lock().map_err(|e| e.to_string())?;
+            if !runs.is_empty() {
+                return Err("this conversation already has a running workflow".into());
+            }
+            runs.insert("validating".into(), flag);
+        }
+        Ok(Self {
+            lifecycle,
+            id: "validating".into(),
+        })
+    }
+    fn identify(&mut self, id: &str) -> Result<(), String> {
+        let mut runs = self.lifecycle.runs.lock().map_err(|e| e.to_string())?;
+        let flag = runs
+            .remove(&self.id)
+            .ok_or("workflow reservation disappeared")?;
+        runs.insert(id.into(), flag);
+        self.id = id.into();
+        Ok(())
+    }
+}
+impl Drop for RunReservation {
+    fn drop(&mut self) {
+        // A cancelled validation future must not permanently reserve the chat.
+        // Destructors cannot return a poisoned-lock error, so report it.
+        match self.lifecycle.runs.lock() {
+            Ok(mut runs) => {
+                runs.remove(&self.id);
+            }
+            Err(e) => eprintln!("release workflow reservation {}: {e}", self.id),
+        }
+    }
 }
 
 pub struct WorkbenchView(pub Arc<Workbench>);
@@ -46,6 +108,51 @@ fn error(e: impl std::fmt::Display) -> ToolError {
 }
 
 impl Workbench {
+    fn definitions(&self) -> Result<Vec<harness_runtime::views::ViewDefinition>, String> {
+        let mut definitions = harness_runtime::views::available()?;
+        definitions.extend(
+            self.renderer_views
+                .lock()
+                .map_err(|e| e.to_string())?
+                .clone(),
+        );
+        Ok(definitions)
+    }
+
+    fn register_views(&self, payload: Value) -> Result<(), String> {
+        if payload.to_string().len() > 32768 {
+            return Err("view descriptors exceed 32 KiB".into());
+        }
+        let definitions: Vec<harness_runtime::views::ViewDefinition> =
+            serde_json::from_value(payload.get("views").cloned().ok_or("missing views")?)
+                .map_err(|e| format!("invalid view descriptors: {e}"))?;
+        if definitions.len() > 128 {
+            return Err("too many view descriptors".into());
+        }
+        let builtins = harness_runtime::views::builtins();
+        let mut ids = std::collections::HashSet::new();
+        for view in &definitions {
+            if view.id.is_empty()
+                || view.id.len() > 80
+                || !view
+                    .id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+                || !ids.insert(&view.id)
+            {
+                return Err(format!("invalid bundled view id: {}", view.id));
+            }
+            for pattern in &view.file_patterns {
+                harness_runtime::views::validate_pattern(pattern)
+                    .map_err(|e| format!("{} file pattern: {e}", view.id))?;
+            }
+        }
+        *self.renderer_views.lock().map_err(|e| e.to_string())? = definitions
+            .into_iter()
+            .filter(|view| !builtins.iter().any(|builtin| builtin.id == view.id))
+            .collect();
+        Ok(())
+    }
     async fn allowed(&self) -> Result<(), String> {
         use harness_permissions::{GateOutcome, GateReview, ToolEffect};
         match self
@@ -74,26 +181,10 @@ impl Workbench {
         if revision.is_some_and(|r| r != document.revision) {
             return Err("graph changed on disk; reload before running".into());
         }
-        // One run per conversation prevents accidental double-click billing.
-        if !self.runs.lock().map_err(|e| e.to_string())?.is_empty() {
-            return Err("this conversation already has a running workflow".into());
-        }
         let reservation = Arc::new(AtomicBool::new(false));
-        {
-            let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-            if !runs.is_empty() {
-                return Err("this conversation already has a running workflow".into());
-            }
-            runs.insert("validating".into(), reservation.clone());
-        }
-        let created = workflow_run::create(&self.docs, document, self.as_ref()).await;
-        let run = {
-            let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-            runs.remove("validating");
-            let run = created?;
-            runs.insert(run.id.clone(), reservation.clone());
-            run
-        };
+        let mut lease = RunReservation::acquire(self.lifecycle.clone(), reservation.clone())?;
+        let run = workflow_run::create(&self.docs, document, self.as_ref()).await?;
+        lease.identify(&run.id)?;
         let latest_path = latest_path(path);
         let previous = match self.docs.read(&latest_path) {
             Ok(doc) => Some(doc),
@@ -103,7 +194,6 @@ impl Workbench {
                 None
             }
             Err(e) => {
-                self.runs.lock().map_err(|e| e.to_string())?.remove(&run.id);
                 return Err(e.to_string());
             }
         };
@@ -116,7 +206,6 @@ impl Workbench {
             )
             .await
         {
-            self.runs.lock().map_err(|e| e.to_string())?.remove(&run.id);
             return Err(e.to_string());
         }
         let engine = self.clone();
@@ -134,12 +223,7 @@ impl Workbench {
                     Err(e) => eprintln!("record workflow failure {id}: {e}"),
                 }
             }
-            match engine.runs.lock() {
-                Ok(mut runs) => {
-                    runs.remove(&id);
-                }
-                Err(e) => eprintln!("finish workflow {id}: {e}"),
-            };
+            drop(lease);
         });
         Ok(run)
     }
@@ -204,6 +288,21 @@ impl Executor for Workbench {
                             "{}: model {model_id} has the wrong media type",
                             node.id
                         ));
+                    }
+                    let parameters = workflow_run::parameters(node);
+                    for kind in [
+                        harness_media::RefKind::Image,
+                        harness_media::RefKind::Video,
+                        harness_media::RefKind::Audio,
+                    ] {
+                        for slot in model.slots(kind) {
+                            if parameters.get(&slot.name).is_some() {
+                                return Err(format!(
+                                    "{}: reference {} must come from a typed input connection",
+                                    node.id, slot.name
+                                ));
+                            }
+                        }
                     }
                     harness_runtime::workflow::validate_parameters(
                         &workflow_run::parameters(node),
@@ -294,6 +393,29 @@ impl Executor for Workbench {
             "rewrite" => {
                 let instructions = match node.text("instructions") { "" => "Rewrite this as a clear, vivid generation prompt. Return only the rewritten prompt.", text => text };
                 let model = self.model(node);
+                let max_tokens = if let Some(limit) =
+                    harness_runtime::limits::load().max_session_tokens
+                {
+                    let usage = self
+                        .store
+                        .usage_for_session(&self.session)
+                        .map_err(|e| format!("read workflow token budget: {e}"))?;
+                    let used = usage
+                        .prompt_tokens
+                        .saturating_add(usage.completion_tokens)
+                        .max(0) as usize;
+                    let remaining = limit
+                        .saturating_sub(used)
+                        .saturating_sub(prompt.len() + instructions.len() + 256);
+                    if remaining == 0 {
+                        return Err(
+                            "workflow rewrite exceeds the remaining session token budget".into(),
+                        );
+                    }
+                    remaining.min(2048)
+                } else {
+                    2048
+                };
                 let request = harness_llm::ChatRequest::new(
                     &model,
                     vec![
@@ -301,7 +423,7 @@ impl Executor for Workbench {
                         harness_llm::ChatMessage::user(prompt),
                     ],
                 )
-                .max_tokens(2048);
+                .max_tokens(max_tokens);
                 let reply = self
                     .client
                     .as_ref()
@@ -396,16 +518,20 @@ impl Executor for Workbench {
 impl ViewHost for WorkbenchView {
     async fn list(&self) -> Result<Value, ToolError> {
         Ok(
-            json!({"views":harness_runtime::views::available().map_err(error)?, "workflow_schema":schemars_schema(), "nodes":harness_runtime::workflow::node_definitions()}),
+            json!({"views":self.definitions().map_err(error)?, "workflow_schema":schemars_schema(), "nodes":harness_runtime::workflow::node_definitions()}),
         )
     }
     async fn open(&self, args: OpenViewArgs) -> Result<Value, ToolError> {
         let inferred = match &args.path {
-            Some(path) => harness_runtime::views::resolve_view(path).map_err(error)?,
+            Some(path) => {
+                harness_runtime::views::resolve_from(path, &self.definitions().map_err(error)?)
+                    .map_err(error)?
+            }
             None => "gallery".into(),
         };
         let view = args.view.as_deref().unwrap_or(&inferred);
-        let definition = harness_runtime::views::available()
+        let definition = self
+            .definitions()
             .map_err(error)?
             .into_iter()
             .find(|d| d.id == view)
@@ -431,7 +557,14 @@ impl ViewHost for WorkbenchView {
     async fn inspect(&self) -> Result<Value, ToolError> {
         let mut value = self.display.lock().map_err(error)?.clone();
         if let Some(path) = value.get("path").and_then(Value::as_str).map(str::to_owned) {
-            let doc = self.docs.read(&path).map_err(error)?;
+            let doc = match self.docs.read(&path) {
+                Ok(doc) => doc,
+                Err(harness_runtime::documents::DocumentError::Invalid(reason)) => {
+                    value["document"] = json!({"editable":false,"reason":reason});
+                    return Ok(value);
+                }
+                Err(e) => return Err(error(e)),
+            };
             value["revision"] = json!(doc.revision);
             if path.ends_with(".graph.json") {
                 value["diagnostics"] = match Workflow::parse(&doc.content) {
@@ -491,6 +624,10 @@ impl SessionService {
             _ => {
                 let engine = self.workbench(session).await?;
                 match action {
+                    "register_views" => {
+                        engine.register_views(payload)?;
+                        Ok(Value::Null)
+                    }
                     "models" => Ok(json!(engine
                         .media
                         .catalog()
@@ -610,5 +747,23 @@ impl SessionService {
             .save(path, content, revision)
             .await
             .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn dropped_reservations_release_validation_and_execution_slots() {
+        let lifecycle = Arc::new(WorkbenchLifecycle::default());
+        let flag = Arc::new(AtomicBool::new(false));
+        let reservation = RunReservation::acquire(lifecycle.clone(), flag.clone()).unwrap();
+        assert!(RunReservation::acquire(lifecycle.clone(), flag.clone()).is_err());
+        drop(reservation);
+        let mut reservation = RunReservation::acquire(lifecycle.clone(), flag).unwrap();
+        reservation.identify("run-1").unwrap();
+        assert!(lifecycle.runs.lock().unwrap().contains_key("run-1"));
+        drop(reservation);
+        assert!(lifecycle.runs.lock().unwrap().is_empty());
     }
 }

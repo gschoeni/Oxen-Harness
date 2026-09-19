@@ -1038,3 +1038,9 @@ packaging, isolation, migration, and verification proposals are in
   the main webview specifically. An iframe in the privileged view is not a
   portable isolation boundary. Package rendering is native-desktop only;
   document/workflow APIs remain transport-independent.
+
+- Bundled modules publish serializable descriptors (patterns, priority, optional
+  document schema) to their session's host. Agent discovery/opening therefore
+  works for contributor views without another Rust registration branch. Host
+  descriptors for shipped views remain available to CLI/server clients without
+  a renderer; installed packages are discovered from reviewed manifests.

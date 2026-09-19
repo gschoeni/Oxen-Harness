@@ -38,4 +38,12 @@ describe("conversation-owned work contexts", () => {
     expect(useStore.getState().workContexts.a.current.url).toBe("https://example.com/a");
     expect(useStore.getState().workContexts.b.current.url).toBe("https://example.com/b");
   });
+  it("keeps a gallery selection with its conversation", () => {
+    useStore.setState({ session: { ...sampleSession, session_id: "a" } });
+    useStore.getState().openGallery("image-a");
+    useStore.setState({ session: { ...sampleSession, session_id: "b" } });
+    useStore.getState().openGallery("image-b");
+    expect(useStore.getState().workContexts.a.current.id).toBe("image-a");
+    expect(useStore.getState().workContexts.b.current.id).toBe("image-b");
+  });
 });

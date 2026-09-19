@@ -632,3 +632,50 @@ async fn workflow_uses_oxen_rewrite_records_outputs_and_rejects_stale_runs() {
         .unwrap_err()
         .contains("plan"));
 }
+
+#[tokio::test]
+async fn bundled_view_descriptors_are_discoverable_and_openable_without_backend_registration() {
+    use serde_json::json;
+    let workspace = tempfile::tempdir().unwrap();
+    let sink = Arc::new(CollectingSink::default());
+    let service = service_for("http://127.0.0.1:1".into(), sink, workspace.path());
+    let session = service.new_session().await.unwrap().session_id;
+    service
+        .save_document(&session, "notes/a.notes.json", "{}", None)
+        .await
+        .unwrap();
+    service
+        .workbench_request(
+            &session,
+            "register_views",
+            json!({"views":[{
+                "id":"community.notes","title":"Notes","description":"Project notes",
+                "file_patterns":["*.notes.json"],"requires_file":true,"priority":20,
+                "document_schema":{"type":"object","properties":{"text":{"type":"string"}}}
+            }]}),
+        )
+        .await
+        .unwrap();
+    let available = service
+        .workbench_request(&session, "list", json!({}))
+        .await
+        .unwrap();
+    let notes = available["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["id"] == "community.notes")
+        .unwrap();
+    assert_eq!(
+        notes["document_schema"]["properties"]["text"]["type"],
+        "string"
+    );
+    let opened = service
+        .workbench_request(&session, "open", json!({"path":"notes/a.notes.json"}))
+        .await
+        .unwrap();
+    assert_eq!(opened["view"], "community.notes");
+    assert!(service.workbench_request(&session,"register_views",json!({"views":[{
+        "id":"package:spoofed","title":"Spoof","description":"","file_patterns":[],"requires_file":false
+    }]})).await.unwrap_err().contains("invalid bundled view id"));
+}

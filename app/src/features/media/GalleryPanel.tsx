@@ -25,9 +25,13 @@ const NONE: MediaItem[] = [];
 export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent) => void }) {
   const sessionId = useStore((s) => s.session?.session_id);
   const workspace = useStore((s) => s.session?.workspace ?? null);
-  const items = useStore((s) => (s.session?.workspace ? s.media[s.session.workspace] : undefined)) ?? NONE;
+  const items =
+    useStore((s) => (s.session?.workspace ? s.media[s.session.workspace] : undefined)) ?? NONE;
   const refreshMedia = useStore((s) => s.refreshMedia);
   const mediaFocus = useStore((s) => s.mediaFocus);
+  const contextFocus = useStore((s) =>
+    s.session ? s.workContexts[s.session.session_id]?.current.id : undefined,
+  );
   const clearMediaFocus = useStore((s) => s.clearMediaFocus);
   const cancelMedia = useStore((s) => s.cancelMedia);
   const [filter, setFilter] = useState<Filter>("all");
@@ -51,6 +55,11 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
     if (workspace) void refreshMedia(workspace);
   });
 
+  useEffect(() => {
+    if (contextFocus) setSelected(contextFocus);
+    setViewing(!!contextFocus);
+  }, [contextFocus]);
+
   // A chat card asked for one item: open it in full.
   useEffect(() => {
     if (!mediaFocus) return;
@@ -71,21 +80,28 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
       ),
     [items, filter, thisChat, sessionId],
   );
-  const detail = viewing && selected ? items.find((i) => i.id === selected) ?? null : null;
+  const detail = viewing && selected ? (items.find((i) => i.id === selected) ?? null) : null;
   const position = detail ? shown.findIndex((i) => i.id === detail.id) : -1;
+  const open = useCallback(
+    (id: string) => {
+      setSelected(id);
+      setViewing(true);
+      if (sessionId) useStore.getState().openWorkView(sessionId, { view: "gallery", id });
+    },
+    [sessionId],
+  );
+  const back = useCallback(() => {
+    setViewing(false);
+    if (sessionId) useStore.getState().openWorkView(sessionId, { view: "gallery" });
+  }, [sessionId]);
   const step = useCallback(
     (delta: number) => {
       if (position < 0) return;
       const next = shown[position + delta];
-      if (next) setSelected(next.id);
+      if (next) open(next.id);
     },
-    [position, shown],
+    [position, shown, open],
   );
-  const open = (id: string) => {
-    setSelected(id);
-    setViewing(true);
-  };
-  const back = () => setViewing(false);
 
   // Keys work anywhere in the window while a generation is open, except in
   // a field the user is typing into.
@@ -102,12 +118,13 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [detail, step]);
+  }, [detail, step, back]);
 
   const inFlight = items.filter(isInFlight).length;
-  const uploading = useStore((s) => (workspace ? s.mediaUploads[workspace] : undefined))?.filter(
-    (u) => u.status === "uploading" || u.status === "presigning",
-  ).length ?? 0;
+  const uploading =
+    useStore((s) => (workspace ? s.mediaUploads[workspace] : undefined))?.filter(
+      (u) => u.status === "uploading" || u.status === "presigning",
+    ).length ?? 0;
 
   if (!workspace) return null;
   if (detail) {
@@ -115,7 +132,13 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
       <aside className="canvas gallery" aria-label="Gallery">
         {onResizeStart && <div className="canvas-resizer" onPointerDown={onResizeStart} />}
         <header className="canvas-head gallery-head">
-          <IconButton type="button" className="sm" onClick={back} aria-label="Back to all generations" title="Back (Esc)">
+          <IconButton
+            type="button"
+            className="sm"
+            onClick={back}
+            aria-label="Back to all generations"
+            title="Back (Esc)"
+          >
             <ChevronLeft size={15} />
           </IconButton>
           <span className="gallery-position">

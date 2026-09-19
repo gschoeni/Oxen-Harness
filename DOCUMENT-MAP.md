@@ -167,6 +167,8 @@ When adding a new file to the project, update this document map.
 | `app/src/workbench-sdk/` | Public view/document API, shared draft store, injected browser SDK. |
 | `app/src/features/workbench/` | Conversation contexts, registry, host chrome, package manager/native mounting. |
 | `app/src/modules/` | Auto-discovered bundled view adapters and Oxen workflow reference. |
+| `app/src/modules/oxen-workflow/{NodeCard,NodeInspector}.tsx` | Graph cards, typed handles, model parameters and output previews. |
+| `app/src/features/workbench/api.test.tsx` | Late module callbacks retain their originating conversation. |
 | `app/scripts/build-workflow-view.mjs` | Builds the graph as an independent installed package. |
 | `app/src-tauri/src/view_packages.rs` | Constrained native package surfaces, IPC bridge and asset protocol. |
 | `app/src-tauri/src/commands/workbench.rs` | Desktop transport for common workbench actions. |

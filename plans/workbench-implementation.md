@@ -89,3 +89,75 @@ Still required: finish package integration/native validation, example packages
 and contributor docs, stronger host/graph integration tests, feature bug review,
 full check suite and GC, selective feature commits, dedicated polish commit.
 No paid Oxen generations have been run.
+
+### Feature commit and dedicated review
+
+Feature committed as `e385691` using a temporary index and three-way patches
+against the initial source snapshot. Existing staged renames and unrelated work
+were preserved. The committed changes add the workflow, bundled/installed
+module paths, shared document service, transports, and examples.
+
+Review findings to address in the separate polish commit:
+
+1. The graph component grew too large; separate reusable node/parameter/output
+   rendering and lazy-load it so normal chats do not load React Flow.
+2. An aborted validation future can retain a run reservation. A rebuilt session
+   can lose sight of its live runs. Give reservations RAII cleanup and share run
+   lifecycle state across session-engine rebuilds.
+3. A late document reload can replace a just-saved snapshot. Fence reloads with
+   document generations and test save/load overlap. Closing a view should retain
+   drafts without a misleading discard confirmation.
+4. Strengthen package lifecycle: revoke/close instances on removal/update, deny
+   new windows, verify copied assets against their approved hash, and preserve
+   the package's own view id when the graph creates a file.
+5. Verify all model reference fields are supplied via typed graph inputs, honor
+   the session's rewrite-token budget, and preserve contextual errors.
+6. Match the remaining source/state adapters to their conversation context;
+   avoid a global Gallery focus leaking across top-level tabs.
+
+Meaningful verification: Rust Nextest 1,346 pass / 5 skipped; frontend 618 pass;
+workspace and native Clippy pass; tsc pass; standalone workflow package build
+pass. Browser check: five initial nodes, zero right-panel tabs, add/edit/save a
+sixth node, no page errors. No paid operations were used. `cargo test --workspace`
+exposed existing CLI tests sharing process-global composer state; Nextest's
+process isolation (the project's preferred runner) passes them all.
+
+### Review completed
+
+Addressed the six findings above. The graph now loads lazily and separates card
+and inspector rendering. Run reservations release on cancelled validation;
+rebuilding a session retains active runs and their permission gate. Reloads are
+fenced against newer saves. Package removal/update closes instances, new windows
+are denied, and installed assets are checked against the approved hash. Package
+runs preserve stale-revision rejection while pinning the validated graph.
+Gallery selections and late SDK composer callbacks retain their owning chat.
+The text editor keeps its read-only preview for oversized files.
+
+Two additional review fixes: contributor modules advertise patterns/schema to
+the agent without a Rust registry edit; the generic picker only carries compatible
+resources into its next view. Regression tests cover descriptor discovery/open,
+package identity, late callbacks, concurrent drafts, path grants, asset tampering,
+and reservation cleanup. Unknown future node kinds remain editable but cannot run.
+
+Final checks (the shared checkout, including its pre-existing work):
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo nextest run`: 1,350 passed, 5 skipped.
+- Desktop `cargo clippy -- -D warnings`: passed.
+- Desktop command-isolation unit test: passed.
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm exec vitest run`: 622 passed across 74 files.
+- `pnpm build` and `pnpm build:workflow-view`: passed.
+- Chrome: five starter nodes, zero panel tabs; click/edit/save node six, drag/drop
+  node seven, move an existing node, save and verify positions; no page errors.
+  Temporary browser fixtures were removed. Screenshots/logs remain in `/tmp`.
+- No live paid requests. Native installed-view interaction and Windows/Linux
+  rendering still need a manual platform smoke test.
+
+Verification compatibility fix `944064e` boxes the provider failure payload and
+removes a redundant native closure. Existing unrelated source edits, staged
+renames, and accompanying style-ratchet repairs remain outside feature commits.
+The polish commit is staged from the post-feature snapshot using a temporary
+index so unrelated ongoing work stays intact.
+
+Post-suite `scripts/gc-target.py` completed: removed 1.2 GB of rebuildable artifacts.

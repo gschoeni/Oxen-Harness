@@ -1,3 +1,5 @@
+import { icons, nodeTypes, type FlowNode } from "./NodeCard";
+import { NodeInspector } from "./NodeInspector";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ReactFlow,
@@ -5,123 +7,25 @@ import {
   Background,
   Controls,
   MiniMap,
-  Handle,
-  Position,
   useReactFlow,
-  type Node,
-  type NodeProps,
   type NodeChange,
   type Connection,
 } from "@xyflow/react";
-import {
-  Play,
-  Square,
-  Save,
-  Plus,
-  Workflow,
-  WandSparkles,
-  Image,
-  Film,
-  Maximize,
-  Type,
-  ArrowDownToLine,
-  FileCode2,
-  Trash2,
-} from "lucide-react";
+import { Play, Square, Save, Plus, Workflow, Image, Film, FileCode2 } from "lucide-react";
 import { useDocument, type ViewProps, type WorkbenchAPI } from "../../workbench-sdk";
 import {
   parseGraph,
   connectionError,
   preset,
   type Graph,
-  type GraphNode,
   type NodeKind,
   type Model,
   type Run,
-  type Output,
 } from "./graph";
 import "@xyflow/react/dist/style.css";
 import "./workflow.css";
 
 const MIME = "application/x-oxen-workflow-node";
-const icons: Record<string, typeof Workflow> = {
-  prompt: Type,
-  rewrite: WandSparkles,
-  image: Image,
-  video: Film,
-  upscale: Maximize,
-  video_upscale: Maximize,
-  image_input: Image,
-  video_input: Film,
-  output: ArrowDownToLine,
-};
-const nodeTypes = { oxen: NodeCard };
-type FlowNode = Node<
-  { node: GraphNode; definition?: NodeKind; result?: Run["nodes"][string] },
-  "oxen"
->;
-
-function NodeCard({ data, selected }: NodeProps<FlowNode>) {
-  const { node, definition, result } = data,
-    Icon = icons[node.kind] ?? Workflow;
-  const inputs = Object.entries(definition?.inputs ?? {});
-  return (
-    <div
-      className={`oxen-node${selected ? " selected" : ""}`}
-      data-kind={node.kind}
-      data-status={result?.status}
-    >
-      <div className="oxen-node-head">
-        <Icon size={15} />
-        <strong>{node.title || definition?.title || node.kind}</strong>
-        <span>
-          {result?.status === "running" ? "●" : result?.status === "succeeded" ? "✓" : ""}
-        </span>
-      </div>
-      <div className="oxen-node-body">
-        {node.kind === "prompt" ? (
-          <p>{String(node.config?.text || "Write a prompt…")}</p>
-        ) : (
-          <small>
-            {String(
-              node.config?.model ||
-                node.config?.path ||
-                definition?.description ||
-                "Unknown node — preserved in file",
-            )}
-          </small>
-        )}
-        {result?.error && <p className="oxen-node-error">{result.error}</p>}
-        {result?.outputs?.some((o) => o.kind !== "text") && (
-          <small>
-            {result.outputs.length} saved output{result.outputs.length === 1 ? "" : "s"}
-          </small>
-        )}
-      </div>
-      <div className="oxen-node-ports">
-        {inputs.map(([port, kind]) => (
-          <div className="oxen-port" key={port}>
-            <Handle type="target" position={Position.Left} id={port} data-kind={kind} />
-            <span>{port}</span>
-            <small>{kind}</small>
-          </div>
-        ))}
-        {definition?.output !== "none" && (
-          <div className="oxen-port output">
-            <span>{definition?.output ?? "unknown"}</span>
-            <Handle
-              type="source"
-              position={Position.Right}
-              id="output"
-              data-kind={definition?.output}
-            />
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export function WorkflowView({ api }: ViewProps) {
   const path = api.context.target.path;
   if (!path?.toLowerCase().endsWith(".graph.json")) return <CreateWorkflow api={api} />;
@@ -143,7 +47,7 @@ function CreateWorkflow({ api }: { api: WorkbenchAPI }) {
       const path = name.trim().endsWith(".graph.json") ? name.trim() : `${name.trim()}.graph.json`;
       if (!name.trim()) throw new Error("Choose a file name");
       await api.save(path, JSON.stringify(preset(kind), null, 2) + "\n");
-      api.open({ view: "workflow", path });
+      api.open({ view: api.context.target.view, path });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -304,6 +208,7 @@ function WorkflowEditor({ api, path }: { api: WorkbenchAPI; path: string }) {
     () =>
       graph?.edges.map((edge) => ({
         id: edge.id,
+        type: "smoothstep",
         source: edge.source,
         target: edge.target,
         sourceHandle: edge.source_port ?? "output",
@@ -649,269 +554,5 @@ function WorkflowEditor({ api, path }: { api: WorkbenchAPI; path: string }) {
         </div>
       )}
     </div>
-  );
-}
-
-function NodeInspector({
-  node,
-  definition,
-  models,
-  outputs,
-  api,
-  onChange,
-  onRemove,
-}: {
-  node: GraphNode;
-  definition?: NodeKind;
-  models: Model[];
-  outputs: Output[];
-  api: WorkbenchAPI;
-  onChange: (node: GraphNode) => void;
-  onRemove: () => void;
-}) {
-  const config = node.config ?? {},
-    text = (key: string) => String(config[key] ?? "");
-  const update = (key: string, value: unknown) =>
-    onChange({ ...node, config: { ...config, [key]: value } });
-  const media = ["image", "video", "upscale", "video_upscale"].includes(node.kind),
-    video = ["video", "video_upscale"].includes(node.kind);
-  const model = models.find((m) => m.id === text("model"));
-  return (
-    <section className="workflow-inspector" aria-label="Node settings">
-      <header>
-        <strong>{definition?.title ?? node.kind}</strong>
-        <code>{node.id}</code>
-        <button className="icon-btn sm" aria-label="Delete selected node" onClick={onRemove}>
-          <Trash2 size={14} />
-        </button>
-      </header>
-      <div className="workflow-fields">
-        <label>
-          Label
-          <input
-            value={node.title ?? ""}
-            placeholder={definition?.title}
-            onChange={(e) => onChange({ ...node, title: e.target.value })}
-          />
-        </label>
-        {node.kind === "prompt" && (
-          <label className="wide">
-            Prompt
-            <textarea
-              value={text("text")}
-              onChange={(e) => update("text", e.target.value)}
-              placeholder="Describe what you want to create…"
-            />
-          </label>
-        )}
-        {node.kind.endsWith("_input") && (
-          <label className="wide">
-            Project file
-            <input
-              value={text("path")}
-              onChange={(e) => update("path", e.target.value)}
-              placeholder="assets/reference.png"
-            />
-          </label>
-        )}
-        {node.kind === "rewrite" && (
-          <>
-            <label>
-              Oxen language model
-              <input
-                value={text("model")}
-                placeholder="Use default model"
-                onChange={(e) => update("model", e.target.value)}
-              />
-            </label>
-            <label className="wide">
-              Rewrite instructions
-              <textarea
-                value={text("instructions")}
-                placeholder="Make this a vivid, detailed generation prompt."
-                onChange={(e) => update("instructions", e.target.value)}
-              />
-            </label>
-          </>
-        )}
-        {media && (
-          <>
-            <label>
-              Oxen model
-              <select
-                value={text("model")}
-                onChange={(e) =>
-                  onChange({ ...node, config: { ...config, model: e.target.value, params: {} } })
-                }
-              >
-                <option value="">Project default</option>
-                {models
-                  .filter((m) => m.kind === (video ? "video" : "image"))
-                  .map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.display_name ?? m.id}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            {["image", "video"].includes(node.kind) && (
-              <label className="wide">
-                Prompt fallback
-                <textarea
-                  value={text("prompt")}
-                  onChange={(e) => update("prompt", e.target.value)}
-                  placeholder="Used when no prompt node is connected"
-                />
-              </label>
-            )}
-            <Parameters
-              model={model}
-              values={(config.params ?? {}) as Record<string, unknown>}
-              onChange={(values) => update("params", values)}
-            />
-          </>
-        )}
-      </div>
-      {outputs.length > 0 && (
-        <div className="workflow-outputs">
-          {outputs.map((output, i) => (
-            <OutputPreview key={`${output.value}:${i}`} output={output} api={api} />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-const reserved = new Set([
-  "prompt",
-  "model",
-  "num_generations",
-  "target_namespace",
-  "target_repo",
-  "target_directory",
-]);
-function Parameters({
-  model,
-  values,
-  onChange,
-}: {
-  model?: Model;
-  values: Record<string, unknown>;
-  onChange: (values: Record<string, unknown>) => void;
-}) {
-  if (!model) return null;
-  return (
-    <>
-      {Object.entries(model.request_schema.properties ?? {})
-        .filter(
-          ([name, schema]) =>
-            !reserved.has(name) &&
-            schema.format !== "uri" &&
-            ["string", "integer", "number", "boolean"].includes(String(schema.type)),
-        )
-        .map(([name, schema]) => {
-          const value = values[name] ?? schema.default ?? "",
-            type = String(schema.type);
-          const change = (next: unknown) => {
-            const copy = { ...values };
-            if (next === "") delete copy[name];
-            else copy[name] = next;
-            onChange(copy);
-          };
-          return (
-            <label key={name} title={String(schema.description ?? name)}>
-              {name.replace(/_/g, " ")}
-              {Array.isArray(schema.enum) ? (
-                <select
-                  value={String(value)}
-                  onChange={(e) =>
-                    change(
-                      type === "number" || type === "integer"
-                        ? Number(e.target.value)
-                        : e.target.value,
-                    )
-                  }
-                >
-                  <option value="">Default</option>
-                  {schema.enum.map((v) => (
-                    <option key={String(v)} value={String(v)}>
-                      {String(v)}
-                    </option>
-                  ))}
-                </select>
-              ) : type === "boolean" ? (
-                <input
-                  type="checkbox"
-                  checked={value === true}
-                  onChange={(e) => change(e.target.checked)}
-                />
-              ) : (
-                <input
-                  type={type === "number" || type === "integer" ? "number" : "text"}
-                  value={String(value)}
-                  min={typeof schema.minimum === "number" ? schema.minimum : undefined}
-                  max={typeof schema.maximum === "number" ? schema.maximum : undefined}
-                  step={type === "integer" ? 1 : "any"}
-                  onChange={(e) =>
-                    change(
-                      e.target.value === ""
-                        ? ""
-                        : type === "string"
-                          ? e.target.value
-                          : Number(e.target.value),
-                    )
-                  }
-                />
-              )}
-            </label>
-          );
-        })}
-    </>
-  );
-}
-
-function OutputPreview({ output, api }: { output: Output; api: WorkbenchAPI }) {
-  const [src, setSrc] = useState<string>(),
-    [error, setError] = useState("");
-  useEffect(() => {
-    if (output.kind === "text") return;
-    let live = true;
-    void api
-      .asset(output.value)
-      .then((v) => {
-        if (live) setSrc(v);
-      })
-      .catch((e) => {
-        if (live) setError(String(e));
-      });
-    return () => {
-      live = false;
-    };
-  }, [api, output.kind, output.value]);
-  return (
-    <figure>
-      {output.kind === "text" ? (
-        <p>{output.value}</p>
-      ) : src ? (
-        output.kind === "video" ? (
-          <video src={src} controls />
-        ) : (
-          <img src={src} alt="Workflow output" />
-        )
-      ) : null}
-      {error && <p role="alert">{error}</p>}
-      <figcaption>
-        <button
-          onClick={() =>
-            output.kind === "text"
-              ? api.addToChat(output.value)
-              : api.open({ view: "editor", path: output.value })
-          }
-        >
-          {output.kind === "text" ? "Add to chat" : output.value.split("/").pop()}
-        </button>
-      </figcaption>
-    </figure>
   );
 }

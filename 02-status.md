@@ -42,12 +42,13 @@ Agent tools can discover, open, inspect and explicitly run saved graphs. Run
 snapshots/results are durable; edits never execute automatically. Canvas
 artifacts now persist as project files. See [the guide](app/WORKBENCH.md).
 
-Initial full verification: 1,346 Rust tests passed under nextest (5 skipped),
-618 frontend tests passed, TypeScript and workspace/native Clippy passed.
-Browser verification exercised node addition, settings and saving with no
-page errors and no independent right-panel tabs. The graph also builds as an
-independent package. Live paid generation and Windows/Linux native rendering
-have not been exercised. Dedicated lifecycle/review polish is in progress.
+Dedicated review/polish is complete. Final verification: 1,350 Rust tests passed
+under nextest (5 skipped), 622 frontend tests passed, TypeScript, workspace/native
+Clippy and formatting passed. The native command-isolation regression passed.
+Browser verification exercised palette drag/drop, node movement, settings and
+saving with no page errors and no independent right-panel tabs. Desktop assets
+and the independent workflow package both build. Live paid generation and native
+installed-view rendering on Windows/Linux have not been exercised.
 
 ## Phase 16 — Durable projects
 

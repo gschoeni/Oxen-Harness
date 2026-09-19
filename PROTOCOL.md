@@ -220,3 +220,9 @@ are exposed by the desktop `workbench_request` command. See
 conversation. `view.context` emits `{session, path, text}` to add context to the
 composer without sending a message automatically. Renderer state is explicitly
 reported through `report`; opening a file does not imply that it was rendered.
+
+`register_views` accepts `{views: ViewDefinition[]}` from the trusted renderer to
+advertise bundled modules for the current session. Each definition contains
+`id`, `title`, `description`, `file_patterns`, `requires_file`, optional `priority`
+and `document_schema`. It does not execute code or install packages. The installed
+package bridge does not expose this action.

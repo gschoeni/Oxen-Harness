@@ -835,14 +835,25 @@ impl SessionService {
         context_window: Option<usize>,
         workspace_root: &Path,
     ) -> Result<AgentConfig, String> {
-        let gate = Arc::new(harness_permissions::PermissionGate::new(
-            workspace_root,
-            Arc::new(HostApprover {
-                sink: self.sink.clone(),
-                session: session.into(),
-                pending: self.pending_approvals.clone(),
-            }),
-        ));
+        let previous_workbench = self
+            .workbenches
+            .lock()
+            .map_err(|e| e.to_string())?
+            .get(session)
+            .cloned();
+        let gate = previous_workbench
+            .as_ref()
+            .map(|engine| engine.gate.clone())
+            .unwrap_or_else(|| {
+                Arc::new(harness_permissions::PermissionGate::new(
+                    workspace_root,
+                    Arc::new(HostApprover {
+                        sink: self.sink.clone(),
+                        session: session.into(),
+                        pending: self.pending_approvals.clone(),
+                    }),
+                ))
+            });
         tools.register_typed(CanvasTool::new(Arc::new(HostCanvasSink {
             root: workspace_root.into(),
             sink: self.sink.clone(),
@@ -935,9 +946,10 @@ impl SessionService {
                 self.media_library_for(workspace_root),
                 Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
             )),
-            display: StdMutex::new(serde_json::json!({"status":"unavailable"})),
-            runs: StdMutex::new(HashMap::new()),
-            failures: StdMutex::new(HashMap::new()),
+            lifecycle: previous_workbench
+                .as_ref()
+                .map(|engine| engine.lifecycle.clone())
+                .unwrap_or_default(),
         });
         self.workbenches
             .lock()

@@ -1999,7 +1999,8 @@ export const useStore = create<AppState>((rawSet, get) => {
 
     openGallery: (itemId) => {
       set({ mediaFocus: itemId ?? null });
-      get().setRightTab("gallery");
+      const session=get().session?.session_id;
+      if(session)get().openWorkView(session,{view:"gallery",id:itemId});
     },
 
     clearMediaFocus: () => set({ mediaFocus: null }),

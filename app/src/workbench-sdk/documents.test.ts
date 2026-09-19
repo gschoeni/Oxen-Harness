@@ -44,4 +44,28 @@ describe("shared document drafts", () => {
     expect(store.get(key).content).toBe("three");
     expect(store.get(key).dirty).toBe(true);
   });
+  it("ignores a reload that started before a newer save", async () => {
+    const store = new DocumentStore();
+    let late!: (value: { path: string; content: string; revision: string }) => void;
+    let reads = 0;
+    const api = {
+      context: { workspace: "race" },
+      read: async () =>
+        ++reads === 1
+          ? { path: "a", content: "one", revision: "1" }
+          : await new Promise((resolve) => {
+              late = resolve;
+            }),
+      save: async () => ({ path: "a", content: "two", revision: "2" }),
+    } as unknown as WorkbenchAPI;
+    await store.load(api, "a");
+    const reload = store.load(api, "a"),
+      key = store.key(api, "a");
+    store.edit(key, "two");
+    await store.save(api, "a");
+    late({ path: "a", content: "one", revision: "1" });
+    await reload;
+    expect(store.get(key).snapshot?.revision).toBe("2");
+    expect(store.get(key).content).toBe("two");
+  });
 });

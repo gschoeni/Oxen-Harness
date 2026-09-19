@@ -44,7 +44,8 @@ Oxen chat completions with a bounded response and attribute usage to the session
 }
 ```
 
-An omitted media model uses the project default. Model-specific parameters live
+An omitted image/video model uses the project default. Upscalers default to
+`flux-image-upscaler` and `flux-video-upscaler`. Model-specific parameters live
 under `config.params`; reference files belong in input nodes and connections.
 Unknown fields are preserved while editing. Unknown node kinds remain visible
 but cannot run. The limits are 128 nodes, 512 edges, and a 4 MiB editable document.
@@ -87,9 +88,16 @@ function Note({ api, path }: ViewProps & { path: string }) {
 
 export default [{
   id: "notes", title: "Notes", description: "Project notes",
-  matches: path => path.endsWith(".notes.json"), priority: 20, component: Notes,
+  matches: path => path.endsWith(".notes.json"), filePatterns: ["*.notes.json"],
+  requiresFile: true, documentSchema: { type: "object" },
+  priority: 20, component: Notes,
 }] satisfies ViewModule[];
 ```
+
+The host receives each bundled view's descriptor when the desktop opens a
+conversation. `list_views` exposes its file patterns and optional document schema,
+and `open_view` can select it by id or matching file. `agentVisible: false` hides
+UI-only utilities. Installed packages are discovered directly from their manifests.
 
 Production modules should also render `document.conflict` and offer an explicit
 choice of the on-disk version or retained draft. See the workflow module for a
@@ -139,5 +147,5 @@ Package rendering is desktop-native. The shared document and workflow service
 is also available over HTTP:
 `POST /v1/sessions/{id}/workbench/{action}` with a JSON payload and the server's
 normal authentication. Actions include `read`, `save`, `list`, `open`, `inspect`,
-`report`, `models`, `run`, `status`, `latest`, `cancel`, and `add_context`.
+`report`, `register_views` (bundled descriptor discovery), `models`, `run`, `status`, `latest`, `cancel`, and `add_context`.
 `view.open` and `view.context` events carry the owning session.

@@ -6,30 +6,33 @@ import type { WorkbenchAPI } from "../../workbench-sdk";
 import { parseGraph } from "./graph";
 
 describe("workflow creation", () => {
-  it("creates a portable graph and opens it without running any models", async () => {
-    const save = vi.fn(async (path, content) => ({ path, content, revision: "one" }));
-    const open = vi.fn(),
-      request = vi.fn();
-    const api = {
-      context: { session: "s", workspace: "project", target: { view: "workflow" } },
-      save,
-      open,
-      request,
-    } as unknown as WorkbenchAPI;
-    render(<WorkflowView api={api} />);
-    await userEvent.click(screen.getByRole("button", { name: /Image studio/ }));
-    expect(save).toHaveBeenCalledOnce();
-    const graph = parseGraph(save.mock.calls[0][1]);
-    expect(graph.nodes.map((n) => n.kind)).toEqual([
-      "prompt",
-      "rewrite",
-      "image",
-      "upscale",
-      "output",
-    ]);
-    expect(open).toHaveBeenCalledWith({ view: "workflow", path: "workflows/studio.graph.json" });
-    expect(request).not.toHaveBeenCalled();
-  });
+  it.each(["workflow", "package:community.oxen-workflow"])(
+    "creates a portable graph in %s without running any models",
+    async (view) => {
+      const save = vi.fn(async (path, content) => ({ path, content, revision: "one" }));
+      const open = vi.fn(),
+        request = vi.fn();
+      const api = {
+        context: { session: "s", workspace: "project", target: { view } },
+        save,
+        open,
+        request,
+      } as unknown as WorkbenchAPI;
+      render(<WorkflowView api={api} />);
+      await userEvent.click(screen.getByRole("button", { name: /Image studio/ }));
+      expect(save).toHaveBeenCalledOnce();
+      const graph = parseGraph(save.mock.calls[0][1]);
+      expect(graph.nodes.map((n) => n.kind)).toEqual([
+        "prompt",
+        "rewrite",
+        "image",
+        "upscale",
+        "output",
+      ]);
+      expect(open).toHaveBeenCalledWith({ view, path: "workflows/studio.graph.json" });
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
   it("shows a create conflict without replacing an existing graph", async () => {
     const api = {
       context: { session: "s", workspace: "project", target: { view: "workflow" } },

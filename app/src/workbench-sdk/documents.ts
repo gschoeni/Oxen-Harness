@@ -15,6 +15,7 @@ const EMPTY: Draft = { content: "", dirty: false, saving: false };
 export class DocumentStore {
   private drafts = new Map<string, Draft>();
   private listeners = new Set<() => void>();
+  private epochs = new Map<string, number>();
   private loading = new Map<string, Promise<void>>();
   key(api: WorkbenchAPI, path: string) {
     return `${api.context.workspace}\0${path}`;
@@ -36,20 +37,26 @@ export class DocumentStore {
     const draft = this.get(key);
     this.put(key, { ...draft, content, dirty: content !== draft.snapshot?.content });
   }
-  async load(api: WorkbenchAPI, path: string) {
+  async load(api: WorkbenchAPI, path: string): Promise<void> {
     const key = this.key(api, path);
     const pending = this.loading.get(key);
-    if (pending) return pending;
+    if (pending) {
+      await pending;
+      return this.load(api, path);
+    }
+    const epoch = this.epochs.get(key) ?? 0;
     const work = (async () => {
       try {
         const snapshot = await api.read(path);
+        if ((this.epochs.get(key) ?? 0) !== epoch) return;
         const draft = this.get(key);
         if (draft.dirty || draft.saving) {
           if (snapshot.revision !== draft.snapshot?.revision)
             this.put(key, { ...draft, conflict: snapshot });
         } else this.put(key, { snapshot, content: snapshot.content, dirty: false, saving: false });
       } catch (e) {
-        this.put(key, { ...this.get(key), error: String(e) });
+        if ((this.epochs.get(key) ?? 0) === epoch)
+          this.put(key, { ...this.get(key), error: String(e) });
       }
     })();
     this.loading.set(key, work);
@@ -65,9 +72,11 @@ export class DocumentStore {
     if (before.saving) throw new Error("A save is already in progress");
     if (before.conflict)
       throw new Error("File changed on disk. Resolve the conflict before saving.");
+    this.epochs.set(key, (this.epochs.get(key) ?? 0) + 1);
     this.put(key, { ...before, saving: true, error: undefined });
     try {
       const snapshot = await api.save(path, before.content, before.snapshot?.revision);
+      this.epochs.set(key, (this.epochs.get(key) ?? 0) + 1);
       const latest = this.get(key);
       this.put(key, {
         snapshot,
@@ -85,6 +94,7 @@ export class DocumentStore {
   resolve(key: string, choice: "disk" | "draft") {
     const draft = this.get(key);
     if (!draft.conflict) return;
+    this.epochs.set(key, (this.epochs.get(key) ?? 0) + 1);
     const content = choice === "disk" ? draft.conflict.content : draft.content;
     this.put(key, {
       snapshot: draft.conflict,

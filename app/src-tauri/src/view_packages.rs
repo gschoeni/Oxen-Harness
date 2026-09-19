@@ -14,6 +14,12 @@ use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Webview, WebviewBuilder, WebviewUrl,
 };
 
+/// App commands are unavailable to embedded web content. A package's one
+/// bridge still verifies its live instance and grants for every request.
+pub(crate) fn command_allowed(label: &str, command: &str) -> bool {
+    label == "main" || (label.starts_with("view-") && command == "view_bridge")
+}
+
 struct Lease {
     session: String,
     package: Package,
@@ -44,6 +50,7 @@ fn still_installed(lease: &Lease) -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) async fn view_packages_request(
+    app: AppHandle,
     action: String,
     source: Option<String>,
     digest: Option<String>,
@@ -54,19 +61,37 @@ pub(crate) async fn view_packages_request(
         "inspect" => Ok(json!(view_packages::inspect(std::path::Path::new(
             source.as_deref().ok_or("missing source directory")?
         ))?)),
-        "install" => Ok(json!(
-            view_packages::install(
+        "install" => {
+            let installed = view_packages::install(
                 std::path::Path::new(source.as_deref().ok_or("missing source directory")?),
-                digest.as_deref().ok_or("missing approved digest")?
+                digest.as_deref().ok_or("missing approved digest")?,
             )
-            .await?
-        )),
+            .await?;
+            revoke_instances(&app, &installed.manifest.id)?;
+            Ok(json!(installed))
+        }
         "remove" => {
-            view_packages::remove(id.as_deref().ok_or("missing package id")?).await?;
+            let id = id.as_deref().ok_or("missing package id")?;
+            view_packages::remove(id).await?;
+            revoke_instances(&app, id)?;
             Ok(Value::Null)
         }
         _ => Err("unknown package operation".into()),
     }
+}
+
+fn revoke_instances(app: &AppHandle, id: &str) -> Result<(), String> {
+    let labels: Vec<_> = leases()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .filter(|(_, lease)| lease.package.manifest.id == id)
+        .map(|(label, _)| label.clone())
+        .collect();
+    for label in labels {
+        view_package_close(app.clone(), label)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -83,6 +108,7 @@ pub(crate) async fn view_package_mount(
         .into_iter()
         .find(|p| p.manifest.id == id)
         .ok_or("view package is not installed")?;
+    view_packages::assets(&package)?;
     let project = state.documents(&session)?;
     if let Some(path) = &path {
         if !package.manifest.permissions.allows("read", path) {
@@ -104,6 +130,7 @@ pub(crate) async fn view_package_mount(
     let guard_label = label.clone();
     let builder = WebviewBuilder::new(&label, WebviewUrl::CustomProtocol(url))
         .initialization_script(init)
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
         .on_navigation(move |url| {
             let own_scheme = url.scheme() == "viewasset"
                 || ((url.scheme() == "http" || url.scheme() == "https")
@@ -210,6 +237,13 @@ pub(crate) async fn view_bridge(
                 return Err("workflow is outside this view's document grant".into());
             }
             let document = instance.project.read(path).map_err(|e| e.to_string())?;
+            if payload
+                .get("revision")
+                .and_then(Value::as_str)
+                .is_some_and(|revision| revision != document.revision)
+            {
+                return Err("graph changed on disk; reload before running".into());
+            }
             let graph = harness_runtime::workflow::Workflow::parse(&document.content)?;
             payload["revision"] = json!(document.revision);
             for node in graph
@@ -332,4 +366,28 @@ pub(crate) fn protocol(
         tauri::http::HeaderValue::from_static("nosniff"),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn child_views_cannot_call_application_commands() {
+        assert!(command_allowed("main", "workbench_request"));
+        assert!(command_allowed("view-test", "view_bridge"));
+        for label in ["view-test", "link-browser", "preview-session"] {
+            for command in [
+                "run_turn",
+                "workbench_request",
+                "fs_read_file",
+                "view_packages_request",
+            ] {
+                assert!(
+                    !command_allowed(label, command),
+                    "{label} unexpectedly allowed {command}"
+                );
+            }
+        }
+        assert!(!command_allowed("link-browser", "view_bridge"));
+    }
 }

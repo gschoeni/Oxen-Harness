@@ -1,5 +1,8 @@
 import type { ViewModule } from "../../workbench-sdk";
-import { WorkflowView } from "./WorkflowView";
+import { lazy } from "react";
+const WorkflowView = lazy(() =>
+  import("./WorkflowView").then((module) => ({ default: module.WorkflowView })),
+);
 export default [
   {
     id: "workflow",

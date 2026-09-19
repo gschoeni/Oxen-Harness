@@ -1,6 +1,7 @@
-import { Component, useEffect, type ReactNode, type PointerEvent } from "react";
+import { Component, Suspense, useEffect, type ReactNode, type PointerEvent } from "react";
 import { ArrowLeft, ArrowRight, Pin, Workflow } from "lucide-react";
 import { useStore } from "../../lib/store";
+import { workbenchRequest } from "../../lib/ipc";
 import { views, viewById, useViewRegistry } from "./registry";
 import { useWorkbenchAPI } from "./api";
 import type { ViewTarget } from "../../workbench-sdk";
@@ -11,7 +12,20 @@ import "./workbench.css";
 const EMPTY_TARGET: ViewTarget = { view: "welcome" };
 
 export function Workbench({ onResizeStart }: { onResizeStart?: (e: PointerEvent) => void }) {
-  useViewRegistry();
+  const registered = useViewRegistry();
+  const descriptors = JSON.stringify(
+    registered
+      .filter((view) => view.agentVisible !== false && !view.id.startsWith("package:"))
+      .map((view) => ({
+        id: view.id,
+        title: view.title,
+        description: view.description,
+        file_patterns: view.filePatterns ?? [],
+        requires_file: view.requiresFile ?? false,
+        priority: view.priority ?? 0,
+        document_schema: view.documentSchema,
+      })),
+  );
   useEffect(() => {
     void refreshPackages().catch((e) =>
       useStore.getState().addNotice(`Load installed views: ${String(e)}`),
@@ -19,6 +33,12 @@ export function Workbench({ onResizeStart }: { onResizeStart?: (e: PointerEvent)
   }, []);
   const session = useStore((s) => s.session);
   const context = useStore((s) => (s.session ? s.workContexts[s.session.session_id] : undefined));
+  useEffect(() => {
+    if (!session) return;
+    void workbenchRequest(session.session_id, "register_views", {
+      views: JSON.parse(descriptors),
+    }).catch((e) => useStore.getState().addNotice(`Register work views: ${String(e)}`));
+  }, [session?.session_id, descriptors]);
   if (!session) return null;
   return (
     <WorkbenchContent
@@ -80,9 +100,14 @@ function WorkbenchContent({
         <select
           aria-label="Work view"
           value={module ? target.view : "welcome"}
-          onChange={(e) =>
-            api.open({ view: e.target.value, path: target.path, paths: target.paths })
-          }
+          onChange={(e) => {
+            const next = viewById(e.target.value);
+            api.open({
+              view: e.target.value,
+              path: target.path && next?.matches?.(target.path) ? target.path : undefined,
+              paths: target.paths?.filter((path) => next?.matches?.(path)),
+            });
+          }}
         >
           <option value="welcome">Choose a view</option>
           {views().map((view) => (
@@ -107,7 +132,9 @@ function WorkbenchContent({
       <div className="workbench-content">
         <ViewBoundary key={`${session}:${target.view}:${target.path ?? ""}`}>
           {Module ? (
-            <Module api={api} />
+            <Suspense fallback={<p className="workbench-welcome">Loading view…</p>}>
+              <Module api={api} />
+            </Suspense>
           ) : (
             <div className="workbench-welcome">
               <Workflow size={30} />
