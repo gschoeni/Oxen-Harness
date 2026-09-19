@@ -997,3 +997,22 @@ full with the header turned into back / prev / next. The old pane-below-the-grid
 overlay couldn't give the frame room without hiding the metadata, and vice
 versa; the single view gives the lineage trail and the raw row the space to be
 read.
+
+## Pluggable right-hand views: product direction (2026-09-18)
+
+**One top tab owns the agent conversation and its right-hand context.** The
+existing tabs above the agent are the only work-context tab strip. Selecting a
+tab switches its conversation and current view/app/context together. The planned
+view host replaces separate right-dock and nested Editor/Canvas tab strips with
+navigation inside the selected context, such as a view picker, breadcrumbs, and
+back/forward. Project documents can be shared across contexts; their active view
+and selection belong to the top tab.
+
+**Support bundled and installable views, starting with bundled views.** The
+agent and visual modules read/write the same project files. First migrate the
+existing views behind a common contract, then expose that contract to packaged
+views that users can install without rebuilding the app.
+
+These are user-confirmed product requirements, not shipped behavior. API,
+packaging, isolation, migration, and verification proposals are in
+[`plans/workbench-views.md`](plans/workbench-views.md).

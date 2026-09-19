@@ -110,7 +110,7 @@ Context is finite. Load what's relevant, not everything.
 
 | Document | When to pull in |
 |----------|-----------------|
-| _(none yet)_ | Phase plans will be added here as work begins |
+| [plans/workbench-views.md](plans/workbench-views.md) | Proposed right-panel extension architecture, unified agent/view tabs, filesystem-backed state, view SDK/packages, migration phases, and acceptance gates |
 
 ### Reference — Pull in when you need specifics
 
