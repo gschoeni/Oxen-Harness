@@ -190,6 +190,7 @@ mod tests {
         let budget = Arc::new(crate::TreeBudget::new(crate::TreeLimits {
             max_requests: 1,
             max_tokens: 10000,
+            max_parallel: 4,
             max_spawns: 24,
         }));
         let spawner = Arc::new(FleetSpawner::new(

@@ -1629,6 +1629,7 @@ mod tests {
         let budget = Arc::new(crate::TreeBudget::new(crate::TreeLimits {
             max_requests: 1,
             max_tokens: 10000,
+            max_parallel: 4,
             max_spawns: 2,
         }));
         let spawner = Arc::new(
@@ -2314,6 +2315,60 @@ mod tests {
             err.contains("can't fund 1"),
             "20k of 30k spent leaves too little: {err}"
         );
+    }
+
+    /// The tree's parallel cap is what the provider sees: three lanes in a
+    /// fleet allowed three abreast still make one call at a time when the
+    /// tree allows one, measured where it matters — at the server.
+    #[tokio::test]
+    async fn the_tree_caps_lane_calls_in_flight_across_a_fleet() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut server = mockito::Server::new_async().await;
+        let (seen, high) = (in_flight.clone(), peak.clone());
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| {
+                let now = seen.fetch_add(1, Ordering::SeqCst) + 1;
+                high.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(40));
+                seen.fetch_sub(1, Ordering::SeqCst);
+                w.write_all(sse_prose("done").as_bytes())
+            })
+            .expect(3)
+            .create_async()
+            .await;
+        let sp = Arc::new(FleetSpawner::new(
+            OxenClient::new(server.url(), "k", "claude-opus-4-8"),
+            ToolRegistry::new(),
+            AgentConfig {
+                system_prompt: None,
+                tree: Some(Arc::new(crate::tree::TreeBudget::new(
+                    crate::tree::TreeLimits {
+                        max_parallel: 1,
+                        ..Default::default()
+                    },
+                ))),
+                ..AgentConfig::default()
+            },
+        ));
+        let out = FleetTool::new(sp.clone(), Arc::new(RecordingSink::default()))
+            .invoke(serde_json::json!({
+                "agents": [
+                    { "name": "a", "prompt": "go" },
+                    { "name": "b", "prompt": "go" },
+                    { "name": "c", "prompt": "go" }
+                ],
+                "max_parallel": 3
+            }))
+            .await
+            .unwrap();
+        assert_eq!(out.matches("— done").count(), 3, "{out}");
+        assert_eq!(peak.load(Ordering::SeqCst), 1, "never two calls at once");
+        assert_eq!(sp.tree_budget().free_slots(), 1, "every slot handed back");
     }
 
     #[tokio::test]

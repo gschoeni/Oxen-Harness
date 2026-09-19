@@ -15,9 +15,10 @@
 //! delegated work.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// The tree's ceilings. Every field is a hard line for the subtree of one
 /// root turn.
@@ -32,6 +33,11 @@ pub struct TreeLimits {
     pub max_requests: u32,
     /// Lanes that may be spawned in the tree, all depths counted.
     pub max_spawns: u32,
+    /// Lane model calls in flight at once, across every fleet of the tree
+    /// at every depth. A per-fleet limit bounds one fleet; three fleets of
+    /// three with lanes spawning fleets of their own is what a provider's
+    /// rate limit counts, and this is the line it sees.
+    pub max_parallel: u32,
 }
 
 impl Default for TreeLimits {
@@ -40,6 +46,7 @@ impl Default for TreeLimits {
             max_tokens: 1_500_000,
             max_requests: 200,
             max_spawns: 24,
+            max_parallel: 4,
         }
     }
 }
@@ -102,6 +109,8 @@ impl Wallet {
 pub struct TreeBudget {
     limits: TreeLimits,
     state: Mutex<BudgetState>,
+    /// The [`TreeLimits::max_parallel`] call slots; never closed.
+    slots: Arc<Semaphore>,
 }
 
 #[derive(Debug, Default)]
@@ -175,7 +184,25 @@ impl TreeBudget {
         Self {
             limits,
             state: Mutex::default(),
+            slots: Arc::new(Semaphore::new(limits.max_parallel.max(1) as usize)),
         }
+    }
+
+    /// Wait for one of the tree's call slots (see
+    /// [`TreeLimits::max_parallel`]); the permit is the slot, released on
+    /// drop. Held around a model call only, never across a tool call or a
+    /// wait on a child fleet, so a parent lane never starves its children.
+    pub async fn call_slot(&self) -> Result<OwnedSemaphorePermit, String> {
+        self.slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "the tree's call slots were closed".to_string())
+    }
+
+    /// Call slots free right now, for readouts and tests.
+    pub fn free_slots(&self) -> usize {
+        self.slots.available_permits()
     }
     pub fn limits(&self) -> TreeLimits {
         self.limits
@@ -366,6 +393,7 @@ mod tests {
             max_tokens: 100_000,
             max_requests: 3,
             max_spawns: 4,
+            max_parallel: 4,
         });
         assert!(budget.admit_spawn(None, 3).is_ok());
         let err = budget.admit_spawn(None, 2).unwrap_err();
@@ -477,6 +505,35 @@ mod tests {
         budget.expect_lanes(None, 1);
         budget.open_lane(None, "next");
         assert_eq!(budget.allowance("next").unwrap().cap, 95_000);
+    }
+
+    #[tokio::test]
+    async fn call_slots_bound_lane_calls_across_the_whole_tree() {
+        let budget = TreeBudget::new(TreeLimits {
+            max_parallel: 2,
+            ..Default::default()
+        });
+        let first = budget.call_slot().await.unwrap();
+        let second = budget.call_slot().await.unwrap();
+        assert_eq!(budget.free_slots(), 0);
+        // A third call waits until one of the two finishes.
+        let third =
+            tokio::time::timeout(std::time::Duration::from_millis(30), budget.call_slot()).await;
+        assert!(third.is_err(), "no slot until a call ends");
+        drop(first);
+        let third = budget.call_slot().await.unwrap();
+        drop((second, third));
+        assert_eq!(budget.free_slots(), 2);
+        // A zero cap still lets one call through: a tree that can never
+        // call is a misconfiguration, not a feature.
+        assert_eq!(
+            TreeBudget::new(TreeLimits {
+                max_parallel: 0,
+                ..Default::default()
+            })
+            .free_slots(),
+            1
+        );
     }
 
     #[test]

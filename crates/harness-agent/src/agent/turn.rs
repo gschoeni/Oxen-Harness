@@ -340,6 +340,10 @@ impl Agent {
                     }
                 }
             }
+            let _slot = self.tree_call_slot(&cancel).await?;
+            if cancel.is_cancelled() {
+                return Ok(String::new());
+            }
             let (assembled, mut outcome, rule_hits) = self
                 .stream_reply(outbound, &tool_defs, nudge.as_ref(), &cancel, &mut on_event)
                 .await?;
@@ -461,6 +465,31 @@ impl Agent {
         )
     }
 
+    /// A lane's model call waits for one of the tree's parallel slots (see
+    /// `TreeLimits::max_parallel`): however many fleets are running, at
+    /// whatever depth, at most that many lane calls are in flight — which
+    /// is what a provider's rate limit counts. The root's own call needs no
+    /// slot. `None` for the root, or when the turn was cancelled while
+    /// waiting (the caller checks the token).
+    async fn tree_call_slot(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, AgentError> {
+        if self.config.depth == 0 {
+            return Ok(None);
+        }
+        let Some(tree) = &self.config.tree else {
+            return Ok(None);
+        };
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Ok(None),
+            slot = tree.call_slot() => slot
+                .map(Some)
+                .map_err(|e| AgentError::Io(std::io::Error::other(e))),
+        }
+    }
+
     /// Whether the tree budget stops this lane here (never the root, whose
     /// own spend the session budget bounds), and why.
     fn tree_budget_stop(&self) -> Option<String> {
@@ -527,6 +556,10 @@ impl Agent {
         let (outbound, report) = self.prepare_outbound();
         self.report_compression(&report, on_event);
         let outbound_len = outbound.len();
+        let _slot = self.tree_call_slot(cancel).await?;
+        if cancel.is_cancelled() {
+            return Ok(String::new());
+        }
         let (assembled, outcome, _) = self
             .stream_reply(outbound, &[], Some(&nudge), cancel, on_event)
             .await?;

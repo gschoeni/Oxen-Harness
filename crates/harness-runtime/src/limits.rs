@@ -38,6 +38,11 @@ pub struct Limits {
     /// budget; see `harness_agent::TreeLimits`). `None` uses the default.
     #[serde(default)]
     pub max_tree_tokens: Option<usize>,
+    /// Lane model calls in flight at once across a turn's whole tree of
+    /// subagents (see `harness_agent::TreeLimits::max_parallel`). Lower it
+    /// when the provider rate-limits a fleet. `None` uses the default.
+    #[serde(default)]
+    pub max_tree_parallel: Option<u32>,
 }
 
 /// Read the saved limits (defaults to no limits on a fresh install or an
@@ -76,6 +81,7 @@ mod tests {
                 smol_model: Some("claude-haiku-4-5".into()),
                 fallback_models: vec!["claude-sonnet-5".into()],
                 max_tree_tokens: Some(500_000),
+                max_tree_parallel: Some(2),
             })
             .unwrap();
             let loaded = load();

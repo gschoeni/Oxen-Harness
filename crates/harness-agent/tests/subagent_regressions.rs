@@ -192,6 +192,7 @@ fn request_admission_is_atomic_across_parallel_lanes() {
     let budget = Arc::new(harness_agent::TreeBudget::new(harness_agent::TreeLimits {
         max_requests: 3,
         max_tokens: 1000,
+        max_parallel: 4,
         max_spawns: 24,
     }));
     let barrier = Arc::new(std::sync::Barrier::new(16));

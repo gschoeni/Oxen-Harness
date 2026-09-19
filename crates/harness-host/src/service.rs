@@ -1037,6 +1037,9 @@ impl SessionService {
                         .max_tree_tokens
                         .map(|n| n as u64)
                         .unwrap_or(harness_agent::TreeLimits::default().max_tokens),
+                    max_parallel: limits
+                        .max_tree_parallel
+                        .unwrap_or(harness_agent::TreeLimits::default().max_parallel),
                     ..Default::default()
                 },
             ))),
