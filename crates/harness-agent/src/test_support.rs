@@ -33,6 +33,36 @@ pub(crate) fn sse_prose(text: &str) -> String {
     format!("data: {chunk}\n\ndata: [DONE]\n\n")
 }
 
+/// One streamed tool call whose final chunk reports `prompt`/`completion`
+/// usage (nothing cached), so a test can make one round cost what it likes.
+pub(crate) fn sse_tool_call_with_usage(
+    id: &str,
+    name: &str,
+    prompt: u32,
+    completion: u32,
+) -> String {
+    let chunk = serde_json::json!({
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "content": "",
+                "tool_calls": [{
+                    "index": 0,
+                    "id": id,
+                    "function": { "name": name, "arguments": "{}" }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }],
+        "usage": {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion
+        }
+    });
+    format!("data: {chunk}\n\ndata: [DONE]\n\n")
+}
+
 /// A retry policy with near-zero waits so backoff tests run instantly.
 pub(crate) fn fast_retry(max_attempts: u32) -> RetryPolicy {
     RetryPolicy {

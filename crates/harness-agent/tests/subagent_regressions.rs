@@ -201,7 +201,7 @@ fn request_admission_is_atomic_across_parallel_lanes() {
             let barrier = barrier.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                budget.reserve_request().is_ok()
+                budget.reserve_request("lane").is_ok()
             })
         })
         .collect();

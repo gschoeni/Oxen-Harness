@@ -150,7 +150,7 @@ impl std::fmt::Display for LaneStop {
                 after.as_secs()
             ),
             LaneStop::Cancelled => write!(f, "stopped early (cancelled)"),
-            LaneStop::Budget => write!(f, "stopped early (the agents' shared budget is spent)"),
+            LaneStop::Budget => write!(f, "stopped early (its token budget is spent)"),
             LaneStop::Rounds(cap) => write!(f, "stopped after {cap} model rounds (its round cap)"),
         }
     }

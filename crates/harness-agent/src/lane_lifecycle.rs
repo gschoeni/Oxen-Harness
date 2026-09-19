@@ -17,6 +17,8 @@ pub(crate) struct LaneLifecycle {
     pub label: String,
     pub fleet: String,
     pub tree: Arc<AgentTree>,
+    /// The wallet the lane spends from; released on every exit path.
+    pub budget: Arc<crate::tree::TreeBudget>,
     pub store: Arc<HistoryStore>,
     pub workspace: Option<Arc<LaneWorktree>>,
     pub spill: Option<Arc<CcrStore>>,
@@ -119,5 +121,6 @@ impl Drop for LaneLifecycle {
             }
         }
         self.tree.finish_lane(&self.id);
+        self.budget.release_lane(&self.id);
     }
 }

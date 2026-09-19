@@ -884,7 +884,7 @@ impl Agent {
                     outcome.cached_prompt_tokens,
                     outcome.cache_write_tokens,
                 );
-                tree.charge_tokens(billable as u64);
+                tree.charge_tokens(self.session_id(), billable as u64);
             }
         }
     }

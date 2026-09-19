@@ -342,7 +342,7 @@ impl MapAgentsTool {
     ) -> Result<Vec<SubagentResult>, ToolError> {
         self.spawner
             .tree_budget()
-            .admit_spawn(pending.len() as u32)
+            .admit_spawn(self.spawner.session().as_deref(), pending.len() as u32)
             .map_err(ToolError::Execution)?;
         let spill = self.spawner.overflow_store();
         let tasks: Vec<SubagentTask> = pending
@@ -418,7 +418,7 @@ impl MapAgentsTool {
     ) -> Result<String, ToolError> {
         self.spawner
             .tree_budget()
-            .admit_spawn(1)
+            .admit_spawn(self.spawner.session().as_deref(), 1)
             .map_err(ToolError::Execution)?;
         let prompt = format!(
             "{reduce_prompt}\n\n## The rows to reduce ({} items)\n\n{document}",

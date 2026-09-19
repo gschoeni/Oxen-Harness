@@ -317,7 +317,7 @@ impl Agent {
             }
             if self.config.depth > 0 {
                 if let Some(tree) = &self.config.tree {
-                    if let Err(reason) = tree.reserve_request() {
+                    if let Err(reason) = tree.reserve_request(self.session_id()) {
                         self.stop = Some(super::TurnStop::TreeBudget);
                         return self
                             .final_report(&reason, turn.rounds, &cancel, &mut on_event)
@@ -452,7 +452,7 @@ impl Agent {
         if self.config.depth == 0 {
             return None;
         }
-        let reason = self.config.tree.as_ref()?.exhausted()?;
+        let reason = self.config.tree.as_ref()?.exhausted(self.session_id())?;
         crate::errlog::record(
             self.config.error_log.as_deref(),
             "tree_budget_exhausted",
@@ -1141,7 +1141,7 @@ mod tests {
         assert_eq!(lane.turn_stop(), Some(crate::TurnStop::TreeBudget));
         assert_eq!(tree.usage().requests, 2, "the report call is counted");
         // Nothing more: a spent lane does not go around again.
-        assert!(tree.exhausted().is_some());
+        assert!(tree.exhausted(lane.session_id()).is_some());
     }
 
     /// A rule that fires on `.unwrap()` anywhere in the reply.
