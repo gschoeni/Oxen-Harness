@@ -1061,3 +1061,10 @@ packaging, isolation, migration, and verification proposals are in
   unconditional save.
 - The portable browser SDK is a separate local package with no React dependency.
   HTML starters need no build tool; frameworks can watch their own output folder.
+- Preview generations are distinct from content hashes: an explicit restart of
+  unchanged code still revokes the old lease and requires a new native surface.
+  Mounted packages serve a verified in-memory bundle; subsequent cache writes
+  cannot alter the running revision. Rollback changes only the preview snapshot.
+- Source-specific diagnostic reports survive restarts, but restoring state never
+  executes package code. Browser test payloads preserve every result within a
+  UTF-8 byte budget, and uncaught runtime errors fail the smoke check.

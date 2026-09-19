@@ -36,9 +36,18 @@
 
 Built a no-recompile package authoring loop: project scaffolds, live immutable
 previews, agent tool, bounded runtime diagnostics, registered browser tests,
-retained drafts, exact-revision installation, and a portable SDK. Targeted
-runtime/host/frontend/SDK tests pass. Full verification and the dedicated
-review/refactor pass are in progress. See `plans/view-studio.md`.
+retained drafts, exact-revision installation, and a portable SDK. The dedicated
+review/refactor is complete: same-code restarts remount correctly, source-specific
+reports survive restarts, previous-preview rollback leaves source untouched,
+native assets remain immutable in memory, and document switching protects drafts.
+
+Final verification: fmt and workspace/native Clippy passed; 1,357 Rust tests
+passed under nextest (5 skipped), 626 frontend tests passed, TypeScript, four SDK
+tests, native command isolation, desktop assets and standalone workflow build
+passed. Chrome smoke covered draft retention, concurrent-agent save conflicts,
+registered tests/failure reports, light/dark themes and a 340-pixel panel without
+horizontal overflow. Native interactive platform coverage and paid generation
+remain untested. See `plans/view-studio.md` and [the builder guide](app/WORKBENCH.md).
 
 ## Workbench views and Oxen workflows — 2026-09-18
 

@@ -190,4 +190,6 @@ When adding a new file to the project, update this document map.
 - `crates/harness-runtime/templates/view/` — no-build starter, theme, tests and agent authoring guide.
 - `crates/harness-host/src/view_development.rs` — shared session/agent/transport authoring operations and retained package state.
 - `app/src/modules/view-studio/` — create, preview, test, diagnose and install from the current conversation.
+- `app/src/features/workbench/PackageSurface.tsx` — native surface lifecycle shared by development previews and installed packages.
+- `app/src/features/workbench/PackageSurface.test.tsx` — preview generations remount without rebuilding surfaces during status polling.
 - `plans/view-studio.md` — implementation and review record for the live builder loop.

@@ -37,7 +37,7 @@ failure, and console-error reporting; no page errors. Source/templates are teste
 with the actual injected SDK and package content policy in Chrome; this does not
 claim native WebKit/Windows/Linux interactive smoke coverage.
 
-Dedicated review findings to address after the feature commit:
+Dedicated review findings after feature commit `f06c49f`:
 - Restore the source's previous report after host restart, marked inactive, without
   erasing diagnostics; distinguish reports for different sources in one chat.
 - Block explicit restart while an unretained draft exists, and avoid overlapping
@@ -50,3 +50,42 @@ Dedicated review findings to address after the feature commit:
   UI; keep module code approachable and keep app settings/themes consistent.
 - Re-run the full suite and browser check after review, GC build artifacts, and
   commit review changes separately. Existing unrelated edits must remain intact.
+
+## Review outcome
+
+Completed the review across the runtime service, host tool/transport, native
+surface, portable SDK, starter, registry and Studio UI. Changes worth applying:
+
+- Persist and restore source-specific reports as inactive; reject mismatched
+  report ownership. Retain prior diagnostics without executing restored code.
+- Give each preview a generation, even when its content hash is unchanged.
+  Regression coverage proves status polling retains a native surface while a
+  restart replaces it. Block restarts with an unretained draft.
+- Add reload and previous-preview controls. Rollback pauses updates and leaves
+  editable files untouched. Apply document-path changes explicitly, protecting
+  drafts and avoiding remounts while typing.
+- Load and verify a native package's complete asset map once per lease. Tests
+  reject altered manifest metadata and prove later cache edits cannot change an
+  already-mounted snapshot. Production replacement leaves development leases
+  separate. Repeated status checks avoid re-parsing unchanged JavaScript.
+- Separate native surface hosting from package-management UI. Keep one portable
+  type contract and retain the small runtime/host/native boundaries.
+- Runtime exceptions fail the smoke check. Bound diagnostics and UTF-8 test
+  reports while preserving every reported pass/fail outcome. Show initial
+  validation errors and accessible operation state.
+- Fix a narrow-panel grid overflow found by the browser smoke check. Light and
+  dark themes render without horizontal overflow at 340 pixels.
+
+Final verification passed: `cargo fmt --all -- --check`, workspace and desktop
+Clippy with warnings denied, nextest **1,357 passed / 5 skipped**, frontend
+**626 passed / 76 files**, TypeScript, four portable SDK tests, native command
+isolation, desktop production build and standalone workflow package build.
+The Chrome package/SDK smoke passed again after review: three reloads, retained
+drafts, preserved concurrent agent edits, registered tests, intentional failures
+and captured diagnostics. Native interactive WebKit/Windows/Linux rendering and
+paid generations were not exercised. Existing frontend test `act` warnings and
+the main-app bundle-size advisory do not affect passing checks.
+
+Post-suite `scripts/gc-target.py` completed and reclaimed 635.8 MB of rebuildable
+artifacts. The review changes are committed separately from the feature; the
+checkout's unrelated edits and three pre-existing staged renames are preserved.

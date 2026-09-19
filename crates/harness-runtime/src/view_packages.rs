@@ -11,7 +11,7 @@ use std::{
 const MAX_BYTES: usize = 20 * 1024 * 1024;
 const MAX_FILES: usize = 512;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub api_version: u32,
@@ -37,7 +37,7 @@ pub struct Permissions {
     pub actions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Package {
     pub manifest: Manifest,
     pub digest: String,
@@ -141,6 +141,12 @@ pub(crate) fn inspect_files(source: &Path) -> Result<(Package, BTreeMap<String, 
             .ok_or("view package needs view.json")?,
     )
     .map_err(|e| format!("invalid view manifest: {e}"))?;
+    if manifest.title.trim().is_empty()
+        || manifest.title.len() > 160
+        || manifest.description.len() > 2000
+    {
+        return Err("view title needs 1 to 160 bytes and description at most 2000 bytes".into());
+    }
     if manifest.api_version != 1 {
         return Err(format!("unsupported view API {}", manifest.api_version));
     }
@@ -169,7 +175,7 @@ pub(crate) fn inspect_files(source: &Path) -> Result<(Package, BTreeMap<String, 
             return Err("too many view path patterns".into());
         }
         for pattern in patterns {
-            if !relative(pattern) {
+            if pattern.len() > 1024 || !relative(pattern) {
                 return Err(format!("invalid view path pattern {pattern}"));
             }
             globset::Glob::new(pattern).map_err(|e| format!("invalid view path pattern: {e}"))?;
@@ -310,19 +316,29 @@ pub async fn remove(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn assets(package: &Package) -> Result<Documents, String> {
+pub type AssetFiles = std::collections::BTreeMap<String, Vec<u8>>;
+
+/// Load one verified revision into the native lease. Later reads cannot observe
+/// modified cache files or repeatedly hash a large bundle for each asset.
+pub fn asset_files(package: &Package) -> Result<AssetFiles, String> {
+    cached_files(package, &root()?)
+}
+
+pub(crate) fn cached_files(package: &Package, root: &Path) -> Result<AssetFiles, String> {
     if package.digest.len() != 64 || !package.digest.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("invalid view digest".into());
     }
-    let docs = Documents::new(root()?).map_err(|e| e.to_string())?;
-    let assets = Documents::new(docs.resolve(&package.digest).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    verify_assets(&assets, package)?;
-    Ok(assets)
+    let docs = Documents::new(root).map_err(|e| e.to_string())?;
+    let path = docs.resolve(&package.digest).map_err(|e| e.to_string())?;
+    let (actual, files) = inspect_files(&path)?;
+    if actual != *package {
+        return Err("installed view assets or manifest no longer match the approved hash; reinstall the package".into());
+    }
+    Ok(files)
 }
 
 fn verify_assets(assets: &Documents, package: &Package) -> Result<(), String> {
-    if inspect(assets.root())?.digest != package.digest {
+    if inspect(assets.root())? != *package {
         return Err(
             "installed view assets no longer match the approved hash; reinstall the package".into(),
         );
@@ -385,6 +401,29 @@ mod tests {
         };
         assert!(permissions.allows("read", "notes/a.json"));
         assert!(!permissions.allows("read", "notes/private/a.json"));
+    }
+    #[test]
+    fn loaded_assets_remain_immutable_and_manifest_metadata_must_match() {
+        let source = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        package(source.path());
+        let (approved, files) = inspect_files(source.path()).unwrap();
+        cache_assets(&approved, &files, cache.path()).unwrap();
+        let snapshot = cached_files(&approved, cache.path()).unwrap();
+        let mut altered = approved.clone();
+        altered.manifest.permissions.read.push("secrets/**".into());
+        assert!(cached_files(&altered, cache.path())
+            .unwrap_err()
+            .contains("approved hash"));
+        std::fs::write(
+            cache.path().join(&approved.digest).join("index.html"),
+            "modified after mount",
+        )
+        .unwrap();
+        assert_eq!(snapshot["index.html"], b"<p>Hello</p>");
+        assert!(cached_files(&approved, cache.path())
+            .unwrap_err()
+            .contains("approved hash"));
     }
     #[test]
     fn changed_installed_assets_cannot_execute_under_an_old_approval() {

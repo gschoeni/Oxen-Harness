@@ -229,8 +229,12 @@ package bridge does not expose this action.
 
 `develop` accepts `{action, source, id?, title?, digest?}`. `source` is a
 workspace-relative package directory. Actions: `scaffold`, `check`, `preview`,
-`status`, `test`, `install`, `pause`, `resume`, `stop`. Preview/install require
+`status`, `test`, `install`, `pause`, `resume`, `rollback`, `stop`. Preview/install require
 an exact checked digest. The response includes candidate/preview revisions,
 capabilities, diagnostics, runtime/test results, and a project `report_path`.
+`generation` changes on each preview restart, including unchanged source; clients
+remount on this value. `previous` identifies the rollback snapshot. Rollback pauses
+updates without editing source. Reports are scoped to source and conversation and
+restore as inactive after a host restart.
 Native package-only diagnostic and retained-state methods are instance-bound;
 they are not exposed through the general HTTP dispatcher.

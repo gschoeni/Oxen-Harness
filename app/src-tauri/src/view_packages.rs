@@ -23,6 +23,7 @@ pub(crate) fn command_allowed(label: &str, command: &str) -> bool {
 struct Lease {
     session: String,
     package: Package,
+    assets: view_packages::AssetFiles,
     project: Documents,
     preview: Option<PreviewLease>,
 }
@@ -97,7 +98,7 @@ fn revoke_instances(app: &AppHandle, id: &str) -> Result<(), String> {
         .lock()
         .map_err(|e| e.to_string())?
         .iter()
-        .filter(|(_, lease)| lease.package.manifest.id == id)
+        .filter(|(_, lease)| lease.package.manifest.id == id && lease.preview.is_none())
         .map(|(label, _)| label.clone())
         .collect();
     for label in labels {
@@ -146,7 +147,7 @@ pub(crate) async fn view_package_mount(
             None,
         )
     };
-    view_packages::assets(&package)?;
+    let assets = view_packages::asset_files(&package)?;
     let project = state.documents(&session)?;
     if let Some(path) = &path {
         if !package.manifest.permissions.allows("read", path) {
@@ -175,16 +176,17 @@ pub(crate) async fn view_package_mount(
                     && url.host_str() == Some("viewasset.localhost"));
             own_scheme && url.path().starts_with(&format!("/{guard_label}/bundle/"))
         });
+    let window = app.get_window("main").ok_or("main window is unavailable")?;
     leases().lock().map_err(|e| e.to_string())?.insert(
         label.clone(),
         Arc::new(Lease {
             session,
             package,
+            assets,
             project,
             preview,
         }),
     );
-    let window = app.get_window("main").ok_or("main window is unavailable")?;
     if let Err(e) = window.add_child(
         builder,
         LogicalPosition::new(bounds.x, bounds.y),
@@ -382,44 +384,31 @@ pub(crate) fn protocol(
         }
         let instance = lease(label)?;
         still_installed(&instance)?;
-        let file = match area {
-            "bundle" => view_packages::assets(&instance.package)?
-                .resolve(relative)
-                .map_err(|e| e.to_string())?,
-            "project" => {
-                if !instance
-                    .package
-                    .manifest
-                    .permissions
-                    .allows("asset", relative)
-                {
-                    return Err("asset access denied".into());
-                }
-                instance
-                    .project
-                    .resolve(relative)
-                    .map_err(|e| e.to_string())?
-            }
-            _ => return Err("unknown view asset area".into()),
-        };
+        if area == "bundle" {
+            let bytes = instance
+                .assets
+                .get(relative)
+                .ok_or("view asset is missing")?;
+            return Ok((bytes.clone(), mime_for(std::path::Path::new(relative))));
+        }
+        if area != "project"
+            || !instance
+                .package
+                .manifest
+                .permissions
+                .allows("asset", relative)
+        {
+            return Err("asset access denied".into());
+        }
+        let file = instance
+            .project
+            .resolve(relative)
+            .map_err(|e| e.to_string())?;
         let metadata = std::fs::metadata(&file).map_err(|e| e.to_string())?;
         if !metadata.is_file() || metadata.len() > 100 * 1024 * 1024 {
             return Err("view asset is not a regular file or exceeds 100 MiB".into());
         }
-        let mime = match file.extension().and_then(|e| e.to_str()).unwrap_or("") {
-            "html" => "text/html; charset=utf-8",
-            "js" | "mjs" => "text/javascript; charset=utf-8",
-            "css" => "text/css; charset=utf-8",
-            "json" => "application/json",
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "webp" => "image/webp",
-            "svg" => "image/svg+xml",
-            "mp4" => "video/mp4",
-            "webm" => "video/webm",
-            "woff2" => "font/woff2",
-            _ => "application/octet-stream",
-        };
+        let mime = mime_for(&file);
         Ok((std::fs::read(file).map_err(|e| e.to_string())?, mime))
     })();
     let (status, body, mime) = match response {
@@ -441,6 +430,23 @@ pub(crate) fn protocol(
         tauri::http::HeaderValue::from_static("nosniff"),
     );
     response
+}
+
+fn mime_for(file: &std::path::Path) -> &'static str {
+    match file.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "woff2" => "font/woff2",
+        _ => "application/octet-stream",
+    }
 }
 
 #[cfg(test)]

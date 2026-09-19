@@ -20,7 +20,10 @@ impl Workbench {
             .as_ref()
             .is_none_or(|dev| dev.status.source != args.source);
         if changed {
-            if matches!(args.action, Status | Test | Install | Pause | Resume | Stop) {
+            if matches!(
+                args.action,
+                Status | Test | Install | Pause | Resume | Rollback | Stop
+            ) {
                 return Err("open or check this view source first".into());
             }
             if let Some(old) = state.as_mut() {
@@ -60,6 +63,7 @@ impl Workbench {
             Test => dev.request_test().await?,
             Pause => dev.pause(true).await?,
             Resume => dev.pause(false).await?,
+            Rollback => dev.rollback().await?,
             Stop => dev.stop().await?,
             Install => {
                 let package = dev

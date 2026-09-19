@@ -15,7 +15,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub level: String,
     pub message: String,
@@ -32,14 +32,14 @@ impl Diagnostic {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestResult {
     pub name: String,
     pub passed: bool,
     #[serde(default)]
     pub error: Option<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestRun {
     pub id: String,
     pub digest: String,
@@ -48,7 +48,7 @@ pub struct TestRun {
     pub snapshot: String,
     pub requested_at: u64,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status {
     pub source: String,
     pub report_path: String,
@@ -56,9 +56,13 @@ pub struct Status {
     pub paused: bool,
     pub dirty: bool,
     pub mounted: bool,
+    #[serde(default)]
+    pub generation: u64,
     pub installed_digest: Option<String>,
     pub candidate: Option<Package>,
     pub package: Option<Package>,
+    #[serde(default)]
+    pub previous: Option<Package>,
     pub diagnostics: Vec<Diagnostic>,
     pub runtime: Vec<Diagnostic>,
     pub test: Option<TestRun>,
@@ -69,6 +73,7 @@ pub struct Development {
     cache: PathBuf,
     token: Arc<AtomicBool>,
     last_seen: u64,
+    validated_digest: Option<String>,
     pub status: Status,
 }
 impl Development {
@@ -79,28 +84,53 @@ impl Development {
         cache: PathBuf,
     ) -> Result<Self, String> {
         docs.resolve(source).map_err(|e| e.to_string())?;
+        let report_path = format!(
+            ".oxen-harness/view-dev/{}.json",
+            revision_of(format!("{session}\0{source}").as_bytes())
+        );
+        let mut status = match docs.read(&report_path) {
+            Ok(document) => serde_json::from_str::<Status>(&document.content)
+                .map_err(|e| format!("read view report {report_path}: {e}"))?,
+            Err(crate::documents::DocumentError::Io { source: error, .. })
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Status {
+                    source: source.into(),
+                    report_path: report_path.clone(),
+                    active: false,
+                    paused: false,
+                    dirty: false,
+                    mounted: false,
+                    generation: 0,
+                    installed_digest: None,
+                    candidate: None,
+                    package: None,
+                    previous: None,
+                    diagnostics: vec![],
+                    runtime: vec![],
+                    test: None,
+                }
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        if status.source != source || status.report_path != report_path {
+            return Err("view report belongs to a different authoring context".into());
+        }
+        status.active = false;
+        status.mounted = false;
+        status.dirty = false;
+        if let Some(test) = &mut status.test {
+            if test.status == "pending" {
+                test.status = "interrupted".into();
+            }
+        }
         Ok(Self {
             docs,
             cache,
             token: Arc::new(AtomicBool::new(false)),
             last_seen: 0,
-            status: Status {
-                source: source.into(),
-                report_path: format!(
-                    ".oxen-harness/view-dev/{}.json",
-                    revision_of(session.as_bytes())
-                ),
-                active: false,
-                paused: false,
-                dirty: false,
-                mounted: false,
-                installed_digest: None,
-                candidate: None,
-                package: None,
-                diagnostics: vec![],
-                runtime: vec![],
-                test: None,
-            },
+            validated_digest: None,
+            status,
         })
     }
     async fn persist(&self) -> Result<(), String> {
@@ -123,12 +153,17 @@ impl Development {
             .map_err(|e| format!("save view development report: {e}"))?;
         Ok(())
     }
-    fn inspect(&self) -> Result<(Package, std::collections::BTreeMap<String, Vec<u8>>), String> {
+    fn inspect(
+        &mut self,
+    ) -> Result<(Package, std::collections::BTreeMap<String, Vec<u8>>), String> {
         let source = self
             .docs
             .resolve(&self.status.source)
             .map_err(|e| e.to_string())?;
         let (package, files) = view_packages::inspect_files(&source)?;
+        if self.validated_digest.as_deref() == Some(&package.digest) {
+            return Ok((package, files));
+        }
         for (path, bytes) in &files {
             if matches!(
                 std::path::Path::new(path)
@@ -146,6 +181,7 @@ impl Development {
                 }
             }
         }
+        self.validated_digest = Some(package.digest.clone());
         Ok((package, files))
     }
     pub async fn check(&mut self) -> Result<Status, String> {
@@ -163,6 +199,9 @@ impl Development {
         Ok(self.status.clone())
     }
     pub async fn start(&mut self, digest: &str) -> Result<Status, String> {
+        if self.status.active && self.status.dirty {
+            return Err("save or retain the preview draft before restarting".into());
+        }
         let (package, files) = self.inspect()?;
         if package.digest != digest {
             return Err(
@@ -185,16 +224,25 @@ impl Development {
         self.token.store(false, Ordering::Relaxed);
         self.token = Arc::new(AtomicBool::new(true));
         self.last_seen = 0;
+        self.status.generation = self.status.generation.saturating_add(1);
         self.status.mounted = false;
         self.status.dirty = false;
         self.status.runtime.clear();
         self.status.test = None;
+        if self
+            .status
+            .package
+            .as_ref()
+            .is_some_and(|current| current.digest != package.digest)
+        {
+            self.status.previous = self.status.package.clone();
+        }
         self.status.candidate = Some(package.clone());
         self.status.package = Some(package);
         Ok(())
     }
     pub async fn refresh(&mut self) -> Result<Status, String> {
-        let before = serde_json::to_value(&self.status).map_err(|e| e.to_string())?;
+        let before = self.status.clone();
         let time = now()?;
         self.status.mounted = self.status.active && time.saturating_sub(self.last_seen) < 4000;
         if let Some(test) = &mut self.status.test {
@@ -232,9 +280,28 @@ impl Development {
                 }
             }
         }
-        if serde_json::to_value(&self.status).map_err(|e| e.to_string())? != before {
+        if self.status != before {
             self.persist().await?;
         }
+        Ok(self.status.clone())
+    }
+    pub async fn rollback(&mut self) -> Result<Status, String> {
+        if self.status.dirty {
+            return Err("save or retain the preview draft before switching revisions".into());
+        }
+        let previous = self
+            .status
+            .previous
+            .clone()
+            .ok_or("no previous preview revision")?;
+        let files = view_packages::cached_files(&previous, &self.cache)?;
+        let candidate = self.status.candidate.clone();
+        self.publish(previous, files)?;
+        self.status.candidate = candidate;
+        self.status.active = true;
+        self.status.paused = true;
+        self.status.diagnostics.clear();
+        self.persist().await?;
         Ok(self.status.clone())
     }
     pub async fn pause(&mut self, paused: bool) -> Result<Status, String> {
@@ -350,6 +417,8 @@ impl Development {
                 let mut diagnostic: Diagnostic =
                     serde_json::from_value(payload).map_err(|e| e.to_string())?;
                 diagnostic.message = diagnostic.message.chars().take(2000).collect();
+                diagnostic.file = diagnostic.file.map(|file| file.chars().take(500).collect());
+                diagnostic.level = diagnostic.level.chars().take(16).collect();
                 if self.status.runtime.len() >= 100 {
                     self.status.runtime.remove(0);
                 }
@@ -412,8 +481,8 @@ pub async fn scaffold(docs: &Documents, source: &str, id: &str, title: &str) -> 
     {
         return Err("view id needs lowercase letters, digits, dots or dashes".into());
     }
-    if title.is_empty() || title.len() > 160 {
-        return Err("view title needs 1 to 160 characters".into());
+    if title.trim().is_empty() || title.len() > 160 {
+        return Err("view title needs 1 to 160 bytes".into());
     }
     let target = docs.resolve(source).map_err(|e| e.to_string())?;
     let _guard = harness_tools::path_lock::lock(&target)
@@ -467,6 +536,64 @@ pub async fn scaffold(docs: &Documents, source: &str, id: &str, title: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn reports_survive_restarts_without_restarting_code_and_sources_keep_separate_reports() {
+        let project = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let docs = Documents::new(project.path()).unwrap();
+        scaffold(&docs, "views/a", "a", "A").await.unwrap();
+        let mut first =
+            Development::new(docs.clone(), "chat", "views/a", cache.path().into()).unwrap();
+        let digest = first.check().await.unwrap().candidate.unwrap().digest;
+        first.start(&digest).await.unwrap();
+        first.bridge(&digest,"diagnostic",json!({"level":"error","message":"remember this failure","file":"main.js","line":1})).await.unwrap();
+        let report = first.status.report_path.clone();
+        drop(first);
+        let restored =
+            Development::new(docs.clone(), "chat", "views/a", cache.path().into()).unwrap();
+        assert!(!restored.status.active);
+        assert!(!restored.status.mounted);
+        assert_eq!(restored.status.runtime[0].message, "remember this failure");
+        assert!(restored.lease().is_err());
+        let other = Development::new(docs, "chat", "views/b", cache.path().into()).unwrap();
+        assert_ne!(other.status.report_path, report);
+    }
+    #[tokio::test]
+    async fn reload_protects_drafts_and_can_return_to_the_previous_preview_revision() {
+        let project = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let docs = Documents::new(project.path()).unwrap();
+        scaffold(&docs, "views/demo", "demo", "Demo").await.unwrap();
+        let mut dev = Development::new(docs, "chat", "views/demo", cache.path().into()).unwrap();
+        let original = dev.check().await.unwrap().candidate.unwrap().digest;
+        dev.start(&original).await.unwrap();
+        dev.bridge(&original, "dirty", json!({"dirty":true}))
+            .await
+            .unwrap();
+        assert!(dev.start(&original).await.unwrap_err().contains("draft"));
+        dev.bridge(&original, "dirty", json!({"dirty":false}))
+            .await
+            .unwrap();
+        let generation = dev.status.generation;
+        let old_lease = dev.lease().unwrap().1;
+        dev.start(&original).await.unwrap();
+        assert!(dev.status.generation > generation);
+        assert!(!old_lease.load(Ordering::Relaxed));
+        std::fs::write(
+            project.path().join("views/demo/style.css"),
+            "body { color:red }",
+        )
+        .unwrap();
+        dev.refresh().await.unwrap();
+        assert_ne!(dev.status.package.as_ref().unwrap().digest, original);
+        dev.rollback().await.unwrap();
+        assert_eq!(dev.status.package.as_ref().unwrap().digest, original);
+        assert!(dev.status.paused);
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("views/demo/style.css")).unwrap(),
+            "body { color:red }"
+        );
+    }
     #[tokio::test]
     async fn paused_and_dirty_previews_keep_their_revision_and_install_is_exact() {
         let project = tempfile::tempdir().unwrap();

@@ -13,10 +13,10 @@ import {
 } from "lucide-react";
 import type { ViewProps } from "../../workbench-sdk";
 import {
-  PackageSurface,
   refreshPackages,
   type ViewPackage,
 } from "../../features/workbench/packages";
+import { PackageSurface } from "../../features/workbench/PackageSurface";
 import "./studio.css";
 
 interface Diagnostic {
@@ -32,6 +32,8 @@ export interface StudioStatus {
   paused: boolean;
   dirty: boolean;
   mounted: boolean;
+  generation?: number;
+  previous?: ViewPackage | null;
   installed_digest?: string | null;
   candidate?: ViewPackage | null;
   package?: ViewPackage | null;
@@ -46,14 +48,17 @@ export interface StudioStatus {
   } | null;
 }
 export function ViewStudio({ api }: ViewProps) {
-  const [source, setSource] = useState(api.context.target.path ?? "views/my-view"),
+  const [source, setSource] = useState(
+      api.context.target.path ?? "views/my-view",
+    ),
     [id, setId] = useState("my.view"),
     [title, setTitle] = useState("My view"),
     [status, setStatus] = useState<StudioStatus>(),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [details, setDetails] = useState(false),
-    [resource, setResource] = useState("");
+    [resource, setResource] = useState(""),
+    [resourceDraft, setResourceDraft] = useState("");
   const request = useCallback(
     (action: string, extra: Record<string, unknown> = {}) =>
       api.request<StudioStatus>("develop", { action, source, ...extra }),
@@ -62,6 +67,9 @@ export function ViewStudio({ api }: ViewProps) {
   useEffect(() => {
     setSource(api.context.target.path ?? "views/my-view");
     setStatus(undefined);
+    setResource("");
+    setResourceDraft("");
+    setError("");
   }, [api.context.target.path]);
   useEffect(() => {
     if (!api.context.target.path) return;
@@ -98,7 +106,8 @@ export function ViewStudio({ api }: ViewProps) {
     };
   }, [request, status?.active]);
   useEffect(() => {
-    if (status?.installed_digest) void refreshPackages().catch((e) => setError(String(e)));
+    if (status?.installed_digest)
+      void refreshPackages().catch((e) => setError(String(e)));
   }, [status?.installed_digest]);
   async function operate(action: string, extra: Record<string, unknown> = {}) {
     setBusy(true);
@@ -109,7 +118,10 @@ export function ViewStudio({ api }: ViewProps) {
         await refreshPackages();
         setStatus(await request("status"));
         setDetails(true);
-      } else setStatus(result);
+      } else {
+        setStatus(result);
+        if (result.diagnostics.length) setDetails(true);
+      }
       if (action === "scaffold" || action === "preview")
         api.open({ view: "view-studio", path: source });
     } catch (e) {
@@ -126,10 +138,15 @@ export function ViewStudio({ api }: ViewProps) {
     active = status?.active && status.package;
   const issues = [
     ...(status?.diagnostics ?? []),
-    ...(status?.runtime ?? []).filter((d) => d.level === "error" || d.level === "warn"),
+    ...(status?.runtime ?? []).filter(
+      (d) => d.level === "error" || d.level === "warn",
+    ),
   ];
   return (
-    <div className={`view-studio${active ? " is-preview" : ""}`}>
+    <div
+      className={`view-studio${active ? " is-preview" : ""}`}
+      aria-busy={busy}
+    >
       <header className="studio-heading">
         <span className="studio-mark">
           <Braces size={18} />
@@ -156,8 +173,8 @@ export function ViewStudio({ api }: ViewProps) {
             Built right here.
           </h2>
           <p>
-            Describe a tool to your agent, or start with a working example. Edit its files and see
-            the changes without restarting the app.
+            Describe a tool to your agent, or start with a working example. Edit
+            its files and see the changes without restarting the app.
           </p>
           <label>
             Package folder
@@ -197,31 +214,38 @@ export function ViewStudio({ api }: ViewProps) {
               <Code2 size={15} />
               Create starter
             </button>
-            <button disabled={busy || !source.trim()} onClick={() => void operate("check")}>
+            <button
+              disabled={busy || !source.trim()}
+              onClick={() => void operate("check")}
+            >
               <RefreshCw size={15} />
               Open existing
             </button>
           </div>
           <p className="studio-footnote">
-            The starter is plain HTML, CSS, and JavaScript, with a saved document and browser tests.
-            No build tools required.
+            The starter is plain HTML, CSS, and JavaScript, with a saved
+            document and browser tests. No build tools required.
           </p>
           {candidate && (
             <section className="studio-review">
               <h3>{candidate.manifest.title}</h3>
               <p>Preview runs this package with these project capabilities:</p>
               <dl>
-                {Object.entries(candidate.manifest.permissions).map(([key, paths]) => (
-                  <div key={key}>
-                    <dt>{key}</dt>
-                    <dd>{paths.length ? paths.join(", ") : "None"}</dd>
-                  </div>
-                ))}
+                {Object.entries(candidate.manifest.permissions).map(
+                  ([key, paths]) => (
+                    <div key={key}>
+                      <dt>{key}</dt>
+                      <dd>{paths.length ? paths.join(", ") : "None"}</dd>
+                    </div>
+                  ),
+                )}
               </dl>
               <button
                 className="studio-primary"
                 disabled={busy}
-                onClick={() => void operate("preview", { digest: candidate.digest })}
+                onClick={() =>
+                  void operate("preview", { digest: candidate.digest })
+                }
               >
                 <Play size={15} />
                 Start live preview
@@ -248,7 +272,9 @@ export function ViewStudio({ api }: ViewProps) {
               {status.paused ? <Play size={14} /> : <Pause size={14} />}
             </button>
             <button
-              disabled={busy || !status.mounted || status.test?.status === "pending"}
+              disabled={
+                busy || !status.mounted || status.test?.status === "pending"
+              }
               onClick={() => {
                 setDetails(true);
                 void operate("test");
@@ -265,10 +291,29 @@ export function ViewStudio({ api }: ViewProps) {
                 status.test?.status === "pending" ||
                 candidate.digest !== status.package?.digest
               }
-              onClick={() => void operate("install", { digest: candidate?.digest })}
+              onClick={() =>
+                void operate("install", { digest: candidate?.digest })
+              }
             >
               <Upload size={14} />
               Install
+            </button>
+            <button
+              title="Reload latest preview"
+              aria-label="Reload latest preview"
+              disabled={
+                busy ||
+                status.dirty ||
+                !candidate ||
+                candidate.manifest.id !== status.package?.manifest.id ||
+                JSON.stringify(candidate.manifest.permissions) !==
+                  JSON.stringify(status.package?.manifest.permissions)
+              }
+              onClick={() =>
+                void operate("preview", { digest: candidate?.digest })
+              }
+            >
+              <RefreshCw size={14} />
             </button>
             <button
               title="Stop preview"
@@ -283,7 +328,7 @@ export function ViewStudio({ api }: ViewProps) {
             <PackageSurface
               api={api}
               packageId={status.package!.manifest.id}
-              revision={status.package!.digest}
+              revision={`${status.package!.digest}:${status.generation ?? 0}`}
               development
               resourcePath={resource || undefined}
             />
@@ -320,9 +365,15 @@ export function ViewStudio({ api }: ViewProps) {
               <FlaskConical size={13} />
             )}{" "}
             {status.test ? `Tests ${status.test.status}` : "Checks & console"}
-            {issues.length ? ` · ${issues.length} issue${issues.length === 1 ? "" : "s"}` : ""}
+            {issues.length
+              ? ` · ${issues.length} issue${issues.length === 1 ? "" : "s"}`
+              : ""}
           </button>
-          <button onClick={() => api.open({ view: "editor", path: `${source}/main.js` })}>
+          <button
+            onClick={() =>
+              api.open({ view: "editor", path: `${source}/main.js` })
+            }
+          >
             Edit source
           </button>
           <button onClick={buildWithAgent}>Build with agent</button>
@@ -330,14 +381,28 @@ export function ViewStudio({ api }: ViewProps) {
       )}
       {details && status && (
         <section className="studio-console" aria-label="View diagnostics">
-          <label>
-            Preview document (optional)
-            <input
-              value={resource}
-              onChange={(e) => setResource(e.target.value)}
-              placeholder="data/my.view/document.json"
-            />
-          </label>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!busy && !status.dirty) setResource(resourceDraft.trim());
+            }}
+          >
+            <label>
+              Preview document (optional)
+              <input
+                value={resourceDraft}
+                onChange={(e) => setResourceDraft(e.target.value)}
+                placeholder="data/my.view/document.json"
+              />
+            </label>
+            <button
+              disabled={
+                busy || status.dirty || resource === resourceDraft.trim()
+              }
+            >
+              Apply document
+            </button>
+          </form>
           <p>
             <code>{status.report_path}</code>
             <button
@@ -351,13 +416,19 @@ export function ViewStudio({ api }: ViewProps) {
             </button>
           </p>
           {status.test?.results.map((result, index) => (
-            <div className={result.passed ? "studio-test-pass" : "studio-error"} key={index}>
+            <div
+              className={result.passed ? "studio-test-pass" : "studio-error"}
+              key={index}
+            >
               {result.passed ? "✓" : "×"} {result.name}
               {result.error && <pre>{result.error}</pre>}
             </div>
           ))}
           {[...status.diagnostics, ...status.runtime].map((d, index) => (
-            <div key={index} className={d.level === "error" ? "studio-error" : "studio-log"}>
+            <div
+              key={index}
+              className={d.level === "error" ? "studio-error" : "studio-log"}
+            >
               <small>
                 {d.level} {d.file}
                 {d.line ? `:${d.line}` : ""}
@@ -365,28 +436,42 @@ export function ViewStudio({ api }: ViewProps) {
               <pre>{d.message}</pre>
             </div>
           ))}
-          {!status.diagnostics.length && !status.runtime.length && <p>No runtime messages yet.</p>}
+          {status.previous && (
+            <button
+              disabled={busy || status.dirty}
+              onClick={() => void operate("rollback")}
+            >
+              Previous preview · {status.previous.digest.slice(0, 8)}
+            </button>
+          )}
+          {!status.diagnostics.length && !status.runtime.length && (
+            <p>No runtime messages yet.</p>
+          )}
           {active && candidate && status.diagnostics.length > 0 && (
             <button
-              disabled={busy}
-              onClick={() => void operate("preview", { digest: candidate.digest })}
+              disabled={busy || status.dirty}
+              onClick={() =>
+                void operate("preview", { digest: candidate.digest })
+              }
             >
               Restart preview with current permissions
             </button>
           )}
           {active && candidate && status.diagnostics.length > 0 && (
             <dl className="studio-grants">
-              {Object.entries(candidate.manifest.permissions).map(([key, paths]) => (
-                <div key={key}>
-                  <dt>{key}</dt>
-                  <dd>{paths.length ? paths.join(", ") : "None"}</dd>
-                </div>
-              ))}
+              {Object.entries(candidate.manifest.permissions).map(
+                ([key, paths]) => (
+                  <div key={key}>
+                    <dt>{key}</dt>
+                    <dd>{paths.length ? paths.join(", ") : "None"}</dd>
+                  </div>
+                ),
+              )}
             </dl>
           )}
           <p>
-            Installing keeps this exact version in the view picker. Continue editing and install
-            again when the next version is ready.
+            Installing keeps this exact version in the view picker. Continue
+            editing and install again when the next version is ready.
           </p>
         </section>
       )}

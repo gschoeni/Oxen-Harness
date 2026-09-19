@@ -13,12 +13,15 @@ function host(invoke, development = false) {
   };
   const window = {
     __OXEN_VIEW_CONTEXT__: { development, target: {} },
-    __TAURI_INTERNALS__: { invoke: (_command, args) => invoke(args.action, args.payload) },
+    __TAURI_INTERNALS__: {
+      invoke: (_command, args) => invoke(args.action, args.payload),
+    },
     addEventListener: (name, callback) => events.set(name, callback),
   };
   runInNewContext(source, {
     window,
     document,
+    TextEncoder,
     console: { log() {}, warn() {}, error() {} },
     setTimeout: (callback, delay) => {
       if (delay < 1000) timers.push(callback);
@@ -87,4 +90,30 @@ test("successive runtime errors are captured without dropping a burst", async ()
     reports.map((r) => r.message),
     ["first", "second"],
   );
+});
+
+test("runtime errors fail the smoke check and long reports preserve every outcome", async () => {
+  const reports = [];
+  const { api, events } = host(async (action, payload) => {
+    if (action === "dev_poll") return { test: { id: "long" } };
+    if (action === "dev_test_result") reports.push(payload);
+  }, true);
+  for (let i = 0; i < 40; i++)
+    api.test(`Unicode failure ${i}`, ({ assert }) =>
+      assert(false, "🐂".repeat(1800)),
+    );
+  events.get("error")({
+    message: "script failed",
+    filename: "main.js",
+    lineno: 1,
+  });
+  events.get("load")();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].results.length, 41);
+  assert.ok(reports[0].results.every((result) => !result.passed));
+  assert.ok(
+    new TextEncoder().encode(JSON.stringify(reports[0])).length <= 30000,
+  );
+  events.get("pagehide")();
 });

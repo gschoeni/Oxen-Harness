@@ -32,21 +32,28 @@
       return request("restore");
     },
     test: (name, run) => {
-      if (tests.size >= 49 || typeof name !== "string" || typeof run !== "function")
+      if (
+        tests.size >= 49 ||
+        typeof name !== "string" ||
+        typeof run !== "function"
+      )
         throw new Error("A view can register up to 49 named test functions");
       tests.set(name, run);
     },
     open: (target) => request("open", target),
-    addToChat: (text) => request("add_context", { text, path: context.target.path }),
+    addToChat: (text) =>
+      request("add_context", { text, path: context.target.path }),
     subscribeFiles: (handler) => {
       if (!context.target.path) return () => {};
       const timer = setInterval(handler, 1000);
       return () => clearInterval(timer);
     },
     read: (path) => request("read", { path }),
-    save: (path, content, revision) => request("save", { path, content, revision }),
+    save: (path, content, revision) =>
+      request("save", { path, content, revision }),
     asset: (path) => request("asset", { path }),
-    report: (state) => request("report", { ...state, path: context.target.path }),
+    report: (state) =>
+      request("report", { ...state, path: context.target.path }),
     // Files are authoritative. Polling works across hosts and external edits;
     // stop the subscription when the view no longer needs the document.
     watch: (path, handler, onError) => {
@@ -77,7 +84,8 @@
     let closed = false,
       timer,
       seenTest,
-      reports = 0;
+      reports = 0,
+      runtimeErrors = 0;
     const describe = (value) => {
       if (value instanceof Error) return value.stack || value.message;
       if (typeof value === "string") return value;
@@ -88,13 +96,16 @@
       }
     };
     const diagnostic = (level, message, file = null, line = null) => {
+      if (level === "error") runtimeErrors++;
       if (closed || reports++ >= 100) return;
       void request("dev_diagnostic", {
         level,
         message: String(message).slice(0, 2000),
         file,
         line,
-      }).catch((error) => originalError("View diagnostics unavailable:", error));
+      }).catch((error) =>
+        originalError("View diagnostics unavailable:", error),
+      );
     };
     const originalError = console.error.bind(console);
     for (const level of ["log", "warn", "error"]) {
@@ -130,11 +141,25 @@
       clearTimeout(timer);
     });
     async function runTests(test) {
-      const results = [{ name: "Preview rendered", passed: !!document.body?.textContent?.trim() }];
+      const results = [
+        {
+          name: "Preview loaded without runtime errors",
+          passed: !!document.body && runtimeErrors === 0,
+          ...(runtimeErrors
+            ? {
+                error: `${runtimeErrors} runtime error(s); inspect the console report`,
+              }
+            : {}),
+        },
+      ];
       const deadline = Date.now() + 24000;
       for (const [name, run] of tests) {
         if (Date.now() >= deadline) {
-          results.push({ name, passed: false, error: "The test suite exceeded 24 seconds" });
+          results.push({
+            name,
+            passed: false,
+            error: "The test suite exceeded 24 seconds",
+          });
           break;
         }
         let timeout;
@@ -156,16 +181,43 @@
           ]);
           results.push({ name, passed: true });
         } catch (error) {
-          results.push({ name, passed: false, error: describe(error).slice(0, 2000) });
+          results.push({
+            name,
+            passed: false,
+            error: describe(error).slice(0, 2000),
+          });
         } finally {
           clearTimeout(timeout);
         }
       }
-      await request("dev_test_result", {
+      const payload = {
         id: test.id,
-        results,
+        results: results.map((result) => ({
+          ...result,
+          name: result.name.slice(0, 120),
+          error: result.error?.slice(0, 512),
+        })),
         snapshot: document.body?.innerText?.slice(0, 8000) ?? "",
-      });
+      };
+      // Keep all pass/fail outcomes even when many Unicode error messages are long.
+      while (new TextEncoder().encode(JSON.stringify(payload)).length > 30000) {
+        payload.snapshot = payload.snapshot.slice(
+          0,
+          Math.floor(payload.snapshot.length / 2),
+        );
+        for (const result of payload.results) {
+          result.name = result.name.slice(
+            0,
+            Math.max(8, Math.floor(result.name.length / 2)),
+          );
+          if (result.error)
+            result.error = result.error.slice(
+              0,
+              Math.floor(result.error.length / 2),
+            );
+        }
+      }
+      await request("dev_test_result", payload);
     }
     async function poll() {
       try {

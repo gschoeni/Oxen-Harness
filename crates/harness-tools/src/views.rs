@@ -47,6 +47,7 @@ pub enum DevelopAction {
     Install,
     Pause,
     Resume,
+    Rollback,
     Stop,
 }
 

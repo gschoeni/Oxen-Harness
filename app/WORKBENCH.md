@@ -161,7 +161,7 @@ The starter includes HTML, CSS, JavaScript, SDK type declarations, a project dat
 file, browser tests, and an `AGENTS.md` guide the agent reads before editing it.
 **Build with agent** adds source and report paths to your conversation. Describe
 what you want in that same chat. The `develop_view` tool provides scaffold, check,
-preview, status, test, install, pause/resume, and stop actions.
+preview, status, test, install, pause/resume, rollback, and stop actions.
 
 A typical agent sequence:
 
@@ -182,12 +182,19 @@ JavaScript files up to 2 MiB; it does not replace framework builds or browser te
 A package-id or permission change needs an explicit preview restart after review.
 Use **Pause updates** while making a larger change.
 
+**Reload latest preview** restarts even an unchanged revision. **Previous preview**
+in the console returns to the last snapshot and pauses updates, leaving source
+files untouched. Save or retain drafts before restarting or switching the preview
+document; changing that path takes effect only after **Apply document**.
+
 **Test** runs the package's registered checks in the actual preview. Runtime
 errors, rejected promises, policy violations, console messages, test outcomes,
 and a text snapshot are available in **Checks & console**. They are tied to the
 preview's content hash. The report is also saved under
 `.oxen-harness/view-dev/` for agent file tools. Browser checks require an open
-preview; no renderer means no claim of a passing test. The report is diagnostic
+preview; no renderer means no claim of a passing test. Reports survive app restarts
+and stay separate for each source folder and conversation. Restoring a report
+does not run its package. The report is diagnostic
 data from package code, not a security certification.
 
 **Install** promotes a reviewed content hash into the regular view picker. It

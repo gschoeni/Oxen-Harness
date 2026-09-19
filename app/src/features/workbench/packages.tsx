@@ -1,13 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import type { ViewProps } from "../../workbench-sdk";
-import {
-  viewPackagesRequest,
-  viewPackageMount,
-  viewPackageMove,
-  viewPackageClose,
-} from "../../lib/ipc";
+import { useEffect, useState } from "react";
+import { viewPackagesRequest } from "../../lib/ipc";
 import { registerView, removeView, views } from "./registry";
-import { useOverlayOpen } from "../preview/useOverlayOpen";
+import { PackageSurface } from "./PackageSurface";
 
 export interface ViewPackage {
   digest: string;
@@ -18,7 +12,12 @@ export interface ViewPackage {
     description: string;
     entry: string;
     file_patterns: string[];
-    permissions: { read: string[]; write: string[]; assets: string[]; actions: string[] };
+    permissions: {
+      read: string[];
+      write: string[];
+      assets: string[];
+      actions: string[];
+    };
   };
 }
 
@@ -36,22 +35,29 @@ function matches(pattern: string, path: string) {
     .join(".*");
   return (
     new RegExp(`^${expression}$`).test(path) ||
-    (!pattern.includes("/") && new RegExp(`^${expression}$`).test(path.split("/").pop() ?? ""))
+    (!pattern.includes("/") &&
+      new RegExp(`^${expression}$`).test(path.split("/").pop() ?? ""))
   );
 }
 
 export async function refreshPackages() {
   const packages = await viewPackagesRequest<ViewPackage[]>("list");
-  for (const view of views().filter((v) => v.id.startsWith("package:"))) removeView(view.id);
+  for (const view of views().filter((v) => v.id.startsWith("package:")))
+    removeView(view.id);
   for (const pkg of packages)
     registerView({
       id: `package:${pkg.manifest.id}`,
       title: pkg.manifest.title,
       description: pkg.manifest.description,
       priority: 50,
-      matches: (path) => pkg.manifest.file_patterns.some((pattern) => matches(pattern, path)),
+      matches: (path) =>
+        pkg.manifest.file_patterns.some((pattern) => matches(pattern, path)),
       component: (props) => (
-        <PackageSurface {...props} packageId={pkg.manifest.id} revision={pkg.digest} />
+        <PackageSurface
+          {...props}
+          packageId={pkg.manifest.id}
+          revision={pkg.digest}
+        />
       ),
     });
   return packages;
@@ -83,8 +89,9 @@ export function PackageManager() {
     <div className="workbench-welcome">
       <h2>Make room for your own tools</h2>
       <p>
-        Install a built view package from a local folder containing <code>view.json</code>. Review
-        the files and actions it can access before installing.
+        Install a built view package from a local folder containing{" "}
+        <code>view.json</code>. Review the files and actions it can access
+        before installing.
       </p>
       <label>
         Package folder
@@ -101,7 +108,11 @@ export function PackageManager() {
         disabled={busy || !source.trim()}
         onClick={() =>
           void operation(async () =>
-            setReview(await viewPackagesRequest<ViewPackage>("inspect", { source: source.trim() })),
+            setReview(
+              await viewPackagesRequest<ViewPackage>("inspect", {
+                source: source.trim(),
+              }),
+            ),
           )
         }
       >
@@ -112,16 +123,18 @@ export function PackageManager() {
           <h3>{review.manifest.title}</h3>
           <p>{review.manifest.description}</p>
           <dl>
-            {Object.entries(review.manifest.permissions).map(([key, values]) => (
-              <div key={key}>
-                <dt>{key}</dt>
-                <dd>{values.length ? values.join(", ") : "None"}</dd>
-              </div>
-            ))}
+            {Object.entries(review.manifest.permissions).map(
+              ([key, values]) => (
+                <div key={key}>
+                  <dt>{key}</dt>
+                  <dd>{values.length ? values.join(", ") : "None"}</dd>
+                </div>
+              ),
+            )}
           </dl>
           <p>
-            Only install code you trust with these project files. Workflow execution can incur Oxen
-            charges.
+            Only install code you trust with these project files. Workflow
+            execution can incur Oxen charges.
           </p>
           <small>Content hash: {review.digest.slice(0, 16)}</small>
           <div>
@@ -145,7 +158,10 @@ export function PackageManager() {
       )}
       <h3>Installed views</h3>
       {installed.length === 0 ? (
-        <p>No installed packages yet. Bundled views are already available in the picker.</p>
+        <p>
+          No installed packages yet. Bundled views are already available in the
+          picker.
+        </p>
       ) : (
         installed.map((pkg) => (
           <div className="workbench-conflict" key={pkg.manifest.id}>
@@ -166,96 +182,6 @@ export function PackageManager() {
         ))
       )}
       {error && <p role="alert">{error}</p>}
-    </div>
-  );
-}
-
-export function PackageSurface({
-  api,
-  packageId,
-  development = false,
-  revision,
-  resourcePath,
-}: ViewProps & {
-  packageId: string;
-  development?: boolean;
-  revision?: string;
-  resourcePath?: string;
-}) {
-  const path = development ? resourcePath : api.context.target.path;
-  const ref = useRef<HTMLDivElement>(null),
-    label = useRef<string | undefined>(undefined);
-  const [error, setError] = useState("");
-  const overlay = useOverlayOpen();
-  const visible = useRef(!overlay);
-  visible.current = !overlay;
-  useEffect(() => {
-    let disposed = false,
-      raf = 0,
-      observer: ResizeObserver | undefined,
-      instance: string | undefined;
-    const bounds = () => {
-      const rect = ref.current?.getBoundingClientRect();
-      return {
-        x: rect?.x ?? 0,
-        y: rect?.y ?? 0,
-        width: rect?.width ?? 1,
-        height: rect?.height ?? 1,
-      };
-    };
-    const move = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        if (instance)
-          void viewPackageMove(instance, bounds(), visible.current).catch((e) => {
-            if (!disposed) setError(String(e));
-          });
-      });
-    };
-    void viewPackageMount(api.context.session, packageId, path, bounds(), development)
-      .then(async (id) => {
-        if (disposed) {
-          await viewPackageClose(id);
-          return;
-        }
-        instance = id;
-        label.current = id;
-        observer = new ResizeObserver(move);
-        if (ref.current) observer.observe(ref.current);
-        window.addEventListener("resize", move);
-        move();
-      })
-      .catch((e) => {
-        if (!disposed) setError(String(e));
-      });
-    return () => {
-      disposed = true;
-      cancelAnimationFrame(raf);
-      observer?.disconnect();
-      window.removeEventListener("resize", move);
-      label.current = undefined;
-      if (instance)
-        void viewPackageClose(instance).catch((e) =>
-          api.report({ status: "error", error: String(e) }),
-        );
-    };
-  }, [api.context.session, packageId, path, development, revision]);
-  useEffect(() => {
-    const rect = ref.current?.getBoundingClientRect();
-    if (label.current && rect)
-      void viewPackageMove(
-        label.current,
-        { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-        !overlay,
-      ).catch((e) => setError(String(e)));
-  }, [overlay]);
-  return (
-    <div ref={ref} style={{ height: "100%", position: "relative" }}>
-      {error && (
-        <div className="workbench-error" role="alert">
-          {error}
-        </div>
-      )}
     </div>
   );
 }
