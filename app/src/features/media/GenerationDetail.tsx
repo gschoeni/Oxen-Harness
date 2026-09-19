@@ -318,9 +318,9 @@ function SourceRow({
       ? `earlier generation${origin ? ` · ${origin.model}` : ""}`
       : source.origin === "attachment"
         ? `attached to the chat · ${source.kind}`
-        : source.sha256
-          ? `project file · ${source.kind}`
-          : "reference";
+        : source.kind === LEGACY_KIND
+          ? "reference"
+          : `project file · ${source.kind}`;
   return (
     <TrailRow
       kind="in"
@@ -416,8 +416,11 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
-/** The references as provenance rows; rows recorded before provenance was
- *  tracked only know the stored copy, so they get a bare row each. */
+/** Rows recorded before provenance was tracked only know the stored copy;
+ *  this marks the bare row synthesized for each one. */
+const LEGACY_KIND = "reference";
+
+/** The references as provenance rows. */
 export function lineageInputs(item: MediaItem): MediaSource[] {
   if (item.sources.length > 0) return item.sources;
   return item.refs.map((path) => ({
@@ -426,7 +429,7 @@ export function lineageInputs(item: MediaItem): MediaSource[] {
     label: null,
     source: path,
     generation: null,
-    kind: "reference",
+    kind: LEGACY_KIND,
     sha256: "",
   }));
 }
@@ -442,10 +445,10 @@ export function derivedFrom(item: MediaItem, library: MediaItem[]): MediaItem[] 
   );
 }
 
+/** What the agent said this item does to its parent is not recorded, so
+ *  only the one relation the kinds prove gets a name. */
 function verb(parent: MediaItem, child: MediaItem): string {
-  if (parent.kind === "image" && child.kind === "video") return "animated";
-  if (parent.width && child.width && child.width > parent.width) return "upscaled";
-  return "varied";
+  return parent.kind === "image" && child.kind === "video" ? "animated" : "varied";
 }
 
 const fileName = (path: string) => path.split("/").pop() ?? path;
