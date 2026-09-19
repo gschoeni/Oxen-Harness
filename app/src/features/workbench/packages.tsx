@@ -50,7 +50,9 @@ export async function refreshPackages() {
       description: pkg.manifest.description,
       priority: 50,
       matches: (path) => pkg.manifest.file_patterns.some((pattern) => matches(pattern, path)),
-      component: (props) => <InstalledView {...props} packageId={pkg.manifest.id} />,
+      component: (props) => (
+        <PackageSurface {...props} packageId={pkg.manifest.id} revision={pkg.digest} />
+      ),
     });
   return packages;
 }
@@ -168,7 +170,19 @@ export function PackageManager() {
   );
 }
 
-function InstalledView({ api, packageId }: ViewProps & { packageId: string }) {
+export function PackageSurface({
+  api,
+  packageId,
+  development = false,
+  revision,
+  resourcePath,
+}: ViewProps & {
+  packageId: string;
+  development?: boolean;
+  revision?: string;
+  resourcePath?: string;
+}) {
+  const path = development ? resourcePath : api.context.target.path;
   const ref = useRef<HTMLDivElement>(null),
     label = useRef<string | undefined>(undefined);
   const [error, setError] = useState("");
@@ -198,7 +212,7 @@ function InstalledView({ api, packageId }: ViewProps & { packageId: string }) {
           });
       });
     };
-    void viewPackageMount(api.context.session, packageId, api.context.target.path, bounds())
+    void viewPackageMount(api.context.session, packageId, path, bounds(), development)
       .then(async (id) => {
         if (disposed) {
           await viewPackageClose(id);
@@ -225,7 +239,7 @@ function InstalledView({ api, packageId }: ViewProps & { packageId: string }) {
           api.report({ status: "error", error: String(e) }),
         );
     };
-  }, [api, packageId]);
+  }, [api.context.session, packageId, path, development, revision]);
   useEffect(() => {
     const rect = ref.current?.getBoundingClientRect();
     if (label.current && rect)

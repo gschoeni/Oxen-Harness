@@ -24,6 +24,11 @@ struct Lease {
     session: String,
     package: Package,
     project: Documents,
+    preview: Option<PreviewLease>,
+}
+struct PreviewLease {
+    engine: Arc<harness_host::workbench::Workbench>,
+    active: Arc<std::sync::atomic::AtomicBool>,
 }
 static LEASES: OnceLock<Mutex<HashMap<String, Arc<Lease>>>> = OnceLock::new();
 fn leases() -> &'static Mutex<HashMap<String, Arc<Lease>>> {
@@ -39,6 +44,13 @@ fn lease(label: &str) -> Result<Arc<Lease>, String> {
 }
 
 fn still_installed(lease: &Lease) -> Result<(), String> {
+    if let Some(preview) = &lease.preview {
+        return if preview.active.load(std::sync::atomic::Ordering::Relaxed) {
+            Ok(())
+        } else {
+            Err("development preview was stopped or replaced".into())
+        };
+    }
     if !view_packages::installed()?
         .iter()
         .any(|p| p.manifest.id == lease.package.manifest.id && p.digest == lease.package.digest)
@@ -94,20 +106,46 @@ fn revoke_instances(app: &AppHandle, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub(crate) async fn view_package_mount(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
+#[derive(serde::Deserialize)]
+pub(crate) struct MountOptions {
     session: String,
     id: String,
     path: Option<String>,
     bounds: Bounds,
     theme: Option<Value>,
+    development: Option<bool>,
+}
+
+#[tauri::command]
+pub(crate) async fn view_package_mount(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    options: MountOptions,
 ) -> Result<String, String> {
-    let package = view_packages::installed()?
-        .into_iter()
-        .find(|p| p.manifest.id == id)
-        .ok_or("view package is not installed")?;
+    let MountOptions {
+        session,
+        id,
+        path,
+        bounds,
+        theme,
+        development,
+    } = options;
+    let (package, preview) = if development == Some(true) {
+        let engine = state.workbench(&session).await?;
+        let (package, active) = engine.preview_lease().await?;
+        if package.manifest.id != id {
+            return Err("preview package changed; refresh View Studio".into());
+        }
+        (package, Some(PreviewLease { engine, active }))
+    } else {
+        (
+            view_packages::installed()?
+                .into_iter()
+                .find(|p| p.manifest.id == id)
+                .ok_or("view package is not installed")?,
+            None,
+        )
+    };
     view_packages::assets(&package)?;
     let project = state.documents(&session)?;
     if let Some(path) = &path {
@@ -122,10 +160,10 @@ pub(crate) async fn view_package_mount(
         package.manifest.entry
     );
     let url: tauri::Url = address.parse().map_err(|e| format!("view URL: {e}"))?;
-    let context = json!({"session":session,"workspace":project.root(),"theme":theme,"target":{"view":format!("package:{}",package.manifest.id),"path":path}});
+    let context = json!({"session":session,"workspace":project.root(),"theme":theme,"development":development==Some(true),"target":{"view":format!("package:{}",package.manifest.id),"path":path}});
     let init = format!(
         "window.__OXEN_VIEW_CONTEXT__={context};\n{}",
-        include_str!("../../src/workbench-sdk/browser.js")
+        include_str!("../../../packages/view-sdk/browser.js")
     );
     let guard_label = label.clone();
     let builder = WebviewBuilder::new(&label, WebviewUrl::CustomProtocol(url))
@@ -143,6 +181,7 @@ pub(crate) async fn view_package_mount(
             session,
             package,
             project,
+            preview,
         }),
     );
     let window = app.get_window("main").ok_or("main window is unavailable")?;
@@ -197,6 +236,42 @@ pub(crate) async fn view_bridge(
 ) -> Result<Value, String> {
     let instance = lease(webview.label())?;
     still_installed(&instance)?;
+    if let Some(action) = action.strip_prefix("dev_") {
+        let preview = instance
+            .preview
+            .as_ref()
+            .ok_or("development reports are only available in a preview")?;
+        return preview
+            .engine
+            .preview_report(&instance.package.digest, action, payload)
+            .await;
+    }
+    if action == "retain" || action == "restore" {
+        let engine = state.workbench(&instance.session).await?;
+        return engine
+            .view_state(
+                &instance.package.manifest.id,
+                if action == "retain" {
+                    Some(
+                        payload
+                            .get("value")
+                            .cloned()
+                            .ok_or("missing retained value")?,
+                    )
+                } else {
+                    None
+                },
+            )
+            .await;
+    }
+    if action == "report" {
+        if let (Some(preview), Some(dirty)) = (&instance.preview, payload.get("dirty")) {
+            preview
+                .engine
+                .preview_report(&instance.package.digest, "dirty", json!({"dirty":dirty}))
+                .await?;
+        }
+    }
     let permissions = &instance.package.manifest.permissions;
     let path = payload
         .get("path")
@@ -360,7 +435,7 @@ pub(crate) fn protocol(
     response
         .headers_mut()
         .insert("Content-Type", tauri::http::HeaderValue::from_static(mime));
-    response.headers_mut().insert("Content-Security-Policy",tauri::http::HeaderValue::from_static("default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"));
+    response.headers_mut().insert("Content-Security-Policy",tauri::http::HeaderValue::from_static("default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"));
     response.headers_mut().insert(
         "X-Content-Type-Options",
         tauri::http::HeaderValue::from_static("nosniff"),

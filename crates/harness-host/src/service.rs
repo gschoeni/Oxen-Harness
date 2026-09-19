@@ -960,7 +960,8 @@ impl SessionService {
         tools.register_typed(harness_tools::views::ListViewsTool(view_host.clone()));
         tools.register_typed(harness_tools::views::OpenViewTool(view_host.clone()));
         tools.register_typed(harness_tools::views::InspectViewTool(view_host.clone()));
-        tools.register_typed(harness_tools::views::RunWorkflowTool(view_host));
+        tools.register_typed(harness_tools::views::RunWorkflowTool(view_host.clone()));
+        tools.register_typed(harness_tools::views::DevelopViewTool(view_host));
         let (media_models, generate_image, generate_video, media_status) =
             harness_media::session_tools(media_ctx);
         tools.register_typed(media_models);

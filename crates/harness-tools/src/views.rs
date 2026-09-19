@@ -24,10 +24,59 @@ pub trait ViewHost: Send + Sync {
     async fn list(&self) -> Result<Value, ToolError>;
     async fn open(&self, args: OpenViewArgs) -> Result<Value, ToolError>;
     async fn inspect(&self) -> Result<Value, ToolError>;
+    async fn develop(&self, _args: DevelopViewArgs) -> Result<Value, ToolError> {
+        Err(ToolError::Execution(
+            "view authoring is unavailable on this host".into(),
+        ))
+    }
     async fn run_workflow(&self, _args: RunWorkflowArgs) -> Result<Value, ToolError> {
         Err(ToolError::Execution(
             "workflow execution is unavailable on this host".into(),
         ))
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DevelopAction {
+    Scaffold,
+    Check,
+    Preview,
+    Status,
+    Test,
+    Install,
+    Pause,
+    Resume,
+    Stop,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct DevelopViewArgs {
+    /// Scaffold, validate, preview, inspect, test, or install a work view without rebuilding the app.
+    pub action: DevelopAction,
+    /// Workspace-relative package folder with view.json (or the folder to scaffold).
+    pub source: String,
+    /// Lowercase package id for scaffold, e.g. my.storyboard.
+    pub id: Option<String>,
+    /// Display title for scaffold.
+    pub title: Option<String>,
+    /// Exact digest from check/status, required for preview and install.
+    pub digest: Option<String>,
+}
+
+pub struct DevelopViewTool(pub Arc<dyn ViewHost>);
+#[async_trait]
+impl TypedTool for DevelopViewTool {
+    const NAME: &'static str = "develop_view";
+    type Args = DevelopViewArgs;
+    fn description(&self) -> &str {
+        "Build work views inside the app: scaffold a no-build package, edit its files, check, preview, test, and install. Read the generated AGENTS.md and SDK types. Preview refreshes code edits while retaining the approved permissions. Status returns revision-scoped runtime errors and browser test results plus a report_path on disk. Test requires the live desktop preview; a successful check is not a browser test. Preview/install require the digest returned by check. Install only when the user wants to keep that version. No desktop rebuild or restart."
+    }
+    fn concurrency(&self) -> crate::Concurrency {
+        crate::Concurrency::Exclusive
+    }
+    async fn run(&self, args: DevelopViewArgs) -> Result<String, ToolError> {
+        result(self.0.develop(args).await?)
     }
 }
 

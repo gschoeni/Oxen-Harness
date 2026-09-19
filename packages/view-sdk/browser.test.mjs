@@ -1,0 +1,90 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { runInNewContext } from "node:vm";
+const source = await readFile(new URL("./browser.js", import.meta.url), "utf8");
+function host(invoke, development = false) {
+  const events = new Map(),
+    timers = [];
+  const document = {
+    addEventListener() {},
+    documentElement: { style: { setProperty() {} } },
+    body: { textContent: "A view", innerText: "A view" },
+  };
+  const window = {
+    __OXEN_VIEW_CONTEXT__: { development, target: {} },
+    __TAURI_INTERNALS__: { invoke: (_command, args) => invoke(args.action, args.payload) },
+    addEventListener: (name, callback) => events.set(name, callback),
+  };
+  runInNewContext(source, {
+    window,
+    document,
+    console: { log() {}, warn() {}, error() {} },
+    setTimeout: (callback, delay) => {
+      if (delay < 1000) timers.push(callback);
+      return 1;
+    },
+    clearTimeout() {},
+    setInterval() {
+      return 1;
+    },
+    clearInterval() {},
+  });
+  return { api: window.oxenView, events, timers };
+}
+test("retained drafts are serialized, restored after writes, and recover after a failed write", async () => {
+  let value = null,
+    writes = 0;
+  const { api } = host(async (action, payload) => {
+    if (action === "retain") {
+      writes++;
+      if (writes === 1) throw new Error("disk full");
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      value = payload.value;
+    }
+    if (action === "restore") return value;
+  });
+  await assert.rejects(api.retain("first"), /disk full/);
+  const second = api.retain("second");
+  const third = api.retain("third");
+  assert.equal(await api.restore(), "third");
+  await Promise.all([second, third]);
+});
+test("browser tests run only on request and report real failures with a DOM snapshot", async () => {
+  const reports = [];
+  let pending = null,
+    calls = 0;
+  const { api, events, timers } = host(async (action, payload) => {
+    if (action === "dev_poll") return { test: pending };
+    if (action === "dev_test_result") reports.push(payload);
+  }, true);
+  api.test("fixture", ({ assert }) => {
+    calls++;
+    assert(false, "fixture did not render");
+  });
+  events.get("load")();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 0);
+  pending = { id: "one" };
+  await timers.shift()();
+  assert.equal(calls, 1);
+  assert.equal(reports[0].snapshot, "A view");
+  assert.equal(reports[0].results[1].passed, false);
+  assert.match(reports[0].results[1].error, /fixture did not render/);
+  await timers.shift()();
+  assert.equal(calls, 1, "one test request must execute only once");
+  events.get("pagehide")();
+});
+test("successive runtime errors are captured without dropping a burst", async () => {
+  const reports = [];
+  const { events } = host(async (action, payload) => {
+    if (action === "dev_diagnostic") reports.push(payload);
+  }, true);
+  events.get("error")({ message: "first", filename: "main.js", lineno: 3 });
+  events.get("error")({ message: "second", filename: "main.js", lineno: 4 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    reports.map((r) => r.message),
+    ["first", "second"],
+  );
+});

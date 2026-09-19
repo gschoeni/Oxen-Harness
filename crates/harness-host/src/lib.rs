@@ -21,6 +21,7 @@ mod bridges;
 mod ledger;
 mod service;
 pub mod translate;
+mod view_development;
 pub mod workbench;
 
 use harness_protocol::ProtocolEvent;

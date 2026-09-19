@@ -149,3 +149,72 @@ is also available over HTTP:
 normal authentication. Actions include `read`, `save`, `list`, `open`, `inspect`,
 `report`, `register_views` (bundled descriptor discovery), `models`, `run`, `status`, `latest`, `cancel`, and `add_context`.
 `view.open` and `view.context` events carry the owning session.
+
+## Build a view with your agent
+
+Choose **View Studio** in the work-view picker. Create a starter in a folder such
+as `views/storyboard`, or open an existing package folder. Review its file grants
+and choose **Start live preview**. Your agent can edit those files immediately;
+you do not rebuild or restart the desktop app.
+
+The starter includes HTML, CSS, JavaScript, SDK type declarations, a project data
+file, browser tests, and an `AGENTS.md` guide the agent reads before editing it.
+**Build with agent** adds source and report paths to your conversation. Describe
+what you want in that same chat. The `develop_view` tool provides scaffold, check,
+preview, status, test, install, pause/resume, and stop actions.
+
+A typical agent sequence:
+
+```json
+{"action":"scaffold","source":"views/storyboard","id":"my.storyboard","title":"Storyboard"}
+{"action":"check","source":"views/storyboard"}
+{"action":"preview","source":"views/storyboard","digest":"<candidate.digest from check>"}
+{"action":"test","source":"views/storyboard"}
+{"action":"status","source":"views/storyboard"}
+{"action":"install","source":"views/storyboard","digest":"<tested digest>"}
+```
+
+Code changes refresh an active Studio preview within about a second. Each refresh
+uses an immutable snapshot, so one page never mixes files from different updates.
+Invalid manifests or detected JavaScript syntax errors keep the last valid preview
+visible and show an error. Structural validation uses the existing parser for
+JavaScript files up to 2 MiB; it does not replace framework builds or browser tests.
+A package-id or permission change needs an explicit preview restart after review.
+Use **Pause updates** while making a larger change.
+
+**Test** runs the package's registered checks in the actual preview. Runtime
+errors, rejected promises, policy violations, console messages, test outcomes,
+and a text snapshot are available in **Checks & console**. They are tied to the
+preview's content hash. The report is also saved under
+`.oxen-harness/view-dev/` for agent file tools. Browser checks require an open
+preview; no renderer means no claim of a passing test. The report is diagnostic
+data from package code, not a security certification.
+
+**Install** promotes a reviewed content hash into the regular view picker. It
+leaves source files editable; later edits affect the preview until you install
+again. Production packages and development previews use the same isolated surface,
+scoped bridge, and API. Installing does not run a package manager or rebuild the app.
+
+### Portable SDK and testing
+
+`packages/view-sdk/` contains the framework-neutral `@oxen/view-sdk` package, type
+declarations, injected bridge, and dependency-free contract tests. It can be used
+as a local package; no npm publication is assumed. The React-facing SDK in
+`app/src/workbench-sdk/` adds the bundled component and document-store contracts.
+
+- `api.retain(value)` / `api.restore()` keep up to 64 KiB of JSON state per package
+  and conversation, including through reloads. The starter retains the draft's
+  base revision, so an intervening agent edit still causes a save conflict.
+- `api.report({dirty:true})` defers automatic reload while input is not safely
+  retained. Clear it after saving/retaining the draft.
+- `api.test(name, async ({assert}) => { ... })` registers an explicit browser test.
+  Tests run under the same grants as the view. Use separate fixtures and avoid
+  paid workflow actions. A check times out after 5 seconds; the suite is bounded.
+- Use theme CSS variables and labelled controls. Local asset fetches are allowed;
+  remote network access and scripts remain blocked.
+
+Run SDK contract tests with `node --test packages/view-sdk/browser.test.mjs`.
+For React, Svelte, or another framework, run its normal local build/watch command
+and point Studio at the output folder containing `view.json` and bundled assets.
+The desktop app is not part of that rebuild. Host APIs and capability additions
+still require host code; ordinary view UI, state, and workflows do not.

@@ -32,6 +32,14 @@
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
 > **652 Rust tests + 230 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
 
+## Live View Studio — 2026-09-18
+
+Built a no-recompile package authoring loop: project scaffolds, live immutable
+previews, agent tool, bounded runtime diagnostics, registered browser tests,
+retained drafts, exact-revision installation, and a portable SDK. Targeted
+runtime/host/frontend/SDK tests pass. Full verification and the dedicated
+review/refactor pass are in progress. See `plans/view-studio.md`.
+
 ## Workbench views and Oxen workflows — 2026-09-18
 
 Implemented bundled module discovery, a public view SDK, conversation-owned

@@ -679,3 +679,54 @@ async fn bundled_view_descriptors_are_discoverable_and_openable_without_backend_
         "id":"package:spoofed","title":"Spoof","description":"","file_patterns":[],"requires_file":false
     }]})).await.unwrap_err().contains("invalid bundled view id"));
 }
+
+#[tokio::test]
+async fn view_authoring_is_workspace_scoped_and_keeps_drafts_per_conversation() {
+    use serde_json::json;
+    let workspace = tempfile::tempdir().unwrap();
+    let sink = Arc::new(CollectingSink::default());
+    let service = service_for("http://127.0.0.1:1".into(), sink, workspace.path());
+    let first = service.new_session().await.unwrap().session_id;
+    let second = service.new_session().await.unwrap().session_id;
+    let result = service
+        .workbench_request(
+            &first,
+            "develop",
+            json!({"action":"scaffold","source":"views/demo","id":"demo.view","title":"Demo"}),
+        )
+        .await
+        .unwrap();
+    assert!(result["candidate"]["digest"].is_string());
+    assert!(workspace.path().join("views/demo/oxen-view.d.ts").is_file());
+    assert!(service
+        .workbench_request(
+            &first,
+            "develop",
+            json!({"action":"check","source":"../outside"})
+        )
+        .await
+        .unwrap_err()
+        .contains("invalid"));
+    let a = service.workbench(&first).await.unwrap();
+    let b = service.workbench(&second).await.unwrap();
+    a.view_state("demo.view", Some(json!({"draft":"keep this"})))
+        .await
+        .unwrap();
+    assert_eq!(
+        a.view_state("demo.view", None).await.unwrap()["draft"],
+        "keep this"
+    );
+    assert!(a.view_state("another.view", None).await.unwrap().is_null());
+    assert!(b.view_state("demo.view", None).await.unwrap().is_null());
+    a.gate.set_plan_mode(true);
+    assert!(service
+        .workbench_request(
+            &first,
+            "develop",
+            json!({"action":"scaffold","source":"views/blocked","id":"blocked","title":"Blocked"})
+        )
+        .await
+        .unwrap_err()
+        .contains("plan"));
+    assert!(!workspace.path().join("views/blocked").exists());
+}

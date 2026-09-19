@@ -32,6 +32,7 @@ pub struct Workbench {
 }
 
 pub struct WorkbenchLifecycle {
+    pub development: tokio::sync::Mutex<Option<harness_runtime::view_development::Development>>,
     pub renderer_views: Mutex<Vec<harness_runtime::views::ViewDefinition>>,
     pub display: Mutex<Value>,
     pub runs: Mutex<HashMap<String, Arc<AtomicBool>>>,
@@ -40,6 +41,7 @@ pub struct WorkbenchLifecycle {
 impl Default for WorkbenchLifecycle {
     fn default() -> Self {
         Self {
+            development: tokio::sync::Mutex::new(None),
             renderer_views: Mutex::new(Vec::new()),
             display: Mutex::new(json!({"status":"unavailable"})),
             runs: Mutex::new(HashMap::new()),
@@ -154,11 +156,12 @@ impl Workbench {
         Ok(())
     }
     async fn allowed(&self) -> Result<(), String> {
+        self.allow_action("run_workflow").await
+    }
+
+    pub(crate) async fn allow_action(&self, action: &str) -> Result<(), String> {
         use harness_permissions::{GateOutcome, GateReview, ToolEffect};
-        match self
-            .gate
-            .review("run_workflow", &json!({}), ToolEffect::Mutating)
-        {
+        match self.gate.review(action, &json!({}), ToolEffect::Mutating) {
             GateReview::Allow => Ok(()),
             GateReview::Deny { message } => Err(message),
             GateReview::Ask(request) => match self.gate.resolve(*request).await.0 {
@@ -516,6 +519,12 @@ impl Executor for Workbench {
 
 #[async_trait]
 impl ViewHost for WorkbenchView {
+    async fn develop(
+        &self,
+        args: harness_tools::views::DevelopViewArgs,
+    ) -> Result<Value, ToolError> {
+        self.0.develop(args).await.map_err(error)
+    }
     async fn list(&self) -> Result<Value, ToolError> {
         Ok(
             json!({"views":self.definitions().map_err(error)?, "workflow_schema":schemars_schema(), "nodes":harness_runtime::workflow::node_definitions()}),
@@ -624,6 +633,11 @@ impl SessionService {
             _ => {
                 let engine = self.workbench(session).await?;
                 match action {
+                    "develop" => {
+                        engine
+                            .develop(serde_json::from_value(payload).map_err(|e| e.to_string())?)
+                            .await
+                    }
                     "register_views" => {
                         engine.register_views(payload)?;
                         Ok(Value::Null)

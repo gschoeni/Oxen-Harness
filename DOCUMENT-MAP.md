@@ -164,7 +164,7 @@ When adding a new file to the project, update this document map.
 | File | Purpose |
 |------|---------|
 | `app/WORKBENCH.md` | User workflow guide, bundled-module SDK, installed package contract. |
-| `app/src/workbench-sdk/` | Public view/document API, shared draft store, injected browser SDK. |
+| `app/src/workbench-sdk/` | Public view/document API, shared draft store; portable browser SDK lives in `packages/view-sdk/`. |
 | `app/src/features/workbench/` | Conversation contexts, registry, host chrome, package manager/native mounting. |
 | `app/src/modules/` | Auto-discovered bundled view adapters and Oxen workflow reference. |
 | `app/src/modules/oxen-workflow/{NodeCard,NodeInspector}.tsx` | Graph cards, typed handles, model parameters and output previews. |
@@ -182,3 +182,12 @@ When adding a new file to the project, update this document map.
 | `crates/harness-tools/src/path_lock.rs` | File-write locks shared by independent agent and UI writers. |
 | `examples/views/notes/` | Ready-to-install plain-JavaScript document view. |
 | `examples/views/workflow/` | The bundled Oxen graph built and installed through the package SDK. |
+
+## Live view authoring
+
+- `packages/view-sdk/` — portable browser contract, injected bridge, draft retention, in-preview tests and SDK tests.
+- `crates/harness-runtime/src/view_development.rs` — scaffolding, preview revisions, capability freezes, diagnostic/test reports and promotion.
+- `crates/harness-runtime/templates/view/` — no-build starter, theme, tests and agent authoring guide.
+- `crates/harness-host/src/view_development.rs` — shared session/agent/transport authoring operations and retained package state.
+- `app/src/modules/view-studio/` — create, preview, test, diagnose and install from the current conversation.
+- `plans/view-studio.md` — implementation and review record for the live builder loop.

@@ -2,23 +2,8 @@
 import type { ComponentType } from "react";
 
 export const VIEW_API_VERSION = 1;
-export interface DocumentSnapshot {
-  path: string;
-  content: string;
-  revision: string;
-}
-export interface ViewTarget {
-  view: string;
-  path?: string;
-  url?: string;
-  paths?: string[];
-  id?: string;
-}
-export interface ViewContext {
-  session: string;
-  workspace: string;
-  target: ViewTarget;
-}
+import type {DocumentSnapshot,ViewTarget,ViewContext} from "../../../packages/view-sdk";
+export type {DocumentSnapshot,ViewTarget,ViewContext} from "../../../packages/view-sdk";
 export interface WorkbenchAPI {
   context: ViewContext;
   read(path: string): Promise<DocumentSnapshot>;

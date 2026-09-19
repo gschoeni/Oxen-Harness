@@ -24,7 +24,7 @@ pub struct Manifest {
     pub permissions: Permissions,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Permissions {
     #[serde(default)]
@@ -126,7 +126,7 @@ fn collect(
     Ok(())
 }
 
-fn inspect_files(source: &Path) -> Result<(Package, BTreeMap<String, Vec<u8>>), String> {
+pub(crate) fn inspect_files(source: &Path) -> Result<(Package, BTreeMap<String, Vec<u8>>), String> {
     if std::fs::symlink_metadata(source)
         .map_err(|e| e.to_string())?
         .is_symlink()
@@ -233,25 +233,18 @@ fn installed_at(root: &Path) -> Result<Vec<Package>, String> {
 pub async fn install(source: &Path, approved_digest: &str) -> Result<Package, String> {
     install_at(source, approved_digest, &root()?).await
 }
-async fn install_at(source: &Path, approved_digest: &str, root: &Path) -> Result<Package, String> {
+pub(crate) async fn install_at(
+    source: &Path,
+    approved_digest: &str,
+    root: &Path,
+) -> Result<Package, String> {
     let (package, files) = inspect_files(source)?;
     if package.digest != approved_digest {
         return Err("view assets changed after review; inspect and approve the new package".into());
     }
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let docs = Documents::new(root).map_err(|e| e.to_string())?;
-    let destination = docs.resolve(&package.digest).map_err(|e| e.to_string())?;
-    if !destination.exists() {
-        let staging = tempfile::tempdir_in(root).map_err(|e| e.to_string())?;
-        for (path, bytes) in files {
-            let target = staging.path().join(path);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            std::fs::write(target, bytes).map_err(|e| e.to_string())?;
-        }
-        std::fs::rename(staging.path(), &destination).map_err(|e| e.to_string())?;
-    }
+    cache_assets(&package, &files, root)?;
     let previous = match docs.read("installed.json") {
         Ok(doc) => Some(doc),
         Err(crate::documents::DocumentError::Io { source, .. })
@@ -275,6 +268,30 @@ async fn install_at(source: &Path, approved_digest: &str, root: &Path) -> Result
     .await
     .map_err(|e| e.to_string())?;
     Ok(package)
+}
+
+/// Cache the exact inspected bytes. Preview and installation share one asset format.
+pub(crate) fn cache_assets(
+    package: &Package,
+    files: &BTreeMap<String, Vec<u8>>,
+    root: &Path,
+) -> Result<(), String> {
+    std::fs::create_dir_all(root).map_err(|e| format!("create view cache: {e}"))?;
+    let docs = Documents::new(root).map_err(|e| e.to_string())?;
+    let destination = docs.resolve(&package.digest).map_err(|e| e.to_string())?;
+    if !destination.exists() {
+        let staging = tempfile::tempdir_in(root).map_err(|e| e.to_string())?;
+        for (path, bytes) in files {
+            let target = staging.path().join(path);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(target, bytes).map_err(|e| e.to_string())?;
+        }
+        std::fs::rename(staging.path(), &destination).map_err(|e| e.to_string())?;
+    }
+    let cached = Documents::new(destination).map_err(|e| e.to_string())?;
+    verify_assets(&cached, package)
 }
 
 pub async fn remove(id: &str) -> Result<(), String> {

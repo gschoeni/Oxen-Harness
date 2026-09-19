@@ -41,6 +41,7 @@ pub mod repo_tool;
 pub mod rules;
 pub mod skills;
 pub mod tools;
+pub mod view_development;
 pub mod view_packages;
 pub mod views;
 pub mod workflow;

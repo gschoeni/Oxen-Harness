@@ -1044,3 +1044,20 @@ packaging, isolation, migration, and verification proposals are in
   works for contributor views without another Rust registration branch. Host
   descriptors for shipped views remain available to CLI/server clients without
   a renderer; installed packages are discovered from reviewed manifests.
+
+## Live view authoring — 2026-09-18
+
+- Development uses the installable-package boundary, not a privileged app-code
+  loader. Agent-created UI therefore runs without rebuilding the desktop app and
+  has the same filesystem/action grants as a released package.
+- A conversation owns one authoring context. Source remains in the project;
+  each successful refresh snapshots exact bytes. Invalid code keeps the previous
+  structural revision, while changed permissions require a new explicit preview.
+- Runtime diagnostics and registered browser tests are revision-scoped, bounded,
+  and persisted as project reports. Structural validation cannot stand in for a
+  real renderer. Tests execute only when requested.
+- Retained drafts are isolated by package and conversation and preserve their
+  original document revision. Hot reload must not turn a stale draft into an
+  unconditional save.
+- The portable browser SDK is a separate local package with no React dependency.
+  HTML starters need no build tool; frameworks can watch their own output folder.

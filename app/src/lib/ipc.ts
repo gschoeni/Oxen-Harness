@@ -828,7 +828,7 @@ export const onViewOpen = (handler: (event: { session: string; view: string; pat
   listen<{ session: string; view: string; path?: string }>("view://open", (event) => handler(event.payload));
 
 export const viewPackagesRequest = <T>(action:string, payload:Record<string,unknown> = {}) => invoke<T>("view_packages_request",{action,...payload});
-export const viewPackageMount = (session:string,id:string,path:string|undefined,bounds:{x:number;y:number;width:number;height:number}) => invoke<string>("view_package_mount",{session,id,path,bounds,theme:Object.fromEntries(["--bg","--surface","--surface-2","--text","--text-secondary","--text-tertiary","--accent","--border","--font-ui"].map(key=>[key,getComputedStyle(document.documentElement).getPropertyValue(key)]))});
+export const viewPackageMount = (session:string,id:string,path:string|undefined,bounds:{x:number;y:number;width:number;height:number},development=false) => invoke<string>("view_package_mount",{options:{session,id,path,bounds,development,theme:Object.fromEntries(["--bg","--surface","--surface-2","--text","--text-secondary","--text-tertiary","--accent","--border","--font-ui"].map(key=>[key,getComputedStyle(document.documentElement).getPropertyValue(key)]))}});
 export const viewPackageMove = (label:string,bounds:{x:number;y:number;width:number;height:number},visible:boolean) => invoke<void>("view_package_move",{label,bounds,visible});
 export const viewPackageClose = (label:string) => invoke<void>("view_package_close",{label});
 

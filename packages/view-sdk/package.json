@@ -1,0 +1,23 @@
+{
+  "name": "@oxen/view-sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Portable API for Oxen Harness work views",
+  "license": "Apache-2.0",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "browser.js",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test browser.test.mjs"
+  }
+}
