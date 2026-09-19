@@ -86,8 +86,8 @@ pub struct FleetSpawner {
     /// back and resumed) and their spend lands in its ledger. `None` (tests)
     /// keeps lanes in memory.
     store: Option<Arc<HistoryStore>>,
-    /// The session lanes are spawned from — their `parent_session`, and
-    /// where their spend is attributed (see [`FleetSpawner::set_session`]).
+    /// The session lanes are spawned from — their `parent_session` (see
+    /// [`FleetSpawner::set_session`]).
     /// A slot rather than a builder argument: the CLI registers the tool
     /// before its session exists.
     session: StdMutex<Option<String>>,
@@ -842,8 +842,10 @@ impl FleetSpawner {
         Ok(store.clone())
     }
 
-    /// What every lane gets after construction: spend attributed to the
-    /// spawning session, its stop token, and a place in the live registry.
+    /// What every lane gets after construction: its stop token, its wallet,
+    /// and a place in the live registry. A persisted lane keeps its own
+    /// usage ledger (see `HistoryStore::usage_for_tree` for the roll-up), so
+    /// where a fleet's tokens went can be read back per lane.
     fn adopt(
         &self,
         agent: &mut Agent,
@@ -852,9 +854,6 @@ impl FleetSpawner {
         cancel: CancellationToken,
         workspace: Option<Arc<crate::worktree::LaneWorktree>>,
     ) -> Result<(), AgentError> {
-        if let Some(session) = self.session() {
-            agent.set_usage_session(session);
-        }
         agent.set_cancel_token(cancel.clone());
         self.tree_budget()
             .open_lane(self.session().as_deref(), agent.session_id());
@@ -2020,7 +2019,15 @@ mod tests {
             "a settled lane leaves the registry"
         );
         // Lane spend is the parent's spend.
-        assert!(store.usage_for_session(&parent).unwrap().prompt_tokens > 0);
+        // The lane's spend is its own row set, rolled up into its parent's
+        // tree — so a fleet's cost can be read back per lane afterwards.
+        let own = store.usage_for_session(&id).unwrap();
+        assert!(own.prompt_tokens > 0);
+        assert_eq!(store.usage_for_session(&parent).unwrap().prompt_tokens, 0);
+        assert_eq!(
+            store.usage_for_tree(&parent).unwrap().prompt_tokens,
+            own.prompt_tokens
+        );
 
         // The full reply is readable, sliceable, and greppable by id — and a
         // session that isn't one of this chat's lanes is refused.
