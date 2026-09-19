@@ -831,10 +831,10 @@ mod tests {
             attempts: 4,
             model: "claude-opus-4-8".into(),
             endpoint: "https://hub.oxen.ai/api/ai".into(),
-            source: LlmError::Api {
+            source: Box::new(LlmError::Api {
                 status: 502,
                 message: "The model provider returned an error.".into(),
-            },
+            }),
         };
         let auth = AgentError::Llm(LlmError::Api {
             status: 401,

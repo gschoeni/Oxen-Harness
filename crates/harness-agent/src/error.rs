@@ -44,6 +44,6 @@ pub enum AgentError {
         attempts: u32,
         model: String,
         endpoint: String,
-        source: LlmError,
+        source: Box<LlmError>,
     },
 }

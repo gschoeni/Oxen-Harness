@@ -251,7 +251,7 @@ impl Agent {
                         attempts: attempt,
                         model: request.model.clone(),
                         endpoint: self.client.base_url().to_string(),
-                        source: e,
+                        source: Box::new(e),
                     })
                 }
                 Err(e) => return Err(e.into()),
@@ -788,7 +788,7 @@ mod tests {
                 assert_eq!(*attempts, 2);
                 assert_eq!(model, "claude-opus-4-8");
                 assert_eq!(endpoint, &server.url());
-                assert!(matches!(source, LlmError::Api { status: 502, .. }));
+                assert!(matches!(source.as_ref(), LlmError::Api { status: 502, .. }));
             }
             other => panic!("expected RetriesExhausted, got {other:?}"),
         }

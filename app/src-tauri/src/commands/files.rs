@@ -831,7 +831,7 @@ pub(crate) async fn stage_dropped_file(
         .headers()
         .get("x-file-name")
         .and_then(|v| v.to_str().ok())
-        .map(|n| percent_decode(n))
+        .map(percent_decode)
         .unwrap_or_else(|| "dropped".to_string());
     let bytes: Vec<u8> = match request.body() {
         tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
