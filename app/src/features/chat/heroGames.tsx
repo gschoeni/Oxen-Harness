@@ -89,6 +89,11 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
     setState(definition.initialState());
   }, [definition]);
 
+  const changePause = useCallback((next: boolean) => {
+    setPaused(next);
+    if (definition.onPause) setState((current: any) => definition.onPause!(current));
+  }, [definition]);
+
   const start = useCallback(() => {
     comboRef.current = 0;
     setCombo(0);
@@ -103,6 +108,8 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      const cabinet = document.activeElement?.closest(".hero-game") ?? (e.target as HTMLElement | null)?.closest(".hero-game");
+      if (cabinet && cabinet !== stageRef.current?.parentElement) return;
       // Keys aimed at the composer (or any input) never reach the game.
       if (isEditableTarget(e) || e.repeat || (e.target as HTMLElement | null)?.closest("button")) return;
 
@@ -134,13 +141,13 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
       }
       if (e.key.toLowerCase() === "p") {
         e.preventDefault();
-        setPaused((value) => !value);
-        if (definition.onPause) setState((current: any) => definition.onPause!(current));
+        changePause(!paused);
         return;
       }
       // Any key resumes from a pause; the key itself is swallowed so a resume
       // never doubles as a move.
       if (paused) {
+        if (["Tab", "Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
         e.preventDefault();
         setPaused(false);
         return;
@@ -166,21 +173,21 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [definition, playing, paused, start]);
+  }, [definition, playing, paused, start, changePause]);
 
   // Losing the window mid-run pauses instead of letting the ox crash while you
   // answer a message; any key or click brings it back.
   useEffect(() => {
     if (!playing) return;
     function pause() {
-      setPaused(true);
-      if (definition.onPause) setState((current: any) => definition.onPause!(current));
+      changePause(true);
     }
     function onVisibility() {
       if (document.hidden) pause();
     }
     function onFocus(e: FocusEvent) {
-      if (isEditableTarget(e)) pause();
+      const cabinet = (e.target as HTMLElement | null)?.closest(".hero-game");
+      if (isEditableTarget(e) || (cabinet && cabinet !== stageRef.current?.parentElement)) pause();
     }
     document.addEventListener("focusin", onFocus);
     window.addEventListener("blur", pause);
@@ -190,7 +197,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
       window.removeEventListener("blur", pause);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [definition, playing]);
+  }, [playing, changePause]);
 
   // The frame loop only runs while playing and unpaused; the attract screen is static.
   useEffect(() => {
@@ -232,6 +239,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
     const next = !sound;
     setSound(next);
     if (variant !== "dock") setSfxPreference(next);
+    if (playing) stageRef.current?.focus();
     if (next) {
       unlockSfx();
       playSfx("menu");
@@ -303,8 +311,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
             ))}
           </div>
         )}
-        {/* Cabinet switches: sound and the daily seed. Small, corner-mounted,
-            available on the attract screen and while playing. */}
+        {/* These controls must never cover the game HUD. */}
         <div className="hero-game-switches">
           {!playing && (
             <button className={daily ? "hero-game-switch active" : "hero-game-switch"} onClick={toggleDaily} aria-pressed={daily} title="Daily run: everyone gets today's trail">
@@ -315,14 +322,25 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
             {sound ? "♪ ON" : "♪ OFF"}
           </button>
         </div>
-          {playing && <>
-            <button className="hero-game-switch" aria-label={paused ? "Resume game" : "Pause game"} onClick={() => {
-              setPaused(!paused);
-              if (definition.onPause) setState((current: any) => definition.onPause!(current));
+        {playing && <>
+          <button
+            className="hero-game-switch"
+            aria-label={paused ? "Resume game" : "Pause game"}
+            onClick={() => {
+              changePause(!paused);
               stageRef.current?.focus();
-            }}>{paused ? "RESUME" : "PAUSE"}</button>
-            <button className="hero-game-switch" aria-label="Back to arcade menu" onClick={() => { setPlaying(false); setPaused(false); }}>MENU</button>
-          </>}
+            }}
+          >
+            {paused ? "RESUME" : "PAUSE"}
+          </button>
+          <button
+            className="hero-game-switch"
+            aria-label="Back to arcade menu"
+            onClick={() => { setPlaying(false); setPaused(false); }}
+          >
+            MENU
+          </button>
+        </>}
       </div>
       <div ref={stageRef} tabIndex={0} className="hero-game-stage" aria-label={`${definition.title} playfield`} onPointerDown={onPointerDown} onPointerUp={onPointerUp} onPointerCancel={() => (pointerStart.current = null)}>
         {!playing && definition.renderAttract ? definition.renderAttract(palette) : definition.render(state, palette)}

@@ -109,7 +109,7 @@ describe("The Oxen Trail", () => {
     // Continue (dismissing any message screens, taking option 2 on decisions)
     // until the journey ends.
     for (let i = 0; i < 400 && s.phase !== "over"; i++) {
-      s = s.phase === "trail" ? G.handleKey(s, "1") : G.handleKey(s, s.phase === "river" ? (s.food >= s.party.filter((m: any) => m.alive).length * 6 ? "3" : "2") : s.phase === "choice" ? "2" : "Enter");
+      s = s.phase === "trail" ? G.handleKey(s, "1") : G.handleKey(s, s.phase === "river" ? (s.food >= s.party.filter((m: any) => m.alive).length * 6 ? "3" : s.misc > 0 ? "2" : "1") : s.phase === "choice" ? "2" : "Enter");
     }
     expect(s.phase).toBe("over");
     expect(typeof s.score).toBe("number");
@@ -338,4 +338,27 @@ describe("Trail decisions", () => {
     expect(result.health).toBe(40);
     expect(result.msgTitle).toBe("Not enough provisions");
   });
+});
+
+it("does not travel when the player taps the landscape or status panel", () => {
+  const trail = press(G.initialState(), "1", "Enter");
+  expect(G.handlePointer!(trail, { kind: "tap", x: 0.2, y: 0.3 })).toBe(trail);
+});
+
+it("treats an already-scouted route as a no-op even without provisions", () => {
+  const camp = { ...press(G.initialState(), "1", "Enter", "6"), food: 0, scouted: true };
+  expect(G.handleKey(camp, "3")).toBe(camp);
+});
+
+it("trades a supply kit and a day for a safer floating crossing", () => {
+  const river = { ...press(G.initialState(), "1", "Enter"), phase: "river" as const, riverName: "Green River", nextLandmark: 6, misc: 2 };
+  seedRng(42);
+  const crossed = G.handleKey(river, "2");
+  expect(crossed.misc).toBe(1);
+  expect(crossed.day).toBe(river.day + 1);
+  expect(crossed.nextLandmark).toBe(6);
+  const refused = G.handleKey({ ...river, misc: 0 }, "2");
+  expect(refused.msgTitle).toBe("No caulking supplies");
+  expect(refused.afterMessage).toBe("river");
+  expect(refused.day).toBe(river.day);
 });

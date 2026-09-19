@@ -39,8 +39,9 @@ and presentation; longer human playtesting remains useful for balance.
 
 ## Verification and review
 
-Pending implementation, regression suite, browser inspection, workspace checks,
-build-cache cleanup, feature commit and dedicated review/refactor pass.
+Implemented and committed as `cb2a611`. The dedicated review and polish are
+complete. Arcade verification is green; the broader checkout has the unrelated
+failures listed in the final verification record below.
 
 ### Feature verification
 
@@ -59,7 +60,67 @@ build-cache cleanup, feature commit and dedicated review/refactor pass.
   wire tests (media/thread/retry schema mismatch); `cargo test --workspace`
   reached CLI tests and failed 18 shared-state composer/completion cases.
   Bridge Clippy found an existing redundant closure in `commands/files.rs:834`.
-  Nextest is being checked separately to isolate the CLI tests.
+  An initial isolated Nextest run passed 1,331 tests (5 skipped); the final
+  rerun encountered the store/host mismatch recorded below.
 - Requested cache GC was run; its warm commands succeeded, but pruning raced
   a disappearing object file (`FileNotFoundError`). Retry after final checks.
 - Temporary browser fixtures/screenshots live outside the feature commit.
+
+### Dedicated review of `cb2a611`
+
+Concrete findings (modularity, maintainability, readability, idiomatic frontend
+code, and pragmatism):
+
+1. **Keep scenery cheap:** static field texture and quantized vista geometry
+   currently rebuild hundreds of SVG elements on every game tick. Memoize these
+   two bounded renderers using palette values and their actual animation inputs.
+2. **Keep taps intentional:** the Trail's clamped menu hit mapping treats taps
+   on scenery as Travel. Restrict menu input to the drawn rows; remove the
+   unreachable duplicate Hunt pointer branch.
+3. **Preserve useful status:** restore the last-leg/ailment readout below the
+   Trail scene; show health and full names in the travelers' SVG descriptions.
+4. **Contain input:** two mounted cabinets should not resume each other. Pause
+   when focus moves into another cabinet, and route its keyboard input only to
+   that cabinet. Reuse one pause/resume helper for keyboard and toolbar.
+5. **Finish Hunt cleanly:** stop accepting new shots during the full-bag ending,
+   keep focus consistent during warmup, and extract the aim guide so its bounds
+   and terrain occlusion are readable independently of the field renderer.
+6. **Reject repeated camp actions before affordability checks:** scouting an
+   already-scouted leg must be a no-op even when food has since run out.
+
+7. **Give river safety a real tradeoff:** floating was strictly better than
+   fording at the same cost. Require one caulking kit and one day, show both
+   costs, and preserve an explicit no-supplies error that returns to the river.
+
+Keep the existing small state machines and SVG renderer; an engine, generalized
+entity/component layer, or a separate progression service would add complexity
+without helping this feature. The new art is shared; game-specific scoring and
+input remain beside their tests. Apply the seven concrete improvements above and
+re-run checks in a separate polish commit.
+
+
+### Final verification after polish
+
+- All **88 arcade tests pass** (21 Dodge, 27 Hunt, 30 Trail, 10 wrapper).
+- TypeScript and the production build pass. Full frontend: **606 pass / 2 fail**;
+  both failures are the existing CSS sizing-ratchet/baseline tests, with no
+  arcade stylesheet violations. Existing bundle-size warning remains.
+- Chrome and WebKit browser checks were repeated successfully after the review:
+  controls, pause/resume, composer focus, menu return, Trail camp, narrow layout,
+  and reduced motion. No browser runtime errors were observed.
+- `cargo fmt --all -- --check` passes.
+- Final workspace Clippy remains blocked by 20 protocol wire-test schema errors.
+- Final Nextest cannot build `harness-host`: `ThreadRow`, `FINISHED_STATE`, and
+  `thread_rows` are missing from the current store API. The earlier full
+  1,331-test pass is not a green result for this final checkout.
+- Bridge Clippy remains blocked by the unrelated redundant closure in
+  `app/src-tauri/src/commands/files.rs:834`.
+- Retried `scripts/gc-target.py`; it safely refused to prune when its workspace
+  test build encountered the same store/host mismatch. No workaround or manual
+  cache deletion was used.
+- The review also preserves keyboard control after toggling sound, allows Tab
+  out of a paused cabinet, and prevents one global start combo from launching
+  two mounted cabinets. New regressions cover the latter two-cabinet behavior
+  and sound-focus behavior.
+- Existing staged renames and unrelated working changes remain outside both
+  arcade commits. Temporary browser fixture files were removed after checking.

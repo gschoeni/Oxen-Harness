@@ -859,8 +859,6 @@ function riverSafety(s: OregonState, ford: boolean): number {
 function crossRiver(s: OregonState, choice: number): OregonState {
   const river = s.riverName;
   const next = { ...s, phase: "trail" as Phase, riverName: "" };
-  const deep = rand();
-
   if (choice === 3) {
     // Wait for better conditions, then cross safely.
     const cost = aliveCount(s) * 6;
@@ -873,21 +871,23 @@ function crossRiver(s: OregonState, choice: number): OregonState {
   }
 
   const ford = choice === 1;
-  const disaster = deep > riverSafety(s, ford); // fording is riskier
+  if (!ford && s.misc < 1) return toMessage(s, "No caulking supplies", ["Floating needs one supply kit.", "Ford, wait, or take the ferry."], "bad", "river");
+  const crossing = ford ? next : { ...next, misc: s.misc - 1, day: s.day + 1 };
+  const disaster = rand() > riverSafety(s, ford);
 
   if (!disaster) {
-    return toMessage(next, `You cross the ${river}`, ford ? ["You ford the river and reach", "the far bank safely."] : ["You caulk the wagon and float", "across without a hitch."], "good", "trail");
+    return toMessage(crossing, `You cross the ${river}`, ford ? ["You ford the river and reach", "the far bank safely."] : ["You caulk the wagon and float", "across without a hitch."], "good", "trail");
   }
 
   // Something goes wrong in the water.
   if (rand() < 0.4) {
     const victim = randomMember(s);
-    return afflict(hurtOne(next, victim.name, -100, "drowning"), { ...victim, health: 0, ailment: "drowning" });
+    return afflict(hurtOne(crossing, victim.name, -100, "drowning"), { ...victim, health: 0, ailment: "drowning" });
   }
   const lostFood = randInt(80, 200);
   const lostOx = ford && s.oxen > 1 && rand() < 0.5 ? 1 : 0;
   return toMessage(
-    hurtAll({ ...next, food: Math.max(0, s.food - lostFood), oxen: s.oxen - lostOx }, -12),
+    hurtAll({ ...crossing, food: Math.max(0, s.food - lostFood), oxen: s.oxen - lostOx }, -12),
     `The ${river} nearly takes you`,
     [`The wagon tips and you lose`, `${lostFood} lbs of food${lostOx ? " and an ox" : ""}.`],
     "bad",
@@ -990,13 +990,14 @@ function storeKey(s: OregonState, key: string): OregonState {
 
 function campKey(s: OregonState, key: string): OregonState {
   if (key === "4" || key === "Enter") return { ...s, phase: "trail" };
+  if ((key === "2" && s.foraged) || (key === "3" && s.scouted)) return s;
   const cost = key === "1" ? aliveCount(s) * 6 : key === "3" ? 10 : 0;
   if (s.food < cost) return toMessage(s, "Not enough provisions", [`You need ${cost} lb of food.`, "Try foraging or hunting first."], "bad", "camp");
   if (key === "1") return toMessage(hurtAll({ ...s, food: s.food - cost, day: s.day + 2 }, 14),
     "A night by the fire", [`Two days rest · −${cost} lb of food`, "Each living traveler heals +14."], "good", "trail");
-  if (key === "2" && !s.foraged) return toMessage({ ...s, foraged: true, food: s.food + 45, day: s.day + 1 },
+  if (key === "2") return toMessage({ ...s, foraged: true, food: s.food + 45, day: s.day + 1 },
     "A little prairie bounty", ["Wild berries and roots: +45 lb.", "One day spent. Fresh ground next leg."], "good", "trail");
-  if (key === "3" && !s.scouted) return toMessage({ ...s, scouted: true, food: s.food - 10, day: s.day + 1 },
+  if (key === "3") return toMessage({ ...s, scouted: true, food: s.food - 10, day: s.day + 1 },
     "A better way through", ["One day scouting · −10 lb of food", "Next leg: +25 miles of progress."], "good", "trail");
   return s;
 }
@@ -1091,6 +1092,7 @@ function oregonPointer(s: OregonState, p: PointerInput): OregonState {
     case "river":
       return oregonKey(s, String(rowAt(p.y, RIVER_TOP, RIVER_STEP, 4) + 1));
     case "trail":
+      if (p.y * H < MENU_TOP - 8 || p.y * H > MENU_TOP + MENU_STEP * 2 + 5) return s;
       return oregonKey(s, String((p.x < 0.5 ? [1, 2, 6] : [3, 4, 5])[rowAt(p.y, MENU_TOP, MENU_STEP, 3)]));
     case "store":
       if (p.y < 1 / 3) return oregonKey(s, "ArrowUp");
@@ -1099,11 +1101,12 @@ function oregonPointer(s: OregonState, p: PointerInput): OregonState {
       if (p.x > 0.65) return oregonKey(s, "ArrowRight");
       return oregonKey(s, "Enter");
     case "camp":
+      if (p.y * H < 61 || p.y * H > 119) return s;
       return oregonKey(s, String(rowAt(p.y, 69, 15, 4) + 1));
     case "occupation":
       return oregonKey(s, String(rowAt(p.y, 62, 16, 3) + 1));
     case "hunt":
-      return s.hunt && !s.hunt.done ? withHunt(s, tripPointer(s.hunt, p)) : oregonKey(s, "Enter");
+      return oregonKey(s, "Enter");
     default:
       return s;
   }
@@ -1150,7 +1153,6 @@ function screenColors(p: ThemePalette) {
 }
 
 type ScreenColors = ReturnType<typeof screenColors>;
-
 
 /** The status header: a progress bar marked with every landmark ahead and
     behind, and a wagon inching toward Oregon. */
@@ -1229,6 +1231,11 @@ function TrailScreen(s: OregonState, sc: ScreenColors, p: ThemePalette) {
   const c = sceneColors(p);
   const foodNeeded = RATION_LB[s.rations] * aliveCount(s);
   const next = LANDMARKS[s.nextLandmark];
+  const ailing = s.party.find((m) => m.alive && m.ailment);
+  const leg = s.lastLeg;
+  const recap = ailing ? `${shortName(ailing.name)}: ${ailing.ailment}` : leg
+    ? `LAST: +${leg.miles} mi / −${leg.ate} lb / ${leg.dh > 0 ? "+" : ""}${leg.dh} HP`
+    : "NEXT LEG: 14 DAYS ON THE TRAIL";
   const menus = [
     ["1  Travel onward", "2  Hunt for food", "6  Make camp"],
     [`3  ${PACE_NAMES[s.pace]} / ${PACE_H[s.pace] > 0 ? "+" : ""}${PACE_H[s.pace]} HP`, `4  ${RATION_NAMES[s.rations]} / ${RATION_H[s.rations] > 0 ? "+" : ""}${RATION_H[s.rations]} HP`, s.atFort ? "5  Trade at the fort" : "5  Trade at next fort"],
@@ -1236,19 +1243,21 @@ function TrailScreen(s: OregonState, sc: ScreenColors, p: ThemePalette) {
   return (
     <g>
       {Header(s, sc)}
-      <svg x={8} y={30} width={128} height={55} viewBox="0 0 288 136" preserveAspectRatio="xMidYMid slice">
+      <svg x={8} y={30} width={128} height={45} viewBox="0 0 288 136" preserveAspectRatio="xMidYMid slice">
         <Vista c={c} horizon={18} travel={s.miles / 4} night={s.weather === "Cold" || s.weather === "Snow"} />
         <Pine x={8} y={31} c={c} scale={1.8} />
         <Wagon x={26} y={23} c={c} />
         <PxText x={144} y={17} size={9} fill={c.snow} shadow={c.sky} anchor="middle">{s.atFort ? "AT THE TRADING POST" : s.weather.toUpperCase()}</PxText>
       </svg>
+      <Line x={10} y={84} c={ailing ? sc.bad : sc.dim} size={6}>{recap}</Line>
       <Line x={144} y={37} c={sc.accent} size={7}>{next ? `${Math.max(0, next.mile - s.miles)} mi to ${next.name}` : "Oregon awaits"}</Line>
       <Line x={144} y={48} c={s.food < foodNeeded ? sc.bad : sc.fg} size={7}>{`FOOD ${Math.round(s.food)} · NEED ${foodNeeded}`}</Line>
       <Line x={144} y={58} c={sc.fg} size={7}>{`AMMO ${s.bullets} · CASH $${Math.round(s.cash)}`}</Line>
       <Line x={144} y={68} c={sc.dim} size={7}>{`OXEN ${s.oxen} · COATS ${s.clothing} · KITS ${s.misc}`}</Line>
       {s.party.map((m, i) => <g key={m.name}>
+        <title>{`${m.name}: ${m.alive ? `${m.health}% health${m.ailment ? `, ${m.ailment}` : ""}` : "deceased"}`}</title>
         <rect x={145 + i * 26} y={74} width={21} height={3} fill={sc.frame} />
-        <rect x={145 + i * 26} y={74} width={21 * (m.alive ? m.health / 100 : 0)} height={3} fill={m.health < 40 ? sc.bad : sc.good} />
+        <rect x={145 + i * 26} y={74} width={21 * (m.alive ? m.health / 100 : 0)} height={3} fill={m.health < 40 || m.ailment ? sc.bad : sc.good} />
         <Line x={155 + i * 26} y={84} c={m.alive ? sc.fg : sc.dim} size={5.5} anchor="middle">{m.alive ? shortName(m.name).slice(0, 4) : "RIP"}</Line>
       </g>)}
       <rect x={8} y={89} width={272} height={42} fill={sc.frame} opacity={0.12} />
@@ -1291,8 +1300,8 @@ function RiverScreen(s: OregonState, sc: ScreenColors) {
       <PxText x={W / 2} y={44} size={11} fill={sc.accent} shadow={sc.bg} anchor="middle">{`THE ${s.riverName.toUpperCase()}`}</PxText>
       <Line x={W / 2} y={58} c={sc.dim} size={8} anchor="middle">{`${s.weather} weather · ${s.weather === "Rainy" || s.weather === "Snow" ? "swollen waters" : "calm waters"}`}</Line>
       <Line x={W / 2} y={68} c={sc.dim} size={7} anchor="middle">Weigh the risk. Protect your people.</Line>
-      {[`1  Ford · ${Math.round(riverSafety(s, true) * 100)}% safe`, `2  Float · ${Math.round(riverSafety(s, false) * 100)}% safe`, `3  Wait · safe · 2 days / ${aliveCount(s) * 6} lb`, `4  Ferry · safe · $${FERRY_COST} / 1 day`].map((line, i) => (
-        <Line key={line} x={20} y={RIVER_TOP + i * RIVER_STEP} c={i === 3 && s.cash < FERRY_COST ? sc.dim : sc.accent} size={8}>{line}</Line>
+      {[`1  Ford · ${Math.round(riverSafety(s, true) * 100)}% safe`, `2  Float · ${Math.round(riverSafety(s, false) * 100)}% safe / 1 kit / 1 day`, `3  Wait · safe · 2 days / ${aliveCount(s) * 6} lb`, `4  Ferry · safe · $${FERRY_COST} / 1 day`].map((line, i) => (
+        <Line key={line} x={20} y={RIVER_TOP + i * RIVER_STEP} c={(i === 1 && s.misc < 1) || (i === 2 && s.food < aliveCount(s) * 6) || (i === 3 && s.cash < FERRY_COST) ? sc.dim : sc.accent} size={8}>{line}</Line>
       ))}
     </g>
   );

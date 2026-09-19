@@ -172,7 +172,7 @@ interface Bullet {
 interface Hunter {
   x: number; // center, in cells
   y: number;
-  fx: number; // facing vector, each -1 | 0 | 1
+  fx: number; // arrows face eight ways; pointer aim allows fractional directions
   fy: number;
   walking: boolean;
   recoil: number;
@@ -330,7 +330,7 @@ function heldVector(held: string[]): [number, number] {
 }
 
 function fire(t: HuntTrip): HuntTrip {
-  if (t.hunter.down > 0) return t;
+  if (t.hunter.down > 0 || t.endIn > 0 || t.mauledIn > 0) return t;
   if (t.bulletsLeft <= 0) return { ...t, sfx: pushSfx(t.sfx, "empty") };
   if (t.fireCooldown > 0 || t.bullets.length >= MAX_IN_FLIGHT) return t;
   const h = t.hunter;
@@ -560,7 +560,7 @@ export function tripUpdate(t: HuntTrip, dt: number): HuntTrip {
 
   // Soft start: you can get your bearings, but nothing else moves yet.
   if (t.warmup > 0) {
-    return { ...t, clock, hunter, heldFor, swipeWalk, particles, popups, shake, fireCooldown, warmup: t.warmup - dt };
+    return { ...t, clock, hunter, heldFor, swipeWalk, particles, popups, shake, fireCooldown, focus, warmup: t.warmup - dt };
   }
 
   // The bear got you: lie there for a beat, then the trip is over.
@@ -972,6 +972,30 @@ function Weather({ t, c }: { t: HuntTrip; c: SceneColors }) {
   }
 }
 
+function AimGuide({ t, c }: { t: HuntTrip; c: SceneColors }) {
+  if (t.done || t.hunter.down > 0) return null;
+  const { x, y, fx, fy } = t.hunter;
+  const norm = Math.hypot(fx, fy) || 1;
+  const dots = [];
+  for (let distance = 2; distance <= 14; distance++) {
+    const dx = x + fx / norm * distance;
+    const dy = y + fy / norm * distance;
+    if (dx < 0 || dx > COLS || dy < FIELD_TOP || dy > FIELD_BOTTOM) break;
+    if (t.obstacles.some((o) => o.solid && inside(dx, dy, o))) break;
+    if (distance >= 5 && (distance - 5) % 3 === 0) {
+      dots.push(<Px key={distance} x={Math.round(dx)} y={Math.round(dy)} w={0.5} h={0.5} fill={c.snow} />);
+    }
+  }
+  return (
+    <g opacity={0.65}>
+      {dots}
+      <rect x={(x - 2) * U} y={(y + 3) * U} width={4 * U} height={2} fill={c.sky} />
+      <rect x={(x - 2) * U} y={(y + 3) * U} width={4 * U * t.focus} height={2} fill={c.accent} />
+      {t.focus >= 1 && <rect x={(x - 3) * U} y={(y - 3) * U} width={6 * U} height={6 * U} stroke={c.accent} strokeWidth={1} fill="none" strokeDasharray="3 5" />}
+    </g>
+  );
+}
+
 /** The field contents for one trip, to drop inside a <GameFrame>. */
 export function HuntScene({ t, p, hud = true }: { t: HuntTrip; p: ThemePalette; hud?: boolean }) {
   const c = sceneColors(p);
@@ -993,15 +1017,7 @@ export function HuntScene({ t, p, hud = true }: { t: HuntTrip; p: ThemePalette; 
       {t.animals.filter((a) => a.dead).map((a) => <AnimalSprite key={a.id} a={a} c={c} />)}
       {t.animals.filter((a) => !a.dead).map((a) => <AnimalSprite key={a.id} a={a} c={c} />)}
       {t.obstacles.filter((o) => o.solid).map((o, i) => <ObstacleSprite key={`s${i}`} o={o} c={c} />)}
-      {!t.done && t.hunter.down === 0 && <g opacity={0.65}>
-        {[5, 8, 11, 14].map((distance) => {
-          const norm = Math.hypot(t.hunter.fx, t.hunter.fy) || 1;
-          return <Px key={distance} x={Math.round(t.hunter.x + t.hunter.fx / norm * distance)} y={Math.round(t.hunter.y + t.hunter.fy / norm * distance)} w={0.5} h={0.5} fill={c.snow} />;
-        })}
-        <rect x={(t.hunter.x - 2) * U} y={(t.hunter.y + 3) * U} width={4 * U} height={2} fill={c.sky} />
-        <rect x={(t.hunter.x - 2) * U} y={(t.hunter.y + 3) * U} width={4 * U * t.focus} height={2} fill={c.accent} />
-        {t.focus >= 1 && <rect x={(t.hunter.x - 3) * U} y={(t.hunter.y - 3) * U} width={6 * U} height={6 * U} stroke={c.accent} strokeWidth={1} fill="none" strokeDasharray="3 5" />}
-      </g>}
+      <AimGuide t={t} c={c} />
       <HunterSprite h={t.hunter} c={c} />
       {t.bullets.map((b) => {
         const len = Math.hypot(b.vx, b.vy) || 1;

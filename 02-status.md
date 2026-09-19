@@ -667,3 +667,8 @@ Cabinet controls sit outside the playfield, with explicit play/pause/menu button
 and automatic pause when returning to the composer. River crossings no longer
 skip the following landmark. See `plans/arcade-delight.md` for research,
 verification, remaining workspace blockers, and the dedicated polish pass.
+
+Arcade polish verified: 88 game tests, TypeScript, production build, and
+Chrome/WebKit checks pass. The full frontend has 606 passing tests and two
+unrelated sizing-baseline failures; current Rust checks and cache GC are
+blocked by the existing API/lint failures documented in the feature plan.

@@ -290,3 +290,9 @@ describe("Hunt precision", () => {
     expect(t.hitStreak).toBe(0);
   });
 });
+
+it("does not spend ammunition after the bag is already full", () => {
+  const t = quiet({ endIn: 0.5, shotLbs: 100 });
+  expect(tripKey(t, " ").bulletsUsed).toBe(0);
+  expect(tripPointer(t, { kind: "tap", x: 0.9, y: 0.5 }).bulletsUsed).toBe(0);
+});

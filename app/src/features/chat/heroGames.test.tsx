@@ -85,3 +85,26 @@ it("pauses when focus moves into the composer", () => {
   fireEvent.focusIn(screen.getByRole("textbox"));
   expect(screen.getByRole("status")).toHaveTextContent("PAUSED");
 });
+
+it("pauses the first cabinet when a second one takes focus", async () => {
+  render(<><HeroGame gameName="hunt" palette={palette} /><HeroGame gameName="oregon" palette={palette} /></>);
+  await userEvent.click(screen.getByRole("button", { name: "Play Hunting Season" }));
+  await userEvent.click(screen.getByRole("button", { name: "Play The Oxen Trail" }));
+  expect(screen.getAllByRole("status")).toHaveLength(1);
+  await userEvent.keyboard("1");
+  expect(screen.getByRole("img", { name: /outfit your wagon/i })).toBeInTheDocument();
+  expect(screen.getAllByRole("status")).toHaveLength(1);
+});
+
+it("keeps keyboard controls focused after changing sound mid-run", async () => {
+  render(<HeroGame gameName="hunt" palette={palette} />);
+  await userEvent.click(screen.getByRole("button", { name: "Play Hunting Season" }));
+  await userEvent.click(screen.getByRole("button", { name: /mute game sound/i }));
+  expect(stage()).toHaveFocus();
+});
+
+it("starts only one cabinet when the global start combo is entered", async () => {
+  render(<><HeroGame gameName="hunt" palette={palette} /><HeroGame gameName="oregon" palette={palette} /></>);
+  await userEvent.keyboard("{ArrowUp}{ArrowUp}{ArrowDown}{ArrowDown}");
+  expect(screen.getAllByRole("button", { name: "Pause game" })).toHaveLength(1);
+});
