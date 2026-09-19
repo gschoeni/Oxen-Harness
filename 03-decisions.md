@@ -1,7 +1,7 @@
 # Working Decisions & Rationale
 
 **Purpose:** Currently relevant decisions with enough "why" to be useful during implementation. For full deep-dive analysis, cite the source in each entry.
-**Updated:** 2026-09-13
+**Updated:** 2026-09-18
 
 ---
 
@@ -953,3 +953,20 @@ The CLI uses a chooser plus stable IDs, numbered live rows, and a visible
 message target. The desktop has one Agents panel with persistent results and
 acknowledged controls. Patch application requires the exact artifact reviewed
 by the user and lets Git reject conflicts atomically.
+
+## Desktop styling (2026-09-18)
+
+**Sizes come from token scales, enforced by a ratchet** (2026-09-18)
+`app/src/styles/tokens.css` owns every size the desktop app uses: the 4pt
+space scale, the type scale, radii, the control-height family, and the chat
+column (`--chat-column` + `--chat-gutter`, so the thread, the panels stacked
+above the composer, and the composer share one edge). Feature CSS references
+the tokens and never writes a pixel size on a property that has a scale
+(`font-size`, `line-height`, `gap`, `padding*`, `margin*`, `border-radius`).
+
+*Why a ratchet:* ~300 literal sizes predate the rule, and rewriting them blind
+risks visual regressions. `styles/tokens.test.ts` counts the literals per
+stylesheet against a checked-in baseline: a file may only go down, a new file
+starts at zero, and the test fails with the offending declarations. The chat
+column width is banned outright. Migrate a file, lower its number — the
+remaining work is listed in `04-backlog.md`.
