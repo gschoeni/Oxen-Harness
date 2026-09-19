@@ -115,10 +115,10 @@ export function ToolsPage() {
               />
             </div>
           ) : (
-            <button className="tool-add" onClick={() => setAdding(true)} disabled={tools === null}>
+            <Button variant="outline" className="tool-add" onClick={() => setAdding(true)} disabled={tools === null}>
               <Plus size={15} />
               New tool
-            </button>
+            </Button>
           )}
         </div>
       </section>

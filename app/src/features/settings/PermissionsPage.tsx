@@ -6,6 +6,7 @@
 // writes, …) are hard limits and are not configurable here or anywhere.
 
 import { useCallback, useEffect, useState } from "react";
+import { Button } from "../../components/ui";
 import { ShieldAlert, X } from "lucide-react";
 import {
   addPermissionRule,
@@ -176,9 +177,9 @@ export function PermissionsPage() {
             spellCheck={false}
             onChange={(e) => setDraft(e.target.value)}
           />
-          <button type="submit" className="perms-add-btn" disabled={!draft.trim()}>
+          <Button type="submit" variant="primary" disabled={!draft.trim()}>
             Add rule
-          </button>
+          </Button>
         </form>
       </section>
 

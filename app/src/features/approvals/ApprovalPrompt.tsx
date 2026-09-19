@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Button } from "../../components/ui";
 import { ShieldAlert } from "lucide-react";
 import { answerApproval } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
@@ -54,48 +55,46 @@ function ApprovalCard({ request }: { request: ApprovalRequestEvent }) {
         )}
 
         <div className="aprompt-actions">
-          <button type="button" className="abtn primary" onClick={() => decide("once")}>
+          <Button type="button" variant="primary" onClick={() => decide("once")}>
             Run once
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="abtn"
             title={`Don't ask again this session for ${request.grant_label}`}
             onClick={() => decide("session")}
           >
             Allow for session
-          </button>
+          </Button>
           {request.offer_project_grant && (
-            <button
+            <Button
               type="button"
-              className="abtn"
               title={`Don't ask again in this project for ${request.grant_label} (saved to .oxen-harness/permissions.json)`}
               onClick={() => decide("project")}
             >
               Allow for project
-            </button>
+            </Button>
           )}
           {request.offer_trash && (
-            <button
+            <Button
               type="button"
-              className="abtn"
               title="Relocate the files into ~/.oxen-harness/trash (kept 7 days) instead of deleting"
               onClick={() => decide("trash")}
             >
               Move to trash instead
-            </button>
+            </Button>
           )}
-          <button type="button" className="abtn deny" onClick={() => decide("deny")}>
+          <Button type="button" variant="danger" onClick={() => decide("deny")}>
             Deny
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="abtn bypass"
+            variant="outline"
+            className="aprompt-bypass"
             title="Switch this session to bypass mode — nothing asks again (hard limits like rm -rf / still refuse). Session-only; new chats return to your configured mode."
             onClick={() => decide("bypass")}
           >
             Dangerously allow everything
-          </button>
+          </Button>
         </div>
 
         <form
@@ -112,9 +111,9 @@ function ApprovalCard({ request }: { request: ApprovalRequestEvent }) {
             spellCheck={false}
             onChange={(e) => setReason(e.target.value)}
           />
-          <button type="submit" className="abtn deny sm" disabled={!reason.trim()}>
+          <Button type="submit" variant="danger" disabled={!reason.trim()}>
             Deny with reason
-          </button>
+          </Button>
         </form>
       </div>
     </div>

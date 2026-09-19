@@ -35,11 +35,7 @@ pub(crate) fn sse_prose(text: &str) -> String {
 
 /// A retry policy with near-zero waits so backoff tests run instantly.
 pub(crate) fn fast_retry(max_attempts: u32) -> RetryPolicy {
-    RetryPolicy {
-        max_attempts,
-        base_delay: std::time::Duration::from_millis(1),
-        fallback_models: Vec::new(),
-    }
+    RetryPolicy::from_backoff(harness_llm::Backoff::instant(max_attempts), Vec::new())
 }
 
 pub(crate) fn retry_test_agent(url: String, retry: RetryPolicy) -> Agent {

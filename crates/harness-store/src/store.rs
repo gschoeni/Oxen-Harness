@@ -205,20 +205,13 @@ pub const LANE_STATE: &str = "lane";
 /// what's left. Shape is a map of hash → `SubagentResult`.
 pub const MAP_MEMO_STATE: &str = "map_memo";
 
-/// `session_state` key for the latest plan snapshot (written by the agent on
-/// every successful `update_plan` call; shape is `harness_tools`'
-/// `Option<PlanSnapshot>`, where a stored `null` means "checked, no plan").
-/// Key names live here — next to the ledger query that joins on them — so the
-/// writer and the reader can never drift apart.
-pub const PLAN_STATE: &str = "plan";
-
 /// How many characters of the first user message a session title keeps.
-/// Titles label sidebar rows, ledger wagons, and pickers — one line each — so
+/// Titles label sidebar rows, overview rows, and pickers — one line each — so
 /// the store clips in SQL rather than shipping a pasted document per session
 /// on every list refresh.
 pub const TITLE_CHARS: usize = 200;
 
-/// How many characters a one-line message preview keeps (the ledger's last
+/// How many characters a one-line message preview keeps (an overview's last
 /// reply, a rewind picker's turn text). Slightly longer than a title: a reply
 /// preview reads as a sentence or two.
 pub const PREVIEW_CHARS: usize = 280;
@@ -229,26 +222,24 @@ pub const PREVIEW_CHARS: usize = 280;
 /// of thousands does not pay per-conversation commit cost.
 pub const IMPORT_BATCH: usize = 50;
 
-/// `session_state` key marking a thread tied off in the Ledger (written by the
-/// host's settle command; shape is `harness_protocol`'s `SettleState`).
-pub const SETTLE_STATE: &str = "settle";
-
-/// `session_state` key for the session's charted journey (written by the agent
-/// on every successful `update_trail` call; shape is `harness_tools`'
-/// `TrailSnapshot`: a model-chosen title plus named waypoints).
-pub const TRAIL_STATE: &str = "trail";
+/// `session_state` key marking a thread the user finished (written by the
+/// host's finish command; shape is `{"settled_at": <unix secs>}` — the key and
+/// field names predate the "finished" wording and are kept so existing marks
+/// keep working). Key names live here — next to the overview query that joins
+/// on them — so the writer and the reader can never drift apart.
+pub const FINISHED_STATE: &str = "settle";
 
 /// `session_state` key: unix seconds the user last *looked at* this thread —
 /// opened its chat, or watched its turn finish. Written by the host's seen
-/// mark; shape is a bare JSON integer. The Ledger reads "finished while you
-/// were away" against it, per thread, so leaving the board never silently
-/// clears a loose end the user has yet to open.
+/// mark; shape is a bare JSON integer. "Finished while you were away" is read
+/// against it, per thread, so a loose end stays flagged until the user
+/// actually opens it.
 pub const SEEN_STATE: &str = "seen";
 
 /// `session_state` key for a name the user gave the chat (a JSON string).
 /// Absent, a chat is titled by its first user message; present, this wins
 /// everywhere a title is read ([`HistoryStore::list_sessions`],
-/// [`HistoryStore::ledger_rows`]). Written by [`HistoryStore::rename_session`].
+/// [`HistoryStore::thread_rows`]). Written by [`HistoryStore::rename_session`].
 pub const TITLE_STATE: &str = "title";
 
 /// The user's name for a chat from its raw [`TITLE_STATE`] payload, or `None`
@@ -265,9 +256,9 @@ pub const RULE_HISTORY_STATE: &str = "rule_history";
 
 /// The `session_state` keys that are projections of the transcript — derived
 /// from what the messages say, not facts about the session. A fork that cuts
-/// the transcript leaves them out (the agent rebuilds them from the messages
-/// it kept); a plain copy carries them over unchanged.
-const TRANSCRIPT_PROJECTION_KEYS: [&str; 3] = [PLAN_STATE, TRAIL_STATE, RULE_HISTORY_STATE];
+/// the transcript leaves them out (they describe the source *now*, not as of
+/// the cut); a plain copy carries them over unchanged.
+const TRANSCRIPT_PROJECTION_KEYS: [&str; 1] = [RULE_HISTORY_STATE];
 
 /// Errors from the history store.
 #[derive(Debug, thiserror::Error)]
@@ -343,13 +334,10 @@ pub struct SessionSummary {
     pub source: String,
 }
 
-/// One session as the Ledger reads it: summary metadata plus the freshness and
-/// per-session projections that decide where its wagon sits on the trail.
-/// The `*_json` fields are the raw `session_state` payloads — the store hands
-/// them over verbatim and the host layer parses them into wire shapes, so the
-/// store stays ignorant of feature-owned schemas.
+/// One session as an overview surface reads it: summary metadata plus the
+/// freshness facts and marks that decide whether it needs the user.
 #[derive(Debug, Clone)]
-pub struct LedgerRow {
+pub struct ThreadRow {
     pub id: String,
     pub workspace: String,
     pub model: String,
@@ -365,15 +353,10 @@ pub struct LedgerRow {
     /// signal we have.
     pub last_role: String,
     /// The opening of the newest assistant message (clipped in SQL) — the
-    /// thread's "last word", shown on its waystation card. Empty when the
-    /// model never replied.
+    /// thread's "last word". Empty when the model never replied.
     pub last_reply: String,
-    /// Raw JSON under [`PLAN_STATE`]; `None` when never recorded.
-    pub plan_json: Option<String>,
-    /// Raw JSON under [`TRAIL_STATE`]; `None` when the model never charted one.
-    pub trail_json: Option<String>,
-    /// Raw JSON under [`SETTLE_STATE`]; `None` while the thread is open.
-    pub settle_json: Option<String>,
+    /// Unix seconds under [`FINISHED_STATE`]; `0` while the thread is open.
+    pub finished_at: i64,
     /// Unix seconds under [`SEEN_STATE`]; `0` when the thread was never
     /// opened since the mark existed.
     pub seen_at: i64,
@@ -534,10 +517,9 @@ impl HistoryStore {
     /// `seq <= through_seq` (all of them when `None`) with their sequence
     /// numbers, plus the context snapshot when it predates the cut. Session
     /// state comes along too, except that a cut fork leaves out the keys that
-    /// are projections of the transcript ([`PLAN_STATE`], [`TRAIL_STATE`],
-    /// [`RULE_HISTORY_STATE`]): those rows describe the source *now*, not as
-    /// of the cut, and the caller rebuilds them from the messages it kept.
-    /// Returns the new session's id. The source is untouched — a fork is how
+    /// are projections of the transcript ([`RULE_HISTORY_STATE`]): those rows
+    /// describe the source *now*, not as of the cut. Returns the new
+    /// session's id. The source is untouched — a fork is how
     /// a rewind keeps history complete.
     pub fn fork_session(
         &self,
@@ -578,14 +560,8 @@ impl HistoryStore {
             tx.execute(
                 "INSERT INTO session_state (session_id, key, raw_json)
                  SELECT ?1, key, raw_json FROM session_state
-                 WHERE session_id = ?2 AND key NOT IN (?3, ?4, ?5)",
-                rusqlite::params![
-                    id,
-                    source,
-                    TRANSCRIPT_PROJECTION_KEYS[0],
-                    TRANSCRIPT_PROJECTION_KEYS[1],
-                    TRANSCRIPT_PROJECTION_KEYS[2]
-                ],
+                 WHERE session_id = ?2 AND key NOT IN (?3)",
+                rusqlite::params![id, source, TRANSCRIPT_PROJECTION_KEYS[0]],
             )?;
         } else {
             tx.execute(
@@ -827,20 +803,20 @@ impl HistoryStore {
         }
     }
 
-    /// Everything the Ledger needs about every native session, in one query.
+    /// Everything an overview needs about every native session, in one query.
     ///
     /// Ordered newest-activity first. Sessions without a user turn are skipped
-    /// (same rule as [`Self::list_sessions`] — nothing to title a wagon with),
-    /// as are imported transcripts: another tool's history is reading material,
-    /// not a thread of ours to tie off.
-    pub fn ledger_rows(&self) -> Result<Vec<LedgerRow>, HistoryError> {
+    /// (same rule as [`Self::list_sessions`] — nothing to title them with), as
+    /// are imported transcripts: another tool's history is reading material,
+    /// not a thread of ours to finish.
+    pub fn thread_rows(&self) -> Result<Vec<ThreadRow>, HistoryError> {
         let conn = self.lock()?;
         // One grouped pass over messages finds each session's landmarks (the
         // seqs of its title / last / last-reply messages, its count, its last
         // activity); the landmark rows are then fetched by (session_id, seq)
-        // point-joins on the unique index. The board polls this on every
+        // point-joins on the unique index. Overviews poll this on every
         // refresh — five correlated per-session scans added up. Title and
-        // reply are clipped in SQL: the board only ever shows a line of each.
+        // reply are clipped in SQL: a row only ever shows a line of each.
         let mut stmt = conn.prepare(&format!(
             "SELECT s.id, s.workspace, s.model, s.created_at,
                     substr(title.content, 1, {TITLE_CHARS}) AS title,
@@ -848,7 +824,8 @@ impl HistoryStore {
                     COALESCE(agg.last_msg_at, s.created_at) AS last_activity,
                     COALESCE(last.role, ''),
                     COALESCE(substr(reply.content, 1, {PREVIEW_CHARS}), ''),
-                    plan.raw_json, trail.raw_json, settle.raw_json, s.review_status,
+                    COALESCE(json_extract(finished.raw_json, '$.settled_at'), 0),
+                    s.review_status,
                     COALESCE(CAST(seen.raw_json AS INTEGER), 0),
                     named.raw_json
              FROM sessions s
@@ -872,31 +849,21 @@ impl HistoryStore {
                     ON last.session_id = s.id AND last.seq = agg.last_seq
              LEFT JOIN messages reply
                     ON reply.session_id = s.id AND reply.seq = agg.reply_seq
-             LEFT JOIN session_state plan
-                    ON plan.session_id = s.id AND plan.key = ?1
-             LEFT JOIN session_state trail
-                    ON trail.session_id = s.id AND trail.key = ?2
-             LEFT JOIN session_state settle
-                    ON settle.session_id = s.id AND settle.key = ?3
+             LEFT JOIN session_state finished
+                    ON finished.session_id = s.id AND finished.key = ?1
              LEFT JOIN session_state seen
-                    ON seen.session_id = s.id AND seen.key = ?4
+                    ON seen.session_id = s.id AND seen.key = ?2
              LEFT JOIN session_state named
-                    ON named.session_id = s.id AND named.key = ?5
+                    ON named.session_id = s.id AND named.key = ?3
              WHERE s.source = '' AND s.parent_session = ''
              ORDER BY last_activity DESC",
         ))?;
-        let params = [
-            PLAN_STATE,
-            TRAIL_STATE,
-            SETTLE_STATE,
-            SEEN_STATE,
-            TITLE_STATE,
-        ];
+        let params = [FINISHED_STATE, SEEN_STATE, TITLE_STATE];
         let rows = stmt.query_map(params, |row| {
             Ok((
                 row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(14)?,
-                LedgerRow {
+                row.get::<_, Option<String>>(12)?,
+                ThreadRow {
                     id: row.get(0)?,
                     workspace: row.get(1)?,
                     model: row.get(2)?,
@@ -906,42 +873,21 @@ impl HistoryStore {
                     last_activity_at: row.get(6)?,
                     last_role: row.get(7)?,
                     last_reply: row.get(8)?,
-                    plan_json: row.get(9)?,
-                    trail_json: row.get(10)?,
-                    settle_json: row.get(11)?,
-                    review_status: row.get(12)?,
-                    seen_at: row.get(13)?,
+                    finished_at: row.get(9)?,
+                    review_status: row.get(10)?,
+                    seen_at: row.get(11)?,
                 },
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (title, custom, mut ledger_row) = row?;
+            let (title, custom, mut thread_row) = row?;
             if let Some(title) = title {
-                ledger_row.title = custom_title(custom).unwrap_or(title);
-                out.push(ledger_row);
+                thread_row.title = custom_title(custom).unwrap_or(title);
+                out.push(thread_row);
             }
         }
         Ok(out)
-    }
-
-    /// Assistant messages that *might* hold an `update_plan` call, newest
-    /// first, as verbatim JSON. The `LIKE` is only a cheap textual prefilter
-    /// over one session's messages — the caller does the real tool-call parse,
-    /// walking the list until one yields a valid plan (a prose mention, or a
-    /// call whose bad arguments were rejected, simply doesn't). Exists to
-    /// backfill plan snapshots for sessions that predate them; new sessions
-    /// persist their snapshot as each call happens.
-    pub fn plan_message_candidates(&self, session_id: &str) -> Result<Vec<String>, HistoryError> {
-        let conn = self.lock()?;
-        let mut stmt = conn.prepare(
-            "SELECT raw_json FROM messages
-             WHERE session_id = ?1 AND role = 'assistant'
-               AND raw_json LIKE '%update_plan%'
-             ORDER BY seq DESC LIMIT 20",
-        )?;
-        let rows = stmt.query_map([session_id], |row| row.get::<_, String>(0))?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// When each workspace was last used: the newest message timestamp across
@@ -1977,7 +1923,7 @@ mod tests {
     }
 
     #[test]
-    fn ledger_rows_carry_freshness_and_projections() {
+    fn thread_rows_carry_freshness_and_marks() {
         let store = store();
         let session = store.create_session(&meta()).unwrap();
         store
@@ -1986,15 +1932,9 @@ mod tests {
         store
             .append_message(&session, &Message::assistant("done"))
             .unwrap();
-        store
-            .save_session_state(&session, PLAN_STATE, &serde_json::json!({"done": 2}))
-            .unwrap();
-        store
-            .save_session_state(&session, TRAIL_STATE, &serde_json::json!({"title": "t"}))
-            .unwrap();
         store.set_review_status(&session, "kept").unwrap();
 
-        let rows = store.ledger_rows().unwrap();
+        let rows = store.thread_rows().unwrap();
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
         assert_eq!(row.id, session);
@@ -2003,25 +1943,33 @@ mod tests {
         assert_eq!(row.last_role, "assistant");
         assert_eq!(row.last_reply, "done");
         assert!(row.last_activity_at > 0);
-        assert_eq!(row.plan_json.as_deref(), Some(r#"{"done":2}"#));
-        assert_eq!(row.trail_json.as_deref(), Some(r#"{"title":"t"}"#));
-        assert_eq!(row.settle_json, None);
         assert_eq!(row.review_status, "kept");
-        // Never opened since the mark existed: zero, not NULL.
+        // Never finished, never opened since the marks existed: zero, not NULL.
+        assert_eq!(row.finished_at, 0);
         assert_eq!(row.seen_at, 0);
 
         store
             .save_session_state(&session, SEEN_STATE, &1_753_000_000_i64)
             .unwrap();
-        assert_eq!(store.ledger_rows().unwrap()[0].seen_at, 1_753_000_000);
+        // A mark written by an older build (with a closing note) still reads.
+        store
+            .save_session_state(
+                &session,
+                FINISHED_STATE,
+                &serde_json::json!({"settled_at": 1_753_000_100, "note": "old"}),
+            )
+            .unwrap();
+        let row = &store.thread_rows().unwrap()[0];
+        assert_eq!(row.seen_at, 1_753_000_000);
+        assert_eq!(row.finished_at, 1_753_000_100);
     }
 
     #[test]
-    fn ledger_rows_skip_untitled_and_imported_sessions() {
+    fn thread_rows_skip_untitled_and_imported_sessions() {
         let store = store();
-        // A session opened but never used: no user turn, so no wagon.
+        // A session opened but never used: no user turn, so no row.
         store.create_session(&meta()).unwrap();
-        // An imported transcript: another tool's history, not ours to tie off.
+        // An imported transcript: another tool's history, not ours to finish.
         let conv = crate::import::ImportedConversation {
             source_ref: "ext-1".into(),
             workspace: "/w".into(),
@@ -2031,56 +1979,20 @@ mod tests {
         };
         store.import_conversations("claude-code", &[conv]).unwrap();
 
-        assert!(store.ledger_rows().unwrap().is_empty());
+        assert!(store.thread_rows().unwrap().is_empty());
     }
 
     #[test]
-    fn ledger_rows_flag_a_transcript_stopped_mid_turn() {
+    fn thread_rows_flag_a_transcript_stopped_mid_turn() {
         let store = store();
         let session = store.create_session(&meta()).unwrap();
         store
             .append_message(&session, &Message::user("start big refactor"))
             .unwrap();
 
-        let rows = store.ledger_rows().unwrap();
+        let rows = store.thread_rows().unwrap();
         // Ends on a user message — the reply never arrived.
         assert_eq!(rows[0].last_role, "user");
-    }
-
-    #[test]
-    fn plan_message_candidates_are_newest_first_and_prefiltered() {
-        let store = store();
-        let session = store.create_session(&meta()).unwrap();
-        store
-            .append_message(&session, &Message::user("plan this"))
-            .unwrap();
-        store
-            .append_message(
-                &session,
-                &serde_json::json!({
-                    "role": "assistant", "content": null,
-                    "tool_calls": [{"id": "1", "function": {
-                        "name": "update_plan", "arguments": "{}"}}]
-                }),
-            )
-            .unwrap();
-        store
-            .append_message(&session, &Message::assistant("no plan talk here"))
-            .unwrap();
-        store
-            .append_message(
-                &session,
-                &serde_json::json!({
-                    "role": "assistant",
-                    "content": "I mentioned update_plan in prose only"
-                }),
-            )
-            .unwrap();
-
-        let candidates = store.plan_message_candidates(&session).unwrap();
-        assert_eq!(candidates.len(), 2);
-        assert!(candidates[0].contains("prose only"));
-        assert!(candidates[1].contains("tool_calls"));
     }
 
     #[test]
@@ -2281,7 +2193,7 @@ mod tests {
             store.list_sessions().unwrap()[0].title.as_deref(),
             Some("Parser flake")
         );
-        assert_eq!(store.ledger_rows().unwrap()[0].title, "Parser flake");
+        assert_eq!(store.thread_rows().unwrap()[0].title, "Parser flake");
 
         // A blank name means "title yourself again".
         store.rename_session(&id, "   ").unwrap();
@@ -2290,7 +2202,7 @@ mod tests {
             Some("fix the flaky parser test")
         );
         assert_eq!(
-            store.ledger_rows().unwrap()[0].title,
+            store.thread_rows().unwrap()[0].title,
             "fix the flaky parser test"
         );
 
@@ -2430,9 +2342,9 @@ mod tests {
         assert_eq!(title.chars().count(), TITLE_CHARS);
         assert!(long.starts_with(title));
 
-        let ledger = store.ledger_rows().unwrap();
-        assert_eq!(ledger[0].title.chars().count(), TITLE_CHARS);
-        assert_eq!(ledger[0].last_reply.chars().count(), PREVIEW_CHARS);
+        let threads = store.thread_rows().unwrap();
+        assert_eq!(threads[0].title.chars().count(), TITLE_CHARS);
+        assert_eq!(threads[0].last_reply.chars().count(), PREVIEW_CHARS);
 
         let turns = store.user_turns(&id).unwrap();
         assert_eq!(turns[0].1.chars().count(), PREVIEW_CHARS);
@@ -2795,10 +2707,10 @@ mod tests {
                 .unwrap();
         }
         store
-            .save_session_state(&src, PLAN_STATE, &serde_json::json!({"x": 1}))
+            .save_session_state(&src, RULE_HISTORY_STATE, &serde_json::json!({"x": 1}))
             .unwrap();
         store
-            .save_session_state(&src, SETTLE_STATE, &serde_json::json!({"tied": true}))
+            .save_session_state(&src, FINISHED_STATE, &serde_json::json!({"tied": true}))
             .unwrap();
         // Rewind to before "second": keep seq 0..=1.
         let fork = store.fork_session(&src, Some(1)).unwrap();
@@ -2819,18 +2731,18 @@ mod tests {
             )
             .unwrap();
         assert_eq!(seq, 2);
-        // A cut fork leaves transcript projections behind (the plan as of
-        // "now" would show work the fork never did); everything else rides
-        // along. A plain copy keeps them all.
-        let state: Option<serde_json::Value> = store.session_state(&fork, PLAN_STATE).unwrap();
-        assert_eq!(
-            state, None,
-            "plan is rebuilt from the kept messages, not copied"
-        );
-        let settle: Option<serde_json::Value> = store.session_state(&fork, SETTLE_STATE).unwrap();
-        assert_eq!(settle, Some(serde_json::json!({"tied": true})));
+        // A cut fork leaves transcript projections behind (the rule history
+        // as of "now" would count reminders the fork never saw); everything
+        // else rides along. A plain copy keeps them all.
+        let state: Option<serde_json::Value> =
+            store.session_state(&fork, RULE_HISTORY_STATE).unwrap();
+        assert_eq!(state, None, "projections are not copied across a cut");
+        let finished: Option<serde_json::Value> =
+            store.session_state(&fork, FINISHED_STATE).unwrap();
+        assert_eq!(finished, Some(serde_json::json!({"tied": true})));
         let copy = store.fork_session(&src, None).unwrap();
-        let state: Option<serde_json::Value> = store.session_state(&copy, PLAN_STATE).unwrap();
+        let state: Option<serde_json::Value> =
+            store.session_state(&copy, RULE_HISTORY_STATE).unwrap();
         assert_eq!(state, Some(serde_json::json!({"x": 1})));
         assert_eq!(
             store.user_turns(&src).unwrap(),
@@ -2960,7 +2872,7 @@ mod tests {
         }
         assert_eq!(store.session_meta(&lane).unwrap().parent_session, parent);
 
-        // Chat listings, the ledger, and project counts all skip the lane.
+        // Chat listings, the thread overview, and project counts all skip the lane.
         let listed: Vec<String> = store
             .list_sessions()
             .unwrap()
@@ -2969,7 +2881,7 @@ mod tests {
             .collect();
         assert_eq!(listed, vec![parent.clone()]);
         let board: Vec<String> = store
-            .ledger_rows()
+            .thread_rows()
             .unwrap()
             .into_iter()
             .map(|r| r.id)
@@ -3026,7 +2938,7 @@ mod tests {
 
         // The first usage release shipped this aggregate table at user_version
         // 5. Its replacement needs a new migration so existing databases do
-        // not report their obsolete version as current and skip the ledger.
+        // not report their obsolete version as current and skip the thread overview.
         {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(

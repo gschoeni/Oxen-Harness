@@ -570,7 +570,9 @@ impl Catalog {
         if let Some(key) = api_key.filter(|k| !k.trim().is_empty()) {
             req = req.bearer_auth(key);
         }
-        let res = req.send().await.map_err(|e| format!("{url}: {e}"))?;
+        let res = harness_http::send_with_retry(req, &harness_http::Backoff::brief(), true)
+            .await
+            .map_err(|e| format!("{url}: {e}"))?;
         if !res.status().is_success() {
             return Err(format!("{url}: HTTP {}", res.status()));
         }

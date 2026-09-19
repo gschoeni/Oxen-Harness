@@ -9,7 +9,12 @@ default-run = "oxen-harness-app"
 
 [lib]
 name = "oxen_harness_app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# The desktop binary links the library as an rlib and that is all the desktop
+# bundles (`tauri build`, release-app.yml) need. The Tauri template also lists
+# "staticlib" (iOS) and "cdylib" (Android); each adds a ~1 GB archive to every
+# debug build, so add them back only when a mobile target exists. Cargo cannot
+# vary crate-type by profile, so this is all-or-nothing per checkout.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

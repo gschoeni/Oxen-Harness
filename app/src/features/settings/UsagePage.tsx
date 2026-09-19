@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Button } from "../../components/ui";
 import { useEffect, useMemo, useState } from "react";
 import { dailyUsage, modelUsageBreakdown } from "../../lib/ipc";
 import { compactTokens, formatUsd } from "../../lib/format";
@@ -99,9 +100,9 @@ export function UsagePage() {
           <h3>{reportLabel}</h3>
         </div>
         {selectedDate && (
-          <button className="usage-all-time" onClick={() => setSelectedDate(null)}>
+          <Button size="sm" variant="ghost" onClick={() => setSelectedDate(null)}>
             View all time
-          </button>
+          </Button>
         )}
       </section>
 

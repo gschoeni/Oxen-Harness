@@ -20,6 +20,7 @@
   --text-2xl: 28px;
 
   /* Spacing — 4pt scale */
+  --space-half: 2px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -48,6 +49,24 @@
   --control-h-sm: 26px;
   --control-h: 32px;
   --control-h-lg: 34px;
+
+  /* Button sizes — every text button in the app is one of three sizes, and
+     each size is a (height, side padding, type, icon gap) tuple read from
+     these tokens by `.btn` (components/ui). Feature CSS never sets a button's
+     height, padding, or font size itself: pick `sm` / default / `lg`, and add
+     only what the feature needs (position, reveal-on-hover, max-width).
+     Heights share the control family so a button beside an input lines up. */
+  --btn-h-sm: var(--control-h-sm);
+  --btn-h: var(--control-h);
+  --btn-h-lg: 40px;
+  --btn-px-sm: var(--space-3);
+  --btn-px: var(--space-4);
+  --btn-px-lg: 20px;
+  --btn-text-sm: var(--text-xs);
+  --btn-text: var(--text-md);
+  --btn-text-lg: var(--text-md);
+  --btn-gap-sm: var(--space-1);
+  --btn-gap: var(--space-2);
 
   /* The chat column. Everything centered in the chat — the thread, the
      panels stacked above the composer, the composer itself — is this wide,

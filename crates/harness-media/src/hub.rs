@@ -69,14 +69,14 @@ impl HubRepos {
 
     /// The username this API key belongs to.
     pub async fn whoami(&self) -> Result<String, HubError> {
-        let res = self
-            .http
-            .get(format!("{}/users/me", self.api_root))
-            .bearer_auth(&self.api_key)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| HubError::Http(e.to_string()))?;
+        let res = send(
+            self.http
+                .get(format!("{}/users/me", self.api_root))
+                .bearer_auth(&self.api_key)
+                .timeout(Duration::from_secs(30)),
+            true,
+        )
+        .await?;
         let v: Value = body(res).await?;
         v.get("user")
             .and_then(|u| u.get("username"))
@@ -88,14 +88,14 @@ impl HubRepos {
     /// Whether `namespace/name` exists and this key can see it (a 403 reads
     /// as "not for this key", not as an error — another namespace may be).
     pub async fn repo_exists(&self, namespace: &str, name: &str) -> Result<bool, HubError> {
-        let res = self
-            .http
-            .get(format!("{}/repos/{namespace}/{name}", self.api_root))
-            .bearer_auth(&self.api_key)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| HubError::Http(e.to_string()))?;
+        let res = send(
+            self.http
+                .get(format!("{}/repos/{namespace}/{name}", self.api_root))
+                .bearer_auth(&self.api_key)
+                .timeout(Duration::from_secs(30)),
+            true,
+        )
+        .await?;
         match res.status().as_u16() {
             200..=299 => Ok(true),
             401 => Err(HubError::Unauthorized),
@@ -124,17 +124,32 @@ impl HubRepos {
         if repo.workbench {
             json["workbench"] = Value::Bool(true);
         }
-        let res = self
-            .http
-            .post(format!("{}/repos/", self.api_root))
-            .bearer_auth(&self.api_key)
-            .json(&json)
-            .timeout(Duration::from_secs(60))
-            .send()
-            .await
-            .map_err(|e| HubError::Http(e.to_string()))?;
+        // Creating is not safe to repeat blindly (a 5xx may have created
+        // it); only a 429 or a connect failure is re-sent.
+        let res = send(
+            self.http
+                .post(format!("{}/repos/", self.api_root))
+                .bearer_auth(&self.api_key)
+                .json(&json)
+                .timeout(Duration::from_secs(60)),
+            false,
+        )
+        .await?;
         body::<Value>(res).await.map(drop)
     }
+}
+
+/// Send a hub request with the brief retry schedule (rate limits and blips
+/// are retried after a jittered wait, honoring `Retry-After`), mapping a
+/// transport failure to [`HubError::Http`]. `safe_to_repeat` is false for a
+/// request with side effects — see [`harness_http::send_with_retry`].
+pub(crate) async fn send(
+    request: reqwest::RequestBuilder,
+    safe_to_repeat: bool,
+) -> Result<reqwest::Response, HubError> {
+    harness_http::send_with_retry(request, &harness_http::Backoff::brief(), safe_to_repeat)
+        .await
+        .map_err(|e| HubError::Http(e.to_string()))
 }
 
 /// Parse a hub response: 401 → [`HubError::Unauthorized`], any other

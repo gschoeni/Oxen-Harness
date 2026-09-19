@@ -10,6 +10,7 @@
 // patterns that then silently never fire.
 
 import { useCallback, useEffect, useState } from "react";
+import { Button } from "../../components/ui";
 import { Plus } from "lucide-react";
 import { listRules, saveRules } from "../../lib/ipc";
 import { TeachingNav } from "../settings/TeachingNav";
@@ -166,9 +167,9 @@ export function RulesPage() {
         </div>
 
         {editing === null && (
-          <button type="button" className="tool-add" onClick={startNew}>
+          <Button type="button" variant="outline" className="tool-add" onClick={startNew}>
             <Plus size={15} /> New rule
-          </button>
+          </Button>
         )}
       </section>
 

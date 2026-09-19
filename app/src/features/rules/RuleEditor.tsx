@@ -195,9 +195,9 @@ export function RuleEditor({
 
       <div className="rule-actions">
         {onDelete && (
-          <button type="button" className="rule-delete" onClick={onDelete}>
+          <Button type="button" size="sm" variant="ghost" className="rule-delete" onClick={onDelete}>
             <Trash2 size={14} /> Delete
-          </button>
+          </Button>
         )}
         {problem && <span className="rule-problem">{problem}</span>}
         <div className="rule-actions-buttons">

@@ -213,8 +213,8 @@
   border-radius: 5px;
   background: var(--accent);
   color: var(--on-accent);
-  width: 26px;
-  height: 26px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   display: grid;
   place-items: center;
 }

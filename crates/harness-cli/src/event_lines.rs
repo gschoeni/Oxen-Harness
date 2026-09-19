@@ -247,6 +247,7 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
             delay_ms,
             error,
             switching_to,
+            ..
         } => Cue::Block {
             lines: vec![format!(
                 "  {} {}",

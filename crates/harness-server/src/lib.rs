@@ -135,13 +135,12 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/v1/health", get(health))
         .route("/v1/events", get(events))
         .route("/v1/sessions", get(list_sessions).post(new_session))
-        .route("/v1/ledger", get(ledger_snapshot))
-        .route("/v1/ledger/seen", post(ledger_mark_seen))
+        .route("/v1/threads", get(thread_snapshot))
         .route("/v1/sessions/{id}/seen", post(session_mark_seen))
         .route("/v1/sessions/{id}/title", post(rename_session))
         .route(
-            "/v1/sessions/{id}/settle",
-            post(settle_session).delete(reopen_session),
+            "/v1/sessions/{id}/finish",
+            post(finish_session).delete(reopen_session),
         )
         .route(
             "/v1/sessions/{id}",
@@ -383,23 +382,13 @@ async fn new_session(
     Ok(Json(state.service.new_session().await?))
 }
 
-/// The Ledger board's one read: every native thread with derived status, the
-/// in-flight session ids, and the last-seen mark.
-async fn ledger_snapshot(
+/// Every native thread with derived status, plus the in-flight session ids.
+async fn thread_snapshot(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> ApiResult<Json<harness_protocol::LedgerSnapshot>> {
+) -> ApiResult<Json<harness_protocol::ThreadSnapshot>> {
     authorize(&state, &headers, None)?;
-    Ok(Json(state.service.ledger_snapshot().await?))
-}
-
-/// Record that the user just looked at the board; returns the new mark.
-async fn ledger_mark_seen(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> ApiResult<Json<i64>> {
-    authorize(&state, &headers, None)?;
-    Ok(Json(state.service.mark_ledger_seen()?))
+    Ok(Json(state.service.thread_snapshot().await?))
 }
 
 /// Record that the user just looked at one thread; returns the new mark.
@@ -424,20 +413,17 @@ async fn rename_session(
     Ok(StatusCode::OK)
 }
 
-/// Tie off a thread, optionally with a one-line closing note.
-async fn settle_session(
+/// Mark a thread finished; returns the recorded unix time.
+async fn finish_session(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(request): Json<harness_protocol::SettleRequest>,
-) -> ApiResult<Json<harness_protocol::SettleState>> {
+) -> ApiResult<Json<i64>> {
     authorize(&state, &headers, None)?;
-    Ok(Json(
-        state.service.settle_session(&id, &request.note).await?,
-    ))
+    Ok(Json(state.service.finish_session(&id).await?))
 }
 
-/// Bring a settled thread back to the trail.
+/// Reopen a finished thread.
 async fn reopen_session(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

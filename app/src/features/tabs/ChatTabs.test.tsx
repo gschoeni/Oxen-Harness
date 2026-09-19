@@ -290,6 +290,23 @@ describe("chat tab shortcuts", () => {
     await waitFor(() => expect(useStore.getState().session?.session_id).toBe("s3"));
   });
 
+  it("⌘⇧→ / ⌘⇧← cycle the tabs too, wrapping at both ends", async () => {
+    useStore.setState({ chatTabs: { [W]: ["s1", "s2", "s3"] } });
+    render(<Shortcuts />);
+    press("ArrowRight", { metaKey: true, shiftKey: true });
+    await waitFor(() => expect(useStore.getState().session?.session_id).toBe("s2"));
+    press("ArrowRight", { metaKey: true, shiftKey: true });
+    await waitFor(() => expect(useStore.getState().session?.session_id).toBe("s3"));
+    press("ArrowRight", { metaKey: true, shiftKey: true });
+    await waitFor(() => expect(useStore.getState().session?.session_id).toBe("s1"));
+    press("ArrowLeft", { metaKey: true, shiftKey: true });
+    await waitFor(() => expect(useStore.getState().session?.session_id).toBe("s3"));
+    // Plain ⌘← (no shift) is the composer's line-start jump, not a tab switch.
+    press("ArrowLeft", { metaKey: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(useStore.getState().session?.session_id).toBe("s3");
+  });
+
   it("stands down while Home covers the chat — except the history", () => {
     useStore.setState({ homeOpen: true });
     render(<Shortcuts />);

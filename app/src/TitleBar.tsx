@@ -6,7 +6,6 @@
 // right edge, clear of the macOS traffic lights on the left.
 
 import { Activity, Code2, Files, Gamepad2, Settings } from "lucide-react";
-import { setUi } from "./lib/uiState";
 import { useActiveProject, useStore } from "./lib/store";
 
 export function TitleBar() {
@@ -24,9 +23,9 @@ export function TitleBar() {
   const setGameDockOpen = useStore((s) => s.setGameDockOpen);
   const openInspector = useStore((s) => s.openInspector);
   const runningCount = useStore((s) => {
-    const sessions = new Set(s.ledger?.running ?? []);
+    const sessions = new Set(s.threadsSnapshot?.running ?? []);
     for (const [id, status] of Object.entries(s.runStatus)) {
-      // Live state wins over an older Ledger snapshot in either direction.
+      // Live state wins over an older snapshot in either direction.
       if (status === "running") sessions.add(id);
       else sessions.delete(id);
     }
@@ -53,8 +52,7 @@ export function TitleBar() {
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
   const openSettings = useStore((s) => s.openSettings);
 
-  function openLedger() {
-    setUi("homeView", "ledger");
+  function openHome() {
     setSettingsOpen(false);
     setHomeOpen(true);
   }
@@ -66,9 +64,9 @@ export function TitleBar() {
       <div className="app-titlebar-actions">
         <button
           className={`titlebar-running ${runningCount > 0 ? "active" : ""}`}
-          onClick={openLedger}
-          title={`${runningCount} running — open the Ledger`}
-          aria-label={`${runningCount} running — open the Ledger`}
+          onClick={openHome}
+          title={`${runningCount} running — go Home`}
+          aria-label={`${runningCount} running — go Home`}
         >
           <Activity size={14} />
           <span>{runningCount}</span>

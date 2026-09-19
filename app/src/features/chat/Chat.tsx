@@ -12,7 +12,7 @@ import { AgentView } from "./AgentView";
 import { TasksPanel } from "./TasksPanel";
 import { MediaPanel } from "./MediaPanel";
 import { Plan } from "./Plan";
-import { TrailStrip } from "../ledger/TrailStrip";
+import { ThreadStatus } from "./ThreadStatus";
 import { ChatTabs } from "../tabs/ChatTabs";
 import { Composer } from "./Composer";
 import { Queue } from "./Queue";
@@ -231,7 +231,7 @@ export function Chat() {
     >
       <ChatTabs />
       <div className="messages-wrap">
-        <TrailStrip />
+        <ThreadStatus />
         <Plan />
         {showReopenCanvas && lastCanvas && (
           <button

@@ -22,7 +22,7 @@ import {
 import { History, Plus, X } from "lucide-react";
 import { useStore } from "../../lib/store";
 import type { Item } from "../chat/thread";
-import { useThreads } from "../ledger/useBoard";
+import { useThreads } from "../threads/useThreads";
 import { DeleteChatModal } from "../history/DeleteChatModal";
 import { StatusDot } from "./StatusDot";
 import { TabMenu, type MenuAt } from "./TabMenu";

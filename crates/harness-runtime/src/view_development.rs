@@ -24,8 +24,14 @@ pub struct Diagnostic {
 }
 impl Diagnostic {
     fn error(message: impl Into<String>) -> Self {
+        Self::at("error", message)
+    }
+    fn warning(message: impl Into<String>) -> Self {
+        Self::at("warning", message)
+    }
+    fn at(level: &str, message: impl Into<String>) -> Self {
         Self {
-            level: "error".into(),
+            level: level.into(),
             message: message.into(),
             file: None,
             line: None,
@@ -88,33 +94,51 @@ impl Development {
             ".oxen-harness/view-dev/{}.json",
             revision_of(format!("{session}\0{source}").as_bytes())
         );
+        let fresh = || Status {
+            source: source.into(),
+            report_path: report_path.clone(),
+            active: false,
+            paused: false,
+            dirty: false,
+            mounted: false,
+            generation: 0,
+            installed_digest: None,
+            candidate: None,
+            package: None,
+            previous: None,
+            diagnostics: vec![],
+            runtime: vec![],
+            test: None,
+        };
+        // The report is a convenience cache of the last studio state. One
+        // that can't be read — truncated by a crash mid-write, or written by
+        // a build with a different schema — must not lock the author out of
+        // the view: start over and say so, since every studio action opens
+        // the source through here.
+        let mut reset = None;
         let mut status = match docs.read(&report_path) {
-            Ok(document) => serde_json::from_str::<Status>(&document.content)
-                .map_err(|e| format!("read view report {report_path}: {e}"))?,
+            Ok(document) => match serde_json::from_str::<Status>(&document.content) {
+                Ok(saved) if saved.source == source && saved.report_path == report_path => saved,
+                Ok(_) => {
+                    reset = Some("the saved view report belongs to a different view".to_string());
+                    fresh()
+                }
+                Err(e) => {
+                    reset = Some(format!("the saved view report could not be read ({e})"));
+                    fresh()
+                }
+            },
             Err(crate::documents::DocumentError::Io { source: error, .. })
                 if error.kind() == std::io::ErrorKind::NotFound =>
             {
-                Status {
-                    source: source.into(),
-                    report_path: report_path.clone(),
-                    active: false,
-                    paused: false,
-                    dirty: false,
-                    mounted: false,
-                    generation: 0,
-                    installed_digest: None,
-                    candidate: None,
-                    package: None,
-                    previous: None,
-                    diagnostics: vec![],
-                    runtime: vec![],
-                    test: None,
-                }
+                fresh()
             }
             Err(e) => return Err(e.to_string()),
         };
-        if status.source != source || status.report_path != report_path {
-            return Err("view report belongs to a different authoring context".into());
+        if let Some(reason) = reset {
+            status.diagnostics.push(Diagnostic::warning(format!(
+                "{reason}; {report_path} was reset, so the previous preview state is gone"
+            )));
         }
         status.active = false;
         status.mounted = false;
@@ -161,6 +185,7 @@ impl Development {
             .resolve(&self.status.source)
             .map_err(|e| e.to_string())?;
         let (package, files) = view_packages::inspect_files(&source)?;
+        view_packages::check_manifest_limits(&package.manifest)?;
         if self.validated_digest.as_deref() == Some(&package.digest) {
             return Ok((package, files));
         }
@@ -557,6 +582,39 @@ mod tests {
         assert!(restored.lease().is_err());
         let other = Development::new(docs, "chat", "views/b", cache.path().into()).unwrap();
         assert_ne!(other.status.report_path, report);
+    }
+    #[tokio::test]
+    async fn an_unreadable_report_is_reset_with_a_warning_instead_of_locking_the_view() {
+        let project = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let docs = Documents::new(project.path()).unwrap();
+        scaffold(&docs, "views/a", "a", "A").await.unwrap();
+        let mut first =
+            Development::new(docs.clone(), "chat", "views/a", cache.path().into()).unwrap();
+        first.check().await.unwrap();
+        let report = project.path().join(&first.status.report_path);
+        drop(first);
+        // A crash mid-write leaves a truncated file; an older build leaves a
+        // different schema. Either way the studio must still open.
+        std::fs::write(&report, "{\"source\":\"views/a\",\"report_path\":").unwrap();
+        let mut restored =
+            Development::new(docs.clone(), "chat", "views/a", cache.path().into()).unwrap();
+        assert!(restored.status.candidate.is_none());
+        assert_eq!(restored.status.diagnostics.len(), 1);
+        assert_eq!(restored.status.diagnostics[0].level, "warning");
+        assert!(
+            restored.status.diagnostics[0]
+                .message
+                .contains("could not be read"),
+            "{:?}",
+            restored.status.diagnostics[0]
+        );
+        // The next action rewrites a readable report over the broken one.
+        restored.check().await.unwrap();
+        assert!(restored.status.candidate.is_some());
+        let saved: Status =
+            serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
+        assert_eq!(saved.source, "views/a");
     }
     #[tokio::test]
     async fn reload_protects_drafts_and_can_return_to_the_previous_preview_revision() {

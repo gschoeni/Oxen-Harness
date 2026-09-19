@@ -127,15 +127,18 @@ impl TypedTool for WebSearchTool {
             ))
         })?;
 
-        let response = self
+        // Brave meters by the second on the free plan; a 429 or a blip is
+        // retried briefly rather than failing the model's search outright.
+        let request = self
             .http
             .get(&self.endpoint)
             .header("X-Subscription-Token", api_key)
             .header("Accept", "application/json")
-            .query(&[("q", query), ("count", &count.to_string())])
-            .send()
-            .await
-            .map_err(|e| ToolError::Execution(format!("web search request failed: {e}")))?;
+            .query(&[("q", query), ("count", &count.to_string())]);
+        let response =
+            harness_http::send_with_retry(request, &harness_http::Backoff::brief(), true)
+                .await
+                .map_err(|e| ToolError::Execution(format!("web search request failed: {e}")))?;
 
         let status = response.status();
         let body = crate::http_body::text(response, 2 * 1024 * 1024)

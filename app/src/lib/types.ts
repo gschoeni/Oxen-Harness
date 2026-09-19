@@ -112,40 +112,9 @@ export interface Project {
   last_used_at: number | null;
 }
 
-/** A compact plan reading — "3/5, currently: Running tests" — persisted per
- *  session by the agent so the Ledger renders progress without a transcript. */
-export interface PlanProgress {
-  done: number;
-  total: number;
-  /** The in-progress item's present-continuous label, when one is underway. */
-  active: string | null;
-}
-
-/** One named stage on a thread's charted journey. */
-export interface TrailWaypoint {
-  /** Stage name, e.g. "define", "implement". */
-  name: string;
-  status: "ahead" | "current" | "done";
-}
-
-/** The journey the model charted via `update_trail`: a self-chosen thread
- *  title plus the macro stages the work passes through. */
-export interface TrailProgress {
-  title: string;
-  waypoints: TrailWaypoint[];
-}
-
-/** The mark a settled ("tied off") thread carries. Absence means open. */
-export interface SettleState {
-  /** Unix seconds when the thread was tied off. */
-  settled_at: number;
-  /** The user's one-line closing note; empty when skipped. */
-  note: string;
-}
-
-/** One thread as the Ledger renders it: a native session plus everything
- *  derived that decides where its wagon sits on the trail. */
-export interface LedgerEntry {
+/** One chat as the threads overview sees it: a native session plus the
+ *  facts that decide whether it needs the user. */
+export interface ThreadEntry {
   id: string;
   workspace: string;
   model: string;
@@ -154,17 +123,15 @@ export interface LedgerEntry {
   last_activity_at: number;
   /** The first user message's text — the thread's title. */
   title: string;
-  /** The opening of the newest assistant message — the thread's last word,
-   *  shown on its waystation card. Empty when the model never replied. */
+  /** The opening of the newest assistant message. Empty when the model
+   *  never replied. */
   last_reply: string;
   message_count: number;
   /** The stored transcript stops on a user message or tool result — a reply
    *  never arrived. Mid-turn and not running means left dangling. */
   mid_turn: boolean;
-  plan: PlanProgress | null;
-  /** The model-charted journey; its `title` supersedes `title` for display. */
-  trail: TrailProgress | null;
-  settle: SettleState | null;
+  /** Unix seconds the user marked this thread finished; 0 while open. */
+  finished_at: number;
   /** Training-data curation: "" (unreviewed), "kept", or "rejected". */
   review_status: ReviewStatus;
   /** Unix seconds the user last looked at this thread (opened its chat or
@@ -174,28 +141,13 @@ export interface LedgerEntry {
   seen_at: number;
 }
 
-/** Everything the Ledger board needs, in one read. */
-export interface LedgerSnapshot {
+/** Every native thread plus the in-flight session ids, in one read. */
+export interface ThreadSnapshot {
   /** Every native thread, newest activity first. */
-  entries: LedgerEntry[];
+  entries: ThreadEntry[];
   /** Session ids with work in flight (a turn, review, or loop) — from the
    *  host's authoritative registry, correct even after a UI restart. */
   running: string[];
-  /** Unix seconds the Ledger was last marked seen; 0 on first visit. */
-  last_seen: number;
-}
-
-/** A workspace's git state, rendered on its wagon-train banner. Per-workspace
- *  by design: git cannot attribute a dirty tree to any one conversation. */
-export interface GitOverview {
-  /** The checked-out branch, or a short sha when HEAD is detached. */
-  branch: string;
-  /** Files changed relative to HEAD (staged, unstaged, untracked). */
-  dirty_files: number;
-  /** Commits ahead of upstream; 0 when there is no upstream. */
-  ahead: number;
-  behind: number;
-  has_upstream: boolean;
 }
 
 export interface StartProjectInput {
@@ -593,11 +545,42 @@ export interface RetryEvent {
   max_attempts: number;
   /** How long the agent waits before the next attempt. */
   delay_ms: number;
+  /** The one-line reason, as shown in the notice. */
   error: string;
   /** Set when the attempts on the current model are spent and the call moves to
    *  a configured fallback instead of failing the turn. The session model is
    *  unchanged — only this call switches. */
   switching_to?: string;
+  /** The model whose call failed and the endpoint it was sent to. Empty from a
+   *  server that predates the detail fields. */
+  model?: string;
+  endpoint?: string;
+  /** The HTTP status of the failed reply, when there was one. */
+  status?: number;
+  /** What the provider actually said — the raw error body, or the transport
+   *  error chain — for the error-detail view. Absent when `error` says it all. */
+  detail?: string;
+}
+
+/** Everything the UI knows about one failed model call, kept on the thread
+ *  notice (and the final "continue" card) so the faint one-liner can open into
+ *  a view that actually helps debug: where it went, what came back, and what
+ *  the agent did next. */
+export interface ModelErrorDetail {
+  /** When the failure was seen, epoch milliseconds. */
+  at: number;
+  /** The one-line reason (an `LlmError`'s display form). */
+  error: string;
+  model?: string;
+  endpoint?: string;
+  status?: number;
+  /** The raw provider response / transport error chain, when there was one. */
+  detail?: string;
+  /** Which attempt failed (1-based) out of how many the policy allows. */
+  attempt?: number;
+  maxAttempts?: number;
+  /** What happened next: a timed retry, or a switch to a fallback model. */
+  next?: { kind: "retry"; delayMs: number } | { kind: "switch"; model: string };
 }
 
 /** One stream rule as stored in rules.json — a pattern that watches the

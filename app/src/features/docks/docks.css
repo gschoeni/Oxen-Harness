@@ -114,8 +114,8 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   padding: 0;
   background: var(--bg);
   border: 1px solid var(--separator);
@@ -185,8 +185,8 @@
 .dock-rail-btn {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: var(--control-h-lg);
+  height: var(--control-h-lg);
   padding: 0;
   background: transparent;
   border: 1px solid transparent;

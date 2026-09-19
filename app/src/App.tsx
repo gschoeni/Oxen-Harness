@@ -6,7 +6,7 @@ import { DockColumn, useActiveDock, useDockShortcuts } from "./features/docks/Do
 import { docksOnSide, useAvailableDocks } from "./features/docks/docks";
 import { planColumns, type ColumnPlan, type LayoutPlan } from "./features/docks/layout";
 import { Settings } from "./features/settings/Settings";
-import { HomePage } from "./features/ledger/HomePage";
+import { HomePage } from "./features/home/HomePage";
 import { InspectorDrawer } from "./features/inspector/Inspector";
 import { HistoryModal } from "./features/history/HistoryModal";
 import { useChatTabShortcuts } from "./features/tabs/shortcuts";
@@ -87,7 +87,7 @@ export default function App() {
       </div>
       {/* Order is load-bearing: both are full-window takeovers in the same
           stacking band (`--z-overlay`), so whichever renders last paints on
-          top. Settings opens *over* the Ledger — it's reachable from there —
+          top. Settings opens *over* Home — it's reachable from there —
           and closing it returns to whatever it covered. */}
       {homeOpen && <HomePage />}
       {settingsOpen && <Settings />}

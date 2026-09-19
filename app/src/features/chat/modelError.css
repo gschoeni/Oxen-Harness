@@ -1,0 +1,135 @@
+/* A failed model call: the clickable retry notice in the thread and the detail
+   view behind it. The notice keeps the quiet, centered `.msg.notice` look (a
+   hiccup mid-turn is not an alarm) but reads as openable — an icon, a hover
+   lift, and a small "Details ›" tail. */
+
+.msg.notice.model-error-notice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  background: none;
+  border: none;
+  font: inherit;
+  font-style: italic;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-2);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.msg.notice.model-error-notice:hover,
+.msg.notice.model-error-notice:focus-visible {
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  outline: none;
+}
+.msg.notice.model-error-notice:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.model-error-notice-icon {
+  flex-shrink: 0;
+  color: var(--warning);
+}
+.model-error-notice-text {
+  min-width: 0;
+}
+.model-error-notice-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-half);
+  font-style: normal;
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* ---- detail view ---------------------------------------------------------- */
+
+.model-error {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.model-error-final {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-radius: var(--radius-xs);
+  background: var(--danger-soft);
+  color: var(--danger);
+  line-height: 1.45;
+  word-break: break-word;
+}
+.model-error-final .label-caps {
+  color: var(--danger);
+}
+
+.model-error-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+}
+.model-error-facts dt {
+  color: var(--text-tertiary);
+}
+.model-error-facts dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-all;
+}
+.model-error-mono {
+  font-family: var(--font-readout);
+  font-size: 0.95em;
+}
+
+.model-error-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.model-error-section h3 {
+  margin: 0;
+}
+.model-error-message {
+  margin: 0;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.model-error-body {
+  margin: 0;
+  max-height: 40vh;
+  overflow: auto;
+  padding: var(--space-3);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  font-family: var(--font-readout);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.model-error-empty {
+  margin: 0;
+  line-height: 1.45;
+}
+.model-error-foot {
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+.model-error-foot code {
+  font-family: var(--font-readout);
+  font-size: 0.95em;
+}

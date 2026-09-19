@@ -206,12 +206,12 @@
 .history-item.needy.broken {
   border-color: color-mix(in srgb, var(--danger) 22%, transparent);
 }
-/* Settled: tied off, nothing owed — quieted, but still a click away. */
-.history-item.settled {
+/* Finished: nothing owed — quieted, but still a click away. */
+.history-item.finished {
   opacity: 0.66;
 }
-.history-item.settled.highlighted,
-.history-item.settled.active {
+.history-item.finished.highlighted,
+.history-item.finished.active {
   opacity: 1;
 }
 /* The main clickable area of a row (everything but the delete icon). */

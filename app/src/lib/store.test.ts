@@ -6,7 +6,7 @@ import { useStore } from "./store";
 import { getUi } from "./uiState";
 import * as ipc from "../test/ipcMock";
 import { resetAll } from "../test/utils";
-import type { LedgerEntry } from "./types";
+import type { ThreadEntry } from "./types";
 
 beforeEach(resetAll);
 
@@ -53,16 +53,13 @@ describe("store: editor git state + wrap", () => {
 });
 
 describe("store: navigation", () => {
-  it("starts at the Ledger, the application's navigation root", () => {
+  it("starts at Home, the application's navigation root", () => {
     expect(useStore.getState().homeOpen).toBe(true);
   });
 
-  it("riding out of the Ledger records the visit; opening refreshes the board", async () => {
-    useStore.getState().setHomeOpen(false);
-    expect(ipc.ledgerMarkSeen).toHaveBeenCalled();
-
+  it("opening Home refreshes the thread snapshot", async () => {
     useStore.getState().setHomeOpen(true);
-    await vi.waitFor(() => expect(ipc.ledgerSnapshot).toHaveBeenCalled());
+    await vi.waitFor(() => expect(ipc.threadsSnapshot).toHaveBeenCalled());
   });
 
   it("targets a project home explicitly and clears that target for the project list", () => {
@@ -76,117 +73,44 @@ describe("store: navigation", () => {
 });
 
 describe("store: per-thread seen marks", () => {
-  it("opening a chat marks it seen, then repaints the board against the new mark", async () => {
+  it("opening a chat marks it seen, then repaints the verdicts against the new mark", async () => {
     await useStore.getState().resume("older");
     await vi.waitFor(() => expect(ipc.sessionMarkSeen).toHaveBeenCalledWith("older"));
-    await vi.waitFor(() => expect(ipc.ledgerSnapshot).toHaveBeenCalled());
+    await vi.waitFor(() => expect(ipc.threadsSnapshot).toHaveBeenCalled());
     // The mark lands BEFORE the snapshot that repaints — never the other way.
     const markAt = ipc.sessionMarkSeen.mock.invocationCallOrder[0];
-    const order = ipc.ledgerSnapshot.mock.invocationCallOrder;
+    const order = ipc.threadsSnapshot.mock.invocationCallOrder;
     const lastSnapshot = order[order.length - 1];
     expect(lastSnapshot).toBeGreaterThan(markAt);
   });
 });
 
-describe("store: trail dust", () => {
-  it("tool starts raise dust for any session, cached thread or not", () => {
-    // No thread cached for "bg" — the chat runs entirely in the background —
-    // yet the Ledger still sees its wagon working.
-    useStore.getState().ingestTool({ session: "bg", name: "read_file", phase: "start", detail: "" });
-    useStore.getState().ingestTool({ session: "bg", name: "read_file", phase: "end", detail: "" });
-    useStore.getState().ingestTool({ session: "bg", name: "git", phase: "start", detail: "" });
-    expect(useStore.getState().trailDust.bg).toBe(2);
+describe("store: the finished boolean", () => {
+  it("marks a thread finished, then re-reads the snapshot; reopening does the same", async () => {
+    await useStore.getState().finishThread("s1");
+    expect(ipc.sessionFinish).toHaveBeenCalledWith("s1");
+    expect(ipc.threadsSnapshot).toHaveBeenCalledTimes(1);
+
+    await useStore.getState().reopenThread("s1");
+    expect(ipc.sessionReopen).toHaveBeenCalledWith("s1");
+    expect(ipc.threadsSnapshot).toHaveBeenCalledTimes(2);
   });
 
-  it("tool starts keep the riding-now readout current for background sessions", () => {
-    useStore
-      .getState()
-      .ingestTool({ session: "bg", name: "read_file", phase: "start", detail: "src/a.rs" });
-    expect(useStore.getState().trailActivity.bg?.name).toBe("read_file");
-    useStore
-      .getState()
-      .ingestTool({ session: "bg", name: "run_shell", phase: "start", detail: "cargo test" });
-    const activity = useStore.getState().trailActivity.bg;
-    expect(activity?.name).toBe("run_shell");
-    expect(activity?.detail).toBe("cargo test");
-  });
-});
-
-describe("store: ledger refreshes", () => {
-  const entry = (id: string, workspace: string, settled = false): import("./types").LedgerEntry => ({
-    id,
-    workspace,
-    model: "m",
-    created_at: 1,
-    last_activity_at: 1,
-    title: "t",
-    last_reply: "",
-    message_count: 1,
-    mid_turn: false,
-    seen_at: 0,
-    plan: null,
-    trail: null,
-    review_status: "",
-    settle: settled ? { settled_at: 1, note: "" } : null,
-  });
-
-  it("a landed update_trail repaints the board even with the chat open (Home closed)", async () => {
-    useStore.setState({ homeOpen: false });
-    vi.mocked(ipc.ledgerSnapshot).mockClear();
-    useStore.getState().ingestTool({ session: "bg", name: "update_trail", phase: "end", detail: "" });
-    await vi.waitFor(() => expect(ipc.ledgerSnapshot).toHaveBeenCalled());
-  });
-
-  it("an older refresh's git probe never overwrites a newer board", async () => {
-    vi.mocked(ipc.ledgerSnapshot).mockResolvedValue({
-      entries: [entry("s1", "/work/app")],
-      running: [],
-      last_seen: 0,
-    });
-    // The older refresh's git probe hangs (a slow repo) while a newer refresh
-    // starts, completes with the pushed state, and paints. The stale probe
-    // then resolves LAST with pre-push state — it must be discarded.
-    let releaseOld: (v: Record<string, unknown>) => void = () => {};
-    vi.mocked(ipc.workspaceGit).mockImplementationOnce(
+  it("an older refresh never overwrites a newer snapshot", async () => {
+    // The older read hangs while a newer one starts, completes, and paints;
+    // the stale one then resolves LAST — it must be discarded.
+    let releaseOld: (v: { entries: never[]; running: string[] }) => void = () => {};
+    vi.mocked(ipc.threadsSnapshot).mockImplementationOnce(
       () => new Promise((resolve) => (releaseOld = resolve)) as never,
     );
-    const older = useStore.getState().refreshLedger();
-    await vi.waitFor(() => expect(ipc.workspaceGit).toHaveBeenCalled());
+    const older = useStore.getState().refreshThreads();
+    vi.mocked(ipc.threadsSnapshot).mockResolvedValueOnce({ entries: [], running: ["new"] });
+    await useStore.getState().refreshThreads();
+    expect(useStore.getState().threadsSnapshot?.running).toEqual(["new"]);
 
-    vi.mocked(ipc.workspaceGit).mockResolvedValueOnce({
-      "/work/app": { branch: "main", dirty_files: 0, ahead: 0, behind: 0, has_upstream: true },
-    } as never);
-    await useStore.getState().refreshLedger();
-    expect(useStore.getState().ledgerGit["/work/app"]?.ahead).toBe(0);
-
-    releaseOld({
-      "/work/app": { branch: "main", dirty_files: 0, ahead: 1, behind: 0, has_upstream: true },
-    });
+    releaseOld({ entries: [], running: ["old"] });
     await older;
-    // The stale probe was discarded — the board still shows the pushed state.
-    expect(useStore.getState().ledgerGit["/work/app"]?.ahead).toBe(0);
-  });
-
-  it("a workspace whose threads all settled sheds its git banner", async () => {
-    vi.mocked(ipc.ledgerSnapshot).mockResolvedValue({
-      entries: [entry("s1", "/work/app")],
-      running: [],
-      last_seen: 0,
-    });
-    vi.mocked(ipc.workspaceGit).mockResolvedValue({
-      "/work/app": { branch: "main", dirty_files: 1, ahead: 0, behind: 0, has_upstream: true },
-    } as never);
-    await useStore.getState().refreshLedger();
-    expect(useStore.getState().ledgerGit["/work/app"]).toBeDefined();
-
-    vi.mocked(ipc.ledgerSnapshot).mockResolvedValue({
-      entries: [entry("s1", "/work/app", true)],
-      running: [],
-      last_seen: 0,
-    });
-    await useStore.getState().refreshLedger();
-    expect(useStore.getState().ledgerGit).toEqual({});
-    expect(ipc.workspaceGit).toHaveBeenCalledTimes(1); // no probe for settled-only
+    expect(useStore.getState().threadsSnapshot?.running).toEqual(["new"]);
   });
 });
 
@@ -313,6 +237,76 @@ describe("store: sessions", () => {
     useStore.setState({ session: { ...ipc.sampleSession, session_id: "same" } });
     await useStore.getState().resume("same");
     expect(ipc.resumeSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("store: retry notices", () => {
+  it("ingestRetry appends a one-line notice carrying the failure's detail", () => {
+    useStore.setState({ threads: { s1: [] } });
+    useStore.getState().ingestRetry({
+      session: "s1",
+      attempt: 1,
+      max_attempts: 4,
+      delay_ms: 1000,
+      error: "Oxen API error (502): The model provider returned an error.",
+      model: "deepseek-v4-pro",
+      endpoint: "https://hub.oxen.ai/api/ai",
+      status: 502,
+      detail: '{"error":{"title":"The model provider returned an error."}}',
+    });
+    const [notice] = useStore.getState().threads["s1"];
+    expect(notice).toMatchObject({
+      kind: "notice",
+      text: "Model call failed (Oxen API error (502): The model provider returned an error.) — retrying in 1s (attempt 2 of 4)",
+      error: {
+        error: "Oxen API error (502): The model provider returned an error.",
+        model: "deepseek-v4-pro",
+        endpoint: "https://hub.oxen.ai/api/ai",
+        status: 502,
+        detail: '{"error":{"title":"The model provider returned an error."}}',
+        attempt: 1,
+        maxAttempts: 4,
+        next: { kind: "retry", delayMs: 1000 },
+      },
+    });
+    expect((notice as unknown as { error: { at: number } }).error.at).toBeGreaterThan(0);
+  });
+
+  it("ingestRetry records a model switch and tolerates a server without the detail fields", () => {
+    useStore.setState({ threads: { s1: [] } });
+    useStore.getState().ingestRetry({
+      session: "s1",
+      attempt: 4,
+      max_attempts: 4,
+      delay_ms: 0,
+      error: "Oxen API error (503): overloaded",
+      switching_to: "claude-sonnet-5",
+      // An older server sends empty strings / nothing for the new fields.
+      model: "",
+      endpoint: "",
+    });
+    const [notice] = useStore.getState().threads["s1"];
+    expect(notice).toMatchObject({
+      kind: "notice",
+      text: "Model call failed (Oxen API error (503): overloaded) — 4 attempts spent, continuing on claude-sonnet-5",
+      error: { next: { kind: "switch", model: "claude-sonnet-5" } },
+    });
+    const err = (notice as unknown as { error: Record<string, unknown> }).error;
+    expect(err.model).toBeUndefined();
+    expect(err.endpoint).toBeUndefined();
+    expect(err.status).toBeUndefined();
+    expect(err.detail).toBeUndefined();
+  });
+
+  it("ingestRetry ignores sessions whose thread is not loaded", () => {
+    useStore.getState().ingestRetry({
+      session: "ghost",
+      attempt: 1,
+      max_attempts: 4,
+      delay_ms: 1000,
+      error: "boom",
+    });
+    expect(useStore.getState().threads["ghost"]).toBeUndefined();
   });
 });
 
@@ -826,14 +820,14 @@ describe("store: chat tabs", () => {
 });
 
 describe("store: renaming a chat", () => {
-  it("patches the listed title at once, writes it, then re-reads the list and board", async () => {
+  it("patches the listed title at once, writes it, then re-reads the list and snapshot", async () => {
     useStore.setState({
       sessions: [{ id: "a", workspace: "/w", model: "m", created_at: 1, title: "first words", message_count: 2, review_status: "", source: "" }],
     });
     await useStore.getState().renameSession("a", "  Parser flake ");
     expect(ipc.renameSession).toHaveBeenCalledWith("a", "Parser flake");
     expect(ipc.listSessions).toHaveBeenCalled();
-    expect(ipc.ledgerSnapshot).toHaveBeenCalled();
+    expect(ipc.threadsSnapshot).toHaveBeenCalled();
   });
 
   it("a blank name clears the custom title without touching the list", async () => {
@@ -891,7 +885,7 @@ describe("store: entering a project opens its loose ends as tabs", () => {
   beforeEach(() => {
     ipc.newSession.mockImplementation(async () => ({ ...ipc.sampleSession, session_id: "new-session-id", workspace: "/w" }));
   });
-  const entry = (id: string, workspace: string, extra: Partial<LedgerEntry> = {}): LedgerEntry => ({
+  const entry = (id: string, workspace: string, extra: Partial<ThreadEntry> = {}): ThreadEntry => ({
     id,
     workspace,
     model: "m",
@@ -901,27 +895,23 @@ describe("store: entering a project opens its loose ends as tabs", () => {
     last_reply: "",
     message_count: 2,
     mid_turn: false,
-    plan: null,
-    trail: null,
-    settle: null,
+    finished_at: 0,
     review_status: "",
     seen_at: 0,
     ...extra,
   });
 
-  it("opens open threads (needs you first, then newest), skipping settled and archived ones", async () => {
-    ipc.ledgerSnapshot.mockResolvedValue({
+  it("opens open threads (needs you first, then newest), skipping finished ones", async () => {
+    ipc.threadsSnapshot.mockResolvedValue({
       entries: [
         entry("older", "/w", { last_activity_at: now - 7_200 }),
         entry("newer", "/w"),
         // The reply never arrived: needs the user, so it leads.
         entry("dangling", "/w", { mid_turn: true, last_activity_at: now - 10_000 }),
-        entry("tied", "/w", { settle: { settled_at: now - 60, note: "" } }),
-        entry("archived", "/w", { last_activity_at: now - 20 * 86_400 }),
+        entry("done", "/w", { finished_at: now - 60 }),
         entry("elsewhere", "/other"),
       ],
       running: [],
-      last_seen: now,
     });
     await useStore.getState().prepareProject("/w");
     expect(useStore.getState().chatTabs["/w"]).toEqual(["dangling", "newer", "older", "new-session-id"]);
@@ -929,17 +919,16 @@ describe("store: entering a project opens its loose ends as tabs", () => {
   });
 
   it("keeps tabs already open where they were, adding only what's missing", async () => {
-    ipc.ledgerSnapshot.mockResolvedValue({
+    ipc.threadsSnapshot.mockResolvedValue({
       entries: [entry("a", "/w"), entry("b", "/w", { last_activity_at: now - 7_200 })],
       running: [],
-      last_seen: now,
     });
     useStore.setState({ chatTabs: { "/w": ["b", "mine"] } });
     await useStore.getState().prepareProject("/w");
     expect(useStore.getState().chatTabs["/w"]).toEqual(["b", "mine", "a", "new-session-id"]);
   });
 
-  it("a project with nothing on the trail just gets the fresh chat", async () => {
+  it("a project with no open chats just gets the fresh chat", async () => {
     ipc.newSession.mockImplementation(async () => ({ ...ipc.sampleSession, session_id: "new-session-id", workspace: "/quiet" }));
     await useStore.getState().prepareProject("/quiet");
     expect(useStore.getState().chatTabs["/quiet"]).toEqual(["new-session-id"]);

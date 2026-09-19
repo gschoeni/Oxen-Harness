@@ -60,7 +60,7 @@ The catalog (see `harness-protocol/src/event.rs` for the exact fields):
 | `agent.tool_delta` | streaming fragments of a tool call's JSON args |
 | `agent.tool_progress` | a running tool's live output (a shell command streaming), keyed by `call_id` |
 | `agent.usage` | live token usage around each model call |
-| `agent.compacted` / `agent.compression` / `agent.retry` | context + resilience notices |
+| `agent.compacted` / `agent.compression` / `agent.retry` | context + resilience notices (`agent.retry` names the failed call's `model` and `endpoint`, its HTTP `status` when there was a reply, and `detail`: the provider's raw error body or the transport error chain — the material behind the one-line `error`, for a client's error-detail view) |
 | `agent.notice` | a one-line notice about something the agent did on its own (`kind` = `background_task`: a finished task's output was delivered to the model; `nudge`: the model is being re-called with a corrective; `fleet`: a `spawn_agents` fleet run with `wait: false` finished and its report was delivered) |
 | `agent.question` | `ask_user_question` — answer via `POST /v1/questions/{id}/answer` |
 | `agent.approval_request` | permission gate — answer via `POST /v1/approvals/{id}/answer` |
@@ -116,29 +116,25 @@ forces one more model round rather than being dropped. `accepted: false`
 means no turn was running — send the text as an ordinary `…/turns` prompt
 instead.
 
-The Ledger (the home board of threads across every project):
+Threads (the overview every project page and chat list reads):
 
 ```
-GET    /v1/ledger                    → LedgerSnapshot {entries, running, last_seen}
-POST   /v1/ledger/seen               record "the user just looked" → new mark (unix secs)
-POST   /v1/sessions/{id}/seen        record "the user just looked at THIS thread" → new mark
+GET    /v1/threads                   → ThreadSnapshot {entries, running}
+POST   /v1/sessions/{id}/seen        record "the user just looked at this thread" → new mark (unix secs)
 POST   /v1/sessions/{id}/title       name a chat: {title} (blank = title by first message again)
-POST   /v1/sessions/{id}/settle      tie a thread off: {note?} → SettleState
-DELETE /v1/sessions/{id}/settle      bring it back to the trail
+POST   /v1/sessions/{id}/finish      mark a thread finished → finished_at (unix secs)
+DELETE /v1/sessions/{id}/finish      reopen it
 ```
 
-Each `LedgerEntry` is derived truth about one native session: title, freshness
+Each `ThreadEntry` is derived truth about one native session: title, freshness
 (`last_activity_at`), whether the transcript stops mid-turn (`mid_turn` — the
-reply never arrived), the latest `update_plan` reading (`plan: {done, total,
-active}`), the journey the model charted via `update_trail` (`trail: {title,
-waypoints: [{name, status}]}` — its title supersedes the first-user-message
-title for display), the opening of its newest reply (`last_reply`), the
+reply never arrived), the opening of its newest reply (`last_reply`), the
 training-data curation verdict (`review_status`), when the user last looked at
 it (`seen_at` — activity newer than this is "finished while you were away",
-per thread), and its settle mark if tied off. `running` comes from the host's in-flight registry, so it is
-correct even after a client restart. Workspace git state is deliberately not
-here — it belongs to the workspace, not the thread (the desktop reads it via
-its own `workspace_git` command).
+per thread), and `finished_at` — the one piece of human-authored state, set by
+the finish route and cleared by reopening (or by the thread running again; a
+running thread can't be finished). `running` comes from the host's in-flight
+registry, so it is correct even after a client restart.
 
 Round-trips (ids arrive on the stream):
 

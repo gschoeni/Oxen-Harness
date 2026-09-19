@@ -19,8 +19,6 @@ pub struct OptionalTools {
     /// CLI); the prompt must not order the model to verify shipping through a
     /// tool the registry would reject.
     pub gh: bool,
-    /// `update_trail` — same: registered by default, disableable in Settings.
-    pub trail: bool,
     /// The agent tools (`spawn_agents`, `map_agents`, `ask_model`, …) — the
     /// fleet is registered after the prompt is built, so hosts set this from
     /// the same preference that decides whether it registers.
@@ -39,7 +37,6 @@ impl OptionalTools {
             canvas: tools.get(harness_tools::CANVAS_TOOL).is_some(),
             open_file: tools.get(harness_tools::OPEN_FILE_TOOL).is_some(),
             gh: tools.get(harness_tools::GH_TOOL).is_some(),
-            trail: tools.get(harness_tools::TRAIL_TOOL).is_some(),
             agents: tools.get(crate::fleet_tool::FLEET_TOOL).is_some(),
             media: tools.get(harness_media::GENERATE_IMAGE_TOOL).is_some(),
         }
@@ -54,14 +51,12 @@ impl OptionalTools {
         self
     }
 
-    /// The default registry's optional set: `gh` and `update_trail` are
-    /// registered unless the user disables them, the host-injected tools are
-    /// not. Used where a prompt is built without a finished registry in hand
+    /// The default registry's optional set: `gh` is registered unless the
+    /// user disables it, the host-injected tools are not. Used where a prompt is built without a finished registry in hand
     /// ([`crate::AgentConfig::default`], [`default_system_prompt`]).
     pub fn default_registry() -> Self {
         Self {
             gh: true,
-            trail: true,
             ..Self::default()
         }
     }
@@ -102,10 +97,6 @@ pub fn system_prompt_with_env(tools: OptionalTools, workspace: &std::path::Path)
         environment_section(workspace)
     )
 }
-
-/// The trail's entry in the prompt's tool list. A named constant so
-/// [`strip_trail_sections`] can remove exactly what was added.
-const TRAIL_TOOL_LIST_ENTRY: &str = ", `update_trail` (chart the session's journey)";
 
 /// The media tools' entry in the prompt's tool list.
 const MEDIA_TOOL_LIST_ENTRY: &str =
@@ -160,47 +151,6 @@ pub fn subagent_appendix(depth: u8, max_depth: u8) -> &'static str {
     }
 }
 
-/// The trail guideline when `gh` is registered: the shipping stages are
-/// verifiable in-session, so the model is ordered to verify them.
-///
-/// The trigger is a *condition*, not a moment: sessions routinely open as a
-/// question ("what could we improve about X?") and only later turn into real
-/// work — a "chart before you start" instruction has already expired by then,
-/// so the mandate is pinned to the first file edit or shell command instead.
-/// It also explicitly severs itself from `update_plan`'s "default to not
-/// using it" guidance in the next bullet, which otherwise bleeds onto its
-/// sibling tool and suppresses charting.
-const TRAIL_GUIDELINE_WITH_GH: &str =
-    "\n- Chart this session with `update_trail` as soon as it involves real \
-     work — at the latest, right before your first file edit or shell command. \
-     A session that opens as a question still gets charted the moment you \
-     start actually working. Unlike `update_plan` below, the trail is NOT \
-     optional for work sessions. Title the thread and chart its macro stages \
-     (standard: define, plan, implement, review; code work ends with pushed, \
-     pr-reviewed, merged). Advance stages as you pass them, and re-chart \
-     the route whenever the user redirects you or you change approach — \
-     the trail must always tell the truth about where this thread stands. \
-     The shipping stages are verified, never assumed: `git` push to close \
-     \"pushed\", `gh` pr_view to confirm review and merge state. The \
-     user's board gates closing the thread on these — they are the open \
-     loops you exist to close.";
-
-/// The trail guideline without `gh`: only the push is verifiable in-session;
-/// review/merge state is explicitly the user's to confirm.
-const TRAIL_GUIDELINE_NO_GH: &str =
-    "\n- Chart this session with `update_trail` as soon as it involves real \
-     work — at the latest, right before your first file edit or shell command. \
-     A session that opens as a question still gets charted the moment you \
-     start actually working. Unlike `update_plan` below, the trail is NOT \
-     optional for work sessions. Title the thread and chart its macro stages \
-     (standard: define, plan, implement, review; code work ends with pushed, \
-     pr-reviewed, merged). Advance stages as you pass them, and re-chart \
-     the route whenever the user redirects you or you change approach — \
-     the trail must always tell the truth about where this thread stands. \
-     Close \"pushed\" only after a verified `git` push; pr-reviewed and \
-     merged can't be auto-verified in this session, so leave them for the \
-     user to confirm rather than marking them done on faith.";
-
 const AGENTS_TOOL_LIST_ENTRY: &str = ", `spawn_agents` / `map_agents` / `ask_model` (delegate to \
     parallel subagents)";
 
@@ -219,20 +169,6 @@ pub const DELEGATION_GUIDELINE: &str = "\n- Delegate reading, not deciding. Your
     as handles, never pasted. Use `wait: false` when you have other work meanwhile — results \
     arrive on their own, never poll — and `send_to_agent` to continue an agent instead of \
     briefing a new one.";
-
-/// Remove the trail sections from a finished system prompt, for detached
-/// subagents (side agents, fleet lanes). Their registries drop `update_trail`
-/// (see `subagent_tools`): a lane's transcript lives in a throwaway in-memory
-/// store, so a charted trail would never reach the user's board — the mandate
-/// would be either wasted tokens or a wasted call. The parent's prompt is
-/// inherited verbatim otherwise (environment, conventions, project metadata),
-/// so this strips exactly the constants the builder spliced in.
-pub(crate) fn strip_trail_sections(prompt: &str) -> String {
-    prompt
-        .replace(TRAIL_TOOL_LIST_ENTRY, "")
-        .replace(TRAIL_GUIDELINE_WITH_GH, "")
-        .replace(TRAIL_GUIDELINE_NO_GH, "")
-}
 
 /// Remove the delegation sections from a finished system prompt, for a leaf
 /// lane that has no agent tools to delegate with.
@@ -289,19 +225,6 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
     } else {
         ""
     };
-    let trail_tool = if tools.trail {
-        TRAIL_TOOL_LIST_ENTRY
-    } else {
-        ""
-    };
-    // The trail guideline names the shipping stages the model can actually
-    // verify: with `gh` the review/merge state is checked; without it, only
-    // the push is verifiable and the rest is explicitly the user's to confirm.
-    let trail_guideline = match (tools.trail, tools.gh) {
-        (false, _) => "",
-        (true, true) => TRAIL_GUIDELINE_WITH_GH,
-        (true, false) => TRAIL_GUIDELINE_NO_GH,
-    };
     let media_tool = if tools.media {
         MEDIA_TOOL_LIST_ENTRY
     } else {
@@ -322,7 +245,7 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
          project directory. Available tools: `find_files` (locate files by glob), \
          `search_files` (regex content search), `read_file` (line-numbered, supports \
          offset/limit), `write_file`, `edit_file` (exact-string patch), `run_shell`, \
-         `git`{gh_tool}, `update_plan` (maintain a task checklist){trail_tool}, \
+         `git`{gh_tool}, `update_plan` (maintain a task checklist), \
          `ask_user_question` (interview the user){web_tool}{canvas_tool}{open_file_tool}{agents_tool}{media_tool}.\n\n\
          Guidelines:\n\
          - Prefer the dedicated tools over shell equivalents: use `find_files` not \
@@ -339,7 +262,7 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
          - Think before you code. When a request is ambiguous, name the assumption \
            you're acting on and the trade-off you're making rather than filling the gap \
            with plausible-looking code. For anything multi-step, state the plan and a \
-           concrete success criterion first so a wrong approach is caught early.{trail_guideline}\n\
+           concrete success criterion first so a wrong approach is caught early.\n\
          - Default to working WITHOUT `update_plan`. Reach for it only on large, \
            multi-phase work (roughly 5+ substantial steps spanning clearly \
            separate pieces) or when the user explicitly asks for a plan/todo list \
@@ -408,17 +331,6 @@ pub(crate) const PLAN_STALL_NUDGE: &str =
      step, continue any steps that don't depend on it — and then give your final \
      answer explaining what's blocked and what you completed instead. Do not leave \
      the checklist stale.";
-
-/// The one-shot corrective appended when a turn did real work (edited files or
-/// ran shell commands) but the session has no charted trail — the "question
-/// that quietly became a work session" failure mode the prompt guideline alone
-/// doesn't reliably catch (see `Agent::drive_turn`). Sent only on the retry
-/// request and never persisted.
-pub(crate) const TRAIL_STALL_NUDGE: &str =
-    "You did real work this turn, but this session has no charted trail. Call \
-     `update_trail` now: title the thread and chart its macro stages, marking \
-     stages already passed as done and the stage you're in as current. Then \
-     give your final answer.";
 
 /// The one-shot corrective appended when the same tool call has repeated with
 /// identical arguments *and* an identical result several times in a row (see
@@ -600,14 +512,12 @@ mod tests {
         assert!(!bare.contains("`canvas`"));
         assert!(!bare.contains("`open_file`"));
         assert!(!bare.contains("`gh`"));
-        assert!(!bare.contains("update_trail"));
 
         let full = system_prompt_with(OptionalTools {
             web_search: true,
             canvas: true,
             open_file: true,
             gh: true,
-            trail: true,
             agents: false,
             media: true,
         });
@@ -619,53 +529,17 @@ mod tests {
         assert!(full.contains("`open_file` (show a project file in the user's file viewer)"));
         assert!(full.contains("`open_file` to put it in their file viewer"));
         assert!(full.contains("`gh` (GitHub PRs)"));
-        assert!(full.contains("`update_trail` (chart the session's journey)"));
     }
 
-    /// The trail guideline must only order the model to verify through tools
-    /// it actually has: with `gh` disabled the prompt neither lists the tool
-    /// nor demands pr_view checks; with `update_trail` disabled the whole
-    /// trail mandate disappears.
     #[test]
-    fn trail_guideline_adapts_to_the_registered_tools() {
-        let both = system_prompt_with(OptionalTools {
-            gh: true,
-            trail: true,
-            ..OptionalTools::default()
-        });
-        assert!(both.contains("`gh` pr_view to confirm review and merge state"));
-
-        let trail_only = system_prompt_with(OptionalTools {
-            trail: true,
-            ..OptionalTools::default()
-        });
-        assert!(trail_only.contains("update_trail"));
-        assert!(
-            !trail_only.contains("`gh`"),
-            "must not order an unregistered tool"
-        );
-        assert!(trail_only.contains("leave them for the user to confirm"));
-
-        let neither = system_prompt_with(OptionalTools::default());
-        assert!(!neither.contains("update_trail"));
-        assert!(!neither.contains("pr-reviewed"));
-
-        // The trigger is a condition (first edit/shell command), not a
-        // "before you start" moment a question-shaped session sails past, and
-        // it explicitly severs itself from update_plan's default-off guidance.
-        assert!(both.contains("right before your first file edit or shell command"));
-        assert!(both.contains("NOT optional for work sessions"));
-
-        // The convenience default advertises the default registry (gh + trail
-        // are registered unless the user disables them).
+    fn the_convenience_default_advertises_the_default_registry() {
+        // `gh` is registered unless the user disables it.
         let default = default_system_prompt(false);
         assert!(default.contains("`gh` (GitHub PRs)"));
-        assert!(default.contains("update_trail"));
+        let neither = system_prompt_with(OptionalTools::default());
+        assert!(!neither.contains("`gh`"));
     }
 
-    /// Subagents inherit the parent's finished prompt but drop `update_trail`
-    /// from their registry — stripping must remove every trail section (tool
-    /// list entry + guideline, both gh variants) and nothing else.
     #[test]
     fn the_delegation_guideline_rides_with_the_agent_tools_and_leaves_lose_it() {
         let with = system_prompt_with(OptionalTools {
@@ -680,40 +554,6 @@ mod tests {
         assert!(!leaf.contains("spawn_agents"), "{leaf}");
         assert!(!leaf.contains("Delegate reading"));
         assert_eq!(leaf, without);
-    }
-
-    #[test]
-    fn strip_trail_sections_removes_the_mandate_from_any_variant() {
-        for gh in [false, true] {
-            let full = system_prompt_with(OptionalTools {
-                gh,
-                trail: true,
-                ..OptionalTools::default()
-            });
-            let stripped = strip_trail_sections(&full);
-            assert!(!stripped.contains("update_trail"), "gh={gh}");
-            assert!(!stripped.contains("pr-reviewed"), "gh={gh}");
-            // The rest of the prompt survives untouched.
-            assert!(stripped.contains("update_plan"));
-            if gh {
-                assert!(stripped.contains("`gh` (GitHub PRs)"));
-            }
-            assert_eq!(
-                stripped,
-                system_prompt_with(OptionalTools {
-                    gh,
-                    ..OptionalTools::default()
-                }),
-                "stripping must equal never having advertised the trail (gh={gh})"
-            );
-        }
-        // Still works on a full prompt with the environment section appended,
-        // the shape a subagent actually inherits.
-        let inherited = system_prompt_with_env(
-            OptionalTools::default_registry(),
-            std::path::Path::new("/w"),
-        );
-        assert!(!strip_trail_sections(&inherited).contains("update_trail"));
     }
 
     #[test]

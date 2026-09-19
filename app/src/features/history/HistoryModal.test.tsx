@@ -151,8 +151,8 @@ describe("HistoryModal", () => {
     expect(ipc.deleteSession).toHaveBeenCalledWith("s2");
   });
 
-  it("fetches the board once when nothing has, so rows still section", () => {
+  it("fetches the thread snapshot once when nothing has, so rows still section", () => {
     render(<HistoryModal />);
-    expect(ipc.ledgerSnapshot).toHaveBeenCalledOnce();
+    expect(ipc.threadsSnapshot).toHaveBeenCalledOnce();
   });
 });

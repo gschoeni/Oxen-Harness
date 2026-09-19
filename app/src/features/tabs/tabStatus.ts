@@ -5,7 +5,7 @@
 // than reading run flags itself — so "what does the orange dot mean" has one
 // answer everywhere.
 
-import { needLabel, type Thread } from "../ledger/ledger";
+import { needLabel, type Thread } from "../threads/threads";
 import type { RunStatus } from "../../lib/types";
 import type { ApprovalRequestEvent, QuestionPayload } from "../../lib/types";
 
@@ -31,23 +31,20 @@ export interface TabSignals {
   approval: boolean;
   /** The model asked a question and is waiting on the answer. */
   question: boolean;
-  /** The Ledger's verdict, when the board has met this chat. */
+  /** The thread verdict, when the snapshot has met this chat. */
   thread: Thread | null | undefined;
 }
 
 /** Precedence, strongest first: parked on the user (approval, question), then
- *  live work, then a lost reply, then an open plan, then a finish to look at.
- *  Live signals outrank the board — its snapshot can trail a turn that has
- *  since resumed, and a streaming reply is never "dangling". A thread merely
- *  going cold stays idle here: the tab is open, so the user already has it in
- *  view; the nag belongs to the history list and the Ledger. */
+ *  live work, then a lost reply, then a finish to look at.
+ *  Live signals outrank the snapshot — it can lag a turn that has
+ *  since resumed, and a streaming reply is never "dangling". */
 export function tabStatus(x: TabSignals): TabStatus {
   if (x.approval || x.thread?.stuck) return { state: "needs", label: "waiting on your approval" };
   if (x.question) return { state: "needs", label: "asked you a question" };
   if (x.running || x.thread?.state === "running") return { state: "running", label: "Running" };
   if (x.thread?.need === "dangling") return { state: "broken", label: needLabel(x.thread) };
-  if (x.thread?.need === "plan-open") return { state: "needs", label: needLabel(x.thread) };
-  if (x.unread || x.thread?.need === "finished") {
+  if (x.unread || x.thread?.need === "unseen") {
     return { state: "check", label: "finished while you were away" };
   }
   return { state: "idle", label: null };

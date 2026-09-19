@@ -297,11 +297,10 @@ async fn answering_an_unknown_question_id_is_ignored() {
     );
 }
 
-/// The Ledger surface end-to-end: a turn leaves a titled, fresh entry; a plan
-/// laid out before snapshots existed is backfilled from the transcript;
-/// settling and reopening round-trip; the seen mark advances.
+/// The thread overview end-to-end: a turn leaves a titled, fresh entry;
+/// finishing and reopening round-trip; the seen mark is recorded.
 #[tokio::test]
-async fn ledger_snapshot_derives_entries_and_settles_round_trip() {
+async fn thread_snapshot_derives_entries_and_finish_round_trips() {
     let mut server = mockito::Server::new_async().await;
     let sink = Arc::new(CollectingSink::default());
     let workspace = tempfile::tempdir().unwrap();
@@ -316,110 +315,64 @@ async fn ledger_snapshot_derives_entries_and_settles_round_trip() {
         .unwrap();
     mock.assert_async().await;
 
-    // Simulate a pre-snapshot-era plan: the tool call is in the transcript,
-    // but no `session_state` projection exists — the snapshot must backfill.
+    // A curation verdict surfaces on the entry.
     let store = service.store().unwrap();
-    store
-        .append_message(
-            &session,
-            &serde_json::json!({
-                "role": "assistant", "content": null,
-                "tool_calls": [{"id": "c1", "type": "function", "function": {
-                    "name": "update_plan",
-                    "arguments": "{\"plan\":[{\"content\":\"A\",\"active_form\":\"Doing A\",\"status\":\"completed\"},{\"content\":\"B\",\"active_form\":\"Doing B\",\"status\":\"pending\"}]}"
-                }}]
-            }),
-        )
-        .unwrap();
-
-    // A charted journey (normally written by the agent as `update_trail`
-    // lands) and a curation verdict both surface on the entry.
-    store
-        .save_session_state(
-            &session,
-            harness_store::TRAIL_STATE,
-            &serde_json::json!({
-                "title": "sum two numbers",
-                "waypoints": [
-                    {"name": "define", "status": "done"},
-                    {"name": "answer", "status": "current"},
-                ],
-            }),
-        )
-        .unwrap();
     store.set_review_status(&session, "kept").unwrap();
 
-    let snapshot = service.ledger_snapshot().await.unwrap();
-    assert_eq!(snapshot.last_seen, 0, "board never marked seen yet");
+    let snapshot = service.thread_snapshot().await.unwrap();
     assert!(snapshot.running.is_empty());
     let entry = snapshot
         .entries
         .iter()
         .find(|e| e.id == session)
-        .expect("the session has a ledger entry");
+        .expect("the session has an entry");
     assert_eq!(entry.title, "what is 2 + 3?");
-    assert!(entry.settle.is_none());
-    let trail = entry.trail.as_ref().expect("charted trail surfaces");
-    assert_eq!(trail.title, "sum two numbers");
-    assert_eq!(trail.waypoints[1].status, "current");
+    assert_eq!(entry.finished_at, 0);
+    assert_eq!(entry.seen_at, 0, "never opened since the mark existed");
     assert_eq!(entry.review_status, "kept");
-    // The appended assistant message is the transcript tail: not mid-turn.
+    // The reply landed: not mid-turn.
     assert!(!entry.mid_turn);
-    let plan = entry
-        .plan
-        .as_ref()
-        .expect("plan backfilled from transcript");
-    assert_eq!((plan.done, plan.total), (1, 2));
 
-    // The backfill persisted its verdict: a second read must not rescan.
-    assert!(store
-        .session_state::<serde_json::Value>(&session, harness_store::PLAN_STATE)
-        .unwrap()
-        .is_some());
-
-    // A thread with work in flight refuses to settle — the board's render
-    // gate can race a turn start, so the contract lives server-side.
+    // A thread with work in flight refuses to finish — a list's render gate
+    // can race a turn start, so the contract lives server-side.
     service
         .cancels
         .lock()
         .await
         .insert(session.clone(), tokio_util::sync::CancellationToken::new());
-    let err = service.settle_session(&session, "").await.unwrap_err();
+    let err = service.finish_session(&session).await.unwrap_err();
     assert!(err.contains("mid-turn"), "got: {err}");
     service.cancels.lock().await.remove(&session);
 
-    // Settle with a note, see it in the snapshot, then reopen.
-    let settled = service
-        .settle_session(&session, "  shipped as PR #42  ")
-        .await
-        .unwrap();
-    assert_eq!(settled.note, "shipped as PR #42");
-    let snapshot = service.ledger_snapshot().await.unwrap();
+    // Finish, see it in the snapshot, then reopen.
+    let finished_at = service.finish_session(&session).await.unwrap();
+    assert!(finished_at > 0);
+    let snapshot = service.thread_snapshot().await.unwrap();
     let entry = snapshot.entries.iter().find(|e| e.id == session).unwrap();
-    assert_eq!(entry.settle.as_ref().unwrap().note, "shipped as PR #42");
+    assert_eq!(entry.finished_at, finished_at);
 
     service.reopen_session(&session).unwrap();
-    let snapshot = service.ledger_snapshot().await.unwrap();
+    let snapshot = service.thread_snapshot().await.unwrap();
     let entry = snapshot.entries.iter().find(|e| e.id == session).unwrap();
-    assert!(entry.settle.is_none());
+    assert_eq!(entry.finished_at, 0);
 
-    // Settling a session that doesn't exist is a clean error.
-    assert!(service.settle_session("nope", "").await.is_err());
+    // Finishing a session that doesn't exist is a clean error.
+    assert!(service.finish_session("nope").await.is_err());
 
-    // Marking seen advances the mark the next snapshot reports.
-    let seen = service.mark_ledger_seen().unwrap();
+    // Marking seen lands on the entry the next snapshot reports.
+    let seen = service.mark_session_seen(&session).unwrap();
     assert!(seen > 0);
-    let snapshot = service.ledger_snapshot().await.unwrap();
-    assert_eq!(snapshot.last_seen, seen);
+    let snapshot = service.thread_snapshot().await.unwrap();
+    let entry = snapshot.entries.iter().find(|e| e.id == session).unwrap();
+    assert_eq!(entry.seen_at, seen);
 }
 
-/// The other half of the settle/turn-start race: however the two interleave,
-/// a running thread is never settled. `settle_session` holds the running-set
+/// The other half of the finish/turn-start race: however the two interleave,
+/// a running thread is never finished. `finish_session` holds the running-set
 /// lock across its check-and-write (tested above); here, a run that starts
-/// AFTER a settle landed clears the mark — riding again means back on the
-/// trail.
+/// AFTER a finish landed clears the mark — running again means open again.
 #[tokio::test]
-async fn a_run_starting_on_a_settled_thread_reopens_it() {
+async fn a_run_starting_on_a_finished_thread_reopens_it() {
     let mut server = mockito::Server::new_async().await;
     let _m = sse_mock(&mut server, FINAL_SSE);
     let sink = Arc::new(CollectingSink::default());
@@ -431,24 +384,21 @@ async fn a_run_starting_on_a_settled_thread_reopens_it() {
         .run_turn(&info.session_id, "hello".into(), vec![])
         .await
         .unwrap();
-    service
-        .settle_session(&info.session_id, "done")
-        .await
-        .unwrap();
+    service.finish_session(&info.session_id).await.unwrap();
 
     service
         .run_turn(&info.session_id, "actually, keep going".into(), vec![])
         .await
         .unwrap();
-    let snapshot = service.ledger_snapshot().await.unwrap();
+    let snapshot = service.thread_snapshot().await.unwrap();
     let entry = snapshot
         .entries
         .iter()
         .find(|e| e.id == info.session_id)
         .unwrap();
-    assert!(
-        entry.settle.is_none(),
-        "a thread that rode again must not stay settled"
+    assert_eq!(
+        entry.finished_at, 0,
+        "a thread that ran again must not stay finished"
     );
 }
 

@@ -6,9 +6,8 @@ import { useStore } from "../../lib/store";
 import { isComposingKey, PROMPT_INPUT_PROPS } from "../../lib/promptInput";
 import type { Project, ProjectContext, StartupModelChoice } from "../../lib/types";
 import { ModelPicker } from "../chat/ModelPicker";
-import { ProjectTrail } from "../ledger/ProjectTrail";
 import { ProjectMediaCard } from "../media/ProjectMediaCard";
-import { useBoard } from "../ledger/useBoard";
+import { ProjectThreads } from "./ProjectThreads";
 import { RemoveProjectModal } from "./RemoveProjectModal";
 import "./projects.css";
 
@@ -38,14 +37,10 @@ export function ProjectHome({
   const cleanName = name.trim();
   const cleanGoal = goal.trim();
   const detailsChanged = name !== project.name || goal !== project.description;
-  // Whether this project has anything to show on its trail (open, settled, or
-  // lost threads) — with history, the getting-started hint yields to it.
-  const board = useBoard();
-  const hasTrail =
-    !!board &&
-    (board.trains.some((t) => t.workspace === project.path) ||
-      board.settled.some((t) => t.entry.workspace === project.path) ||
-      board.lost.some((t) => t.entry.workspace === project.path));
+  // With chats to list, the getting-started hint yields to them.
+  const hasChats = useStore((state) =>
+    state.sessions.some((s) => s.source === "" && s.workspace === project.path),
+  );
 
   async function saveDetails() {
     if (!cleanName || !detailsChanged || savingDetails) return;
@@ -185,11 +180,8 @@ export function ProjectHome({
             </div>
           </form>
           {chatError && <div className="project-home-error" role="alert">Could not start this chat: {chatError}</div>}
-          {/* The project's full trail — every open thread, no cap. The home
-              board's "…and N more on this trail" lands here. A project with
-              history doesn't need the getting-started hint anymore. */}
-          {hasTrail ? (
-            <ProjectTrail workspace={project.path} />
+          {hasChats ? (
+            <ProjectThreads workspace={project.path} />
           ) : (
             <div className="project-home-empty">
               <MessageSquare size={28} />

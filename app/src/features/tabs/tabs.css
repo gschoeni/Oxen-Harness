@@ -1,5 +1,8 @@
 /* The chat tab strip: one row above the messages, in the surface color so it
-   reads as chrome — the chat itself stays on --bg below.
+   reads as chrome — the chat itself stays on --bg below. The active tab is
+   cut from that --bg and sits flush on the strip's bottom edge, flaring
+   into it with curved feet (the browser-tab shape), so the visible chat and
+   its tab read as one continuous surface.
 
    Layout, left to right: the tabs, then "+" right where the next tab will
    appear, then the history at the far edge. The tab region sizes to its
@@ -8,26 +11,32 @@
    scrolls out of reach because it lives outside the scroller. */
 
 .chat-tabs {
+  /* How far the active tab's feet reach past its sides. */
+  --tab-foot: 8px;
   display: flex;
-  align-items: center;
+  /* Tabs stand on the strip's bottom edge; the buttons stay centered. */
+  align-items: flex-end;
   gap: var(--space-1);
   flex-shrink: 0;
   min-height: 40px;
-  padding: var(--space-1) var(--space-2);
+  padding: 6px var(--space-2) 0;
   background: var(--surface);
-  border-bottom: 1px solid var(--separator);
+  /* The rule under the strip is painted inside it, so the active tab (which
+     reaches the very bottom) covers its stretch of it and joins the chat. */
+  box-shadow: inset 0 -1px 0 var(--separator);
 }
 .chat-tabs-scroll {
   flex: 0 1 auto;
   min-width: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 2px;
   overflow-x: auto;
   scrollbar-width: none;
-  /* Room for the drop indicators and focus rings at the ends. */
-  padding: 2px 3px;
-  margin: -2px -3px;
+  /* Room for the active tab's feet, the drop indicators, and focus rings at
+     the ends; none below, so the tabs sit flush on the strip's edge. */
+  padding: 2px var(--tab-foot) 0;
+  margin: -2px calc(-1 * var(--tab-foot)) 0;
 }
 .chat-tabs-scroll::-webkit-scrollbar {
   display: none;
@@ -47,11 +56,22 @@
 }
 
 /* A tab: dot · title · close, sized to its title (a short name makes a short
-   tab) within bounds. The active one lifts onto the chat's own background
-   with the same framing the dock tabs use, so "selected" looks the same on
-   every strip in the app. */
+   tab) within bounds. Every tab is the strip's full height with its content
+   in the top 30px, so titles never move when the active one changes. Behind
+   the content sits the tab's plate (::before) — the browser-tab shape:
+   rounded at the top, open at the bottom, with feet (::after) curving out
+   into the strip on both sides. Its color, --tab-plate, is what says what
+   the tab is: nothing at rest, the hover tint under the pointer, and for the
+   active tab the chat's own --bg, ringed by the strip's rule. Because the
+   plate is one shape with one color in every state, hovering paints exactly
+   the tab you'd get by clicking. */
 .chat-tab {
+  --tab-radius: var(--radius-sm);
+  --tab-plate: transparent;
   position: relative;
+  /* Its own stacking context, so the plate can sit behind the content
+     (z-index -1) without dropping behind the strip. */
+  isolation: isolate;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -59,35 +79,109 @@
   /* Never squeezed past a readable title: the strip scrolls instead. */
   min-width: 140px;
   max-width: 220px;
-  height: 30px;
-  padding: 0 var(--space-1) 0 var(--space-3);
+  height: 34px;
+  padding: 0 var(--space-1) 4px var(--space-3);
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border: none;
+  border-radius: var(--tab-radius) var(--tab-radius) 0 0;
   color: var(--text-secondary);
   font-size: var(--text-sm);
   font-weight: 500;
   cursor: pointer;
   user-select: none;
   transition:
-    background var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease),
     box-shadow var(--dur-fast) var(--ease);
 }
+.chat-tab::before,
+.chat-tab::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--tab-plate);
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.chat-tab::before {
+  inset: 0;
+  border-radius: var(--tab-radius) var(--tab-radius) 0 0;
+}
+/* The feet: one strip along the bottom, a foot's width past each side, with
+   a quarter circle of the strip cut (masked) out of each end's top outer
+   corner — the concave curve from the strip into the tab. */
+.chat-tab::after {
+  left: calc(-1 * var(--tab-foot));
+  right: calc(-1 * var(--tab-foot));
+  bottom: 0;
+  height: var(--tab-foot);
+  -webkit-mask-image:
+    radial-gradient(circle at 0 0, transparent calc(var(--tab-foot) - 1.5px), #000 calc(var(--tab-foot) - 1px)),
+    radial-gradient(circle at 100% 0, transparent calc(var(--tab-foot) - 1.5px), #000 calc(var(--tab-foot) - 1px)),
+    linear-gradient(#000, #000);
+  -webkit-mask-size: var(--tab-foot) 100%, var(--tab-foot) 100%, calc(100% - 2 * var(--tab-foot)) 100%;
+  -webkit-mask-position: left, right, center;
+  -webkit-mask-repeat: no-repeat;
+  mask-image:
+    radial-gradient(circle at 0 0, transparent calc(var(--tab-foot) - 1.5px), #000 calc(var(--tab-foot) - 1px)),
+    radial-gradient(circle at 100% 0, transparent calc(var(--tab-foot) - 1.5px), #000 calc(var(--tab-foot) - 1px)),
+    linear-gradient(#000, #000);
+  mask-size: var(--tab-foot) 100%, var(--tab-foot) 100%, calc(100% - 2 * var(--tab-foot)) 100%;
+  mask-position: left, right, center;
+  mask-repeat: no-repeat;
+}
 .chat-tab:hover {
-  background: var(--surface-hover);
+  --tab-plate: var(--surface-hover);
   color: var(--text);
+}
+/* A plate that isn't the active one stays behind the strip's rule: the
+   rule is redrawn along its bottom edge (plate and feet alike), so only the
+   active tab ever breaks through into the chat. */
+.chat-tab:not(.active):hover::before,
+.chat-tab.editing:not(.active)::before {
+  box-shadow: inset 0 -1px 0 var(--separator);
+}
+.chat-tab:not(.active):hover::after,
+.chat-tab.editing:not(.active)::after {
+  background-image: linear-gradient(transparent calc(100% - 1px), var(--separator) 0);
 }
 .chat-tab:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 .chat-tab.active {
-  background: var(--bg);
-  border-color: var(--separator);
+  --tab-plate: var(--bg);
+  /* Above its neighbours, so a hovered tab's plate slips under the active
+     tab's feet and outline instead of over them. */
+  z-index: 1;
   color: var(--text);
-  box-shadow: var(--shadow-1);
+}
+/* The strip's rule continues around the active plate: a 1px line just
+   outside it, following the rounded top (its bottom run is clipped away by
+   the scroller), and a 1px ring around each foot's cut-out — tangent to the
+   strip's rule at the far edge and to the plate's line where they meet. */
+.chat-tab.active::before {
+  box-shadow: 0 0 0 1px var(--separator);
+}
+.chat-tab.active::after {
+  background-image:
+    radial-gradient(
+        circle at 0 0,
+        transparent calc(var(--tab-foot) - 1px),
+        var(--separator) calc(var(--tab-foot) - 1px),
+        var(--separator) calc(var(--tab-foot) - 0.25px),
+        transparent calc(var(--tab-foot) + 0.25px)
+      )
+      left / var(--tab-foot) 100% no-repeat,
+    radial-gradient(
+        circle at 100% 0,
+        transparent calc(var(--tab-foot) - 1px),
+        var(--separator) calc(var(--tab-foot) - 1px),
+        var(--separator) calc(var(--tab-foot) - 0.25px),
+        transparent calc(var(--tab-foot) + 0.25px)
+      )
+      right / var(--tab-foot) 100% no-repeat;
 }
 .chat-tab-title {
   flex: 1;
@@ -99,11 +193,19 @@
 /* Renaming in place: the title becomes a bare field in the same slot, the
    tab's frame taking the focus ring so the row doesn't jump. */
 .chat-tab.editing {
+  --tab-plate: var(--bg);
   max-width: 320px;
-  background: var(--bg);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--separator));
-  box-shadow: var(--focus-ring);
   cursor: text;
+}
+.chat-tab.editing::before {
+  box-shadow:
+    inset 0 -1px 0 var(--separator),
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, var(--separator));
+}
+.chat-tab.editing.active::before {
+  box-shadow:
+    0 0 0 1px var(--separator),
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, var(--separator));
 }
 .chat-tab-input {
   flex: 1;
@@ -156,19 +258,35 @@
   box-shadow: 3px 0 0 0 var(--accent);
 }
 
-/* A tab that needs the user, or lost its reply, tints its frame as well as
-   its dot: readable across a room, not just up close. */
-.chat-tab.needs {
-  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+/* A tab that needs the user, or lost its reply, wears a colored rule along
+   the top of its plate as well as its dot: readable across a room, not just
+   up close. The rule rides the plate's rounded corners, brighter on the
+   active tab whose plate is filled. */
+.chat-tab.needs::before {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--warning) 55%, transparent);
 }
-.chat-tab.needs.active {
-  border-color: color-mix(in srgb, var(--warning) 60%, var(--separator));
+.chat-tab.needs:not(.active):hover::before {
+  box-shadow:
+    inset 0 -1px 0 var(--separator),
+    inset 0 2px 0 color-mix(in srgb, var(--warning) 55%, transparent);
 }
-.chat-tab.broken {
-  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+.chat-tab.needs.active::before {
+  box-shadow:
+    0 0 0 1px var(--separator),
+    inset 0 2px 0 color-mix(in srgb, var(--warning) 75%, transparent);
 }
-.chat-tab.broken.active {
-  border-color: color-mix(in srgb, var(--danger) 55%, var(--separator));
+.chat-tab.broken::before {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--danger) 50%, transparent);
+}
+.chat-tab.broken:not(.active):hover::before {
+  box-shadow:
+    inset 0 -1px 0 var(--separator),
+    inset 0 2px 0 color-mix(in srgb, var(--danger) 50%, transparent);
+}
+.chat-tab.broken.active::before {
+  box-shadow:
+    0 0 0 1px var(--separator),
+    inset 0 2px 0 color-mix(in srgb, var(--danger) 70%, transparent);
 }
 
 /* --- The status dot ------------------------------------------------------
@@ -233,12 +351,14 @@
 
 /* --- The strip's buttons: new chat beside the tabs, the history at the end */
 .chat-tabs-new {
+  align-self: center;
   margin-left: 2px;
 }
 .chat-tabs-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  align-self: center;
+  gap: var(--space-half);
   flex-shrink: 0;
   margin-left: auto;
 }
@@ -246,8 +366,8 @@
   position: relative;
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   padding: 0;
   background: transparent;
   color: var(--text-tertiary);
@@ -271,7 +391,7 @@
   right: -5px;
   min-width: 16px;
   height: 16px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   display: grid;
   place-items: center;
   font-family: var(--font-mono);

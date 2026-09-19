@@ -96,7 +96,6 @@
       }
     };
     const diagnostic = (level, message, file = null, line = null) => {
-      if (level === "error") runtimeErrors++;
       if (closed || reports++ >= 100) return;
       void request("dev_diagnostic", {
         level,
@@ -106,6 +105,13 @@
       }).catch((error) =>
         originalError("View diagnostics unavailable:", error),
       );
+    };
+    // Only an uncaught failure counts against the smoke test. A failure the
+    // view handled and chose to log is still reported to the studio, but a
+    // view that logs "no document yet" on first load must still pass.
+    const runtimeError = (message, file = null, line = null) => {
+      runtimeErrors++;
+      diagnostic("error", message, file, line);
     };
     const originalError = console.error.bind(console);
     for (const level of ["log", "warn", "error"]) {
@@ -118,8 +124,7 @@
     window.addEventListener(
       "error",
       (event) =>
-        diagnostic(
-          "error",
+        runtimeError(
           event.message ||
             `Failed to load ${event.target?.src || event.target?.href || "resource"}`,
           event.filename || null,
@@ -128,11 +133,10 @@
       true,
     );
     window.addEventListener("unhandledrejection", (event) =>
-      diagnostic("error", describe(event.reason)),
+      runtimeError(describe(event.reason)),
     );
     window.addEventListener("securitypolicyviolation", (event) =>
-      diagnostic(
-        "error",
+      runtimeError(
         `Blocked by package policy: ${event.violatedDirective} ${event.blockedURI}`,
       ),
     );

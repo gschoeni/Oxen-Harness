@@ -15,7 +15,7 @@ import type {
   HardwareProfile,
   HfHit,
   InstalledView,
-  LedgerSnapshot,
+  ThreadSnapshot,
   OxenModelHit,
   PatternCheck,
   Project,
@@ -336,19 +336,14 @@ export const listProjects = vi.fn(async () => [] as Project[]);
 export const setReviewStatus = vi.fn(async () => {});
 export const setReviewStatusMany = vi.fn(async () => 0);
 
-// ---- the Ledger ------------------------------------------------------------
+// ---- threads ---------------------------------------------------------------
 
-export const emptyLedger: LedgerSnapshot = { entries: [], running: [], last_seen: 0 };
-export const ledgerSnapshot = vi.fn(async () => ({ ...emptyLedger }));
-export const settleSession = vi.fn(async (_id: string, note?: string) => ({
-  settled_at: Math.floor(Date.now() / 1000),
-  note: note ?? "",
-}));
-export const reopenSession = vi.fn(async () => {});
-export const ledgerMarkSeen = vi.fn(async () => Math.floor(Date.now() / 1000));
+export const emptyThreads: ThreadSnapshot = { entries: [], running: [] };
+export const threadsSnapshot = vi.fn(async () => ({ ...emptyThreads }));
+export const sessionFinish = vi.fn(async (_id: string) => Math.floor(Date.now() / 1000));
+export const sessionReopen = vi.fn(async (_id: string) => {});
 export const sessionMarkSeen = vi.fn(async (_id: string) => Math.floor(Date.now() / 1000));
 export const renameSession = vi.fn(async (_id: string, _title: string) => {});
-export const workspaceGit = vi.fn(async () => ({}));
 export const openProject = vi.fn(async (path: string) => ({
   path,
   name: path,
@@ -601,16 +596,11 @@ export function resetIpc() {
   }));
   setActiveProject.mockReset().mockResolvedValue(undefined);
   selectCloudModelForNewChats.mockReset().mockResolvedValue(undefined);
-  ledgerSnapshot.mockReset().mockResolvedValue({ ...emptyLedger });
-  settleSession.mockReset().mockImplementation(async (_id: string, note?: string) => ({
-    settled_at: Math.floor(Date.now() / 1000),
-    note: note ?? "",
-  }));
-  reopenSession.mockReset().mockResolvedValue(undefined);
-  ledgerMarkSeen.mockReset().mockResolvedValue(Math.floor(Date.now() / 1000));
+  threadsSnapshot.mockReset().mockResolvedValue({ ...emptyThreads });
+  sessionFinish.mockReset().mockResolvedValue(Math.floor(Date.now() / 1000));
+  sessionReopen.mockReset().mockResolvedValue(undefined);
   sessionMarkSeen.mockReset().mockResolvedValue(Math.floor(Date.now() / 1000));
   renameSession.mockReset().mockResolvedValue(undefined);
-  workspaceGit.mockReset().mockResolvedValue({});
   getDefaultProjectLocation.mockReset().mockResolvedValue(null);
   setDefaultProjectLocation.mockReset().mockImplementation(async (path: string) => path);
   pickFolder.mockReset().mockResolvedValue(null);

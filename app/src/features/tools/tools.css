@@ -170,28 +170,14 @@
 }
 
 /* --- Custom tools: the add button and the create/edit editor --- */
+/* The list's "add one" row: a full-width outline button drawn dashed so it
+   reads as a slot, not an item. Size comes from .btn. */
 .tool-add {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px dashed var(--separator-strong);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease);
+  width: 100%;
+  border-style: dashed;
 }
 .tool-add:hover:not(:disabled) {
   border-color: var(--accent);
-  color: var(--text);
-  background: var(--surface-2);
-}
-.tool-add:disabled {
-  opacity: 0.5;
 }
 .tool-add svg {
   color: var(--accent);
@@ -327,8 +313,8 @@
 .tool-param-remove {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   background: transparent;
   border: none;
   border-radius: var(--radius-xs);

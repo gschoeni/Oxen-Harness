@@ -529,10 +529,7 @@ mod tests {
             .contains("Could not run (needs user approval): `rm -rf build`"));
 
         let failed = SubagentResult::from_outcome(
-            &outcome(Err(AgentError::Llm(LlmError::Api {
-                status: 429,
-                message: "slow down".into(),
-            }))),
+            &outcome(Err(AgentError::Llm(LlmError::api(429, "slow down")))),
             "fleet-1",
             100,
             None,

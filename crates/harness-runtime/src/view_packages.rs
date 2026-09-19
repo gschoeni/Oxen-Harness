@@ -141,12 +141,6 @@ pub(crate) fn inspect_files(source: &Path) -> Result<(Package, BTreeMap<String, 
             .ok_or("view package needs view.json")?,
     )
     .map_err(|e| format!("invalid view manifest: {e}"))?;
-    if manifest.title.trim().is_empty()
-        || manifest.title.len() > 160
-        || manifest.description.len() > 2000
-    {
-        return Err("view title needs 1 to 160 bytes and description at most 2000 bytes".into());
-    }
     if manifest.api_version != 1 {
         return Err(format!("unsupported view API {}", manifest.api_version));
     }
@@ -205,8 +199,24 @@ pub(crate) fn inspect_files(source: &Path) -> Result<(Package, BTreeMap<String, 
     ))
 }
 
+/// Limits a manifest must meet to be previewed or installed. They are
+/// checked when a package is inspected for review, never when an installed
+/// revision is loaded back — so tightening one later can't orphan a view
+/// that was approved under the old rules.
+pub(crate) fn check_manifest_limits(manifest: &Manifest) -> Result<(), String> {
+    if manifest.title.trim().is_empty()
+        || manifest.title.len() > 160
+        || manifest.description.len() > 2000
+    {
+        return Err("view title needs 1 to 160 bytes and description at most 2000 bytes".into());
+    }
+    Ok(())
+}
+
 pub fn inspect(source: &Path) -> Result<Package, String> {
-    Ok(inspect_files(source)?.0)
+    let (package, _) = inspect_files(source)?;
+    check_manifest_limits(&package.manifest)?;
+    Ok(package)
 }
 pub fn root() -> Result<PathBuf, String> {
     Ok(harness_config::paths::base_dir()
@@ -245,6 +255,7 @@ pub(crate) async fn install_at(
     root: &Path,
 ) -> Result<Package, String> {
     let (package, files) = inspect_files(source)?;
+    check_manifest_limits(&package.manifest)?;
     if package.digest != approved_digest {
         return Err("view assets changed after review; inspect and approve the new package".into());
     }
@@ -338,7 +349,7 @@ pub(crate) fn cached_files(package: &Package, root: &Path) -> Result<AssetFiles,
 }
 
 fn verify_assets(assets: &Documents, package: &Package) -> Result<(), String> {
-    if inspect(assets.root())? != *package {
+    if inspect_files(assets.root())?.0 != *package {
         return Err(
             "installed view assets no longer match the approved hash; reinstall the package".into(),
         );
@@ -352,6 +363,25 @@ mod tests {
     fn package(dir: &Path) {
         std::fs::write(dir.join("view.json"),r#"{"api_version":1,"id":"test.notes","title":"Notes","description":"Test","entry":"index.html","permissions":{"read":["notes/**"],"write":["notes/**"]}}"#).unwrap();
         std::fs::write(dir.join("index.html"), "<p>Hello</p>").unwrap();
+    }
+    #[tokio::test]
+    async fn a_package_installed_under_older_limits_still_mounts() {
+        let source = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let description = "x".repeat(2300);
+        std::fs::write(source.path().join("view.json"),format!(r#"{{"api_version":1,"id":"test.old","title":"Old","description":"{description}","entry":"index.html","permissions":{{"read":[],"write":[]}}}}"#)).unwrap();
+        std::fs::write(source.path().join("index.html"), "<p>Old</p>").unwrap();
+        // Installed before the description limit existed: the cache holds
+        // its exact bytes, approved as they were.
+        let (package, files) = inspect_files(source.path()).unwrap();
+        cache_assets(&package, &files, root.path()).unwrap();
+        assert_eq!(cached_files(&package, root.path()).unwrap().len(), 2);
+        // The same folder is refused for a fresh review or install today.
+        assert!(inspect(source.path()).unwrap_err().contains("2000 bytes"));
+        assert!(install_at(source.path(), &package.digest, root.path())
+            .await
+            .unwrap_err()
+            .contains("2000 bytes"));
     }
     #[tokio::test]
     async fn install_requires_review_of_exact_assets_and_survives_source_changes() {

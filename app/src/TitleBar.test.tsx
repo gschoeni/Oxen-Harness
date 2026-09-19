@@ -6,7 +6,6 @@ vi.mock("./lib/ipc", () => import("./test/ipcMock"));
 
 import { TitleBar } from "./TitleBar";
 import { useStore } from "./lib/store";
-import { getUi, setUi } from "./lib/uiState";
 import { resetAll } from "./test/utils";
 
 beforeEach(() => {
@@ -16,7 +15,7 @@ beforeEach(() => {
 describe("TitleBar running work indicator", () => {
   it("counts active fleet lanes instead of double-counting their parent sessions", () => {
     useStore.setState({
-      ledger: { entries: [], running: ["persisted"], last_seen: 0 },
+      threadsSnapshot: { entries: [], running: ["persisted"] },
       runStatus: { parent: "running", solo: "running", finished: "unread" },
       fleets: {
         "fleet-1": {
@@ -42,30 +41,28 @@ describe("TitleBar running work indicator", () => {
     render(<TitleBar />);
 
     // Three active fleet lanes + one solo live session + one backend-known session.
-    expect(screen.getByRole("button", { name: "5 running — open the Ledger" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "5 running — go Home" })).toBeTruthy();
   });
 
-  it("lets locally completed work override an older Ledger snapshot", () => {
+  it("lets locally completed work override an older snapshot", () => {
     useStore.setState({
-      ledger: { entries: [], running: ["done", "still-running"], last_seen: 0 },
+      threadsSnapshot: { entries: [], running: ["done", "still-running"] },
       runStatus: { done: "unread", "still-running": "running" },
     });
 
     render(<TitleBar />);
 
-    expect(screen.getByRole("button", { name: "1 running — open the Ledger" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "1 running — go Home" })).toBeTruthy();
   });
 
-  it("opens the Ledger lens when clicked", async () => {
-    setUi("homeView", "cards");
+  it("goes Home when clicked, closing Settings and any project page", async () => {
     useStore.setState({ homeOpen: false, projectHomePath: "/work/project", settingsOpen: true });
     render(<TitleBar />);
 
-    await userEvent.click(screen.getByRole("button", { name: "0 running — open the Ledger" }));
+    await userEvent.click(screen.getByRole("button", { name: "0 running — go Home" }));
 
     expect(useStore.getState().homeOpen).toBe(true);
     expect(useStore.getState().settingsOpen).toBe(false);
     expect(useStore.getState().projectHomePath).toBeNull();
-    expect(getUi("homeView")).toBe("ledger");
   });
 });

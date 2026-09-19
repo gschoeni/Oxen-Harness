@@ -632,9 +632,8 @@ impl FleetSpawner {
     }
 
     /// [`Self::build_agent`], optionally as a fork: the lane starts from the
-    /// parent's published transcript (its system prompt made a lane's, the
-    /// trail mandate gone and the lane appendix added) instead of a fresh
-    /// context.
+    /// parent's published transcript (its system prompt made a lane's, with
+    /// the lane appendix added) instead of a fresh context.
     pub(crate) fn build_agent_with(
         &self,
         label: &str,
@@ -1536,18 +1535,15 @@ mod tests {
             }
         }
 
-        // A registry carrying the session-singular tools, plus the fleet tool
+        // A registry carrying the host-singular tools, plus the fleet tool
         // itself — the shape a real session hands the spawner.
         let mut tools = ToolRegistry::new();
         tools.register_typed(AskUserTool::new(Arc::new(NoopAsker)));
-        tools.register_typed(harness_tools::TrailTool::new());
         let sp = FleetSpawner::new(
             OxenClient::new("http://localhost/api/ai", "k", "m"),
             tools,
             AgentConfig {
                 max_depth: 1,
-                // The parent's real prompt mandates charting; a lane must not
-                // inherit a mandate for a tool its registry rejects.
                 system_prompt: Some(crate::prompt::default_system_prompt(false)),
                 ..AgentConfig::default()
             },
@@ -1567,15 +1563,6 @@ mod tests {
         assert!(
             !names.contains(&FLEET_TOOL.to_string()),
             "a subagent must not inherit spawn_agents (no recursive fan-out): {names:?}"
-        );
-        assert!(
-            !names.contains(&harness_tools::TRAIL_TOOL.to_string()),
-            "a subagent must not inherit update_trail (its trail never reaches a board): {names:?}"
-        );
-        let system = sub.messages()[0].content_text().unwrap_or_default();
-        assert!(
-            !system.contains("update_trail"),
-            "the inherited prompt must drop the trail mandate along with the tool"
         );
     }
 
@@ -2404,10 +2391,6 @@ mod tests {
             .unwrap()
             .expect("the inherited context is one snapshot");
         let system = inherited[0].content_text().unwrap_or_default();
-        assert!(
-            !system.contains("update_trail"),
-            "no trail mandate in a lane"
-        );
         assert!(system.contains("You are a subagent"));
         assert_eq!(
             store.messages(&lanes[0].id).unwrap().len(),

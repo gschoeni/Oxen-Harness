@@ -112,11 +112,22 @@ pub enum AgentEvent {
         attempt: u32,
         max_attempts: u32,
         delay_ms: u64,
+        /// The one-line reason (an `LlmError`'s display form).
         error: String,
         /// Set when the retries on the current model are spent and the call is
         /// moving to a configured fallback instead of failing the turn. The
         /// session model is unchanged — only this call switches.
         switching_to: Option<String>,
+        /// The model whose call failed and the endpoint it was sent to, so a
+        /// UI can show where the failure happened without a config lookup.
+        model: String,
+        endpoint: String,
+        /// The HTTP status of the failed reply, when there was one.
+        status: Option<u16>,
+        /// What the provider actually said — the raw error body, or the full
+        /// error chain for a transport failure — for a debugging view. `None`
+        /// when `error` already carries everything (a stream cut off).
+        detail: Option<String>,
     },
 }
 

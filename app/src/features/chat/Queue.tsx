@@ -2,6 +2,7 @@
 // Styled as one of the in-flight panels (fleet, tasks, media) so the stack
 // above the composer reads as one column: same width, head, and row height.
 import { ListOrdered, X } from "lucide-react";
+import { Button } from "../../components/ui";
 
 export function Queue({
   items,
@@ -18,9 +19,9 @@ export function Queue({
         <ListOrdered size={13} className="fleet-panel-icon" />
         <span className="fleet-panel-title">Queued · {items.length}</span>
         <span className="fleet-panel-hint queue-note">sends automatically when the agent is free</span>
-        <button type="button" className="fleet-panel-stop queue-clear" onClick={() => onChange([])}>
+        <Button type="button" size="sm" variant="outline" className="queue-clear" onClick={() => onChange([])}>
           Clear
-        </button>
+        </Button>
       </div>
       <div className="fleet-lanes">
         {items.map((text, i) => (

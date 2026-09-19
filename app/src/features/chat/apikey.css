@@ -103,8 +103,8 @@
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: var(--control-h);
+  height: var(--control-h);
   background: transparent;
   border: none;
   color: var(--text-tertiary);

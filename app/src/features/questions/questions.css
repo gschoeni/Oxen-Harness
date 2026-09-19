@@ -160,8 +160,8 @@
 .qother-send {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: var(--control-h-lg);
+  height: var(--control-h-lg);
   flex-shrink: 0;
   background: var(--accent);
   color: var(--on-accent);

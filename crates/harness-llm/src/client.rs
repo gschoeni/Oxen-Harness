@@ -82,12 +82,10 @@ impl OxenClient {
             .await?;
 
         let status = resp.status();
+        let headers = resp.headers().clone();
         let body = resp.text().await?;
         if !status.is_success() {
-            return Err(LlmError::Api {
-                status: status.as_u16(),
-                message: extract_api_error(&body),
-            });
+            return Err(LlmError::api_with_headers(status.as_u16(), &headers, &body));
         }
         serde_json::from_str(&body).map_err(LlmError::from)
     }
@@ -127,11 +125,9 @@ impl OxenClient {
 
         let status = resp.status();
         if !status.is_success() {
+            let headers = resp.headers().clone();
             let body = resp.text().await?;
-            return Err(LlmError::Api {
-                status: status.as_u16(),
-                message: extract_api_error(&body),
-            });
+            return Err(LlmError::api_with_headers(status.as_u16(), &headers, &body));
         }
 
         let mut decoder = SseDecoder::new();
@@ -187,7 +183,7 @@ impl OxenClient {
 /// `{"error":{"type":..,"title":..},"status":..,"status_message":..}`, but other
 /// services vary, so we try the friendliest fields in priority order and fall
 /// back to the trimmed body when none are present.
-fn extract_api_error(body: &str) -> String {
+pub(crate) fn extract_api_error(body: &str) -> String {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
         return body.trim().to_string();
     };
@@ -257,12 +253,43 @@ mod tests {
         let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
         let err = client.chat(&req).await.unwrap_err();
         match err {
-            LlmError::Api { status, message } => {
+            LlmError::Api {
+                status,
+                message,
+                body,
+                retry_after,
+            } => {
                 assert_eq!(status, 401);
                 assert_eq!(message, "Invalid API key");
+                // The raw body rides along for the debugging view.
+                assert_eq!(body, r#"{"error":{"message":"Invalid API key"}}"#);
+                assert_eq!(retry_after, None);
             }
             other => panic!("expected Api error, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_keeps_the_servers_retry_after() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after", "17")
+            .with_body(r#"{"error":{"title":"The model provider returned an error."}}"#)
+            .create_async()
+            .await;
+
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
+        let err = client.chat(&req).await.unwrap_err();
+        assert_eq!(err.status(), Some(429));
+        assert_eq!(err.transient_kind(), Some(crate::Transient::RateLimited));
+        assert_eq!(err.retry_after(), Some(std::time::Duration::from_secs(17)));
+        // The streaming path reads the same header.
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let err = client.stream_chat(&req, &cancel, |_| {}).await.unwrap_err();
+        assert_eq!(err.retry_after(), Some(std::time::Duration::from_secs(17)));
     }
 
     #[test]

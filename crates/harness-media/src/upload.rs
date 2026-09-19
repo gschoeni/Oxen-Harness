@@ -153,14 +153,15 @@ impl HubUploader {
     /// The namespace a recent generation was billed to, if the queue lists
     /// one — the hub's own default for this account.
     async fn queue_namespace(&self) -> Option<String> {
-        let res = self
-            .http
-            .get(format!("{}/ai/queue", self.api_root))
-            .bearer_auth(&self.api_key)
-            .timeout(Duration::from_secs(20))
-            .send()
-            .await
-            .ok()?;
+        let res = crate::hub::send(
+            self.http
+                .get(format!("{}/ai/queue", self.api_root))
+                .bearer_auth(&self.api_key)
+                .timeout(Duration::from_secs(20)),
+            true,
+        )
+        .await
+        .ok()?;
         if !res.status().is_success() {
             return None;
         }
@@ -277,18 +278,21 @@ impl HubUploader {
         let form = reqwest::multipart::Form::new()
             .part("file", part)
             .text("directory", UPLOAD_DIRECTORY);
-        let res = self
-            .http
-            .post(format!(
-                "{}/repos/{namespace}/{repo}/workbench/context",
-                self.api_root
-            ))
-            .bearer_auth(&self.api_key)
-            .multipart(form)
-            .timeout(Duration::from_secs(20 * 60))
-            .send()
-            .await
-            .map_err(|e| UploadError::Http(e.to_string()))?;
+        // A multipart body streams, so this is sent exactly once (the retry
+        // helper can't clone it); the routing goes through it for one
+        // consistent error mapping.
+        let res = crate::hub::send(
+            self.http
+                .post(format!(
+                    "{}/repos/{namespace}/{repo}/workbench/context",
+                    self.api_root
+                ))
+                .bearer_auth(&self.api_key)
+                .multipart(form)
+                .timeout(Duration::from_secs(20 * 60)),
+            false,
+        )
+        .await?;
         let v: Value = crate::hub::body(res).await.map_err(|e| match e {
             UploadError::Api { status, message } => UploadError::Api {
                 status,
@@ -329,17 +333,17 @@ impl HubUploader {
         repo: &str,
         asset_path: &str,
     ) -> Result<String, UploadError> {
-        let res = self
-            .http
-            .get(format!(
-                "{}/repos/{namespace}/{repo}/file/presigned_url/main/{asset_path}",
-                self.api_root
-            ))
-            .bearer_auth(&self.api_key)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| UploadError::Http(e.to_string()))?;
+        let res = crate::hub::send(
+            self.http
+                .get(format!(
+                    "{}/repos/{namespace}/{repo}/file/presigned_url/main/{asset_path}",
+                    self.api_root
+                ))
+                .bearer_auth(&self.api_key)
+                .timeout(Duration::from_secs(30)),
+            true,
+        )
+        .await?;
         let v: Value = crate::hub::body(res).await.map_err(|e| match e {
             UploadError::Api { status, message } => UploadError::Api {
                 status,

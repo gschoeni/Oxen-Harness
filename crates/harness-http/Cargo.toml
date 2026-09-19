@@ -1,0 +1,21 @@
+[package]
+name = "harness-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Retry schedule and Retry-After handling shared by every HTTP call oxen-harness makes"
+
+[dependencies]
+tokio = { workspace = true }
+httpdate = "1"
+fastrand = "2"
+reqwest = { workspace = true }
+
+[dev-dependencies]
+mockito = "1"
+
+[lints]
+workspace = true

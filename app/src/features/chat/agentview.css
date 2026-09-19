@@ -117,12 +117,14 @@
   gap: var(--space-1);
   flex-shrink: 0;
 }
-.agent-view-actions > button,
+/* The toolbar's own icon/tab buttons; a shared .btn dropped in here (Stop)
+   keeps its token size and variant. */
+.agent-view-actions > button:not(.btn),
 .agent-view-switch button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
+  height: var(--control-h-sm);
   padding: 0 var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -134,7 +136,7 @@
     color var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease);
 }
-.agent-view-actions > button:hover:not(:disabled),
+.agent-view-actions > button:not(.btn):hover:not(:disabled),
 .agent-view-switch button:hover:not(:disabled) {
   background: var(--surface-hover);
   color: var(--text);
@@ -154,19 +156,13 @@
   font-variant-numeric: tabular-nums;
 }
 .agent-view-switch button {
-  width: 26px;
+  width: var(--control-h-sm);
   padding: 0;
   justify-content: center;
 }
 .agent-view-switch > span {
   padding: 0 4px;
   white-space: nowrap;
-}
-.agent-view-stop {
-  color: var(--danger) !important;
-}
-.agent-view-stop:hover:not(:disabled) {
-  background: var(--danger-soft, color-mix(in srgb, var(--danger) 12%, transparent)) !important;
 }
 
 /* --- The thread --- */
@@ -254,7 +250,7 @@
 .agent-view-patch-head button {
   display: inline-flex;
   align-items: center;
-  height: 26px;
+  height: var(--control-h-sm);
   padding: 0 var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-xs);

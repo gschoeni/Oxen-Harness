@@ -8,7 +8,7 @@
 
 import { useRef, useState, type KeyboardEvent } from "react";
 import { AlertTriangle, Wrench } from "lucide-react";
-import { Modal } from "../../components/ui";
+import { Modal, Button } from "../../components/ui";
 import { Markdown } from "../../components/ui/Markdown";
 import type { ToolInfo } from "../../lib/types";
 
@@ -200,15 +200,17 @@ export function InstructionsEditor({
       )}
 
       <div className="skill-editor-foot">
-        <button
+        <Button
           type="button"
+          size="sm"
+          variant="outline"
           className="skill-tools-button"
           onClick={() => setPaletteOpen(true)}
           title="Browse the tools this agent can use"
         >
           <Wrench size={13} />
           Available tools
-        </button>
+        </Button>
 
         {(refs.known.length > 0 || refs.unknown.length > 0) && (
           <div className="skill-refs" aria-label="Referenced tools">

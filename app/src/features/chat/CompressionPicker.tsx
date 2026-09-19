@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Button } from "../../components/ui";
 import { ChevronDown, Settings2, Shrink } from "lucide-react";
 import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../components/ui/Menu";
 import { useStore } from "../../lib/store";
@@ -37,8 +38,10 @@ export function CompressionPicker({ disabled }: { disabled: boolean }) {
 
   return (
     <div className="picker" ref={ref}>
-      <button
+      <Button
         type="button"
+        size="sm"
+        variant="ghost"
         className="picker-btn"
         onClick={() => setOpen((o) => !o)}
         disabled={disabled || busy}
@@ -53,7 +56,7 @@ export function CompressionPicker({ disabled }: { disabled: boolean }) {
         <Shrink size={13} />
         <span className="picker-label">Compression {mode}</span>
         <ChevronDown size={13} className="picker-caret" />
-      </button>
+      </Button>
 
       {open && (
         <Menu className="picker-menu">

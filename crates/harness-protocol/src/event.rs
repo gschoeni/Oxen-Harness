@@ -163,11 +163,25 @@ pub enum ProtocolEvent {
         attempt: u32,
         max_attempts: u32,
         delay_ms: u64,
+        /// The one-line reason, as shown in a notice.
         error: String,
         /// The model this call is moving to, when the retries on the current
         /// one are spent. Absent for an ordinary backoff retry.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         switching_to: Option<String>,
+        /// The model whose call failed and the endpoint it was sent to.
+        #[serde(default)]
+        model: String,
+        #[serde(default)]
+        endpoint: String,
+        /// The HTTP status of the failed reply, when there was one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<u16>,
+        /// What the provider actually said (raw error body, or the transport
+        /// error chain), for a client's error-detail view. Absent when `error`
+        /// already says everything.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
     /// Stale tool output was compressed (or its savings measured, in audit
     /// mode) before a model call.

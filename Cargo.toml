@@ -4,6 +4,7 @@ members = [
     "crates/harness-core",
     "crates/harness-config",
     "crates/harness-protocol",
+    "crates/harness-http",
     "crates/harness-llm",
     "crates/harness-compress",
     "crates/harness-tools",
@@ -40,6 +41,7 @@ description = "An open source, hackable agentic coding harness powered by Oxen.a
 harness-core = { path = "crates/harness-core" }
 harness-config = { path = "crates/harness-config" }
 harness-protocol = { path = "crates/harness-protocol" }
+harness-http = { path = "crates/harness-http" }
 harness-llm = { path = "crates/harness-llm" }
 harness-compress = { path = "crates/harness-compress" }
 harness-tools = { path = "crates/harness-tools" }

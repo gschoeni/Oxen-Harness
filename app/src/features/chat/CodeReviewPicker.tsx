@@ -5,6 +5,7 @@
 // Disabled mid-turn — a review holds the same agent lock a turn does.
 
 import { useState, type FormEvent } from "react";
+import { Button } from "../../components/ui";
 import { ArrowRight, ChevronDown, SearchCode, Settings2 } from "lucide-react";
 import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../components/ui/Menu";
 import { useStore } from "../../lib/store";
@@ -29,8 +30,10 @@ export function CodeReviewPicker({ disabled }: { disabled: boolean }) {
 
   return (
     <div className="picker" ref={ref}>
-      <button
+      <Button
         type="button"
+        size="sm"
+        variant="ghost"
         className="picker-btn"
         onClick={() => setOpen((o) => !o)}
         disabled={disabled}
@@ -45,7 +48,7 @@ export function CodeReviewPicker({ disabled }: { disabled: boolean }) {
         <SearchCode size={13} />
         <span className="picker-label">Review</span>
         <ChevronDown size={13} className="picker-caret" />
-      </button>
+      </Button>
 
       {open && (
         <Menu className="picker-menu">

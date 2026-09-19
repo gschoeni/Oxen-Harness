@@ -5,6 +5,7 @@
 // and "Raw JSON" (the exact request shape). Read-only — never disturbs the agent.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { IconButton } from "../../components/ui";
 import {
   Ban,
   Braces,
@@ -485,9 +486,9 @@ export function InspectorDrawer() {
               </span>
             )}
           </div>
-          <button className="inspector-close" onClick={close} aria-label="Close">
+          <IconButton onClick={close} aria-label="Close">
             <X size={18} />
-          </button>
+          </IconButton>
         </header>
 
         {review && (

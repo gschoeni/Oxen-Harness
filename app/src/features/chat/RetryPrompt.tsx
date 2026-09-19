@@ -4,6 +4,7 @@ import { Button } from "../../components/ui";
 import { getConnection } from "../../lib/ipc";
 import { isCreditsError, useStore } from "../../lib/store";
 import type { Item } from "./thread";
+import { ModelErrorModal } from "./ModelError";
 import "./apikey.css";
 
 type RetryItem = Extract<Item, { kind: "retry" }>;
@@ -27,6 +28,9 @@ export function RetryPrompt({ item }: { item: RetryItem }) {
       .catch(() => {});
   }, [credits]);
   const hubUrl = /^https?:\/\//.test(host) ? host : `https://${host || "hub.oxen.ai"}`;
+  // The card's one line summarises the turn's end; the detail view behind it
+  // has the last provider response, status, model and endpoint for debugging.
+  const [details, setDetails] = useState(false);
 
   return (
     <div className="apikey-card">
@@ -62,7 +66,13 @@ export function RetryPrompt({ item }: { item: RetryItem }) {
           {credits ? "I’ve added credits — retry" : "Continue"}
           <RotateCcw size={15} />
         </Button>
+        <button type="button" className="apikey-link" onClick={() => setDetails(true)}>
+          View error details
+        </button>
       </div>
+      {details && (
+        <ModelErrorModal error={item.lastError} final={item.message} onClose={() => setDetails(false)} />
+      )}
 
       {credits && (
         <div className="apikey-foot">

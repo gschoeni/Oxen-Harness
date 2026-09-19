@@ -831,15 +831,9 @@ mod tests {
             attempts: 4,
             model: "claude-opus-4-8".into(),
             endpoint: "https://hub.oxen.ai/api/ai".into(),
-            source: Box::new(LlmError::Api {
-                status: 502,
-                message: "The model provider returned an error.".into(),
-            }),
+            source: Box::new(LlmError::api(502, "The model provider returned an error.")),
         };
-        let auth = AgentError::Llm(LlmError::Api {
-            status: 401,
-            message: "Invalid API key".into(),
-        });
+        let auth = AgentError::Llm(LlmError::api(401, "Invalid API key"));
 
         // A dangling turn that died on a provider error → pre-fill /retry.
         assert!(seed_retry(&dangling, &exhausted));

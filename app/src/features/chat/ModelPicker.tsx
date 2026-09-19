@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useState } from "react";
+import { Button } from "../../components/ui";
 import { ChevronDown, Cloud, Cpu, Download, Loader } from "lucide-react";
 import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../components/ui/Menu";
 import { installedLocalModels, searchOxenModels } from "../../lib/ipc";
@@ -113,8 +114,10 @@ export function ModelPicker({
 
   return (
     <div className="picker" ref={ref}>
-      <button
+      <Button
         type="button"
+        size="sm"
+        variant="ghost"
         className="picker-btn"
         onClick={() => setOpen((o) => !o)}
         disabled={disabled || switching}
@@ -137,7 +140,7 @@ export function ModelPicker({
         )}
         <span className="picker-label">{statusLabel}</span>
         {!switching && <ChevronDown size={13} className="picker-caret" />}
-      </button>
+      </Button>
 
       {!choosingStartupModel && localSwitch && (
         <span className="model-switch-inline">

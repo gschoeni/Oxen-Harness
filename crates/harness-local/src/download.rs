@@ -54,8 +54,9 @@ where
         req = req.bearer_auth(token.trim());
     }
 
-    let resp = req
-        .send()
+    // Hugging Face throttles bursts of downloads with a 429; the request
+    // (not the multi-gigabyte body) is retried on the brief schedule.
+    let resp = harness_http::send_with_retry(req, &harness_http::Backoff::brief(), true)
         .await
         .map_err(|e| LocalError::Download(format!("request failed: {e}")))?;
     if let Some(message) = opts.gated_message {

@@ -21,7 +21,7 @@
 pub(crate) mod browser;
 pub(crate) mod connection;
 pub(crate) mod files;
-pub(crate) mod ledger;
+pub(crate) mod threads;
 pub(crate) mod loops;
 pub(crate) mod media;
 pub(crate) mod models;

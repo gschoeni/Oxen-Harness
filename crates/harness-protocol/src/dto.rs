@@ -325,62 +325,6 @@ pub struct LoopResult {
     pub summary: String,
 }
 
-/// A compact plan reading — "3/5, currently: Running tests". Serde-compatible
-/// with `harness_tools::PlanSnapshot` (pinned by a wire test), which is the
-/// shape the agent persists per session.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct PlanProgress {
-    /// Items marked completed.
-    pub done: usize,
-    /// Items in the plan overall.
-    pub total: usize,
-    /// The in-progress item's present-continuous label, when one is underway.
-    #[serde(default)]
-    pub active: Option<String>,
-}
-
-/// One named stage on a thread's charted journey. Serde-compatible with
-/// `harness_tools::Waypoint` (pinned by a wire test).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct TrailWaypoint {
-    /// Stage name, e.g. "define", "implement".
-    pub name: String,
-    /// `"ahead"` | `"current"` | `"done"`.
-    pub status: String,
-}
-
-/// The journey the model charted for a session via `update_trail`: a
-/// self-chosen thread title plus its macro stages. Serde-compatible with
-/// `harness_tools::TrailSnapshot` (pinned by a wire test).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct TrailProgress {
-    /// The model-chosen thread title.
-    pub title: String,
-    /// The route, in order.
-    pub waypoints: Vec<TrailWaypoint>,
-}
-
-/// The mark a settled ("tied off") thread carries in the Ledger: when it was
-/// closed and, optionally, the user's one-line closing note ("shipped as
-/// PR #42"). Absence of this state is what "open" means — there is no
-/// separate open/closed flag to fall out of sync.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct SettleState {
-    /// Unix seconds when the thread was tied off.
-    pub settled_at: i64,
-    /// The user's closing note; empty when they skipped it.
-    #[serde(default)]
-    pub note: String,
-}
-
-/// A request to settle (tie off) a session's thread in the Ledger.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct SettleRequest {
-    /// Optional one-line closing note.
-    #[serde(default)]
-    pub note: String,
-}
-
 /// A request to give a session a name of the user's choosing. A blank name
 /// clears it, so the session titles itself by its first message again.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -388,13 +332,12 @@ pub struct RenameRequest {
     pub title: String,
 }
 
-/// One thread as the Ledger renders it: a native session with everything that
-/// decides where its wagon sits — freshness, plan progress, whether it stopped
-/// mid-turn, and whether it has been tied off. Workspace-level facts (git
-/// state, project names) deliberately are NOT here: they belong to the
-/// workspace, not the thread, and travel separately.
+/// One session as an overview surface sees it: what decides whether it needs
+/// the user — freshness, whether it stopped mid-turn, and whether the user
+/// marked it finished. Workspace-level facts (git state, project names)
+/// deliberately are NOT here: they belong to the workspace, not the thread.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct LedgerEntry {
+pub struct ThreadEntry {
     pub id: String,
     pub workspace: String,
     pub model: String,
@@ -404,8 +347,8 @@ pub struct LedgerEntry {
     pub last_activity_at: i64,
     /// The first user message's text — the thread's title.
     pub title: String,
-    /// The opening of the newest assistant message — the thread's last word,
-    /// shown on its waystation card. Empty when the model never replied.
+    /// The opening of the newest assistant message — the thread's last word.
+    /// Empty when the model never replied.
     #[serde(default)]
     pub last_reply: String,
     pub message_count: i64,
@@ -413,16 +356,11 @@ pub struct LedgerEntry {
     /// never arrived. Combined with `running` on the snapshot: mid-turn and
     /// not running means the thread was left dangling.
     pub mid_turn: bool,
-    /// Latest plan reading, when the thread ever laid one out.
+    /// Unix seconds the user marked this thread finished; `0` while open.
+    /// The one piece of human-authored state: set by the finish route,
+    /// cleared by reopening (or by the thread running again).
     #[serde(default)]
-    pub plan: Option<PlanProgress>,
-    /// The journey the model charted via `update_trail`, when it has. Its
-    /// `title` supersedes the first-user-message `title` for display.
-    #[serde(default)]
-    pub trail: Option<TrailProgress>,
-    /// Present once the thread has been tied off.
-    #[serde(default)]
-    pub settle: Option<SettleState>,
+    pub finished_at: i64,
     /// Training-data curation: `""` (unreviewed), `"kept"`, or `"rejected"`.
     #[serde(default)]
     pub review_status: String,
@@ -434,16 +372,13 @@ pub struct LedgerEntry {
     pub seen_at: i64,
 }
 
-/// Everything the Ledger board needs, in one read.
+/// Every native thread plus which ones are running, in one read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct LedgerSnapshot {
+pub struct ThreadSnapshot {
     /// Every native thread, newest activity first.
-    pub entries: Vec<LedgerEntry>,
+    pub entries: Vec<ThreadEntry>,
     /// Session ids with work in flight right now (a turn, review, or loop) —
     /// read from the host's authoritative in-flight registry, so it is correct
     /// even after a UI restart.
     pub running: Vec<String>,
-    /// Unix seconds the Ledger was last marked seen; 0 on first visit. The
-    /// board renders "since you left" against this.
-    pub last_seen: i64,
 }

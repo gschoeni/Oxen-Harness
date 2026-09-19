@@ -8,6 +8,7 @@ import {
   dropRetryPrompts,
   endsMidTurn,
   finalizeAssistant,
+  lastModelError,
   lastUserText,
   resolveRecoveryPrompt,
   resumeMidTurn,
@@ -17,6 +18,19 @@ import {
   transcriptToItems,
   type Item,
 } from "./thread";
+import type { ModelErrorDetail } from "../../lib/types";
+
+const sampleModelError = (over: Partial<ModelErrorDetail> = {}): ModelErrorDetail => ({
+  at: 1_700_000_000_000,
+  error: "Oxen API error (502): The model provider returned an error.",
+  model: "claude-opus-4-8",
+  endpoint: "https://hub.oxen.ai/api/ai",
+  status: 502,
+  attempt: 1,
+  maxAttempts: 4,
+  next: { kind: "retry", delayMs: 1000 },
+  ...over,
+});
 
 const assistantText = (items: Item[]) =>
   items.filter((i): i is Extract<Item, { kind: "assistant" }> => i.kind === "assistant");
@@ -34,6 +48,43 @@ describe("thread: appendNotice", () => {
     const items = finalizeAssistant(startTurn([], "hi"), "done");
     const next = appendNotice(items, "note");
     expect(next[next.length - 1]).toMatchObject({ kind: "notice", text: "note" });
+    // A plain note carries no error payload at all (not even an undefined key).
+    expect("error" in next[next.length - 1]).toBe(false);
+  });
+
+  it("keeps a failed model call's structured detail on the notice", () => {
+    const error = sampleModelError({ status: 502 });
+    const next = appendNotice(startTurn([], "hi"), "Model call failed (502) — retrying in 1s", error);
+    expect(next[1]).toMatchObject({ kind: "notice", error: { status: 502, model: "claude-opus-4-8" } });
+  });
+});
+
+describe("thread: lastModelError", () => {
+  it("finds the last failed call of the current turn only", () => {
+    const first = sampleModelError({ status: 502, attempt: 1 });
+    const second = sampleModelError({ status: 503, attempt: 2 });
+    let items = appendNotice(startTurn([], "one"), "failed", first);
+    items = finalizeAssistant(items, "recovered");
+    // A new turn with no failures yet: the previous turn's hiccup is not "its" error.
+    items = startTurn(items, "two");
+    expect(lastModelError(items)).toBeUndefined();
+    items = appendNotice(items, "failed again", first);
+    items = appendNotice(items, "and again", second);
+    expect(lastModelError(items)).toMatchObject({ status: 503, attempt: 2 });
+  });
+
+  it("attaches that error to the retry card when the turn dies", () => {
+    const error = sampleModelError({ status: 502, detail: '{"error":"upstream"}' });
+    const items = appendNotice(startTurn([], "hi"), "failed", error);
+    const card = appendRetryPrompt(items, "hi", [], "the model endpoint failed 4 times in a row");
+    expect(card[card.length - 1]).toMatchObject({
+      kind: "retry",
+      message: "the model endpoint failed 4 times in a row",
+      lastError: { status: 502, detail: '{"error":"upstream"}' },
+    });
+    // No failure notice this turn (a 402 dies on the first call): no payload.
+    const bare = appendRetryPrompt(startTurn([], "hi"), "hi", [], "out of credits");
+    expect("lastError" in bare[bare.length - 1]).toBe(false);
   });
 });
 

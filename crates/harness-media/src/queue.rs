@@ -149,15 +149,17 @@ impl QueueClient {
     /// Enqueue one request (`model`, `num_generations`, model params).
     /// Returns the generation ids, in order.
     pub async fn enqueue(&self, body: &Value) -> Result<Vec<String>, QueueError> {
-        let res = self
-            .http
-            .post(self.queue_url())
-            .bearer_auth(&self.api_key)
-            .json(body)
-            .timeout(Duration::from_secs(120))
-            .send()
-            .await
-            .map_err(|e| QueueError::Http(e.to_string()))?;
+        // Enqueueing bills; a 5xx may have queued the job, so only a 429 or
+        // a connect failure is re-sent.
+        let res = Self::send(
+            self.http
+                .post(self.queue_url())
+                .bearer_auth(&self.api_key)
+                .json(body)
+                .timeout(Duration::from_secs(120)),
+            false,
+        )
+        .await?;
         let parsed: EnqueueResponse = Self::body(res).await?;
         if parsed.generations.is_empty() {
             return Err(QueueError::Json("enqueue returned no generations".into()));
@@ -171,14 +173,14 @@ impl QueueClient {
 
     /// One generation's current record.
     pub async fn get(&self, id: &str) -> Result<GenerationRecord, QueueError> {
-        let res = self
-            .http
-            .get(format!("{}/{id}", self.queue_url()))
-            .bearer_auth(&self.api_key)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| QueueError::Http(e.to_string()))?;
+        let res = Self::send(
+            self.http
+                .get(format!("{}/{id}", self.queue_url()))
+                .bearer_auth(&self.api_key)
+                .timeout(Duration::from_secs(30)),
+            true,
+        )
+        .await?;
         Self::body(res).await
     }
 
@@ -193,24 +195,21 @@ impl QueueClient {
         if let Some(status) = status {
             req = req.query(&[("status", status)]);
         }
-        let res = req
-            .send()
-            .await
-            .map_err(|e| QueueError::Http(e.to_string()))?;
+        let res = Self::send(req, true).await?;
         let parsed: ListResponse = Self::body(res).await?;
         Ok(parsed.generations)
     }
 
     /// Cancel a queued or processing generation.
     pub async fn cancel(&self, id: &str) -> Result<(), QueueError> {
-        let res = self
-            .http
-            .delete(format!("{}/{id}", self.queue_url()))
-            .bearer_auth(&self.api_key)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| QueueError::Http(e.to_string()))?;
+        let res = Self::send(
+            self.http
+                .delete(format!("{}/{id}", self.queue_url()))
+                .bearer_auth(&self.api_key)
+                .timeout(Duration::from_secs(30)),
+            true,
+        )
+        .await?;
         let _: Value = Self::body(res).await?;
         Ok(())
     }
@@ -218,13 +217,11 @@ impl QueueClient {
     /// Fetch a result by its presigned URL (no auth header — the signature
     /// is in the URL, and a bearer on a foreign host would leak the key).
     pub async fn download(&self, url: &str) -> Result<Vec<u8>, QueueError> {
-        let res = self
-            .http
-            .get(url)
-            .timeout(Duration::from_secs(10 * 60))
-            .send()
-            .await
-            .map_err(|e| QueueError::Http(e.to_string()))?;
+        let res = Self::send(
+            self.http.get(url).timeout(Duration::from_secs(10 * 60)),
+            true,
+        )
+        .await?;
         let status = res.status();
         if !status.is_success() {
             return Err(QueueError::Api {
@@ -373,6 +370,18 @@ impl QueueClient {
 
     /// Decode a JSON body, turning the hub's error envelope into a
     /// [`QueueError`].
+    /// Send with the brief retry schedule (see [`harness_http::send_with_retry`]):
+    /// a 429 from the queue or a blip is retried after a jittered wait that
+    /// honors `Retry-After`, instead of failing the generation outright.
+    async fn send(
+        request: reqwest::RequestBuilder,
+        safe_to_repeat: bool,
+    ) -> Result<reqwest::Response, QueueError> {
+        harness_http::send_with_retry(request, &harness_http::Backoff::brief(), safe_to_repeat)
+            .await
+            .map_err(|e| QueueError::Http(e.to_string()))
+    }
+
     async fn body<T: serde::de::DeserializeOwned>(res: reqwest::Response) -> Result<T, QueueError> {
         let status = res.status();
         let text = res

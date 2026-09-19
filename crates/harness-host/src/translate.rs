@@ -133,6 +133,10 @@ pub fn agent_event(
             delay_ms,
             error,
             switching_to,
+            model,
+            endpoint,
+            status,
+            detail,
         } => ProtocolEvent::Retry {
             session,
             attempt: *attempt,
@@ -140,6 +144,10 @@ pub fn agent_event(
             delay_ms: *delay_ms,
             error: error.clone(),
             switching_to: switching_to.clone(),
+            model: model.clone(),
+            endpoint: endpoint.clone(),
+            status: *status,
+            detail: detail.clone(),
         },
         AgentEvent::Compression {
             mode,

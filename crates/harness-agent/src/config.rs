@@ -7,49 +7,105 @@ use std::time::Duration;
 
 use harness_compress::CompressionMode;
 use harness_core::DEFAULT_MODEL;
+use harness_llm::{Backoff, LlmError, Transient};
 use harness_permissions::PermissionGate;
 
 use crate::prompt::default_system_prompt;
 
 /// Backoff schedule for retrying model calls that fail transiently (provider
 /// 5xx, rate limits, network blips — see [`harness_llm::LlmError::is_transient`]).
-/// `max_attempts` counts the first try; the wait doubles from `base_delay`
-/// after each failure (1s → 2s → 4s by default).
+/// The waits come from [`harness_llm::Backoff`]: a blip doubles from
+/// `base_delay` (1s → 2s → 4s by default) for `max_attempts` tries; a 429
+/// rate limit doubles from `rate_limit_base_delay` (2s → … → 32s) for
+/// `rate_limit_max_attempts` tries, since it clears on the server's clock,
+/// not ours; and a server-sent `Retry-After` is obeyed over either schedule,
+/// exactly, up to `max_retry_after`. Computed waits are jittered so parallel
+/// lanes don't retry in lockstep. `max_attempts` counts the first try.
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
     pub max_attempts: u32,
     pub base_delay: Duration,
-    /// Models to fall back to, in order, once `max_attempts` on the current
+    /// Attempts a 429 gets, first try included.
+    pub rate_limit_max_attempts: u32,
+    /// The first wait after a 429; doubles per attempt.
+    pub rate_limit_base_delay: Duration,
+    /// The longest any computed wait may be, whatever the base and attempt
+    /// count multiply out to. Unbounded exponential backoff has a history
+    /// of surprising people (a doubling schedule a few misconfigured
+    /// attempts deep sleeps for hours); past a minute, waiting longer
+    /// doesn't make a provider recover sooner. A `Retry-After` may exceed
+    /// it, up to `max_retry_after`.
+    pub max_delay: Duration,
+    /// The longest server-sent `Retry-After` that is obeyed. A hint past it
+    /// ends the retries on this model (falling back to the next one when
+    /// configured) so the rate limit reaches the user instead of a silent
+    /// minutes-long nap.
+    pub max_retry_after: Duration,
+    /// Models to fall back to, in order, once the attempts on the current
     /// model are spent and the failure still looks transient. A provider
     /// having a bad day shouldn't end the turn when another model is healthy;
     /// the switch is per-call, so the session model is unchanged.
     pub fallback_models: Vec<String>,
 }
 
-/// The longest a single retry wait may be, whatever the configured base and
-/// attempt count multiply out to. Unbounded exponential backoff has a history
-/// of surprising people (a doubling schedule a few misconfigured attempts deep
-/// sleeps for hours); past a minute, waiting longer doesn't make a provider
-/// recover sooner.
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
-
 impl Default for RetryPolicy {
     fn default() -> Self {
-        Self {
-            max_attempts: 4,
-            base_delay: Duration::from_secs(1),
-            fallback_models: Vec::new(),
-        }
+        Self::from_backoff(Backoff::default(), Vec::new())
     }
 }
 
 impl RetryPolicy {
-    /// How long to wait after the `attempt`-th try failed (1-based), doubling
-    /// each time — base, 2×base, 4×base, … — clamped to [`MAX_RETRY_DELAY`].
-    pub(crate) fn delay_after(&self, attempt: u32) -> Duration {
-        self.base_delay
-            .saturating_mul(2u32.saturating_pow(attempt.saturating_sub(1)))
-            .min(MAX_RETRY_DELAY)
+    /// A policy with `backoff`'s schedule and the given fallback models.
+    pub fn from_backoff(backoff: Backoff, fallback_models: Vec<String>) -> Self {
+        Self {
+            max_attempts: backoff.max_attempts,
+            base_delay: backoff.base_delay,
+            rate_limit_max_attempts: backoff.rate_limit_max_attempts,
+            rate_limit_base_delay: backoff.rate_limit_base_delay,
+            max_delay: backoff.max_delay,
+            max_retry_after: backoff.max_retry_after,
+            fallback_models,
+        }
+    }
+
+    fn backoff(&self) -> Backoff {
+        Backoff {
+            max_attempts: self.max_attempts,
+            base_delay: self.base_delay,
+            rate_limit_max_attempts: self.rate_limit_max_attempts,
+            rate_limit_base_delay: self.rate_limit_base_delay,
+            max_delay: self.max_delay,
+            max_retry_after: self.max_retry_after,
+        }
+    }
+
+    /// How many attempts (first try included) a failure like `error` gets on
+    /// one model: the rate-limit budget for a 429, `max_attempts` otherwise.
+    pub(crate) fn attempts_for(&self, error: &LlmError) -> u32 {
+        match error.transient_kind() {
+            Some(kind) => self.backoff().attempts_for(kind),
+            None => self.max_attempts,
+        }
+    }
+
+    /// How long to wait after the `attempt`-th try (1-based) failed with
+    /// `error`, before jitter: the server's `Retry-After` when it sent one,
+    /// else the failure kind's doubling schedule clamped to `max_delay`.
+    /// `None` when the server asked for more than `max_retry_after`. The
+    /// deterministic half of [`RetryPolicy::wait_after`], kept for tests.
+    #[cfg(test)]
+    pub(crate) fn delay_after(&self, attempt: u32, error: &LlmError) -> Option<Duration> {
+        let kind = error.transient_kind().unwrap_or(Transient::Blip);
+        self.backoff().delay_for(attempt, kind, error.retry_after())
+    }
+
+    /// The wait to actually sleep after the `attempt`-th failure: a computed
+    /// delay jittered, a server hint obeyed exactly (see
+    /// [`harness_llm::Backoff::wait_after`]). `None` means stop retrying.
+    pub(crate) fn wait_after(&self, attempt: u32, error: &LlmError) -> Option<Duration> {
+        let kind = error.transient_kind().unwrap_or(Transient::Blip);
+        self.backoff()
+            .wait_after(attempt, kind, error.retry_after())
     }
 }
 
@@ -244,9 +300,8 @@ impl AgentConfig {
     ///   can't drive the host's single approval prompt);
     /// - a round budget is installed, so a lane that never converges is
     ///   stopped instead of spending the fleet's whole allowance;
-    /// - the system prompt loses the trail mandate, since `subagent_tools`
-    ///   removes the tool it mandates, and gains the lane or leaf appendix
-    ///   for its depth (see [`crate::prompt::subagent_appendix`]);
+    /// - the system prompt gains the lane or leaf appendix for its depth
+    ///   (see [`crate::prompt::subagent_appendix`]);
     /// - it sits one level deeper in the tree and shares the tree budget.
     pub fn for_subagent(&self) -> AgentConfig {
         let mut config = self.clone();
@@ -265,12 +320,13 @@ impl AgentConfig {
         let appendix = crate::prompt::subagent_appendix(config.depth, config.max_depth);
         let leaf = !config.may_spawn();
         config.system_prompt = config.system_prompt.map(|p| {
-            let mut prompt = crate::prompt::strip_trail_sections(&p);
             // A leaf has no agent tools; the delegation guideline would
             // order it to use tools its registry rejects.
-            if leaf {
-                prompt = crate::prompt::strip_delegation_sections(&prompt);
-            }
+            let mut prompt = if leaf {
+                crate::prompt::strip_delegation_sections(&p)
+            } else {
+                p
+            };
             prompt.push_str(appendix);
             prompt
         });
@@ -356,12 +412,55 @@ mod tests {
     #[test]
     fn retry_delay_doubles_then_clamps() {
         let policy = RetryPolicy::default(); // 1s base
-        assert_eq!(policy.delay_after(1), Duration::from_secs(1));
-        assert_eq!(policy.delay_after(2), Duration::from_secs(2));
-        assert_eq!(policy.delay_after(3), Duration::from_secs(4));
+        let blip = LlmError::api(502, "boom");
+        assert_eq!(policy.delay_after(1, &blip), Some(Duration::from_secs(1)));
+        assert_eq!(policy.delay_after(2, &blip), Some(Duration::from_secs(2)));
+        assert_eq!(policy.delay_after(3, &blip), Some(Duration::from_secs(4)));
         // A deep (or misconfigured) attempt count must never produce an
         // hours-long sleep — the clamp holds even where 2^n overflows.
-        assert_eq!(policy.delay_after(10), Duration::from_secs(60));
-        assert_eq!(policy.delay_after(u32::MAX), Duration::from_secs(60));
+        assert_eq!(policy.delay_after(10, &blip), Some(Duration::from_secs(60)));
+        assert_eq!(
+            policy.delay_after(u32::MAX, &blip),
+            Some(Duration::from_secs(60))
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_waits_longer_and_gets_more_tries_than_a_blip() {
+        let policy = RetryPolicy::default();
+        let blip = LlmError::api(502, "boom");
+        let limited = LlmError::api(429, "slow down");
+        assert_eq!(policy.attempts_for(&blip), 4);
+        assert_eq!(policy.attempts_for(&limited), 6);
+        assert_eq!(
+            policy.delay_after(1, &limited),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            policy.delay_after(4, &limited),
+            Some(Duration::from_secs(16))
+        );
+        // A non-transient error gets the plain budget (it won't be retried
+        // anyway, but the count still has to be sane for the report).
+        assert_eq!(policy.attempts_for(&LlmError::api(401, "nope")), 4);
+    }
+
+    #[test]
+    fn a_servers_retry_after_overrides_the_schedule() {
+        let policy = RetryPolicy::default();
+        let limited = LlmError::Api {
+            status: 429,
+            message: "slow down".into(),
+            body: String::new(),
+            retry_after: Some(Duration::from_secs(9)),
+        };
+        assert_eq!(
+            policy.delay_after(1, &limited),
+            Some(Duration::from_secs(9))
+        );
+        assert_eq!(
+            policy.delay_after(5, &limited),
+            Some(Duration::from_secs(9))
+        );
     }
 }

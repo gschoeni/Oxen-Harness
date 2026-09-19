@@ -19,7 +19,7 @@ export interface UiState {
   heroGame?: string;
   /** Dock layout: per-side widths + collapsed sides. */
   docks?: { widths: Record<string, number>; collapsed: Record<string, boolean> };
-  /** Home's lens: "ledger" | "cards". */
+  /** Home's lens: "cards" | "media". */
   homeView?: string;
   /** Project-cards ordering: "recent" | "name". */
   projectsSort?: string;

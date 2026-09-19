@@ -40,8 +40,8 @@
   transform: translateX(-50%);
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: var(--control-h-lg);
+  height: var(--control-h-lg);
   background: var(--surface);
   color: var(--accent);
   border: var(--frame-border-w) solid var(--separator-strong);
@@ -680,10 +680,6 @@
 .queue-clear {
   margin-left: auto;
 }
-.queue-clear:hover {
-  color: var(--text);
-  border-color: var(--text-tertiary);
-}
 /* A queued message is not a lane you can watch: no pointer, no hover. */
 .fleet-lane.queue-item {
   cursor: default;
@@ -998,8 +994,8 @@
 .attach {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: var(--control-h-lg);
+  height: var(--control-h-lg);
   flex-shrink: 0;
   background: transparent;
   color: var(--text-tertiary);
@@ -1043,8 +1039,8 @@
 .stop {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: var(--control-h-lg);
+  height: var(--control-h-lg);
   flex-shrink: 0;
   background: var(--surface-2);
   color: var(--accent);
@@ -1076,28 +1072,11 @@
   align-items: center;
   gap: var(--space-2);
 }
+/* A composer picker's trigger (a ghost .btn): pill-shaped, never wider than
+   its slot — the label inside ellipsizes. */
 .picker-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
   max-width: 320px;
-  padding: 3px var(--space-2);
-  background: transparent;
-  color: var(--text-tertiary);
-  border: 1px solid transparent;
   border-radius: var(--radius-pill);
-  font-size: var(--text-xs);
-  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease);
-}
-.picker-btn:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--surface-2);
-  border-color: var(--separator-strong);
-}
-.picker-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 .picker-label {
   overflow: hidden;
@@ -1347,23 +1326,6 @@
   white-space: nowrap;
 }
 /* Stop just this fleet; the turn around it keeps going. */
-.fleet-panel-stop {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  padding: 1px 8px;
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-  background: transparent;
-  border: 1px solid var(--separator-strong);
-  border-radius: var(--frame-radius);
-  cursor: pointer;
-}
-.fleet-panel-stop:hover {
-  color: var(--danger, #c0392b);
-  border-color: var(--danger, #c0392b);
-}
 .fleet-lanes {
   display: flex;
   flex-direction: column;
@@ -1670,20 +1632,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.chat-status-action {
-  flex: none;
-  padding: 2px var(--space-2);
-  background: none;
-  border: 1px solid var(--separator);
-  border-radius: var(--radius-pill);
-  color: var(--text-secondary);
-  font-family: var(--font-readout, var(--font-mono));
-  font-size: var(--text-2xs);
-  text-transform: var(--label-transform);
-  letter-spacing: var(--label-spacing);
-  cursor: pointer;
-}
-.chat-status-action:hover { color: var(--text); border-color: var(--separator-strong); }
+.chat-status .btn { flex: none; }
 /* The session id, tail-clipped; copies on click. */
 .chat-session-id {
   flex: none;

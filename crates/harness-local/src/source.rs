@@ -248,11 +248,13 @@ pub async fn hf_list_quants(
 ) -> Result<Vec<ModelRef>, LocalError> {
     let client = reqwest::Client::new();
     let url = format!("https://huggingface.co/api/models/{repo}/tree/{revision}?recursive=true");
-    let resp = hf_request(&client, &url, token)
-        .header("User-Agent", "oxen-harness")
-        .send()
-        .await
-        .map_err(|e| LocalError::Download(format!("Hugging Face request failed: {e}")))?;
+    let resp = harness_http::send_with_retry(
+        hf_request(&client, &url, token).header("User-Agent", "oxen-harness"),
+        &harness_http::Backoff::brief(),
+        true,
+    )
+    .await
+    .map_err(|e| LocalError::Download(format!("Hugging Face request failed: {e}")))?;
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED
         || resp.status() == reqwest::StatusCode::FORBIDDEN
     {
@@ -380,11 +382,13 @@ pub async fn hf_search(query: &str, token: Option<&str>) -> Result<Vec<HfHit>, L
     let url = format!(
         "https://huggingface.co/api/models?search={q}&filter=gguf&sort=downloads&direction=-1&limit=25"
     );
-    let resp = hf_request(&client, &url, token)
-        .header("User-Agent", "oxen-harness")
-        .send()
-        .await
-        .map_err(|e| LocalError::Download(format!("Hugging Face search failed: {e}")))?;
+    let resp = harness_http::send_with_retry(
+        hf_request(&client, &url, token).header("User-Agent", "oxen-harness"),
+        &harness_http::Backoff::brief(),
+        true,
+    )
+    .await
+    .map_err(|e| LocalError::Download(format!("Hugging Face search failed: {e}")))?;
     if !resp.status().is_success() {
         return Err(LocalError::Download(format!(
             "Hugging Face search returned HTTP {}",
@@ -521,8 +525,7 @@ async fn fetch_oxen_models(
     if let Some(t) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(t.trim());
     }
-    let resp = req
-        .send()
+    let resp = harness_http::send_with_retry(req, &harness_http::Backoff::brief(), true)
         .await
         .map_err(|e| LocalError::Download(format!("Oxen models request failed: {e}")))?;
     if !resp.status().is_success() {

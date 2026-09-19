@@ -1,5 +1,5 @@
-// The left column's top-level nav: back to the Ledger, the home board of
-// threads across every project. It sits above the dock tab strip (Chats /
+// The left column's top-level nav: back Home, the project cards. It sits
+// above the dock tab strip (Chats /
 // Files) — column chrome, not dock content — so home is one click from
 // either tab.
 

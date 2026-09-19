@@ -23,7 +23,9 @@ pub(crate) fn command_allowed(label: &str, command: &str) -> bool {
 struct Lease {
     session: String,
     package: Package,
-    assets: view_packages::AssetFiles,
+    /// The verified bundle, shared by every open instance of this revision:
+    /// three tabs on a 15 MiB view hold one copy, not three.
+    assets: Arc<view_packages::AssetFiles>,
     project: Documents,
     preview: Option<PreviewLease>,
 }
@@ -42,6 +44,17 @@ fn lease(label: &str) -> Result<Arc<Lease>, String> {
         .get(label)
         .cloned()
         .ok_or_else(|| "view instance is closed or unavailable".into())
+}
+
+/// The bundle an already-open instance of the same revision holds, if any.
+/// Revisions are content-addressed, so equal digests mean identical bytes.
+fn shared_assets(digest: &str) -> Result<Option<Arc<view_packages::AssetFiles>>, String> {
+    Ok(leases()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .values()
+        .find(|lease| lease.package.digest == digest)
+        .map(|lease| Arc::clone(&lease.assets)))
 }
 
 fn still_installed(lease: &Lease) -> Result<(), String> {
@@ -147,7 +160,10 @@ pub(crate) async fn view_package_mount(
             None,
         )
     };
-    let assets = view_packages::asset_files(&package)?;
+    let assets = match shared_assets(&package.digest)? {
+        Some(assets) => assets,
+        None => Arc::new(view_packages::asset_files(&package)?),
+    };
     let project = state.documents(&session)?;
     if let Some(path) = &path {
         if !package.manifest.permissions.allows("read", path) {
@@ -389,6 +405,8 @@ pub(crate) fn protocol(
                 .assets
                 .get(relative)
                 .ok_or("view asset is missing")?;
+            // The protocol handler must hand WebKit an owned body, so one
+            // copy per response is the floor; the lease itself adds none.
             return Ok((bytes.clone(), mime_for(std::path::Path::new(relative))));
         }
         if area != "project"

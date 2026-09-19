@@ -9,6 +9,7 @@
 // coexist on screen).
 
 import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { Button } from "../../components/ui";
 import {
   ExternalLink,
   Globe2,
@@ -201,9 +202,9 @@ export function Preview({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
             <span className="preview-banner-text" title={pageError}>
               Something broke in the app: {pageError}
             </span>
-            <button className="preview-fix-btn" onClick={() => resolvePreviewError(session, true)}>
+            <Button size="sm" variant="primary" onClick={() => resolvePreviewError(session, true)}>
               Fix it
-            </button>
+            </Button>
             <button
               className="icon-btn"
               aria-label="Dismiss error"
@@ -238,8 +239,8 @@ export function Preview({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
               {status.phase === "error" ? "The server hit a problem" : "Server stopped"}
             </p>
             {status.message && <p className="preview-error-msg">{status.message}</p>}
-            <button
-              className="preview-fix-btn"
+            <Button
+              variant="primary"
               disabled={restarting}
               onClick={() => {
                 setRestarting(true);
@@ -253,7 +254,7 @@ export function Preview({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =
               }}
             >
               {restarting ? "Starting…" : "Restart server"}
-            </button>
+            </Button>
             {restartError && <p className="preview-error-msg">{restartError}</p>}
             <p className="preview-hint">
               Or ask the chat to fix it — for example “the preview stopped, get it running again”.

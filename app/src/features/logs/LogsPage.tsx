@@ -314,9 +314,9 @@ export function LogsPage() {
             ))}
           </select>
           {activeFilters && (
-            <button className="log-clear-filters" onClick={resetFilters}>
+            <Button size="sm" variant="ghost" onClick={resetFilters}>
               <RotateCcw size={13} /> Clear filters
-            </button>
+            </Button>
           )}
         </div>
 
@@ -338,15 +338,15 @@ export function LogsPage() {
           {/* Bulk actions apply to the whole filtered list. */}
           <div className="log-bulk">
             <span className="log-bulk-count">{shown.length} shown</span>
-            <button className="log-bulk-btn keep" onClick={() => bulk("kept")} disabled={shown.length === 0}>
+            <Button size="sm" variant="ghost" className="log-bulk-keep" onClick={() => bulk("kept")} disabled={shown.length === 0}>
               Keep all
-            </button>
-            <button className="log-bulk-btn reject" onClick={() => bulk("rejected")} disabled={shown.length === 0}>
+            </Button>
+            <Button size="sm" variant="ghost" className="log-bulk-reject" onClick={() => bulk("rejected")} disabled={shown.length === 0}>
               Reject all
-            </button>
-            <button className="log-bulk-btn" onClick={() => bulk("")} disabled={shown.length === 0}>
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => bulk("")} disabled={shown.length === 0}>
               Clear
-            </button>
+            </Button>
           </div>
         </div>
 

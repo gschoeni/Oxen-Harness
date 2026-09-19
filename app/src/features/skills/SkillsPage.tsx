@@ -149,10 +149,10 @@ export function SkillsPage() {
         )}
 
         <div className="tool-list">
-          <button className="tool-add" onClick={() => setView({ kind: "new" })} disabled={skills === null}>
+          <Button variant="outline" className="tool-add" onClick={() => setView({ kind: "new" })} disabled={skills === null}>
             <Plus size={15} />
             New skill
-          </button>
+          </Button>
         </div>
       </section>
     </div>
@@ -259,10 +259,10 @@ function SkillShow({
     skill.scope === "project" && project ? `project · ${project.name}` : skill.scope;
   return (
     <div className="settings-page skill-detail">
-      <button className="skill-back" onClick={onBack}>
+      <Button size="sm" variant="ghost" className="skill-back" onClick={onBack}>
         <ArrowLeft size={15} />
         All skills
-      </button>
+      </Button>
 
       <header className="skill-detail-head">
         <GraduationCap size={20} className="skill-detail-icon" />
@@ -365,10 +365,10 @@ function SkillEditor({
 
   return (
     <div className="settings-page skill-detail">
-      <button className="skill-back" onClick={onCancel}>
+      <Button size="sm" variant="ghost" className="skill-back" onClick={onCancel}>
         <ArrowLeft size={15} />
         {initial ? initial.name : "All skills"}
-      </button>
+      </Button>
 
       <div className="settings-label">{initial ? `Edit ${initial.name}` : "New skill"}</div>
 

@@ -338,6 +338,29 @@ fn fleet_event_wire_shapes() {
 }
 
 #[test]
+fn retry_without_the_detail_fields_still_parses() {
+    // An older server omits model/endpoint/status/detail; a newer client must
+    // read its retry events rather than dropping them.
+    let json = r#"{"type":"agent.retry","session":"s1","attempt":1,"max_attempts":4,"delay_ms":1000,"error":"Oxen API error (502): boom"}"#;
+    let event: ProtocolEvent = serde_json::from_str(json).unwrap();
+    match event {
+        ProtocolEvent::Retry {
+            model,
+            endpoint,
+            status,
+            detail,
+            ..
+        } => {
+            assert_eq!(model, "");
+            assert_eq!(endpoint, "");
+            assert_eq!(status, None);
+            assert_eq!(detail, None);
+        }
+        other => panic!("expected a retry, got {other:?}"),
+    }
+}
+
+#[test]
 fn remaining_variants_round_trip() {
     for event in [
         ProtocolEvent::Compacted {
@@ -351,6 +374,10 @@ fn remaining_variants_round_trip() {
             delay_ms: 500,
             error: "connection reset".into(),
             switching_to: None,
+            model: "claude-opus-4-8".into(),
+            endpoint: "https://hub.oxen.ai/api/ai".into(),
+            status: None,
+            detail: Some("error sending request\n  caused by: connection reset".into()),
         },
         ProtocolEvent::Retry {
             session: "s1".into(),
@@ -359,6 +386,10 @@ fn remaining_variants_round_trip() {
             delay_ms: 0,
             error: "provider error".into(),
             switching_to: Some("backup-model".into()),
+            model: "claude-opus-4-8".into(),
+            endpoint: "https://hub.oxen.ai/api/ai".into(),
+            status: Some(502),
+            detail: Some(r#"{"error":{"title":"provider error"}}"#.into()),
         },
         ProtocolEvent::Compression {
             session: "s1".into(),
@@ -489,6 +520,10 @@ fn legacy_channel_names() {
                 delay_ms: 0,
                 error: "e".into(),
                 switching_to: None,
+                model: String::new(),
+                endpoint: String::new(),
+                status: None,
+                detail: None,
             },
             "agent://retry",
         ),
@@ -777,60 +812,10 @@ fn review_and_loop_result_wire_shapes() {
     assert_eq!(outcome.iterations, 3);
 }
 
-/// The agent persists `harness_tools::PlanSnapshot` per session; the Ledger
-/// serves it back as the protocol's `PlanProgress`. The two must stay
-/// serde-compatible — a stored snapshot from either side must parse as the
-/// other.
 #[test]
-fn plan_progress_matches_harness_tools_snapshot() {
-    let items = harness_tools::parse_plan_arguments(
-        r#"{"plan": [
-            {"content": "Research", "active_form": "Researching", "status": "completed"},
-            {"content": "Build", "active_form": "Building", "status": "in_progress"}
-        ]}"#,
-    )
-    .unwrap();
-    let snapshot = harness_tools::plan_snapshot(&items);
-    let value = serde_json::to_value(&snapshot).unwrap();
-    let progress: harness_protocol::PlanProgress =
-        serde_json::from_value(value.clone()).expect("shapes match");
-    assert_eq!((progress.done, progress.total), (1, 2));
-    assert_eq!(progress.active.as_deref(), Some("Building"));
-    assert_eq!(serde_json::to_value(&progress).unwrap(), value);
-}
-
-/// The agent persists `harness_tools::TrailSnapshot`; the Ledger serves it as
-/// the protocol's `TrailProgress`. A stored snapshot from either side must
-/// parse as the other, including the waypoint status spellings.
-#[test]
-fn trail_progress_matches_harness_tools_snapshot() {
-    let snapshot = harness_tools::parse_trail_arguments(
-        r#"{"title": "fix flaky sse retry test", "waypoints": [
-            {"name": "define", "status": "done"},
-            {"name": "implement", "status": "current"},
-            {"name": "review", "status": "ahead"}
-        ]}"#,
-    )
-    .unwrap();
-    let value = serde_json::to_value(&snapshot).unwrap();
-    let progress: harness_protocol::TrailProgress =
-        serde_json::from_value(value.clone()).expect("shapes match");
-    assert_eq!(progress.title, "fix flaky sse retry test");
-    assert_eq!(progress.waypoints.len(), 3);
-    assert_eq!(progress.waypoints[0].status, "done");
-    assert_eq!(progress.waypoints[1].status, "current");
-    assert_eq!(progress.waypoints[2].status, "ahead");
-    assert_eq!(serde_json::to_value(&progress).unwrap(), value);
-}
-
-#[test]
-fn ledger_wire_shapes() {
-    // A stored settle payload with no note field still parses (note defaults).
-    let settle: harness_protocol::SettleState =
-        serde_json::from_value(serde_json::json!({ "settled_at": 1_753_000_000 })).unwrap();
-    assert_eq!(settle.note, "");
-
-    let entry: harness_protocol::LedgerEntry = serde_json::from_value(serde_json::json!({
+fn thread_wire_shapes() {
+    // An entry from before the finished/seen marks still parses (both default to 0).
+    let entry: harness_protocol::ThreadEntry = serde_json::from_value(serde_json::json!({
         "id": "s1",
         "workspace": "/tmp/proj",
         "model": "claude-opus-4-8",
@@ -841,16 +826,15 @@ fn ledger_wire_shapes() {
         "mid_turn": false,
     }))
     .unwrap();
-    assert_eq!(entry.plan, None);
-    assert_eq!(entry.settle, None);
+    assert_eq!(entry.finished_at, 0);
+    assert_eq!(entry.seen_at, 0);
 
-    let snapshot = harness_protocol::LedgerSnapshot {
+    let snapshot = harness_protocol::ThreadSnapshot {
         entries: vec![entry],
         running: vec!["s2".into()],
-        last_seen: 0,
     };
     let value = serde_json::to_value(&snapshot).unwrap();
-    let back: harness_protocol::LedgerSnapshot = serde_json::from_value(value).unwrap();
+    let back: harness_protocol::ThreadSnapshot = serde_json::from_value(value).unwrap();
     assert_eq!(back, snapshot);
 }
 

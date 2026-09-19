@@ -18,11 +18,12 @@ function host(invoke, development = false) {
     },
     addEventListener: (name, callback) => events.set(name, callback),
   };
+  const console = { log() {}, warn() {}, error() {} };
   runInNewContext(source, {
     window,
     document,
     TextEncoder,
-    console: { log() {}, warn() {}, error() {} },
+    console,
     setTimeout: (callback, delay) => {
       if (delay < 1000) timers.push(callback);
       return 1;
@@ -33,7 +34,7 @@ function host(invoke, development = false) {
     },
     clearInterval() {},
   });
-  return { api: window.oxenView, events, timers };
+  return { api: window.oxenView, events, timers, console };
 }
 test("retained drafts are serialized, restored after writes, and recover after a failed write", async () => {
   let value = null,
@@ -115,5 +116,24 @@ test("runtime errors fail the smoke check and long reports preserve every outcom
   assert.ok(
     new TextEncoder().encode(JSON.stringify(reports[0])).length <= 30000,
   );
+  events.get("pagehide")();
+});
+
+test("a handled failure logged with console.error is reported but passes the smoke check", async () => {
+  const diagnostics = [],
+    reports = [];
+  const { events, console } = host(async (action, payload) => {
+    if (action === "dev_diagnostic") diagnostics.push(payload);
+    if (action === "dev_poll") return { test: { id: "smoke" } };
+    if (action === "dev_test_result") reports.push(payload);
+  }, true);
+  // A view that catches "no document yet" on first load and renders empty.
+  console.error("no document yet", new Error("not found"));
+  events.get("load")();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(diagnostics[0].level, "error");
+  assert.match(diagnostics[0].message, /no document yet/);
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].results[0].passed, true);
   events.get("pagehide")();
 });

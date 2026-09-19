@@ -23,7 +23,10 @@ trap 'rm -rf "$tmp"' EXIT
 size="$(magick identify -format %w assets/app-icon.png)"
 content=$((size * 824 / 1024))
 radius=$((content * 185 / 824))
+# -alpha set: a source without an alpha channel (plain RGB PNG) would otherwise
+# get opaque black corners from the DstIn mask instead of transparent ones.
 magick assets/app-icon.png \
+  -alpha set \
   -resize "${content}x${content}" \
   \( -size "${content}x${content}" xc:none \
      -fill white \

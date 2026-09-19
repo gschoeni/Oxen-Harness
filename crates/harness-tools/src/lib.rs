@@ -46,7 +46,6 @@ pub mod shell;
 pub mod skill;
 pub mod steer;
 pub mod tasks;
-pub mod trail;
 pub mod viewer;
 pub mod views;
 pub mod web;
@@ -60,20 +59,13 @@ pub use fs::{
 };
 pub use gh::{GhTool, GH_TOOL};
 pub use git::GIT_TOOL;
-pub use plan::{
-    parse_plan_arguments, plan_is_open, plan_snapshot, PlanItem, PlanSnapshot, PlanStatus,
-    PlanTool, PLAN_TOOL,
-};
+pub use plan::{parse_plan_arguments, plan_is_open, PlanItem, PlanStatus, PlanTool, PLAN_TOOL};
 pub use retrieve::{RetrieveOriginalTool, RETRIEVE_ORIGINAL_TOOL};
 pub use sandbox::Workspace;
 pub use shell::RUN_SHELL_TOOL;
 pub use skill::{Skill, SkillScope, SkillTool, SKILL_TOOL};
 pub use steer::{steer_channel, SteerNotifier, SteerSignal};
 pub use tasks::{BackgroundTasks, SettledTask, TaskExit, KILL_TASK_TOOL, TASK_OUTPUT_TOOL};
-pub use trail::{
-    merge_trail, parse_trail_arguments, TrailSnapshot, TrailTool, Waypoint, WaypointStatus,
-    TRAIL_TOOL,
-};
 pub use viewer::{FileView, OpenFileTool, ViewerSink, OPEN_FILE_TOOL};
 pub use web::WEB_SEARCH_TOOL;
 pub use web_fetch::{WebFetchTool, WEB_FETCH_TOOL};
@@ -572,13 +564,15 @@ impl Tool for CustomTool {
     ) -> Result<String, ToolError> {
         match &self.spec.action {
             CustomToolAction::HttpPost { url } => {
-                let res = self
-                    .client
-                    .post(url)
-                    .json(&args)
-                    .send()
-                    .await
-                    .map_err(|e| ToolError::Execution(format!("HTTP request failed: {e}")))?;
+                // A POST may have side effects, so only a 429 (rejected
+                // before anything ran) or a connect failure is re-sent.
+                let res = harness_http::send_with_retry(
+                    self.client.post(url).json(&args),
+                    &harness_http::Backoff::brief(),
+                    false,
+                )
+                .await
+                .map_err(|e| ToolError::Execution(format!("HTTP request failed: {e}")))?;
                 let status = res.status();
                 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
                 let body = crate::http_body::text(res, MAX_RESPONSE_BYTES)
@@ -890,13 +884,10 @@ impl ToolRegistry {
             .with_typed(fs::FindFilesTool::new(workspace.clone()))
             .with_typed(fs::SearchTool::new(workspace.clone()))
             .with_typed(git::GitTool::new(workspace.clone()))
-            // GitHub PR checks/creation — how the model verifies the trail's
-            // shipping stages before marking them done.
+            // GitHub PR checks/creation.
             .with_typed(gh::GhTool::new(workspace.clone()))
             // Planning/checklist tool — always available so any host gets it.
             .with_typed(plan::PlanTool::new())
-            // The session's macro journey (title + waypoints) for the Ledger.
-            .with_typed(trail::TrailTool::new())
             // Fetch a web page into context (no key needed); pairs with the
             // web_search tool registered just below.
             .with_typed(web_fetch::WebFetchTool::new());
@@ -982,6 +973,21 @@ mod tests {
         assert_eq!(params["required"][0], "text");
     }
 
+    #[tokio::test]
+    async fn registry_dispatches_by_name() {
+        let registry = ToolRegistry::new().with_typed(EchoTool);
+        assert_eq!(registry.len(), 1);
+        let out = registry
+            .invoke(
+                "echo",
+                serde_json::json!({"text": "moo"}),
+                &CallContext::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out, "moo");
+    }
+
     /// Echoes who asked, so a test can see the context arrive intact.
     struct WhoAskedTool;
     #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -1014,21 +1020,6 @@ mod tests {
         let seen: CallContext = serde_json::from_str(&out).unwrap();
         assert_eq!(seen, CallContext::default());
         assert_eq!(seen.session, None);
-    }
-
-    #[tokio::test]
-    async fn registry_dispatches_by_name() {
-        let registry = ToolRegistry::new().with_typed(EchoTool);
-        assert_eq!(registry.len(), 1);
-        let out = registry
-            .invoke(
-                "echo",
-                serde_json::json!({"text": "moo"}),
-                &CallContext::default(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(out, "moo");
     }
 
     #[tokio::test]
@@ -1153,7 +1144,6 @@ mod tests {
                 fs::SEARCH_FILES_TOOL,
                 tasks::TASK_OUTPUT_TOOL,
                 plan::PLAN_TOOL,
-                trail::TRAIL_TOOL,
                 web_fetch::WEB_FETCH_TOOL,
                 web::WEB_SEARCH_TOOL,
                 fs::WRITE_FILE_TOOL,
@@ -1177,17 +1167,8 @@ mod tests {
         // feature is the limit: the next tool either replaces one, or argues
         // for its permanent prefix cost in the commit that adds it.
         //
-        // `update_trail` (~1.7K, budget 12K → 13.5K): the Ledger home screen
-        // renders every session's journey from the snapshot this tool
-        // maintains — it is the one tool whose absence degrades a headline
-        // surface for every thread, and its guidance (when to chart, the
-        // standard route, how it differs from update_plan) is what keeps
-        // models from spamming it or skipping it.
-        //
-        // `gh` (~0.9K, 13.5K → 14.5K): every code trail now ends in shipping
-        // stages the MODEL must verify (pushed, pr-reviewed, merged) — this
-        // is the tool that verifies them and opens the PR, so it earns its
-        // permanent seat next to `git`.
+        // `gh` (~0.9K, 13.5K → 14.5K): the tool that checks and opens PRs,
+        // so it earns its permanent seat next to `git`.
         //
         // The shell-patience contract (~0.4K, 14.5K → 15.2K): `run_shell`'s
         // sixty-second wait, the promise that a backgrounded task's final

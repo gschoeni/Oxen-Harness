@@ -1,7 +1,6 @@
-// The home's card view — the calm, project-first lens the trails view trades
-// away. One card per project with its vital signs from the board (running,
-// needs-you, open threads), for days when you want altitude, not detail.
-// Established projects resume their newest chat; fresh ones open their home.
+// Home's card view: one card per project with its vital signs (running,
+// needs-you, open chats). Established projects resume their newest chat;
+// fresh ones open their home.
 
 import { useMemo, useState } from "react";
 import { ArrowDownAZ, Clock, FolderOpen, FolderPlus, Trash2 } from "lucide-react";
@@ -9,8 +8,9 @@ import { relativeTime } from "../../lib/format";
 import { useStore } from "../../lib/store";
 import type { Project } from "../../lib/types";
 import { getUi, setUi } from "../../lib/uiState";
-import { RemoveProjectModal } from "../projects/RemoveProjectModal";
-import { needsUser, type Board } from "./ledger";
+import { useThreads } from "../threads/useThreads";
+import { workspaceVitals } from "../threads/threads";
+import { RemoveProjectModal } from "./RemoveProjectModal";
 
 type CardSort = "recent" | "name";
 
@@ -29,20 +29,7 @@ export function sortProjects(projects: Project[], sort: CardSort): Project[] {
   return sorted;
 }
 
-/** A workspace's vital signs, folded from the board's full thread lists. */
-interface Vitals {
-  open: number;
-  running: number;
-  needs: number;
-}
-
-export function ProjectCards({
-  board,
-  onOpenProject,
-}: {
-  board: Board;
-  onOpenProject: (project: Project) => void;
-}) {
+export function ProjectCards({ onOpenProject }: { onOpenProject: (project: Project) => void }) {
   const projects = useStore((s) => s.projects);
   const sessions = useStore((s) => s.sessions);
   const activePath = useStore((s) => s.session?.workspace ?? null);
@@ -59,20 +46,7 @@ export function ProjectCards({
   }
 
   const sorted = useMemo(() => sortProjects(projects, sort), [projects, sort]);
-
-  const vitals = useMemo(() => {
-    const map = new Map<string, Vitals>();
-    for (const train of board.trains) {
-      map.set(train.workspace, {
-        open: train.threads.length,
-        running: train.threads.filter((t) => t.state === "running").length,
-        // The same predicate the project's chat list sections on, so the
-        // pill's number is exactly the rows waiting inside.
-        needs: train.threads.filter(needsUser).length,
-      });
-    }
-    return map;
-  }, [board]);
+  const threads = useThreads();
 
   async function openProject(project: Project) {
     // History is newest-first from the durable store; imported transcripts are
@@ -92,17 +66,17 @@ export function ProjectCards({
   return (
     <>
       {projects.length > 1 && (
-        <div className="ledger-cards-toolbar">
-          <div className="ledger-sort" role="group" aria-label="Sort projects">
+        <div className="projects-toolbar">
+          <div className="projects-sort" role="group" aria-label="Sort projects">
             <button
-              className={`ledger-sort-option ${sort === "recent" ? "selected" : ""}`}
+              className={`projects-sort-option ${sort === "recent" ? "selected" : ""}`}
               aria-pressed={sort === "recent"}
               onClick={() => changeSort("recent")}
             >
               <Clock size={12} /> recent
             </button>
             <button
-              className={`ledger-sort-option ${sort === "name" ? "selected" : ""}`}
+              className={`projects-sort-option ${sort === "name" ? "selected" : ""}`}
               aria-pressed={sort === "name"}
               onClick={() => changeSort("name")}
             >
@@ -114,7 +88,7 @@ export function ProjectCards({
 
       <section className="projects-grid" aria-label="Your projects">
         {sorted.map((project) => {
-          const v = vitals.get(project.path);
+          const v = workspaceVitals(threads, project.path);
           return (
             <div
               key={project.path}
@@ -128,12 +102,12 @@ export function ProjectCards({
                   <span className="project-card-name">
                     {project.name}
                     {project.path === activePath && <span className="project-card-badge">current</span>}
-                    {(v?.needs ?? 0) > 0 && (
+                    {v.needs > 0 && (
                       <span
                         className="project-card-attention"
-                        title={`${v?.needs} trail${v?.needs === 1 ? "" : "s"} waiting on you — open the ledger`}
+                        title={`${v.needs} chat${v.needs === 1 ? "" : "s"} waiting on you`}
                       >
-                        {v?.needs} need{v?.needs === 1 ? "s" : ""} you
+                        {v.needs} need{v.needs === 1 ? "s" : ""} you
                       </span>
                     )}
                   </span>
@@ -145,12 +119,12 @@ export function ProjectCards({
                   </span>
                 </span>
                 <span className="project-card-meta">
-                  {(v?.running ?? 0) > 0 && (
-                    <span className="project-card-running" title={`${v?.running} riding right now`}>
+                  {v.running > 0 && (
+                    <span className="project-card-running" title={`${v.running} running right now`}>
                       <span className="run-dot" />
                     </span>
                   )}
-                  {(v?.open ?? 0) > 0 && <span>{v?.open} on the trail</span>}
+                  {v.open > 0 && <span>{v.open} open</span>}
                   <span>
                     {project.session_count} chat{project.session_count === 1 ? "" : "s"}
                   </span>

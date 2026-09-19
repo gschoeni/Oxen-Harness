@@ -94,7 +94,7 @@ impl TypedTool for WebFetchTool {
             .unwrap_or(DEFAULT_MAX_CHARS)
             .clamp(1, MAX_CHARS_CEILING);
 
-        let response = self
+        let request = self
             .http
             .get(&url)
             // Prefer Markdown when the server can negotiate it, else HTML, else
@@ -102,10 +102,13 @@ impl TypedTool for WebFetchTool {
             .header(
                 reqwest::header::ACCEPT,
                 "text/markdown, text/html;q=0.9, text/plain;q=0.8, */*;q=0.5",
-            )
-            .send()
-            .await
-            .map_err(|e| ToolError::Execution(format!("fetch failed: {e}")))?;
+            );
+        // A GET is safe to repeat: a 429 (docs hosts throttle scrapers) or a
+        // 5xx gets a couple of short, jittered retries before it's reported.
+        let response =
+            harness_http::send_with_retry(request, &harness_http::Backoff::brief(), true)
+                .await
+                .map_err(|e| ToolError::Execution(format!("fetch failed: {e}")))?;
 
         // Bail on a huge advertised body before reading it into memory.
         if let Some(len) = response.content_length() {

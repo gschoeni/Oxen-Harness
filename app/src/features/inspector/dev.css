@@ -363,21 +363,6 @@
   color: var(--text-tertiary);
   font-family: var(--font-readout);
 }
-.inspector-close {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-tertiary);
-}
-.inspector-close:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
 .inspector-review-bar {
   display: flex;
   align-items: center;
@@ -391,8 +376,8 @@
 .inspector-nav {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: var(--control-h);
+  height: var(--control-h);
   border: 1px solid var(--separator-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);

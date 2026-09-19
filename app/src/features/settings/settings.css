@@ -374,15 +374,13 @@
 }
 .usage-year-nav span { min-width: 48px; text-align: center; font-size: var(--text-sm); font-weight: 600; }
 .usage-year-nav button,
-.usage-all-time {
-  border: 0;
-  color: var(--text-secondary);
-  background: transparent;
-  border-radius: 6px;
+.usage-year-nav button {
+  display: grid;
+  place-items: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
 }
-.usage-year-nav button { display: grid; place-items: center; width: 27px; height: 27px; }
-.usage-year-nav button:hover:not(:disabled),
-.usage-all-time:hover { color: var(--text); background: var(--surface-2); }
+.usage-year-nav button:hover:not(:disabled) { color: var(--text); background: var(--surface-2); }
 .usage-year-nav button:disabled { opacity: 0.3; cursor: default; }
 .usage-calendar-card {
   padding: 18px 18px 13px;
@@ -471,7 +469,6 @@
 .usage-legend { display: flex; align-items: center; gap: 4px; }
 .usage-legend i[data-level="0"] { background: color-mix(in srgb, var(--text) 7%, var(--bg)); }
 .usage-report-head { margin-top: var(--space-2); }
-.usage-all-time { padding: 6px 9px; font-size: var(--text-xs); }
 .usage-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); }
 .usage-stat {
   min-height: 92px;
@@ -572,8 +569,8 @@
   right: var(--space-2);
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   background: transparent;
   border: none;
   border-radius: var(--radius-sm);
@@ -669,8 +666,8 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   background: transparent;
   border: none;
   border-radius: var(--radius-sm);
@@ -717,8 +714,8 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   background: transparent;
   border: none;
   border-radius: var(--radius-sm);
@@ -859,8 +856,8 @@
 .catalog-item-expand {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   background: transparent;
   border: none;
   border-radius: var(--radius-sm);

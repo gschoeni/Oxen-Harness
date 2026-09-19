@@ -59,6 +59,23 @@ cd app/src-tauri && cargo clippy -- -D warnings   # the Tauri bridge
 cd app && npx tsc --noEmit && npx vitest run       # the React frontend
 ```
 
+### Garbage-collect the build cache after a test run
+
+Cargo never deletes anything from `target/`: every dependency bump, feature
+change, or toolchain update leaves the previous set of artifacts behind, and
+a checkout that runs the check suite all day grows past 100 GB. So **after the
+test suite has run, garbage-collect the target directory**:
+
+```bash
+scripts/gc-target.py             # keeps only what the check suite uses
+scripts/gc-target.py --dry-run   # to see what would go first
+```
+
+It asks cargo which artifacts the clippy and test commands above actually use
+(both workspaces share `<repo>/target`) and deletes the rest, plus incremental
+caches idle for a week. Everything it removes is rebuildable, so the only cost
+of running it too often is a rebuild; the cost of never running it is the disk.
+
 ## Project conventions
 
 - **Provider:** Oxen.ai only. Base URL `https://hub.oxen.ai/api/ai`, default model

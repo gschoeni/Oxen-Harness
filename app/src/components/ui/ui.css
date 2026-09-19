@@ -1,18 +1,26 @@
 /* Design-system primitives. */
 
+/* The one text button. Its size is a token tuple (see --btn-* in tokens.css):
+   `sm` for row actions and toolbars, the default for forms and headers, `lg`
+   for a page's single call to action. Features add position and reveal
+   rules on top; they never re-declare height, padding, or type. */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
+  gap: var(--btn-gap);
+  height: var(--btn-h);
+  padding: 0 var(--btn-px);
   background: var(--surface-2);
   color: var(--text);
   border: var(--frame-border-w) solid var(--separator-strong);
   border-radius: var(--frame-radius);
   box-shadow: var(--frame-shadow);
-  padding: calc(var(--space-2) - 1px) var(--space-4);
-  font-size: var(--text-md);
+  font-size: var(--btn-text);
   font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
   transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease),
     filter var(--dur-fast) var(--ease);
@@ -31,8 +39,16 @@
   cursor: default;
 }
 .btn.sm {
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--text-sm);
+  gap: var(--btn-gap-sm);
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
+  font-size: var(--btn-text-sm);
+}
+.btn.lg {
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
+  font-size: var(--btn-text-lg);
+  font-weight: 600;
 }
 .btn.primary {
   background: var(--accent);
@@ -64,6 +80,21 @@
 .btn.danger:hover:not(:disabled) {
   background: var(--surface-2);
 }
+/* A quiet-but-visible action: framed, no fill, no lift. The row-level act
+   (mark finished, reopen, add, fix) that must read as a button without
+   competing with the content beside it. */
+.btn.outline {
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-secondary);
+}
+.btn.outline:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--text-tertiary);
+  transform: none;
+  box-shadow: none;
+}
 
 .icon-btn {
   display: grid;
@@ -87,6 +118,10 @@
 .icon-btn.sm {
   width: var(--control-h-sm);
   height: var(--control-h-sm);
+}
+.icon-btn.lg {
+  width: var(--control-h-lg);
+  height: var(--control-h-lg);
 }
 .icon-btn.danger:hover {
   background: var(--danger-soft);
@@ -366,11 +401,13 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  /* The default button height less the track's 2px inset. */
+  height: calc(var(--btn-h) - 4px);
   background: transparent;
   color: var(--text-tertiary);
   border: none;
   border-radius: var(--radius-xs);
-  padding: var(--space-2) var(--space-3);
+  padding: 0 var(--space-3);
   font-size: var(--text-sm);
   font-weight: 500;
   cursor: pointer;

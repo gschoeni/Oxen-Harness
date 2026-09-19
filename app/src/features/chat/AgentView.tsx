@@ -13,6 +13,7 @@
 // the thread at once, and the persisted transcript takes over as it lands.
 
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { Button } from "../../components/ui";
 import { ArrowDown, ChevronDown, ChevronLeft, ChevronUp, FileDiff, ScrollText, Square, X } from "lucide-react";
 import { agentPatch, applyAgentPatch, followUpAgent, sessionMessages } from "../../lib/ipc";
 import { fleetsFor, useStore } from "../../lib/store";
@@ -287,9 +288,9 @@ export function AgentView({ session, lane }: { session: string; lane: string }) 
             <ScrollText size={14} />
           </button>
           {running && (
-            <button className="agent-view-stop" onClick={stop} disabled={stopping} aria-label={`Stop ${label}`}>
+            <Button size="sm" variant="danger" onClick={stop} disabled={stopping} aria-label={`Stop ${label}`}>
               <Square size={11} fill="currentColor" /> Stop
-            </button>
+            </Button>
           )}
         </div>
       </header>

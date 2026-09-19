@@ -5,6 +5,7 @@ import { ThinkingIndicator } from "./ThinkingIndicator";
 import { ToolCall } from "./ToolCall";
 import { ApiKeyPrompt } from "./ApiKeyPrompt";
 import { RetryPrompt } from "./RetryPrompt";
+import { ModelErrorNotice } from "./ModelError";
 import { AttachmentImage } from "./AttachmentImage";
 import type { Item } from "./thread";
 
@@ -31,6 +32,8 @@ export const ThreadItem = memo(function ThreadItem({ item }: { item: Item }) {
   }
 
   if (item.kind === "notice") {
+    // A failed model call opens into its detail view; other notes stay inert.
+    if (item.error) return <ModelErrorNotice text={item.text} error={item.error} />;
     return <div className="msg notice">{item.text}</div>;
   }
 

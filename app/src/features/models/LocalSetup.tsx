@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Button, IconButton } from "../../components/ui";
 import {
   AlertTriangle,
   Check,
@@ -241,8 +242,8 @@ export function LocalSetup() {
                     {runtime?.source === "managed" && ` (${runtime.managed_version})`}
                   </span>
                 ) : runtime?.can_manage ? (
-                  <button
-                    className="ls-btn ls-btn-primary"
+                  <Button
+                    variant="primary"
                     onClick={doInstallRuntime}
                     disabled={installingRuntime}
                   >
@@ -255,7 +256,7 @@ export function LocalSetup() {
                         <Download size={15} /> Set up runtime
                       </>
                     )}
-                  </button>
+                  </Button>
                 ) : (
                   <span className="ls-runtime-warn">
                     <AlertTriangle size={15} /> No automatic runtime for this platform
@@ -299,20 +300,22 @@ export function LocalSetup() {
                     <Cpu size={15} />
                     <span className="ls-installed-name">{m.display}</span>
                     <span className="ls-installed-size">{formatBytes(m.size_bytes)}</span>
-                    <button
-                      className="ls-btn ls-btn-primary ls-btn-sm"
+                    <Button
+                      size="sm"
+                      variant="primary"
                       onClick={() => doUse(m.id)}
                       disabled={!runtimeReady || usingId === m.id}
                     >
                       {usingId === m.id ? "Starting…" : "Use"}
-                    </button>
-                    <button
-                      className="ls-icon-btn"
+                    </Button>
+                    <IconButton
+                      size="sm"
+                      className="danger"
                       onClick={() => doRemove(m.id)}
                       aria-label={`Remove ${m.display}`}
                     >
                       <Trash2 size={15} />
-                    </button>
+                    </IconButton>
                   </div>
                 ))}
               </div>
@@ -435,9 +438,7 @@ export function LocalSetup() {
                         onChange={(e) => setTokenInput(e.target.value)}
                       />
                     </div>
-                    <button className="ls-btn" onClick={saveToken}>
-                      Save
-                    </button>
+                    <Button onClick={saveToken}>Save</Button>
                   </div>
                 )}
               </div>
@@ -494,21 +495,21 @@ export function LocalSetup() {
                       <div className="ls-quant-actions">
                         {q.installed ? (
                           <>
-                            <button
-                              className="ls-btn ls-btn-primary"
+                            <Button
+                              variant="primary"
                               onClick={() => doUse(q.model.id)}
                               disabled={!runtimeReady || usingId === q.model.id}
                               title={runtimeReady ? "" : "Set up the runtime first"}
                             >
                               {usingId === q.model.id ? "Starting…" : "Use model"}
-                            </button>
-                            <button
-                              className="ls-icon-btn"
+                            </Button>
+                            <IconButton
+                              className="danger"
                               onClick={() => doRemove(q.model.id)}
                               aria-label="Remove"
                             >
                               <Trash2 size={15} />
-                            </button>
+                            </IconButton>
                           </>
                         ) : dl ? (
                           <div className="ls-dl">
@@ -522,9 +523,9 @@ export function LocalSetup() {
                             <AlertTriangle size={15} /> Not enough space
                           </span>
                         ) : (
-                          <button className="ls-btn" onClick={() => doDownload(q)}>
+                          <Button onClick={() => doDownload(q)}>
                             <Download size={15} /> Download
-                          </button>
+                          </Button>
                         )}
                       </div>
                     </div>
@@ -583,13 +584,13 @@ function DownloadRow({
         <span className="ls-download-error" title={d.error}>
           {d.error}
         </span>
-        <button
-          className="ls-icon-btn"
+        <IconButton
+          size="sm"
           onClick={onDismiss}
           aria-label={`Dismiss failed download of ${d.model.display}`}
         >
           <X size={15} />
-        </button>
+        </IconButton>
       </div>
     );
   }
@@ -607,15 +608,15 @@ function DownloadRow({
           : formatBytes(d.downloaded)}
       </span>
       <span className="ls-dl-pct">{d.status === "cancelling" ? "stopping…" : `${pct}%`}</span>
-      <button
-        className="ls-icon-btn"
+      <IconButton
+        size="sm"
         onClick={onStop}
         disabled={d.status === "cancelling"}
         aria-label={`Stop downloading ${d.model.display}`}
         title="Stop download"
       >
         <X size={15} />
-      </button>
+      </IconButton>
     </div>
   );
 }

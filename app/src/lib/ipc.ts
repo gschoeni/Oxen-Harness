@@ -41,11 +41,9 @@ import type {
   MediaPrefs,
   GitFileDiff,
   GitFileState,
-  GitOverview,
-  LedgerSnapshot,
+  ThreadSnapshot,
   OpenFileEvent,
   Project,
-  SettleState,
   StartProjectInput,
   SessionView,
   Theme,
@@ -226,27 +224,20 @@ export const setReviewStatus = (id: string, status: string) =>
 export const setReviewStatusMany = (ids: string[], status: string) =>
   invoke<number>("set_review_status_many", { ids, status });
 
-// ---- the Ledger (the home board of threads across every project) -----------
+// ---- threads (every chat's standing, across projects) ----------------------
 
-/** Every native thread with derived status, the in-flight session ids, and
- *  the last-seen mark — the board's one read. */
-export const ledgerSnapshot = () => invoke<LedgerSnapshot>("ledger_snapshot");
-/** Tie off a thread, optionally with a one-line closing note. */
-export const settleSession = (id: string, note?: string) =>
-  invoke<SettleState>("settle_session", { id, note });
-/** Bring a settled thread back to the trail. */
-export const reopenSession = (id: string) => invoke<void>("reopen_session", { id });
-/** Record that the user just looked at the board; resolves with the new mark. */
-export const ledgerMarkSeen = () => invoke<number>("ledger_mark_seen");
+/** Every native thread with its facts, plus the in-flight session ids. */
+export const threadsSnapshot = () => invoke<ThreadSnapshot>("threads_snapshot");
+/** Mark a thread finished; resolves with the recorded unix time. */
+export const sessionFinish = (id: string) => invoke<number>("session_finish", { id });
+/** Reopen a finished thread. */
+export const sessionReopen = (id: string) => invoke<void>("session_reopen", { id });
 /** Record that the user just looked at one thread (opened its chat, or
  *  watched its turn end); returns the new mark. */
 export const sessionMarkSeen = (id: string) => invoke<number>("session_mark_seen", { id });
 /** Name a chat; a blank name lets it title itself by its first message again. */
 export const renameSession = (id: string, title: string) =>
   invoke<void>("rename_session", { id, title });
-/** Git overviews for workspaces, keyed by path; non-repos are absent. */
-export const workspaceGit = (paths: string[]) =>
-  invoke<Record<string, GitOverview>>("workspace_git", { paths });
 
 // ---- projects (chats grouped by working directory) -------------------------
 

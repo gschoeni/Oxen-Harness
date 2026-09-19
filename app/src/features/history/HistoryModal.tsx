@@ -3,8 +3,8 @@
 // It opens from the clock at the end of the tab strip (or ⌘K), lands the
 // cursor in the search box, and closes the moment a chat is picked — the
 // chosen chat becomes the visible tab. Scoped to the current project by
-// default, with the whole trail one toggle away. Rows keep the sidebar's old
-// order: what needs you first, then the open chats, then the tied-off ones.
+// default, with every project one toggle away. Rows keep the sidebar's old
+// order: what needs you first, then the open chats, then the finished ones.
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Search, Trash2 } from "lucide-react";
@@ -12,7 +12,7 @@ import { useStore } from "../../lib/store";
 import { basename, relativeTime, shortModel } from "../../lib/format";
 import { Modal } from "../../components/ui";
 import type { SessionSummary } from "../../lib/types";
-import { useThreads } from "../ledger/useBoard";
+import { useThreads } from "../threads/useThreads";
 import { StatusDot } from "../tabs/StatusDot";
 import { tabSignals, tabStatus, type TabStatus } from "../tabs/tabStatus";
 import { DeleteChatModal } from "./DeleteChatModal";
@@ -61,7 +61,7 @@ export function HistoryModal() {
 
   // The rows in reading order, for the arrow keys.
   const flat = useMemo(
-    () => [...sections.needs.map((n) => n.row), ...sections.open, ...sections.settled],
+    () => [...sections.needs.map((n) => n.row), ...sections.open, ...sections.finished],
     [sections],
   );
   const highlighted = flat[Math.min(cursor, Math.max(0, flat.length - 1))]?.id;
@@ -86,7 +86,7 @@ export function HistoryModal() {
     setHistoryOpen(false);
     resume(id)
       .then(() => {
-        // Picked from Home: ride out to the chat, as the board's rows do.
+        // Picked from Home: leave for the chat.
         if (homeOpen) setHomeOpen(false);
       })
       .catch((e: unknown) => addNotice(`Couldn't open that chat: ${String(e)}`));
@@ -110,13 +110,13 @@ export function HistoryModal() {
   const currentId = session?.session_id ?? null;
   const empty = flat.length === 0;
 
-  const row = (s: SessionSummary, need?: string, settled = false) => (
+  const row = (s: SessionSummary, need?: string, finished = false) => (
     <HistoryRow
       key={s.id}
       row={s}
       status={statusOf(s.id)}
       need={need}
-      settled={settled}
+      finished={finished}
       current={s.id === currentId}
       highlighted={s.id === highlighted}
       asTab={openTabs.has(s.id)}
@@ -180,7 +180,7 @@ export function HistoryModal() {
               {sections.needs.length > 0 && (
                 <div
                   className="history-head needs"
-                  title="Loose ends: pick each one back up, or open it and tie the knot"
+                  title="Loose ends: pick each one back up, or open it and mark it finished"
                 >
                   <span>Needs you</span>
                   <span className="history-count">{sections.needs.length}</span>
@@ -193,13 +193,13 @@ export function HistoryModal() {
                 </div>
               )}
               {sections.open.map((s) => row(s))}
-              {sections.settled.length > 0 && (
-                <div className="history-head settled" title="Tied off — nothing owed here">
-                  <span>Settled</span>
-                  <span className="history-count">{sections.settled.length}</span>
+              {sections.finished.length > 0 && (
+                <div className="history-head finished" title="Marked finished — nothing owed here">
+                  <span>Finished</span>
+                  <span className="history-count">{sections.finished.length}</span>
                 </div>
               )}
-              {sections.settled.map((s) => row(s, undefined, true))}
+              {sections.finished.map((s) => row(s, undefined, true))}
             </>
           )}
         </div>
@@ -223,7 +223,7 @@ function HistoryRow({
   row,
   status,
   need,
-  settled,
+  finished,
   current,
   highlighted,
   asTab,
@@ -235,7 +235,7 @@ function HistoryRow({
   row: SessionSummary;
   status: TabStatus;
   need?: string;
-  settled: boolean;
+  finished: boolean;
   current: boolean;
   highlighted: boolean;
   asTab: boolean;
@@ -258,7 +258,7 @@ function HistoryRow({
     current ? "active" : "",
     highlighted ? "highlighted" : "",
     need ? "needy" : "",
-    settled ? "settled" : "",
+    finished ? "finished" : "",
   ]
     .filter(Boolean)
     .join(" ");

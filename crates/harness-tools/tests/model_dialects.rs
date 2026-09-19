@@ -21,48 +21,6 @@
 //! the arguments of the sibling tool models will confuse it with.
 
 use harness_tools::fs::EditFileArgs;
-use harness_tools::{parse_trail_arguments, TypedTool};
-
-/// Jul 26, 2026 — the model's first-ever `update_trail` calls. Perfect
-/// waypoints, no `title`: the shape mirrors `update_plan`, which has none.
-/// Failed with serde's terse "missing field `title`" twice, taught nothing,
-/// and the model gave up charting. Titles are now optional (persistence keeps
-/// the previously charted name; the board falls back to the first message).
-#[test]
-fn update_trail_without_a_title_first_charting() {
-    let trail = parse_trail_arguments(
-        r#"{"waypoints":[{"name":"inspect","status":"current"},{"name":"design","status":"ahead"},{"name":"implement","status":"ahead"},{"name":"verify","status":"ahead"}]}"#,
-    )
-    .expect("a titleless trail is a valid trail");
-    assert_eq!(trail.title, "");
-    assert_eq!(trail.waypoints.len(), 4);
-}
-
-/// Same session, later: advancing waypoints, still no title.
-#[test]
-fn update_trail_without_a_title_mid_ride() {
-    let trail = parse_trail_arguments(
-        r#"{"waypoints":[{"name":"inspect","status":"done"},{"name":"design","status":"done"},{"name":"implement","status":"current"},{"name":"verify","status":"ahead"}]}"#,
-    )
-    .expect("waypoint updates may omit the title");
-    assert_eq!(trail.waypoints[2].name, "implement");
-}
-
-/// The tool result must nudge toward a title, not error — the result string
-/// is the one channel the model reliably reads.
-#[tokio::test]
-async fn update_trail_untitled_result_teaches() {
-    let out = harness_tools::TrailTool::new()
-        .invoke(serde_json::json!({
-            "waypoints": [
-                {"name": "inspect", "status": "current"},
-                {"name": "verify", "status": "ahead"},
-            ]
-        }))
-        .await
-        .expect("untitled call succeeds");
-    assert!(out.contains("tip: include `title`"), "{out}");
-}
 
 /// Jul 26, 2026 — `edit_file` with every schema field present at once: a real
 /// pair beside an EMPTY `edits` list. Failed with "pass either `edits` or a

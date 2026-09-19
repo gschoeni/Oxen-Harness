@@ -353,19 +353,7 @@
   color: var(--text-tertiary);
   font-size: var(--text-xs);
 }
-.rule-delete {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: var(--space-1) var(--space-2);
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-tertiary);
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-.rule-delete:hover {
+.rule-delete:hover:not(:disabled) {
   background: var(--danger-soft);
   color: var(--danger);
 }
@@ -543,7 +531,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
+  width: var(--control-h-lg);
   background: var(--accent-soft);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);

@@ -1589,7 +1589,7 @@ impl SessionService {
             .lock()
             .await
             .insert(sid.clone(), cancel.clone());
-        // Registered ⇒ running ⇒ not settled (see ledger::reopen_for_run).
+        // Registered ⇒ running ⇒ not finished (see threads::reopen_for_run).
         self.reopen_for_run(&sid);
         self.interjections
             .lock()

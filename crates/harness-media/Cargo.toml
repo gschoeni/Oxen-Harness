@@ -11,7 +11,7 @@ description = "Image and video generation tools over the Oxen.ai async queue, wi
 [dependencies]
 harness-config = { workspace = true }
 harness-core = { workspace = true }
-harness-llm = { workspace = true }
+harness-http = { workspace = true }
 harness-tools = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

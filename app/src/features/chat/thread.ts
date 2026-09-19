@@ -2,7 +2,7 @@
 // and applies these transforms as the agent streams; keeping them here (free of
 // React) makes the streaming behavior easy to read, reuse, and unit-test.
 
-import type { ChatMessage, MessageContent } from "../../lib/types";
+import type { ChatMessage, MessageContent, ModelErrorDetail } from "../../lib/types";
 import { isMediaPath } from "../../lib/attachments";
 
 const MAX_THREAD_ITEMS = 300;
@@ -59,7 +59,9 @@ export type Item =
        *  whole reply — wins when the bubble settles. */
       partial?: boolean;
     }
-  | { id: string; kind: "notice"; text: string }
+  // A quiet system line (a compaction, a refused command). A model-call
+  // failure carries its structured `error` so the line can open a detail view.
+  | { id: string; kind: "notice"; text: string; error?: ModelErrorDetail }
   // An inline API-key entry card, shown in place of a reply when a turn failed
   // authentication (a 401). It carries the failed prompt so the turn can be
   // retried once a key is saved.
@@ -69,7 +71,16 @@ export type Item =
   // transcript ends mid-turn. `message` explains why; `text`/`attachments`
   // carry the failed prompt so a retry can fall back to the API-key card if it
   // then hits a 401.
-  | { id: string; kind: "retry"; text: string; attachments: string[]; message: string }
+  // `lastError` is the last failed model call seen this turn (if the retries
+  // ran out), so the card can open the same detail view as the notices.
+  | {
+      id: string;
+      kind: "retry";
+      text: string;
+      attachments: string[];
+      message: string;
+      lastError?: ModelErrorDetail;
+    }
   | {
       id: string;
       kind: "tool";
@@ -326,8 +337,26 @@ export function appendRetryPrompt(
       break;
     }
   }
-  next.push({ id: uid(), kind: "retry", text, attachments, message });
+  const lastError = lastModelError(prev);
+  next.push(
+    lastError
+      ? { id: uid(), kind: "retry", text, attachments, message, lastError }
+      : { id: uid(), kind: "retry", text, attachments, message },
+  );
   return capThread(next);
+}
+
+/** The most recent failed model call in the turn that is ending — the last
+ *  retry notice after the last user message. A failure card built from it can
+ *  show the provider's actual response, which the turn's final error string
+ *  (a summary of the attempts) no longer carries. */
+export function lastModelError(items: Item[]): ModelErrorDetail | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === "user") return undefined;
+    if (it.kind === "notice" && it.error) return it.error;
+  }
+  return undefined;
 }
 
 /** Drop any pending retry cards — a fresh prompt supersedes them (the dangling
@@ -358,8 +387,8 @@ export function lastUserText(messages: ChatMessage[]): string {
 /** Add a centered notice line (e.g. a context-compaction note). Inserts it
  *  before a trailing empty in-flight assistant bubble so the continued reply
  *  still streams below it. */
-export function appendNotice(prev: Item[], text: string): Item[] {
-  const notice: Item = { id: uid(), kind: "notice", text };
+export function appendNotice(prev: Item[], text: string, error?: ModelErrorDetail): Item[] {
+  const notice: Item = error ? { id: uid(), kind: "notice", text, error } : { id: uid(), kind: "notice", text };
   const last = prev[prev.length - 1];
   if (last && last.kind === "assistant" && last.streaming && last.text === "") {
     return capThread([...prev.slice(0, -1), notice, last]);

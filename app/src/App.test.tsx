@@ -12,20 +12,20 @@ beforeEach(() => {
 });
 
 describe("App overlays", () => {
-  it("paints Settings above the Ledger when both are open", () => {
+  it("paints Settings above Home when both are open", () => {
     // They share a stacking band, so DOM order decides which one you see.
-    // Settings opens *from* the Ledger; rendering it first made the button
+    // Settings opens *from* Home; rendering it first made the button
     // look dead — the surface mounted, entirely behind the page it opened from.
     useStore.setState({ homeOpen: true, settingsOpen: true });
 
     const { container } = render(<App />);
-    const ledger = container.querySelector(".home-overlay");
+    const home = container.querySelector(".home-overlay");
     const settings = container.querySelector(".settings-overlay");
 
-    expect(ledger).toBeTruthy();
+    expect(home).toBeTruthy();
     expect(settings).toBeTruthy();
     // Following in document order means painting on top at equal z-index.
-    expect(ledger!.compareDocumentPosition(settings!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+    expect(home!.compareDocumentPosition(settings!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });

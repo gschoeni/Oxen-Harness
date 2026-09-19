@@ -3,10 +3,11 @@
 //!
 //! A rewind ("go back to before that message and try again") is a fork of
 //! the transcript up to the cut, resumed as a new session. The original
-//! keeps every message, so nothing the user said is lost. The fork's plan
-//! and trail are rebuilt from the messages it kept — a snapshot of the
-//! source's state *now* would show work the fork never did — and its rule
-//! history starts fresh, so once-per-session reminders may fire again.
+//! keeps every message, so nothing the user said is lost. The fork copies
+//! only the messages it keeps, not the source's session state: that state
+//! describes the source *now* and would show work the fork never did. In
+//! particular its rule history starts fresh, so once-per-session reminders
+//! may fire again.
 
 use crate::error::AgentError;
 
@@ -26,9 +27,6 @@ impl Agent {
             self.config.clone(),
         )?;
         forked.set_rules(self.rules.clone());
-        if through_seq.is_some() {
-            forked.rebuild_projections()?;
-        }
         Ok(forked)
     }
 
@@ -47,40 +45,6 @@ impl Agent {
     /// offered. A rewind to a turn is [`Self::rewind_before`].
     pub fn user_turns(&self) -> Result<Vec<(i64, String)>, AgentError> {
         Ok(self.store.user_turns(&self.session_id)?)
-    }
-
-    /// Recompute the plan and trail snapshots from this session's transcript:
-    /// the same fold the turn loop applies to each successful `update_plan`
-    /// / `update_trail` call, replayed over the messages the fork kept.
-    fn rebuild_projections(&self) -> Result<(), AgentError> {
-        let mut plan: Option<harness_tools::PlanSnapshot> = None;
-        let mut trail: Option<harness_tools::TrailSnapshot> = None;
-        for call in self
-            .messages
-            .iter()
-            .filter(|m| m.role == "assistant")
-            .filter_map(|m| m.tool_calls.as_ref())
-            .flatten()
-        {
-            if call.function.name == harness_tools::PLAN_TOOL {
-                if let Some(items) = harness_tools::parse_plan_arguments(&call.function.arguments) {
-                    plan = Some(harness_tools::plan_snapshot(&items));
-                }
-            } else if call.function.name == harness_tools::TRAIL_TOOL {
-                if let Some(next) = harness_tools::parse_trail_arguments(&call.function.arguments) {
-                    trail = Some(harness_tools::merge_trail(trail.take(), next));
-                }
-            }
-        }
-        if plan.is_some() {
-            self.store
-                .save_session_state(&self.session_id, harness_store::PLAN_STATE, &plan)?;
-        }
-        if let Some(trail) = trail {
-            self.store
-                .save_session_state(&self.session_id, harness_store::TRAIL_STATE, &trail)?;
-        }
-        Ok(())
     }
 }
 
@@ -154,7 +118,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_rewind_skips_synthetic_turns_and_rebuilds_the_plan_as_of_the_cut() {
+    async fn a_rewind_skips_synthetic_turns_and_cuts_before_the_chosen_one() {
         let store = Arc::new(HistoryStore::open_in_memory().unwrap());
         let session = test_session(&store, "claude-opus-4-8");
         let client = OxenClient::new("http://localhost/api/ai", "key", "claude-opus-4-8");
@@ -182,56 +146,25 @@ mod tests {
             ))
             .unwrap();
         agent.push(ChatMessage::assistant("working on it")).unwrap();
-        // Turn 2: the plan is finished — and persisted as the session's
-        // current projection.
+        // Turn 2: the plan is finished.
         agent.push(ChatMessage::user("finish up")).unwrap();
         agent.push(plan_call("c2", "completed")).unwrap();
         agent
             .push(ChatMessage::tool_result("c2", "plan recorded"))
             .unwrap();
         agent.push(ChatMessage::assistant("done")).unwrap();
-        store
-            .save_session_state(
-                &session,
-                harness_store::PLAN_STATE,
-                &Some(harness_tools::PlanSnapshot {
-                    done: 1,
-                    total: 1,
-                    active: None,
-                }),
-            )
-            .unwrap();
 
         // Only the two typed messages are offered.
         let turns = agent.user_turns().unwrap();
         let previews: Vec<&str> = turns.iter().map(|(_, t)| t.as_str()).collect();
         assert_eq!(previews, vec!["start", "finish up"]);
 
-        // Rewinding to before "finish up" keeps turn 1 whole …
+        // Rewinding to before "finish up" keeps turn 1 whole, and the
+        // source is untouched.
+        let source_len = store.messages(&session).unwrap().len();
         let fork = agent.rewind_before(turns[1].0).unwrap();
         assert_eq!(fork.messages().len(), 5);
         assert_eq!(fork.messages().last().unwrap().role, "assistant");
-        // … and the plan is what turn 1 left it at, not the source's finished one.
-        let plan: Option<harness_tools::PlanSnapshot> = store
-            .session_state(fork.session_id(), harness_store::PLAN_STATE)
-            .unwrap()
-            .flatten();
-        assert_eq!(
-            plan,
-            Some(harness_tools::PlanSnapshot {
-                done: 0,
-                total: 1,
-                active: Some("Researching".into()),
-            })
-        );
-        let source_plan: Option<harness_tools::PlanSnapshot> = store
-            .session_state(&session, harness_store::PLAN_STATE)
-            .unwrap()
-            .flatten();
-        assert_eq!(
-            source_plan.map(|p| p.done),
-            Some(1),
-            "the source is untouched"
-        );
+        assert_eq!(store.messages(&session).unwrap().len(), source_len);
     }
 }

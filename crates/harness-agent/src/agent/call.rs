@@ -54,6 +54,29 @@ where
     }
 }
 
+/// The error a call ends on. After at least one retry it reports the full
+/// picture (attempts, model, endpoint, last error) so the failure is
+/// debuggable rather than a bare status code; a first-try failure — a
+/// non-transient error, or a server asking for a longer wait than the
+/// policy takes — surfaces as itself.
+fn retries_exhausted(
+    agent: &Agent,
+    attempt: u32,
+    request: &ChatRequest,
+    error: harness_llm::LlmError,
+) -> AgentError {
+    if attempt > 1 {
+        AgentError::RetriesExhausted {
+            attempts: attempt,
+            model: request.model.clone(),
+            endpoint: agent.client.base_url().to_string(),
+            source: Box::new(error),
+        }
+    } else {
+        error.into()
+    }
+}
+
 impl Agent {
     /// Send the prepared outbound transcript (plus the optional one-shot
     /// nudge) to the model and stream the reply, translating provider stream
@@ -94,6 +117,9 @@ impl Agent {
         let retry = self.config.retry.clone();
         let started = std::time::Instant::now();
         let mut attempt: u32 = 1;
+        // The attempt budget on the current model, fixed by its first
+        // transient failure (a blip's or a rate limit's); reset on fallback.
+        let mut budget: Option<u32> = None;
         // How far down `retry.fallback_models` this call has walked.
         let mut fallbacks = retry.fallback_models.iter();
         loop {
@@ -166,48 +192,65 @@ impl Agent {
                     };
                     return Ok((assembled, outcome, hits));
                 }
-                // Retries on this model are spent but another model is
-                // configured: a provider having a bad minute shouldn't end the
-                // turn. Switch and start its attempt budget fresh, with no
-                // backoff — a different endpoint is a fresh chance, not a
-                // repeat of the one that just failed.
-                Err(e)
-                    if e.is_transient()
-                        && attempt >= retry.max_attempts
-                        && fallbacks.clone().next().is_some() =>
-                {
-                    let Some(next) = fallbacks.next().cloned() else {
-                        return Err(e.into());
+                Err(e) if e.is_transient() => {
+                    // The budget is fixed by the first failure on this model:
+                    // a run of 502s that turns into a 429 keeps the blip
+                    // budget it announced, so "attempt N of M" never flips
+                    // mid-sequence and never exhausts early.
+                    let max_attempts = *budget.get_or_insert_with(|| retry.attempts_for(&e));
+                    // A 429 waits on the server's schedule (its Retry-After
+                    // when sent — exactly, never shortened — or a longer
+                    // doubling floor otherwise) and gets more tries than a
+                    // blip; computed waits are jittered so N lanes limited at
+                    // once don't all knock again in unison. No wait means the
+                    // retries are done: the budget is spent, or the server
+                    // asked for a longer nap than the policy will take.
+                    let wait = (attempt < max_attempts)
+                        .then(|| retry.wait_after(attempt, &e))
+                        .flatten();
+                    let Some(delay) = wait else {
+                        // Retries on this model are spent but another model
+                        // is configured: a provider having a bad minute
+                        // shouldn't end the turn. Switch and start its
+                        // attempt budget fresh, with no backoff — a different
+                        // endpoint is a fresh chance, not a repeat of the one
+                        // that just failed.
+                        let Some(next) = fallbacks.next().cloned() else {
+                            return Err(retries_exhausted(self, attempt, &request, e));
+                        };
+                        crate::errlog::record(
+                            self.config.error_log.as_deref(),
+                            "model_fallback",
+                            serde_json::json!({
+                                "session": self.session_id(),
+                                "from": request.model.as_str(),
+                                "to": next,
+                                "attempts": attempt,
+                                "error": e.to_string(),
+                            }),
+                        );
+                        on_event(&AgentEvent::Retrying {
+                            attempt,
+                            max_attempts,
+                            delay_ms: 0,
+                            error: e.to_string(),
+                            switching_to: Some(next.clone()),
+                            model: request.model.clone(),
+                            endpoint: self.client.base_url().to_string(),
+                            status: e.status(),
+                            detail: e.detail(),
+                        });
+                        // Cache breakpoints are per model family, so re-derive
+                        // them for the model actually about to be called.
+                        request.cache_anchors = self
+                            .config
+                            .prompt_cache
+                            .anchors_for(&next, &request.messages);
+                        request.model = next;
+                        attempt = 1;
+                        budget = None;
+                        continue;
                     };
-                    crate::errlog::record(
-                        self.config.error_log.as_deref(),
-                        "model_fallback",
-                        serde_json::json!({
-                            "session": self.session_id(),
-                            "from": request.model.as_str(),
-                            "to": next,
-                            "attempts": attempt,
-                            "error": e.to_string(),
-                        }),
-                    );
-                    on_event(&AgentEvent::Retrying {
-                        attempt,
-                        max_attempts: retry.max_attempts,
-                        delay_ms: 0,
-                        error: e.to_string(),
-                        switching_to: Some(next.clone()),
-                    });
-                    // Cache breakpoints are per model family, so re-derive
-                    // them for the model actually about to be called.
-                    request.cache_anchors = self
-                        .config
-                        .prompt_cache
-                        .anchors_for(&next, &request.messages);
-                    request.model = next;
-                    attempt = 1;
-                }
-                Err(e) if e.is_transient() && attempt < retry.max_attempts => {
-                    let delay = retry.delay_after(attempt);
                     crate::errlog::record(
                         self.config.error_log.as_deref(),
                         "retrying",
@@ -216,17 +259,24 @@ impl Agent {
                             "model": request.model.as_str(),
                             "endpoint": self.client.base_url(),
                             "attempt": attempt,
-                            "max_attempts": retry.max_attempts,
+                            "max_attempts": max_attempts,
                             "delay_ms": delay.as_millis() as u64,
+                            "retry_after_ms": e.retry_after().map(|d| d.as_millis() as u64),
                             "error": e.to_string(),
+                            "status": e.status(),
+                            "detail": e.detail(),
                         }),
                     );
                     on_event(&AgentEvent::Retrying {
                         attempt,
-                        max_attempts: retry.max_attempts,
+                        max_attempts,
                         delay_ms: delay.as_millis() as u64,
                         error: e.to_string(),
                         switching_to: None,
+                        model: request.model.clone(),
+                        endpoint: self.client.base_url().to_string(),
+                        status: e.status(),
+                        detail: e.detail(),
                     });
                     // A stop during the backoff wait ends the turn like any
                     // other cancellation: quietly, with nothing assembled.
@@ -243,18 +293,7 @@ impl Agent {
                     }
                     attempt += 1;
                 }
-                // Retries were burned and it's still down: report the full
-                // picture (attempts, model, endpoint, last error) so the
-                // failure is debuggable rather than a bare status code.
-                Err(e) if attempt > 1 => {
-                    return Err(AgentError::RetriesExhausted {
-                        attempts: attempt,
-                        model: request.model.clone(),
-                        endpoint: self.client.base_url().to_string(),
-                        source: Box::new(e),
-                    })
-                }
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(retries_exhausted(self, attempt, &request, e)),
             }
         }
     }
@@ -431,16 +470,22 @@ mod tests {
 
         let mut agent = retry_test_agent(server.url(), fast_retry(4));
         let mut retries = Vec::new();
+        let mut details = Vec::new();
         let out = agent
             .run_turn("hello", |e| {
                 if let AgentEvent::Retrying {
                     attempt,
                     max_attempts,
                     error,
+                    model,
+                    endpoint,
+                    status,
+                    detail,
                     ..
                 } = e
                 {
                     retries.push((*attempt, *max_attempts, error.clone()));
+                    details.push((model.clone(), endpoint.clone(), *status, detail.clone()));
                 }
             })
             .await
@@ -452,6 +497,16 @@ mod tests {
         assert_eq!((retries[0].0, retries[0].1), (1, 4));
         assert_eq!((retries[1].0, retries[1].1), (2, 4));
         assert!(retries[0].2.contains("502"), "event should carry the error");
+        // …plus where it happened and what the provider actually said, so a
+        // UI can offer the raw response behind the one-line notice.
+        let (model, endpoint, status, detail) = &details[0];
+        assert_eq!(model, "claude-opus-4-8");
+        assert_eq!(endpoint, &server.url());
+        assert_eq!(*status, Some(502));
+        assert_eq!(
+            detail.as_deref(),
+            Some(r#"{"error":{"title":"The model provider returned an error."}}"#)
+        );
         bad.assert_async().await;
         good.assert_async().await;
     }
@@ -625,6 +680,133 @@ mod tests {
         assert_eq!(entries[1]["model"], "claude-opus-4-8");
         assert_eq!(entries[1]["endpoint"], server.url());
         assert!(entries[1]["ts"].as_str().unwrap().ends_with('Z'));
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_gets_the_longer_budget_and_obeys_retry_after() {
+        let mut server = mockito::Server::new_async().await;
+        let limited = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after-ms", "600")
+            .with_body(r#"{"error":{"title":"The model provider returned an error."}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let good = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("recovered"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Blips get 2 tries; a 429 gets 3 and its own (still tiny) floor.
+        let retry = RetryPolicy {
+            rate_limit_max_attempts: 3,
+            ..fast_retry(2)
+        };
+        let mut agent = retry_test_agent(server.url(), retry);
+        let mut retries = Vec::new();
+        let out = agent
+            .run_turn("hello", |e| {
+                if let AgentEvent::Retrying {
+                    attempt,
+                    max_attempts,
+                    delay_ms,
+                    status,
+                    ..
+                } = e
+                {
+                    retries.push((*attempt, *max_attempts, *delay_ms, *status));
+                }
+            })
+            .await
+            .expect("the turn should survive a rate limit and finish");
+
+        assert_eq!(out, "recovered");
+        // The notice reports the rate-limit budget, not the blip one, and the
+        // wait is the server's hint exactly: jittering it down would re-send
+        // before the server said it may.
+        assert_eq!(retries.len(), 1);
+        let (attempt, max_attempts, delay_ms, status) = retries[0];
+        assert_eq!((attempt, max_attempts, status), (1, 3, Some(429)));
+        assert_eq!(delay_ms, 600, "wait must be the server's hint, unshortened");
+        limited.assert_async().await;
+        good.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_retry_after_past_the_policy_ends_the_turn_with_the_rate_limit() {
+        let mut server = mockito::Server::new_async().await;
+        let limited = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after", "3600")
+            .with_body(r#"{"error":{"title":"Rate limit reached."}}"#)
+            .expect(1) // never re-sent: an hour's nap is not a retry
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(4));
+        let started = std::time::Instant::now();
+        let err = agent
+            .run_turn("hello", |_| {})
+            .await
+            .expect_err("a rate limit the policy won't wait out must surface");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(err.to_string().contains("429"), "{err}");
+        limited.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn the_attempt_budget_is_fixed_by_the_first_failure() {
+        let mut server = mockito::Server::new_async().await;
+        // Two blips, then a rate limit: the notices keep the blip budget they
+        // announced instead of flipping to the rate-limit one mid-sequence.
+        let blips = server
+            .mock("POST", "/chat/completions")
+            .with_status(502)
+            .with_body(r#"{"error":{"title":"The model provider returned an error."}}"#)
+            .expect(2)
+            .create_async()
+            .await;
+        let limited = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after-ms", "1")
+            .with_body(r#"{"error":{"title":"Rate limit reached."}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let retry = RetryPolicy {
+            rate_limit_max_attempts: 6,
+            ..fast_retry(3)
+        };
+        let mut agent = retry_test_agent(server.url(), retry);
+        let mut notices = Vec::new();
+        let err = agent
+            .run_turn("hello", |e| {
+                if let AgentEvent::Retrying {
+                    attempt,
+                    max_attempts,
+                    ..
+                } = e
+                {
+                    notices.push((*attempt, *max_attempts));
+                }
+            })
+            .await
+            .expect_err("three attempts is the blip budget, so the third failure ends it");
+        assert_eq!(notices, vec![(1, 3), (2, 3)]);
+        assert!(
+            matches!(err, AgentError::RetriesExhausted { attempts: 3, .. }),
+            "{err}"
+        );
+        blips.assert_async().await;
+        limited.assert_async().await;
     }
 
     #[tokio::test]

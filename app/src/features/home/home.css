@@ -1,0 +1,99 @@
+/* Home — the app's front door: the project cards (or the media lens) under
+ * one header. Every color, face, and corner comes from the theme tokens. */
+
+.home-overlay {
+  position: fixed;
+  /* Below the app title bar, which must stay draggable everywhere. */
+  inset: var(--titlebar-h) 0 0;
+  z-index: var(--z-overlay);
+  background:
+    radial-gradient(circle at 82% 4%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 32%),
+    var(--bg);
+  overflow-y: auto;
+}
+
+.home-page {
+  /* One width for both lenses — the page doesn't breathe when you switch. */
+  width: min(960px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: var(--space-6) 0 var(--space-8);
+}
+
+.home-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.home-eyebrow {
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+}
+
+.home-title {
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  letter-spacing: var(--wordmark-spacing);
+  text-transform: var(--label-transform);
+  color: var(--text);
+}
+
+.home-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The lens toggle and the cards' sort share one pill treatment. */
+.home-view-toggle,
+.projects-sort {
+  display: inline-flex;
+  padding: var(--space-half);
+  gap: var(--space-half);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill);
+}
+
+.home-view-option,
+.projects-sort-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  /* Sits inside the pill's 2px inset; the sm button height less that inset. */
+  height: calc(var(--btn-h-sm) - 4px);
+  border: none;
+  background: none;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font-family: var(--font-readout, var(--font-mono));
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  text-transform: var(--label-transform);
+  letter-spacing: var(--label-spacing);
+}
+
+.home-view-option:hover,
+.projects-sort-option:hover {
+  color: var(--text);
+}
+
+.home-view-option.selected,
+.projects-sort-option.selected {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+@media (max-width: 640px) {
+  .home-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

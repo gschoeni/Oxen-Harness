@@ -5,9 +5,13 @@ export type { SelectOption, SelectProps } from "./Select";
 import { X } from "lucide-react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
+/** The one text button. `size` picks a token tuple (`--btn-*` in tokens.css);
+ *  `variant` picks the emphasis: `primary` for the one main act, `outline`
+ *  for a quiet framed action, `ghost` for toolbar-grade, `danger` for the
+ *  destructive one. Features never re-size a button in their own CSS. */
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "default" | "primary" | "ghost" | "danger";
-  size?: "sm" | "md";
+  variant?: "default" | "primary" | "outline" | "ghost" | "danger";
+  size?: "sm" | "md" | "lg";
 };
 
 export function Button({ variant = "default", size = "md", className = "", ...rest }: ButtonProps) {
@@ -17,12 +21,18 @@ export function Button({ variant = "default", size = "md", className = "", ...re
   return <button className={cls} {...rest} />;
 }
 
+/** A square icon-only button sized from the control-height family, so it
+ *  lines up beside inputs and text buttons of the same size. */
 export function IconButton({
   active,
+  size = "md",
   className = "",
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { active?: boolean }) {
-  return <button className={`icon-btn ${active ? "active" : ""} ${className}`} {...rest} />;
+}: ButtonHTMLAttributes<HTMLButtonElement> & { active?: boolean; size?: "sm" | "md" | "lg" }) {
+  const cls = ["icon-btn", active ? "active" : "", size !== "md" ? size : "", className]
+    .filter(Boolean)
+    .join(" ");
+  return <button className={cls} {...rest} />;
 }
 
 export function Spinner() {
