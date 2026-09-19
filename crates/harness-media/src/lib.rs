@@ -50,13 +50,16 @@ use serde::{Deserialize, Serialize};
 pub use budget::{BudgetVerdict, MediaBudget, SpendEstimate};
 pub use catalog::{Catalog, MediaModel};
 pub use events::{Completion, CompletionFeed};
-pub use library::{MediaItem, MediaLibrary, MediaStatus, MediaTick, MediaUpload, UploadStatus};
+pub use hub::{repo_web_url, HubRepos, NewRepo};
+pub use library::{
+    MediaItem, MediaLibrary, MediaSource, MediaStatus, MediaTick, MediaUpload, SourceOrigin,
+    StoredRef, UploadStatus,
+};
 pub use queue::{GenerationRecord, QueueClient, QueueError};
 pub use refs::{MediaRefs, RefKind, ResolvedRef};
 pub use tools::{
     GenerateImageTool, GenerateVideoTool, MediaContext, MediaModelsTool, MediaStatusTool,
 };
-pub use hub::{repo_web_url, HubRepos, NewRepo};
 pub use upload::{HubUploader, UploadError, UploadedRef};
 
 /// Tool names the model calls (and front ends special-case for rendering).

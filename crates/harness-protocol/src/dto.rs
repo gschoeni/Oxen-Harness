@@ -208,6 +208,43 @@ pub struct MediaItem {
     pub parent: Option<String>,
     #[serde(default)]
     pub seed: Option<serde_json::Value>,
+    /// Where each reference came from, in request order (the provenance
+    /// behind `refs`).
+    #[serde(default)]
+    pub sources: Vec<MediaSource>,
+    /// The prompt as the agent wrote it, when rewriting reference labels
+    /// changed what the hub got (`prompt`).
+    #[serde(default)]
+    pub agent_prompt: Option<String>,
+    /// The hub's completed generation record, verbatim.
+    #[serde(default)]
+    pub provider: Option<serde_json::Value>,
+}
+
+/// One reference's provenance on a `MediaItem`: the stored copy, the file
+/// it was made from, and how that file got into the request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MediaSource {
+    /// The project-relative copy under `refs/` (the matching `refs` entry).
+    pub path: String,
+    /// `attachment` (dropped into the chat), `generation` (an earlier
+    /// output of the library, named by `generation`), or `file` (any other
+    /// project file).
+    pub origin: String,
+    /// The chip label the request used (`[Image #1]`), when it came from
+    /// the chat.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The original file: absolute for an attachment from outside the
+    /// project, project-relative otherwise.
+    pub source: String,
+    /// The library item whose output this is, for a `generation` origin.
+    #[serde(default)]
+    pub generation: Option<String>,
+    /// `image`, `video`, or `audio`.
+    pub kind: String,
+    /// SHA-256 of the bytes, hex.
+    pub sha256: String,
 }
 
 /// One reference on its way to the hub for a generation (`media.changed`

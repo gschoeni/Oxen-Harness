@@ -22,7 +22,9 @@ use serde_json::{Map, Value};
 
 use crate::budget::{fmt_usd, BudgetVerdict, SpendEstimate};
 use crate::catalog::{estimate_cost, Catalog, MediaModel};
-use crate::library::{now_unix, slugify, MediaItem, MediaLibrary, MediaStatus};
+use crate::library::{
+    now_unix, slugify, MediaItem, MediaLibrary, MediaSource, MediaStatus, SourceOrigin, StoredRef,
+};
 use crate::queue::{deadline_for, QueueClient, QueueError};
 use crate::refs::{self, MediaRefs, RefKind, ResolvedRef};
 use crate::{
@@ -602,7 +604,8 @@ async fn run_generation(
 
     // References go to the hub first (progress rows in the media feed),
     // then land in the model's fields as URLs.
-    let (urls, ref_paths) = upload_refs(ctx, &prepared.resolved).await?;
+    let (urls, sources) = upload_refs(ctx, &prepared.resolved).await?;
+    let ref_paths: Vec<String> = sources.iter().map(|s| s.path.clone()).collect();
     let mut body = prepared.body.clone();
     let prompt = place_refs(
         &prepared.model,
@@ -664,6 +667,9 @@ async fn run_generation(
             completed_at: None,
             parent: req.parent.clone(),
             seed: prepared.params.get("seed").cloned(),
+            sources: sources.clone(),
+            agent_prompt: (req.prompt != prompt).then(|| req.prompt.clone()),
+            provider: None,
         })
         .collect();
     for item in &items {
@@ -912,15 +918,15 @@ fn validate_slots(
 
 /// Upload every reference to the hub (progress rows in the media feed) and
 /// copy it into the library. Returns each file's public URL by path, and
-/// the project-relative copies for the manifest.
+/// the provenance of each copy for the manifest.
 async fn upload_refs(
     ctx: &Arc<MediaContext>,
     resolved: &[ResolvedRef],
-) -> Result<(std::collections::HashMap<PathBuf, String>, Vec<String>), ToolError> {
+) -> Result<(std::collections::HashMap<PathBuf, String>, Vec<MediaSource>), ToolError> {
     let mut urls = std::collections::HashMap::new();
-    let mut ref_paths = Vec::new();
+    let mut sources = Vec::new();
     if resolved.is_empty() {
-        return Ok((urls, ref_paths));
+        return Ok((urls, sources));
     }
     let uploader = ctx
         .uploader()
@@ -997,11 +1003,47 @@ async fn upload_refs(
             }
         }
         match ctx.library.store_ref(&r.path) {
-            Ok(rel) => ref_paths.push(rel),
+            Ok(stored) => sources.push(source_of(ctx, r, stored)),
             Err(e) => tracing::warn!("could not copy reference {}: {e}", r.path.display()),
         }
     }
-    Ok((urls, ref_paths))
+    Ok((urls, sources))
+}
+
+/// Where a reference came from. An earlier output of this library wins
+/// over how it was named (a chip the user made by dragging a generation
+/// back into the chat still traces to that generation); otherwise a chip
+/// label means the user attached it, and anything else is a project file.
+fn source_of(ctx: &MediaContext, r: &ResolvedRef, stored: StoredRef) -> MediaSource {
+    let root = ctx.root.canonicalize().unwrap_or_else(|_| ctx.root.clone());
+    let canonical = r.path.canonicalize().unwrap_or_else(|_| r.path.clone());
+    let relative = canonical
+        .strip_prefix(&root)
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+    let generation = relative.as_deref().and_then(|rel| {
+        ctx.library
+            .items()
+            .into_iter()
+            .find(|i| i.path.as_deref() == Some(rel))
+            .map(|i| i.id)
+    });
+    let origin = if generation.is_some() {
+        SourceOrigin::Generation
+    } else if r.label.is_some() {
+        SourceOrigin::Attachment
+    } else {
+        SourceOrigin::File
+    };
+    MediaSource {
+        path: stored.path,
+        origin,
+        label: r.label.clone(),
+        source: relative.unwrap_or_else(|| r.path.to_string_lossy().into_owned()),
+        generation,
+        kind: r.kind.word().to_ascii_lowercase(),
+        sha256: stored.sha256,
+    }
 }
 
 /// Put uploaded references into the model's fields and rewrite `[Image #N]`
@@ -1257,6 +1299,13 @@ async fn wait_one(
         }
     };
     item.seed = record.seed.clone().or(item.seed.take());
+    item.provider = match serde_json::to_value(&record) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::warn!("could not keep the hub record for {}: {e}", item.id);
+            None
+        }
+    };
     let status = MediaStatus::from_hub(&record.status);
     if status != MediaStatus::Succeeded {
         let msg = record
@@ -1879,6 +1928,41 @@ mod tests {
         assert!(item.refs[0].starts_with("generations/refs/"));
         assert!(dir.path().join(item.path.as_ref().unwrap()).exists());
         assert!(dir.path().join("generations/manifest.jsonl").exists());
+
+        // Provenance: the reference traces to the chip and the file the
+        // user attached, the prompt the agent wrote survives the rewrite,
+        // and the hub's record rides along verbatim.
+        assert_eq!(item.sources.len(), 1);
+        let source = &item.sources[0];
+        assert_eq!(source.path, item.refs[0]);
+        assert_eq!(source.origin, SourceOrigin::Attachment);
+        assert_eq!(source.label.as_deref(), Some("[Image #1]"));
+        assert_eq!(source.source, "ref.png", "inside the project → relative");
+        assert_eq!(source.generation, None);
+        assert_eq!(source.kind, "image");
+        assert_eq!(source.sha256.len(), 64);
+        assert_eq!(item.agent_prompt.as_deref(), Some("an ox like [Image #1]"));
+        assert_eq!(item.prompt, "an ox like @Image1");
+        let provider = item.provider.as_ref().expect("hub record kept");
+        assert_eq!(provider["status"], "succeeded");
+        assert_eq!(provider["seed"], 7);
+
+        // A generation used as a reference traces back to its own item,
+        // even when it reached the request through a chip.
+        let out_path = dir.path().join(item.path.as_ref().unwrap());
+        assert_eq!(ctx.refs.stage(&out_path).as_deref(), Some("[Image #2]"));
+        let r = refs::resolve(&["[Image #2]".into()], &ctx.refs, dir.path()).unwrap();
+        let stored = ctx.library.store_ref(&r[0].path).unwrap();
+        let traced = source_of(&ctx, &r[0], stored);
+        assert_eq!(traced.origin, SourceOrigin::Generation);
+        assert_eq!(traced.generation.as_deref(), Some("g1"));
+        assert_eq!(traced.source, item.path.clone().unwrap());
+        assert_eq!(traced.label.as_deref(), Some("[Image #2]"));
+        let plain = dir.path().join("plain.png");
+        std::fs::write(&plain, png()).unwrap();
+        let r = refs::resolve(&["plain.png".into()], &ctx.refs, dir.path()).unwrap();
+        let stored = ctx.library.store_ref(&r[0].path).unwrap();
+        assert_eq!(source_of(&ctx, &r[0], stored).origin, SourceOrigin::File);
     }
 
     #[tokio::test]

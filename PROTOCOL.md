@@ -91,7 +91,7 @@ POST   /v1/sessions/{id}/fleets/{fleet}/cancel   stop one `spawn_agents` fleet (
 GET    /v1/sessions/{id}/agents          every subagent lane of the session, running and finished → [AgentSummary {id, label, fleet, status, summary, tokens, rounds, elapsed_secs, created_at}]
 GET    /v1/sessions/{id}/tasks           the session's background shell tasks → [TaskSummary {id, command, running, exit_code, killed, elapsed_secs, last_line}]
 POST   /v1/sessions/{id}/tasks/{task}/kill   kill one background task (its whole process group); 404 when unknown
-GET    /v1/media?root=                  the project's image/video generations, newest first → [MediaItem {id, session, kind, model, prompt, params, refs, path, poster, status, cost_usd, created_at, …}] (defaults to the active project)
+GET    /v1/media?root=                  the project's image/video generations, newest first → [MediaItem {id, session, kind, model, prompt, params, refs, sources, parent, path, poster, status, cost_usd, created_at, provider, …}] (`sources` traces each reference to the chat attachment, earlier generation, or project file it came from; `provider` is the hub's completed record) (defaults to the active project)
 POST   /v1/media/{generation}/cancel    cancel an in-flight generation by its hub id
 GET    /v1/media/prefs                  media preferences → MediaPrefs {default_image_model, default_video_model, output_dir, per_generation_usd, per_run_usd}
 PUT    /v1/media/prefs                  replace the media preferences (applies to new/resumed chats)

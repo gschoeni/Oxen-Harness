@@ -113,10 +113,75 @@ pub struct MediaItem {
     pub parent: Option<String>,
     #[serde(default)]
     pub seed: Option<Value>,
+    /// Where each reference came from, in request order — the provenance
+    /// behind `refs` (which keeps only the stored copies' paths).
+    #[serde(default)]
+    pub sources: Vec<MediaSource>,
+    /// The prompt as the agent wrote it, when rewriting reference labels to
+    /// the model's convention changed it; `prompt` is what the hub got.
+    #[serde(default)]
+    pub agent_prompt: Option<String>,
+    /// The hub's completed generation record, verbatim (echoed params,
+    /// timings, provider detail), for the raw view and for tracing a file
+    /// back to the exact request the provider served.
+    #[serde(default)]
+    pub provider: Option<Value>,
 }
 
 fn one() -> u32 {
     1
+}
+
+/// What a reference was before it became a content-addressed copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceOrigin {
+    /// A file the user dropped into the chat.
+    Attachment,
+    /// An earlier output of this library (`generation` names it).
+    Generation,
+    /// Any other file inside the project.
+    File,
+}
+
+impl SourceOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Attachment => "attachment",
+            Self::Generation => "generation",
+            Self::File => "file",
+        }
+    }
+}
+
+/// One reference's provenance: the stored copy, the file it was made from,
+/// and how that file got into the request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MediaSource {
+    /// The project-relative copy under `refs/` (the matching `refs` entry).
+    pub path: String,
+    pub origin: SourceOrigin,
+    /// The chip label the request used (`[Image #1]`), when it came from
+    /// the chat.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The original file: absolute for an attachment from outside the
+    /// project, project-relative otherwise.
+    pub source: String,
+    /// The library item whose output this is, for a `generation` origin.
+    #[serde(default)]
+    pub generation: Option<String>,
+    /// `image`, `video`, or `audio`.
+    pub kind: String,
+    /// SHA-256 of the bytes, hex — the identity the `refs/` name is cut from.
+    pub sha256: String,
+}
+
+/// A reference copied into the library: its path and content hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredRef {
+    pub path: String,
+    pub sha256: String,
 }
 
 /// Where an upload is.
@@ -351,8 +416,9 @@ impl MediaLibrary {
     }
 
     /// Copy a reference file into `refs/` (content-addressed, so reusing a
-    /// reference costs nothing) and return its project-relative path.
-    pub fn store_ref(&self, source: &Path) -> std::io::Result<String> {
+    /// reference costs nothing) and return its project-relative path with
+    /// the hash it was named from.
+    pub fn store_ref(&self, source: &Path) -> std::io::Result<StoredRef> {
         let bytes = std::fs::read(source)?;
         let ext = source
             .extension()
@@ -372,7 +438,10 @@ impl MediaLibrary {
             std::fs::create_dir_all(parent)?;
             std::fs::write(&abs, &bytes)?;
         }
-        Ok(rel)
+        Ok(StoredRef {
+            path: rel,
+            sha256: hash,
+        })
     }
 
     /// Write an output as `<dir>/<YYYY-MM-DD>/<HHMM>-<slug>-<index>.<ext>`,
@@ -498,6 +567,9 @@ mod tests {
             completed_at: None,
             parent: None,
             seed: None,
+            sources: vec![],
+            agent_prompt: None,
+            provider: None,
         }
     }
 
@@ -600,8 +672,56 @@ mod tests {
         let b = lib.store_ref(&src).unwrap();
         assert_eq!(a, b);
         assert!(
-            a.starts_with("generations/refs/") && a.ends_with(".jpg"),
-            "{a}"
+            a.path.starts_with("generations/refs/") && a.path.ends_with(".jpg"),
+            "{}",
+            a.path
+        );
+        assert_eq!(a.sha256.len(), 64);
+        assert!(
+            a.path.contains(&a.sha256[..16]),
+            "the name is cut from the hash"
+        );
+    }
+
+    /// Manifest rows written before provenance existed still read, and a
+    /// row with it round-trips every field.
+    #[test]
+    fn manifest_rows_read_with_and_without_provenance() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = MediaLibrary::new(dir.path(), "generations");
+        std::fs::create_dir_all(lib.dir_abs()).unwrap();
+        std::fs::write(
+            lib.manifest_path(),
+            concat!(
+                r#"{"id":"old","session":"s1","kind":"image","model":"m","prompt":"p","#,
+                r#""status":"succeeded","created_at":5}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let mut traced = item("new", MediaStatus::Succeeded, 6);
+        traced.sources = vec![MediaSource {
+            path: "generations/refs/abcd.png".into(),
+            origin: SourceOrigin::Generation,
+            label: Some("[Image #1]".into()),
+            source: "generations/2026-09-10/0026-an-ox-1.png".into(),
+            generation: Some("old".into()),
+            kind: "image".into(),
+            sha256: "abcd".into(),
+        }];
+        traced.agent_prompt = Some("like [Image #1]".into());
+        traced.provider = Some(serde_json::json!({"status": "succeeded", "seed": 7}));
+        lib.record(traced.clone()).unwrap();
+
+        let again = MediaLibrary::new(dir.path(), "generations");
+        let items = again.items();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0], traced);
+        assert!(items[1].sources.is_empty());
+        assert_eq!(items[1].provider, None);
+        assert_eq!(
+            serde_json::to_value(&items[0].sources[0]).unwrap()["origin"],
+            "generation"
         );
     }
 

@@ -18,9 +18,10 @@ mod event;
 
 pub use dto::{
     AgentSummary, ApprovalAnswer, Choice, InterjectRequest, InterjectResponse, LedgerEntry,
-    LedgerSnapshot, LoopResult, MediaItem, MediaModelSummary, MediaUpload, PlanProgress, Question,
-    QuestionAnswer, RenameRequest, ReviewResult, SessionInfo, SessionView, SettleRequest,
-    SettleState, TaskSummary, TrailProgress, TrailWaypoint, TurnRequest, TurnResponse,
+    LedgerSnapshot, LoopResult, MediaItem, MediaModelSummary, MediaSource, MediaUpload,
+    PlanProgress, Question, QuestionAnswer, RenameRequest, ReviewResult, SessionInfo, SessionView,
+    SettleRequest, SettleState, TaskSummary, TrailProgress, TrailWaypoint, TurnRequest,
+    TurnResponse,
 };
 pub use event::{
     ApprovalKind, ApprovalPhase, FleetActivityKind, FleetAgentPhase, FleetSource, LocalPhase,

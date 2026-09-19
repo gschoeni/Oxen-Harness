@@ -291,6 +291,17 @@ fn fleet_event_wire_shapes() {
             completed_at: Some(1_789_000_184),
             parent: None,
             seed: Some(serde_json::json!(42)),
+            sources: vec![harness_protocol::MediaSource {
+                path: "generations/refs/3f9a.png".into(),
+                origin: "attachment".into(),
+                label: Some("[Image #1]".into()),
+                source: "/Users/me/photo.png".into(),
+                generation: None,
+                kind: "image".into(),
+                sha256: "3f9a".into(),
+            }],
+            agent_prompt: Some("an ox at dawn like [Image #1]".into()),
+            provider: Some(serde_json::json!({"status": "succeeded"})),
         }],
         uploads: vec![harness_protocol::MediaUpload {
             id: "u1".into(),

@@ -391,6 +391,21 @@ pub fn media_item(item: harness_media::MediaItem) -> harness_protocol::MediaItem
         completed_at: item.completed_at,
         parent: item.parent,
         seed: item.seed,
+        sources: item.sources.into_iter().map(media_source).collect(),
+        agent_prompt: item.agent_prompt,
+        provider: item.provider,
+    }
+}
+
+fn media_source(source: harness_media::MediaSource) -> harness_protocol::MediaSource {
+    harness_protocol::MediaSource {
+        path: source.path,
+        origin: source.origin.as_str().to_string(),
+        label: source.label,
+        source: source.source,
+        generation: source.generation,
+        kind: source.kind,
+        sha256: source.sha256,
     }
 }
 
