@@ -768,6 +768,32 @@ impl Agent {
         self.config.permissions.as_ref()
     }
 
+    /// A lane's model call waits for one of the tree's parallel slots (see
+    /// `TreeLimits::max_parallel`): however many fleets are running, at
+    /// whatever depth, at most that many lane calls are in flight — which
+    /// is what a provider's rate limit counts. Every path that reaches the
+    /// model takes it here: the turn loop, a compaction summary, a one-shot
+    /// completion. The root's own calls need no slot. `None` for the root,
+    /// or when `cancel` fired while waiting (the call then sees the token).
+    pub(crate) async fn tree_call_slot(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, AgentError> {
+        if self.config.depth == 0 {
+            return Ok(None);
+        }
+        let Some(tree) = &self.config.tree else {
+            return Ok(None);
+        };
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Ok(None),
+            slot = tree.call_slot() => slot
+                .map(Some)
+                .map_err(|e| AgentError::Io(std::io::Error::other(e))),
+        }
+    }
+
     /// Run a one-shot completion that is *not* part of the session transcript
     /// (no tools, nothing persisted). Used for side tasks like generating a
     /// theme from a natural-language description, reusing the session's model
@@ -779,6 +805,7 @@ impl Agent {
         ];
         let request = ChatRequest::new(&self.config.model, messages).streaming(true);
         // A one-shot side task, not the cancellable turn loop: run it to completion.
+        let _slot = self.tree_call_slot(&CancellationToken::new()).await?;
         let started = std::time::Instant::now();
         let assembled = self
             .client
@@ -1200,6 +1227,50 @@ mod tests {
         // The lane's own meter still reports the gross figure the provider
         // processed; that is what a context readout is for.
         assert_eq!(lane.tokens_used(), 1050);
+    }
+
+    /// Every path to the model waits for a tree call slot, not just the turn
+    /// loop: a one-shot completion from a lane queues like its other calls.
+    #[tokio::test]
+    async fn a_lanes_one_shot_completion_waits_for_a_call_slot() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose("answer"))
+            .expect(1)
+            .create_async()
+            .await;
+        let tree = Arc::new(crate::TreeBudget::new(crate::TreeLimits {
+            max_parallel: 1,
+            ..Default::default()
+        }));
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "m");
+        let lane = Agent::new(
+            OxenClient::new(server.url(), "k", "m"),
+            harness_tools::ToolRegistry::new(),
+            store,
+            session,
+            AgentConfig {
+                system_prompt: None,
+                depth: 1,
+                tree: Some(tree.clone()),
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        let held = tree.call_slot().await.unwrap();
+        let blocked = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            lane.complete("s", "u"),
+        )
+        .await;
+        assert!(blocked.is_err(), "no call while the one slot is held");
+        drop(held);
+        assert_eq!(lane.complete("s", "u").await.unwrap(), "answer");
+        assert_eq!(tree.free_slots(), 1);
     }
 
     /// A cold resume must re-teach the read-before-edit guard everything this

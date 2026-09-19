@@ -1144,3 +1144,14 @@ collapse.
   context that won't fit, a tool — are reported as they are, and the user
   takes over from the agent view: its composer follows up any finished
   lane, failed ones included.
+- *Details that came out of the bug pass.* The call cap is taken in the
+  one place every model call passes through (`stream_reply`, compaction
+  summaries, one-shot completions), never in the loop above it, so no path
+  holds two slots. A retry runs as its own fleet (`<id>-retry`): hosts key a
+  fleet's lane list by id, and a second "started" under the first id would
+  replace the lanes that finished. Per-fleet concurrency is clamped to the
+  tree cap, so a lane past it queues at the fleet with its clock stopped,
+  not at a call slot with its clock running. A resumed lane stopped on its
+  first round still gets its report (it did its work last time). A review
+  resets the tree wallet when it starts, since only a root turn did before
+  and reviews run outside one.

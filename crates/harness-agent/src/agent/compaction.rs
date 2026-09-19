@@ -147,6 +147,9 @@ impl Agent {
         let prompt_estimate =
             budget::estimate_tokens_for_chars(compact::SUMMARY_PROMPT.len() + rendered.len());
         let started = std::time::Instant::now();
+        let _slot = self
+            .tree_call_slot(&tokio_util::sync::CancellationToken::new())
+            .await?;
         let assembled = summarize(&self.client, self.summary_model(), rendered).await?;
         let (prompt, completion) = budget::split_oneshot_usage(&assembled, prompt_estimate);
         self.record_usage_event(
@@ -250,7 +253,17 @@ impl Agent {
             budget::estimate_tokens_for_chars(compact::SUMMARY_PROMPT.len() + rendered.len());
         let client = self.client.clone();
         let model = self.summary_model().to_string();
-        let handle = tokio::spawn(async move { summarize(&client, &model, rendered).await });
+        // A lane's prefire waits its turn like any of its calls.
+        let slots = (self.config.depth > 0)
+            .then(|| self.config.tree.clone())
+            .flatten();
+        let handle = tokio::spawn(async move {
+            let _slot = match &slots {
+                Some(tree) => tree.call_slot().await.ok(),
+                None => None,
+            };
+            summarize(&client, &model, rendered).await
+        });
         self.prefire = Some(PrefireSummary {
             cut,
             prompt_estimate,

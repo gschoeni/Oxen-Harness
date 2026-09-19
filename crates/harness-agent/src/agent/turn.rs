@@ -340,10 +340,6 @@ impl Agent {
                     }
                 }
             }
-            let _slot = self.tree_call_slot(&cancel).await?;
-            if cancel.is_cancelled() {
-                return Ok(String::new());
-            }
             let (assembled, mut outcome, rule_hits) = self
                 .stream_reply(outbound, &tool_defs, nudge.as_ref(), &cancel, &mut on_event)
                 .await?;
@@ -465,31 +461,6 @@ impl Agent {
         )
     }
 
-    /// A lane's model call waits for one of the tree's parallel slots (see
-    /// `TreeLimits::max_parallel`): however many fleets are running, at
-    /// whatever depth, at most that many lane calls are in flight — which
-    /// is what a provider's rate limit counts. The root's own call needs no
-    /// slot. `None` for the root, or when the turn was cancelled while
-    /// waiting (the caller checks the token).
-    async fn tree_call_slot(
-        &self,
-        cancel: &CancellationToken,
-    ) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, AgentError> {
-        if self.config.depth == 0 {
-            return Ok(None);
-        }
-        let Some(tree) = &self.config.tree else {
-            return Ok(None);
-        };
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => Ok(None),
-            slot = tree.call_slot() => slot
-                .map(Some)
-                .map_err(|e| AgentError::Io(std::io::Error::other(e))),
-        }
-    }
-
     /// Whether the tree budget stops this lane here (never the root, whose
     /// own spend the session budget bounds), and why.
     fn tree_budget_stop(&self) -> Option<String> {
@@ -514,8 +485,8 @@ impl Agent {
     /// (never persisted). Its reply is the turn's final reply, so a lane's
     /// parent gets findings — what it read, what it concluded, what is left
     /// — instead of the stop notice. Bounded by construction: the turn
-    /// returns right after it, whatever the model does. A turn stopped
-    /// before its first round has nothing to report and gets the notice
+    /// returns right after it, whatever the model does. A lane stopped
+    /// before it ever did anything has nothing to report and gets the notice
     /// alone: a queue of lanes behind an empty wallet must not each buy a
     /// call to say so.
     async fn final_report<F>(
@@ -528,7 +499,10 @@ impl Agent {
     where
         F: FnMut(&AgentEvent),
     {
-        if rounds_so_far == 0 {
+        // A resumed lane stopped on its first round of this turn still has
+        // everything it did last time to report on.
+        let did_work = rounds_so_far > 0 || self.messages.iter().any(|m| m.role == "assistant");
+        if !did_work {
             let notice = format!("Stopped before starting: {reason}.");
             self.push(ChatMessage::assistant(notice.clone()))?;
             return Ok(notice);
@@ -556,10 +530,6 @@ impl Agent {
         let (outbound, report) = self.prepare_outbound();
         self.report_compression(&report, on_event);
         let outbound_len = outbound.len();
-        let _slot = self.tree_call_slot(cancel).await?;
-        if cancel.is_cancelled() {
-            return Ok(String::new());
-        }
         let (assembled, outcome, _) = self
             .stream_reply(outbound, &[], Some(&nudge), cancel, on_event)
             .await?;
@@ -1126,6 +1096,49 @@ mod tests {
                 .contains("allowance left")),
             "the reminder is not persisted"
         );
+    }
+
+    /// A lane resumed into a spent wallet did its work last time: it still
+    /// gets the report call, not the "before starting" notice.
+    #[tokio::test]
+    async fn a_resumed_lane_stopped_at_once_still_reports_its_earlier_work() {
+        let mut server = mockito::Server::new_async().await;
+        let report = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                "Tools are no longer available".into(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose("what I found last time"))
+            .expect(1)
+            .create_async()
+            .await;
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        for m in [
+            serde_json::json!({"role": "user", "content": "read the three files"}),
+            serde_json::json!({"role": "assistant", "content": "read two of them: both fine"}),
+        ] {
+            store.append_message(&session, &m).unwrap();
+        }
+        let tree = Arc::new(crate::TreeBudget::new(crate::TreeLimits {
+            max_tokens: 1,
+            ..Default::default()
+        }));
+        tree.charge(1);
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            depth: 1,
+            tree: Some(tree.clone()),
+            ..AgentConfig::default()
+        };
+        let mut lane =
+            Agent::resume_from_store(client, ToolRegistry::new(), store, session, config).unwrap();
+        let text = lane.run_turn("continue", |_| {}).await.unwrap();
+        report.assert_async().await;
+        assert_eq!(text, "what I found last time");
     }
 
     /// A lane whose tree wallet runs dry is not cut off mid-thought: it gets

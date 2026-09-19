@@ -89,6 +89,12 @@ impl ReviewRunner {
         F: FnMut(&ReviewEvent),
     {
         let input = resolve_target(&self.workspace_root, self.target.clone())?;
+        // A review is a root turn's worth of delegated work: its reviewers
+        // spend from the tree wallet, which only a root turn resets. Without
+        // this, reviews run outside a turn would drain it review by review.
+        if let Some(tree) = &agent.config().tree {
+            tree.reset();
+        }
         let steps = self.config.resolved_steps();
         on_event(&ReviewEvent::Started {
             target: input.target.label(),

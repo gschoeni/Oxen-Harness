@@ -924,6 +924,15 @@ impl FleetSpawner {
         );
         let tree = self.tree_budget();
         let _inflight = InFlight::begin(tree.clone());
+        // No fleet runs more lanes abreast than the tree allows calls in
+        // flight: a lane past that would only queue for a call slot with its
+        // own clock already running. Queued at the fleet, its clock waits.
+        let limits = FleetLimits {
+            concurrency: limits
+                .concurrency
+                .min(tree.limits().max_parallel.max(1) as usize),
+            ..limits
+        };
         // The lanes about to open split this session's remaining allowance.
         let parent = self.session();
         let count = tasks.len() as u32;
@@ -1028,11 +1037,16 @@ impl FleetSpawner {
             .iter()
             .enumerate()
             .filter(|(_, r)| {
+                // A rate limit, or transient retries spent (the record keeps
+                // only the kind and the message; a 400 is also "provider",
+                // and running it again would only fail again).
+                let transient = match r.failure {
+                    Some(FailureKind::RateLimit) => true,
+                    Some(FailureKind::Provider) => r.summary.contains("times in a row"),
+                    _ => false,
+                };
                 r.status == LaneStatus::Failed
-                    && matches!(
-                        r.failure,
-                        Some(FailureKind::RateLimit | FailureKind::Provider)
-                    )
+                    && transient
                     && !r.id.is_empty()
                     && tree.exhausted(&r.id).is_none()
             })
@@ -1069,10 +1083,13 @@ impl FleetSpawner {
                 )
             })
             .collect();
+        // Its own fleet id: hosts key a fleet's lane list by id, and a second
+        // "started" under the first id would replace the lanes that finished.
+        let retry_fleet = format!("{fleet}-retry");
         let guard = SinkGuard::open(
             sink.clone(),
             self.live.clone(),
-            fleet,
+            &retry_fleet,
             &labels,
             cancel.clone(),
         );
@@ -1080,23 +1097,28 @@ impl FleetSpawner {
         tree.expect_lanes(parent.as_deref(), ids.len() as u32);
         let outcomes = run_fleet(
             |index: usize, lane_cancel: CancellationToken| {
-                self.resume_lane(&ids[index], &labels[index], fleet, lane_cancel)
+                self.resume_lane(&ids[index], &labels[index], &retry_fleet, lane_cancel)
             },
             tasks,
             FleetLimits::with_concurrency(limits.concurrency),
             cancel.clone(),
-            |event| sink.event(fleet, event),
+            |event| sink.event(&retry_fleet, event),
         )
         .await;
         drop(guard);
-        self.tree.finish_fleet(fleet);
+        self.tree.finish_fleet(&retry_fleet);
         match outcomes {
             Ok(outcomes) => {
                 let budget = lane_budget(results.len());
                 let spill = self.tools.overflow_store();
                 for (k, outcome) in outcomes.iter().enumerate() {
                     results[retry[k]] = outcome.record.clone().unwrap_or_else(|| {
-                        SubagentResult::from_outcome(outcome, fleet, budget, spill.map(Arc::as_ref))
+                        SubagentResult::from_outcome(
+                            outcome,
+                            &retry_fleet,
+                            budget,
+                            spill.map(Arc::as_ref),
+                        )
                     });
                 }
             }
@@ -1105,7 +1127,7 @@ impl FleetSpawner {
                 crate::errlog::record(
                     config.error_log.as_deref(),
                     "lane_retry_failed",
-                    serde_json::json!({ "session": self.session(), "fleet": fleet, "error": error.to_string() }),
+                    serde_json::json!({ "session": self.session(), "fleet": retry_fleet, "error": error.to_string() }),
                 );
             }
         }
@@ -2532,12 +2554,20 @@ mod tests {
             .with_store(store.clone())
             .with_session(parent.clone()),
         );
-        let out = FleetTool::new(sp.clone(), Arc::new(RecordingSink::default()))
+        let sink = Arc::new(RecordingSink::default());
+        let out = FleetTool::new(sp.clone(), sink.clone())
             .invoke(serde_json::json!({ "agents": [{ "name": "scan", "prompt": "TASK go" }] }))
             .await
             .unwrap();
         limited.assert_async().await;
         recovered.assert_async().await;
+        let calls = sink.calls.lock().unwrap().clone();
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.starts_with("started:") && c.ends_with("-retry:scan")),
+            "the retry is announced as its own fleet, not over the first: {calls:?}"
+        );
         assert!(out.contains("### scan — done"), "{out}");
         assert!(out.contains("recovered: the answer"), "{out}");
         // One lane, one session: the retry resumed it rather than spawning.

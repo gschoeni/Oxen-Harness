@@ -102,6 +102,9 @@ impl Agent {
         F: FnMut(&AgentEvent),
     {
         outbound.extend(nudge.cloned());
+        // Held across the attempts: a lane backing off from a 429 keeps its
+        // slot, which is the backing-off the provider asked for.
+        let _slot = self.tree_call_slot(cancel).await?;
         // Prompt-cache breakpoints on the growing tip (see [`crate::cache`]).
         // Empty (a plain request) when the mode/model opts out.
         let anchors = self
