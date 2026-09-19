@@ -1449,8 +1449,24 @@ impl FleetTool {
             out.push_str(&patches_section(lanes, &mut results, spill.as_deref()));
         }
         drop(lanes);
+        out.push_str(&budget_footer(&spawner));
         Ok(out.trim_end().to_string())
     }
+}
+
+/// One line the parent can plan on: what this turn's agents have spent of
+/// the tree so far, and what is left to fund more agents from here. Before
+/// this the parent learned the budget existed only when a lane died of it.
+fn budget_footer(spawner: &FleetSpawner) -> String {
+    let tree = spawner.tree_budget();
+    let usage = tree.usage();
+    let limits = tree.limits();
+    let left = tree.remaining_for(spawner.session().as_deref());
+    format!(
+        "\n\nBudget: this turn's agents have spent {} of {} tokens ({} of {} agents); about {} \
+         tokens remain for more agents from here.",
+        usage.tokens, limits.max_tokens, usage.spawns, limits.max_spawns, left
+    )
 }
 
 #[cfg(test)]
@@ -2292,6 +2308,11 @@ mod tests {
         assert!(
             usage.tokens < 30_000,
             "the tree itself was never spent: {usage:?}"
+        );
+        assert!(
+            out.contains("Budget: this turn's agents have spent")
+                && out.contains("of 30000 tokens (2 of 24 agents)"),
+            "the parent is told where the budget stands: {out}"
         );
         // Both wallets are closed with the fleet; the pool holds their spend.
         assert!(sp.tree_budget().allowance("greedy").is_none());

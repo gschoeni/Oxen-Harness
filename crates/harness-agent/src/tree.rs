@@ -334,6 +334,11 @@ impl TreeBudget {
     pub fn exhausted(&self, lane: &str) -> Option<String> {
         self.reason(&mut self.state.lock().expect("tree budget poisoned"), lane)
     }
+    /// What `parent` (`None`: the root turn) has left to fund more lanes.
+    pub fn remaining_for(&self, parent: Option<&str>) -> u64 {
+        let mut state = self.state.lock().expect("tree budget poisoned");
+        state.wallet_of(key(parent), self.limits.max_tokens).left()
+    }
     /// Where `lane` stands against its own allowance, once it has opened.
     pub fn allowance(&self, lane: &str) -> Option<Allowance> {
         let state = self.state.lock().expect("tree budget poisoned");

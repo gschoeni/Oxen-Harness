@@ -53,6 +53,10 @@ fn bounded_by_construction(tool: &str) -> bool {
     )
 }
 
+/// The share of its allowance a lane may have left before it is told to
+/// wrap up: enough for a step and a report, not for more reading.
+const ALLOWANCE_WARN_PERCENT_LEFT: u64 = 20;
+
 #[derive(Default)]
 struct TurnState {
     /// A one-shot corrective appended to the *next* request only. Never
@@ -80,6 +84,8 @@ struct TurnState {
     loop_guard: crate::loopguard::LoopGuard,
     /// The soft spend warning is logged once per turn, not per round.
     budget_warned: bool,
+    /// A lane is told once that its allowance is nearly spent.
+    allowance_warned: bool,
     /// Model rounds so far this turn, for the round budget.
     rounds: u32,
     /// The persisted `seq` of the user message that started the turn — the
@@ -285,6 +291,27 @@ impl Agent {
                         prompt::WRAP_UP_NUDGE,
                         "round budget nearly spent — asked to wrap up",
                     );
+                }
+            }
+            // A lane near the end of its allowance hears so once, while it
+            // can still finish the step it is on and report on purpose
+            // rather than by being stopped.
+            if !turn.allowance_warned && self.config.depth > 0 {
+                let allowance = self
+                    .config
+                    .tree
+                    .as_ref()
+                    .and_then(|tree| tree.allowance(self.session_id()));
+                if let Some(allowance) = allowance {
+                    if allowance.left().saturating_mul(100)
+                        <= allowance.cap.saturating_mul(ALLOWANCE_WARN_PERCENT_LEFT)
+                    {
+                        turn.allowance_warned = true;
+                        turn.set_nudge(
+                            prompt::allowance_nudge(allowance.left(), allowance.cap),
+                            "token allowance nearly spent — asked to wrap up",
+                        );
+                    }
                 }
             }
 
@@ -1089,6 +1116,77 @@ mod tests {
         );
         // The loop guard would also have caught this eventually, but the
         // budget got there first: three rounds, not six.
+    }
+
+    /// A lane that has spent most of its allowance is told once, before
+    /// the next request, to finish the step and report; the reminder rides
+    /// along with that request and is never persisted.
+    #[tokio::test]
+    async fn a_lane_near_its_allowance_is_told_to_wrap_up() {
+        let mut server = mockito::Server::new_async().await;
+        let work = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_tool_call_with_usage(
+                "c1", "snap", 8_500, 50,
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+        let wrapped = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                "about 1450 tokens of your 10000-token allowance left".into(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose(
+                "wrapping up: here is the report",
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+        let tree = Arc::new(crate::TreeBudget::new(crate::TreeLimits {
+            max_tokens: 10_000,
+            ..Default::default()
+        }));
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        tree.expect_lanes(None, 1);
+        tree.open_lane(None, &session);
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            depth: 1,
+            tree: Some(tree.clone()),
+            ..AgentConfig::default()
+        };
+        let mut lane = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+        let mut nudges = Vec::new();
+        let text = lane
+            .run_turn("go", |e| {
+                if let AgentEvent::Nudged { reason } = e {
+                    nudges.push(reason.clone());
+                }
+            })
+            .await
+            .unwrap();
+        work.assert_async().await;
+        wrapped.assert_async().await;
+        assert_eq!(text, "wrapping up: here is the report");
+        assert_eq!(
+            nudges,
+            vec!["token allowance nearly spent — asked to wrap up"]
+        );
+        assert!(lane.turn_stop().is_none(), "it finished on its own");
+        assert!(
+            !lane.messages().iter().any(|m| m
+                .content_text()
+                .unwrap_or_default()
+                .contains("allowance left")),
+            "the reminder is not persisted"
+        );
     }
 
     /// A lane whose tree wallet runs dry is not cut off mid-thought: it gets
