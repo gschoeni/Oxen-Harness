@@ -35,7 +35,9 @@ export default defineConfig(async () => ({
     environment: "jsdom",
     globals: true,
     setupFiles: "./src/test/setup.ts",
-    css: false,
+    // Styles are irrelevant headless, but `?raw` reads of a stylesheet are
+    // source text for tests that guard the token contract, so let them through.
+    css: { include: [/\?raw$/] },
     include: ["src/**/*.test.{ts,tsx}"],
   },
 }));

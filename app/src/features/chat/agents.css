@@ -1,6 +1,6 @@
 .agent-hub {
-  width: 100%;
-  max-width: 740px;
+  width: calc(100% - 2 * var(--chat-gutter));
+  max-width: var(--chat-column);
   margin: var(--space-2) auto 0;
   border: 1px solid var(--separator);
   border-radius: var(--frame-radius, var(--radius));

@@ -49,6 +49,15 @@
   --control-h: 32px;
   --control-h-lg: 34px;
 
+  /* The chat column. Everything centered in the chat — the thread, the
+     panels stacked above the composer, the composer itself — is this wide,
+     and keeps this gutter from the window edge when the window is narrower.
+     Wrappers that carry the gutter as padding size themselves with
+     `calc(var(--chat-column) + 2 * var(--chat-gutter))` so their content
+     still lands on the column. */
+  --chat-column: 740px;
+  --chat-gutter: var(--space-5);
+
   /* macOS overlay-titlebar clearance (the traffic-light strip). The value is a
      platform constraint; the token exists so it's named, not magic. */
   --titlebar-h: 38px;

@@ -2,10 +2,10 @@
    call waits on the user's decision. Mirrors the clarifying-question card. */
 .aprompt {
   flex-shrink: 0;
-  padding: 0 var(--space-5);
+  padding: 0 var(--chat-gutter);
 }
 .aprompt-card {
-  max-width: 740px;
+  max-width: var(--chat-column);
   margin: 0 auto var(--space-2);
   display: flex;
   flex-direction: column;
