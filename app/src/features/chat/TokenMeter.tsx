@@ -35,18 +35,22 @@ export function TokenMeter() {
   const model = useStore((s) => s.session?.model ?? "");
   const sessionId = useStore((s) => s.session?.session_id ?? "");
   const pricedUsage = useStore((s) => (sessionId ? s.sessionUsage[sessionId] : undefined));
-  const [cost, setCost] = useState<number | null>(null);
+  // The chat's tree spend (subagents included) once the store has read it;
+  // until then the parent's own figures stand in.
+  const tree = useStore((s) => (sessionId ? s.treeUsage[sessionId] : undefined));
+  const [ownCost, setOwnCost] = useState<number | null>(null);
 
   useEffect(() => {
     let active = true;
-    if (!model || !pricedUsage) { setCost(null); return; }
+    if (!model || !pricedUsage || tree) { setOwnCost(null); return; }
     sessionCost(model, pricedUsage.prompt, pricedUsage.completion)
-      .then((next) => active && setCost(next))
-      .catch(() => active && setCost(null));
+      .then((next) => active && setOwnCost(next))
+      .catch(() => active && setOwnCost(null));
     return () => { active = false; };
-  }, [model, pricedUsage?.prompt, pricedUsage?.completion]);
+  }, [model, pricedUsage?.prompt, pricedUsage?.completion, tree]);
 
-  const tokensUsed = baseUsed + live;
+  const cost = tree ? tree.cost : ownCost;
+  const tokensUsed = Math.max(baseUsed, tree?.tokens ?? 0) + live;
   const contextTokens = baseContext + live;
   const pct = contextWindow > 0 ? Math.min(100, (contextTokens / contextWindow) * 100) : 0;
 
@@ -56,7 +60,12 @@ export function TokenMeter() {
       {cost !== null && (
         <>
           <span className="token-meter-dot">·</span>
-          <span className="token-meter-cost" title="Estimated cost for this session">{formatUsd(cost)}</span>
+          <span
+            className="token-meter-cost"
+            title={tree ? "Estimated cost for this chat, subagents included" : "Estimated cost for this session"}
+          >
+            {formatUsd(cost)}
+          </span>
         </>
       )}
       {contextWindow > 0 && (

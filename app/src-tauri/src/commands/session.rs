@@ -292,6 +292,19 @@ pub(crate) async fn model_usage_breakdown(date: Option<String>) -> Result<UsageB
     Ok(price_usage(usage).await)
 }
 
+/// What one chat has spent so far, subagents included: its session's tree
+/// (every lane beneath it, at every depth) summed per model and priced with
+/// the catalog, so the meter can show the real running bill while a fleet
+/// works — and the user can stop it when it climbs.
+#[tauri::command]
+pub(crate) async fn session_tree_usage(session: String) -> Result<UsageBreakdown, String> {
+    let store = open_history_store()?;
+    let usage = store
+        .usage_for_tree_by_model(&session)
+        .map_err(|e| e.to_string())?;
+    Ok(price_usage(usage).await)
+}
+
 #[tauri::command]
 pub(crate) async fn session_cost(
     model: String,

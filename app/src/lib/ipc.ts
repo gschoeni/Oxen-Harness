@@ -122,6 +122,9 @@ export const modelUsageBreakdown = (date: string | null = null) =>
   invoke<UsageBreakdown>("model_usage_breakdown", { date });
 export const sessionCost = (model: string, promptTokens: number, completionTokens: number) =>
   invoke<number | null>("session_cost", { model, promptTokens, completionTokens });
+/** What a chat has spent so far, subagents included, priced per model. */
+export const sessionTreeUsage = (session: string) =>
+  invoke<UsageBreakdown>("session_tree_usage", { session });
 /** Daily input/output totals for a local-calendar year, for the activity grid. */
 export const dailyUsage = (year: number) => invoke<DailyUsageRow[]>("daily_usage", { year });
 /** A session's raw persisted transcript (verbatim, read-only) for the dev inspector. */

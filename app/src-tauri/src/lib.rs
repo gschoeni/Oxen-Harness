@@ -216,6 +216,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::session::total_cost_usd,
                 commands::session::model_usage_breakdown,
                 commands::session::session_cost,
+                commands::session::session_tree_usage,
                 commands::session::daily_usage,
                 commands::session::new_session,
                 commands::session::resume_session,

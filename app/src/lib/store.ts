@@ -49,6 +49,7 @@ import {
   setReviewStatusMany as setReviewStatusManyIpc,
   previewStatus,
   totalCostUsd,
+  sessionTreeUsage,
   totalTokensUsed,
   useLocalModel,
   listMedia,
@@ -361,6 +362,7 @@ function sweepCached(s: AppState, threads: Record<string, Item[]>): Partial<AppS
     streamingCanvas: keep(s.streamingCanvas),
     liveTokens: keep(s.liveTokens),
     sessionUsage: keep(s.sessionUsage),
+    treeUsage: keep(s.treeUsage),
     tokensPerSecond: keep(s.tokensPerSecond),
     compression: keep(s.compression),
     snippets: keep(s.snippets),
@@ -376,6 +378,17 @@ function sweepCached(s: AppState, threads: Record<string, Item[]>): Partial<AppS
 // now accumulate here per session and land in the store on a short timer, so a
 // burst costs one copy. The window is short because the backend has already
 // smoothed the stream; anything longer only adds latency.
+/** A chat's running spend, subagents included (see `refreshTreeUsage`). */
+export interface TreeUsage {
+  tokens: number;
+  cost: number | null;
+  unpriced: boolean;
+}
+/** Lane activity arrives many times a second; the bill is re-read once per
+ *  burst. */
+const TREE_USAGE_DEBOUNCE_MS = 1500;
+const treeUsageTimers = new Map<string, number>();
+
 const TOKEN_FLUSH_MS = 50;
 const pendingTokens = new Map<string, { text: string; est: number; tps: number | null }>();
 let tokenFlushTimer: number | null = null;
@@ -476,6 +489,12 @@ interface AppState {
   liveTokens: Record<string, number>;
   /** Cumulative input/output tokens for pricing the active session. */
   sessionUsage: Record<string, { prompt: number; completion: number }>;
+  /** What a chat has spent so far with its subagents included, priced per
+   *  model from the store — refreshed (debounced) as lanes spend, so the
+   *  meter tracks the real running bill while a fleet works. */
+  treeUsage: Record<string, TreeUsage>;
+  /** Re-read a chat's tree spend; coalesces bursts of lane activity. */
+  refreshTreeUsage: (session: string) => void;
   /** Generation speed (tokens/sec) per session, measured over the current
    *  streaming burst. Persists the last rate when idle. */
   tokensPerSecond: Record<string, number>;
@@ -1104,6 +1123,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     threads: {},
     liveTokens: {},
     sessionUsage: {},
+    treeUsage: {},
     tokensPerSecond: {},
     compression: {},
     runStatus: {},
@@ -1358,6 +1378,7 @@ export const useStore = create<AppState>((rawSet, get) => {
           streamingCanvas: drop(s.streamingCanvas),
           liveTokens: drop(s.liveTokens),
           sessionUsage: drop(s.sessionUsage),
+          treeUsage: drop(s.treeUsage),
           tokensPerSecond: drop(s.tokensPerSecond),
           compression: drop(s.compression),
           // The backend stops the deleted chat's dev server and closes its
@@ -1839,7 +1860,8 @@ export const useStore = create<AppState>((rawSet, get) => {
         return { fleets: { ...s.fleets, [e.fleet]: { ...fleet, lanes } } };
       }),
 
-    ingestFleetBudget: (e) =>
+    ingestFleetBudget: (e) => {
+      get().refreshTreeUsage(e.session);
       set((s) => {
         const fleet = s.fleets[e.fleet];
         if (!fleet) return {};
@@ -1850,7 +1872,8 @@ export const useStore = create<AppState>((rawSet, get) => {
           max_spawns: e.max_spawns,
         };
         return { fleets: { ...s.fleets, [e.fleet]: { ...fleet, budget } } };
-      }),
+      });
+    },
 
     ingestFleetCompleted: (session, id) => {
       set((s) => {
@@ -2074,7 +2097,8 @@ export const useStore = create<AppState>((rawSet, get) => {
         return update;
       }),
 
-    ingestUsage: (e) =>
+    ingestUsage: (e) => {
+      get().refreshTreeUsage(e.session);
       set((s) => {
         const info = s.infos[e.session];
         if (!info) return {};
@@ -2095,7 +2119,8 @@ export const useStore = create<AppState>((rawSet, get) => {
             [e.session]: { prompt: e.prompt_tokens_used, completion: e.completion_tokens_used },
           },
         };
-      }),
+      });
+    },
 
     ingestCompression: (e) =>
       set((s) => ({
@@ -2166,6 +2191,34 @@ export const useStore = create<AppState>((rawSet, get) => {
           },
         };
       }),
+
+    refreshTreeUsage: (session) => {
+      const pending = treeUsageTimers.get(session);
+      if (pending != null) window.clearTimeout(pending);
+      treeUsageTimers.set(
+        session,
+        window.setTimeout(() => {
+          treeUsageTimers.delete(session);
+          sessionTreeUsage(session)
+            .then((usage) => {
+              if (!usage) return;
+              set((s) => ({
+                treeUsage: {
+                  ...s.treeUsage,
+                  [session]: {
+                    tokens: usage.prompt_tokens + usage.completion_tokens,
+                    cost: usage.total_cost_usd,
+                    unpriced: usage.has_unpriced_usage,
+                  },
+                },
+              }));
+            })
+            .catch(() => {
+              /* keep the previous figure on a transient error */
+            });
+        }, TREE_USAGE_DEBOUNCE_MS),
+      );
+    },
 
     refreshTotalTokens: async () => {
       try {

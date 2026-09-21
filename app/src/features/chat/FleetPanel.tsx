@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { Check, ChevronDown, ChevronRight, CircleDashed, Square, Users, X } from "lucide-react";
-import { compactTokens } from "../../lib/format";
+import { compactTokens, formatUsd } from "../../lib/format";
 import { fleetsFor, useStore, type FleetView } from "../../lib/store";
 import { agentRows, isActive, statusLabel, type AgentRow } from "./agentRows";
 import "./agents.css";
@@ -36,6 +36,7 @@ function AgentHub({ session }: { session: string }) {
   }, [session, refresh, knownIds]);
   const working = rows.filter((r) => isActive(r.status)).length;
   const budget = mine.filter(([, f]) => !f.finished).slice(-1)[0]?.[1].budget;
+  const spend = useStore((s) => s.treeUsage[session]);
   if (!rows.length) return null;
   return (
     <section className="agent-hub" aria-label="Agents">
@@ -52,6 +53,11 @@ function AgentHub({ session }: { session: string }) {
               title={`${compactTokens(budget.tokens)} of ${compactTokens(budget.max_tokens)} shared tokens`}
             >
               {compactTokens(budget.tokens)} tokens
+            </span>
+          )}
+          {spend?.cost != null && (
+            <span className="agent-hub-budget" title="This chat's spend so far, agents included">
+              {formatUsd(spend.cost)}
             </span>
           )}
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}

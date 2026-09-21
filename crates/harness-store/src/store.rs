@@ -1393,6 +1393,37 @@ impl HistoryStore {
         .map_err(HistoryError::from)
     }
 
+    /// A session's tree spend by model — its own calls plus every lane's,
+    /// their lanes', and so on — so a chat's cost can be priced per model
+    /// while it runs (lanes often run on a cheaper role model).
+    pub fn usage_for_tree_by_model(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ModelUsage>, HistoryError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "WITH RECURSIVE tree(id) AS (
+                 SELECT ?1
+                 UNION ALL
+                 SELECT s.id FROM sessions s JOIN tree ON s.parent_session = tree.id
+             )
+             SELECT model, source, SUM(prompt_tokens), SUM(completion_tokens)
+             FROM usage_events WHERE session_id IN (SELECT id FROM tree)
+             GROUP BY model, source
+             ORDER BY SUM(prompt_tokens + completion_tokens) DESC, model ASC",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            Ok(ModelUsage {
+                model: row.get(0)?,
+                source: row.get(1)?,
+                prompt_tokens: row.get(2)?,
+                completion_tokens: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(HistoryError::from)
+    }
+
     /// The per-model usage breakdown, busiest first — every model that has
     /// accumulated usage, with separate prompt and completion counts.
     pub fn model_usage_breakdown(&self) -> Result<Vec<ModelUsage>, HistoryError> {
@@ -2607,6 +2638,26 @@ mod tests {
         assert_eq!(store.usage_for_tree(&root).unwrap().completion_tokens, 3);
         assert_eq!(store.usage_for_tree(&lane).unwrap().prompt_tokens, 11);
         assert_eq!(store.usage_for_tree(&leaf).unwrap().prompt_tokens, 1);
+
+        // Priced per model: a lane on a cheaper role model is its own row.
+        store
+            .record_model_usage_detailed(
+                "tiny",
+                "oxen_cloud",
+                40,
+                4,
+                &UsageDetail {
+                    session_id: &lane,
+                    kind: "turn",
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let by_model = store.usage_for_tree_by_model(&root).unwrap();
+        let find = |m: &str| by_model.iter().find(|u| u.model == m).unwrap();
+        assert_eq!(find("m").prompt_tokens, 111);
+        assert_eq!(find("tiny").prompt_tokens, 40);
+        assert_eq!(by_model.len(), 2);
     }
 
     #[test]
