@@ -10,13 +10,17 @@
     Inter, Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
 
-  --text-3xs: 10px;
-  --text-2xs: 11px;
-  --text-xs: 12px;
-  --text-sm: 13px;
-  --text-md: 14.5px;
-  --text-lg: 17px;
-  --text-xl: 21px;
+  /* The type scale. Nothing on it goes below 11px: the smallest step is for
+     eyebrow labels and unit suffixes, and even those have to be legible on a
+     laptop without leaning in. Body copy is `md`; readable defaults are
+     enforced by tokens.test.ts. */
+  --text-3xs: 11px;
+  --text-2xs: 12px;
+  --text-xs: 13px;
+  --text-sm: 14px;
+  --text-md: 15px;
+  --text-lg: 18px;
+  --text-xl: 22px;
   --text-2xl: 28px;
 
   /* Spacing — 4pt scale */

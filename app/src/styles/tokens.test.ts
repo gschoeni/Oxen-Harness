@@ -50,7 +50,7 @@ function literalSizes(css: string): string[] {
 const BASELINE: Record<string, number> = {
   "/src/app.css": 1,
   "/src/components/ui/markdown.css": 1,
-  "/src/components/ui/ui.css": 6,
+  "/src/components/ui/ui.css": 5,
   "/src/features/approvals/approvals.css": 3,
   "/src/features/canvas/canvas.css": 4,
   "/src/features/chat/agents.css": 34,
@@ -78,6 +78,30 @@ const BASELINE: Record<string, number> = {
   "/src/features/tabs/tabs.css": 6,
   "/src/features/tools/tools.css": 3,
 };
+
+// The scale itself: every step has to be legible on a laptop screen without
+// leaning in. 10px labels crept in through the smallest token, so the floor
+// is pinned here alongside the body size everything else is set against.
+describe("type scale", () => {
+  const tokens = Object.entries(sheets).find(([path]) => isTokens(path))?.[1] ?? "";
+  const scale = new Map(
+    [...tokens.matchAll(/--text-(\w+):\s*([\d.]+)px;/g)].map((m) => [m[1], Number(m[2])] as const),
+  );
+
+  it("defines every step in tokens.css", () => {
+    expect([...scale.keys()]).toEqual(["3xs", "2xs", "xs", "sm", "md", "lg", "xl", "2xl"]);
+  });
+
+  it("keeps the smallest step readable and body text at 15px", () => {
+    for (const [name, px] of scale) expect(px, `--text-${name}`).toBeGreaterThanOrEqual(11);
+    expect(scale.get("md")).toBe(15);
+  });
+
+  it("grows monotonically so a larger name is always a larger size", () => {
+    const sizes = [...scale.values()];
+    for (let i = 1; i < sizes.length; i++) expect(sizes[i]).toBeGreaterThan(sizes[i - 1]);
+  });
+});
 
 describe("sizing ratchet", () => {
   it("adds no new literal sizes on properties that have a token scale", () => {
