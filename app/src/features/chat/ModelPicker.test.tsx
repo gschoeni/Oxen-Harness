@@ -80,8 +80,14 @@ describe("ModelPicker", () => {
     });
     render(<ModelPicker disabled={false} />);
     fireEvent.click(screen.getByText("Claude Sonnet 4.6"));
-    // The cloud row carries its catalog rate (from search_oxen_models)…
-    expect(await screen.findByText("$3/M in · $15/M out")).toBeInTheDocument();
+    // The cloud row carries its catalog rate (from search_oxen_models), set
+    // as bold dollar figures with the unit on its own line…
+    expect(await screen.findByText("per 1M tokens")).toBeInTheDocument();
+    const rate = document.querySelector(".menu-rate");
+    expect(rate?.textContent).toBe("$3 in·$15 outper 1M tokens");
+    expect([...(rate?.querySelectorAll("b") ?? [])].map((b) => b.textContent)).toEqual(["$3", "$15"]);
+    // …and its id sits under the display name rather than in the hint column.
+    expect(screen.getByText("claude-sonnet-4-6")).toHaveClass("menu-id");
     // …and the installed local model is labeled free.
     expect(await screen.findByText("Qwen3 8B · Q4_K_M")).toBeInTheDocument();
     expect(screen.getByText("free")).toBeInTheDocument();

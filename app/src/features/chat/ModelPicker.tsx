@@ -3,7 +3,8 @@ import { Button } from "../../components/ui";
 import { ChevronDown, Cloud, Cpu, Download, Loader } from "lucide-react";
 import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../components/ui/Menu";
 import { installedLocalModels, searchOxenModels } from "../../lib/ipc";
-import { ratesById } from "../../lib/rates";
+import { ratePartsById } from "../../lib/rates";
+import type { RateParts } from "../../lib/rates";
 import { useStore } from "../../lib/store";
 import type { ModelRef, StartupModelChoice } from "../../lib/types";
 
@@ -31,10 +32,10 @@ export function ModelPicker({
   const { open, setOpen, ref } = useMenuState();
   const [busy, setBusy] = useState(false);
   const [localModels, setLocalModels] = useState<ModelRef[]>([]);
-  // Per-million price labels from the endpoint catalog, keyed by model id.
-  // Kept across opens so rows show a (possibly stale) rate instantly while a
+  // Per-million prices from the endpoint catalog, keyed by model id. Kept
+  // across opens so rows show a (possibly stale) rate instantly while a
   // refresh is in flight; a failed fetch just means no tags.
-  const [rates, setRates] = useState<Map<string, string>>(new Map());
+  const [rates, setRates] = useState<Map<string, RateParts>>(new Map());
 
   // Tick once a second so the local-switch elapsed counter advances in place.
   const [, tick] = useReducer((n: number) => n + 1, 0);
@@ -78,7 +79,7 @@ export function ModelPicker({
       .then((v) => setLocalModels(v.models))
       .catch(() => setLocalModels([]));
     searchOxenModels("")
-      .then((hits) => setRates(ratesById(hits)))
+      .then((hits) => setRates(ratePartsById(hits)))
       .catch(() => {});
   }, [open, loadCloudModels]);
 
@@ -169,24 +170,19 @@ export function ModelPicker({
                 }}
               />
             )}
-            {cloudModels.map((m) => (
-              <MenuItem
-                key={m.id}
-                active={m.id === model}
-                name={m.name}
-                hint={
-                  rates.has(m.id) ? (
-                    <span className="menu-hint-stack">
-                      <span>{m.id}</span>
-                      <span className="menu-rate">{rates.get(m.id)}</span>
-                    </span>
-                  ) : (
-                    m.id
-                  )
-                }
-                onSelect={() => pickCloud(m.id, m.name)}
-              />
-            ))}
+            {cloudModels.map((m) => {
+              const rate = rates.get(m.id);
+              return (
+                <MenuItem
+                  key={m.id}
+                  active={m.id === model}
+                  name={m.name}
+                  description={<span className="menu-id">{m.id}</span>}
+                  hint={rate && <ModelRate rate={rate} />}
+                  onSelect={() => pickCloud(m.id, m.name)}
+                />
+              );
+            })}
 
             {localModels.length > 0 && (
               <>
@@ -227,5 +223,28 @@ export function ModelPicker({
         </Menu>
       )}
     </div>
+  );
+}
+
+/** A model's price beside its name: the dollar figures carry the weight, and
+ *  the unit sits underneath so every row reads the same way at a glance. */
+function ModelRate({ rate }: { rate: RateParts }) {
+  return (
+    <span className="menu-rate">
+      <span className="menu-rate-line">
+        {rate.input && (
+          <span>
+            <b>{rate.input}</b> in
+          </span>
+        )}
+        {rate.input && rate.output && <span aria-hidden="true">·</span>}
+        {rate.output && (
+          <span>
+            <b>{rate.output}</b> out
+          </span>
+        )}
+      </span>
+      <span className="menu-rate-unit">per 1M tokens</span>
+    </span>
   );
 }
