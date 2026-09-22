@@ -191,11 +191,18 @@ impl StreamAssembler {
                     started = Some(frag.name.clone());
                 }
             }
-            if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
-                if !args.is_empty() {
-                    frag.arguments.push_str(args);
-                    arguments = Some(args.to_string());
-                }
+            // Arguments arrive as a JSON string fragment; some models (via
+            // some gateways) send the whole object as a JSON value instead.
+            // Dropping the latter left a canvas call with no arguments after
+            // a 40-second generation, and the re-sent empty call drew a 400.
+            let args = match func.get("arguments") {
+                Some(serde_json::Value::String(s)) => Some(s.clone()),
+                Some(serde_json::Value::Null) | None => None,
+                Some(value) => Some(value.to_string()),
+            };
+            if let Some(args) = args.filter(|a| !a.is_empty()) {
+                frag.arguments.push_str(&args);
+                arguments = Some(args);
             }
         }
         MergedDelta {
@@ -280,6 +287,19 @@ mod tests {
         assert_eq!(msg.tool_calls[0].function.name, "read_file");
         let args = msg.tool_calls[0].function.parsed_arguments().unwrap();
         assert_eq!(args["path"], "a.rs");
+    }
+
+    #[test]
+    fn arguments_sent_as_a_json_object_are_kept() {
+        let mut asm = StreamAssembler::new();
+        asm.accept(
+            r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"canvas","arguments":{"format":"markdown","title":"Report"}}}]}}]}"#,
+        );
+        asm.accept(r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#);
+        let msg = asm.finish();
+        let args = msg.tool_calls[0].function.parsed_arguments().unwrap();
+        assert_eq!(args["format"], "markdown");
+        assert_eq!(args["title"], "Report");
         assert_eq!(msg.finish_reason.as_deref(), Some("tool_calls"));
     }
 

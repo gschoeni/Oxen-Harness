@@ -71,9 +71,12 @@ export function ToolCall({ item }: { item: ToolItem }) {
   const root = useStore((s) => s.session?.workspace ?? null);
   const now = useNow(item.running);
   const a = parseArgs(item.args);
+  const failed = !item.running && item.result.startsWith("tool error:");
   // A canvas call is a clickable card that (re)opens the document in the panel —
   // including past versions in a resumed chat, rebuilt from the call's args.
-  if (item.name === "canvas") return <CanvasToolCall item={item} a={a} />;
+  // One the tool refused (no arguments, a bad format) has no document to
+  // open and reads as the error it was.
+  if (item.name === "canvas" && !failed) return <CanvasToolCall item={item} a={a} />;
   // A plan update renders as a checklist snapshot (the live, pinned plan lives
   // above the thread; this card is the in-thread record of each update).
   if (item.name === "update_plan") return <PlanToolCard item={item} a={a} />;
@@ -86,7 +89,6 @@ export function ToolCall({ item }: { item: ToolItem }) {
   // key prompt rather than the generic (collapsed) output.
   const needsKey =
     item.name === "web_search" && !item.running && item.result.includes(WEB_SEARCH_NO_KEY);
-  const failed = !item.running && item.result.startsWith("tool error:");
   const hasBody = !needsKey && Boolean(item.result || item.args);
 
   return (

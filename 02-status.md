@@ -740,6 +740,12 @@ each, in `crates/harness-agent`:
 - lanes are warned at a fifth of their allowance, the subagent prompt names
   the allowance, and `spawn_agents` results carry a budget line;
 - lane usage is recorded per lane, with `usage_for_tree` for the roll-up.
+- 2026-09-22: a reply that "never arrived" after a fleet was a canvas call
+  the model sent with no arguments; re-sending it drew a 400 the turn could
+  not retry. Arguments that arrive as a JSON object (not a string) are now
+  kept by the stream assembler, empty or cut-off arguments are re-sent as
+  valid JSON, the tool result says the call arrived empty, and the desktop
+  shows a refused canvas call as the error it was.
 - follow-ups the same day: lane model calls are capped in flight across the
   whole tree (`max_tree_parallel`, default 4); tool-less leaves spend from
   their parent's remaining allowance instead of slicing it; a lane that

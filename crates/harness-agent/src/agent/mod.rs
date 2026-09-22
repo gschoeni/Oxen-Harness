@@ -1088,6 +1088,16 @@ impl Agent {
     /// keep the images and a later multimodal model can still look at them.
     fn outbound_messages(&self) -> Vec<ChatMessage> {
         let mut messages = self.messages.clone();
+        // A tool call the model produced with no arguments, or arguments cut
+        // off mid-JSON, is kept verbatim in the transcript but must not be
+        // re-sent as-is: providers reject a call whose `arguments` isn't
+        // valid JSON with a 400 that ends the turn (and is rightly never
+        // retried). Send something valid that still says what happened.
+        for message in messages.iter_mut() {
+            for call in message.tool_calls.iter_mut().flatten() {
+                call.function.arguments = sendable_arguments(&call.function.arguments);
+            }
+        }
         if self.config.accepts_images == Some(false) {
             for message in messages.iter_mut() {
                 if let Some(content) = message.content.as_mut() {
@@ -1178,10 +1188,88 @@ fn build_user_message(
     Ok(ChatMessage::user_parts(parts))
 }
 
+/// `arguments` as a provider will accept them: valid JSON, always. Empty
+/// becomes `{}`; text that isn't JSON (a reply cut at its output limit)
+/// is carried as a string field so the model still sees what it sent.
+fn sendable_arguments(arguments: &str) -> String {
+    if arguments.trim().is_empty() {
+        return "{}".to_string();
+    }
+    if serde_json::from_str::<serde_json::Value>(arguments).is_ok() {
+        return arguments.to_string();
+    }
+    serde_json::json!({ "unparsed_arguments": arguments }).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::test_session;
+
+    #[test]
+    fn arguments_are_always_sent_as_valid_json() {
+        assert_eq!(sendable_arguments(""), "{}");
+        assert_eq!(sendable_arguments("  "), "{}");
+        assert_eq!(sendable_arguments(r#"{"a":1}"#), r#"{"a":1}"#);
+        let healed: serde_json::Value =
+            serde_json::from_str(&sendable_arguments(r#"{"path": "a.r"#)).unwrap();
+        assert_eq!(healed["unparsed_arguments"], r#"{"path": "a.r"#);
+    }
+
+    /// The transcript keeps the empty call the model made; what goes back
+    /// to the provider is a call it will accept, so the turn goes on.
+    #[tokio::test]
+    async fn an_empty_tool_call_in_the_transcript_is_resent_as_empty_json() {
+        let mut server = mockito::Server::new_async().await;
+        let ok = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::AllOf(vec![mockito::Matcher::Regex(
+                r#""name":"canvas","arguments":"\{\}""#.into(),
+            )]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose("carrying on"))
+            .expect(1)
+            .create_async()
+            .await;
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "m");
+        for m in [
+            serde_json::json!({"role": "user", "content": "write it up"}),
+            serde_json::json!({"role": "assistant", "content": null, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "canvas", "arguments": ""}}]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c1", "content": "tool error: invalid arguments: missing field `format`"}),
+        ] {
+            store.append_message(&session, &m).unwrap();
+        }
+        let mut agent = Agent::resume_from_store(
+            OxenClient::new(server.url(), "k", "m"),
+            harness_tools::ToolRegistry::new(),
+            store,
+            session,
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        let text = agent.run_turn("go on", |_| {}).await.unwrap();
+        ok.assert_async().await;
+        assert_eq!(text, "carrying on");
+        // The stored transcript is untouched: the call stays as the model made it.
+        assert_eq!(
+            agent
+                .messages()
+                .iter()
+                .find(|m| m.role == "assistant")
+                .unwrap()
+                .tool_calls
+                .as_ref()
+                .unwrap()[0]
+                .function
+                .arguments,
+            ""
+        );
+    }
 
     /// The wallet every lane of a turn shares is spent in billable tokens:
     /// a lane whose context is mostly served from the prompt cache pays for

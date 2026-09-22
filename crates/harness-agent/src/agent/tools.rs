@@ -36,6 +36,10 @@ const TOOL_RESULT_EVENT_CHARS: usize = 4_000;
 /// tool is broken" to the model, so the absence is spelled out.
 const EMPTY_RESULT: &str = "(the tool returned no output)";
 
+/// Appended to a tool's result when its call carried no arguments at all.
+const EMPTY_ARGS_NOTE: &str = "note: this call arrived with no arguments at all — if the tool \
+    needed any, your reply was probably cut short; call it again with the full arguments.";
+
 /// Prefixed to a result whose arguments arrived unparseable and were healed.
 const HEALED_NOTE: &str = "[note: the call's JSON arguments were cut short and auto-healed; \
 emit complete JSON next time]";
@@ -205,6 +209,13 @@ impl Agent {
         // (a whole model round to re-emit the same call); the model is told,
         // so it can tighten up next time.
         let (args, mut note, healed) = match call.function.parsed_arguments() {
+            // A call with no arguments at all usually means the reply lost
+            // them (a stream cut short, or a gateway that dropped them);
+            // say so with the result, so the model resends instead of
+            // guessing from a "missing field" alone.
+            Ok(args) if call.function.arguments.trim().is_empty() => {
+                (args, Some(EMPTY_ARGS_NOTE.to_string()), false)
+            }
             Ok(args) => (args, None, false),
             Err(e) if reply_truncated => {
                 return resolved(format!(
