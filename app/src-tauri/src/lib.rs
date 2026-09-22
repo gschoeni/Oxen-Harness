@@ -40,6 +40,23 @@ mod view_packages;
 use commands::project::read_projects_config;
 use state::{launch_dir, AppState};
 
+/// Whether the main webview may perform a navigation itself, or must bounce
+/// it to the link-browser pane.
+///
+/// The webview reports every navigation, not just the top-level one: an
+/// `<iframe srcDoc>` the UI renders (a canvas document, the editor's HTML
+/// preview) arrives as `about:srcdoc`, and an object URL the UI minted as
+/// `blob:`. Those never leave the app, so they are the app's own, along with
+/// its origins: the bundled `tauri://` origin in production and the Vite dev
+/// server (loopback) in dev. Anything else is a page to show in the pane.
+fn main_webview_keeps(url: &tauri::Url) -> bool {
+    matches!(url.scheme(), "tauri" | "about" | "blob")
+        || matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+        )
+}
+
 /// Entry point shared by the binary and mobile targets.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> Result<(), tauri::Error> {
@@ -106,13 +123,7 @@ pub fn run() -> Result<(), tauri::Error> {
                     if webview.label() != "main" {
                         return true;
                     }
-                    // The app's own origins: the bundled tauri:// origin in
-                    // production, the Vite dev server (loopback) in dev.
-                    let own = url.scheme() == "tauri"
-                        || matches!(
-                            url.host_str(),
-                            Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
-                        );
+                    let own = main_webview_keeps(url);
                     if !own {
                         let _ = webview.app_handle().emit(
                             "browser://open",
@@ -337,4 +348,35 @@ pub fn run() -> Result<(), tauri::Error> {
             }
         });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::main_webview_keeps;
+    use tauri::Url;
+
+    #[test]
+    fn frames_the_ui_renders_stay_in_the_main_webview() {
+        for own in [
+            "about:srcdoc",
+            "about:blank",
+            "blob:tauri://localhost/2b8d0c9e-0000-4000-8000-000000000000",
+            "tauri://localhost/index.html",
+            "http://localhost:1430/",
+            "http://127.0.0.1:1430/src/main.tsx",
+        ] {
+            assert!(main_webview_keeps(&Url::parse(own).unwrap()), "{own}");
+        }
+    }
+
+    #[test]
+    fn web_pages_go_to_the_link_browser() {
+        for page in [
+            "https://docs.oxen.ai/",
+            "http://example.com/",
+            "mailto:g@oxen.ai",
+        ] {
+            assert!(!main_webview_keeps(&Url::parse(page).unwrap()), "{page}");
+        }
+    }
 }
