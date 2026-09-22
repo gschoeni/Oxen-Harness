@@ -253,6 +253,11 @@ pub enum ProtocolEvent {
         format: String,
         language: Option<String>,
         content: String,
+        /// The workspace-relative file the document mirrors, when the model
+        /// showed a project file: a client that watches files follows its
+        /// edits instead of waiting for another call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     /// The model started writing a canvas; content streams via `tool_delta`.
     #[serde(rename = "agent.canvas_writing")]

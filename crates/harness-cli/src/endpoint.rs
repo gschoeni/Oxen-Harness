@@ -261,9 +261,10 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui, base_url: &str
     )));
     // Show documents in the canvas: write them to disk, open web docs in the
     // browser, and preview text docs inline.
-    tools.register_typed(harness_tools::CanvasTool::new(Arc::new(
-        canvas::CliCanvasSink,
-    )));
+    tools.register_typed(harness_tools::CanvasTool::new(
+        Arc::new(canvas::CliCanvasSink),
+        workspace.clone(),
+    ));
     // Image/video generation: chips the composer staged resolve through the
     // shared registry, results land in the project's media library, and a
     // call over the user's budget asks through the same terminal picker.

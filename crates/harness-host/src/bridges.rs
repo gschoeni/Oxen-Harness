@@ -128,6 +128,7 @@ impl CanvasSink for HostCanvasSink {
             format: doc.format.clone(),
             language: doc.language.clone(),
             content: doc.content.clone(),
+            path: doc.path.clone(),
         });
         self.sink.emit(ProtocolEvent::ViewOpen {
             session: self.session.clone(),

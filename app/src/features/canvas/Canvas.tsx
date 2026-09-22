@@ -3,13 +3,15 @@
 // Formats: markdown (rich), code (mono), and html/web & svg (sandboxed iframe —
 // the content is model-authored, so it never gets same-origin access).
 
-import { type PointerEvent } from "react";
+import { useEffect, useState, type PointerEvent } from "react";
 import { X } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { useThrottled } from "../../lib/useThrottled";
 import { Markdown } from "../../components/ui/Markdown";
 import { HighlightedCode } from "../../components/ui/HighlightedCode";
 import type { CanvasDoc } from "../../lib/types";
+import { useAssetSrc } from "../files/useAssetSrc";
+import { useFsChanged } from "../files/useFsChanged";
 import "./canvas.css";
 
 export function Canvas({ onResizeStart }: { onResizeStart?: (e: PointerEvent) => void }) {
@@ -23,6 +25,7 @@ export function Canvas({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =>
     150,
   );
   const setActiveCanvas = useStore((s) => s.setActiveCanvas);
+  const workspace = useStore((s) => s.session?.workspace ?? "");
 
   const committed = docs?.find((d) => d.id === activeId) ?? null;
   // Prefer the committed doc; while a new one is still being written, show the
@@ -65,8 +68,12 @@ export function Canvas({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =>
       </header>
       <div className="canvas-body">
         {committed ? (
-          // Key on id+content so a switch or update fully remounts the view.
-          <CanvasView key={`${committed.id}:${committed.content.length}`} doc={committed} />
+          committed.path && workspace ? (
+            <MirroredCanvasView key={committed.id} doc={committed} workspace={workspace} />
+          ) : (
+            // Key on id+content so a switch or update fully remounts the view.
+            <CanvasView key={`${committed.id}:${committed.content.length}`} doc={committed} />
+          )
         ) : doc ? (
           // Still streaming: render the document in place as it forms.
           <CanvasStreamingView doc={doc} />
@@ -79,6 +86,36 @@ export function Canvas({ onResizeStart }: { onResizeStart?: (e: PointerEvent) =>
       </div>
     </aside>
   );
+}
+
+/** A document that mirrors a project file: the panel shows the file's text,
+ *  read now and again whenever the watcher reports the file changed, so the
+ *  agent's later edits land without another canvas call. Until the first
+ *  read arrives (or when the file is out of reach), the content the call
+ *  carried is shown. */
+function MirroredCanvasView({ doc, workspace }: { doc: CanvasDoc; workspace: string }) {
+  const path = doc.path ?? "";
+  const [bust, setBust] = useState(0);
+  useFsChanged(workspace, [path], () => setBust((b) => b + 1));
+  const src = useAssetSrc(workspace, path, bust);
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => {
+    if (!src) return;
+    let stale = false;
+    fetch(src)
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(r.statusText))))
+      .then((t) => {
+        if (!stale) setText(t);
+      })
+      .catch(() => {
+        /* unreadable right now: keep what we have */
+      });
+    return () => {
+      stale = true;
+    };
+  }, [src]);
+  const content = text ?? doc.content;
+  return <CanvasView key={`${doc.id}:${content.length}:${bust}`} doc={{ ...doc, content }} />;
 }
 
 export function CanvasView({ doc }: { doc: CanvasDoc }) {

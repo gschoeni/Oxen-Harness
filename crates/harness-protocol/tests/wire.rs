@@ -414,6 +414,7 @@ fn remaining_variants_round_trip() {
             format: "markdown".into(),
             language: None,
             content: "# hi".into(),
+            path: None,
         },
         ProtocolEvent::CanvasWriting {
             session: "s1".into(),
@@ -555,6 +556,7 @@ fn legacy_channel_names() {
                 format: "markdown".into(),
                 language: None,
                 content: "".into(),
+                path: None,
             },
             "agent://canvas",
         ),

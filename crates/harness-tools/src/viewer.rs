@@ -87,7 +87,9 @@ impl TypedTool for OpenFileTool {
     fn description(&self) -> &str {
         "Open a project file in the user's file viewer panel beside the chat \
          (source code with syntax highlighting, or an image/video rendered \
-         natively). Use it to put a specific file in front of the user: one \
+         natively). An .html file appears here as source, not as a page: to \
+         show a page or document rendered, call `canvas` with the file's \
+         `path` instead. Use it to put a specific file in front of the user: one \
          you just created or finished editing, or one you are walking them \
          through. This SHOWS the file to the user — it does not return its \
          content (use read_file to read a file yourself), and it is not for \

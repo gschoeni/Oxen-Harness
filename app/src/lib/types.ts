@@ -1083,6 +1083,9 @@ export interface CanvasDoc {
   format: CanvasFormat;
   language?: string | null;
   content: string;
+  /** The workspace-relative file the document mirrors, when the agent showed
+   *  a project file: the panel re-reads it whenever the file changes. */
+  path?: string | null;
 }
 
 /** `agent://canvas` payload — a CanvasDoc tagged with its chat session. */

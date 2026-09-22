@@ -213,8 +213,10 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
          web page or interactive demo (html), a sizeable code file (code), or a \
          vector graphic (svg) — show it with `canvas` \
          instead of a long fenced block in chat. Reuse the same `id` to revise an \
-         open document. Don't use `canvas` for short answers or quick snippets; \
-         opening a panel for those is disruptive."
+         open document. For a page or document you also wrote to a project file, \
+         pass its `path` instead of `content`: the canvas renders the file and \
+         follows your later edits to it. Don't use `canvas` for short answers or \
+         quick snippets; opening a panel for those is disruptive."
     } else {
         ""
     };
@@ -240,7 +242,8 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
          will want to look at — or when walking them through one — call \
          `open_file` to put it in their file viewer beside the chat instead of \
          pasting its contents. Open the one or two files that matter, not every \
-         file you touch."
+         file you touch. `open_file` shows source: an HTML page (or a document) \
+         the user should see rendered goes to `canvas` with the file's `path`."
     } else {
         ""
     };

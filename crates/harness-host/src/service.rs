@@ -854,16 +854,20 @@ impl SessionService {
                     }),
                 ))
             });
-        tools.register_typed(CanvasTool::new(Arc::new(HostCanvasSink {
-            root: workspace_root.into(),
-            sink: self.sink.clone(),
-            session: session.to_string(),
-        })));
-        // Open project files in the client's editor/viewer surface (the
-        // host-surface pattern). The workspace was validated by agent_parts.
-        if let Ok(viewer_workspace) = Workspace::new(workspace_root) {
+        // The canvas and the file viewer both show project files through the
+        // sandbox (the host-surface pattern). The workspace was validated by
+        // agent_parts.
+        if let Ok(workspace) = Workspace::new(workspace_root) {
+            tools.register_typed(CanvasTool::new(
+                Arc::new(HostCanvasSink {
+                    root: workspace_root.into(),
+                    sink: self.sink.clone(),
+                    session: session.to_string(),
+                }),
+                workspace.clone(),
+            ));
             tools.register_typed(harness_tools::OpenFileTool::new(
-                viewer_workspace,
+                workspace,
                 Arc::new(HostViewerSink {
                     sink: self.sink.clone(),
                     session: session.to_string(),
@@ -2127,7 +2131,7 @@ impl SessionService {
         let mut registry =
             ToolRegistry::default_for_workspace_with_web_key(workspace.clone(), brave_key);
         registry.register_typed(AskUserTool::new(Arc::new(NullAsker)));
-        registry.register_typed(CanvasTool::new(Arc::new(NullCanvasSink)));
+        registry.register_typed(CanvasTool::new(Arc::new(NullCanvasSink), workspace.clone()));
         registry.register_typed(harness_tools::OpenFileTool::new(
             workspace,
             Arc::new(NullViewerSink),

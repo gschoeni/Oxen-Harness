@@ -17,15 +17,28 @@ export function slugId(s: string): string {
   return Array.from(out).slice(0, 64).join("");
 }
 
-/** Build a CanvasDoc from parsed `canvas` tool args, or null if there's no
- *  content (e.g. a malformed/partial call). */
+/** The canvas format a project file renders as — mirrors
+ *  `harness_tools::canvas::format_for_path`. */
+export function formatForPath(path: string): CanvasFormat {
+  const ext = path.split("/").pop()?.split(".").pop()?.toLowerCase() ?? "";
+  if (["md", "markdown", "mdx"].includes(ext)) return "markdown";
+  if (["html", "htm"].includes(ext)) return "html";
+  if (ext === "svg") return "svg";
+  return "code";
+}
+
+/** Build a CanvasDoc from parsed `canvas` tool args, or null if there's
+ *  nothing to show (a malformed/partial call). A call that showed a project
+ *  file carries no content: the panel reads the file itself. */
 export function canvasDocFromArgs(a: Record<string, unknown>): CanvasDoc | null {
   const content = typeof a.content === "string" ? a.content : "";
-  if (!content.trim()) return null;
+  const path = typeof a.path === "string" && a.path.trim() ? a.path.trim().replace(/^\.\//, "") : null;
+  if (!content.trim() && !path) return null;
+  const fileName = path?.split("/").pop();
   const title =
-    typeof a.title === "string" && a.title.trim() ? a.title.trim() : "Document";
-  const format = (typeof a.format === "string" ? a.format : "markdown") as CanvasFormat;
+    typeof a.title === "string" && a.title.trim() ? a.title.trim() : (fileName ?? "Document");
+  const format = (typeof a.format === "string" ? a.format : path ? formatForPath(path) : "markdown") as CanvasFormat;
   const language = typeof a.language === "string" ? a.language : undefined;
-  const idSource = typeof a.id === "string" && a.id.trim() ? a.id : title;
-  return { id: slugId(idSource), title, format, language, content };
+  const idSource = typeof a.id === "string" && a.id.trim() ? a.id : (path ?? title);
+  return { id: slugId(idSource), title, format, language, content, path };
 }

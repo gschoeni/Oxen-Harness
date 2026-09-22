@@ -1169,3 +1169,21 @@ where they happened, with the working count, shared spend, and stop-all in
 a bar over its lanes while they run. The strip under the thread is kept
 only for fleets no call started — a review's fan-out — so nothing shows
 twice.
+
+## Canvas shows project files (2026-09-22)
+
+**`canvas` takes a `path` as well as `content`.** A page or document the
+model wrote to the project used to have two bad ways to be seen: `open_file`,
+which shows source (an HTML page as markup), or `canvas` with the whole body
+resent, which doubles the output and hit the token cutoff on a real page.
+Now `canvas {path}` reads the file through the workspace sandbox, infers the
+format from the extension (title and id default from the file, so showing it
+again updates the same panel), and the document carries `path` on the wire.
+The desktop panel re-reads the file whenever the watcher reports it changed,
+so later edits land without another call; hosts that can't watch still get
+the content the tool read. The system prompt and both tool descriptions
+steer an HTML page to this path; `open_file` stays what it was, source.
+
+*Why not make `open_file` render HTML:* the editor is where a file is edited,
+and a user opening a page from the tree usually wants the markup; the canvas
+is the "show it to me" surface, and it already knew how to render html.
