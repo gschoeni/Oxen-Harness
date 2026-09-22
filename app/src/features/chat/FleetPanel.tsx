@@ -1,14 +1,16 @@
-// The strip of agents still working, pinned under the thread so a running
-// fleet's state, spend, and stops are in reach while it runs. It steps aside
-// once every agent has finished: a fleet's lanes live for good in the thread,
-// inside the spawn card that started them (see AgentRowList / ToolCall).
+// The strip of agents still working that have no card in the thread — a
+// review's fan-out, started by the host rather than by a model's call —
+// pinned under the thread so their state, spend, and stops are in reach. A
+// fleet a model's call started lives in that call's card instead (see
+// AgentRowList / ToolCall), and the strip steps aside when nothing of its
+// own is working.
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Square, Users } from "lucide-react";
+import { ChevronDown, ChevronRight, Users } from "lucide-react";
 import { compactTokens, formatUsd } from "../../lib/format";
-import { fleetsFor, useStore, type FleetView } from "../../lib/store";
+import { fleetsFor, useStore } from "../../lib/store";
 import { agentRows, isActive } from "./agentRows";
-import { AgentRowList } from "./AgentRowList";
+import { AgentRowList, StopFleets } from "./AgentRowList";
 import "./agents.css";
 
 export { agentRows } from "./agentRows";
@@ -23,7 +25,9 @@ function AgentHub({ session }: { session: string }) {
   const agents = useStore((s) => s.agents[session]);
   const refresh = useStore((s) => s.refreshAgents);
   const [open, setOpen] = useState(true);
-  const mine = fleetsFor(fleets, session);
+  // Fleets a model's call started have a card in the thread that carries
+  // their lanes; the strip is for the rest (a review's fan-out).
+  const mine = fleetsFor(fleets, session).filter(([, f]) => !f.call);
   const rows = agentRows(agents ?? [], mine);
   const knownIds = rows
     .filter((r) => isActive(r.status))
@@ -61,7 +65,7 @@ function AgentHub({ session }: { session: string }) {
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
         {working > 0 && (
-          <StopAll
+          <StopFleets
             key={mine
               .filter(([, f]) => !f.finished)
               .map(([id]) => id)
@@ -76,36 +80,3 @@ function AgentHub({ session }: { session: string }) {
   );
 }
 
-function StopAll({ session, fleets }: { session: string; fleets: Array<[string, FleetView]> }) {
-  const stop = useStore((s) => s.stopFleet);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
-  if (!fleets.length) return null;
-  return (
-    <div className="agent-hub-stop-wrap">
-      <button
-        className="agent-hub-stop"
-        aria-label="Stop all agents"
-        title="Stop all agents in this chat"
-        disabled={pending}
-        onClick={async () => {
-          setPending(true);
-          setError("");
-          const results = await Promise.allSettled(fleets.map(([id]) => stop(session, id)));
-          const failed = results.find((r) => r.status === "rejected");
-          if (failed?.status === "rejected") {
-            setError(String(failed.reason));
-            setPending(false);
-          }
-        }}
-      >
-        {pending ? "Stopping…" : <Square size={11} />}
-      </button>
-      {error && (
-        <span role="alert" className="agent-hub-error">
-          {error}
-        </span>
-      )}
-    </div>
-  );
-}

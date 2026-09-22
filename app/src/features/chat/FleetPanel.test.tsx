@@ -70,6 +70,14 @@ describe("the lane strip", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("leaves a fleet a model's call started to that call's card", async () => {
+    const { container } = render(<FleetPanel />);
+    await act(async () => {
+      useStore.getState().ingestFleetStarted({ session: "s1", fleet: "f1", agents: ["diff-scan"], source: "turn", call: "call_9" });
+    });
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("says a row's state once when it has no activity to show", async () => {
     render(<FleetPanel />);
     await start("f1", ["diff-scan"]);

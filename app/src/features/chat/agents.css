@@ -306,3 +306,17 @@
   max-height: none;
   border-top: 0;
 }
+/* The bar over a running card's lanes: how many work, the shared spend, and
+   the one stop for the fleet — what the strip under the thread used to hold. */
+.toolcall-agents-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--separator);
+}
+.toolcall-agents-spacer {
+  flex: 1;
+}

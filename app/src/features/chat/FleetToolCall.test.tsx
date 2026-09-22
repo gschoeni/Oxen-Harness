@@ -68,6 +68,16 @@ describe("a spawn card in the thread", () => {
     expect(screen.queryByText("explore")).not.toBeInTheDocument();
     expect(screen.getAllByText("Working")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Stop callers" })).toBeInTheDocument();
+    // What the strip used to hold sits over the lanes: count, spend, stop-all.
+    expect(screen.getByText("2 working")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop all agents" })).toBeInTheDocument();
+  });
+
+  it("stops its own fleet from the card", async () => {
+    await startFleet("f1", "call_9", ["diff-scan"]);
+    render(<ToolCall item={spawn({})} />);
+    await userEvent.click(screen.getByRole("button", { name: "Stop all agents" }));
+    expect(ipc.cancelFleet).toHaveBeenCalledWith("s1", "f1");
   });
 
   it("keeps the lanes its result names once everything is done, even in a resumed chat", async () => {

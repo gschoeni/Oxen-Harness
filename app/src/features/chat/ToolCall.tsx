@@ -34,8 +34,9 @@ import {
   generationArgs,
   isGenerateTool, isActiveUpload, uploadPercent } from "../../lib/media";
 import { fleetsFor, useStore } from "../../lib/store";
-import { agentRows } from "./agentRows";
-import { AgentRowList, agentIdsInResult } from "./AgentRowList";
+import { agentRows, isActive } from "./agentRows";
+import { AgentRowList, StopFleets, agentIdsInResult } from "./AgentRowList";
+import { compactTokens, formatUsd } from "../../lib/format";
 import { setDragPaths } from "../files/dnd";
 import { UploadRow } from "./MediaPanel";
 import { useAssetSrc } from "../files/useAssetSrc";
@@ -102,9 +103,28 @@ function FleetLanes({ item }: { item: ToolItem }) {
     saved.filter((a) => ids.has(a.id)),
     mine,
   );
+  const spend = useStore((s) => s.treeUsage[session]);
   if (!rows.length) return null;
+  const working = rows.filter((r) => isActive(r.status)).length;
+  const running = mine.filter(([, f]) => !f.finished);
+  const budget = running.slice(-1)[0]?.[1].budget;
   return (
     <div className="toolcall-agents">
+      {working > 0 && (
+        <div className="toolcall-agents-bar">
+          <span>{working} working</span>
+          {budget && (
+            <span title={`${compactTokens(budget.tokens)} of ${compactTokens(budget.max_tokens)} shared tokens`}>
+              {compactTokens(budget.tokens)} tokens
+            </span>
+          )}
+          {spend?.cost != null && (
+            <span title="This chat's spend so far, agents included">{formatUsd(spend.cost)}</span>
+          )}
+          <span className="toolcall-agents-spacer" />
+          <StopFleets session={session} fleets={running} />
+        </div>
+      )}
       <AgentRowList session={session} rows={rows} />
     </div>
   );

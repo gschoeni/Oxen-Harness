@@ -1165,5 +1165,7 @@ model's tool-call id, and the spawn card in the thread (`spawn_agents`,
 `map_agents`, `send_to_agent`) renders its own lanes: live from the fleet
 tied to it while it runs, and from the saved records its result names
 ("agent id: …") for good, so a resumed chat still shows each spawn's agents
-where they happened. The strip stays only while agents are working — state,
-spend, and stops in reach — and steps aside when they finish.
+where they happened, with the working count, shared spend, and stop-all in
+a bar over its lanes while they run. The strip under the thread is kept
+only for fleets no call started — a review's fan-out — so nothing shows
+twice.

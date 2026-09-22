@@ -6,7 +6,7 @@
 
 import { useState, type CSSProperties } from "react";
 import { Check, ChevronRight, CircleDashed, Square, X } from "lucide-react";
-import { useStore } from "../../lib/store";
+import { useStore, type FleetView } from "../../lib/store";
 import { isActive, statusLabel, type AgentRow } from "./agentRows";
 import "./agents.css";
 
@@ -42,6 +42,41 @@ export function AgentRowList({ session, rows }: { session: string; rows: AgentRo
  *  call's. */
 export function agentIdsInResult(result: string): string[] {
   return Array.from(result.matchAll(/agent id: (\S+)/g), (m) => m[1]);
+}
+
+/** One stop for every running fleet given — the card's, or the strip's. */
+export function StopFleets({ session, fleets }: { session: string; fleets: Array<[string, FleetView]> }) {
+  const stop = useStore((s) => s.stopFleet);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  if (!fleets.length) return null;
+  return (
+    <div className="agent-hub-stop-wrap">
+      <button
+        className="agent-hub-stop"
+        aria-label="Stop all agents"
+        title="Stop all agents in this chat"
+        disabled={pending}
+        onClick={async () => {
+          setPending(true);
+          setError("");
+          const results = await Promise.allSettled(fleets.map(([id]) => stop(session, id)));
+          const failed = results.find((r) => r.status === "rejected");
+          if (failed?.status === "rejected") {
+            setError(String(failed.reason));
+            setPending(false);
+          }
+        }}
+      >
+        {pending ? "Stopping…" : <Square size={11} />}
+      </button>
+      {error && (
+        <span role="alert" className="agent-hub-error">
+          {error}
+        </span>
+      )}
+    </div>
+  );
 }
 
 function Glyph({ status }: { status: string }) {
