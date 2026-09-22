@@ -61,14 +61,13 @@ describe("the lane strip", () => {
     expect(screen.getByText("explore")).toBeInTheDocument();
   });
 
-  it("shows durable results after completion without duplicate rows", async () => {
-    render(<FleetPanel />);
+  it("steps aside once every agent has finished — the rows live in the spawn card", async () => {
+    const { container } = render(<FleetPanel />);
     await start("f1", ["diff-scan"]);
     ipc.listAgents.mockResolvedValue([saved("f1-0")]);
     await act(async () => useStore.getState().ingestFleetCompleted("s1", "f1"));
-    expect(await screen.findByText("4 candidates")).toBeInTheDocument();
-    expect(screen.getAllByText("diff-scan")).toHaveLength(1);
-    expect(screen.getByText("1 finished")).toBeInTheDocument();
+    await act(async () => {});
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("says a row's state once when it has no activity to show", async () => {

@@ -70,7 +70,7 @@ fn committed_lane_edits_are_returned() {
 #[derive(Default)]
 struct QuietSink;
 impl FleetSink for QuietSink {
-    fn started(&self, _: &str, _: &[String], _: CancellationToken) {}
+    fn started(&self, _: &str, _: &[String], _: CancellationToken, _: Option<&str>) {}
     fn event(&self, _: &str, _: &FleetEvent) {}
     fn finished(&self, _: &str) {}
 }
@@ -100,7 +100,7 @@ struct CompletionSink {
     spawner: Arc<FleetSpawner>,
 }
 impl FleetSink for CompletionSink {
-    fn started(&self, _: &str, _: &[String], _: CancellationToken) {}
+    fn started(&self, _: &str, _: &[String], _: CancellationToken, _: Option<&str>) {}
     fn event(&self, _: &str, _: &FleetEvent) {}
     fn finished(&self, _: &str) {
         let lanes = self.store.lanes_of(&self.parent).unwrap();

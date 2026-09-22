@@ -1,14 +1,14 @@
-// The lane strip under the thread: one row per subagent of this chat, running
-// and finished, each a glance — glyph, name, what it's doing, its state. A
-// row opens the agent in place of the thread column (see AgentView); nothing
-// expands inline, so the strip stays a strip. Stops live here too: one per
-// working row, and one for everything at the top.
+// The strip of agents still working, pinned under the thread so a running
+// fleet's state, spend, and stops are in reach while it runs. It steps aside
+// once every agent has finished: a fleet's lanes live for good in the thread,
+// inside the spawn card that started them (see AgentRowList / ToolCall).
 
-import { useEffect, useState, type CSSProperties } from "react";
-import { Check, ChevronDown, ChevronRight, CircleDashed, Square, Users, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronDown, ChevronRight, Square, Users } from "lucide-react";
 import { compactTokens, formatUsd } from "../../lib/format";
 import { fleetsFor, useStore, type FleetView } from "../../lib/store";
-import { agentRows, isActive, statusLabel, type AgentRow } from "./agentRows";
+import { agentRows, isActive } from "./agentRows";
+import { AgentRowList } from "./AgentRowList";
 import "./agents.css";
 
 export { agentRows } from "./agentRows";
@@ -22,8 +22,6 @@ function AgentHub({ session }: { session: string }) {
   const fleets = useStore((s) => s.fleets);
   const agents = useStore((s) => s.agents[session]);
   const refresh = useStore((s) => s.refreshAgents);
-  const openAgent = useStore((s) => s.openAgent);
-  const opened = useStore((s) => s.agentView[session]);
   const [open, setOpen] = useState(true);
   const mine = fleetsFor(fleets, session);
   const rows = agentRows(agents ?? [], mine);
@@ -37,7 +35,7 @@ function AgentHub({ session }: { session: string }) {
   const working = rows.filter((r) => isActive(r.status)).length;
   const budget = mine.filter(([, f]) => !f.finished).slice(-1)[0]?.[1].budget;
   const spend = useStore((s) => s.treeUsage[session]);
-  if (!rows.length) return null;
+  if (!working) return null;
   return (
     <section className="agent-hub" aria-label="Agents">
       <div className="agent-hub-header">
@@ -73,31 +71,7 @@ function AgentHub({ session }: { session: string }) {
           />
         )}
       </div>
-      {open && (
-        <div className="agent-hub-rows">
-          {rows.map((row) => (
-            <div
-              key={row.key}
-              className={`agent-hub-row ${row.id && row.id === opened ? "selected" : ""}`}
-            >
-              <button
-                className="agent-hub-select"
-                style={{ "--depth": Math.min(row.depth ?? 0, 4) } as CSSProperties}
-                title={row.id ? `Open ${row.label}` : `${row.label} is waiting for a slot`}
-                disabled={!row.id}
-                onClick={() => row.id && openAgent(session, row.id)}
-              >
-                <Glyph status={row.status} />
-                <span className="agent-hub-name">{row.label}</span>
-                <span className="agent-hub-activity">{row.activity}</span>
-                <span className={`agent-hub-status ${row.status}`}>{statusLabel(row.status)}</span>
-                <ChevronRight size={13} className="agent-hub-open" aria-hidden="true" />
-              </button>
-              {isActive(row.status) && row.id && <StopButton session={session} row={row} />}
-            </div>
-          ))}
-        </div>
-      )}
+      {open && <AgentRowList session={session} rows={rows} />}
     </section>
   );
 }
@@ -126,52 +100,6 @@ function StopAll({ session, fleets }: { session: string; fleets: Array<[string, 
         }}
       >
         {pending ? "Stopping…" : <Square size={11} />}
-      </button>
-      {error && (
-        <span role="alert" className="agent-hub-error">
-          {error}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function Glyph({ status }: { status: string }) {
-  if (status === "running") return <span className="agent-hub-dot" aria-label="working" />;
-  if (status === "done") return <Check size={13} className="agent-hub-done" />;
-  if (status === "failed") return <X size={13} className="agent-hub-failed" />;
-  if (status === "cancelled") return <Square size={11} />;
-  return <CircleDashed size={13} />;
-}
-
-function StopButton({ session, row }: { session: string; row: AgentRow }) {
-  const stop = useStore((s) => s.stopLane);
-  const refresh = useStore((s) => s.refreshAgents);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
-  return (
-    <div className="agent-hub-stop-wrap">
-      <button
-        className="agent-hub-stop"
-        aria-label={`Stop ${row.label}`}
-        title={error || `Stop ${row.label}`}
-        disabled={pending}
-        onClick={async () => {
-          setPending(true);
-          setError("");
-          try {
-            if (!(await stop(session, row.id))) {
-              setPending(false);
-              await refresh(session);
-              setError("Agent already finished");
-            }
-          } catch (e) {
-            setError(String(e));
-            setPending(false);
-          }
-        }}
-      >
-        {pending ? <span>Stopping…</span> : <Square size={10} />}
       </button>
       {error && (
         <span role="alert" className="agent-hub-error">

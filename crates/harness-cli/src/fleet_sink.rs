@@ -45,7 +45,7 @@ impl CliFleetSink {
 }
 
 impl FleetSink for CliFleetSink {
-    fn started(&self, fleet: &str, labels: &[String], cancel: CancellationToken) {
+    fn started(&self, fleet: &str, labels: &[String], cancel: CancellationToken, _: Option<&str>) {
         let tree = self.tree.clone();
         self.hub.install(
             fleet,

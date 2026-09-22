@@ -301,6 +301,7 @@ impl TypedTool for MapAgentsTool {
                     args.max_parallel
                         .unwrap_or(DEFAULT_MAP_PARALLEL)
                         .clamp(1, MAX_FLEET_AGENTS),
+                    call,
                 )
                 .await?
             } else {
@@ -308,7 +309,7 @@ impl TypedTool for MapAgentsTool {
                     .max_parallel
                     .unwrap_or(DEFAULT_MAP_PARALLEL)
                     .clamp(1, MAX_FLEET_AGENTS);
-                self.run_lanes(&items, &pending, &args.prompt, &schema, parallel)
+                self.run_lanes(&items, &pending, &args.prompt, &schema, parallel, call)
                     .await?
             };
             for (index, result) in pending.iter().zip(fresh) {
@@ -337,6 +338,7 @@ impl TypedTool for MapAgentsTool {
                     &rows,
                     args.reduce_prompt.as_deref().unwrap_or_default(),
                     &document,
+                    call,
                 )
                 .await?;
             out.push_str(&reduced);
@@ -356,6 +358,7 @@ impl MapAgentsTool {
         template: &str,
         schema: &Option<serde_json::Value>,
         parallel: usize,
+        call: &CallContext,
     ) -> Result<Vec<SubagentResult>, ToolError> {
         self.spawner
             .tree_budget()
@@ -390,6 +393,7 @@ impl MapAgentsTool {
                         spawner.build_agent(&labels[index], &fleet, None, cancel)
                     }
                 },
+                call.call_id.as_deref(),
             )
             .await?;
         Ok(results)
@@ -404,6 +408,7 @@ impl MapAgentsTool {
         template: &str,
         schema: &Option<serde_json::Value>,
         parallel: usize,
+        call: &CallContext,
     ) -> Result<Vec<SubagentResult>, ToolError> {
         let store = self.spawner.overflow_store();
         let tasks = pending
@@ -421,7 +426,12 @@ impl MapAgentsTool {
             })
             .collect::<Result<Vec<_>, ToolError>>()?;
         self.spawner
-            .run_leaf_tasks_admitted(tasks, parallel, crate::ask_tool::DEFAULT_SYSTEM)
+            .run_leaf_tasks_admitted(
+                tasks,
+                parallel,
+                crate::ask_tool::DEFAULT_SYSTEM,
+                call.call_id.as_deref(),
+            )
             .await
     }
 
@@ -431,6 +441,7 @@ impl MapAgentsTool {
         rows: &[SubagentResult],
         reduce_prompt: &str,
         document: &str,
+        call: &CallContext,
     ) -> Result<String, ToolError> {
         self.spawner
             .tree_budget()
@@ -455,6 +466,7 @@ impl MapAgentsTool {
                         spawner.build_agent("reduce", &fleet, None, cancel)
                     }
                 },
+                call.call_id.as_deref(),
             )
             .await?;
         let mut out = String::new();
@@ -498,7 +510,7 @@ mod tests {
     #[derive(Default)]
     struct QuietSink;
     impl FleetSink for QuietSink {
-        fn started(&self, _: &str, _: &[String], _: CancellationToken) {}
+        fn started(&self, _: &str, _: &[String], _: CancellationToken, _: Option<&str>) {}
         fn event(&self, _: &str, _: &FleetEvent) {}
         fn finished(&self, _: &str) {}
     }

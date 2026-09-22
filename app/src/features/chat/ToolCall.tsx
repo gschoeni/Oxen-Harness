@@ -33,7 +33,9 @@ import {
   generatedFiles,
   generationArgs,
   isGenerateTool, isActiveUpload, uploadPercent } from "../../lib/media";
-import { useStore } from "../../lib/store";
+import { fleetsFor, useStore } from "../../lib/store";
+import { agentRows } from "./agentRows";
+import { AgentRowList, agentIdsInResult } from "./AgentRowList";
 import { setDragPaths } from "../files/dnd";
 import { UploadRow } from "./MediaPanel";
 import { useAssetSrc } from "../files/useAssetSrc";
@@ -61,6 +63,51 @@ function useNow(active: boolean): number {
     return () => clearInterval(t);
   }, [active]);
   return now;
+}
+
+/** The tools whose card carries the lanes it started. */
+const FLEET_TOOLS = new Set(["spawn_agents", "map_agents", "send_to_agent"]);
+
+/** The lanes a spawn call started, shown inside its card: live from the
+ *  fleet the call id ties to it while it runs, and from the saved records the
+ *  result names ("agent id: …") for good — so a resumed chat still shows what
+ *  each spawn did, where it did it. */
+function FleetLanes({ item }: { item: ToolItem }) {
+  const session = useStore((s) => s.session?.session_id ?? "");
+  const fleets = useStore((s) => s.fleets);
+  const agents = useStore((s) => s.agents[session]);
+  const refresh = useStore((s) => s.refreshAgents);
+  const mine = fleetsFor(fleets, session).filter(([, f]) => Boolean(item.callId) && f.call === item.callId);
+  const ids = new Set<string>(agentIdsInResult(item.result));
+  for (const [, f] of mine) for (const lane of f.lanes) if (lane.id) ids.add(lane.id);
+  // Descendants of this call's lanes belong to the card too.
+  const saved = agents ?? [];
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const a of saved) {
+      if (!ids.has(a.id) && a.parent && ids.has(a.parent)) {
+        ids.add(a.id);
+        grew = true;
+      }
+    }
+  }
+  const named = agentIdsInResult(item.result);
+  const known = named.length > 0 && saved.some((a) => ids.has(a.id));
+  useEffect(() => {
+    if (session && named.length > 0 && !known) void refresh(session);
+    // The result names the lanes once; that string is the dependency.
+  }, [session, item.result, known, refresh]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rows = agentRows(
+    saved.filter((a) => ids.has(a.id)),
+    mine,
+  );
+  if (!rows.length) return null;
+  return (
+    <div className="toolcall-agents">
+      <AgentRowList session={session} rows={rows} />
+    </div>
+  );
 }
 
 /** A polished, tool-aware card for one tool call: an icon + human summary in the
@@ -122,6 +169,7 @@ export function ToolCall({ item }: { item: ToolItem }) {
         </span>
       </button>
 
+      {FLEET_TOOLS.has(item.name) && <FleetLanes item={item} />}
       {needsKey && (
         <div className="toolcall-body">
           <WebSearchKeyPrompt />

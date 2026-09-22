@@ -73,7 +73,7 @@ impl TypedTool for AskModelTool {
          needs tools."
     }
 
-    async fn run(&self, args: AskModelArgs, _call: &CallContext) -> Result<String, ToolError> {
+    async fn run(&self, args: AskModelArgs, call: &CallContext) -> Result<String, ToolError> {
         let prompts: Vec<String> = args
             .prompts
             .into_iter()
@@ -109,7 +109,7 @@ impl TypedTool for AskModelTool {
             .collect();
         let results = self
             .spawner
-            .run_leaf_tasks(tasks, ASK_CONCURRENCY, &system)
+            .run_leaf_tasks(tasks, ASK_CONCURRENCY, &system, call.call_id.as_deref())
             .await?;
         let cap = ANSWER_CHARS.min(REPLY_CHARS / results.len().max(1));
         Ok(results

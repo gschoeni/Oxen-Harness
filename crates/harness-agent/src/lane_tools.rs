@@ -68,7 +68,7 @@ impl TypedTool for SendToAgentTool {
         Concurrency::Exclusive
     }
 
-    async fn run(&self, args: SendToAgentArgs, _call: &CallContext) -> Result<String, ToolError> {
+    async fn run(&self, args: SendToAgentArgs, call: &CallContext) -> Result<String, ToolError> {
         let _admission = self.spawner.admit_fleet(1)?;
         let id = args.agent.trim().to_string();
         let label = self
@@ -90,6 +90,7 @@ impl TypedTool for SendToAgentTool {
                         let fleet = fleet.clone();
                         move |_: usize, cancel| spawner.resume_lane(&id, &label, &fleet, cancel)
                     },
+                    call.call_id.as_deref(),
                 )
                 .await?;
         let mut out = String::new();

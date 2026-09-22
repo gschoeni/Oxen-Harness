@@ -1841,6 +1841,7 @@ impl SessionService {
                                 fleet: review_fleet.clone(),
                                 agents: agents.clone(),
                                 source: harness_protocol::FleetSource::Review,
+                                call: None,
                             });
                         }
                     }

@@ -252,9 +252,11 @@ impl FleetSpawner {
         tasks: Vec<SubagentTask>,
         parallel: usize,
         system: &str,
+        call: Option<&str>,
     ) -> Result<Vec<SubagentResult>, ToolError> {
         let _admission = self.admit_fleet(0)?;
-        self.run_leaf_tasks_admitted(tasks, parallel, system).await
+        self.run_leaf_tasks_admitted(tasks, parallel, system, call)
+            .await
     }
 
     pub(crate) async fn run_leaf_tasks_admitted(
@@ -262,6 +264,7 @@ impl FleetSpawner {
         tasks: Vec<SubagentTask>,
         parallel: usize,
         system: &str,
+        call: Option<&str>,
     ) -> Result<Vec<SubagentResult>, ToolError> {
         let fleet = next_fleet_id();
         let labels: Vec<_> = tasks.iter().map(|t| t.label.clone()).collect();
@@ -278,6 +281,7 @@ impl FleetSpawner {
                     self.tree_budget().open_as_leaf(agent.session_id());
                     Ok(agent)
                 },
+                call,
             )
             .await?;
         Ok(results)
@@ -892,6 +896,9 @@ impl FleetSpawner {
     /// the lane lifecycle before completion is emitted (a patch may
     /// still be attached). Returns the results and whether the fleet's token
     /// was cancelled.
+    /// `call` is the model's id for the tool call this fleet answers, when a
+    /// model's call started it; hosts use it to place the lanes in the
+    /// thread beside that call.
     pub(crate) async fn run_lanes<S: SpawnAgent>(
         &self,
         sink: &Arc<dyn FleetSink>,
@@ -899,6 +906,7 @@ impl FleetSpawner {
         tasks: Vec<SubagentTask>,
         limits: FleetLimits,
         spawn: S,
+        call: Option<&str>,
     ) -> Result<(Vec<SubagentResult>, bool), ToolError> {
         let labels: Vec<String> = tasks.iter().map(|t| t.label.clone()).collect();
         let cancel = self.run_token();
@@ -921,6 +929,7 @@ impl FleetSpawner {
             fleet,
             &labels,
             cancel.clone(),
+            call,
         );
         let tree = self.tree_budget();
         let _inflight = InFlight::begin(tree.clone());
@@ -979,7 +988,7 @@ impl FleetSpawner {
             })
             .collect();
         let results = self
-            .retry_transient_failures(sink, fleet, results, limits, &cancel)
+            .retry_transient_failures(sink, fleet, results, limits, &cancel, call)
             .await;
         // The trajectory: one line per fleet with every lane's verdict and
         // spend, beside the turn's other developer-log events, so a tree
@@ -1028,6 +1037,7 @@ impl FleetSpawner {
         mut results: Vec<SubagentResult>,
         limits: FleetLimits,
         cancel: &CancellationToken,
+        call: Option<&str>,
     ) -> Vec<SubagentResult> {
         if self.store.is_none() || cancel.is_cancelled() {
             return results;
@@ -1092,6 +1102,7 @@ impl FleetSpawner {
             &retry_fleet,
             &labels,
             cancel.clone(),
+            call,
         );
         let parent = self.session();
         tree.expect_lanes(parent.as_deref(), ids.len() as u32);
@@ -1147,7 +1158,7 @@ fn agent_tool_names() -> [&'static str; 5] {
 
 struct QuietFleetSink;
 impl FleetSink for QuietFleetSink {
-    fn started(&self, _: &str, _: &[String], _: CancellationToken) {}
+    fn started(&self, _: &str, _: &[String], _: CancellationToken, _: Option<&str>) {}
     fn event(&self, _: &str, _: &FleetEvent) {}
     fn finished(&self, _: &str) {}
 }
@@ -1400,9 +1411,10 @@ impl SinkGuard {
         fleet: &str,
         labels: &[String],
         cancel: CancellationToken,
+        call: Option<&str>,
     ) -> Self {
         live.fetch_add(1, Ordering::SeqCst);
-        sink.started(fleet, labels, cancel);
+        sink.started(fleet, labels, cancel, call);
         Self {
             sink,
             live,
@@ -1451,7 +1463,8 @@ impl TypedTool for FleetTool {
         harness_tools::Concurrency::Exclusive
     }
 
-    async fn run(&self, args: FleetArgs, _call: &CallContext) -> Result<String, ToolError> {
+    async fn run(&self, args: FleetArgs, call: &CallContext) -> Result<String, ToolError> {
+        let call_id = call.call_id.clone();
         if args.agents.is_empty() {
             return Err(ToolError::InvalidArguments(
                 "spawn_agents needs at least one agent".into(),
@@ -1482,7 +1495,7 @@ impl TypedTool for FleetTool {
                 );
                 tokio::spawn(async move {
                     let _admission = _admission;
-                    let body = match Self::execute(spawner, sink, fleet, args).await {
+                    let body = match Self::execute(spawner, sink, fleet, args, call_id).await {
                         Ok(text) => text,
                         Err(e) => format!("the fleet failed: {e}"),
                     };
@@ -1495,7 +1508,14 @@ impl TypedTool for FleetTool {
                 return Ok(started);
             }
         }
-        Self::execute(self.spawner.clone(), self.sink.clone(), fleet, args).await
+        Self::execute(
+            self.spawner.clone(),
+            self.sink.clone(),
+            fleet,
+            args,
+            call_id,
+        )
+        .await
     }
 }
 
@@ -1506,6 +1526,7 @@ impl FleetTool {
         sink: Arc<dyn FleetSink>,
         fleet: String,
         args: FleetArgs,
+        call: Option<String>,
     ) -> Result<String, ToolError> {
         let concurrency = args
             .max_parallel
@@ -1565,6 +1586,7 @@ impl FleetTool {
                         )
                     }
                 },
+                call.as_deref(),
             )
             .await?;
 
@@ -1625,11 +1647,18 @@ mod tests {
     }
 
     impl FleetSink for RecordingSink {
-        fn started(&self, fleet: &str, labels: &[String], _cancel: CancellationToken) {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("started:{fleet}:{}", labels.join(",")));
+        fn started(
+            &self,
+            fleet: &str,
+            labels: &[String],
+            _cancel: CancellationToken,
+            call: Option<&str>,
+        ) {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push(format!("started:{fleet}:{}", labels.join(",")));
+            if let Some(call) = call {
+                calls.push(format!("call:{fleet}:{call}"));
+            }
         }
         fn event(&self, _fleet: &str, event: &FleetEvent) {
             if let FleetEvent::TaskCompleted { label, ok, .. } = event {
@@ -2050,6 +2079,7 @@ mod tests {
             "fleet-x",
             &labels_a,
             CancellationToken::new(),
+            None,
         );
         let second = SinkGuard::open(
             sink.clone(),
@@ -2057,6 +2087,7 @@ mod tests {
             "fleet-y",
             &labels_b,
             CancellationToken::new(),
+            None,
         );
         assert_eq!(live.load(Ordering::SeqCst), 2);
 
@@ -2573,6 +2604,45 @@ mod tests {
         // One lane, one session: the retry resumed it rather than spawning.
         assert_eq!(store.lanes_of(&parent).unwrap().len(), 1);
         assert!(sp.tree().live().is_empty());
+    }
+
+    /// The host learns which tool call a fleet answers, so a client can put
+    /// the lanes in the thread beside that call instead of a strip.
+    #[tokio::test]
+    async fn the_sink_is_told_which_call_spawned_the_fleet() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("done"))
+            .expect(1)
+            .create_async()
+            .await;
+        let sp = Arc::new(FleetSpawner::new(
+            OxenClient::new(server.url(), "k", "claude-opus-4-8"),
+            ToolRegistry::new(),
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        ));
+        let sink = Arc::new(RecordingSink::default());
+        let tool = FleetTool::new(sp, sink.clone());
+        let args: FleetArgs = serde_json::from_value(
+            serde_json::json!({ "agents": [{ "name": "a", "prompt": "go" }] }),
+        )
+        .unwrap();
+        tool.run(args, &harness_tools::CallContext::new("s1", None, "call_9"))
+            .await
+            .unwrap();
+        let calls = sink.calls.lock().unwrap().clone();
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.starts_with("call:") && c.ends_with(":call_9")),
+            "{calls:?}"
+        );
     }
 
     #[tokio::test]

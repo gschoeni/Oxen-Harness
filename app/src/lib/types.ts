@@ -964,6 +964,9 @@ export interface FleetStartedEvent {
   agents: string[];
   /** `"review"` (a pipeline step) or `"turn"` (the model's spawn_agents). */
   source: "review" | "turn";
+  /** The model's id for the tool call that spawned the fleet, when one did:
+   *  the thread places the lanes beside that call. */
+  call?: string;
 }
 
 /** `fleet://agent` — one lane changed state. `lane` is the lane's own id,

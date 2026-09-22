@@ -284,6 +284,10 @@ pub enum ProtocolEvent {
         fleet: String,
         agents: Vec<String>,
         source: FleetSource,
+        /// The model's id for the tool call that spawned this fleet, when one
+        /// did: a client places the lanes in the thread beside that call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call: Option<String>,
     },
     /// One lane changed state. `lane` is the lane's own id (its session id),
     /// what `POST /v1/sessions/{id}/agents/{lane}/cancel|interject` and the

@@ -220,6 +220,8 @@ export interface FleetView {
   /** The chat it runs in (fleets are keyed by their own id, see `fleets`). */
   session: string;
   source: "review" | "turn";
+  /** The tool call that spawned it (see `FleetStartedEvent.call`). */
+  call?: string;
   lanes: FleetLane[];
   focused: number | null;
   /** Where the turn's tree budget stands, once the fleet has reported it. */
@@ -1797,6 +1799,7 @@ export const useStore = create<AppState>((rawSet, get) => {
           [e.fleet]: {
             session: e.session,
             source: e.source,
+            call: e.call,
             focused: null,
             lanes: e.agents.map((name) => ({
               name,

@@ -1155,3 +1155,15 @@ collapse.
   first round still gets its report (it did its work last time). A review
   resets the tree wallet when it starts, since only a root turn did before
   and reviews run outside one.
+
+**A fleet's lanes live in the thread, beside the call that started them**
+(2026-09-22)
+The desktop kept every lane of a chat in one strip pinned under the thread,
+finished ones included, so a run's agents sat at the bottom of the chat
+detached from the turn that spawned them. `fleet.started` now carries the
+model's tool-call id, and the spawn card in the thread (`spawn_agents`,
+`map_agents`, `send_to_agent`) renders its own lanes: live from the fleet
+tied to it while it runs, and from the saved records its result names
+("agent id: …") for good, so a resumed chat still shows each spawn's agents
+where they happened. The strip stays only while agents are working — state,
+spend, and stops in reach — and steps aside when they finish.

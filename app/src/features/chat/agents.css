@@ -296,3 +296,13 @@
     margin-right: 6px;
   }
 }
+
+/* A spawn card's lanes: the same rows, inside the card, uncapped in height
+   (a card is in the scrolling thread; the strip under it was not). */
+.toolcall-agents {
+  border-top: 1px solid var(--separator);
+}
+.toolcall-agents .agent-hub-rows {
+  max-height: none;
+  border-top: 0;
+}

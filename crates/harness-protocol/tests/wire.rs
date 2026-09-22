@@ -215,9 +215,11 @@ fn fleet_event_wire_shapes() {
         fleet: "fleet-7".into(),
         agents: vec!["lane a".into(), "lane b".into()],
         source: FleetSource::Turn,
+        call: Some("call_9".into()),
     };
     let value = json(&started);
     assert_eq!(value["type"], "fleet.started");
+    assert_eq!(value["call"], "call_9");
     assert_eq!(value["source"], "turn");
     assert_eq!(value["fleet"], "fleet-7");
     round_trips(started);
@@ -620,6 +622,7 @@ fn legacy_channel_names() {
                 fleet: "f".into(),
                 agents: vec![],
                 source: FleetSource::Review,
+                call: None,
             },
             "fleet://started",
         ),

@@ -317,7 +317,13 @@ impl HostFleetSink {
 }
 
 impl harness_agent::fleet::FleetSink for HostFleetSink {
-    fn started(&self, fleet: &str, labels: &[String], cancel: CancellationToken) {
+    fn started(
+        &self,
+        fleet: &str,
+        labels: &[String],
+        cancel: CancellationToken,
+        call: Option<&str>,
+    ) {
         self.cancels
             .lock()
             .expect("fleet cancels poisoned")
@@ -327,6 +333,7 @@ impl harness_agent::fleet::FleetSink for HostFleetSink {
             fleet: fleet.to_string(),
             agents: labels.to_vec(),
             source: self.source,
+            call: call.map(str::to_string),
         });
     }
 
@@ -417,7 +424,7 @@ impl harness_tools::ViewerSink for NullViewerSink {
 pub struct NullFleetSink;
 
 impl harness_agent::fleet::FleetSink for NullFleetSink {
-    fn started(&self, _fleet: &str, _labels: &[String], _cancel: CancellationToken) {}
+    fn started(&self, _: &str, _: &[String], _: CancellationToken, _: Option<&str>) {}
     fn event(&self, _fleet: &str, _event: &harness_agent::fleet::FleetEvent) {}
     fn finished(&self, _fleet: &str) {}
 }

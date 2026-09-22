@@ -113,8 +113,16 @@ pub enum FleetEvent {
 pub trait FleetSink: Send + Sync {
     /// A fleet is starting: lane labels in order, plus the token that cancels
     /// just this fleet (a child of the turn's token — hosts wire it to a key
-    /// or button).
-    fn started(&self, fleet: &str, labels: &[String], cancel: CancellationToken);
+    /// or button). `call` is the model's id for the tool call that spawned
+    /// it, when one did, so a host can place the lanes in the thread beside
+    /// that call rather than in a strip of their own.
+    fn started(
+        &self,
+        fleet: &str,
+        labels: &[String],
+        cancel: CancellationToken,
+        call: Option<&str>,
+    );
     /// One multiplexed progress event from `fleet`.
     fn event(&self, fleet: &str, event: &FleetEvent);
     /// `fleet` is done (or was abandoned); tear down its lanes display.
