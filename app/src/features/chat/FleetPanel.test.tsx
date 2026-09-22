@@ -71,6 +71,14 @@ describe("the lane strip", () => {
     expect(screen.getByText("1 finished")).toBeInTheDocument();
   });
 
+  it("says a row's state once when it has no activity to show", async () => {
+    render(<FleetPanel />);
+    await start("f1", ["diff-scan"]);
+    const row = screen.getByTitle("Open diff-scan");
+    expect(row.querySelector(".agent-hub-activity")).toBeEmptyDOMElement();
+    expect(row.querySelector(".agent-hub-status")).toHaveTextContent("Working");
+  });
+
   it("opens an agent in the thread column and marks the open row", async () => {
     render(<FleetPanel />);
     await start();

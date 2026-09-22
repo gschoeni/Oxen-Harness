@@ -58,37 +58,25 @@ export function TokenMeter() {
     <div className="token-meter" title={`${contextTokens.toLocaleString()} / ${contextWindow.toLocaleString()} context tokens`}>
       <span className="token-meter-used">{tokensUsed.toLocaleString()} tokens used</span>
       {cost !== null && (
-        <>
-          <span className="token-meter-dot">·</span>
-          <span
-            className="token-meter-cost"
-            title={tree ? "Estimated cost for this chat, subagents included" : "Estimated cost for this session"}
-          >
-            {formatUsd(cost)}
-          </span>
-        </>
+        <span
+          className="token-meter-cost"
+          title={tree ? "Estimated cost for this chat, subagents included" : "Estimated cost for this session"}
+        >
+          {formatUsd(cost)}
+        </span>
       )}
       {contextWindow > 0 && (
-        <>
-          <span className="token-meter-dot">·</span>
-          <span className="token-meter-ctx">{pct < 1 ? "<1" : Math.round(pct)}% of context</span>
-        </>
+        <span className="token-meter-ctx">{pct < 1 ? "<1" : Math.round(pct)}% of context</span>
       )}
       {tps > 0 && (
-        <>
-          <span className="token-meter-dot">·</span>
-          <span className="token-meter-tps" title="Generation speed">
-            {tps >= 10 ? Math.round(tps) : tps.toFixed(1)} tok/s
-          </span>
-        </>
+        <span className="token-meter-tps" title="Generation speed">
+          {tps >= 10 ? Math.round(tps) : tps.toFixed(1)} tok/s
+        </span>
       )}
       {mode !== "off" && (
-        <>
-          <span className="token-meter-dot">·</span>
-          <span className="token-meter-saved" title={MODE_HINT[mode]}>
-            {mode === "audit" ? "would save" : "saved"} ~{compactTokens(saved?.tokensSaved ?? 0)}
-          </span>
-        </>
+        <span className="token-meter-saved" title={MODE_HINT[mode]}>
+          {mode === "audit" ? "would save" : "saved"} ~{compactTokens(saved?.tokensSaved ?? 0)}
+        </span>
       )}
     </div>
   );

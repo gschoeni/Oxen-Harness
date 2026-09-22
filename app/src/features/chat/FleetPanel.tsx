@@ -4,7 +4,7 @@
 // expands inline, so the strip stays a strip. Stops live here too: one per
 // working row, and one for everything at the top.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { Check, ChevronDown, ChevronRight, CircleDashed, Square, Users, X } from "lucide-react";
 import { compactTokens, formatUsd } from "../../lib/format";
 import { fleetsFor, useStore, type FleetView } from "../../lib/store";
@@ -82,14 +82,14 @@ function AgentHub({ session }: { session: string }) {
             >
               <button
                 className="agent-hub-select"
-                style={{ paddingLeft: 14 + Math.min(row.depth ?? 0, 4) * 16 }}
+                style={{ "--depth": Math.min(row.depth ?? 0, 4) } as CSSProperties}
                 title={row.id ? `Open ${row.label}` : `${row.label} is waiting for a slot`}
                 disabled={!row.id}
                 onClick={() => row.id && openAgent(session, row.id)}
               >
                 <Glyph status={row.status} />
                 <span className="agent-hub-name">{row.label}</span>
-                <span className="agent-hub-activity">{row.activity || statusLabel(row.status)}</span>
+                <span className="agent-hub-activity">{row.activity}</span>
                 <span className={`agent-hub-status ${row.status}`}>{statusLabel(row.status)}</span>
                 <ChevronRight size={13} className="agent-hub-open" aria-hidden="true" />
               </button>

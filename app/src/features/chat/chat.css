@@ -1063,8 +1063,19 @@
   max-width: var(--chat-column);
   margin: var(--space-2) auto 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1);
+}
+/* In a narrow panel the pickers wrap to a second row; one still too wide for
+   its row ellipsizes its label rather than overflowing. */
+.composer-toolbar > .picker {
+  min-width: 0;
+  max-width: 100%;
+}
+.composer-toolbar .picker-btn {
+  min-width: 0;
+  max-width: min(320px, 100%);
 }
 .picker {
   position: relative;
@@ -1155,19 +1166,29 @@
    which carries the all-time total — is gone once messages exist). Matches the
    composer's centered column so it sits flush above the input. */
 .token-meter {
+  width: calc(100% - 2 * var(--chat-gutter));
   max-width: var(--chat-column);
   margin: 0 auto;
   padding: 0 var(--space-2) var(--space-1);
   display: flex;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
   align-items: baseline;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--text-tertiary);
   user-select: none;
 }
-.token-meter-dot {
+/* In a narrow panel each reading wraps as a whole ("192,872 tokens used" never
+   splits mid-phrase), carrying its separator with it. */
+.token-meter > span {
+  white-space: nowrap;
+}
+.token-meter > span + span::before {
+  content: "·";
+  margin-right: var(--space-2);
   opacity: 0.6;
+  color: var(--text-tertiary);
 }
 .token-meter-tps {
   color: var(--accent);
