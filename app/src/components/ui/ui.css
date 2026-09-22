@@ -363,18 +363,8 @@
   font-size: var(--text-2xs);
   color: var(--text-tertiary);
 }
-/* A model row: the display name leads (weight, full contrast), its id is a
-   quiet mono line under it, and the price sits right as a small figure.
-   Three sizes, three colors, descending, so a row scans name → price → id. */
-.menu-copy .menu-name {
-  font-weight: 500;
-}
-.menu-id {
-  font-family: var(--font-readout, monospace);
-  font-size: var(--text-2xs);
-  line-height: 1.3;
-  color: var(--text-tertiary);
-}
+/* A model row: the display name leads, the price sits right as a small
+   figure, and the id is only a tooltip — it never earned its own line. */
 /* The price: two right-aligned columns, in then out, wide enough that the
    figures line up down the list ($0.25 to $64 all fit). The dollar figure
    carries a little weight; its in/out label is the smallest, quietest type. */
@@ -397,8 +387,9 @@
 .menu-rate b {
   font-weight: 500;
 }
+/* A word in the price column where there is no price: "free", "not in catalog". */
 .menu-rate small,
-.menu-rate-free {
+.menu-rate-note {
   font-family: var(--font-ui);
   font-size: var(--text-3xs);
   color: var(--text-tertiary);

@@ -85,17 +85,18 @@ describe("ModelPicker", () => {
     const rate = await screen.findByLabelText("$3 in, $15 out per million tokens");
     expect([...rate.querySelectorAll("b")].map((b) => b.textContent)).toEqual(["$3", "$15"]);
     expect(screen.getByText("$ per 1M tokens")).toHaveClass("menu-head-aside");
-    // …and its id sits under the display name rather than in the hint column.
-    expect(screen.getByText("claude-sonnet-4-6")).toHaveClass("menu-id");
+    // …the id is a tooltip only, not a second line of text.
+    expect(screen.queryByText("claude-sonnet-4-6")).toBeNull();
+    expect(screen.getByTitle("claude-sonnet-4-6")).toHaveClass("menu-item");
     // …and the installed local model is labeled free.
     expect(await screen.findByText("Qwen3 8B · Q4_K_M")).toBeInTheDocument();
     expect(screen.getByText("free")).toBeInTheDocument();
   });
 
-  it("omits the id line when the display name already is the id", () => {
+  it("flags a saved model the endpoint's catalog no longer lists", async () => {
     useStore.setState({
       session: {
-        model: "claude-sonnet-4-6",
+        model: "muse-spark-1-1",
         workspace: "/x",
         session_id: "s1",
         tokens_used: 0,
@@ -103,13 +104,18 @@ describe("ModelPicker", () => {
         context_window: 200000,
         compression_mode: "off",
       },
-      cloudModels: [{ id: "claude-sonnet-4-6", name: "claude-sonnet-4-6", selected: true }],
+      cloudModels: [
+        { id: "muse-spark-1-1", name: "Muse Spark 1.1", selected: true },
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", selected: false },
+      ],
       localSwitch: null,
     });
     render(<ModelPicker disabled={false} />);
-    fireEvent.click(screen.getByText("claude-sonnet-4-6"));
-    expect(screen.getAllByText("claude-sonnet-4-6").filter((el) => el.closest(".menu-item"))).toHaveLength(1);
-    expect(document.querySelector(".menu-id")).toBeNull();
+    fireEvent.click(screen.getByText("Muse Spark 1.1"));
+    // Once the catalog has answered, a listed model shows its rate and an
+    // unlisted one says so instead of silently showing nothing.
+    await screen.findByLabelText("$3 in, $15 out per million tokens");
+    expect(screen.getByText("not in catalog")).toHaveClass("menu-rate-note");
   });
 
   it("jumps to the cloud-models settings page from the configure button", () => {

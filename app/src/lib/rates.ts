@@ -46,13 +46,9 @@ export function ratesById(hits: OxenModelHit[]): Map<string, string> {
   return rates;
 }
 
-/** Like {@link ratesById}, but keeping the figures apart for a layout that
- *  sets them in its own type rather than one mono string. */
-export function ratePartsById(hits: OxenModelHit[]): Map<string, RateParts> {
-  const rates = new Map<string, RateParts>();
-  for (const h of hits) {
-    const parts = rateParts(h.pricing);
-    if (parts) rates.set(h.id, parts);
-  }
-  return rates;
+/** Every model in a catalog listing, keyed by id, with its price parts or
+ *  null when the catalog lists it without token pricing. A picker uses the
+ *  keys to tell "unpriced" from "no longer listed". */
+export function catalogById(hits: OxenModelHit[]): Map<string, RateParts | null> {
+  return new Map(hits.map((h) => [h.id, rateParts(h.pricing)]));
 }

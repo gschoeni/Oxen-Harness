@@ -3,7 +3,7 @@ import { Button } from "../../components/ui";
 import { ChevronDown, Cloud, Cpu, Download, Loader } from "lucide-react";
 import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../components/ui/Menu";
 import { installedLocalModels, searchOxenModels } from "../../lib/ipc";
-import { ratePartsById } from "../../lib/rates";
+import { catalogById } from "../../lib/rates";
 import type { RateParts } from "../../lib/rates";
 import { useStore } from "../../lib/store";
 import type { ModelRef, StartupModelChoice } from "../../lib/types";
@@ -32,10 +32,11 @@ export function ModelPicker({
   const { open, setOpen, ref } = useMenuState();
   const [busy, setBusy] = useState(false);
   const [localModels, setLocalModels] = useState<ModelRef[]>([]);
-  // Per-million prices from the endpoint catalog, keyed by model id. Kept
-  // across opens so rows show a (possibly stale) rate instantly while a
-  // refresh is in flight; a failed fetch just means no tags.
-  const [rates, setRates] = useState<Map<string, RateParts>>(new Map());
+  // The endpoint's catalog, keyed by model id: its per-million price, or null
+  // for a listed model the catalog doesn't price by token. Kept across opens
+  // so rows show a (possibly stale) rate instantly while a refresh is in
+  // flight; a failed fetch just means no tags. Empty until the first fetch.
+  const [catalog, setCatalog] = useState<Map<string, RateParts | null>>(new Map());
 
   // Tick once a second so the local-switch elapsed counter advances in place.
   const [, tick] = useReducer((n: number) => n + 1, 0);
@@ -44,6 +45,8 @@ export function ModelPicker({
     const t = setInterval(tick, 500);
     return () => clearInterval(t);
   }, [localSwitch]);
+
+  const priced = [...catalog.values()].some(Boolean);
 
   // Friendly label for the active model: its catalog name, else the raw id (a
   // local model, or a custom not yet in the catalog).
@@ -79,7 +82,7 @@ export function ModelPicker({
       .then((v) => setLocalModels(v.models))
       .catch(() => setLocalModels([]));
     searchOxenModels("")
-      .then((hits) => setRates(ratePartsById(hits)))
+      .then((hits) => setCatalog(catalogById(hits)))
       .catch(() => {});
   }, [open, loadCloudModels]);
 
@@ -159,7 +162,7 @@ export function ModelPicker({
           {/* Only the model list scrolls — the setup actions below stay pinned
               so they're never pushed off-screen by a long catalog. */}
           <div className="picker-scroll">
-            <MenuHead aside={rates.size > 0 && "$ per 1M tokens"}>Cloud models</MenuHead>
+            <MenuHead aside={priced && "$ per 1M tokens"}>Cloud models</MenuHead>
             {cloudModels.length === 0 && (
               <MenuItem
                 manage
@@ -171,14 +174,23 @@ export function ModelPicker({
               />
             )}
             {cloudModels.map((m) => {
-              const rate = rates.get(m.id);
+              const rate = catalog.get(m.id);
+              // A saved id the endpoint no longer lists (a retired release,
+              // say) can't be priced — and probably won't answer either.
+              const unlisted = catalog.size > 0 && !catalog.has(m.id);
               return (
                 <MenuItem
                   key={m.id}
                   active={m.id === model}
                   name={m.name}
-                  description={m.id !== m.name && <span className="menu-id">{m.id}</span>}
-                  hint={rate && <ModelRate rate={rate} />}
+                  title={m.id}
+                  hint={
+                    rate ? (
+                      <ModelRate rate={rate} />
+                    ) : unlisted ? (
+                      <span className="menu-rate-note">not in catalog</span>
+                    ) : undefined
+                  }
                   onSelect={() => pickCloud(m.id, m.name)}
                 />
               );
@@ -193,7 +205,7 @@ export function ModelPicker({
                     active={m.id === model}
                     icon={<Cpu size={13} className="menu-icon" />}
                     name={m.display}
-                    hint={<span className="menu-rate-free">free</span>}
+                    hint={<span className="menu-rate-note">free</span>}
                     onSelect={() => pickLocal(m)}
                   />
                 ))}

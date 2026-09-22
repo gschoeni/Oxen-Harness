@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatRate, ratePartsById, rateParts } from "./rates";
+import { catalogById, formatRate, rateParts } from "./rates";
 import type { OxenModelHit } from "./types";
 
 const hit = (id: string, pricing: OxenModelHit["pricing"]): OxenModelHit =>
@@ -37,13 +37,15 @@ describe("formatRate", () => {
   });
 });
 
-describe("ratePartsById", () => {
-  it("indexes only the priced models", () => {
-    const rates = ratePartsById([
+describe("catalogById", () => {
+  it("indexes every listed model, priced or not, so absence means unlisted", () => {
+    const catalog = catalogById([
       hit("a", { input_cost_per_token: 1e-6, output_cost_per_token: 2e-6 }),
       hit("b", null),
     ]);
-    expect([...rates.keys()]).toEqual(["a"]);
-    expect(rates.get("a")).toEqual({ input: "$1", output: "$2" });
+    expect([...catalog.keys()]).toEqual(["a", "b"]);
+    expect(catalog.get("a")).toEqual({ input: "$1", output: "$2" });
+    expect(catalog.get("b")).toBeNull();
+    expect(catalog.has("c")).toBe(false);
   });
 });
