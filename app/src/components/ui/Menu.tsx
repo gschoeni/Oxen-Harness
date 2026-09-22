@@ -82,8 +82,15 @@ export function Menu({
   );
 }
 
-export function MenuHead({ children }: { children: ReactNode }) {
-  return <div className="menu-head">{children}</div>;
+/** A section eyebrow. `aside` is a right-aligned legend for the rows below
+ *  (the unit their figures share), so no row has to repeat it. */
+export function MenuHead({ children, aside }: { children: ReactNode; aside?: ReactNode }) {
+  return (
+    <div className="menu-head">
+      <span>{children}</span>
+      {aside && <span className="menu-head-aside">{aside}</span>}
+    </div>
+  );
 }
 
 export function MenuSep() {

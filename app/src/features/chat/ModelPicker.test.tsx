@@ -80,17 +80,36 @@ describe("ModelPicker", () => {
     });
     render(<ModelPicker disabled={false} />);
     fireEvent.click(screen.getByText("Claude Sonnet 4.6"));
-    // The cloud row carries its catalog rate (from search_oxen_models), set
-    // as bold dollar figures with the unit on its own line…
-    expect(await screen.findByText("per 1M tokens")).toBeInTheDocument();
-    const rate = document.querySelector(".menu-rate");
-    expect(rate?.textContent).toBe("$3 in·$15 outper 1M tokens");
-    expect([...(rate?.querySelectorAll("b") ?? [])].map((b) => b.textContent)).toEqual(["$3", "$15"]);
+    // The cloud row carries its catalog rate (from search_oxen_models) as an
+    // in/out pair of figures, with the unit said once on the section head…
+    const rate = await screen.findByLabelText("$3 in, $15 out per million tokens");
+    expect([...rate.querySelectorAll("b")].map((b) => b.textContent)).toEqual(["$3", "$15"]);
+    expect(screen.getByText("$ per 1M tokens")).toHaveClass("menu-head-aside");
     // …and its id sits under the display name rather than in the hint column.
     expect(screen.getByText("claude-sonnet-4-6")).toHaveClass("menu-id");
     // …and the installed local model is labeled free.
     expect(await screen.findByText("Qwen3 8B · Q4_K_M")).toBeInTheDocument();
     expect(screen.getByText("free")).toBeInTheDocument();
+  });
+
+  it("omits the id line when the display name already is the id", () => {
+    useStore.setState({
+      session: {
+        model: "claude-sonnet-4-6",
+        workspace: "/x",
+        session_id: "s1",
+        tokens_used: 0,
+        context_tokens: 0,
+        context_window: 200000,
+        compression_mode: "off",
+      },
+      cloudModels: [{ id: "claude-sonnet-4-6", name: "claude-sonnet-4-6", selected: true }],
+      localSwitch: null,
+    });
+    render(<ModelPicker disabled={false} />);
+    fireEvent.click(screen.getByText("claude-sonnet-4-6"));
+    expect(screen.getAllByText("claude-sonnet-4-6").filter((el) => el.closest(".menu-item"))).toHaveLength(1);
+    expect(document.querySelector(".menu-id")).toBeNull();
   });
 
   it("jumps to the cloud-models settings page from the configure button", () => {

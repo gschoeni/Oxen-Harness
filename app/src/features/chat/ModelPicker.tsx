@@ -159,7 +159,7 @@ export function ModelPicker({
           {/* Only the model list scrolls — the setup actions below stay pinned
               so they're never pushed off-screen by a long catalog. */}
           <div className="picker-scroll">
-            <MenuHead>Cloud models</MenuHead>
+            <MenuHead aside={rates.size > 0 && "$ per 1M tokens"}>Cloud models</MenuHead>
             {cloudModels.length === 0 && (
               <MenuItem
                 manage
@@ -177,7 +177,7 @@ export function ModelPicker({
                   key={m.id}
                   active={m.id === model}
                   name={m.name}
-                  description={<span className="menu-id">{m.id}</span>}
+                  description={m.id !== m.name && <span className="menu-id">{m.id}</span>}
                   hint={rate && <ModelRate rate={rate} />}
                   onSelect={() => pickCloud(m.id, m.name)}
                 />
@@ -193,7 +193,7 @@ export function ModelPicker({
                     active={m.id === model}
                     icon={<Cpu size={13} className="menu-icon" />}
                     name={m.display}
-                    hint={<span className="menu-rate">free</span>}
+                    hint={<span className="menu-rate-free">free</span>}
                     onSelect={() => pickLocal(m)}
                   />
                 ))}
@@ -226,25 +226,31 @@ export function ModelPicker({
   );
 }
 
-/** A model's price beside its name: the dollar figures carry the weight, and
- *  the unit sits underneath so every row reads the same way at a glance. */
+/** A model's price beside its name: two right-aligned columns (in, out) so
+ *  the figures line up down the list and the eye compares them as a table.
+ *  The unit is on the section head, not here. */
 function ModelRate({ rate }: { rate: RateParts }) {
+  const label = [rate.input && `${rate.input} in`, rate.output && `${rate.output} out`]
+    .filter(Boolean)
+    .join(", ");
   return (
-    <span className="menu-rate">
-      <span className="menu-rate-line">
+    <span className="menu-rate" role="img" aria-label={`${label} per million tokens`}>
+      <span className="menu-rate-cell">
         {rate.input && (
-          <span>
-            <b>{rate.input}</b> in
-          </span>
-        )}
-        {rate.input && rate.output && <span aria-hidden="true">·</span>}
-        {rate.output && (
-          <span>
-            <b>{rate.output}</b> out
-          </span>
+          <>
+            <b>{rate.input}</b>
+            <small>in</small>
+          </>
         )}
       </span>
-      <span className="menu-rate-unit">per 1M tokens</span>
+      <span className="menu-rate-cell">
+        {rate.output && (
+          <>
+            <b>{rate.output}</b>
+            <small>out</small>
+          </>
+        )}
+      </span>
     </span>
   );
 }
