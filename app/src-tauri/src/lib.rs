@@ -369,6 +369,19 @@ mod tests {
         }
     }
 
+    /// Attachments the agent keeps live under `.oxen-harness/attachments/`,
+    /// and the Files dock shows dotfiles too. Tauri's scope globs skip
+    /// dot-components on Unix unless told otherwise, and `**` alone left every
+    /// attachment thumbnail broken on macOS.
+    #[test]
+    fn asset_protocol_serves_files_under_dot_directories() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let scope = &conf["app"]["security"]["assetProtocol"]["scope"];
+        assert_eq!(scope["requireLiteralLeadingDot"], false, "{scope}");
+        assert_eq!(scope["allow"][0], "**", "{scope}");
+    }
+
     #[test]
     fn web_pages_go_to_the_link_browser() {
         for page in [
