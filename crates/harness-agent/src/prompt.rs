@@ -323,9 +323,11 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
 /// doesn't call a tool (see [`looks_like_unfulfilled_intent`]). Sent only on the
 /// retry request and never persisted.
 pub(crate) const INTENT_NUDGE: &str =
-    "You described what you'll do but didn't actually call a tool to do it. \
-     If you intended to take an action — open a `canvas`, write or edit a file, run a command — \
-     make that tool call now. If you were genuinely finished, reply with your final answer.";
+    "<system-reminder>An automatic check, not a message from the user: your reply described \
+     what you'll do but didn't call a tool to do it. If you intended to take an action — open a \
+     `canvas`, write or edit a file, run a command — make that tool call now. If you were \
+     finished, or are waiting on the user or on background work, reply with only your final \
+     answer and don't mention this check.</system-reminder>";
 
 /// The one-shot corrective appended when the model ends its turn while a plan it
 /// updated *this turn* still has unfinished items — the "one subtask failed, so
@@ -427,9 +429,10 @@ pub(crate) fn looks_like_unfulfilled_intent(text: &str) -> bool {
     SIGNALS.iter().any(|s| t.contains(s)) && !hands_turn_to_user(&t)
 }
 
-/// Whether a (lowercased) reply ends by waiting on the user — a question, or
-/// a hand-off like "tell me X and I'll do Y". Its "I'll" is conditional on the
-/// answer, so ending the turn there is correct, not a stall.
+/// Whether a (lowercased) reply ends by waiting — on the user (a question, or
+/// "tell me X and I'll do Y") or on background work it already started ("I'll
+/// show it the moment it lands"). Its "I'll" is conditional on that, so
+/// ending the turn there is correct, not a stall.
 fn hands_turn_to_user(t: &str) -> bool {
     const HAND_OFFS: &[&str] = &[
         "let me know",
@@ -437,6 +440,15 @@ fn hands_turn_to_user(t: &str) -> bool {
         "once you",
         "if you'd like",
         "if you want",
+        "the moment it",
+        "as soon as it",
+        "once it's",
+        "once it finishes",
+        "once it lands",
+        "when it's done",
+        "when it's ready",
+        "when it finishes",
+        "when it lands",
     ];
     let last_paragraph = t.trim_end().rsplit("\n\n").next().unwrap_or(t);
     last_paragraph.contains('?') || HAND_OFFS.iter().any(|h| t.contains(h))
@@ -648,6 +660,11 @@ mod tests {
         ));
         assert!(!looks_like_unfulfilled_intent(
             "I'll need one detail first: should the output be PNG or JPEG?"
+        ));
+        // Waiting on background work it already queued.
+        assert!(!looks_like_unfulfilled_intent(
+            "Queued — 5s, 480p draft.\n\nI'll show it here the moment it lands. If you \
+             like the motion, I can re-render it at 720p."
         ));
         // A question earlier in the reply doesn't excuse a trailing announcement.
         assert!(looks_like_unfulfilled_intent(
