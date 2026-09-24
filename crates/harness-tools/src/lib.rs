@@ -151,20 +151,40 @@ impl Roster {
 
 /// The shared queue of pending [`Aside`]s, cloneable into any tool.
 #[derive(Debug, Clone, Default)]
-pub struct Asides(Arc<std::sync::Mutex<std::collections::VecDeque<Aside>>>);
+pub struct Asides(Arc<AsidesInner>);
+
+#[derive(Debug, Default)]
+struct AsidesInner {
+    queue: std::sync::Mutex<std::collections::VecDeque<Aside>>,
+    /// Bumped on every push, so a host can learn that a result landed while
+    /// no turn is running to drain it (see [`Asides::arrivals`]).
+    arrived: tokio::sync::watch::Sender<u64>,
+}
 
 impl Asides {
     pub fn push(&self, aside: Aside) {
-        self.0.lock().expect("asides lock").push_back(aside);
+        self.0.queue.lock().expect("asides lock").push_back(aside);
+        self.0.arrived.send_modify(|n| *n = n.wrapping_add(1));
     }
 
     /// Everything queued, in arrival order, leaving the queue empty.
     pub fn take_all(&self) -> Vec<Aside> {
-        self.0.lock().expect("asides lock").drain(..).collect()
+        self.0
+            .queue
+            .lock()
+            .expect("asides lock")
+            .drain(..)
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.lock().expect("asides lock").is_empty()
+        self.0.queue.lock().expect("asides lock").is_empty()
+    }
+
+    /// A receiver that wakes on every push. It ends once every clone of the
+    /// queue is dropped, so a watcher holding only this never outlives it.
+    pub fn arrivals(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.0.arrived.subscribe()
     }
 }
 
@@ -933,6 +953,24 @@ impl ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_pushed_aside_wakes_its_watcher_until_the_queue_is_dropped() {
+        let asides = Asides::default();
+        let mut arrivals = asides.arrivals();
+        asides.clone().push(Aside {
+            kind: "media".into(),
+            title: "video ready".into(),
+            body: String::new(),
+        });
+        arrivals.changed().await.expect("a push wakes the watcher");
+        assert_eq!(asides.take_all().len(), 1);
+        drop(asides);
+        assert!(
+            arrivals.changed().await.is_err(),
+            "the watch ends with the queue"
+        );
+    }
 
     /// The minimal reference tool — mirrors the `TypedTool` doc example.
     #[derive(serde::Deserialize, schemars::JsonSchema)]

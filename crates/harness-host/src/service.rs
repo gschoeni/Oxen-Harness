@@ -273,6 +273,8 @@ enum TurnKind {
         attachments: Vec<Attachment>,
     },
     Retry,
+    /// Start from background results that landed while the chat was idle.
+    Deliver,
 }
 
 /// Configures and builds a [`SessionService`].
@@ -651,6 +653,11 @@ impl SessionService {
                     session: session.clone(),
                     tasks: list.into_iter().map(translate::task_summary).collect(),
                 });
+                if tasks.has_settled_unannounced().await {
+                    sink.emit(ProtocolEvent::DeliveryReady {
+                        session: session.clone(),
+                    });
+                }
             }
         });
     }
@@ -686,14 +693,27 @@ impl SessionService {
         tasks.kill(id).await.map_err(|e| e.to_string())
     }
 
-    /// The session's aside queue, registering `fresh` as it on first sight.
+    /// The session's aside queue, registering `fresh` as it on first sight —
+    /// and, then, announcing every result that lands in it as
+    /// `turn.delivery_ready`, so a client can deliver one that arrives while
+    /// the chat is idle. The watcher ends with the queue.
     fn asides_for(&self, session: &str, fresh: harness_tools::Asides) -> harness_tools::Asides {
-        self.session_asides
-            .lock()
-            .expect("session asides poisoned")
-            .entry(session.to_string())
-            .or_insert(fresh)
-            .clone()
+        let mut asides = self.session_asides.lock().expect("session asides poisoned");
+        if let Some(existing) = asides.get(session) {
+            return existing.clone();
+        }
+        let mut arrivals = fresh.arrivals();
+        let sink = self.sink.clone();
+        let sid = session.to_string();
+        tokio::spawn(async move {
+            while arrivals.changed().await.is_ok() {
+                sink.emit(ProtocolEvent::DeliveryReady {
+                    session: sid.clone(),
+                });
+            }
+        });
+        asides.insert(session.to_string(), fresh.clone());
+        fresh
     }
 
     /// The session's reference-media registry, created on first sight.
@@ -1536,6 +1556,39 @@ impl SessionService {
         self.execute_turn(session, TurnKind::Retry).await
     }
 
+    /// Deliver background results that finished while `session` was idle,
+    /// as a turn of their own (see [`Agent::deliver_pending`]). `None` when
+    /// there is nothing to deliver or a turn is already running — that turn
+    /// drains the results itself.
+    pub async fn deliver_pending(&self, session: &str) -> Result<Option<String>, String> {
+        if self.cancels.lock().await.contains_key(session) {
+            return Ok(None);
+        }
+        let pending = self
+            .session_asides
+            .lock()
+            .expect("session asides poisoned")
+            .get(session)
+            .is_some_and(|asides| !asides.is_empty());
+        let tasks = self
+            .session_tasks
+            .lock()
+            .expect("session tasks poisoned")
+            .get(session)
+            .cloned();
+        let pending = pending
+            || match tasks {
+                Some(tasks) => tasks.has_settled_unannounced().await,
+                None => false,
+            };
+        if !pending {
+            return Ok(None);
+        }
+        self.execute_turn(session, TurnKind::Deliver)
+            .await
+            .map(Some)
+    }
+
     /// The shared body of a turn: rehydrate the agent, register a cancel
     /// token, run the turn while forwarding streamed events, then account for
     /// tokens and release idle background agents.
@@ -1647,6 +1700,12 @@ impl SessionService {
                         .await
                 }
                 TurnKind::Retry => agent.continue_turn(on_event).await,
+                // Emptied since the check above (a turn in between delivered
+                // it): nothing to say.
+                TurnKind::Deliver => agent
+                    .deliver_pending(on_event)
+                    .await
+                    .map(Option::unwrap_or_default),
             };
             saved_delta = agent.tokens_saved().saturating_sub(saved_before);
             r

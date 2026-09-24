@@ -205,6 +205,12 @@ pub enum ProtocolEvent {
     /// The turn ended in an error (auth failure, exhausted retries, …).
     #[serde(rename = "turn.failed")]
     TurnFailed { session: String, error: String },
+    /// Background work (a `wait: false` generation or fleet, a background
+    /// shell task) finished and is waiting to reach the model. A running turn
+    /// picks it up on its own; an idle chat needs the client to call the
+    /// host's deliver-pending command, which runs a turn that starts from it.
+    #[serde(rename = "turn.delivery_ready")]
+    DeliveryReady { session: String },
 
     // --- Host round-trips ----------------------------------------------------
     /// The model asked the user structured questions (`ask_user_question`);
@@ -425,6 +431,7 @@ impl ProtocolEvent {
             Self::TurnStarted { .. } => "turn.started",
             Self::TurnCompleted { .. } => "turn.completed",
             Self::TurnFailed { .. } => "turn.failed",
+            Self::DeliveryReady { .. } => "turn.delivery_ready",
             Self::Question { .. } => "agent.question",
             Self::ApprovalRequest { .. } => "agent.approval_request",
             Self::Approval { .. } => "agent.approval",
@@ -474,6 +481,7 @@ impl ProtocolEvent {
             | Self::TurnStarted { session }
             | Self::TurnCompleted { session, .. }
             | Self::TurnFailed { session, .. }
+            | Self::DeliveryReady { session }
             | Self::Question { session, .. }
             | Self::ApprovalRequest { session, .. }
             | Self::Approval { session, .. }

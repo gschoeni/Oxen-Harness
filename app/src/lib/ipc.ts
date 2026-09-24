@@ -407,6 +407,11 @@ export async function pickLoopExportPath(name: string): Promise<string | null> {
  *  the assistant's final text, exactly like `runTurn`. */
 export const retryTurn = (session: string) => invoke<string>("retry_turn", { session });
 
+/** Run a turn that starts from background results (a generation, fleet, or
+ *  shell task that finished while `session` was idle). Resolves null when
+ *  nothing was pending. Call it on `turn://delivery-ready`. */
+export const deliverPending = (session: string) => invoke<string | null>("deliver_pending", { session });
+
 /** Stream rules for the active project: the user's own plus the repository's. */
 export const listRules = () => invoke<RuleSets>("list_rules");
 
@@ -622,6 +627,11 @@ export const onMediaChanged = (handler: (e: MediaChangedEvent) => void) =>
 /** A chat's background tasks changed (one started, ended, or was killed). */
 export const onTasksChanged = (handler: (e: TasksChangedEvent) => void) =>
   listen<TasksChangedEvent>("tasks://changed", (e) => handler(e.payload));
+
+/** Background work finished and is waiting to reach the model; an idle chat
+ *  delivers it with `deliverPending`. */
+export const onDeliveryReady = (handler: (session: string) => void) =>
+  listen<{ session: string }>("turn://delivery-ready", (e) => handler(e.payload.session));
 
 /** Where the turn's tree budget stands, after a lane's spend changed. */
 export const onFleetBudget = (handler: (e: FleetBudgetEvent) => void) =>

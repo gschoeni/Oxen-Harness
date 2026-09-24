@@ -580,6 +580,16 @@ impl BackgroundTasks {
         settled
     }
 
+    /// Whether a finished task is still waiting for
+    /// [`Self::take_settled_unannounced`] to deliver it.
+    pub async fn has_settled_unannounced(&self) -> bool {
+        self.tasks
+            .lock()
+            .await
+            .values()
+            .any(|entry| !entry.announced && entry.done.borrow().is_some())
+    }
+
     /// Kill task `id`'s whole process group. The entry stays queryable so a
     /// final `task_output` can confirm the exit and read the last output.
     ///
@@ -1059,7 +1069,9 @@ mod tests {
             .unwrap();
         tasks.wait(id, Duration::from_secs(10)).await.unwrap();
 
+        assert!(tasks.has_settled_unannounced().await);
         let settled = tasks.take_settled_unannounced().await;
+        assert!(!tasks.has_settled_unannounced().await);
         assert_eq!(settled.len(), 1, "{settled:?}");
         assert_eq!(settled[0].id, id);
         assert_eq!(settled[0].command, "echo hi");

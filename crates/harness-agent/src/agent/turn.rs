@@ -154,6 +154,34 @@ impl Agent {
         self.drive_turn(on_event).await
     }
 
+    /// Whether background work finished since the last turn and is waiting
+    /// to reach the model (a `wait: false` generation or fleet, a background
+    /// shell task).
+    pub async fn has_pending_deliveries(&self) -> bool {
+        if !self.tools.asides().is_empty() {
+            return true;
+        }
+        match self.tools.background_tasks() {
+            Some(tasks) => tasks.has_settled_unannounced().await,
+            None => false,
+        }
+    }
+
+    /// Run a turn that starts from background results instead of a user
+    /// message: a generation that finished after the turn that queued it
+    /// ended would otherwise wait, undelivered, for the user to speak next —
+    /// while the model's "I'll show it when it lands" goes unkept. `None`
+    /// when nothing is pending (a turn in between already delivered it).
+    pub async fn deliver_pending<F>(&mut self, on_event: F) -> Result<Option<String>, AgentError>
+    where
+        F: FnMut(&AgentEvent),
+    {
+        if !self.has_pending_deliveries().await {
+            return Ok(None);
+        }
+        self.drive_turn(on_event).await.map(Some)
+    }
+
     /// Drive the model/tool loop against the current transcript to a final reply.
     /// Shared by a fresh turn and a retry — the only difference is whether a user
     /// message was pushed first.
@@ -1661,6 +1689,53 @@ mod tests {
             "the retry must not append a second copy of the user prompt"
         );
         assert_eq!(agent.messages().last().unwrap().role, "assistant");
+    }
+
+    #[tokio::test]
+    async fn a_result_that_lands_after_the_turn_ended_is_delivered_by_its_own_turn() {
+        let mut server = mockito::Server::new_async().await;
+        let replies = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("Here's your video."))
+            .expect(2)
+            .create_async()
+            .await;
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let config = AgentConfig {
+            system_prompt: None,
+            context_window: Some(128_000),
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, ToolRegistry::new(), store, session, config).unwrap();
+
+        // Nothing pending: no turn, no model call.
+        assert_eq!(agent.deliver_pending(|_| {}).await.unwrap(), None);
+
+        agent.run_turn("Make me a video", |_| {}).await.unwrap();
+        agent.tools.asides().push(harness_tools::Aside {
+            kind: "media".into(),
+            title: "video generation finished: 1/1 ready (robot)".into(),
+            body: "generations/robot.mp4".into(),
+        });
+        assert!(agent.has_pending_deliveries().await);
+
+        let reply = agent.deliver_pending(|_| {}).await.unwrap();
+        assert_eq!(reply.as_deref(), Some("Here's your video."));
+        assert!(!agent.has_pending_deliveries().await);
+        let delivery = &agent.messages()[agent.messages().len() - 2];
+        assert!(
+            delivery
+                .content_text()
+                .unwrap_or_default()
+                .contains("generations/robot.mp4"),
+            "the result reaches the model: {delivery:?}"
+        );
+        assert_eq!(agent.deliver_pending(|_| {}).await.unwrap(), None);
+        replies.assert_async().await;
     }
 
     /// SSE for a reply whose `write_file` call was cut off at the response

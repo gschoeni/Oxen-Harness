@@ -44,6 +44,14 @@ describe("thread: appendNotice", () => {
     expect(next[next.length - 1]).toMatchObject({ kind: "assistant", streaming: true });
   });
 
+  it("ends a bubble that has text, so the next round's reply starts its own", () => {
+    const items = appendToken(startTurn([], "hi"), "Queued — I'll show it when it lands.");
+    const noticed = appendNotice(items, "nudged the model: the reply announced work without doing it");
+    const next = appendToken(noticed, "Here's the proof.");
+    expect(next.map((i) => i.kind)).toEqual(["user", "assistant", "notice", "assistant"]);
+    expect(assistantText(next).map((a) => a.text)).toEqual(["Queued — I'll show it when it lands.", "Here's the proof."]);
+  });
+
   it("appends at the end when there is no in-flight bubble", () => {
     const items = finalizeAssistant(startTurn([], "hi"), "done");
     const next = appendNotice(items, "note");

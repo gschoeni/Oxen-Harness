@@ -30,6 +30,7 @@ import {
   runTurn,
   runLoop,
   retryTurn,
+  deliverPending,
   cancelAgent,
   cancelFleet,
   cancelTurn,
@@ -67,6 +68,7 @@ import {
   lastUserText,
   resolveRecoveryPrompt,
   resumeMidTurn,
+  openReply,
   startTurn,
   toolEnd,
   toolStart,
@@ -751,6 +753,9 @@ interface AppState {
   closeAgent: (session: string) => void;
   /** The chat's background tasks changed on the backend. */
   ingestTasksChanged: (e: TasksChangedEvent) => void;
+  /** `turn://delivery-ready`: background work finished. An idle chat runs a
+   *  turn that delivers it; a busy one delivers it once its turns settle. */
+  ingestDeliveryReady: (session: string) => void;
   /** Re-fetch a chat's background tasks. */
   refreshTasks: (session: string) => Promise<void>;
   /** Kill one background task. */
@@ -1025,7 +1030,12 @@ export const useStore = create<AppState>((rawSet, get) => {
   // transcript), then either send the next queued prompt or settle the run status
   // (read if the chat is in view, unread if it finished offscreen). The turn's UI
   // (user bubble + streaming assistant bubble) must already be in the thread.
-  function driveTurn(id: string, text: string, paths: string[], retry: boolean) {
+  // Chats whose background results landed while a turn ran: the running turn
+  // usually drains them itself, but one that lands after its last drain is
+  // delivered once the chat goes idle (see driveTurn's settle).
+  const awaitingDelivery = new Set<string>();
+
+  function driveTurn(id: string, text: string, paths: string[], how: "fresh" | "retry" | "deliver") {
     genSamples.delete(id); // each turn starts a fresh speed measurement
     lastActive.set(id, Date.now());
     set((s) => ({
@@ -1037,9 +1047,9 @@ export const useStore = create<AppState>((rawSet, get) => {
     // A retry continues the failed turn's transcript in place; a fresh turn sends
     // the prompt (and any attachments) for the first time.
     let recovering = false;
-    const turn = retry ? retryTurn(id) : runTurn(id, text, paths);
+    const turn = how === "retry" ? retryTurn(id) : how === "deliver" ? deliverPending(id) : runTurn(id, text, paths);
     turn
-      .then((final) => set((s) => withThread(s, id, (t) => finalizeAssistant(t, final))))
+      .then((final) => set((s) => withThread(s, id, (t) => finalizeAssistant(t, final ?? ""))))
       .catch((e) => {
         // No failure is a dead end: a 401 swaps the reply for an inline
         // key-entry card, and everything else (out of credits, a provider
@@ -1073,9 +1083,13 @@ export const useStore = create<AppState>((rawSet, get) => {
         // queue: draining it would just hit the same error. The card's action
         // retries this turn, then the queue flows.
         const next = recovering ? undefined : (get().queues[id] ?? [])[0];
+        // A queued prompt's turn drains pending results on its own.
+        const deliver = awaitingDelivery.delete(id) && !recovering && next === undefined;
         if (next !== undefined) {
           set((s) => ({ queues: { ...s.queues, [id]: (s.queues[id] ?? []).slice(1) } }));
           setTimeout(() => runTurnFor(id, next.text, next.attachments), 0); // let state settle first
+        } else if (deliver) {
+          setTimeout(() => deliverFor(id), 0);
         } else {
           settleRunStatus(id);
         }
@@ -1099,7 +1113,13 @@ export const useStore = create<AppState>((rawSet, get) => {
         ? { threads: { ...s.threads, [id]: startTurn(dropRetryPrompts(s.threads[id] ?? []), text, paths) } }
         : {},
     );
-    driveTurn(id, text, paths, false);
+    driveTurn(id, text, paths, "fresh");
+  }
+
+  // Start a turn from finished background work: no user bubble, just the reply.
+  function deliverFor(id: string) {
+    set((s) => withThread(s, id, openReply));
+    driveTurn(id, "", [], "deliver");
   }
 
   return {
@@ -1930,6 +1950,15 @@ export const useStore = create<AppState>((rawSet, get) => {
 
     ingestTasksChanged: (e) => set((s) => ({ tasks: { ...s.tasks, [e.session]: e.tasks } })),
 
+    ingestDeliveryReady: (session) => {
+      const s = get();
+      if (s.runStatus[session] === "running" || (s.queues[session] ?? []).length > 0) {
+        awaitingDelivery.add(session);
+        return;
+      }
+      deliverFor(session);
+    },
+
     refreshTasks: async (session) => {
       try {
         const rows = await listTasks(session);
@@ -2013,7 +2042,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       set((s) => ({
         threads: { ...s.threads, [session]: resolveRecoveryPrompt(s.threads[session] ?? [], itemId) },
       }));
-      driveTurn(session, item.text, item.attachments, true);
+      driveTurn(session, item.text, item.attachments, "retry");
     },
 
     retryBrokenTurn: (session, itemId) => {
@@ -2023,7 +2052,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       set((s) => ({
         threads: { ...s.threads, [session]: resolveRecoveryPrompt(s.threads[session] ?? [], itemId) },
       }));
-      driveTurn(session, item.text, item.attachments, true);
+      driveTurn(session, item.text, item.attachments, "retry");
     },
 
     setQueue: (items) =>

@@ -398,6 +398,7 @@ export const pickLoopExportPath = vi.fn(async () => null as string | null);
 export const themeLocation = vi.fn(async () => null as string | null);
 export const setThemeLocation = vi.fn(async () => {});
 export const retryTurn = vi.fn(async () => "Done.");
+export const deliverPending = vi.fn(async (): Promise<string | null> => null);
 export const cancelTurn = vi.fn(async () => {});
 export const cancelFleet = vi.fn(async () => true);
 export const cancelAgent = vi.fn(async () => true);
@@ -618,6 +619,7 @@ export function resetIpc() {
   themeLocation.mockReset().mockResolvedValue(null);
   setThemeLocation.mockReset().mockResolvedValue(undefined);
   retryTurn.mockReset().mockResolvedValue("Done.");
+  deliverPending.mockReset().mockResolvedValue(null);
   cancelTurn.mockReset().mockResolvedValue(undefined);
   cancelFleet.mockReset().mockResolvedValue(true);
   cancelAgent.mockReset().mockResolvedValue(true);

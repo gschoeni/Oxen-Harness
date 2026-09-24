@@ -193,6 +193,43 @@ describe("store: sessions", () => {
     await vi.waitFor(() => expect(useStore.getState().runStatus["bg"]).toBe("unread"));
   });
 
+  it("delivers a background result to an idle chat as a reply with no user bubble", async () => {
+    ipc.deliverPending.mockResolvedValueOnce("Your video is ready.");
+    useStore.setState({
+      session: { ...ipc.sampleSession, session_id: "s1" },
+      infos: { s1: { ...ipc.sampleSession, session_id: "s1" } },
+      threads: { s1: [] },
+    });
+
+    useStore.getState().ingestDeliveryReady("s1");
+    expect(ipc.deliverPending).toHaveBeenCalledWith("s1");
+    expect(useStore.getState().runStatus["s1"]).toBe("running");
+    await vi.waitFor(() => expect(useStore.getState().runStatus["s1"]).toBeUndefined());
+    expect(useStore.getState().threads["s1"]).toMatchObject([
+      { kind: "assistant", text: "Your video is ready.", streaming: false },
+    ]);
+  });
+
+  it("holds a delivery that lands mid-turn until the chat is idle", async () => {
+    let finishTurn!: (v: string) => void;
+    ipc.runTurn.mockImplementationOnce(() => new Promise((r) => (finishTurn = r)));
+    useStore.setState({
+      session: { ...ipc.sampleSession, session_id: "s1" },
+      infos: { s1: { ...ipc.sampleSession, session_id: "s1" } },
+      threads: { s1: [] },
+    });
+
+    useStore.getState().send("make a video");
+    useStore.getState().ingestDeliveryReady("s1");
+    expect(ipc.deliverPending).not.toHaveBeenCalled();
+
+    finishTurn("Queued.");
+    await vi.waitFor(() => expect(ipc.deliverPending).toHaveBeenCalledWith("s1"));
+    // Nothing was left to deliver: the empty reply bubble goes away.
+    await vi.waitFor(() => expect(useStore.getState().runStatus["s1"]).toBeUndefined());
+    expect(useStore.getState().threads["s1"].map((i) => i.kind)).toEqual(["user", "assistant"]);
+  });
+
   it("preserves attachments on prompts queued behind a running turn", async () => {
     let finishFirst!: (v: string) => void;
     ipc.runTurn

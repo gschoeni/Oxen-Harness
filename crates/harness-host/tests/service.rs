@@ -680,3 +680,72 @@ async fn view_authoring_is_workspace_scoped_and_keeps_drafts_per_conversation() 
         .contains("plan"));
     assert!(!workspace.path().join("views/blocked").exists());
 }
+
+/// A scripted `run_shell` call that starts a background task.
+const BACKGROUND_SHELL_SSE: &str = concat!(
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_bg\",\"type\":\"function\",\"function\":{\"name\":\"run_shell\",\"arguments\":\"{\\\"command\\\":\\\"sleep 1; echo render-finished\\\",\\\"is_background\\\":true}\"}}]}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":5,\"total_tokens\":105}}\n\n",
+    "data: [DONE]\n\n"
+);
+
+const QUEUED_SSE: &str = concat!(
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Started — I'll show it the moment it lands.\"},\"finish_reason\":\"stop\"}]}\n\n",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":10,\"total_tokens\":210}}\n\n",
+    "data: [DONE]\n\n"
+);
+
+#[tokio::test]
+async fn background_work_that_finishes_while_idle_is_announced_and_delivered() {
+    let mut server = mockito::Server::new_async().await;
+    let started = sse_mock(&mut server, BACKGROUND_SHELL_SSE);
+    let queued = sse_mock(&mut server, QUEUED_SSE);
+
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+    let session = service.new_session().await.expect("new session").session_id;
+
+    // Nothing pending yet: no turn runs.
+    assert_eq!(service.deliver_pending(&session).await, Ok(None));
+
+    let text = service
+        .run_turn(&session, "render it in the background".into(), vec![])
+        .await
+        .expect("turn runs");
+    assert!(text.contains("the moment it lands"), "{text}");
+    started.assert_async().await;
+    queued.assert_async().await;
+
+    // The task outlives the turn, so nothing delivered it yet; its end is
+    // announced so the idle client can act on it.
+    assert!(!sink
+        .events()
+        .iter()
+        .any(|e| { matches!(e, ProtocolEvent::Notice { kind, .. } if kind == "background_task") }));
+    wait_for(&sink, || {
+        sink.events()
+            .iter()
+            .any(|e| matches!(e, ProtocolEvent::DeliveryReady { session: s } if *s == session))
+            .then_some(())
+    })
+    .await;
+
+    let delivered = sse_mock(&mut server, FINAL_SSE);
+    let reply = service
+        .deliver_pending(&session)
+        .await
+        .expect("delivery turn");
+    assert_eq!(reply.as_deref(), Some("The sum is 5."));
+    delivered.assert_async().await;
+
+    let transcript = service.session_messages(&session).unwrap();
+    assert!(
+        transcript
+            .iter()
+            .any(|m| m.to_string().contains("render-finished")),
+        "the task's output reaches the model"
+    );
+    // Delivered once: a second call has nothing to do.
+    assert_eq!(service.deliver_pending(&session).await, Ok(None));
+}

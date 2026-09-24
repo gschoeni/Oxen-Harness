@@ -55,6 +55,7 @@ The catalog (see `harness-protocol/src/event.rs` for the exact fields):
 | type | meaning |
 |---|---|
 | `turn.started` / `turn.completed` / `turn.failed` | turn lifecycle (completed carries the final `text`) |
+| `turn.delivery_ready` | background work (a `wait: false` generation or fleet, a background shell task) finished; a running turn delivers it itself, an idle chat needs `POST …/turns/deliver` |
 | `agent.token` | streamed assistant text (batched ~512 bytes) |
 | `agent.tool` | tool call start (`detail` = args) / end (`detail` = result) |
 | `agent.tool_delta` | streaming fragments of a tool call's JSON args |
@@ -85,6 +86,7 @@ DELETE /v1/sessions/{id}
 GET    /v1/sessions/{id}/messages       raw persisted transcript (JSON values)
 POST   /v1/sessions/{id}/turns          {prompt, attachments?} → {text}
 POST   /v1/sessions/{id}/turns/retry    re-drive the trailing user turn → {text}
+POST   /v1/sessions/{id}/turns/deliver  run a turn that starts from finished background results → {text}, or null when none are pending (or a turn is running)
 POST   /v1/sessions/{id}/interject      {text} → {accepted} — steer the running turn
 POST   /v1/sessions/{id}/cancel         stop the in-flight turn (no-op when idle)
 POST   /v1/sessions/{id}/fleets/{fleet}/cancel   stop one `spawn_agents` fleet (named on its `fleet.started`) without ending the turn; 404 once it has ended

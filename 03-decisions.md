@@ -1187,3 +1187,24 @@ steer an HTML page to this path; `open_file` stays what it was, source.
 *Why not make `open_file` render HTML:* the editor is where a file is edited,
 and a user opening a page from the tree usually wants the markup; the canvas
 is the "show it to me" surface, and it already knew how to render html.
+
+## Background results reach an idle chat (2026-09-23)
+
+**A result that finishes after its turn ended runs a turn of its own, and
+the client starts it.** `generate_video` (and `wait: false` fleets,
+background shell tasks) tell the model the result "will be delivered to you
+automatically", but the agent only drained finished work inside a running
+turn — so a video that landed after the model said "I'll show it the moment
+it lands" sat in the aside queue until the user spoke again. Now every push
+to a session's aside queue, and every task that settles undelivered, emits
+`turn.delivery_ready`; an idle client calls `deliver_pending` (Tauri
+command, `POST …/turns/deliver`), which runs `Agent::deliver_pending` — the
+normal turn loop, whose first drain puts the result in the transcript. The
+desktop drives it through the same `driveTurn` as a prompt (a reply bubble,
+no user bubble) and holds a delivery that lands mid-turn until the chat
+settles.
+
+*Why the client starts the turn, not the host:* the desktop tracks a turn's
+running state from the promise of the call that started it; a turn the host
+began on its own would stream into a chat that thinks it is idle. The CLI
+REPL still delivers at the next prompt.

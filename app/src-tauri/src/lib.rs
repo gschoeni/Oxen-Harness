@@ -282,6 +282,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::connection::configure_brave_key,
                 commands::connection::configure_oxen_key,
                 commands::turn::retry_turn,
+                commands::turn::deliver_pending,
                 commands::rules::list_rules,
                 commands::rules::list_rule_suggestions,
                 commands::rules::save_rules,

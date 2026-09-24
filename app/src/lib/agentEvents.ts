@@ -22,6 +22,7 @@ import {
   onFleetAgent,
   onFleetBudget,
   onTasksChanged,
+  onDeliveryReady,
   onMediaChanged,
   onFleetCompleted,
   onFleetStarted,
@@ -92,6 +93,7 @@ export function startAgentEventBridge(): void {
     onFleetActivity((e) => s().ingestFleetActivity(e)),
     onFleetBudget((e) => s().ingestFleetBudget(e)),
     onTasksChanged((e) => s().ingestTasksChanged(e)),
+    onDeliveryReady((session) => s().ingestDeliveryReady(session)),
     onMediaChanged((e) => s().ingestMediaChanged(e)),
     onFleetCompleted((e) => s().ingestFleetCompleted(e.session, e.fleet)),
   ];

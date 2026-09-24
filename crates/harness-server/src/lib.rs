@@ -149,6 +149,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/v1/sessions/{id}/messages", get(session_messages))
         .route("/v1/sessions/{id}/turns", post(run_turn))
         .route("/v1/sessions/{id}/turns/retry", post(retry_turn))
+        .route("/v1/sessions/{id}/turns/deliver", post(deliver_pending))
         .route("/v1/sessions/{id}/interject", post(interject))
         .route("/v1/sessions/{id}/cancel", post(cancel_turn))
         .route(
@@ -484,6 +485,18 @@ async fn retry_turn(
     authorize(&state, &headers, None)?;
     let text = state.service.retry_turn(&id).await?;
     Ok(Json(harness_protocol::TurnResponse { text }))
+}
+
+async fn deliver_pending(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Option<harness_protocol::TurnResponse>>> {
+    authorize(&state, &headers, None)?;
+    let text = state.service.deliver_pending(&id).await?;
+    Ok(Json(
+        text.map(|text| harness_protocol::TurnResponse { text }),
+    ))
 }
 
 async fn interject(

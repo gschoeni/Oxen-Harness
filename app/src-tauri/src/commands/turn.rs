@@ -35,6 +35,17 @@ pub(crate) async fn retry_turn(
     state.retry_turn(&session).await
 }
 
+/// Deliver background results (a finished generation, fleet, or shell task)
+/// that landed while the chat was idle, as a turn of their own; `None` when
+/// there was nothing to deliver. The UI calls it on `turn://delivery-ready`.
+#[tauri::command]
+pub(crate) async fn deliver_pending(
+    state: State<'_, AppState>,
+    session: String,
+) -> Result<Option<String>, String> {
+    state.deliver_pending(&session).await
+}
+
 /// Stop the in-flight turn for `session`, if any. A no-op when idle.
 #[tauri::command]
 pub(crate) async fn cancel_turn(state: State<'_, AppState>, session: String) -> Result<(), String> {

@@ -178,6 +178,13 @@ export function appendToken(prev: Item[], token: string): Item[] {
   return capThread(next);
 }
 
+/** An in-flight assistant bubble with no user bubble above it — for a turn
+ *  the chat starts on its own (delivering a generation that finished while
+ *  it was idle). */
+export function openReply(prev: Item[]): Item[] {
+  return capThread([...prev, { id: uid(), kind: "assistant", text: "", streaming: true }]);
+}
+
 /** Rejoin a chat that is mid-reply after its live thread was released from
  *  the cache (a background run evicted under the running-session cap): the
  *  persisted transcript renders as usual, then an in-flight bubble opens so
@@ -390,8 +397,11 @@ export function lastUserText(messages: ChatMessage[]): string {
 export function appendNotice(prev: Item[], text: string, error?: ModelErrorDetail): Item[] {
   const notice: Item = error ? { id: uid(), kind: "notice", text, error } : { id: uid(), kind: "notice", text };
   const last = prev[prev.length - 1];
-  if (last && last.kind === "assistant" && last.streaming && last.text === "") {
-    return capThread([...prev.slice(0, -1), notice, last]);
+  if (last && last.kind === "assistant" && last.streaming) {
+    if (last.text === "") return capThread([...prev.slice(0, -1), notice, last]);
+    // Text after the notice is a new round (a nudged re-call): it gets its own
+    // bubble below the notice rather than running on into this one.
+    return capThread([...prev.slice(0, -1), { ...last, streaming: false }, notice]);
   }
   return capThread([...prev, notice]);
 }
