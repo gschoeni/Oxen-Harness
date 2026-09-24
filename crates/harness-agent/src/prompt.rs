@@ -424,8 +424,22 @@ pub(crate) fn looks_like_unfulfilled_intent(text: &str) -> bool {
         "next, i",
         "i'll go ahead",
     ];
-    // "let me know" is a sign-off, not an unperformed action — don't nudge on it.
-    SIGNALS.iter().any(|s| t.contains(s)) && !t.contains("let me know")
+    SIGNALS.iter().any(|s| t.contains(s)) && !hands_turn_to_user(&t)
+}
+
+/// Whether a (lowercased) reply ends by waiting on the user — a question, or
+/// a hand-off like "tell me X and I'll do Y". Its "I'll" is conditional on the
+/// answer, so ending the turn there is correct, not a stall.
+fn hands_turn_to_user(t: &str) -> bool {
+    const HAND_OFFS: &[&str] = &[
+        "let me know",
+        "tell me",
+        "once you",
+        "if you'd like",
+        "if you want",
+    ];
+    let last_paragraph = t.trim_end().rsplit("\n\n").next().unwrap_or(t);
+    last_paragraph.contains('?') || HAND_OFFS.iter().any(|h| t.contains(h))
 }
 
 /// The most of a finished background task's output delivered inline; the
@@ -626,6 +640,18 @@ mod tests {
         assert!(!looks_like_unfulfilled_intent("Done — the bug is fixed."));
         assert!(!looks_like_unfulfilled_intent(
             "Let me know if you need anything else."
+        ));
+        // A question back to the user: the "I'll" waits on their answer.
+        assert!(!looks_like_unfulfilled_intent(
+            "Which model do you want?\n\nWhat are you trying to make — text-to-video or \
+             animate an image? Tell me the shot + length, and I'll pick the model and generate it."
+        ));
+        assert!(!looks_like_unfulfilled_intent(
+            "I'll need one detail first: should the output be PNG or JPEG?"
+        ));
+        // A question earlier in the reply doesn't excuse a trailing announcement.
+        assert!(looks_like_unfulfilled_intent(
+            "Why does it fail?\n\nI'll read the logs to find out."
         ));
     }
 }
