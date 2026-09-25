@@ -746,6 +746,11 @@ each, in `crates/harness-agent`:
   kept by the stream assembler, empty or cut-off arguments are re-sent as
   valid JSON, the tool result says the call arrived empty, and the desktop
   shows a refused canvas call as the error it was.
+- 2026-09-25: an `open_file` (or canvas) the agent made landed in a right
+  column the user had folded to its rail, so "they are looking at it now"
+  was false. A tool-driven open for the chat on screen now expands the
+  column the way a click on the rail does; a pinned work view says in the
+  chat what it kept out of sight.
 - follow-ups the same day: lane model calls are capped in flight across the
   whole tree (`max_tree_parallel`, default 4); tool-less leaves spend from
   their parent's remaining allowance instead of slicing it; a lane that

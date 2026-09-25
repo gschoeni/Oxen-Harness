@@ -849,12 +849,22 @@ pub(crate) async fn stage_dropped_file(
         .and_then(|n| n.to_str())
         .unwrap_or("dropped")
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let hash = {
         use sha2::Digest;
         let digest = sha2::Sha256::digest(&bytes);
-        digest.iter().take(8).map(|b| format!("{b:02x}")).collect::<String>()
+        digest
+            .iter()
+            .take(8)
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
     };
     let path = dir.join(format!("{hash}-{safe}"));
     if !path.exists() {

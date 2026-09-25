@@ -20,6 +20,26 @@ describe("conversation-owned work contexts", () => {
     expect(useStore.getState().workContexts.a.current.path).toBe("studio.graph.json");
     expect(useStore.getState().workContexts.b.current.path).toBe("other.graph.json");
   });
+  it("an agent's open expands a right column folded to its rail — for the chat on screen only", () => {
+    useStore.setState({ session: { ...sampleSession, session_id: "a" }, dockCollapsed: { right: true } });
+    useStore.getState().ingestOpenFile({ session: "b", paths: ["background.md"] });
+    expect(useStore.getState().dockCollapsed.right).toBe(true);
+    useStore.getState().ingestOpenFile({ session: "a", paths: ["picks/2026-09-25-week-3.md"] });
+    expect(useStore.getState().dockCollapsed.right).toBe(false);
+    expect(useStore.getState().workContexts.a.current.path).toBe("picks/2026-09-25-week-3.md");
+  });
+  it("a pinned work view says when it kept an agent's open out of sight", () => {
+    useStore.setState({ session: { ...sampleSession, session_id: "a" }, threads: { a: [] } });
+    const s = useStore.getState();
+    s.openWorkView("a", { view: "gallery" });
+    s.pinWorkView();
+    s.ingestOpenFile({ session: "a", paths: ["notes.md"] });
+    const thread = useStore.getState().threads.a;
+    const last = thread[thread.length - 1];
+    expect(last.kind).toBe("notice");
+    expect(last.kind === "notice" && last.text).toContain("notes.md");
+    expect(useStore.getState().workContexts.a.current.view).toBe("gallery");
+  });
   it("a pin stops agent focus changes but allows the user's explicit navigation", () => {
     useStore.setState({ session: { ...sampleSession, session_id: "a" } });
     const s = useStore.getState();

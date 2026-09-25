@@ -1,5 +1,6 @@
 // The two layout columns. Workbench owns view registration and navigation.
 import type { ReactNode } from "react";
+import { WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "./layout";
 import { FolderTree, NotebookPen } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { Workbench } from "../workbench/Workbench";
@@ -36,7 +37,7 @@ export interface DockSpec {
 
 export const DOCKS: DockSpec[] = [
   { id: "files", side: "left", title: "Files", icon: <FolderTree size={16}/>, defaultWidth: 280, minWidth: 216, useAvailable: () => true, render: ({onResizeStart}) => <FilesPanel onResizeStart={onResizeStart}/> },
-  { id: "workbench", side: "right", title: "Work view", icon: <NotebookPen size={16}/>, defaultWidth: 680, minWidth: 340, useAvailable: () => useStore(s => !!s.session), render: ({onResizeStart}) => <Workbench onResizeStart={onResizeStart}/> },
+  { id: "workbench", side: "right", title: "Work view", icon: <NotebookPen size={16}/>, defaultWidth: WORK_VIEW_DEFAULT_WIDTH, minWidth: WORK_VIEW_MIN_WIDTH, useAvailable: () => useStore(s => !!s.session), render: ({onResizeStart}) => <Workbench onResizeStart={onResizeStart}/> },
 ];
 
 export const docksOnSide = (side: DockSide) => DOCKS.filter((d) => d.side === side);

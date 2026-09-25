@@ -1,5 +1,6 @@
 import { navigate, travel, type WorkContext } from "../features/workbench/context";
 import { resolveView } from "../features/workbench/registry";
+import { CHAT_MIN_FIT, RAIL_W, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "../features/docks/layout";
 import type { ViewTarget } from "../workbench-sdk";
 // Global app state. Chats are multi-session: each chat owns a thread, a run
 // status, and a send queue keyed by session id, so a chat keeps streaming in the
@@ -172,6 +173,20 @@ function loadDockLayout(): DockLayout {
 
 function saveDockLayout(layout: DockLayout) {
   setUi("docks", layout);
+}
+
+/** The layout patch that expands the right column out of its rail for an
+ *  agent's open — the same arithmetic as a click on the rail: take only the
+ *  work view's minimum and fold the left side when the window can't fit
+ *  both, so the un-collapse is never a dead one the solver folds right back. */
+function revealRightColumn(s: Pick<AppState, "dockWidths" | "dockCollapsed">): Pick<AppState, "dockWidths" | "dockCollapsed"> {
+  const want = s.dockWidths.right ?? WORK_VIEW_DEFAULT_WIDTH;
+  const leftWidth = s.dockCollapsed.left ? RAIL_W : (s.dockWidths.left ?? 0);
+  const tight = window.innerWidth - leftWidth - want < CHAT_MIN_FIT;
+  const widths = tight ? { ...s.dockWidths, right: WORK_VIEW_MIN_WIDTH } : s.dockWidths;
+  const collapsed = { ...s.dockCollapsed, right: false, ...(tight && leftWidth > RAIL_W ? { left: true } : {}) };
+  saveDockLayout({ widths, collapsed });
+  return { dockWidths: widths, dockCollapsed: collapsed };
 }
 
 /** The store patch that installs a tab layout and persists it in one step,
@@ -930,11 +945,14 @@ export const useStore = create<AppState>((rawSet, get) => {
       const next = { ...previous, ...patch };
       const workContexts = { ...previous.workContexts };
       const rightTab = { ...next.rightTab };
+      const onScreen = next.session?.session_id;
+      // What the chat on screen was shown, and what its pin kept out.
+      let revealed = false;
+      const keptOut: string[] = [];
       for (const [session, view] of Object.entries(next.rightTab)) {
         const pane = next.editorTabs[session];
         const changed = view !== previous.rightTab[session] || pane !== previous.editorTabs[session] || next.activeCanvas[session] !== previous.activeCanvas[session] || (view === "browser" && next.session?.session_id === session && next.browserUrl !== previous.browserUrl);
         if (!changed) continue;
-        if (workContexts[session]?.pinned) { rightTab[session] = workContexts[session].current.view; continue; }
         const paths = pane?.tabs[pane.active];
         const target: ViewTarget = { view };
         if (view === "editor" && paths?.length) {
@@ -943,11 +961,27 @@ export const useStore = create<AppState>((rawSet, get) => {
         }
         if (view === "canvas") target.id = next.activeCanvas[session] ?? undefined;
         if (view === "browser") target.url = next.browserUrl ?? undefined;
+        if (workContexts[session]?.pinned) {
+          rightTab[session] = workContexts[session].current.view;
+          if (session === onScreen) keptOut.push(target.path ?? target.paths?.join(", ") ?? target.view);
+          continue;
+        }
         rightTab[session] = target.view;
         workContexts[session] = navigate(workContexts[session], target);
+        if (session === onScreen) revealed = true;
       }
       setUi("workContexts", workContexts);
-      return { ...patch, rightTab, workContexts };
+      // An open the agent made for the chat on screen must be seen: a right
+      // column folded to its rail is expanded the way a click on the rail
+      // would, making room honestly when the window is tight. A background
+      // chat's open stays in its own context.
+      const layout = revealed && next.dockCollapsed.right ? revealRightColumn(next) : {};
+      // A pin keeps the agent's opens out of the work view on purpose; the
+      // chat says so, so "they are looking at it now" isn't silently false.
+      const threads = keptOut.length && onScreen
+        ? { threads: { ...next.threads, [onScreen]: appendNotice(next.threads[onScreen] ?? [], `Opened ${keptOut.join(", ")} behind your pinned work view — unpin it to follow along`) } }
+        : {};
+      return { ...patch, rightTab, workContexts, ...layout, ...threads };
     });
   };
 
