@@ -144,8 +144,8 @@ export function ToolCall({ item }: { item: ToolItem }) {
   // One the tool refused (no arguments, a bad format) has no document to
   // open and reads as the error it was.
   if (item.name === "canvas" && !failed) return <CanvasToolCall item={item} a={a} />;
-  // A plan update renders as a checklist snapshot (the live, pinned plan lives
-  // above the thread; this card is the in-thread record of each update).
+  // A plan update renders as a checklist snapshot (the in-thread record of
+  // each update).
   if (item.name === "update_plan") return <PlanToolCard item={item} a={a} />;
   // A generation shows its prompt and, once done, the pictures themselves.
   if (isGenerateTool(item.name)) return <MediaToolCall item={item} a={a} />;

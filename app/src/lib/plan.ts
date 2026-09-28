@@ -1,9 +1,6 @@
 // Reconstruct the task plan from an `update_plan` tool call's raw arguments.
-// Because the plan lives in the tool call (part of the chat transcript), the
-// current plan — including in a resumed chat — can be derived straight from the
-// thread's most recent `update_plan` chip, with no separate stored state.
+// The plan lives in the tool call, so it survives a resumed chat with no stored state.
 
-import type { Item } from "../features/chat/thread";
 import type { PlanItem, PlanStatus } from "./types";
 
 const STATUSES: PlanStatus[] = ["pending", "in_progress", "completed"];
@@ -32,20 +29,4 @@ export function planProgress(items: PlanItem[]): { done: number; total: number }
     done: items.filter((i) => i.status === "completed").length,
     total: items.length,
   };
-}
-
-/** The current plan for a thread: parsed from its most recent `update_plan`
- *  tool call, or null if the thread has none. */
-export function currentPlan(items: Item[]): PlanItem[] | null {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i];
-    if (it.kind === "tool" && it.name === "update_plan") {
-      try {
-        return planItemsFromArgs(JSON.parse(it.args || "{}"));
-      } catch {
-        return null;
-      }
-    }
-  }
-  return null;
 }

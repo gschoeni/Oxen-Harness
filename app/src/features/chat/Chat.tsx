@@ -11,7 +11,6 @@ import { FleetPanel } from "./FleetPanel";
 import { AgentView } from "./AgentView";
 import { TasksPanel } from "./TasksPanel";
 import { MediaPanel } from "./MediaPanel";
-import { Plan } from "./Plan";
 import { ThreadStatus } from "./ThreadStatus";
 import { ChatTabs } from "../tabs/ChatTabs";
 import { Composer } from "./Composer";
@@ -232,7 +231,6 @@ export function Chat() {
       <ChatTabs />
       <div className="messages-wrap">
         <ThreadStatus />
-        <Plan />
         {showReopenCanvas && lastCanvas && (
           <button
             className="reopen-canvas"

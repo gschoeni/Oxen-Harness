@@ -412,7 +412,7 @@ describe("Chat", () => {
     expect(screen.queryByText(/stopped before the reply finished/i)).toBeNull();
   });
 
-  it("marks an unfinished plan as stalled once the run ends", async () => {
+  it("stops the plan card spinner once the run ends", async () => {
     let resolveTurn!: (v: string) => void;
     ipc.runTurn.mockImplementationOnce(() => new Promise((r) => (resolveTurn = r)));
 
@@ -432,13 +432,11 @@ describe("Chat", () => {
     // While the run is live: the active step spins and nothing reads stalled.
     expect((await screen.findAllByText("Researching")).length).toBeGreaterThan(0);
     expect(container.querySelector(".plan-spinner")).not.toBeNull();
-    expect(screen.queryByText("stalled")).toBeNull();
 
     // The turn ends (the model gave up after a failed step) with items open:
-    // the spinner stops and the panel flags the plan as stalled.
+    // the spinner stops.
     act(() => resolveTurn("stopping here"));
     await waitFor(() => expect(useStore.getState().runStatus["s1"]).toBeUndefined());
-    expect(screen.getByText("stalled")).toBeInTheDocument();
     expect(container.querySelector(".plan-spinner")).toBeNull();
   });
 

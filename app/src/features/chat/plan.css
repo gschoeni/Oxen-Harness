@@ -1,48 +1,10 @@
-/* The task plan: a pinned, live-updating checklist shown above the thread, plus
-   the inline snapshot card rendered in the thread on each `update_plan` call.
-   Both share the `.plan-list` rows. */
+/* The inline plan snapshot card rendered in the thread on each `update_plan` call. */
 
-.plan-panel {
-  flex-shrink: 0;
-  margin: var(--space-3) var(--space-4) 0;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--separator));
-  border-radius: var(--radius);
-  background: var(--accent-tint);
-  overflow: hidden;
-}
-
-.plan-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, var(--separator));
-}
-.plan-head-icon {
-  color: var(--accent);
-  flex-shrink: 0;
-}
-.plan-title {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--text-secondary);
-  letter-spacing: 0.01em;
-  flex: 1;
-}
 .plan-progress {
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   color: var(--text-tertiary);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border-radius: var(--radius-pill);
-  padding: 1px var(--space-2);
-}
-
-/* The run ended (finished, errored, or cancelled) with items unfinished. */
-.plan-stalled {
-  font-size: var(--text-xs);
-  color: var(--warning);
-  background: var(--warning-soft);
   border-radius: var(--radius-pill);
   padding: 1px var(--space-2);
 }
@@ -103,12 +65,6 @@
 .plan-item.completed .plan-text {
   color: var(--text-tertiary);
   text-decoration: line-through;
-}
-
-/* stalled: the in-progress row loses its spinner (see .plan-stalled above)
-   and shows a warning-tinted paused marker instead */
-.plan-panel.stalled .plan-item.in_progress .plan-mark {
-  color: var(--warning);
 }
 
 /* reuse the toolcall spinner look for the active row */
