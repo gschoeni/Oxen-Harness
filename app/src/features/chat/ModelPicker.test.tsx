@@ -141,6 +141,36 @@ describe("ModelPicker", () => {
     expect(s.settingsPage).toBe("cloud-models");
   });
 
+  it("lists the active model first, then the rest alphabetically", () => {
+    useStore.setState({
+      session: {
+        model: "zed",
+        workspace: "/x",
+        session_id: "s1",
+        tokens_used: 0,
+        context_tokens: 0,
+        context_window: 200000,
+        compression_mode: "off",
+      },
+      cloudModels: [
+        { id: "mid", name: "mango 10", selected: false },
+        { id: "zed", name: "Zed", selected: true },
+        { id: "mid2", name: "Mango 2", selected: false },
+        { id: "apple", name: "apple", selected: false },
+      ],
+      localSwitch: null,
+    });
+    render(<ModelPicker disabled={false} />);
+    fireEvent.click(screen.getByText("Zed"));
+    const names = screen.getAllByRole("option").map((o) => o.textContent);
+    expect(names.slice(0, 4).map((n) => n?.replace(/\$.*/, "").trim())).toEqual([
+      "Zed",
+      "apple",
+      "Mango 2",
+      "mango 10",
+    ]);
+  });
+
   describe("type-to-find", () => {
     const setup = () => {
       useStore.setState({

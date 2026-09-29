@@ -145,14 +145,30 @@ export function ModelPicker({
   const needle = query.trim().toLowerCase();
   const matches = (...fields: string[]) =>
     !needle || fields.some((f) => f.toLowerCase().includes(needle));
-  const shownCloud = cloudModels.filter((m) => matches(m.id, m.name));
-  const shownLocal = localModels.filter((m) => matches(m.id, m.display));
+  // The active model leads each list; the rest run alphabetically by name.
+  const byActiveThenName = <T,>(items: T[], id: (t: T) => string, name: (t: T) => string) =>
+    [...items].sort(
+      (a, b) =>
+        Number(id(b) === model) - Number(id(a) === model) ||
+        name(a).localeCompare(name(b), undefined, { sensitivity: "base", numeric: true }),
+    );
+  const shownCloud = byActiveThenName(
+    cloudModels.filter((m) => matches(m.id, m.name)),
+    (m) => m.id,
+    (m) => m.name,
+  );
+  const shownLocal = byActiveThenName(
+    localModels.filter((m) => matches(m.id, m.display)),
+    (m) => m.id,
+    (m) => m.display,
+  );
   // Only while searching: models the endpoint hosts that aren't saved yet.
   const addable = useMemo(() => {
     if (!needle) return [];
     const saved = new Set(cloudModels.map((m) => m.id));
     return searchChatModels(hits, needle)
       .filter((h) => !saved.has(h.id))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }))
       .slice(0, 8);
   }, [hits, needle, cloudModels]);
   const nothingFound = !!needle && !shownCloud.length && !shownLocal.length && !addable.length;
