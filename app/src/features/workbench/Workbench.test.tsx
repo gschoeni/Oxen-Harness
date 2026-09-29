@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Workflow } from "lucide-react";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -14,7 +14,7 @@ import { registerView, removeView, views, resolveView } from "./registry";
 import { workbenchCustomizationEnabled } from "../../lib/features";
 import { refreshPackages } from "./packages";
 import { useStore } from "../../lib/store";
-import { sampleSession } from "../../test/ipcMock";
+import { sampleSession, workbenchRequest } from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
 
 function Workbench() {
@@ -148,4 +148,36 @@ it("restores the customization entry points when opted in", async () => {
   await userEvent.click(screen.getByRole("combobox", { name: "Work view" }));
   await userEvent.click(screen.getByRole("option", { name: "View Studio" }));
   expect(api.open).toHaveBeenCalledWith({ view: "view-studio", path: undefined, paths: undefined });
+});
+
+it("loads packages once after a session exists, independently of opening a panel", () => {
+  vi.mocked(workbenchCustomizationEnabled).mockReturnValue(true);
+  useStore.setState({ session: null });
+  renderHook(useWorkbenchRegistration);
+  expect(refreshPackages).not.toHaveBeenCalled();
+  act(() => useStore.setState({ session: sampleSession }));
+  expect(refreshPackages).toHaveBeenCalledOnce();
+  act(() => useStore.setState({ session: { ...sampleSession, session_id: "other" } }));
+  expect(refreshPackages).toHaveBeenCalledOnce();
+});
+
+it("keeps discovery failures with their initiating conversation after a tab switch", async () => {
+  vi.mocked(workbenchCustomizationEnabled).mockReturnValue(true);
+  let rejectPackages!: (reason: Error) => void;
+  let rejectRegistration!: (reason: Error) => void;
+  vi.mocked(refreshPackages).mockImplementationOnce(() => new Promise((_, reject) => { rejectPackages = reject; }));
+  workbenchRequest.mockImplementationOnce(() => new Promise((_, reject) => { rejectRegistration = reject; }));
+  useStore.setState({ threads: { [sampleSession.session_id]: [], other: [] } });
+  renderHook(useWorkbenchRegistration);
+  act(() => useStore.setState({ session: { ...sampleSession, session_id: "other" } }));
+  await act(async () => {
+    rejectPackages(new Error("package unavailable"));
+    rejectRegistration(new Error("registration unavailable"));
+  });
+  const state = useStore.getState();
+  expect(state.threads[sampleSession.session_id]).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "notice", text: "Load installed views: Error: package unavailable" }),
+    expect.objectContaining({ kind: "notice", text: "Register work views: Error: registration unavailable" }),
+  ]));
+  expect(state.threads.other).toEqual([]);
 });

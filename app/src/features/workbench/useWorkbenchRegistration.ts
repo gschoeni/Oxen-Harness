@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { workbenchCustomizationEnabled } from "../../lib/features";
 import { workbenchRequest } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
@@ -10,6 +10,7 @@ import "../../modules";
 export function useWorkbenchRegistration() {
   const registered = useViewRegistry();
   const session = useStore((s) => s.session?.session_id);
+  const packagesLoaded = useRef(false);
   const descriptors = JSON.stringify(
     registered
       .filter((view) => view.agentVisible !== false && !view.id.startsWith("package:"))
@@ -24,15 +25,20 @@ export function useWorkbenchRegistration() {
       })),
   );
   useEffect(() => {
-    if (!workbenchCustomizationEnabled()) return;
+    if (!session || !workbenchCustomizationEnabled() || packagesLoaded.current) return;
+    packagesLoaded.current = true;
     void refreshPackages().catch((e) =>
-      useStore.getState().addNotice(`Load installed views: ${String(e)}`),
+      useStore.getState().ingestNotice({
+        session, kind: "workbench", text: `Load installed views: ${String(e)}`,
+      }),
     );
-  }, []);
+  }, [session]);
   useEffect(() => {
     if (!session) return;
     void workbenchRequest(session, "register_views", {
       views: JSON.parse(descriptors),
-    }).catch((e) => useStore.getState().addNotice(`Register work views: ${String(e)}`));
+    }).catch((e) => useStore.getState().ingestNotice({
+      session, kind: "workbench", text: `Register work views: ${String(e)}`,
+    }));
   }, [session, descriptors]);
 }

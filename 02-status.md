@@ -39,7 +39,10 @@ Explicit file/view actions open the panel for their owning conversation, and
 the agent's `open_view` tool now expands it when collapsed. Persisted history
 is retained without restoring panel visibility. View discovery runs at app
 scope so the agent can discover modules before opening one. See
-`plans/work-panel-visibility.md` for verification and review.
+`plans/work-panel-visibility.md` for verification and review. All checks passed:
+1,399 Rust tests, 691 frontend tests, TypeScript, workspace/native Clippy,
+formatting and production build. The review also covered narrow-window opens
+and conversation-scoped registration failures.
 
 ## Work panel release scope — 2026-09-28
 

@@ -1,6 +1,6 @@
 import { navigate, travel, type WorkContext } from "../features/workbench/context";
 import { availableTarget, resolveView } from "../features/workbench/registry";
-import { CHAT_MIN_FIT, RAIL_W, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "../features/docks/layout";
+import { CHAT_MIN_FIT, FILES_DEFAULT_WIDTH, RAIL_W, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "../features/docks/layout";
 import type { ViewTarget } from "../workbench-sdk";
 // Global app state. Chats are multi-session: each chat owns a thread, a run
 // status, and a send queue keyed by session id, so a chat keeps streaming in the
@@ -181,10 +181,11 @@ function saveDockLayout(layout: DockLayout) {
  *  both, so the un-collapse is never a dead one the solver folds right back. */
 function revealRightColumn(s: Pick<AppState, "dockWidths" | "dockCollapsed">): Pick<AppState, "dockWidths" | "dockCollapsed"> {
   const want = s.dockWidths.right ?? WORK_VIEW_DEFAULT_WIDTH;
-  const leftWidth = s.dockCollapsed.left ? RAIL_W : (s.dockWidths.left ?? 0);
+  const leftWidth = s.dockCollapsed.left ? RAIL_W : (s.dockWidths.left ?? FILES_DEFAULT_WIDTH);
   const tight = window.innerWidth - leftWidth - want < CHAT_MIN_FIT;
+  const foldLeft = tight && window.innerWidth - leftWidth - WORK_VIEW_MIN_WIDTH < CHAT_MIN_FIT;
   const widths = tight ? { ...s.dockWidths, right: WORK_VIEW_MIN_WIDTH } : s.dockWidths;
-  const collapsed = { ...s.dockCollapsed, right: false, ...(tight && leftWidth > RAIL_W ? { left: true } : {}) };
+  const collapsed = { ...s.dockCollapsed, right: false, ...(foldLeft && leftWidth > RAIL_W ? { left: true } : {}) };
   saveDockLayout({ widths, collapsed });
   return { dockWidths: widths, dockCollapsed: collapsed };
 }
@@ -975,7 +976,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       // column folded to its rail is expanded the way a click on the rail
       // would, making room honestly when the window is tight. A background
       // chat's open stays in its own context.
-      const layout = revealed && next.dockCollapsed.right ? revealRightColumn(next) : {};
+      const layout = revealed ? revealRightColumn(next) : {};
       // A pin keeps the agent's opens out of the work view on purpose; the
       // chat says so, so "they are looking at it now" isn't silently false.
       const threads = keptOut.length && onScreen

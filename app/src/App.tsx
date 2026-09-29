@@ -38,8 +38,8 @@ export default function App() {
   useChatTabShortcuts();
   useWorkbenchRegistration();
 
-  // A freshly opened/resumed chat may already have a running server (they
-  // outlive agent eviction) — sync its status so the pane reappears.
+  // Servers outlive agent eviction. Refresh their status without opening a
+  // panel merely because the user switched conversations.
   useEffect(() => {
     if (sessionId) syncPreview(sessionId).catch(() => {});
   }, [sessionId, syncPreview]);

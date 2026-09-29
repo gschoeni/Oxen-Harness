@@ -18,6 +18,8 @@ export const RAIL_W = 52;
 export const CHAT_MIN_FIT = 320;
 /** Below this the chat folds to its own rail (a bar with an expand button). */
 export const CHAT_RAIL_MIN = 240;
+/** The file column's width before a user resizes it. */
+export const FILES_DEFAULT_WIDTH = 280;
 /** The work view's widths, shared with the store so an agent's open can
  *  expand the column the same way a click on its rail does. */
 export const WORK_VIEW_DEFAULT_WIDTH = 680;
