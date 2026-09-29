@@ -1,5 +1,5 @@
 import { navigate, travel, type WorkContext } from "../features/workbench/context";
-import { resolveView } from "../features/workbench/registry";
+import { availableTarget, resolveView } from "../features/workbench/registry";
 import { CHAT_MIN_FIT, RAIL_W, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "../features/docks/layout";
 import type { ViewTarget } from "../workbench-sdk";
 // Global app state. Chats are multi-session: each chat owns a thread, a run
@@ -1212,9 +1212,15 @@ export const useStore = create<AppState>((rawSet, get) => {
     workContexts: getUi("workContexts") ?? {},
     rightTab: Object.fromEntries(Object.entries(getUi("workContexts") ?? {}).map(([id, ctx]) => [id, ctx.current.view])),
     openWorkView: (session, target, agent = false) => {
+      target = availableTarget(target);
       set((s) => {
         if (agent && s.workContexts[session]?.pinned) return {};
-        const workContexts = { ...s.workContexts, [session]: navigate(s.workContexts[session], target) };
+        const previous = s.workContexts[session];
+        // Hydrating a disabled package's file must keep its saved forward history.
+        const context = previous && JSON.stringify(availableTarget(previous.current)) === JSON.stringify(target)
+          ? previous
+          : navigate(previous, target);
+        const workContexts = { ...s.workContexts, [session]: context };
         setUi("workContexts", workContexts);
         return { workContexts, rightTab: { ...s.rightTab, [session]: target.view },
           ...(target.view === "editor" && (target.paths || target.path) ? { editorTabs: { ...s.editorTabs, [session]: addEditorTab(s.editorTabs[session], target.paths ?? [target.path!]) } } : {}),

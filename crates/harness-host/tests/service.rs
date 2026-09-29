@@ -722,6 +722,13 @@ async fn view_authoring_is_workspace_scoped_and_keeps_drafts_per_conversation() 
     );
     let first = service.new_session().await.unwrap().session_id;
     let second = service.new_session().await.unwrap().session_id;
+    let agent = service.agent_or_build(&first).await.unwrap();
+    assert!(agent
+        .lock()
+        .await
+        .tool_definitions()
+        .iter()
+        .any(|tool| tool["function"]["name"] == "develop_view"));
     let result = service
         .workbench_request(
             &first,
@@ -732,6 +739,53 @@ async fn view_authoring_is_workspace_scoped_and_keeps_drafts_per_conversation() 
         .unwrap();
     assert!(result["candidate"]["digest"].is_string());
     assert!(workspace.path().join("views/demo/oxen-view.d.ts").is_file());
+    service
+        .workbench_request(
+            &first,
+            "develop",
+            json!({
+                "action":"install", "source":"views/demo", "digest":result["candidate"]["digest"]
+            }),
+        )
+        .await
+        .unwrap();
+    let listed = service
+        .workbench_request(&first, "list", json!({}))
+        .await
+        .unwrap();
+    assert!(listed["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|view| view["id"] == "package:demo.view"));
+
+    let release = service_for(
+        "http://127.0.0.1:1".into(),
+        Arc::new(CollectingSink::default()),
+        workspace.path(),
+    );
+    let release_session = release.new_session().await.unwrap().session_id;
+    let listed = release
+        .workbench_request(&release_session, "list", json!({}))
+        .await
+        .unwrap();
+    assert!(!listed["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|view| view["id"] == "package:demo.view"));
+    assert!(release
+        .workbench_request(
+            &release_session,
+            "open",
+            json!({"view":"package:demo.view"})
+        )
+        .await
+        .is_err());
+    assert!(harness_runtime::view_packages::installed()
+        .unwrap()
+        .iter()
+        .any(|package| package.manifest.id == "demo.view"));
     assert!(service
         .workbench_request(
             &first,

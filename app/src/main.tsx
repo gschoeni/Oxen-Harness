@@ -25,7 +25,12 @@ async function boot() {
 
   if (featureError) {
     const { useStore } = await import("./lib/store");
-    useStore.getState().addNotice(featureError);
+    // Chat notices need a session; App restores it after the first render.
+    const unsubscribe = useStore.subscribe((state) => {
+      if (!state.session) return;
+      unsubscribe();
+      state.addNotice(featureError);
+    });
   }
 
   // Subscribe to agent events once, outside React's lifecycle, so StrictMode's

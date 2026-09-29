@@ -39,7 +39,10 @@ View Studio, installed packages and authoring operations share the host's
 `OXEN_WORKBENCH_CUSTOMIZATION` startup flag. Built-in file viewers and saved
 workflow graphs remain available; old customization contexts fall back without
 deleting users' files or packages. The flag can be enabled for hardening work
-without rebuilding. See `app/README.md` and `plans/workbench-release-flag.md`.
+without rebuilding. Review also hardened fallback file navigation and preserved
+forward history on startup. Verified with 1,399 Rust tests, 678 frontend tests,
+formatting, both Clippy checks, TypeScript and the production build. See
+`app/README.md` and `plans/workbench-release-flag.md`.
 
 ## Shared view selector — 2026-09-19
 

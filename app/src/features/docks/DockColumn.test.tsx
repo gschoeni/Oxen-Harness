@@ -4,6 +4,12 @@ import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 vi.mock("../../lib/features", () => ({ workbenchCustomizationEnabled: vi.fn(() => false) }));
+vi.mock("../files/EditorPane", () => ({
+  EditorPane: () => {
+    const pane = useStore((s) => s.editorTabs[s.session!.session_id]);
+    return <p>Viewing {pane?.tabs[pane.active]?.join(", ")}</p>;
+  },
+}));
 import { workbenchCustomizationEnabled } from "../../lib/features";
 
 import { DockColumn } from "./DockColumn";
@@ -105,6 +111,41 @@ describe("Dock columns", () => {
     await userEvent.click(screen.getByRole("combobox", { name: "Work view" }));
     await userEvent.click(screen.getByRole("option", { name: "Preview" }));
     expect(useStore.getState().rightTab.s1).toBe("preview");
+  });
+
+  it("restores a package file through history without showing the previously active file", async () => {
+    const history = [
+      { view: "package:notes", path: "notes.txt" },
+      { view: "editor", path: "other.txt" },
+    ];
+    useStore.setState({
+      workContexts: { s1: { current: history[1], history, cursor: 1, pinned: false } },
+      rightTab: { s1: "editor" },
+      editorTabs: { s1: { tabs: [["other.txt"]], active: 0 } },
+    });
+    render(<DockColumn side="right" />);
+    expect(screen.getByText("Viewing other.txt")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Previous work view" }));
+    expect(screen.getByText("Viewing notes.txt")).toBeInTheDocument();
+    expect(useStore.getState().workContexts.s1.history).toEqual(history);
+    await userEvent.click(screen.getByRole("button", { name: "Next work view" }));
+    expect(screen.getByText("Viewing other.txt")).toBeInTheDocument();
+  });
+
+  it("keeps forward history when restoring a package file on startup", async () => {
+    const history = [
+      { view: "package:notes", path: "notes.txt" },
+      { view: "editor", path: "other.txt" },
+    ];
+    useStore.setState({
+      workContexts: { s1: { current: history[0], history, cursor: 0, pinned: false } },
+      rightTab: { s1: "package:notes" },
+    });
+    render(<DockColumn side="right" />);
+    expect(screen.getByText("Viewing notes.txt")).toBeInTheDocument();
+    expect(useStore.getState().workContexts.s1.history).toEqual(history);
+    await userEvent.click(screen.getByRole("button", { name: "Next work view" }));
+    expect(screen.getByText("Viewing other.txt")).toBeInTheDocument();
   });
 
   it("clicking a dock's icon in a collapsed rail expands the column onto it", async () => {

@@ -109,7 +109,10 @@ it.each(["view-studio", "view-manager", "package:demo"])(
       component: () => <p>Customization mounted</p>,
       matches: () => true, priority: 200,
     });
-    useStore.getState().openWorkView(sampleSession.session_id, { view });
+    const target = { view };
+    useStore.setState({ workContexts: {
+      [sampleSession.session_id]: { current: target, history: [target], cursor: 0, pinned: false },
+    } });
     render(<Workbench />);
     expect(screen.queryByText("Customization mounted")).not.toBeInTheDocument();
     expect(screen.getByText("Open a file to get started. This space follows your conversation.")).toBeInTheDocument();
@@ -119,9 +122,24 @@ it.each(["view-studio", "view-manager", "package:demo"])(
 );
 
 it("falls back to a bundled file viewer for a previously installed view", () => {
-  useStore.getState().openWorkView(sampleSession.session_id, {
-    view: "package:demo", path: "notes.txt",
-  });
+  const target = { view: "package:demo", path: "notes.txt" };
+  useStore.setState({ workContexts: {
+    [sampleSession.session_id]: { current: target, history: [target], cursor: 0, pinned: false },
+  } });
   render(<Workbench />);
   expect(screen.getByText("File contents")).toBeInTheDocument();
+});
+
+it("restores the customization entry points when opted in", async () => {
+  vi.mocked(workbenchCustomizationEnabled).mockReturnValue(true);
+  registerView({
+    id: "view-studio", title: "View Studio", description: "Build a view.",
+    component: () => null,
+  });
+  render(<Workbench />);
+  expect(refreshPackages).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "View Studio Build a view." })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("combobox", { name: "Work view" }));
+  await userEvent.click(screen.getByRole("option", { name: "View Studio" }));
+  expect(api.open).toHaveBeenCalledWith({ view: "view-studio", path: undefined, paths: undefined });
 });

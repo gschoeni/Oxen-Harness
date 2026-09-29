@@ -1,4 +1,4 @@
-import { Component, Suspense, useEffect, type ReactNode, type PointerEvent } from "react";
+import { Component, Suspense, useEffect, useMemo, type ReactNode, type PointerEvent } from "react";
 import { ArrowLeft, ArrowRight, Pin, Workflow, PanelsTopLeft } from "lucide-react";
 import { Select } from "../../components/ui";
 import { useStore } from "../../lib/store";
@@ -36,6 +36,7 @@ export function Workbench({ onResizeStart }: { onResizeStart?: (e: PointerEvent)
   }, []);
   const session = useStore((s) => s.session);
   const context = useStore((s) => (s.session ? s.workContexts[s.session.session_id] : undefined));
+  const target = useMemo(() => availableTarget(context?.current ?? EMPTY_TARGET), [context?.current]);
   useEffect(() => {
     if (!session) return;
     void workbenchRequest(session.session_id, "register_views", {
@@ -47,7 +48,7 @@ export function Workbench({ onResizeStart }: { onResizeStart?: (e: PointerEvent)
     <WorkbenchContent
       session={session.session_id}
       workspace={session.workspace}
-      target={availableTarget(context?.current ?? EMPTY_TARGET)}
+      target={target}
       onResizeStart={onResizeStart}
     />
   );
@@ -102,24 +103,26 @@ function WorkbenchContent({
         >
           <ArrowRight size={14} />
         </button>
-        {customizable ? <Select
-          className="workbench-view-select"
-          label="Work view"
-          placeholder="Choose a view"
-          value={module ? target.view : ""}
-          options={views().map((view) => {
-            const Icon = view.icon ?? PanelsTopLeft;
-            return { value: view.id, label: view.title, description: view.description, icon: <Icon size={16} /> };
-          })}
-          onValueChange={(value) => {
-            const next = viewById(value);
-            api.open({
-              view: value,
-              path: target.path && next?.matches?.(target.path) ? target.path : undefined,
-              paths: target.paths?.filter((path) => next?.matches?.(path)),
-            });
-          }}
-        /> : (
+        {customizable ? (
+          <Select
+            className="workbench-view-select"
+            label="Work view"
+            placeholder="Choose a view"
+            value={module ? target.view : ""}
+            options={views().map((view) => {
+              const Icon = view.icon ?? PanelsTopLeft;
+              return { value: view.id, label: view.title, description: view.description, icon: <Icon size={16} /> };
+            })}
+            onValueChange={(value) => {
+              const next = viewById(value);
+              api.open({
+                view: value,
+                path: target.path && next?.matches?.(target.path) ? target.path : undefined,
+                paths: target.paths?.filter((path) => next?.matches?.(path)),
+              });
+            }}
+          />
+        ) : (
           <span className="workbench-view-label">
             <Icon size={16} aria-hidden="true" />
             {module?.title ?? "Work panel"}
@@ -153,14 +156,16 @@ function WorkbenchContent({
                   ? "Build a workflow, preview an app, or open a file. This space follows your conversation."
                   : "Open a file to get started. This space follows your conversation."}
               </p>
-              {customizable && <div className="workbench-choices">
-                {views().map((view) => (
-                  <button key={view.id} onClick={() => api.open({ view: view.id })}>
-                    <strong>{view.title}</strong>
-                    <span>{view.description}</span>
-                  </button>
-                ))}
-              </div>}
+              {customizable && (
+                <div className="workbench-choices">
+                  {views().map((view) => (
+                    <button key={view.id} onClick={() => api.open({ view: view.id })}>
+                      <strong>{view.title}</strong>
+                      <span>{view.description}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               {target.view !== "welcome" && (
                 <p role="alert">
                   The view “{target.view}” is unavailable. Your files are still on disk.

@@ -3,7 +3,9 @@ vi.mock("./ipc", () => ({ loadFeatureFlags: vi.fn() }));
 import { loadFeatureFlags } from "./ipc";
 import { initFeatureFlags, workbenchCustomizationEnabled } from "./features";
 
-beforeEach(() => { vi.mocked(loadFeatureFlags).mockReset(); });
+beforeEach(() => {
+  vi.mocked(loadFeatureFlags).mockReset();
+});
 
 it("defaults customization off and uses the host's startup flags", async () => {
   expect(workbenchCustomizationEnabled()).toBe(false);
