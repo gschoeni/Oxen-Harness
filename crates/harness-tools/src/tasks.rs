@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use harness_core::bounded::BoundedText;
@@ -55,6 +55,8 @@ pub const MAX_AUTO_BACKGROUND_TASKS: usize = 8;
 pub struct TaskExit {
     /// The exit code; `None` means it died on a signal (e.g. `kill_task`).
     pub code: Option<i32>,
+    /// When it ended, so a finished task's elapsed time stops counting.
+    pub at: Instant,
 }
 
 /// One live (or finished-but-unqueried) background task.
@@ -79,7 +81,7 @@ struct TaskEntry {
     /// [`BackgroundTasks::take_settled_unannounced`] and by any `task_output`
     /// that reported the exit, so the news is delivered exactly once.
     announced: bool,
-    started: std::time::Instant,
+    started: Instant,
     /// Whether `kill` was sent, so a signal death reads as a kill and not as
     /// a crash.
     killed: bool,
@@ -291,6 +293,7 @@ impl BackgroundTasks {
             }
             let _ = done_tx.send(Some(TaskExit {
                 code: status.ok().and_then(|s| s.code()),
+                at: Instant::now(),
             }));
             changed.send_modify(|n| *n = n.wrapping_add(1));
         });
@@ -307,7 +310,7 @@ impl BackgroundTasks {
                 stdout_tail,
                 stderr_tail,
                 announced: false,
-                started: std::time::Instant::now(),
+                started: Instant::now(),
                 killed: false,
             },
         );
@@ -342,7 +345,13 @@ impl BackgroundTasks {
                             running: exit.is_none(),
                             exit_code: exit.and_then(|e| e.code),
                             killed: entry.killed,
-                            elapsed_secs: entry.started.elapsed().as_secs(),
+                            // A finished task's clock stops at its exit.
+                            elapsed_secs: exit
+                                .map_or_else(
+                                    || entry.started.elapsed(),
+                                    |e| e.at.saturating_duration_since(entry.started),
+                                )
+                                .as_secs(),
                             last_line: String::new(),
                         },
                         entry.log_path.clone(),
@@ -409,7 +418,10 @@ impl BackgroundTasks {
                     return exit;
                 }
                 if done.changed().await.is_err() {
-                    return TaskExit { code: None };
+                    return TaskExit {
+                        code: None,
+                        at: Instant::now(),
+                    };
                 }
             }
         })
@@ -502,8 +514,10 @@ impl BackgroundTasks {
         // a full read below means everything was delivered.
         let exit = *done.borrow();
         let status = match exit {
-            Some(TaskExit { code: Some(code) }) => format!("exited with code {code}"),
-            Some(TaskExit { code: None }) => "exited on a signal".to_string(),
+            Some(TaskExit {
+                code: Some(code), ..
+            }) => format!("exited with code {code}"),
+            Some(TaskExit { code: None, .. }) => "exited on a signal".to_string(),
             None => "running".to_string(),
         };
         let (delta, new_cursor, skipped) = read_since(&log_path, cursor, exit.is_some()).await;
