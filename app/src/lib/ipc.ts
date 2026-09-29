@@ -94,6 +94,7 @@ import type {
   TasksChangedEvent,
   TaskSummary,
   ProjectOpenEvent,
+  TurnEndedEvent,
 } from "./types";
 
 // ---- session / agent -------------------------------------------------------
@@ -505,6 +506,14 @@ export const onCompression = (handler: (e: CompressionEvent) => void) =>
  *  retried with backoff — so the thread can show the hiccup instead of hanging. */
 export const onRetry = (handler: (e: RetryEvent) => void) =>
   listen<RetryEvent>("agent://retry", (e) => handler(e.payload));
+
+/** A turn ended — with its final reply, or with an error. Emitted for every
+ *  turn; the store acts on it only for turns it rejoined after a reload
+ *  (the ones it holds no `runTurn` promise for). */
+export const onTurnCompleted = (handler: (e: TurnEndedEvent) => void) =>
+  listen<{ session: string; text: string }>("turn://completed", (e) => handler(e.payload));
+export const onTurnFailed = (handler: (e: TurnEndedEvent) => void) =>
+  listen<{ session: string; error: string }>("turn://failed", (e) => handler(e.payload));
 
 export const onQuestion = (handler: (q: QuestionPayload) => void) =>
   listen<QuestionPayload>("agent://question", (e) => handler(e.payload));

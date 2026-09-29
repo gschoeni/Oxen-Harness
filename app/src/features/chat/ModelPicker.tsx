@@ -58,8 +58,10 @@ export function ModelPicker({
 
   // Friendly label for the active model: its catalog name, else the raw id (a
   // local model, or a custom not yet in the catalog).
+  // `||`, not `??`: a mid-turn session the backend couldn't read reports its
+  // model as "" — that must still read as a button, not a blank.
   const current = cloudModels.find((m) => m.id === model);
-  const label = startupChoice?.label ?? current?.name ?? model ?? "Model";
+  const label = startupChoice?.label || current?.name || model || "Model";
 
   // What the button reads while working: a phased message for a local-model
   // start (its server takes a moment — and several seconds on a cold first run),

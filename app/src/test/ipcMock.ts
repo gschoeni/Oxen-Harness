@@ -409,6 +409,8 @@ export const onTool = listener("tool");
 export const onCompression = listener("compression");
 export const onRetry = listener("retry");
 export const onQuestion = listener("question");
+export const onTurnCompleted = listener("turnCompleted");
+export const onTurnFailed = listener("turnFailed");
 export const onFileDrop = listener("fileDrop");
 export const pickAttachments = vi.fn(async () => [] as string[]);
 export const stageDroppedFile = vi.fn(async (name: string, _bytes: Uint8Array) => `/ws/.oxen-harness/dropped/${name}`);
@@ -736,6 +738,8 @@ export function resetIpc() {
     onCompression,
     onRetry,
     onQuestion,
+    onTurnCompleted,
+    onTurnFailed,
     onApprovalRequest,
     onApproval,
     onFileDrop,

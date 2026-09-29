@@ -781,5 +781,21 @@ each, in `crates/harness-agent`:
   failed on the provider is retried once from where it stopped; `map_agents`
   lanes are named for their items.
 
+- 2026-09-29: a desktop chat sat "paused" for good after a dev-server reload
+  (a commit touching `app/src` while the agent waited on an
+  `ask_user_question`): the question event had gone out before the reload,
+  the fresh webview never saw it, and the turn stayed parked on an answer
+  nobody could give — with a blank model button, since the mid-turn resume
+  placeholder carried no model, and boot's `session_info` blocked on the
+  turn's agent lock. Now: the host remembers what each parked round-trip
+  asked and `SessionView.pending` replays it on resume; the mid-turn info
+  carries the stored model and `session_info` never waits on a running
+  turn; a stop drops the parked channels so a turn blocked on the user
+  unwinds; the desktop marks a rejoined chat running (Stop works), settles
+  it from `turn.completed`/`turn.failed` or the thread snapshot, and a
+  cold resume of a transcript ending on unanswered tool calls gets
+  synthetic results so the next turn is a valid request. A killed
+  background task's clock now stops at its exit.
+
 Verification: harness-agent 189 unit + 12 integration tests, harness-store 65,
 workspace clippy and fmt clean.

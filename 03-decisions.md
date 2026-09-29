@@ -1236,3 +1236,28 @@ own conversation. This avoids a second visibility map alongside navigation.
 
 View registration belongs to the app lifecycle, independently of the panel's
 mount lifecycle, so the agent can discover modules while the panel is hidden.
+
+## A parked turn must survive the client that asked (2026-09-29)
+
+**Host round-trips are replayable state, not fire-and-forget events.** A turn
+blocked on the user (`ask_user_question`, a permission approval) emits its
+request once; a client that arrives later — a reloaded webview, a fresh HTTP
+subscriber — used to see a chat that looked idle with a blank model while the
+backend waited forever. The `PendingMap` now records each parked request under
+its session, `SessionView.pending` replays them on resume, and the desktop
+re-raises them exactly as the live event would. The same map lets a stop unpark
+the tool (dropping the channels reads as "no answer"), and the turn's end drops
+whatever is left.
+
+The alternative — making the client re-request questions, or timing questions
+out — either adds a second delivery path or answers on the user's behalf.
+Replaying the one request the turn is actually waiting on keeps a single
+source of truth (the parked oneshot) and lets the user answer late.
+
+Two corollaries: a client that *rejoins* a running turn holds no promise for
+it, so it settles from the stream's `turn.completed`/`turn.failed` (or the
+thread snapshot's running set when it missed those too); and a cold resume of
+a transcript that ends on unanswered tool calls settles them with persisted
+synthetic results, because the provider rejects a `tool_use` without a
+`tool_result` and the model must know the call did nothing.
+

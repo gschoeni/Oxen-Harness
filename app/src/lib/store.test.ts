@@ -152,8 +152,10 @@ describe("store: sessions", () => {
     expect(useStore.getState().threads["abc"]).toHaveLength(2);
   });
 
-  it("switching to a running chat keeps its live thread and clears its unread dot", async () => {
-    // A background chat that already streamed a thread and finished unread.
+  it("switching to a chat the backend reports mid-turn keeps its live thread and marks it running", async () => {
+    // A background chat that streamed a thread, whose turn this client no
+    // longer holds a promise for (it finished a delivery turn out of sight,
+    // say) — the backend, not the stale "unread" dot, says what it is doing.
     useStore.setState({
       session: { ...ipc.sampleSession, session_id: "current" },
       infos: { bg: { ...ipc.sampleSession, session_id: "bg" } },
@@ -170,8 +172,117 @@ describe("store: sessions", () => {
     expect(useStore.getState().session?.session_id).toBe("bg");
     // The live thread is preserved (not clobbered by the empty transcript).
     expect(useStore.getState().threads["bg"]).toHaveLength(1);
-    // Viewing it marks it read.
-    expect(useStore.getState().runStatus["bg"]).toBeUndefined();
+    // The stale dot gives way to the backend's truth: the chat is running.
+    expect(useStore.getState().runStatus["bg"]).toBe("running");
+  });
+
+  it("a thread snapshot settles a rejoined turn the stream never closed", async () => {
+    ipc.resumeSession.mockResolvedValueOnce({
+      info: { ...ipc.sampleSession, session_id: "mid" },
+      messages: [],
+      running: true,
+      pending: [],
+    });
+    await useStore.getState().resume("mid");
+    expect(useStore.getState().runStatus["mid"]).toBe("running");
+    // The turn ended in the gap; the snapshot no longer lists it as running,
+    // and the transcript now holds the whole reply.
+    ipc.sessionMessages.mockResolvedValueOnce([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "the whole reply" },
+    ]);
+    await useStore.getState().refreshThreads();
+    await new Promise((r) => setTimeout(r, 0));
+    const s = useStore.getState();
+    expect(s.runStatus["mid"]).toBeUndefined();
+    const thread = s.threads["mid"] ?? [];
+    expect(thread[thread.length - 1]).toMatchObject({ kind: "assistant", text: "the whole reply", streaming: false });
+  });
+
+  it("rejoining a running chat after a reload marks it running and replays its pending question", async () => {
+    // A reload wiped the store: no thread, no run status, and the question
+    // event the backend emitted before the reload is gone with it.
+    ipc.sessionMessages.mockResolvedValueOnce([
+      { role: "user", content: "pick a pricing convention" },
+      { role: "assistant", content: "", tool_calls: [{ id: "t1", type: "function", function: { name: "ask_user_question", arguments: "{}" } }] },
+    ]);
+    ipc.resumeSession.mockResolvedValueOnce({
+      info: { ...ipc.sampleSession, model: "claude-sonnet-5-5", session_id: "mid" },
+      messages: [],
+      running: true,
+      pending: [
+        {
+          type: "agent.question",
+          session: "mid",
+          id: "q7",
+          questions: [{ header: "Pricing", question: "Which?", options: [{ label: "A", description: "" }, { label: "B", description: "" }], multiSelect: false }],
+        },
+      ],
+    });
+    await useStore.getState().resume("mid");
+    const s = useStore.getState();
+    // The backend is mid-turn: the composer shows Stop, the thread is protected.
+    expect(s.runStatus["mid"]).toBe("running");
+    // The model came through the mid-turn placeholder, not a blank.
+    expect(s.session?.model).toBe("claude-sonnet-5-5");
+    // The transcript is rebuilt with an in-flight bubble for the rest of the reply.
+    const thread = s.threads["mid"] ?? [];
+    expect(thread[thread.length - 1]).toMatchObject({ kind: "assistant", streaming: true, partial: true });
+    // The parked question is back on screen, answerable by its original id.
+    expect(s.question).toMatchObject({ session: "mid", id: "q7" });
+
+    // The rejoined turn ends on the stream: bubble finalized, status settled,
+    // the (now moot) question card gone.
+    useStore.getState().ingestTurnEnded({ session: "mid", text: "Done — configs written." });
+    const after = useStore.getState();
+    expect(after.runStatus["mid"]).toBeUndefined();
+    expect(after.question).toBeNull();
+    const doneThread = after.threads["mid"] ?? [];
+    expect(doneThread[doneThread.length - 1]).toMatchObject({ kind: "assistant", text: "Done — configs written.", streaming: false });
+  });
+
+  it("a rejoined turn that fails gets a retry card; a turn this client drove is left to its promise", async () => {
+    ipc.resumeSession.mockResolvedValueOnce({
+      info: { ...ipc.sampleSession, session_id: "mid" },
+      messages: [],
+      running: true,
+      pending: [],
+    });
+    await useStore.getState().resume("mid");
+    expect(useStore.getState().runStatus["mid"]).toBe("running");
+    useStore.getState().ingestTurnEnded({ session: "mid", error: "the model endpoint failed 4 times in a row" });
+    const s = useStore.getState();
+    expect(s.runStatus["mid"]).toBeUndefined();
+    const failedThread = s.threads["mid"] ?? [];
+    expect(failedThread[failedThread.length - 1]).toMatchObject({ kind: "retry", message: "the model endpoint failed 4 times in a row" });
+
+    // A turn started here has a promise to settle it; the stream event is not its business.
+    let finishTurn!: (v: string) => void;
+    ipc.runTurn.mockImplementationOnce(() => new Promise((r) => (finishTurn = r)));
+    useStore.getState().send("hello");
+    const id = useStore.getState().session!.session_id;
+    expect(useStore.getState().runStatus[id]).toBe("running");
+    useStore.getState().ingestTurnEnded({ session: id, text: "early" });
+    expect(useStore.getState().runStatus[id]).toBe("running");
+    finishTurn("late");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useStore.getState().runStatus[id]).toBeUndefined();
+  });
+
+  it("loadSession hydrates the backend's current chat through the same open path", async () => {
+    ipc.sessionInfo.mockResolvedValueOnce({ ...ipc.sampleSession, session_id: "cur" });
+    ipc.resumeSession.mockResolvedValueOnce({
+      info: { ...ipc.sampleSession, session_id: "cur" },
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "hello" },
+      ],
+      running: false,
+    });
+    await useStore.getState().loadSession();
+    expect(ipc.resumeSession).toHaveBeenCalledWith("cur");
+    expect(useStore.getState().session?.session_id).toBe("cur");
+    expect(useStore.getState().threads["cur"]).toHaveLength(2);
   });
 
   it("send marks a finished off-screen chat as unread", async () => {

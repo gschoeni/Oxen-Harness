@@ -110,6 +110,7 @@ import type {
   OpenFileEvent,
   ThreadSnapshot,
   Project,
+  PendingRoundTrip,
   QuestionPayload,
   ReviewStatus,
   RunStatus,
@@ -120,6 +121,7 @@ import type {
   Theme,
   ToolEvent,
   ToolProgressEvent,
+  TurnEndedEvent,
   NoticeEvent,
   ToolDeltaEvent,
   UsageEvent,
@@ -924,6 +926,10 @@ interface AppState {
   /** Bulk-apply a keep/reject status to many chats (dataset builder bulk actions). */
   setReviewStatusMany: (ids: string[], status: ReviewStatus) => Promise<void>;
   setQuestion: (q: QuestionPayload | null) => void;
+  /** A turn ended on the event stream. Settles a turn this client *rejoined*
+   *  (reloaded mid-turn, so it holds no `runTurn` promise for it); a turn it
+   *  drove itself is settled by that promise and ignored here. */
+  ingestTurnEnded: (e: TurnEndedEvent) => void;
   /** A gated tool call is waiting on (or done with) the user's decision. */
   ingestApprovalRequest: (e: ApprovalRequestEvent) => void;
   /** Clear the card and leave a notice line once the approval resolves. */
@@ -1054,6 +1060,119 @@ export const useStore = create<AppState>((rawSet, get) => {
   // you were away" story.
   function refreshThreadsAfterSeen(id: string) {
     return get().session?.session_id === id ? markSeenThenRefresh(id) : get().refreshThreads();
+  }
+
+  // Re-render a chat's thread from its persisted transcript (its settled
+  // state, once a turn this client only rejoined has ended out of sight).
+  async function reloadTranscript(id: string) {
+    const messages = await sessionMessages(id).catch(() => undefined);
+    if (messages === undefined) return;
+    set((s) => withThread(s, id, () => transcriptToItems(messages)));
+  }
+
+  // The prompt a rejoined turn's retry card carries: its thread's last user
+  // bubble (the transcript's last user message, rendered).
+  function lastUserBubbleText(items: Item[]): string {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === "user") return it.text;
+    }
+    return "";
+  }
+
+  // Chats whose running turn this client did not start: it reloaded (or
+  // booted) while the backend was mid-turn, so no `runTurn` promise will
+  // settle them — the stream's turn-ended event does (see `ingestTurnEnded`).
+  const rejoined = new Set<string>();
+
+  // Show a chat: fetch its view and make it the visible session. A mid-turn
+  // chat keeps streaming into this client (the event bridge is global), so
+  // the store must also *know* it is running — the stop button, the thread
+  // cache's protection of running chats, and the turn-ended settle all key
+  // off `runStatus` — and must be re-handed anything the turn is parked on
+  // (a question, an approval) whose event landed before this client existed.
+  async function openSession(id: string, known?: SessionInfo) {
+    const view = await resumeSession(id);
+    // A mid-turn chat whose thread was released under the running-session
+    // cap (or lost to a reload): the view can't carry its transcript (the
+    // agent holds its lock), but the persisted messages read independently
+    // of it. Rebuild from those and open a bubble for the rest of the reply
+    // still streaming in.
+    let rehydrated: Item[] | undefined;
+    if (view.running && get().threads[id] === undefined) {
+      const messages = await sessionMessages(id).catch(() => []);
+      rehydrated = resumeMidTurn(transcriptToItems(messages));
+    }
+    set((s) => {
+      // A mid-turn chat (`running`) keeps its live in-memory thread + info; a
+      // cold history session seeds its thread and info from the transcript.
+      // A cold transcript that stops mid-turn (the reply never arrived — an
+      // error, out of credits, or the app closed) gets an inline retry card
+      // so the chat can be continued with one click.
+      let seeded: Item[] | undefined;
+      if (view.running && s.threads[id] === undefined) {
+        seeded = rehydrated;
+      } else if (!view.running && s.threads[id] === undefined) {
+        seeded = transcriptToItems(view.messages);
+        if (endsMidTurn(view.messages)) {
+          seeded = appendRetryPrompt(
+            seeded,
+            lastUserText(view.messages),
+            [],
+            "This chat stopped before the reply finished.",
+          );
+        }
+      }
+      const runStatus = { ...s.runStatus };
+      if (runStatus[id] === "unread") delete runStatus[id]; // viewing it clears the dot
+      if (view.running && runStatus[id] !== "running") {
+        // The backend is mid-turn and this client holds no promise for it.
+        runStatus[id] = "running";
+        rejoined.add(id);
+      }
+      const threads = capThreadSessions(
+        seeded === undefined ? s.threads : { ...s.threads, [id]: seeded },
+        runStatus,
+        id,
+      );
+      // A running chat's live info (real counters) beats the backend's
+      // mid-turn placeholder; a client that never had it takes the placeholder
+      // (or the info the caller already fetched for this chat).
+      const fresh = known ?? view.info;
+      const infos = view.running && s.infos[id] ? s.infos : { ...s.infos, [id]: fresh };
+      const session = infos[id] ?? fresh;
+      return {
+        ...sweepCached(s, threads),
+        ...tabFor(s, session),
+        session,
+        infos: retainCached(infos, threads, runStatus),
+        runStatus,
+        ...replayPending(s, id, view.pending ?? []),
+      };
+    });
+    get().refreshHistory();
+    // Opening the chat is looking at it: its "finished while you were away"
+    // flag comes off — durably, so it stays off across restarts — and the
+    // verdicts repaint once the mark has landed.
+    void markSeenThenRefresh(id);
+  }
+
+  // The round-trips a running turn is parked on, as the backend replays them:
+  // re-raise each exactly as its live event would have, so the question card
+  // or approval prompt comes back for a client that missed it.
+  function replayPending(s: AppState, id: string, pending: PendingRoundTrip[]): Partial<AppState> {
+    let patch: Partial<AppState> = {};
+    for (const p of pending) {
+      if (p.session !== id) continue;
+      if (p.type === "agent.question") {
+        const { type: _type, ...question } = p;
+        patch = { ...patch, question };
+      } else if (p.type === "agent.approval_request") {
+        const { type: _type, ...request } = p;
+        patch = { ...patch, approvals: { ...(patch.approvals ?? s.approvals), [id]: request } };
+      }
+    }
+    return patch;
   }
 
   // Monotonic stamp for snapshot refreshes. Concurrent calls race the network
@@ -1290,17 +1409,11 @@ export const useStore = create<AppState>((rawSet, get) => {
     },
 
     loadSession: async () => {
+      // The backend's current chat, then the same open path a tab click
+      // takes — so a boot into a chat that is mid-turn (a reload while the
+      // agent works) rejoins it rather than showing a blank, idle-looking one.
       const info = await sessionInfo();
-      set((s) => ({
-        ...tabFor(s, info),
-        session: info,
-        infos: { ...s.infos, [info.session_id]: info },
-        threads: capThreadSessions(
-          { ...s.threads, [info.session_id]: s.threads[info.session_id] ?? [] },
-          s.runStatus,
-          info.session_id,
-        ),
-      }));
+      await openSession(info.session_id, info);
     },
 
     // Start a fresh chat. Any running chat keeps going in the background.
@@ -1326,58 +1439,7 @@ export const useStore = create<AppState>((rawSet, get) => {
 
     resume: async (id) => {
       if (id === get().session?.session_id) return;
-      const view = await resumeSession(id);
-      // A mid-turn chat whose thread was released under the running-session
-      // cap: the view can't carry its transcript (the agent holds its lock),
-      // but the persisted messages read independently of it. Rebuild from
-      // those and open a bubble for the rest of the reply still streaming in.
-      let rehydrated: Item[] | undefined;
-      if (view.running && get().threads[id] === undefined) {
-        const messages = await sessionMessages(id).catch(() => []);
-        rehydrated = resumeMidTurn(transcriptToItems(messages));
-      }
-      set((s) => {
-        // A mid-turn chat (`running`) keeps its live in-memory thread + info; a
-        // cold history session seeds its thread and info from the transcript.
-        // A cold transcript that stops mid-turn (the reply never arrived — an
-        // error, out of credits, or the app closed) gets an inline retry card
-        // so the chat can be continued with one click.
-        let seeded: Item[] | undefined;
-        if (view.running && s.threads[id] === undefined) {
-          seeded = rehydrated;
-        } else if (!view.running && s.threads[id] === undefined) {
-          seeded = transcriptToItems(view.messages);
-          if (endsMidTurn(view.messages)) {
-            seeded = appendRetryPrompt(
-              seeded,
-              lastUserText(view.messages),
-              [],
-              "This chat stopped before the reply finished.",
-            );
-          }
-        }
-        const threads = capThreadSessions(
-          seeded === undefined ? s.threads : { ...s.threads, [id]: seeded },
-          s.runStatus,
-          id,
-        );
-        const infos = view.running ? s.infos : { ...s.infos, [id]: view.info };
-        const runStatus = { ...s.runStatus };
-        if (runStatus[id] === "unread") delete runStatus[id]; // viewing it clears the dot
-        const session = infos[id] ?? view.info;
-        return {
-          ...sweepCached(s, threads),
-          ...tabFor(s, session),
-          session,
-          infos: retainCached(infos, threads, s.runStatus),
-          runStatus,
-        };
-      });
-      get().refreshHistory();
-      // Opening the chat is looking at it: its "finished while you were away"
-      // flag comes off — durably, so it stays off across restarts — and the
-      // verdicts repaint once the mark has landed.
-      void markSeenThenRefresh(id);
+      await openSession(id);
     },
 
     renameSession: async (id, title) => {
@@ -1472,6 +1534,16 @@ export const useStore = create<AppState>((rawSet, get) => {
         const snapshot = await threadsSnapshot();
         if (seq !== threadsFetchSeq) return; // superseded by a newer refresh
         set({ threadsSnapshot: snapshot });
+        // The snapshot's running set is authoritative. A rejoined turn that
+        // ended before this client was listening (it finished in the gap
+        // between the resume and the event bridge) has no turn-ended event
+        // coming — settle it from the snapshot and show the transcript's
+        // final state instead of a bubble that never closes.
+        for (const id of [...rejoined]) {
+          if (snapshot.running.includes(id)) continue;
+          get().ingestTurnEnded({ session: id, text: "" });
+          void reloadTranscript(id);
+        }
       } catch {
         /* keep the previous snapshot on a transient error */
       }
@@ -2659,6 +2731,36 @@ export const useStore = create<AppState>((rawSet, get) => {
     },
 
     setQuestion: (question) => set({ question }),
+
+    ingestTurnEnded: (e) => {
+      const id = e.session;
+      // A turn this client drove settles through its own promise (driveTurn);
+      // only a rejoined one has nobody else to close it out.
+      if (!rejoined.delete(id)) return;
+      set((s) => {
+        let patch: Partial<AppState> = {};
+        // Whatever it was parked on is moot once the turn is over.
+        if (s.question?.session === id) patch = { ...patch, question: null };
+        if (s.approvals[id]) {
+          const approvals = { ...s.approvals };
+          delete approvals[id];
+          patch = { ...patch, approvals };
+        }
+        const thread = s.threads[id];
+        if (thread !== undefined) {
+          const items =
+            e.error !== undefined
+              ? appendRetryPrompt(thread, lastUserBubbleText(thread), [], e.error)
+              : finalizeAssistant(thread, e.text ?? "");
+          patch = { ...patch, threads: { ...s.threads, [id]: items } };
+        }
+        return patch;
+      });
+      settleRunStatus(id);
+      get().refreshHistory();
+      get().refreshTotalTokens();
+      void refreshThreadsAfterSeen(id);
+    },
 
     ingestApprovalRequest: (e) =>
       set((s) => ({ approvals: { ...s.approvals, [e.session]: e } })),

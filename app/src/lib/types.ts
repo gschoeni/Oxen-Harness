@@ -79,6 +79,28 @@ export interface SessionView {
   messages: ChatMessage[];
   /** True when the chat is mid-turn and couldn't be read; keep the live thread. */
   running: boolean;
+  /** What the running turn is parked on — a question or approval whose event
+   *  this client may never have seen (it arrived before a reload). Replayed
+   *  so the card can be shown again and the turn answered. */
+  pending?: PendingRoundTrip[];
+}
+
+/** A host round-trip the running turn is waiting on, as the backend replays
+ *  it on resume: the same payload the live event carries, tagged by kind. */
+export type PendingRoundTrip =
+  | ({ type: "agent.question" } & QuestionPayload)
+  | ({ type: "agent.approval_request" } & ApprovalRequestEvent);
+
+/** `turn://completed` / `turn://failed` — a turn's end as seen on the event
+ *  stream. The client that started the turn learns this from its own
+ *  promise; these let a client that *rejoined* a running turn (after a
+ *  reload) learn it too. */
+export interface TurnEndedEvent {
+  session: string;
+  /** The final reply (completed) — absent when the turn failed. */
+  text?: string;
+  /** The failure (failed) — absent when the turn completed. */
+  error?: string;
 }
 
 /** A tool definition (JSON schema) as advertised to the model on each call.
