@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Button, Modal, Spinner } from "../../components/ui";
 import { Markdown } from "../../components/ui/Markdown";
 import { compactTokens } from "../../lib/format";
+import { searchChatModels } from "../../lib/modelSearch";
 import { addCloudModel, getConnection, removeCloudModel, searchOxenModels } from "../../lib/ipc";
 import { formatRate, ratesById } from "../../lib/rates";
 import { useStore } from "../../lib/store";
@@ -52,16 +53,10 @@ export function CloudModelsPage() {
 
   // The chat-capable slice of the catalog matching the search box. Endpoints
   // that don't annotate routes list everything rather than nothing.
-  const hits = useMemo(() => {
-    if (!catalog) return [];
-    const routed = catalog.some((h) => h.endpoint !== "");
-    const chat = routed ? catalog.filter((h) => h.endpoint === "/chat/completions") : catalog;
-    const needle = query.trim().toLowerCase();
-    if (!needle) return chat;
-    return chat.filter((h) =>
-      [h.id, h.name, h.developer, h.summary].some((f) => f.toLowerCase().includes(needle)),
-    );
-  }, [catalog, query]);
+  const hits = useMemo(
+    () => (catalog ? searchChatModels(catalog, query) : []),
+    [catalog, query],
+  );
 
   // Annotate the user's saved models with rates the catalog knows about.
   const rateById = useMemo(() => ratesById(catalog ?? []), [catalog]);

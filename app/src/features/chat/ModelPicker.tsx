@@ -1,12 +1,13 @@
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Button } from "../../components/ui";
-import { ChevronDown, Cloud, Cpu, Download, Loader } from "lucide-react";
+import { ChevronDown, Cloud, Cpu, Download, Loader, Plus } from "lucide-react";
 import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../components/ui/Menu";
-import { installedLocalModels, searchOxenModels } from "../../lib/ipc";
-import { catalogById } from "../../lib/rates";
+import { addCloudModel, installedLocalModels, searchOxenModels } from "../../lib/ipc";
+import { searchChatModels } from "../../lib/modelSearch";
+import { catalogById, rateParts } from "../../lib/rates";
 import type { RateParts } from "../../lib/rates";
 import { useStore } from "../../lib/store";
-import type { ModelRef, StartupModelChoice } from "../../lib/types";
+import type { ModelRef, OxenModelHit, StartupModelChoice } from "../../lib/types";
 
 /** A compact model dropdown. In the chat composer it switches the active
  *  session; with `onStartupChoice` it only stages a model for a future chat. */
@@ -46,6 +47,13 @@ export function ModelPicker({
     return () => clearInterval(t);
   }, [localSwitch]);
 
+  // The full catalog listing, searched when the user types: a hit that isn't
+  // saved yet is offered as "add to your list".
+  const [hits, setHits] = useState<OxenModelHit[]>([]);
+  const [query, setQuery] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
   const priced = [...catalog.values()].some(Boolean);
 
   // Friendly label for the active model: its catalog name, else the raw id (a
@@ -77,12 +85,17 @@ export function ModelPicker({
   // opens.
   useEffect(() => {
     if (!open) return;
+    setQuery("");
+    setAddError(null);
     loadCloudModels();
     installedLocalModels()
       .then((v) => setLocalModels(v.models))
       .catch(() => setLocalModels([]));
     searchOxenModels("")
-      .then((hits) => setCatalog(catalogById(hits)))
+      .then((listing) => {
+        setCatalog(catalogById(listing));
+        setHits(listing);
+      })
       .catch(() => {});
   }, [open, loadCloudModels]);
 
@@ -101,6 +114,19 @@ export function ModelPicker({
     }
   }
 
+  // Save a catalog model to the user's list, then switch to it.
+  async function addAndPick(hit: OxenModelHit) {
+    setAddError(null);
+    try {
+      await addCloudModel(hit.id, hit.name);
+      await loadCloudModels();
+    } catch (err) {
+      setAddError(`Couldn't add ${hit.id}: ${String(err)}`);
+      return;
+    }
+    await pickCloud(hit.id, hit.name);
+  }
+
   async function pickLocal(local: ModelRef) {
     setOpen(false);
     if (local.id === model) return;
@@ -114,6 +140,30 @@ export function ModelPicker({
     } finally {
       setBusy(false);
     }
+  }
+
+  const needle = query.trim().toLowerCase();
+  const matches = (...fields: string[]) =>
+    !needle || fields.some((f) => f.toLowerCase().includes(needle));
+  const shownCloud = cloudModels.filter((m) => matches(m.id, m.name));
+  const shownLocal = localModels.filter((m) => matches(m.id, m.display));
+  // Only while searching: models the endpoint hosts that aren't saved yet.
+  const addable = useMemo(() => {
+    if (!needle) return [];
+    const saved = new Set(cloudModels.map((m) => m.id));
+    return searchChatModels(hits, needle)
+      .filter((h) => !saved.has(h.id))
+      .slice(0, 8);
+  }, [hits, needle, cloudModels]);
+  const nothingFound = !!needle && !shownCloud.length && !shownLocal.length && !addable.length;
+
+  // Enter takes the top result: a saved model first, else the first addable.
+  function onSearchKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (shownCloud[0]) pickCloud(shownCloud[0].id, shownCloud[0].name);
+    else if (shownLocal[0]) pickLocal(shownLocal[0]);
+    else if (addable[0]) addAndPick(addable[0]);
   }
 
   return (
@@ -161,8 +211,21 @@ export function ModelPicker({
         <Menu className="picker-menu">
           {/* Only the model list scrolls — the setup actions below stay pinned
               so they're never pushed off-screen by a long catalog. */}
+          <input
+            ref={searchRef}
+            autoFocus
+            className="picker-search"
+            type="search"
+            placeholder="Search models…"
+            aria-label="Search models"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onSearchKey}
+          />
           <div className="picker-scroll">
-            <MenuHead aside={priced && "$ per 1M tokens"}>Cloud models</MenuHead>
+            {(shownCloud.length > 0 || !needle) && (
+              <MenuHead aside={priced && "$ per 1M tokens"}>Cloud models</MenuHead>
+            )}
             {cloudModels.length === 0 && (
               <MenuItem
                 manage
@@ -173,7 +236,7 @@ export function ModelPicker({
                 }}
               />
             )}
-            {cloudModels.map((m) => {
+            {shownCloud.map((m) => {
               const rate = catalog.get(m.id);
               // A saved id the endpoint no longer lists (a retired release,
               // say) can't be priced — and probably won't answer either.
@@ -196,10 +259,10 @@ export function ModelPicker({
               );
             })}
 
-            {localModels.length > 0 && (
+            {shownLocal.length > 0 && (
               <>
                 <MenuHead>Local models</MenuHead>
-                {localModels.map((m) => (
+                {shownLocal.map((m) => (
                   <MenuItem
                     key={m.id}
                     active={m.id === model}
@@ -211,6 +274,27 @@ export function ModelPicker({
                 ))}
               </>
             )}
+
+            {addable.length > 0 && (
+              <>
+                <MenuHead aside={priced && "$ per 1M tokens"}>Available on Oxen</MenuHead>
+                {addable.map((h) => {
+                  const rate = rateParts(h.pricing);
+                  return (
+                    <MenuItem
+                      key={h.id}
+                      checkSlot={<Plus size={15} className="menu-check menu-add" />}
+                      name={h.name}
+                      title={`Add ${h.id} to your models`}
+                      hint={rate ? <ModelRate rate={rate} /> : undefined}
+                      onSelect={() => addAndPick(h)}
+                    />
+                  );
+                })}
+              </>
+            )}
+            {nothingFound && <div className="menu-empty">No models match “{query.trim()}”.</div>}
+            {addError && <div className="menu-empty menu-error" role="alert">{addError}</div>}
           </div>
 
           <MenuSep />

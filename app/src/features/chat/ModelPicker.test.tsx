@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
+import { addCloudModel, setModel } from "../../test/ipcMock";
 import { ModelPicker } from "./ModelPicker";
 import { useStore } from "../../lib/store";
 import { resetAll } from "../../test/utils";
@@ -138,5 +139,60 @@ describe("ModelPicker", () => {
     const s = useStore.getState();
     expect(s.settingsOpen).toBe(true);
     expect(s.settingsPage).toBe("cloud-models");
+  });
+
+  describe("type-to-find", () => {
+    const setup = () => {
+      useStore.setState({
+        session: {
+          model: "claude-sonnet-4-6",
+          workspace: "/x",
+          session_id: "s1",
+          tokens_used: 0,
+          context_tokens: 0,
+          context_window: 200000,
+          compression_mode: "off",
+        },
+        cloudModels: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", selected: true }],
+        localSwitch: null,
+      });
+      render(<ModelPicker disabled={false} />);
+      fireEvent.click(screen.getByText("Claude Sonnet 4.6"));
+      return screen.getByLabelText("Search models");
+    };
+
+    it("filters saved models as you type", async () => {
+      const input = setup();
+      await screen.findByLabelText("$3 in, $15 out per million tokens");
+      fireEvent.change(input, { target: { value: "zzz" } });
+      expect(screen.queryByTitle("claude-sonnet-4-6")).toBeNull();
+      expect(screen.getByText(/No models match/)).toBeInTheDocument();
+    });
+
+    it("offers an unsaved catalog model and adds + selects it on click", async () => {
+      const input = setup();
+      await screen.findByLabelText("$3 in, $15 out per million tokens");
+      fireEvent.change(input, { target: { value: "muse" } });
+      fireEvent.click(await screen.findByTitle("Add muse-spark-1-1 to your models"));
+      await waitFor(() => expect(addCloudModel).toHaveBeenCalledWith("muse-spark-1-1", "Muse Spark 1.1"));
+      await waitFor(() => expect(setModel).toHaveBeenCalledWith("muse-spark-1-1"));
+    });
+
+    it("never offers non-chat models", async () => {
+      const input = setup();
+      await screen.findByLabelText("$3 in, $15 out per million tokens");
+      fireEvent.change(input, { target: { value: "pix" } });
+      expect(screen.queryByText("Pix Gen")).toBeNull();
+    });
+
+    it("reports a failed add and keeps the menu open", async () => {
+      addCloudModel.mockRejectedValueOnce("disk full");
+      const input = setup();
+      await screen.findByLabelText("$3 in, $15 out per million tokens");
+      fireEvent.change(input, { target: { value: "muse" } });
+      fireEvent.click(await screen.findByTitle("Add muse-spark-1-1 to your models"));
+      expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't add muse-spark-1-1: disk full");
+      expect(setModel).not.toHaveBeenCalled();
+    });
   });
 });

@@ -1127,6 +1127,34 @@
   padding: var(--space-1);
 }
 
+/* Type-to-find box pinned above the scrolling list. */
+.picker-search {
+  flex: 0 0 auto;
+  margin: 0 0 var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.picker-search:focus {
+  border-color: var(--accent);
+}
+.menu-item .menu-add {
+  opacity: 1;
+  color: var(--text-tertiary);
+}
+.menu-empty {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.menu-error {
+  color: var(--danger);
+}
+
 /* Reopen the chat's canvas after the panel was closed (top-right of messages). */
 .reopen-canvas {
   position: absolute;
