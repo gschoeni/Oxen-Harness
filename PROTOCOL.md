@@ -81,7 +81,7 @@ Sessions and turns:
 ```
 GET    /v1/sessions                     list (SessionSummary[])
 POST   /v1/sessions                     new chat → SessionInfo
-GET    /v1/sessions/{id}                resume → SessionView {info, messages, running}
+GET    /v1/sessions/{id}                resume → SessionView {info, messages, running, pending} — `pending` replays the `agent.question`/`agent.approval_request` a running turn is parked on, for a client that missed the live event
 DELETE /v1/sessions/{id}
 GET    /v1/sessions/{id}/messages       raw persisted transcript (JSON values)
 POST   /v1/sessions/{id}/turns          {prompt, attachments?} → {text}

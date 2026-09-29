@@ -1372,10 +1372,50 @@ impl SessionService {
     // --- Session commands -------------------------------------------------------
 
     /// Report the current session info, initializing the agent if needed.
+    /// A chat mid-turn holds its agent lock for the whole turn, so this
+    /// never waits on it: the vitals fall back to what the store knows (see
+    /// [`Self::mid_turn_info`]) rather than stalling a client's boot behind
+    /// a turn that may be parked on the user.
     pub async fn session_info(&self) -> Result<SessionInfo, String> {
         let arc = self.current_agent().await?;
-        let agent = arc.lock().await;
-        Ok(self.info_for(&agent))
+        if let Ok(agent) = arc.try_lock() {
+            return Ok(self.info_for(&agent));
+        }
+        let id = { self.current.lock().await.clone() }
+            .ok_or_else(|| "no current session".to_string())?;
+        Ok(self.mid_turn_info(&id))
+    }
+
+    /// The best info available for a session whose agent can't be read
+    /// (a turn holds its lock): the model and workspace the store recorded
+    /// for it, with the live counters zeroed — a client showing this must
+    /// still know which model it is talking to.
+    fn mid_turn_info(&self, id: &str) -> SessionInfo {
+        let model = self
+            .store
+            .as_ref()
+            .ok()
+            .and_then(|store| store.session_meta(id).ok())
+            .map(|meta| meta.model)
+            .unwrap_or_default();
+        SessionInfo {
+            model,
+            workspace: self.session_workspace(id).display().to_string(),
+            session_id: id.to_string(),
+            tokens_used: 0,
+            context_tokens: 0,
+            context_window: 0,
+            compression_mode: harness_runtime::compression::mode().as_str().to_string(),
+        }
+    }
+
+    /// The round-trips `session`'s running turn is parked on (a question or
+    /// approval awaiting the client), for replay to a client that missed
+    /// the original events.
+    pub fn pending_for(&self, session: &str) -> Vec<ProtocolEvent> {
+        let mut pending = self.pending_questions.pending_for(session);
+        pending.extend(self.pending_approvals.pending_for(session));
+        pending
     }
 
     /// Start a fresh chat session as its own agent. Any in-flight chats keep
@@ -1427,22 +1467,18 @@ impl SessionService {
                     info: self.info_for(&agent),
                     messages,
                     running: false,
+                    pending: Vec::new(),
                 }
             }
             // Mid-turn: can't read it. The client keeps its live in-memory
-            // thread; the explicit `running` flag says not to touch it.
+            // thread; the explicit `running` flag says not to touch it. A
+            // client that lost that thread (a reload) also gets whatever the
+            // turn is waiting on it for, so it can answer instead of hang.
             Err(_) => SessionView {
-                info: SessionInfo {
-                    model: String::new(),
-                    workspace: workspace.display().to_string(),
-                    session_id: id.to_string(),
-                    tokens_used: 0,
-                    context_tokens: 0,
-                    context_window: 0,
-                    compression_mode: harness_runtime::compression::mode().as_str().to_string(),
-                },
+                info: self.mid_turn_info(id),
                 messages: vec![],
                 running: true,
+                pending: self.pending_for(id),
             },
         };
         Ok(view)
@@ -1733,6 +1769,7 @@ impl SessionService {
         // steering channel so a later interject falls back to a normal prompt.
         self.cancels.lock().await.remove(session);
         self.interjections.lock().await.remove(session);
+        self.forget_pending(session);
         // After a successful turn, claim any steering that landed after the
         // final drain — before evict_idle below can drop the buffer with the
         // agent. The caller runs it as its own follow-up turn.
@@ -1774,6 +1811,17 @@ impl SessionService {
         if let Some(token) = self.cancels.lock().await.get(session) {
             token.cancel();
         }
+        // A turn parked on the user (a question, an approval) never polls its
+        // stop signal — the tool is awaiting an answer. Dropping the parked
+        // channels returns the tool with "no answer", and the turn loop then
+        // sees the cancel at its next check.
+        self.forget_pending(session);
+    }
+
+    /// Drop every question/approval `session`'s turn was waiting on.
+    fn forget_pending(&self, session: &str) {
+        self.pending_questions.forget_session(session);
+        self.pending_approvals.forget_session(session);
     }
 
     /// Stop one running lane (one subagent of a fleet) in `session`; the

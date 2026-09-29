@@ -31,12 +31,16 @@ pub struct HostAsker {
 #[async_trait]
 impl QuestionAsker for HostAsker {
     async fn ask(&self, questions: &[Question]) -> Result<Option<Vec<QuestionAnswer>>, ToolError> {
-        let (id, rx) = self.pending.register("q");
-        self.sink.emit(ProtocolEvent::Question {
+        let (id, rx) = self.pending.register("q", &self.session);
+        let request = ProtocolEvent::Question {
             session: self.session.clone(),
             id: id.clone(),
             questions: questions.iter().map(translate::question).collect(),
-        });
+        };
+        // Remembered before it goes out, so a client that reconnects while
+        // we wait can be handed the same question (see `SessionView::pending`).
+        self.pending.announce(&id, request.clone());
+        self.sink.emit(request);
         match rx.await {
             Ok(answers) => Ok(Some(answers)),
             Err(_) => {
@@ -63,8 +67,8 @@ impl harness_permissions::CommandApprover for HostApprover {
         &self,
         request: &harness_permissions::ApprovalRequest,
     ) -> Result<Option<harness_permissions::ApprovalDecision>, String> {
-        let (id, rx) = self.pending.register("a");
-        self.sink.emit(ProtocolEvent::ApprovalRequest {
+        let (id, rx) = self.pending.register("a", &self.session);
+        let event = ProtocolEvent::ApprovalRequest {
             session: self.session.clone(),
             id: id.clone(),
             kind: translate::approval_kind(request.kind),
@@ -75,7 +79,9 @@ impl harness_permissions::CommandApprover for HostApprover {
             grant_label: request.grant_label.clone(),
             offer_project_grant: request.offer_project_grant,
             offer_trash: request.offer_trash,
-        });
+        };
+        self.pending.announce(&id, event.clone());
+        self.sink.emit(event);
         match rx.await {
             Ok(answer) => Ok(Some(translate::approval_decision(answer))),
             Err(_) => {

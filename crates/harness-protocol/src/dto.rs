@@ -4,6 +4,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::ProtocolEvent;
+
 /// One selectable choice within a [`Question`]. Serde-compatible with
 /// `harness_tools::Choice` (pinned by a wire test).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -72,6 +74,12 @@ pub struct SessionView {
     pub info: SessionInfo,
     pub messages: Vec<serde_json::Value>,
     pub running: bool,
+    /// What the running turn is parked on right now — an `agent.question`
+    /// or `agent.approval_request` the client must answer — replayed here so
+    /// a client that missed the original event (a reloaded webview, a fresh
+    /// HTTP subscriber) can still answer it. Empty when nothing is pending.
+    #[serde(default)]
+    pub pending: Vec<ProtocolEvent>,
 }
 
 /// A request to run one user turn.
