@@ -23,7 +23,7 @@ oxen-harness/
   rust-toolchain.toml        — Pinned toolchain + components.
   crates/
     harness-core/            — Shared message/role types, defaults, bounded stream text, and copied-around helpers (slug/ellipsize/tail_chars, format_bytes/human_tokens, lenient JSON extraction). Leaf crate.
-    harness-config/          — Single source for ~/.oxen-harness paths; atomic + schema-versioned config IO; .env secrets (dotenvy).
+    harness-config/          — Single source for ~/.oxen-harness paths; atomic + schema-versioned config IO; .env secrets (dotenvy); startup release flags (features.rs).
     harness-http/            — Retry schedule (`Backoff`), `Retry-After` parsing, and `send_with_retry` for every HTTP call. Leaf crate over reqwest so tools share it without linking the LLM client.
     harness-llm/             — Oxen.ai chat client: tool calling + SSE; lightweight auth; attachment store (content-addressed on-disk files) + hydration.
     harness-compress/        — Reversible context compression for tool output: JSON-array crushing, log/line collapsing, CCR store (`<<ccr:hash>>` markers resolved by retrieve_original).
@@ -167,6 +167,9 @@ When adding a new file to the project, update this document map.
 | `app/WORKBENCH.md` | User workflow guide, bundled-module SDK, installed package contract. |
 | `app/src/workbench-sdk/` | Public view/document API, shared draft store; portable browser SDK lives in `packages/view-sdk/`. |
 | `app/src/features/workbench/` | Conversation contexts, registry, host chrome, package manager/native mounting. |
+| `crates/harness-config/src/features.rs` | Default-off work-panel customization flag, captured by the host and enforced by authoring/package entry points. |
+| `app/src/lib/features.ts` | Host feature flags loaded before the UI/store; startup failure and opt-in coverage in `features.test.ts`. |
+| `plans/workbench-release-flag.md` | Release-scope gate, verification and dedicated review record. |
 | `app/src/modules/` | Auto-discovered bundled view adapters and Oxen workflow reference. |
 | `app/src/modules/oxen-workflow/{NodeCard,NodeInspector}.tsx` | Graph cards, typed handles, model parameters and output previews. |
 | `app/src/features/workbench/api.test.tsx` | Late module callbacks retain their originating conversation. |

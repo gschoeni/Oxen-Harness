@@ -75,6 +75,27 @@ toolchain.
   above the composer shows each parallel agent — click a lane to watch its
   output stream.
 
+### Work panel customization (experimental)
+
+Customization is **off by default for this release**. Files still open in their
+built-in viewers, including source, media, canvases and Oxen workflow graphs.
+The view picker, customization cards, View Studio and installed view packages
+are hidden; native package operations and the agent's `develop_view` tool are
+disabled. Package sources, installations and saved history stay on disk.
+
+To work on these experimental features, fully quit the app and launch its host
+with `OXEN_WORKBENCH_CUSTOMIZATION=1` (or `true`). For example, from `app/`:
+
+```sh
+OXEN_WORKBENCH_CUSTOMIZATION=1 cargo tauri dev
+```
+
+Unset the variable and restart to return to the release experience. The host
+captures the flag once at startup and supplies it to the UI; it is not a Vite
+build flag or a saved user preference. Changing it needs a restart, not a new
+build. An old package view falls back to a built-in file viewer when possible;
+an old authoring screen returns to the file-focused welcome screen.
+
 ### Frontend layout (how to extend)
 
 The structure mirrors the sibling `ArxivDiver` app — feature folders plus a thin

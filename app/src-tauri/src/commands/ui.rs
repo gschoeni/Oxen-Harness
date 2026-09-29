@@ -6,6 +6,13 @@
 
 use harness_config::paths;
 
+#[tauri::command]
+pub(crate) fn feature_flags(
+    state: tauri::State<'_, crate::state::AppState>,
+) -> harness_config::features::FeatureFlags {
+    state.feature_flags()
+}
+
 /// The saved UI preferences, or `None` on first run (no `ui.json` yet, or one
 /// that doesn't parse — either way the frontend starts from defaults).
 #[tauri::command]

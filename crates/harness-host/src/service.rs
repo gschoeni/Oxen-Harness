@@ -280,6 +280,7 @@ enum TurnKind {
 /// Configures and builds a [`SessionService`].
 pub struct SessionServiceBuilder {
     sink: Arc<dyn EventSink>,
+    features: harness_config::features::FeatureFlags,
     cloud_model: Option<String>,
     active_project: Option<PathBuf>,
     store: Option<Arc<HistoryStore>>,
@@ -288,6 +289,12 @@ pub struct SessionServiceBuilder {
 }
 
 impl SessionServiceBuilder {
+    /// Override the startup feature flags (default: process environment).
+    pub fn feature_flags(mut self, features: harness_config::features::FeatureFlags) -> Self {
+        self.features = features;
+        self
+    }
+
     /// The cloud model new sessions start on. Default: the persisted selection.
     pub fn cloud_model(mut self, model: impl Into<String>) -> Self {
         self.cloud_model = Some(model.into());
@@ -327,6 +334,7 @@ impl SessionServiceBuilder {
     pub fn build(self) -> SessionService {
         SessionService {
             sink: self.sink,
+            features: self.features,
             store: self
                 .store
                 .map(Ok)
@@ -405,6 +413,7 @@ pub fn launch_dir() -> PathBuf {
 /// legitimately reach the managers and pending maps directly.
 pub struct SessionService {
     pub sink: Arc<dyn EventSink>,
+    features: harness_config::features::FeatureFlags,
     /// The history store every agent persists to. `Err` when the on-disk
     /// database couldn't open (checked at first use so construction is
     /// infallible, mirroring how hosts always open a window/socket first).
@@ -477,6 +486,7 @@ impl SessionService {
     pub fn builder(sink: Arc<dyn EventSink>) -> SessionServiceBuilder {
         SessionServiceBuilder {
             sink,
+            features: harness_config::features::FeatureFlags::from_env(),
             cloud_model: None,
             active_project: None,
             store: None,
@@ -488,6 +498,10 @@ impl SessionService {
     /// The history store, or why it couldn't open.
     pub fn store(&self) -> Result<Arc<HistoryStore>, String> {
         self.store.clone()
+    }
+
+    pub fn feature_flags(&self) -> harness_config::features::FeatureFlags {
+        self.features
     }
 
     // --- Client & model selection -------------------------------------------
@@ -954,6 +968,7 @@ impl SessionService {
         )
         .with_asides(tools.asides());
         let workbench = Arc::new(crate::workbench::Workbench {
+            features: self.features,
             docs: harness_runtime::documents::Documents::new(workspace_root)
                 .map_err(|e| e.to_string())?,
             session: session.into(),
@@ -985,7 +1000,9 @@ impl SessionService {
         tools.register_typed(harness_tools::views::OpenViewTool(view_host.clone()));
         tools.register_typed(harness_tools::views::InspectViewTool(view_host.clone()));
         tools.register_typed(harness_tools::views::RunWorkflowTool(view_host.clone()));
-        tools.register_typed(harness_tools::views::DevelopViewTool(view_host));
+        if self.features.workbench_customization {
+            tools.register_typed(harness_tools::views::DevelopViewTool(view_host));
+        }
         let (media_models, generate_image, generate_video, media_status) =
             harness_media::session_tools(media_ctx);
         tools.register_typed(media_models);

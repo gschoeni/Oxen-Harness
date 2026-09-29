@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { viewPackagesRequest } from "../../lib/ipc";
+import { workbenchCustomizationEnabled } from "../../lib/features";
 import { registerView, removeView, views } from "./registry";
 import { PackageSurface } from "./PackageSurface";
 
@@ -41,6 +42,7 @@ function matches(pattern: string, path: string) {
 }
 
 export async function refreshPackages() {
+  if (!workbenchCustomizationEnabled()) return [];
   const packages = await viewPackagesRequest<ViewPackage[]>("list");
   for (const view of views().filter((v) => v.id.startsWith("package:")))
     removeView(view.id);

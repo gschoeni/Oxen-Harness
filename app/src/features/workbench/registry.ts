@@ -1,5 +1,6 @@
-import type { ViewModule } from "../../workbench-sdk";
+import type { ViewModule, ViewTarget } from "../../workbench-sdk";
 import { useSyncExternalStore } from "react";
+import { workbenchCustomizationEnabled } from "../../lib/features";
 
 const modules = new Map<string, ViewModule>();
 const listeners = new Set<() => void>();
@@ -29,8 +30,21 @@ export function useViewRegistry() {
   );
   return views();
 }
-export const views = () => [...modules.values()];
-export const viewById = (id: string) => modules.get(id);
+const viewEnabled = (id: string) =>
+  workbenchCustomizationEnabled() ||
+  !(id === "view-studio" || id === "view-manager" || id.startsWith("package:"));
+
+export const views = () => [...modules.values()].filter((view) => viewEnabled(view.id));
+export const viewById = (id: string) => viewEnabled(id) ? modules.get(id) : undefined;
+
+/** Old history can reference authoring screens or packages disabled this release. */
+export function availableTarget(target: ViewTarget): ViewTarget {
+  if (viewEnabled(target.view)) return target;
+  if (target.view.startsWith("package:") && target.path) {
+    return { ...target, view: resolveView(target.path) };
+  }
+  return { view: "welcome" };
+}
 export function resolveView(path: string) {
   if (path.startsWith("\0diff:")) return "editor";
   return (

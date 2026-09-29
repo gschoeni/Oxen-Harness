@@ -10,6 +10,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 impl Workbench {
     pub async fn develop(&self, args: DevelopViewArgs) -> Result<Value, String> {
+        self.features.require_workbench_customization()?;
         use DevelopAction::*;
         if !matches!(args.action, Check | Status) {
             self.allow_action("develop_view").await?;
@@ -86,6 +87,7 @@ impl Workbench {
         Ok(json!(status))
     }
     pub async fn preview_lease(&self) -> Result<(Package, Arc<AtomicBool>), String> {
+        self.features.require_workbench_customization()?;
         self.development
             .lock()
             .await

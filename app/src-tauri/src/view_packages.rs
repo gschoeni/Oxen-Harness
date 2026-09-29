@@ -77,11 +77,13 @@ fn still_installed(lease: &Lease) -> Result<(), String> {
 #[tauri::command]
 pub(crate) async fn view_packages_request(
     app: AppHandle,
+    state: tauri::State<'_, AppState>,
     action: String,
     source: Option<String>,
     digest: Option<String>,
     id: Option<String>,
 ) -> Result<Value, String> {
+    state.feature_flags().require_workbench_customization()?;
     match action.as_str() {
         "list" => Ok(json!(view_packages::installed()?)),
         "inspect" => Ok(json!(view_packages::inspect(std::path::Path::new(
@@ -136,6 +138,7 @@ pub(crate) async fn view_package_mount(
     state: tauri::State<'_, AppState>,
     options: MountOptions,
 ) -> Result<String, String> {
+    state.feature_flags().require_workbench_customization()?;
     let MountOptions {
         session,
         id,

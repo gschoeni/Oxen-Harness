@@ -3,7 +3,8 @@ import { ArrowLeft, ArrowRight, Pin, Workflow, PanelsTopLeft } from "lucide-reac
 import { Select } from "../../components/ui";
 import { useStore } from "../../lib/store";
 import { workbenchRequest } from "../../lib/ipc";
-import { views, viewById, useViewRegistry } from "./registry";
+import { workbenchCustomizationEnabled } from "../../lib/features";
+import { views, viewById, useViewRegistry, availableTarget } from "./registry";
 import { useWorkbenchAPI } from "./api";
 import type { ViewTarget } from "../../workbench-sdk";
 import "../../modules";
@@ -28,6 +29,7 @@ export function Workbench({ onResizeStart }: { onResizeStart?: (e: PointerEvent)
       })),
   );
   useEffect(() => {
+    if (!workbenchCustomizationEnabled()) return;
     void refreshPackages().catch((e) =>
       useStore.getState().addNotice(`Load installed views: ${String(e)}`),
     );
@@ -45,7 +47,7 @@ export function Workbench({ onResizeStart }: { onResizeStart?: (e: PointerEvent)
     <WorkbenchContent
       session={session.session_id}
       workspace={session.workspace}
-      target={context?.current ?? EMPTY_TARGET}
+      target={availableTarget(context?.current ?? EMPTY_TARGET)}
       onResizeStart={onResizeStart}
     />
   );
@@ -66,6 +68,8 @@ function WorkbenchContent({
   const api = useWorkbenchAPI({ session, workspace, target });
   const module = viewById(target.view);
   const Module = module?.component;
+  const Icon = module?.icon ?? PanelsTopLeft;
+  const customizable = workbenchCustomizationEnabled();
   useEffect(() => {
     api.report({ status: Module ? "mounted" : "unavailable" });
     return () => api.report({ status: "unmounted" });
@@ -98,7 +102,7 @@ function WorkbenchContent({
         >
           <ArrowRight size={14} />
         </button>
-        <Select
+        {customizable ? <Select
           className="workbench-view-select"
           label="Work view"
           placeholder="Choose a view"
@@ -115,7 +119,12 @@ function WorkbenchContent({
               paths: target.paths?.filter((path) => next?.matches?.(path)),
             });
           }}
-        />
+        /> : (
+          <span className="workbench-view-label">
+            <Icon size={16} aria-hidden="true" />
+            {module?.title ?? "Work panel"}
+          </span>
+        )}
         <span className="workbench-resource" title={target.path ?? target.url}>
           {target.path?.split("/").pop() ?? target.url ?? ""}
         </span>
@@ -138,19 +147,20 @@ function WorkbenchContent({
           ) : (
             <div className="workbench-welcome">
               <Workflow size={30} />
-              <h2>Your work, your view</h2>
+              <h2>{customizable ? "Your work, your view" : "Your work"}</h2>
               <p>
-                Build a workflow, preview an app, or open a file. This space follows your
-                conversation.
+                {customizable
+                  ? "Build a workflow, preview an app, or open a file. This space follows your conversation."
+                  : "Open a file to get started. This space follows your conversation."}
               </p>
-              <div className="workbench-choices">
+              {customizable && <div className="workbench-choices">
                 {views().map((view) => (
                   <button key={view.id} onClick={() => api.open({ view: view.id })}>
                     <strong>{view.title}</strong>
                     <span>{view.description}</span>
                   </button>
                 ))}
-              </div>
+              </div>}
               {target.view !== "welcome" && (
                 <p role="alert">
                   The view “{target.view}” is unavailable. Your files are still on disk.

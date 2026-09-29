@@ -2,6 +2,7 @@
 // never call `invoke`/`listen` directly.
 
 import { invoke } from "@tauri-apps/api/core";
+import type { FeatureFlags } from "./features";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -166,6 +167,8 @@ export const setToolDescription = (name: string, description: string | null) =>
 /** The saved UI preferences object, or null on first run. Loaded once at boot
  *  by `lib/uiState.ts` — components read through that cache, not this call. */
 export const loadUiState = () => invoke<Record<string, unknown> | null>("load_ui_state");
+/** The host's startup flags, shared with native and agent entry points. */
+export const loadFeatureFlags = () => invoke<FeatureFlags>("feature_flags");
 /** Persist the full UI preferences object (always the whole state). */
 export const saveUiState = (state: Record<string, unknown>) =>
   invoke<void>("save_ui_state", { state });

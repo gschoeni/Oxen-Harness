@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use harness_config::features::FeatureFlags;
 use harness_host::{EventSink, SessionService};
 use harness_llm::OxenClient;
 use harness_protocol::{ProtocolEvent, QuestionAnswer, ToolPhase};
@@ -61,10 +62,20 @@ fn service_for(
     sink: Arc<CollectingSink>,
     workspace: &std::path::Path,
 ) -> Arc<SessionService> {
+    service_with_features(server_url, sink, workspace, FeatureFlags::default())
+}
+
+fn service_with_features(
+    server_url: String,
+    sink: Arc<CollectingSink>,
+    workspace: &std::path::Path,
+    features: FeatureFlags,
+) -> Arc<SessionService> {
     isolate_config_home();
     let url = server_url.clone();
     Arc::new(
         SessionService::builder(sink)
+            .feature_flags(features)
             .cloud_model("claude-opus-4-8")
             .store(Arc::new(HistoryStore::open_in_memory().unwrap()))
             .active_project(workspace)
@@ -631,11 +642,84 @@ async fn bundled_view_descriptors_are_discoverable_and_openable_without_backend_
 }
 
 #[tokio::test]
+async fn release_flags_disable_authoring_but_keep_file_views_and_workflows() {
+    use serde_json::json;
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(
+        "http://127.0.0.1:1".into(),
+        Arc::new(CollectingSink::default()),
+        workspace.path(),
+    );
+    let session = service.new_session().await.unwrap().session_id;
+    let agent = service.agent_or_build(&session).await.unwrap();
+    let tools = agent.lock().await.tool_definitions();
+    assert!(!tools
+        .iter()
+        .any(|tool| tool["function"]["name"] == "develop_view"));
+    assert!(tools
+        .iter()
+        .any(|tool| tool["function"]["name"] == "open_view"));
+    for action in ["scaffold", "preview", "check", "status", "install"] {
+        let error = service
+            .workbench_request(
+                &session,
+                "develop",
+                json!({
+                    "action": action, "source": "views/demo", "id": "demo.view", "title": "Demo"
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("customization is disabled"), "{error}");
+    }
+    assert!(!workspace.path().join("views").exists());
+    assert!(service
+        .workbench(&session)
+        .await
+        .unwrap()
+        .preview_lease()
+        .await
+        .is_err());
+    for view in ["view-studio", "view-manager"] {
+        assert!(service.workbench_request(&session, "register_views", json!({"views":[{
+            "id": view, "title": "Authoring", "description": "", "file_patterns": [], "requires_file": false
+        }]})).await.unwrap_err().contains("customization is disabled"));
+        assert!(service
+            .workbench_request(&session, "open", json!({"view":view}))
+            .await
+            .is_err());
+    }
+    for (path, expected) in [
+        ("notes.txt", "editor"),
+        ("studio.graph.json", "workflow"),
+        ("report.canvas.json", "canvas"),
+    ] {
+        service
+            .save_document(&session, path, "{}", None)
+            .await
+            .unwrap();
+        assert_eq!(service.read_document(&session, path).unwrap().content, "{}");
+        let opened = service
+            .workbench_request(&session, "open", json!({"path":path}))
+            .await
+            .unwrap();
+        assert_eq!(opened["view"], expected);
+    }
+}
+
+#[tokio::test]
 async fn view_authoring_is_workspace_scoped_and_keeps_drafts_per_conversation() {
     use serde_json::json;
     let workspace = tempfile::tempdir().unwrap();
     let sink = Arc::new(CollectingSink::default());
-    let service = service_for("http://127.0.0.1:1".into(), sink, workspace.path());
+    let service = service_with_features(
+        "http://127.0.0.1:1".into(),
+        sink,
+        workspace.path(),
+        FeatureFlags {
+            workbench_customization: true,
+        },
+    );
     let first = service.new_session().await.unwrap().session_id;
     let second = service.new_session().await.unwrap().session_id;
     let result = service

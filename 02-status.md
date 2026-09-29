@@ -32,6 +32,15 @@
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
 > **652 Rust tests + 230 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
 
+## Work panel release scope — 2026-09-28
+
+Work-panel customization now defaults off. The view picker, welcome shortcuts,
+View Studio, installed packages and authoring operations share the host's
+`OXEN_WORKBENCH_CUSTOMIZATION` startup flag. Built-in file viewers and saved
+workflow graphs remain available; old customization contexts fall back without
+deleting users' files or packages. The flag can be enabled for hardening work
+without rebuilding. See `app/README.md` and `plans/workbench-release-flag.md`.
+
 ## Shared view selector — 2026-09-19
 
 The work-view picker now uses a shared `Select` over the existing menu primitives:

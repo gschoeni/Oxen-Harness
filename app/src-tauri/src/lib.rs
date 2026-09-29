@@ -324,6 +324,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::theme::theme_location,
                 commands::theme::set_theme_location,
                 commands::ui::load_ui_state,
+                commands::ui::feature_flags,
                 commands::ui::save_ui_state
             ];
             handler(invoke)

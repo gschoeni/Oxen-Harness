@@ -1,13 +1,15 @@
 //! Shared configuration plumbing for oxen-harness.
 //!
-//! Three concerns the CLI, desktop app, and library crates all share:
+//! Configuration the CLI, desktop app, and library crates all share:
 //!
 //! - [`paths`] — the one place that knows where `~/.oxen-harness` and everything
 //!   under it lives.
 //! - [`io`] — atomic, schema-versioned reads/writes for JSON config files.
 //! - [`secrets`] — API keys kept in a `.env` file, loaded into the environment
 //!   and never written into the versioned config.
+//! - [`features`] — release switches shared by the host and frontend.
 
+pub mod features;
 pub mod io;
 pub mod paths;
 pub mod secrets;

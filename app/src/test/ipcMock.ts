@@ -231,6 +231,7 @@ const emptyView: SessionView = { info: sampleSession, messages: [], running: fal
 // ---- mocked command + event functions --------------------------------------
 
 export const loadUiState = vi.fn(async () => null as Record<string, unknown> | null);
+export const loadFeatureFlags = vi.fn(async () => ({ workbench_customization: false }));
 export const saveUiState = vi.fn(async (_state: Record<string, unknown>) => {});
 export const sessionInfo = vi.fn(async () => sampleSession);
 export const listSessions = vi.fn(async () => []);

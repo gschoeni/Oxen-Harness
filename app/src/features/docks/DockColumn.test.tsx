@@ -3,6 +3,8 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
+vi.mock("../../lib/features", () => ({ workbenchCustomizationEnabled: vi.fn(() => false) }));
+import { workbenchCustomizationEnabled } from "../../lib/features";
 
 import { DockColumn } from "./DockColumn";
 import { useStore } from "../../lib/store";
@@ -36,6 +38,7 @@ const openCanvas = () =>
 
 beforeEach(() => {
   resetAll();
+  vi.mocked(workbenchCustomizationEnabled).mockReturnValue(false);
   localStorage.clear();
   useStore.setState({
     session: { ...ipc.sampleSession, session_id: "s1" },
@@ -79,14 +82,16 @@ describe("Dock columns", () => {
     expect(saved?.widths.right).toBe(640);
   });
 
-  it("an empty conversation offers the work view picker", () => {
+  it("an empty conversation offers a file-focused work panel", () => {
     // No dev server, no canvas → the right side has no docks at all.
     const { container } = render(<DockColumn side="right" />);
     expect(container.querySelector(".workbench")).toBeInTheDocument();
-    expect(screen.getByRole("combobox",{name:"Work view"})).toBeInTheDocument();
+    expect(screen.queryByRole("combobox",{name:"Work view"})).not.toBeInTheDocument();
+    expect(screen.getByText("Your work")).toBeInTheDocument();
   });
 
   it("uses one view picker without a second tab strip", async () => {
+    vi.mocked(workbenchCustomizationEnabled).mockReturnValue(true);
     previewReady();
     const { rerender } = render(<DockColumn side="right" />);
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();

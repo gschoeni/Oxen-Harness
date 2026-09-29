@@ -21,6 +21,7 @@ use std::{
 };
 
 pub struct Workbench {
+    pub features: harness_config::features::FeatureFlags,
     pub docs: Documents,
     pub session: String,
     pub sink: Arc<dyn EventSink>,
@@ -111,7 +112,11 @@ fn error(e: impl std::fmt::Display) -> ToolError {
 
 impl Workbench {
     fn definitions(&self) -> Result<Vec<harness_runtime::views::ViewDefinition>, String> {
-        let mut definitions = harness_runtime::views::available()?;
+        let mut definitions = if self.features.workbench_customization {
+            harness_runtime::views::available()?
+        } else {
+            harness_runtime::views::builtins()
+        };
         definitions.extend(
             self.renderer_views
                 .lock()
@@ -143,6 +148,9 @@ impl Workbench {
                 || !ids.insert(&view.id)
             {
                 return Err(format!("invalid bundled view id: {}", view.id));
+            }
+            if !self.features.allows_work_view(&view.id) {
+                self.features.require_workbench_customization()?;
             }
             for pattern in &view.file_patterns {
                 harness_runtime::views::validate_pattern(pattern)

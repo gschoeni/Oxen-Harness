@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { initUiState } from "./lib/uiState";
+import { initFeatureFlags } from "./lib/features";
 import "./styles/global.css";
 
 // UI prefs (color mode, dock layout, …) live in ~/.oxen-harness/ui.json and are
@@ -9,6 +10,10 @@ import "./styles/global.css";
 // are dynamic imports below, not static ones.
 async function boot() {
   await initUiState();
+  const featureError = await initFeatureFlags().then(
+    () => undefined,
+    (error) => `Custom work views are unavailable: ${String(error)}`,
+  );
 
   const [{ default: App }, { startAgentEventBridge }, { startCliOpenBridge }, { startLinkRouting }] =
     await Promise.all([
@@ -17,6 +22,11 @@ async function boot() {
       import("./lib/cliOpen"),
       import("./lib/links"),
     ]);
+
+  if (featureError) {
+    const { useStore } = await import("./lib/store");
+    useStore.getState().addNotice(featureError);
+  }
 
   // Subscribe to agent events once, outside React's lifecycle, so StrictMode's
   // double-invoked effects can't register duplicate listeners (which would render

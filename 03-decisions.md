@@ -1208,3 +1208,19 @@ settles.
 running state from the promise of the call that started it; a turn the host
 began on its own would stream into a chat that thinks it is idle. The CLI
 REPL still delivers at the next prompt.
+
+## Work panel customization is a release flag (2026-09-28)
+
+**Keep built-in file viewing, but default customization off until hardened.**
+`SessionService` captures `OXEN_WORKBENCH_CUSTOMIZATION` at startup (`1` or `true`
+enables it), and the desktop loads that same flag before the registry and store.
+The picker, welcome cards, View Studio, installed package discovery/mounting and
+agent authoring all follow this switch. Native/host authoring requests also
+check it, so hiding the UI does not leave a working authoring endpoint behind.
+Built-in viewers, file resolution and workflow documents remain available.
+
+A startup environment flag avoids a second frontend/backend configuration that
+can disagree, and allows hardening without recompilation. This is a release
+scope switch, not a security boundary against the agent's normal filesystem or
+shell tools. Existing source files, installed packages and saved history are
+preserved; disabled history targets get a safe display fallback.
