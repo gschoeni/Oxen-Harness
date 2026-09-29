@@ -5,7 +5,6 @@ import {
   useCallback,
   useMemo,
   useEffect,
-  useRef,
   useState,
   type DragEvent,
   type PointerEvent,
@@ -176,6 +175,7 @@ function CodeView({
   const target = useMemo(() => ({ view: "editor", path }), [path]);
   const api = useWorkbenchAPI({ session, workspace, target });
   const document = useDocument(api, path);
+  const [error, setError] = useState<string | null>(null);
   const [largePreview, setLargePreview] = useState<string>();
   const oversized = document.error?.includes("editable document limit") ?? false;
   useEffect(() => {
@@ -195,17 +195,17 @@ function CodeView({
       live = false;
     };
   }, [workspace, path, oversized]);
+  // What the editor shows: the shared draft (edits land there on every
+  // keystroke, so it is also what the preview renders), or a read-only copy of
+  // a file too large for the document store.
   const loaded = document.snapshot
     ? { doc: document.content, truncated: false }
     : largePreview !== undefined
       ? { doc: largePreview, truncated: true }
       : null;
   const dirty = document.dirty;
-  const [error, setError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
   const [selection, setSelection] = useState<EditorSelection | null>(null);
-  const buffer = useRef(document.content);
-  buffer.current = document.content;
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
@@ -327,18 +327,15 @@ function CodeView({
         {loaded &&
           renderer &&
           mode === "preview" &&
-          renderer.render(dirty ? buffer.current : loaded.doc, { workspace, path })}
+          renderer.render(loaded.doc, { workspace, path })}
         {loaded && (
           <div className="editor-raw" hidden={!!renderer && mode === "preview"}>
             <CodeEditor
-              initial={loaded.doc}
+              value={loaded.doc}
               filename={basename(path)}
               readOnly={loaded.truncated}
               wrap={wrap}
-              onChange={(doc) => {
-                buffer.current = doc;
-                if (!loaded.truncated) document.edit(doc);
-              }}
+              onChange={document.edit}
               onSelection={setSelection}
               onSave={() => void save()}
             />

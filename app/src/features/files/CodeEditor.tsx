@@ -5,9 +5,9 @@
 // Colors come from CSS variables (defined in files.css) so the editor follows
 // the app's theme and light/dark mode for free.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { basicSetup, EditorView } from "codemirror";
-import { Compartment, EditorState } from "@codemirror/state";
+import { Annotation, Compartment, EditorState } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { completeAnyWord } from "@codemirror/autocomplete";
@@ -61,6 +61,13 @@ const theme = EditorView.theme({
   },
 });
 
+/**
+ * Marks a buffer replacement driven by the `value` prop. The parent already
+ * holds that text, so reporting it back through `onChange` would be an echo —
+ * and for a read-only preview it would wrongly register as an edit.
+ */
+const fromValue = Annotation.define<boolean>();
+
 const highlight = HighlightStyle.define([
   { tag: [tags.keyword, tags.modifier, tags.operatorKeyword, tags.tagName], color: "var(--cm-keyword)" },
   { tag: [tags.string, tags.special(tags.string), tags.regexp], color: "var(--cm-string)" },
@@ -77,7 +84,7 @@ const highlight = HighlightStyle.define([
 ]);
 
 export function CodeEditor({
-  initial,
+  value,
   filename,
   readOnly = false,
   wrap = false,
@@ -85,12 +92,17 @@ export function CodeEditor({
   onSelection,
   onSave,
 }: {
-  /** The buffer's starting content; changing it rebuilds the editor. */
-  initial: string;
+  /**
+   * The buffer's content. The editor is the source of truth while the user
+   * types (each edit is reported through `onChange`); when `value` differs from
+   * the buffer — a reload from disk, a conflict resolved to the disk copy — the
+   * text is replaced in place, keeping the cursor and undo history.
+   */
+  value: string;
   /** Picks the language grammar (matched by name/extension, lazy-loaded). */
   filename: string;
   readOnly?: boolean;
-  /** Soft-wrap long lines. Toggles live — no rebuild, undo history kept. */
+  /** Soft-wrap long lines. */
   wrap?: boolean;
   onChange?: (doc: string) => void;
   onSelection?: (selection: EditorSelection | null) => void;
@@ -98,36 +110,38 @@ export function CodeEditor({
   onSave?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  // Latest callbacks without rebuilding the editor when they change identity.
+  // Latest callbacks, read at event time so a new closure identity never
+  // touches the editor.
   const cb = useRef({ onChange, onSelection, onSave });
   cb.current = { onChange, onSelection, onSave };
-  // Wrapping lives in a compartment so toggling reconfigures the live view;
-  // the ref carries the current value into (re)builds without being a dep.
+  // The view is built once per mount; everything that can change afterwards
+  // lives in a compartment (reconfigured live) or is dispatched as a change.
+  // Rebuilding on a prop change was the bug this replaces: the parent echoes
+  // every keystroke back as `value`, and a rebuild resets the cursor to 0.
   const view = useRef<EditorView | null>(null);
-  const wrapComp = useRef(new Compartment());
-  const wrapNow = useRef(wrap);
-  wrapNow.current = wrap;
-
-  useEffect(() => {
-    view.current?.dispatch({
-      effects: wrapComp.current.reconfigure(wrap ? EditorView.lineWrapping : []),
-    });
-  }, [wrap]);
+  const [compartments] = useState(() => ({
+    language: new Compartment(),
+    wrap: new Compartment(),
+    readOnly: new Compartment(),
+  }));
+  // Read by the build effect so the first state matches the current props
+  // without listing them as deps.
+  const props = useRef({ value, wrap, readOnly });
+  props.current = { value, wrap, readOnly };
 
   useEffect(() => {
     if (!host.current) return;
-    const language = new Compartment();
     const editor = new EditorView({
       parent: host.current,
       state: EditorState.create({
-        doc: initial,
+        doc: props.current.value,
         extensions: [
           basicSetup,
           theme,
           syntaxHighlighting(highlight),
-          language.of([]),
-          wrapComp.current.of(wrapNow.current ? EditorView.lineWrapping : []),
-          EditorState.readOnly.of(readOnly),
+          compartments.language.of([]),
+          compartments.wrap.of(wrapExtension(props.current.wrap)),
+          compartments.readOnly.of(EditorState.readOnly.of(props.current.readOnly)),
           // Word completion from the buffer, for every language — grammars
           // that ship real completions (html/css/…) add theirs on top.
           EditorState.languageData.of(() => [{ autocomplete: completeAnyWord }]),
@@ -142,7 +156,8 @@ export function CodeEditor({
             indentWithTab,
           ]),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) cb.current.onChange?.(update.state.doc.toString());
+            const typed = update.transactions.some((tr) => !tr.annotation(fromValue));
+            if (update.docChanged && typed) cb.current.onChange?.(update.state.doc.toString());
             if (update.selectionSet || update.docChanged) {
               const range = update.state.selection.main;
               cb.current.onSelection?.(
@@ -159,26 +174,57 @@ export function CodeEditor({
         ],
       }),
     });
-
     view.current = editor;
+    return () => {
+      view.current = null;
+      editor.destroy();
+    };
+  }, [compartments]);
 
-    let disposed = false;
+  useEffect(() => {
+    const editor = view.current;
+    if (!editor || editor.state.doc.toString() === value) return;
+    // Clamp rather than reset: after a reload the cursor stays near where the
+    // user was instead of jumping to the top.
+    const { anchor, head } = editor.state.selection.main;
+    editor.dispatch({
+      changes: { from: 0, to: editor.state.doc.length, insert: value },
+      selection: { anchor: Math.min(anchor, value.length), head: Math.min(head, value.length) },
+      annotations: fromValue.of(true),
+    });
+  }, [value]);
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: compartments.wrap.reconfigure(wrapExtension(wrap)) });
+  }, [compartments, wrap]);
+
+  useEffect(() => {
+    view.current?.dispatch({
+      effects: compartments.readOnly.reconfigure(EditorState.readOnly.of(readOnly)),
+    });
+  }, [compartments, readOnly]);
+
+  useEffect(() => {
     const description = LanguageDescription.matchFilename(languages, filename);
+    if (!description) {
+      view.current?.dispatch({ effects: compartments.language.reconfigure([]) });
+      return;
+    }
+    let stale = false;
     description
-      ?.load()
+      .load()
       .then((support) => {
-        if (!disposed) editor.dispatch({ effects: language.reconfigure(support) });
+        if (!stale) view.current?.dispatch({ effects: compartments.language.reconfigure(support) });
       })
       .catch(() => {
         /* no grammar for this file — plain text is fine */
       });
-
     return () => {
-      disposed = true;
-      view.current = null;
-      editor.destroy();
+      stale = true;
     };
-  }, [initial, filename, readOnly]);
+  }, [compartments, filename]);
 
   return <div ref={host} className="code-editor" />;
 }
+
+const wrapExtension = (wrap: boolean) => (wrap ? EditorView.lineWrapping : []);
