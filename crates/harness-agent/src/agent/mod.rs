@@ -333,7 +333,7 @@ impl Agent {
             .session_state(&session_id, RULE_HISTORY_STATE)?
             .unwrap_or_default();
         let steer = tools.steer_notifier();
-        let agent = Self {
+        let mut agent = Self {
             client,
             tools,
             usage_store: store.clone(),
@@ -376,7 +376,30 @@ impl Agent {
         // only in `load_session`, or a cold resume rejects edits to files the
         // transcript already read.
         agent.rehydrate_file_state();
+        agent.settle_unanswered_tool_calls()?;
         Ok(agent)
+    }
+
+    /// A transcript that ends on tool calls the model never heard back from
+    /// (the app closed, or the turn was stopped, while a tool ran — an
+    /// `ask_user_question` parked on the user, say) can't be continued as
+    /// is: the provider rejects a `tool_use` with no `tool_result`. Give
+    /// each such call a result that says what happened, persisted like any
+    /// other, so the next turn goes through and the model knows the call
+    /// did nothing rather than assuming it succeeded.
+    fn settle_unanswered_tool_calls(&mut self) -> Result<(), AgentError> {
+        let Some(missing) = unanswered_tool_call_ids(&self.messages) else {
+            return Ok(());
+        };
+        for id in missing {
+            self.push_synthetic(ChatMessage::tool_result(
+                id,
+                "This tool call was interrupted before it produced a result (the turn \
+                 was stopped or the app closed while it ran), so it did nothing. Ask \
+                 again or re-run it if it is still needed.",
+            ))?;
+        }
+        Ok(())
     }
 
     /// Drop (and stop) any in-flight speculative compaction summary — it was
@@ -1201,6 +1224,33 @@ fn sendable_arguments(arguments: &str) -> String {
     serde_json::json!({ "unparsed_arguments": arguments }).to_string()
 }
 
+/// The ids of the tool calls in a transcript's trailing assistant round that
+/// have no `tool` result yet — `None` when the transcript doesn't end on such
+/// a round (it ends on a reply, a user message, or a complete tool round).
+fn unanswered_tool_call_ids(messages: &[ChatMessage]) -> Option<Vec<String>> {
+    // Walk back over the trailing tool results to the round's assistant call.
+    let mut answered = std::collections::HashSet::new();
+    let mut i = messages.len();
+    while i > 0 && messages[i - 1].role == "tool" {
+        if let Some(id) = &messages[i - 1].tool_call_id {
+            answered.insert(id.clone());
+        }
+        i -= 1;
+    }
+    let round = messages.get(i.checked_sub(1)?)?;
+    if round.role != "assistant" {
+        return None;
+    }
+    let missing: Vec<String> = round
+        .tool_calls
+        .as_deref()?
+        .iter()
+        .filter(|call| !answered.contains(&call.id))
+        .map(|call| call.id.clone())
+        .collect();
+    (!missing.is_empty()).then_some(missing)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1788,5 +1838,109 @@ mod tests {
         assert_eq!(agent.messages().len(), 2);
         assert_eq!(agent.messages()[0].role, "system");
         assert_eq!(agent.messages()[1].content_text().as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn unanswered_tool_call_ids_finds_only_a_trailing_incomplete_round() {
+        use harness_llm::types::{FunctionCall, ToolCall};
+        let call = |id: &str| ToolCall {
+            id: id.into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "ask_user_question".into(),
+                arguments: "{}".into(),
+            },
+        };
+        // Ends on a call with no result at all.
+        let dangling = vec![
+            ChatMessage::user("hi"),
+            ChatMessage::assistant_with_tools(String::new(), vec![call("c1"), call("c2")]),
+        ];
+        assert_eq!(
+            unanswered_tool_call_ids(&dangling),
+            Some(vec!["c1".to_string(), "c2".to_string()])
+        );
+        // One of two answered: only the other is missing.
+        let half = [dangling.clone(), vec![ChatMessage::tool_result("c1", "ok")]].concat();
+        assert_eq!(
+            unanswered_tool_call_ids(&half),
+            Some(vec!["c2".to_string()])
+        );
+        // Complete round, plain reply, user last: nothing to settle.
+        let complete = [half.clone(), vec![ChatMessage::tool_result("c2", "ok")]].concat();
+        assert_eq!(unanswered_tool_call_ids(&complete), None);
+        assert_eq!(
+            unanswered_tool_call_ids(&[ChatMessage::assistant("done")]),
+            None
+        );
+        assert_eq!(unanswered_tool_call_ids(&[ChatMessage::user("hi")]), None);
+        assert_eq!(unanswered_tool_call_ids(&[]), None);
+    }
+
+    /// A stored transcript that stops on an unanswered tool call (the app
+    /// closed while `ask_user_question` waited) resumes with a persisted,
+    /// synthetic result for it, so the next turn is a valid request.
+    #[tokio::test]
+    async fn resume_settles_an_unanswered_tool_call_and_the_next_turn_goes_through() {
+        let mut server = mockito::Server::new_async().await;
+        let ok = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex(r#""tool_call_id":"c1""#.into()),
+                mockito::Matcher::Regex("interrupted before it produced a result".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose("picking up"))
+            .expect(1)
+            .create_async()
+            .await;
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "m");
+        for m in [
+            serde_json::json!({"role": "user", "content": "which pricing?"}),
+            serde_json::json!({"role": "assistant", "content": "asking", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "ask_user_question", "arguments": "{}"}}]}),
+        ] {
+            store.append_message(&session, &m).unwrap();
+        }
+        let mut agent = Agent::resume_from_store(
+            OxenClient::new(server.url(), "k", "m"),
+            harness_tools::ToolRegistry::new(),
+            store.clone(),
+            session.clone(),
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        // The settled result is in memory and on disk, flagged synthetic.
+        let last = agent.messages().last().unwrap();
+        assert_eq!(last.role, "tool");
+        assert_eq!(last.tool_call_id.as_deref(), Some("c1"));
+        let stored = store
+            .messages_typed_after::<ChatMessage>(&session, -1)
+            .unwrap();
+        assert_eq!(stored.last().unwrap().tool_call_id.as_deref(), Some("c1"));
+        // Resuming again does not stack a second result.
+        let again = Agent::resume_from_store(
+            OxenClient::new(server.url(), "k", "m"),
+            harness_tools::ToolRegistry::new(),
+            store.clone(),
+            session.clone(),
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            again.messages().iter().filter(|m| m.role == "tool").count(),
+            1
+        );
+
+        let text = agent.run_turn("go on", |_| {}).await.unwrap();
+        ok.assert_async().await;
+        assert_eq!(text, "picking up");
     }
 }
