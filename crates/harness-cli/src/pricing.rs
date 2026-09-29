@@ -78,6 +78,10 @@ pub(crate) fn is_warm() -> bool {
 /// `model`'s cached per-token input/output rates, or `None` when it isn't priced
 /// (unfetched, or absent from the catalog). The trailer shows this up front so
 /// the price is visible before the first token is even spent.
+///
+/// Once any catalog has landed ([`is_warm`]) the two `None`s mean the same
+/// thing — a fetch caches every listed model, so an unfetched model is an
+/// unlisted one — which is what lets the trailer call it "no rate".
 pub(crate) fn session_rate(model: &str) -> Option<ModelPricing> {
     cached(model)?
 }
@@ -189,6 +193,7 @@ mod tests {
             prompt_tokens: 8,
             completion_tokens: 2,
             ledger: None,
+            prior: crate::spend::Tokens::default(),
         };
         let lines = facts.lines(&ui);
         assert_eq!(lines.len(), 2, "{lines:?}");

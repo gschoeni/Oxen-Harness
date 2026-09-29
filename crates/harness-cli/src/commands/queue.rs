@@ -6,11 +6,8 @@
 //! [`crate::turn::run_turn_and_drain`], so a `/queue run` behaves exactly like sending
 //! each prompt in turn.
 
-use std::sync::Arc;
-
 use anyhow::Result;
 use harness_agent::Agent;
-use harness_store::HistoryStore;
 
 use crate::queue::MessageQueue;
 use crate::render::truncate;
@@ -24,7 +21,6 @@ pub async fn handle_repl(
     agent: &mut Agent,
     ui: &Ui,
     carryover: &mut String,
-    store: &Arc<HistoryStore>,
 ) -> Result<bool> {
     let rest = rest.unwrap_or_default();
     let mut parts = rest.splitn(2, char::is_whitespace);
@@ -80,7 +76,7 @@ pub async fn handle_repl(
             queue.clear();
             println!("  {}", ui.brown("🧹 Emptied the wagon"));
         }
-        "run" | "go" => return run_queue(queue, agent, ui, carryover, store).await,
+        "run" | "go" => return run_queue(queue, agent, ui, carryover).await,
         _ => println!(
             "  {}",
             ui.dim("queue: list | add <msg> | edit <n> <msg> | up <n> | down <n> | rm <n> | clear | run"),
@@ -96,7 +92,6 @@ async fn run_queue(
     agent: &mut Agent,
     ui: &Ui,
     carryover: &mut String,
-    store: &Arc<HistoryStore>,
 ) -> Result<bool> {
     let Some(first) = queue.pop_front() else {
         println!("  {}", ui.dim("the wagon is empty — nothing to send"));
@@ -113,7 +108,6 @@ async fn run_queue(
         ui,
         queue,
         carryover,
-        store,
     )
     .await
 }

@@ -16,12 +16,10 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use harness_agent::{Agent, AgentError, AgentEvent};
-use harness_store::HistoryStore;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::queue::MessageQueue;
 use crate::render::truncate;
-use crate::spend::Ledger;
 use crate::theme::Ui;
 use crate::turn::MeterFacts;
 
@@ -48,9 +46,7 @@ pub(crate) async fn run_prompt(
     first: crate::turn::TurnRequest,
     ui: &Ui,
     queue: &mut MessageQueue,
-    store: &Arc<HistoryStore>,
 ) -> Result<(bool, String)> {
-    let ledger = Ledger::for_agent(store, agent);
     let term = LiveTerminal::new(ui.decorates())?;
     let (rows, cols) = (term.rows, term.cols);
     // While the composer owns the terminal, a `spawn_agents` fleet must paint
@@ -75,7 +71,7 @@ pub(crate) async fn run_prompt(
         let mut s = state.borrow_mut();
         // Arm the meters with the ledger so mid-turn `Usage` events and lane
         // spend can rebuild the context trailer live, agent or no agent.
-        s.set_meters(MeterFacts::of(agent, Some(ledger.clone())));
+        s.set_meters(MeterFacts::of(agent));
         s.compression_line = crate::commands::compression::status_line(agent, ui);
     }
 
@@ -117,7 +113,7 @@ pub(crate) async fn run_prompt(
                     }
                     // Refresh the pinned meters (they sit above the divider,
                     // not in the scrollback) with the turn's totals.
-                    s.set_meters(MeterFacts::of(agent, Some(ledger.clone())));
+                    s.set_meters(MeterFacts::of(agent));
                     s.compression_line = crate::commands::compression::status_line(agent, ui);
                     s.render();
                 }

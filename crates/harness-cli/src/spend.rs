@@ -8,8 +8,10 @@
 //! is the same source the desktop meter prices, so the two front ends agree
 //! on what a chat cost.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use harness_agent::Agent;
 use harness_local::source::ModelPricing;
 use harness_store::{HistoryError, HistoryStore, ModelUsage};
 
@@ -21,6 +23,10 @@ use crate::pricing;
 pub(crate) struct Ledger {
     store: Arc<HistoryStore>,
     session: String,
+    /// Whether a read failure has been written to the developer log. The
+    /// meter re-reads the ledger on every usage event and lane spend, so a
+    /// ledger that stays broken is reported once, not once per repaint.
+    reported: Arc<AtomicBool>,
 }
 
 impl Ledger {
@@ -28,18 +34,89 @@ impl Ledger {
         Self {
             store,
             session: session.into(),
+            reported: Arc::default(),
         }
     }
 
-    /// The ledger for `agent`'s session in `store`.
-    pub(crate) fn for_agent(store: &Arc<HistoryStore>, agent: &harness_agent::Agent) -> Self {
-        Self::new(store.clone(), agent.session_id())
+    /// The ledger `agent`'s usage rows land in, or `None` for an agent whose
+    /// usage is attributed to no session (nothing to read back).
+    pub(crate) fn for_agent(agent: &Agent) -> Option<Self> {
+        let session = agent.usage_session();
+        (!session.is_empty()).then(|| Self::new(agent.usage_store().clone(), session))
     }
 
-    /// The session tree's spend, priced with whatever rates are cached.
-    pub(crate) fn spend(&self) -> Result<Spend, HistoryError> {
-        let rows = self.store.usage_for_tree_by_model(&self.session)?;
+    /// The root session's own recorded spend, lanes excluded.
+    pub(crate) fn root_usage(&self) -> Result<Tokens, HistoryError> {
+        let usage = self.store.usage_for_session(&self.session)?;
+        Ok(Tokens {
+            prompt: usage.prompt_tokens.max(0) as usize,
+            completion: usage.completion_tokens.max(0) as usize,
+        })
+    }
+
+    /// The session tree's spend plus `in_flight` — the root's call in
+    /// progress on `model`, which the ledger only sees once it settles —
+    /// priced with whatever rates are cached.
+    pub(crate) fn spend(&self, model: &str, in_flight: Tokens) -> Result<Spend, HistoryError> {
+        let mut rows = self.store.usage_for_tree_by_model(&self.session)?;
+        if in_flight.total() > 0 {
+            rows.push(in_flight.as_row(model));
+        }
         Ok(price_rows(&rows))
+    }
+
+    /// Leave a read failure where a developer will find it — once.
+    pub(crate) fn report_failure(&self, error: &HistoryError) {
+        if self.reported.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        harness_agent::errlog::record(
+            harness_config::paths::errors_log().ok().as_deref(),
+            "spend_ledger_read_failed",
+            serde_json::json!({ "session": self.session, "error": error.to_string() }),
+        );
+    }
+}
+
+/// A prompt/completion token pair.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Tokens {
+    pub(crate) prompt: usize,
+    pub(crate) completion: usize,
+}
+
+impl Tokens {
+    pub(crate) fn new(prompt: usize, completion: usize) -> Self {
+        Self { prompt, completion }
+    }
+
+    pub(crate) fn total(self) -> usize {
+        self.prompt + self.completion
+    }
+
+    pub(crate) fn plus(self, other: Tokens) -> Tokens {
+        Tokens::new(
+            self.prompt + other.prompt,
+            self.completion + other.completion,
+        )
+    }
+
+    /// `self - other`, floored at zero per component.
+    pub(crate) fn minus(self, other: Tokens) -> Tokens {
+        Tokens::new(
+            self.prompt.saturating_sub(other.prompt),
+            self.completion.saturating_sub(other.completion),
+        )
+    }
+
+    /// These tokens as one usage row on `model`, so they price like any other.
+    fn as_row(self, model: &str) -> ModelUsage {
+        ModelUsage {
+            model: model.to_string(),
+            source: String::new(),
+            prompt_tokens: self.prompt as i64,
+            completion_tokens: self.completion as i64,
+        }
     }
 }
 
@@ -57,16 +134,9 @@ impl Spend {
     }
 
     /// The root agent's own counters priced at its model's rate — the figure
-    /// to show when there is no ledger to read (tests, a session whose first
-    /// call hasn't landed in the ledger yet).
-    pub(crate) fn live(model: &str, prompt_tokens: usize, completion_tokens: usize) -> Self {
-        let rows = [ModelUsage {
-            model: model.to_string(),
-            source: String::new(),
-            prompt_tokens: prompt_tokens as i64,
-            completion_tokens: completion_tokens as i64,
-        }];
-        price_rows(&rows)
+    /// to show when there is no ledger to read.
+    pub(crate) fn live(model: &str, tokens: Tokens) -> Self {
+        price_rows(&[tokens.as_row(model)])
     }
 }
 
@@ -86,6 +156,11 @@ pub(crate) enum Price {
 }
 
 impl Price {
+    /// Whether every token in the spend is in the dollar figure.
+    pub(crate) fn is_complete(&self) -> bool {
+        matches!(self, Price::Priced(_))
+    }
+
     /// The trailer's price segment: `$1.23`, `$1.23 + no rate for m`, or
     /// `no rate for m`. `None` when there is nothing honest to show — no
     /// catalog yet, or a spend that rounds to nothing.
@@ -111,7 +186,7 @@ impl Price {
 }
 
 /// Price usage rows with the process-wide rate cache (see [`crate::pricing`]).
-pub(crate) fn price_rows(rows: &[ModelUsage]) -> Spend {
+fn price_rows(rows: &[ModelUsage]) -> Spend {
     price_rows_with(rows, pricing::is_warm(), pricing::session_rate)
 }
 
@@ -310,15 +385,30 @@ mod tests {
         crate::pricing::seed_for_test("ledger-root-model", rates("big"));
         crate::pricing::seed_for_test("ledger-lane-model", rates("small"));
 
-        let spend = Ledger::new(store.clone(), root.clone()).spend().unwrap();
+        let ledger = Ledger::new(store.clone(), root.clone());
+        let spend = ledger
+            .spend("ledger-root-model", Tokens::default())
+            .unwrap();
         // Tokens: root + both lanes; dollars: 0.27 + 0.11 + 0.11.
         assert_eq!(spend.prompt_tokens, 240_000);
         assert_eq!(spend.completion_tokens, 20_000);
         assert_eq!(spend.price.label().as_deref(), Some("$0.49"));
+        // The root's own rows are readable apart from the lanes'.
+        assert_eq!(ledger.root_usage().unwrap(), Tokens::new(40_000, 10_000));
+
+        // A call of the root's in flight (sent, not yet settled in the ledger)
+        // rides on top, priced at the root's rate: +20k in = +$0.06.
+        let climbing = ledger
+            .spend("ledger-root-model", Tokens::new(20_000, 0))
+            .unwrap();
+        assert_eq!(climbing.prompt_tokens, 260_000);
+        assert_eq!(climbing.price.label().as_deref(), Some("$0.55"));
 
         // A lane's own ledger sees only its subtree, so a watched lane can be
         // priced on its own too.
-        let lane_spend = Ledger::new(store, lane).spend().unwrap();
+        let lane_spend = Ledger::new(store, lane)
+            .spend("ledger-lane-model", Tokens::default())
+            .unwrap();
         assert_eq!(lane_spend.prompt_tokens, 200_000);
     }
 }

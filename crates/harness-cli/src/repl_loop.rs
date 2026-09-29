@@ -223,10 +223,7 @@ pub(crate) async fn run_box_repl(
                 ui.dim("— /queue to review, /queue run to send"),
             );
         }
-        let meters = crate::turn::MeterFacts::of(
-            agent,
-            Some(crate::spend::Ledger::for_agent(ctx.store, agent)),
-        );
+        let meters = crate::turn::MeterFacts::of(agent);
         let compression = commands::compression::status_line(agent, ui);
         let idle =
             live::read_idle(ui, &mut queue, &mut history, &seed, meters, compression).await?;
@@ -306,7 +303,7 @@ async fn handle_line(
         Command::Theme(args) => commands::theme::handle_repl(args, agent, ui).await?,
         Command::Queue(rest) => {
             // `/queue run` may stream turns that the user can Ctrl-C to quit.
-            if commands::queue::handle_repl(rest, queue, agent, ui, carryover, ctx.store).await? {
+            if commands::queue::handle_repl(rest, queue, agent, ui, carryover).await? {
                 print!("{}", theme::death_screen(ui, &ctx.session()));
                 return Ok(true);
             }
@@ -342,15 +339,8 @@ async fn handle_line(
             // takes exactly the path a typed message would.
             if let Some(prompt) = commands::plan::handle_repl(rest, agent, ui, ctx.workspace_root)?
             {
-                if run_turn_and_drain(
-                    agent,
-                    TurnRequest::Prompt(prompt),
-                    ui,
-                    queue,
-                    carryover,
-                    ctx.store,
-                )
-                .await?
+                if run_turn_and_drain(agent, TurnRequest::Prompt(prompt), ui, queue, carryover)
+                    .await?
                 {
                     print!("{}", theme::death_screen(ui, &ctx.session()));
                     return Ok(true);
@@ -381,32 +371,14 @@ async fn handle_line(
                 );
                 return Ok(false);
             }
-            if run_turn_and_drain(
-                agent,
-                TurnRequest::Continue,
-                ui,
-                queue,
-                carryover,
-                ctx.store,
-            )
-            .await?
-            {
+            if run_turn_and_drain(agent, TurnRequest::Continue, ui, queue, carryover).await? {
                 print!("{}", theme::death_screen(ui, &ctx.session()));
                 return Ok(true);
             }
         }
         Command::Prompt(prompt) => {
             // Ctrl-C mid-stream ends the expedition just like quitting does.
-            if run_turn_and_drain(
-                agent,
-                TurnRequest::Prompt(prompt),
-                ui,
-                queue,
-                carryover,
-                ctx.store,
-            )
-            .await?
-            {
+            if run_turn_and_drain(agent, TurnRequest::Prompt(prompt), ui, queue, carryover).await? {
                 print!("{}", theme::death_screen(ui, &ctx.session()));
                 return Ok(true);
             }

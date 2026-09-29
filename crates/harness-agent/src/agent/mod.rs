@@ -719,13 +719,20 @@ impl Agent {
 
     /// The session id usage rows are attributed to: the spawning session's
     /// for a detached agent, this agent's own when its transcript persists,
-    /// and none when neither applies.
-    fn usage_session(&self) -> &str {
+    /// and empty when neither applies (the rows are then attributed to no
+    /// session — a host must not read that empty id back as one).
+    pub fn usage_session(&self) -> &str {
         match &self.usage_session {
             Some(session) => session.as_str(),
             None if self.persist_transcript => self.session_id.as_str(),
             None => "",
         }
+    }
+
+    /// The store usage rows are written to (see [`Agent::usage_session`]):
+    /// where a host reads a session tree's spend back from.
+    pub fn usage_store(&self) -> &Arc<HistoryStore> {
+        &self.usage_store
     }
 
     /// The configuration this agent runs under.

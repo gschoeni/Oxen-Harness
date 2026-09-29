@@ -10,15 +10,13 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use anyhow::Result;
 use harness_agent::Agent;
-use harness_store::HistoryStore;
 
 use crate::queue::MessageQueue;
 use crate::render::{truncate, TurnRenderer};
-use crate::spend::{Ledger, Price, Spend};
+use crate::spend::{Ledger, Spend, Tokens};
 use crate::theme::Ui;
 use crate::{attach, brave, commands, live, pricing};
 
@@ -159,26 +157,22 @@ pub(crate) fn live_enabled(ui: &Ui) -> bool {
 /// runs the classic prompt and drains after.
 /// Returns `Ok(true)` when the session should end (Ctrl-D). A Ctrl-C only
 /// cancels the running turn and its drain — the caller returns to the prompt.
-///
-/// `store` is the session's history store, which the context trailer reads
-/// to price the whole session tree (subagent lanes included).
 pub(crate) async fn run_turn_and_drain(
     agent: &mut Agent,
     request: TurnRequest,
     ui: &Ui,
     queue: &mut MessageQueue,
     carryover: &mut String,
-    store: &Arc<HistoryStore>,
 ) -> Result<bool> {
     if live_enabled(ui) {
         // The live composer hands back any half-typed next message so the idle
         // prompt can keep it instead of wiping it when the turn ends.
-        let (exit, draft) = live::run_prompt(agent, request, ui, queue, store).await?;
+        let (exit, draft) = live::run_prompt(agent, request, ui, queue).await?;
         *carryover = draft;
         return Ok(exit);
     }
     if matches!(
-        run_prompt(agent, &request, ui, carryover, store).await?,
+        run_prompt(agent, &request, ui, carryover).await?,
         PromptOutcome::Interrupted
     ) {
         return Ok(false);
@@ -190,7 +184,7 @@ pub(crate) async fn run_turn_and_drain(
             ui.cream(&truncate(&next, 80)),
         );
         if matches!(
-            run_prompt(agent, &TurnRequest::Prompt(next), ui, carryover, store).await?,
+            run_prompt(agent, &TurnRequest::Prompt(next), ui, carryover).await?,
             PromptOutcome::Interrupted
         ) {
             return Ok(false);
@@ -220,7 +214,6 @@ async fn run_prompt(
     request: &TurnRequest,
     ui: &Ui,
     carryover: &mut String,
-    store: &Arc<HistoryStore>,
 ) -> Result<PromptOutcome> {
     let (text, attachments) = match request {
         TurnRequest::Prompt(prompt) => {
@@ -275,7 +268,7 @@ async fn run_prompt(
             // Learn this model's rate (once) so the trailer can show the
             // session's running cost. Cheap when already cached.
             pricing::warm_for(agent.base_url(), agent.model()).await;
-            print_context_usage(agent, ui, store);
+            print_context_usage(agent, ui);
             // Offer to set up web search if the model tried it without a key.
             if needs_brave_key {
                 brave::prompt_after_failed_search(ui);
@@ -298,9 +291,9 @@ async fn run_prompt(
 
 /// A subtle trailer showing how full the model's context window is, set apart
 /// from the turn's output by a blank line.
-fn print_context_usage(agent: &Agent, ui: &Ui, store: &Arc<HistoryStore>) {
+fn print_context_usage(agent: &Agent, ui: &Ui) {
     println!();
-    for line in MeterFacts::of(agent, Some(Ledger::for_agent(store, agent))).lines(ui) {
+    for line in MeterFacts::of(agent).lines(ui) {
         println!("{line}");
     }
 }
@@ -322,28 +315,48 @@ pub(crate) struct MeterFacts {
     pub(crate) window: usize,
     /// The current context fill.
     pub(crate) context_tokens: usize,
-    /// The root agent's own cumulative input tokens this run. The trailer
-    /// prefers the ledger (which also counts the lanes); these are what a
-    /// `Usage` event carries and what shows before the first call lands.
+    /// The root agent's own cumulative input tokens this run — what a
+    /// `Usage` event carries. They lead the ledger by the call in flight
+    /// (the agent counts a request the moment it's sent; the ledger sees it
+    /// when it settles), and that lead is what keeps the meter climbing.
     pub(crate) prompt_tokens: usize,
     /// The root agent's own cumulative output tokens this run.
     pub(crate) completion_tokens: usize,
     /// The session tree's usage ledger, subagents included. `None` prices
     /// the root's own counters alone.
     pub(crate) ledger: Option<Ledger>,
+    /// The root's ledger spend from before this run (a resumed session):
+    /// what its rows held beyond the live counters when the meters were
+    /// armed, so the call in flight can be told apart from history.
+    pub(crate) prior: Tokens,
 }
 
 impl MeterFacts {
-    /// Snapshot the trailer's inputs from `agent`.
-    pub(crate) fn of(agent: &Agent, ledger: Option<Ledger>) -> Self {
+    /// Snapshot the trailer's inputs from `agent`. Called between calls
+    /// (turn boundaries, the idle prompt, a model switch), when the live
+    /// counters and the ledger's root rows describe the same settled spend.
+    pub(crate) fn of(agent: &Agent) -> Self {
         remember_permission_mode(agent);
+        let live = Tokens::new(agent.prompt_tokens_used(), agent.completion_tokens_used());
+        let ledger = Ledger::for_agent(agent);
+        let prior = match ledger.as_ref().map(Ledger::root_usage) {
+            Some(Ok(root)) => root.minus(live),
+            Some(Err(e)) => {
+                if let Some(ledger) = &ledger {
+                    ledger.report_failure(&e);
+                }
+                Tokens::default()
+            }
+            None => Tokens::default(),
+        };
         Self {
             model: agent.model().to_string(),
             window: agent.context_window(),
             context_tokens: agent.context_tokens(),
-            prompt_tokens: agent.prompt_tokens_used(),
-            completion_tokens: agent.completion_tokens_used(),
+            prompt_tokens: live.prompt,
+            completion_tokens: live.completion,
             ledger,
+            prior,
         }
     }
 
@@ -365,24 +378,25 @@ impl MeterFacts {
         )
     }
 
-    /// What the session has spent: the ledger's tree total once anything has
-    /// landed in it, otherwise the root's own counters (which lead the ledger
-    /// by one call — the pre-call bump of the very first request).
+    /// What the session has spent: the ledger's tree total plus the root's
+    /// call in flight — the live counters' lead over the root's settled
+    /// rows — so the figure counts every lane and still moves the moment a
+    /// request is sent. Without a ledger, the root's own counters.
     fn spend(&self) -> Spend {
-        let live = || Spend::live(&self.model, self.prompt_tokens, self.completion_tokens);
-        match self.ledger.as_ref().map(Ledger::spend) {
-            Some(Ok(spend)) if spend.total_tokens() > 0 => spend,
-            Some(Ok(_)) | None => live(),
-            Some(Err(e)) => {
-                // The ledger is diagnostics for the meter, not state: fall
-                // back to the root's own figures and leave the cause where a
-                // developer will find it.
-                harness_agent::errlog::record(
-                    harness_config::paths::errors_log().ok().as_deref(),
-                    "spend_ledger_read_failed",
-                    serde_json::json!({ "model": self.model, "error": e.to_string() }),
-                );
-                live()
+        let live = Tokens::new(self.prompt_tokens, self.completion_tokens);
+        let Some(ledger) = &self.ledger else {
+            return Spend::live(&self.model, live);
+        };
+        let priced = ledger
+            .root_usage()
+            .and_then(|root| ledger.spend(&self.model, live.plus(self.prior).minus(root)));
+        match priced {
+            Ok(spend) => spend,
+            // The ledger is the meter's better source, not its only one: the
+            // root's own figures stand in, and the cause is logged once.
+            Err(e) => {
+                ledger.report_failure(&e);
+                Spend::live(&self.model, live)
             }
         }
     }
@@ -497,9 +511,10 @@ fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
     );
     let mut line2 = vec![Seg::new(totals.clone(), ui.dim(&totals), 0)];
     if let Some(price) = m.spend.price.label() {
-        let styled = match m.spend.price {
-            Price::Priced(_) => ui.accent(&price),
-            _ => ui.brown(&price),
+        let styled = if m.spend.price.is_complete() {
+            ui.accent(&price)
+        } else {
+            ui.brown(&price)
         };
         line2.push(Seg::new(price, styled, 4));
     }
@@ -628,7 +643,7 @@ mod tests {
     use super::{
         ends_mid_turn, meter_lines, read_branch, retry_notice, seed_retry, MeterFacts, Meters,
     };
-    use crate::spend::{Ledger, Spend};
+    use crate::spend::{Ledger, Spend, Tokens};
     use crate::theme::Ui;
     use harness_agent::AgentError;
     use harness_llm::{ChatMessage, LlmError};
@@ -658,6 +673,7 @@ mod tests {
             prompt_tokens: 40_000,
             completion_tokens: 10_000,
             ledger: None,
+            prior: Tokens::default(),
         };
         let lines = facts.lines(&ui);
         assert_eq!(lines.len(), 2, "two stacked lines: {lines:?}");
@@ -701,7 +717,7 @@ mod tests {
             model,
             used,
             window: 200_000,
-            spend: Spend::live(model, 40_000, 10_000),
+            spend: Spend::live(model, Tokens::new(40_000, 10_000)),
             branch: Some("wagon-trail".to_string()),
             mode: Some("cautious"),
         }
@@ -780,17 +796,18 @@ mod tests {
                 .unwrap();
         };
         let ui = plain_ui();
-        let facts = MeterFacts {
+        let mut facts = MeterFacts {
             model: "tree-root-model".to_string(),
             window: 200_000,
             context_tokens: 50_000,
             prompt_tokens: 40_000,
             completion_tokens: 10_000,
             ledger: Some(Ledger::new(store.clone(), root.clone())),
+            prior: Tokens::default(),
         };
 
         // Before the first call lands in the ledger, the root's own counters
-        // stand in (they lead the ledger by the pre-call bump).
+        // are the whole figure (the call in flight, priced at its rate).
         let early = facts.lines(&ui);
         assert!(early[1].contains("50.0k tokens used"), "{early:?}");
         assert!(early[1].contains("$0.27"), "{early:?}");
@@ -810,6 +827,27 @@ mod tests {
         // Line 1 still describes the root: its model, its context fill.
         assert!(tree[0].contains("tree-root-model"), "{tree:?}");
         assert!(tree[0].contains("50.0k / 200.0k"), "{tree:?}");
+
+        // The root sends its next request: the agent counts the prompt at
+        // once, the ledger only when the reply settles. The meter climbs by
+        // the lead (+20k in = +$0.06) instead of waiting for the call.
+        facts.prompt_tokens = 60_000;
+        let climbing = facts.lines(&ui);
+        assert!(climbing[1].contains("175.0k tokens used"), "{climbing:?}");
+        assert!(climbing[1].contains("$0.44"), "{climbing:?}");
+
+        // A resumed session: the root's rows predate this run's counters.
+        // What they held when the meters were armed is history, not a call
+        // in flight, so a fresh run reports the tree — and nothing twice.
+        let resumed = MeterFacts {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            prior: Tokens::new(40_000, 10_000),
+            ..facts.clone()
+        };
+        let lines = resumed.lines(&ui);
+        assert!(lines[1].contains("155.0k tokens used"), "{lines:?}");
+        assert!(lines[1].contains("$0.38"), "{lines:?}");
     }
 
     #[test]
