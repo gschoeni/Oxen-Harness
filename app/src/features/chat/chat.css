@@ -1107,8 +1107,9 @@
 .picker-menu {
   bottom: calc(100% + var(--space-1));
   left: 0;
-  min-width: 280px;
-  max-width: 380px;
+  /* Wide enough for "Claude Sonnet 4.6" beside an in/out price pair. */
+  min-width: 420px;
+  max-width: min(520px, calc(100vw - var(--space-4) * 2));
   /* Let the scroll region own the overflow so the setup actions stay pinned. */
   display: flex;
   flex-direction: column;
