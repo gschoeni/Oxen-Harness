@@ -1,5 +1,5 @@
 // The strip's keyboard, installed once at the app root (like the dock
-// shortcuts): ⌘T new chat · ⌘W close · ⌃Tab / ⌃⇧Tab and ⌘⇧→ / ⌘⇧← cycle ·
+// shortcuts): ⌘T new chat · ⌘W close · ⌃Tab / ⌃⇧Tab and ⌘⌥→ / ⌘⌥← cycle ·
 // ⌘1–8 jump, ⌘9 last · ⌘K the history. The chat ones stand down while Home, Settings,
 // or the history covers the chat; ⌘K works anywhere but Settings.
 
@@ -13,11 +13,13 @@ export function useChatTabShortcuts() {
       const mod = e.metaKey || e.ctrlKey;
       const plainMod = mod && !e.shiftKey && !e.altKey;
       const key = e.key.toLowerCase();
-      // ⌃Tab / ⌃⇧Tab and ⌘⇧→ / ⌘⇧← both walk the strip, wrapping at the ends.
+      // ⌃Tab / ⌃⇧Tab and ⌘⌥→ / ⌘⌥← both walk the strip, wrapping at the ends.
+      // Not ⌘⇧←→: that is "extend the selection to the line edge" in the code
+      // editor and the composer, and a global handler would steal it.
       const cycle =
         e.ctrlKey && e.key === "Tab"
           ? (e.shiftKey ? -1 : 1)
-          : mod && e.shiftKey && !e.altKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")
+          : mod && e.altKey && !e.shiftKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")
             ? (e.key === "ArrowRight" ? 1 : -1)
             : 0;
       if (plainMod && key === "k" && !s.settingsOpen) {

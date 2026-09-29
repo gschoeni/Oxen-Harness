@@ -54,7 +54,7 @@ toolchain.
   gives hot-module reload in `tauri dev`). **Projects** is the navigation root:
   choose a project to open its home (model-selectable, context-aware composer
   plus editable Instructions and Context cards), then work in its chats: each
-  open chat is a **tab** above the messages (＋ for a new one, ⌘T / ⌘W / ⌃Tab or ⌘⇧←→ /
+  open chat is a **tab** above the messages (＋ for a new one, ⌘T / ⌘W / ⌃Tab or ⌘⌥←→ /
   ⌘1–9 to drive them; double-click a tab to name the chat), and every tab wears a dot for its chat's standing —
   accent while running, amber when it needs you, green when it finished while
   you looked away, red when a reply never arrived. Closing a tab never stops
