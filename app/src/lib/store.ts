@@ -584,8 +584,8 @@ interface AppState {
   /** The preview page's most recent JavaScript error per session (absent =
    *  none) — drives the pane's "Fix it" banner. */
   previewErrors: Record<string, string | undefined>;
-  /** Which right-dock is active per session when more than one has content
-   *  (a dock id from the registry — see `features/docks/docks.tsx`). */
+  /** View explicitly opened for each session in this app run. Saved work
+   *  contexts retain history, but do not open a panel on startup. */
   rightTab: Record<string, RightTabId>;
   /** The URL open in the link-browser side panel (null = pane closed).
    *  App-wide, not per-session: it's a page the user is reading, not part of
@@ -1210,7 +1210,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     previewClosed: {},
     previewErrors: {},
     workContexts: getUi("workContexts") ?? {},
-    rightTab: Object.fromEntries(Object.entries(getUi("workContexts") ?? {}).map(([id, ctx]) => [id, ctx.current.view])),
+    rightTab: {},
     openWorkView: (session, target, agent = false) => {
       target = availableTarget(target);
       set((s) => {
@@ -1225,7 +1225,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         return { workContexts, rightTab: { ...s.rightTab, [session]: target.view },
           ...(target.view === "editor" && (target.paths || target.path) ? { editorTabs: { ...s.editorTabs, [session]: addEditorTab(s.editorTabs[session], target.paths ?? [target.path!]) } } : {}),
           ...(target.view === "canvas" && target.id ? { activeCanvas: { ...s.activeCanvas, [session]: target.id } } : {}),
-          ...(!agent ? { dockCollapsed: { ...s.dockCollapsed, right: false } } : {}),
+          ...(session === s.session?.session_id && target.view !== "welcome" ? revealRightColumn(s) : {}),
         };
       });
     },

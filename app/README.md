@@ -77,6 +77,12 @@ toolchain.
 
 ### Work panel customization (experimental)
 
+The work panel starts hidden, including when reopening the app with saved work
+history. Clicking a file or an agent's explicit view/file/canvas/preview tool
+opens it for that conversation. Passive filesystem and preview status updates
+do not open it. Switching to a fresh chat keeps that chat's panel hidden;
+switching back restores views explicitly opened during the current app run.
+
 Customization is **off by default for this release**. Files still open in their
 built-in viewers, including source, media, canvases and Oxen workflow graphs.
 The view picker, customization cards, View Studio and installed view packages
@@ -94,7 +100,7 @@ Unset the variable and restart to return to the release experience. The host
 captures the flag once at startup and supplies it to the UI; it is not a Vite
 build flag or a saved user preference. Changing it needs a restart, not a new
 build. An old package view falls back to a built-in file viewer when possible;
-an old authoring screen returns to the file-focused welcome screen.
+old authoring contexts stay in history without opening a panel.
 
 ### Frontend layout (how to extend)
 

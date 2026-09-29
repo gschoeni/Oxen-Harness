@@ -8,13 +8,19 @@ vi.mock("../../lib/features", () => ({ workbenchCustomizationEnabled: vi.fn(() =
 vi.mock("./packages", () => ({ refreshPackages: vi.fn(async () => []) }));
 const api = vi.hoisted(() => ({ open: vi.fn(), report: vi.fn() }));
 vi.mock("./api", () => ({ useWorkbenchAPI: () => api }));
-import { Workbench } from "./Workbench";
+import { Workbench as WorkbenchPanel } from "./Workbench";
+import { useWorkbenchRegistration } from "./useWorkbenchRegistration";
 import { registerView, removeView, views, resolveView } from "./registry";
 import { workbenchCustomizationEnabled } from "../../lib/features";
 import { refreshPackages } from "./packages";
 import { useStore } from "../../lib/store";
 import { sampleSession } from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
+
+function Workbench() {
+  useWorkbenchRegistration();
+  return <WorkbenchPanel />;
+}
 
 beforeEach(() => {
   resetAll();

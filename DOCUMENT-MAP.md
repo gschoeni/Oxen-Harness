@@ -170,6 +170,9 @@ When adding a new file to the project, update this document map.
 | `crates/harness-config/src/features.rs` | Default-off work-panel customization flag, captured by the host and enforced by authoring/package entry points. |
 | `app/src/lib/features.ts` | Host feature flags loaded before the UI/store; startup failure and opt-in coverage in `features.test.ts`. |
 | `plans/workbench-release-flag.md` | Release-scope gate, verification and dedicated review record. |
+| `plans/work-panel-visibility.md` | On-demand panel visibility, verification and review record. |
+| `app/src/features/workbench/useWorkbenchRegistration.ts` | App-scoped view discovery independent of panel visibility. |
+| `app/src/features/workbench/startup.test.tsx` | Saved history starts hidden without preventing agent view discovery. |
 | `app/src/modules/` | Auto-discovered bundled view adapters and Oxen workflow reference. |
 | `app/src/modules/oxen-workflow/{NodeCard,NodeInspector}.tsx` | Graph cards, typed handles, model parameters and output previews. |
 | `app/src/features/workbench/api.test.tsx` | Late module callbacks retain their originating conversation. |

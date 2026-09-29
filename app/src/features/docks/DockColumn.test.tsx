@@ -88,12 +88,62 @@ describe("Dock columns", () => {
     expect(saved?.widths.right).toBe(640);
   });
 
-  it("an empty conversation offers a file-focused work panel", () => {
-    // No dev server, no canvas → the right side has no docks at all.
+  it("keeps an empty conversation free of a work panel or rail", () => {
     const { container } = render(<DockColumn side="right" />);
-    expect(container.querySelector(".workbench")).toBeInTheDocument();
-    expect(screen.queryByRole("combobox",{name:"Work view"})).not.toBeInTheDocument();
-    expect(screen.getByText("Your work")).toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
+    act(() => useStore.getState().toggleDock("right"));
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("opens a clicked file and keeps new conversations closed", () => {
+    const { container } = render(<DockColumn side="right" />);
+    act(() => useStore.getState().openInViewer(["notes.txt"]));
+    expect(screen.getByText("Viewing notes.txt")).toBeInTheDocument();
+    act(() => useStore.setState({ session: { ...ipc.sampleSession, session_id: "new-chat" } }));
+    expect(container).toBeEmptyDOMElement();
+    act(() => useStore.setState({ session: { ...ipc.sampleSession, session_id: "s1" } }));
+    expect(screen.getByText("Viewing notes.txt")).toBeInTheDocument();
+  });
+
+  it("opens and reopens the visible chat's panel for the agent's open_view tool", () => {
+    useStore.setState({ dockCollapsed: { right: true } });
+    render(<DockColumn side="right" />);
+    const open = () => useStore.getState().openWorkView("s1", { view: "editor", path: "notes.txt" }, true);
+    act(open);
+    expect(screen.getByText("Viewing notes.txt")).toBeInTheDocument();
+    act(() => useStore.getState().setDockCollapsed("right", true));
+    expect(screen.queryByText("Viewing notes.txt")).not.toBeInTheDocument();
+    act(open);
+    expect(screen.getByText("Viewing notes.txt")).toBeInTheDocument();
+  });
+
+  it("keeps a background agent's open out of the visible conversation", () => {
+    const { container } = render(<DockColumn side="right" />);
+    act(() => useStore.getState().ingestOpenFile({ session: "background", paths: ["result.txt"] }));
+    expect(container).toBeEmptyDOMElement();
+    act(() => useStore.setState({ session: { ...ipc.sampleSession, session_id: "background" } }));
+    expect(screen.getByText("Viewing result.txt")).toBeInTheDocument();
+  });
+
+  it("does not open for saved history, filesystem changes or a preview status sync", async () => {
+    const target = { view: "editor", path: "saved.txt" };
+    useStore.setState({ workContexts: { s1: { current: target, history: [target], cursor: 0, pinned: false } } });
+    const { container } = render(<DockColumn side="right" />);
+    await act(async () => {
+      useStore.getState().ingestFsChange({ root: ipc.sampleSession.workspace, paths: ["saved.txt"] });
+      await useStore.getState().syncPreview("s1");
+    });
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("does not show an empty panel for disabled customization history", () => {
+    const target = { view: "view-studio", path: "views/example" };
+    useStore.setState({
+      workContexts: { s1: { current: target, history: [target], cursor: 0, pinned: false } },
+      rightTab: { s1: "view-studio" },
+    });
+    const { container } = render(<DockColumn side="right" />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("uses one view picker without a second tab strip", async () => {

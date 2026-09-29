@@ -1224,3 +1224,15 @@ can disagree, and allows hardening without recompilation. This is a release
 scope switch, not a security boundary against the agent's normal filesystem or
 shell tools. Existing source files, installed packages and saved history are
 preserved; disabled history targets get a safe display fallback.
+
+## Work panel visibility follows explicit opens (2026-09-29)
+
+**A conversation alone does not open the work panel.** Saved work contexts keep
+file/view history, while `rightTab` starts empty on each app run and records
+explicit opens from the user or agent. The dock only reserves space for a
+requested target in the active conversation. Passive filesystem events and
+preview status hydration do not reveal it. A background request remains in its
+own conversation. This avoids a second visibility map alongside navigation.
+
+View registration belongs to the app lifecycle, independently of the panel's
+mount lifecycle, so the agent can discover modules while the panel is hidden.

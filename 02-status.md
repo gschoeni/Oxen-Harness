@@ -32,6 +32,15 @@
 > `harness-agent` crate (not `harness-core`) to avoid a dependency cycle.
 > **652 Rust tests + 230 frontend tests passing**; CI runs fmt + clippy + tests + docs on the workspace, and tsc + vitest + bridge-clippy on the desktop app, on every push.
 
+## Work panel opens on demand — 2026-09-29
+
+New and restored conversations start without the work panel or its empty rail.
+Explicit file/view actions open the panel for their owning conversation, and
+the agent's `open_view` tool now expands it when collapsed. Persisted history
+is retained without restoring panel visibility. View discovery runs at app
+scope so the agent can discover modules before opening one. See
+`plans/work-panel-visibility.md` for verification and review.
+
 ## Work panel release scope — 2026-09-28
 
 Work-panel customization now defaults off. The view picker, welcome shortcuts,

@@ -4,6 +4,7 @@ import { WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "./layout";
 import { FolderTree, NotebookPen } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { Workbench } from "../workbench/Workbench";
+import { availableTarget } from "../workbench/registry";
 import { FilesPanel } from "../files/FilesPanel";
 import { ProjectsNav } from "../projects/ProjectsNav";
 
@@ -35,9 +36,18 @@ export interface DockSpec {
   alwaysOpen?: boolean;
 }
 
+function useWorkViewAvailable() {
+  return useStore((s) => {
+    const session = s.session?.session_id;
+    if (!session || !s.rightTab[session]) return false;
+    const target = s.workContexts[session]?.current;
+    return !!target && availableTarget(target).view !== "welcome";
+  });
+}
+
 export const DOCKS: DockSpec[] = [
   { id: "files", side: "left", title: "Files", icon: <FolderTree size={16}/>, defaultWidth: 280, minWidth: 216, useAvailable: () => true, render: ({onResizeStart}) => <FilesPanel onResizeStart={onResizeStart}/> },
-  { id: "workbench", side: "right", title: "Work view", icon: <NotebookPen size={16}/>, defaultWidth: WORK_VIEW_DEFAULT_WIDTH, minWidth: WORK_VIEW_MIN_WIDTH, useAvailable: () => useStore(s => !!s.session), render: ({onResizeStart}) => <Workbench onResizeStart={onResizeStart}/> },
+  { id: "workbench", side: "right", title: "Work view", icon: <NotebookPen size={16}/>, defaultWidth: WORK_VIEW_DEFAULT_WIDTH, minWidth: WORK_VIEW_MIN_WIDTH, useAvailable: useWorkViewAvailable, render: ({onResizeStart}) => <Workbench onResizeStart={onResizeStart}/> },
 ];
 
 export const docksOnSide = (side: DockSide) => DOCKS.filter((d) => d.side === side);

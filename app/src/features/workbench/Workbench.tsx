@@ -2,47 +2,20 @@ import { Component, Suspense, useEffect, useMemo, type ReactNode, type PointerEv
 import { ArrowLeft, ArrowRight, Pin, Workflow, PanelsTopLeft } from "lucide-react";
 import { Select } from "../../components/ui";
 import { useStore } from "../../lib/store";
-import { workbenchRequest } from "../../lib/ipc";
 import { workbenchCustomizationEnabled } from "../../lib/features";
 import { views, viewById, useViewRegistry, availableTarget } from "./registry";
 import { useWorkbenchAPI } from "./api";
 import type { ViewTarget } from "../../workbench-sdk";
 import "../../modules";
-import { refreshPackages } from "./packages";
 import "./workbench.css";
 
 const EMPTY_TARGET: ViewTarget = { view: "welcome" };
 
 export function Workbench({ onResizeStart }: { onResizeStart?: (e: PointerEvent) => void }) {
-  const registered = useViewRegistry();
-  const descriptors = JSON.stringify(
-    registered
-      .filter((view) => view.agentVisible !== false && !view.id.startsWith("package:"))
-      .map((view) => ({
-        id: view.id,
-        title: view.title,
-        description: view.description,
-        file_patterns: view.filePatterns ?? [],
-        requires_file: view.requiresFile ?? false,
-        priority: view.priority ?? 0,
-        document_schema: view.documentSchema,
-      })),
-  );
-  useEffect(() => {
-    if (!workbenchCustomizationEnabled()) return;
-    void refreshPackages().catch((e) =>
-      useStore.getState().addNotice(`Load installed views: ${String(e)}`),
-    );
-  }, []);
+  useViewRegistry();
   const session = useStore((s) => s.session);
   const context = useStore((s) => (s.session ? s.workContexts[s.session.session_id] : undefined));
   const target = useMemo(() => availableTarget(context?.current ?? EMPTY_TARGET), [context?.current]);
-  useEffect(() => {
-    if (!session) return;
-    void workbenchRequest(session.session_id, "register_views", {
-      views: JSON.parse(descriptors),
-    }).catch((e) => useStore.getState().addNotice(`Register work views: ${String(e)}`));
-  }, [session?.session_id, descriptors]);
   if (!session) return null;
   return (
     <WorkbenchContent

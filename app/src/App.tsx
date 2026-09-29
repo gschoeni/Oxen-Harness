@@ -12,6 +12,7 @@ import { HistoryModal } from "./features/history/HistoryModal";
 import { useChatTabShortcuts } from "./features/tabs/shortcuts";
 import { activeTheme, fsUnwatch, fsWatch } from "./lib/ipc";
 import { useStore } from "./lib/store";
+import { useWorkbenchRegistration } from "./features/workbench/useWorkbenchRegistration";
 import "./app.css";
 
 export default function App() {
@@ -35,6 +36,7 @@ export default function App() {
   const layout = useLayoutPlan();
   useDockShortcuts();
   useChatTabShortcuts();
+  useWorkbenchRegistration();
 
   // A freshly opened/resumed chat may already have a running server (they
   // outlive agent eviction) — sync its status so the pane reappears.
