@@ -1,15 +1,16 @@
-//! Live session cost for the context trailer.
+//! Per-model rates for the context trailer's running price.
 //!
 //! The `🧭 context …` trailer wants to show what this session has cost so far,
 //! but it's rendered synchronously (and on every keystroke in the live
 //! composer), while pricing comes from an async endpoint-catalog request. So we
 //! keep a small process-wide cache of per-model rates: turn boundaries warm it
 //! with [`warm_for`] (an `.await` we're already paying), and the sync trailer
-//! reads it with [`session_cost`].
+//! reads it through [`crate::spend`], which prices a session tree's usage
+//! rows with [`session_rate`].
 //!
-//! A model with no published rate in the active endpoint's catalog caches as
-//! `None` — "cost unavailable" — so the trailer simply omits the price rather
-//! than implying the session was free.
+//! A model with no published rate in the session endpoint's catalog caches as
+//! `None` — "no rate" — which the trailer says outright rather than implying
+//! the session was free.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -22,22 +23,23 @@ use harness_local::source::ModelPricing;
 /// model every turn.
 static CACHE: Mutex<Option<HashMap<String, Option<ModelPricing>>>> = Mutex::new(None);
 
-/// Fetch pricing for `model` from the active endpoint's catalog and cache it,
-/// unless it's already cached. Call at turn boundaries (it's async); the sync
-/// trailer then reads the result via [`session_cost`].
+/// Fetch pricing for `model` from the catalog at `base_url` — the endpoint
+/// the session actually talks to, not the saved default, since a `--host`
+/// or `--base-url` session (a local hub, say) is priced by *its* catalog —
+/// and cache it, unless it's already cached. Call at turn boundaries (it's
+/// async); the sync trailer then reads the result via [`session_rate`].
 ///
 /// The request returns the whole catalog, so every listed model's rate is
 /// cached too — that's what lets other synchronous surfaces (the `/model`
-/// completion picker's price tags) read rates without their own request.
-pub(crate) async fn warm_for(model: &str) {
+/// completion picker's price tags, the lanes of a fleet on another model)
+/// read rates without their own request.
+pub(crate) async fn warm_for(base_url: &str, model: &str) {
     if cached(model).is_some() {
         return;
     }
-    let connection = harness_runtime::connection::load();
-    let base_url = harness_runtime::connection::effective_base_url(&connection);
-    let token = harness_runtime::connection::effective_api_key(&base_url);
+    let token = harness_runtime::connection::effective_api_key(base_url);
     let pricing = harness_local::source::oxen_model_pricing_catalog_at(
-        &base_url,
+        base_url,
         (!token.trim().is_empty()).then_some(token.as_str()),
     )
     .await
@@ -71,17 +73,6 @@ fn cached(model: &str) -> Option<Option<ModelPricing>> {
 pub(crate) fn is_warm() -> bool {
     let guard = CACHE.lock().expect("pricing cache poisoned");
     guard.as_ref().is_some_and(|c| !c.is_empty())
-}
-
-/// The dollar cost of `prompt_tokens` + `completion_tokens` at `model`'s cached
-/// rate, or `None` when the model isn't priced (unfetched, or absent from the
-/// catalog) — in which case the trailer omits the cost segment.
-pub(crate) fn session_cost(
-    model: &str,
-    prompt_tokens: usize,
-    completion_tokens: usize,
-) -> Option<f64> {
-    cached(model)?.map(|p| p.cost_of(prompt_tokens, completion_tokens))
 }
 
 /// `model`'s cached per-token input/output rates, or `None` when it isn't priced
@@ -144,29 +135,16 @@ mod tests {
     }
 
     #[test]
-    fn unfetched_model_has_no_cost() {
-        assert_eq!(session_cost("never-fetched-xyz", 1_000, 500), None);
+    fn unfetched_model_has_no_rate() {
+        assert!(session_rate("never-fetched-xyz").is_none());
     }
 
     #[test]
-    fn priced_model_multiplies_tokens_by_rate() {
-        seed(
-            "priced-model-a",
-            Some(ModelPricing {
-                input_cost_per_token: 0.000_001,
-                output_cost_per_token: 0.000_002,
-            }),
-        );
-        // 1000 * 1e-6 + 500 * 2e-6 = 0.001 + 0.001 = 0.002
-        assert_eq!(session_cost("priced-model-a", 1_000, 500), Some(0.002));
-    }
-
-    #[test]
-    fn unlisted_model_caches_as_no_cost() {
-        // Fetched, but the catalog had no rate: cached `None` → still no cost,
-        // distinct from "not fetched" but treated the same by the trailer.
+    fn unlisted_model_caches_as_no_rate() {
+        // Fetched, but the catalog had no rate: cached `None` → still no rate,
+        // distinct from "not fetched" but read the same way by the trailer.
         seed("unlisted-model-b", None);
-        assert_eq!(session_cost("unlisted-model-b", 1_000, 500), None);
+        assert!(session_rate("unlisted-model-b").is_none());
     }
 
     #[test]
@@ -204,7 +182,15 @@ mod tests {
         // and the cost simply aren't shown until a fetch lands.
         let ui =
             crate::theme::Ui::with(false, std::sync::Arc::new(harness_theme::Theme::default()));
-        let lines = crate::turn::context_usage_lines_from(&ui, "cold-cache-model", 10, 100, 8, 2);
+        let facts = crate::turn::MeterFacts {
+            model: "cold-cache-model".to_string(),
+            window: 100,
+            context_tokens: 10,
+            prompt_tokens: 8,
+            completion_tokens: 2,
+            ledger: None,
+        };
+        let lines = facts.lines(&ui);
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines[0].contains("cold-cache-model"), "{lines:?}");
         assert!(
@@ -225,7 +211,7 @@ mod tests {
                 output_cost_per_token: 0.000_015,
             }),
         );
-        let warm = crate::turn::context_usage_lines_from(&ui, "cold-cache-model", 10, 100, 8, 2);
+        let warm = facts.lines(&ui);
         assert!(warm[0].contains("$3/M in · $15/M out"), "{warm:?}");
         assert!(is_warm(), "a seeded cache reads as warm");
     }

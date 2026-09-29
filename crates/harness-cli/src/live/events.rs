@@ -276,14 +276,7 @@ impl Live {
         prompt_tokens_used: usize,
         completion_tokens_used: usize,
     ) {
-        self.status_lines = crate::turn::context_usage_lines_from(
-            &self.ui,
-            &self.model,
-            context_tokens,
-            self.context_window,
-            prompt_tokens_used,
-            completion_tokens_used,
-        );
+        self.update_meters(context_tokens, prompt_tokens_used, completion_tokens_used);
         self.request_paint();
     }
 

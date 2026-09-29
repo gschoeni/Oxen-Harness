@@ -32,7 +32,7 @@
 //! milestone lines printed by the state's owner.
 
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -356,11 +356,13 @@ pub(crate) fn apply_fleet_event(
             if plain {
                 print_lane_completed(ui, label, *ok, *stopped, *tokens_used, summary);
             }
+            hub.note_spend();
         }
         FleetEvent::Budget { usage, limits } => {
             if let Some(state) = hub.lock().get_mut(fleet) {
                 state.budget = Some((*usage, *limits));
             }
+            hub.note_spend();
         }
     }
 }
@@ -382,6 +384,10 @@ pub(crate) struct FleetHub {
     /// and mid-turn alike.
     notices: StdMutex<Vec<String>>,
     drafts: StdMutex<std::collections::HashMap<String, String>>,
+    /// Bumped whenever a lane's spend lands (a budget update, a lane
+    /// finishing), so the composer knows to re-price the session meter
+    /// without polling the ledger every tick.
+    spend_epoch: AtomicU64,
 }
 
 /// The hub's fleets under lock: the primary for painting and keys, any fleet
@@ -526,6 +532,15 @@ impl FleetHub {
 
     pub(crate) fn take_notices(&self) -> Vec<String> {
         std::mem::take(&mut *self.notices.lock().expect("fleet hub poisoned"))
+    }
+
+    /// The current spend epoch (see the field): compare, don't interpret.
+    pub(crate) fn spend_epoch(&self) -> u64 {
+        self.spend_epoch.load(Ordering::Relaxed)
+    }
+
+    fn note_spend(&self) {
+        self.spend_epoch.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn lock(&self) -> FleetBoard<'_> {
@@ -1188,6 +1203,64 @@ pub(crate) fn pinned_lines(
 #[cfg(test)]
 mod tests {
     use crossterm::event::{KeyCode, KeyModifiers};
+
+    /// A lane's spend landing (a budget update, a lane finishing) moves the
+    /// hub's spend epoch, and nothing else does — that's the composer's cue to
+    /// re-price the session meter instead of polling the ledger every tick.
+    #[test]
+    fn only_spend_events_move_the_hub_epoch() {
+        use super::*;
+        let hub = FleetHub::default();
+        hub.install("f", FleetState::new(&["scan".into()], None));
+        let ui = Ui::with(false, std::sync::Arc::new(harness_theme::Theme::default()));
+        let before = hub.spend_epoch();
+
+        apply_fleet_event(
+            &hub,
+            &ui,
+            false,
+            "f",
+            &FleetEvent::TaskStarted {
+                index: 0,
+                label: "scan".into(),
+                lane: "lane-1".into(),
+            },
+        );
+        assert_eq!(hub.spend_epoch(), before, "starting a lane spends nothing");
+
+        apply_fleet_event(
+            &hub,
+            &ui,
+            false,
+            "f",
+            &FleetEvent::Budget {
+                usage: harness_agent::TreeUsage {
+                    tokens: 1_000,
+                    requests: 1,
+                    spawns: 1,
+                },
+                limits: harness_agent::TreeLimits::default(),
+            },
+        );
+        assert_eq!(hub.spend_epoch(), before + 1, "a budget update is spend");
+
+        apply_fleet_event(
+            &hub,
+            &ui,
+            false,
+            "f",
+            &FleetEvent::TaskCompleted {
+                index: 0,
+                label: "scan".into(),
+                lane: "lane-1".into(),
+                ok: true,
+                stopped: None,
+                tokens_used: 1_000,
+                summary: "done".into(),
+            },
+        );
+        assert_eq!(hub.spend_epoch(), before + 2, "a lane finishing is spend");
+    }
 
     #[test]
     fn fleet_switching_preserves_each_watch_and_back_returns_to_main() {

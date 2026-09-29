@@ -238,7 +238,7 @@ pub(crate) async fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui
     // Price transparency on every switch: warm the shared rate cache for the
     // new model (also feeds the context trailer + completion picker) and show
     // what it costs right in the confirmation.
-    crate::pricing::warm_for(id).await;
+    crate::pricing::warm_for(agent.base_url(), id).await;
     let rate = crate::pricing::session_rate(id)
         .and_then(|r| crate::pricing::format_rate(&r))
         .map(|r| format!(" · {r}"))

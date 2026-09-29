@@ -35,6 +35,7 @@ mod queue;
 mod render;
 mod repl;
 mod repl_loop;
+mod spend;
 mod theme;
 mod training;
 mod turn;
@@ -329,8 +330,9 @@ async fn main() -> Result<()> {
     // A headless `-p` run shows neither figure, so it doesn't even ask.
     let warm_pricing = args.print.is_none().then(|| {
         tokio::spawn({
+            let base_url = client.base_url().to_string();
             let model = model.clone();
-            async move { pricing::warm_for(&model).await }
+            async move { pricing::warm_for(&base_url, &model).await }
         })
     });
 

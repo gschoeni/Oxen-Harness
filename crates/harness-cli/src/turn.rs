@@ -5,17 +5,20 @@
 //! go through: on a live TTY it hands off to the sticky composer
 //! ([`crate::live`]), otherwise it drives the classic [`TurnRenderer`] path
 //! and drains stacked messages after. The report helpers ([`retry_notice`],
-//! [`turn_failure_lines`], [`context_usage_lines`]) live here so the classic
+//! [`turn_failure_lines`], [`MeterFacts`]) live here so the classic
 //! prompt and the live composer explain a turn the same way.
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::Result;
 use harness_agent::Agent;
+use harness_store::HistoryStore;
 
 use crate::queue::MessageQueue;
 use crate::render::{truncate, TurnRenderer};
+use crate::spend::{Ledger, Price, Spend};
 use crate::theme::Ui;
 use crate::{attach, brave, commands, live, pricing};
 
@@ -156,22 +159,26 @@ pub(crate) fn live_enabled(ui: &Ui) -> bool {
 /// runs the classic prompt and drains after.
 /// Returns `Ok(true)` when the session should end (Ctrl-D). A Ctrl-C only
 /// cancels the running turn and its drain — the caller returns to the prompt.
+///
+/// `store` is the session's history store, which the context trailer reads
+/// to price the whole session tree (subagent lanes included).
 pub(crate) async fn run_turn_and_drain(
     agent: &mut Agent,
     request: TurnRequest,
     ui: &Ui,
     queue: &mut MessageQueue,
     carryover: &mut String,
+    store: &Arc<HistoryStore>,
 ) -> Result<bool> {
     if live_enabled(ui) {
         // The live composer hands back any half-typed next message so the idle
         // prompt can keep it instead of wiping it when the turn ends.
-        let (exit, draft) = live::run_prompt(agent, request, ui, queue).await?;
+        let (exit, draft) = live::run_prompt(agent, request, ui, queue, store).await?;
         *carryover = draft;
         return Ok(exit);
     }
     if matches!(
-        run_prompt(agent, &request, ui, carryover).await?,
+        run_prompt(agent, &request, ui, carryover, store).await?,
         PromptOutcome::Interrupted
     ) {
         return Ok(false);
@@ -183,7 +190,7 @@ pub(crate) async fn run_turn_and_drain(
             ui.cream(&truncate(&next, 80)),
         );
         if matches!(
-            run_prompt(agent, &TurnRequest::Prompt(next), ui, carryover).await?,
+            run_prompt(agent, &TurnRequest::Prompt(next), ui, carryover, store).await?,
             PromptOutcome::Interrupted
         ) {
             return Ok(false);
@@ -213,6 +220,7 @@ async fn run_prompt(
     request: &TurnRequest,
     ui: &Ui,
     carryover: &mut String,
+    store: &Arc<HistoryStore>,
 ) -> Result<PromptOutcome> {
     let (text, attachments) = match request {
         TurnRequest::Prompt(prompt) => {
@@ -266,8 +274,8 @@ async fn run_prompt(
             carryover.clear();
             // Learn this model's rate (once) so the trailer can show the
             // session's running cost. Cheap when already cached.
-            pricing::warm_for(agent.model()).await;
-            print_context_usage(agent, ui);
+            pricing::warm_for(agent.base_url(), agent.model()).await;
+            print_context_usage(agent, ui, store);
             // Offer to set up web search if the model tried it without a key.
             if needs_brave_key {
                 brave::prompt_after_failed_search(ui);
@@ -290,66 +298,94 @@ async fn run_prompt(
 
 /// A subtle trailer showing how full the model's context window is, set apart
 /// from the turn's output by a blank line.
-fn print_context_usage(agent: &Agent, ui: &Ui) {
+fn print_context_usage(agent: &Agent, ui: &Ui, store: &Arc<HistoryStore>) {
     println!();
-    for line in context_usage_lines(agent, ui) {
+    for line in MeterFacts::of(agent, Some(Ledger::for_agent(store, agent))).lines(ui) {
         println!("{line}");
     }
 }
 
-/// The context-usage trailer as a (themed, indented) line — the current model
-/// alongside how full its context window is. Shared by the classic prompt and
-/// the live composer (which pins it just above the input divider).
+/// Everything the context-usage trailer is built from, snapshotted from the
+/// agent so the live composer can rebuild the trailer while the agent is
+/// busy: mid-turn `Usage` events update the fill and the root's own counters,
+/// and lane spend landing in the ledger re-prices the total.
 ///
-/// Two stacked lines: the first is the live context-window fill (what's in the
-/// model's head *right now*, which shrinks on compaction); the second is the
-/// session's cumulative spend — total tokens with an input/output breakdown so
-/// it's auditable — and the running price. The two are deliberately distinct:
-/// context fill ≠ total tokens used.
-pub(crate) fn context_usage_lines(agent: &Agent, ui: &Ui) -> Vec<String> {
-    remember_permission_mode(agent);
-    context_usage_lines_from(
-        ui,
-        agent.model(),
-        agent.context_tokens(),
-        agent.context_window(),
-        agent.prompt_tokens_used(),
-        agent.completion_tokens_used(),
-    )
+/// Two stacked lines come out of it: the live context-window fill (what's in
+/// the model's head *right now*, which shrinks on compaction), and the
+/// session's cumulative spend — total tokens with an input/output breakdown
+/// so it's auditable — with the running price. The two are deliberately
+/// distinct: context fill ≠ total tokens used.
+#[derive(Clone)]
+pub(crate) struct MeterFacts {
+    pub(crate) model: String,
+    /// The model's context window, the denominator of the fill.
+    pub(crate) window: usize,
+    /// The current context fill.
+    pub(crate) context_tokens: usize,
+    /// The root agent's own cumulative input tokens this run. The trailer
+    /// prefers the ledger (which also counts the lanes); these are what a
+    /// `Usage` event carries and what shows before the first call lands.
+    pub(crate) prompt_tokens: usize,
+    /// The root agent's own cumulative output tokens this run.
+    pub(crate) completion_tokens: usize,
+    /// The session tree's usage ledger, subagents included. `None` prices
+    /// the root's own counters alone.
+    pub(crate) ledger: Option<Ledger>,
 }
 
-/// The two trailer lines built from raw figures rather than an [`Agent`], so the
-/// live composer can rebuild them from a mid-turn `Usage` event (which carries
-/// the same numbers) and keep the meters climbing in real time — not just jump
-/// at turn boundaries.
-///
-/// `used` is the current context fill; `prompt_tokens`/`completion_tokens` are
-/// the session's cumulative input/output totals (their sum is the total tokens
-/// used, and what the price is computed from). The workspace's git branch and
-/// the permission mode are read from the process (see [`git_branch`] and
-/// [`permission_mode`]) rather than passed in, so this signature stays the one
-/// a `Usage` event can satisfy.
-pub(crate) fn context_usage_lines_from(
-    ui: &Ui,
-    model: &str,
-    used: usize,
-    window: usize,
-    prompt_tokens: usize,
-    completion_tokens: usize,
-) -> Vec<String> {
-    meter_lines(
-        ui,
-        &Meters {
-            model,
-            used,
-            window,
-            prompt_tokens,
-            completion_tokens,
-            branch: git_branch(),
-            mode: permission_mode(),
-        },
-        meter_budget(),
-    )
+impl MeterFacts {
+    /// Snapshot the trailer's inputs from `agent`.
+    pub(crate) fn of(agent: &Agent, ledger: Option<Ledger>) -> Self {
+        remember_permission_mode(agent);
+        Self {
+            model: agent.model().to_string(),
+            window: agent.context_window(),
+            context_tokens: agent.context_tokens(),
+            prompt_tokens: agent.prompt_tokens_used(),
+            completion_tokens: agent.completion_tokens_used(),
+            ledger,
+        }
+    }
+
+    /// The two trailer lines, themed and indented, fitted to the terminal.
+    /// The workspace's git branch and the permission mode are read from the
+    /// process (see [`git_branch`] and [`permission_mode`]).
+    pub(crate) fn lines(&self, ui: &Ui) -> Vec<String> {
+        meter_lines(
+            ui,
+            &Meters {
+                model: &self.model,
+                used: self.context_tokens,
+                window: self.window,
+                spend: self.spend(),
+                branch: git_branch(),
+                mode: permission_mode(),
+            },
+            meter_budget(),
+        )
+    }
+
+    /// What the session has spent: the ledger's tree total once anything has
+    /// landed in it, otherwise the root's own counters (which lead the ledger
+    /// by one call — the pre-call bump of the very first request).
+    fn spend(&self) -> Spend {
+        let live = || Spend::live(&self.model, self.prompt_tokens, self.completion_tokens);
+        match self.ledger.as_ref().map(Ledger::spend) {
+            Some(Ok(spend)) if spend.total_tokens() > 0 => spend,
+            Some(Ok(_)) | None => live(),
+            Some(Err(e)) => {
+                // The ledger is diagnostics for the meter, not state: fall
+                // back to the root's own figures and leave the cause where a
+                // developer will find it.
+                harness_agent::errlog::record(
+                    harness_config::paths::errors_log().ok().as_deref(),
+                    "spend_ledger_read_failed",
+                    serde_json::json!({ "model": self.model, "error": e.to_string() }),
+                );
+                live()
+            }
+        }
+    }
 }
 
 /// Everything the two meter lines report about the session right now.
@@ -357,8 +393,8 @@ struct Meters<'a> {
     model: &'a str,
     used: usize,
     window: usize,
-    prompt_tokens: usize,
-    completion_tokens: usize,
+    /// The session tree's token totals and price.
+    spend: Spend,
     /// The workspace's git branch, when it is a git work tree.
     branch: Option<String>,
     /// The permission mode in force (`relaxed` / `cautious` / `bypass`).
@@ -449,23 +485,23 @@ fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
         line1.push(Seg::new(rate.clone(), ui.dim(&rate), 4));
     }
 
-    // Line 2 — the session's cumulative spend: total tokens = input + output,
-    // spelled out so the figure is auditable, plus the running dollar cost.
-    let total = m.prompt_tokens + m.completion_tokens;
+    // Line 2 — the session's cumulative spend, subagents included: total
+    // tokens = input + output, spelled out so the figure is auditable, plus
+    // the running dollar cost — or, when a model has no published rate, its
+    // name, so a missing price is never mistaken for a free one.
     let totals = format!(
         "📊 {} tokens used · {} in · {} out",
-        human_tokens(total),
-        human_tokens(m.prompt_tokens),
-        human_tokens(m.completion_tokens),
+        human_tokens(m.spend.total_tokens()),
+        human_tokens(m.spend.prompt_tokens),
+        human_tokens(m.spend.completion_tokens),
     );
     let mut line2 = vec![Seg::new(totals.clone(), ui.dim(&totals), 0)];
-    if let Some(cost) = crate::pricing::session_cost(m.model, m.prompt_tokens, m.completion_tokens)
-        // Only surface a price once it rounds to something visible, so a session
-        // with a few cheap tokens doesn't read as "$0.00".
-        .filter(|&c| c > 0.0)
-        .map(crate::theme::format_usd)
-    {
-        line2.push(Seg::new(cost.clone(), ui.accent(&cost), 4));
+    if let Some(price) = m.spend.price.label() {
+        let styled = match m.spend.price {
+            Price::Priced(_) => ui.accent(&price),
+            _ => ui.brown(&price),
+        };
+        line2.push(Seg::new(price, styled, 4));
     }
 
     vec![fit(line1, budget), fit(line2, budget)]
@@ -555,7 +591,7 @@ fn read_branch(start: &std::path::Path) -> Option<String> {
 ///
 /// The mode lives on the agent's gate, but the meter is also rebuilt from
 /// mid-turn `Usage` events that carry only token figures — so
-/// [`context_usage_lines`] records it here as it passes, and the figures-only
+/// [`MeterFacts::of`] records it here as it passes, and the figures-only
 /// path reads it back. The mode can only change between turns (`/permissions`),
 /// so the remembered value is never stale on screen.
 fn remember_permission_mode(agent: &Agent) {
@@ -590,9 +626,9 @@ pub(crate) use harness_core::fmt::human_tokens;
 #[cfg(test)]
 mod tests {
     use super::{
-        context_usage_lines_from, ends_mid_turn, meter_lines, read_branch, retry_notice,
-        seed_retry, Meters,
+        ends_mid_turn, meter_lines, read_branch, retry_notice, seed_retry, MeterFacts, Meters,
     };
+    use crate::spend::{Ledger, Spend};
     use crate::theme::Ui;
     use harness_agent::AgentError;
     use harness_llm::{ChatMessage, LlmError};
@@ -615,8 +651,15 @@ mod tests {
         let ui = plain_ui();
 
         // A mid-turn snapshot: 50k of a 200k window; 40k in + 10k out so far.
-        let lines =
-            context_usage_lines_from(&ui, "live-meter-model", 50_000, 200_000, 40_000, 10_000);
+        let mut facts = MeterFacts {
+            model: "live-meter-model".to_string(),
+            window: 200_000,
+            context_tokens: 50_000,
+            prompt_tokens: 40_000,
+            completion_tokens: 10_000,
+            ledger: None,
+        };
+        let lines = facts.lines(&ui);
         assert_eq!(lines.len(), 2, "two stacked lines: {lines:?}");
         let (ctx, usage) = (&lines[0], &lines[1]);
 
@@ -640,8 +683,10 @@ mod tests {
 
         // A later snapshot in the same turn climbs — the whole point of wiring
         // Usage events through: more context, more tokens, higher cost.
-        let later =
-            context_usage_lines_from(&ui, "live-meter-model", 120_000, 200_000, 100_000, 40_000);
+        facts.context_tokens = 120_000;
+        facts.prompt_tokens = 100_000;
+        facts.completion_tokens = 40_000;
+        let later = facts.lines(&ui);
         assert!(later[0].contains("120.0k / 200.0k"), "context: {later:?}");
         assert!(later[0].contains("(60%)"), "percent: {later:?}");
         assert!(later[1].contains("140.0k tokens used"), "total: {later:?}");
@@ -656,11 +701,115 @@ mod tests {
             model,
             used,
             window: 200_000,
-            prompt_tokens: 40_000,
-            completion_tokens: 10_000,
+            spend: Spend::live(model, 40_000, 10_000),
             branch: Some("wagon-trail".to_string()),
             mode: Some("cautious"),
         }
+    }
+
+    #[test]
+    fn the_trailer_names_a_model_with_no_published_rate() {
+        // A model the endpoint's catalog doesn't price (a local hub's own
+        // model, a custom endpoint): the price segment says why there is no
+        // figure instead of quietly disappearing — a missing price must never
+        // read as a free session. Seeding a *different* model first makes the
+        // cache warm, so this is "no rate", not "not fetched yet".
+        crate::pricing::seed_for_test(
+            "meter-warmer-model",
+            Some(harness_local::source::ModelPricing {
+                input_cost_per_token: 0.000_001,
+                output_cost_per_token: 0.000_002,
+            }),
+        );
+        let ui = plain_ui();
+        let lines = meter_lines(&ui, &meters(50_000, "gpt-6-1-sol"), None);
+        assert!(lines[1].contains("50.0k tokens used"), "totals: {lines:?}");
+        assert!(
+            lines[1].contains("no rate for gpt-6-1-sol"),
+            "the missing rate is explained: {lines:?}"
+        );
+        assert!(!lines[1].contains('$'), "no phantom dollars: {lines:?}");
+        assert!(
+            !lines[0].contains("/M"),
+            "no rate on line 1 either: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn the_trailer_prices_the_whole_session_tree() {
+        use harness_store::{HistoryStore, SessionMeta, UsageDetail};
+        // The root on one model, a spawned lane on a cheaper one: the trailer
+        // reads the ledger, so both the tokens and the dollars cover the whole
+        // tree — the same figure the desktop meter shows — not just the root's
+        // own counters.
+        crate::pricing::seed_for_test(
+            "tree-root-model",
+            Some(harness_local::source::ModelPricing {
+                input_cost_per_token: 0.000_003,
+                output_cost_per_token: 0.000_015,
+            }),
+        );
+        crate::pricing::seed_for_test(
+            "tree-lane-model",
+            Some(harness_local::source::ModelPricing {
+                input_cost_per_token: 0.000_001,
+                output_cost_per_token: 0.000_002,
+            }),
+        );
+        let store = std::sync::Arc::new(HistoryStore::open_in_memory().unwrap());
+        let root = store.create_session(&SessionMeta::default()).unwrap();
+        let lane = store
+            .create_session(&SessionMeta {
+                parent_session: root.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+        let record = |session: &str, model: &str, prompt: usize, completion: usize| {
+            store
+                .record_model_usage_detailed(
+                    model,
+                    "oxen_cloud",
+                    prompt,
+                    completion,
+                    &UsageDetail {
+                        session_id: session,
+                        kind: "turn",
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        };
+        let ui = plain_ui();
+        let facts = MeterFacts {
+            model: "tree-root-model".to_string(),
+            window: 200_000,
+            context_tokens: 50_000,
+            prompt_tokens: 40_000,
+            completion_tokens: 10_000,
+            ledger: Some(Ledger::new(store.clone(), root.clone())),
+        };
+
+        // Before the first call lands in the ledger, the root's own counters
+        // stand in (they lead the ledger by the pre-call bump).
+        let early = facts.lines(&ui);
+        assert!(early[1].contains("50.0k tokens used"), "{early:?}");
+        assert!(early[1].contains("$0.27"), "{early:?}");
+
+        // Once the ledger has the root's call and a lane's, the tree is
+        // what's reported: 50k + 105k tokens, $0.27 + $0.11.
+        record(&root, "tree-root-model", 40_000, 10_000);
+        record(&lane, "tree-lane-model", 100_000, 5_000);
+        let tree = facts.lines(&ui);
+        assert!(
+            tree[1].contains("155.0k tokens used"),
+            "tree total: {tree:?}"
+        );
+        assert!(tree[1].contains("140.0k in"), "tree input: {tree:?}");
+        assert!(tree[1].contains("15.0k out"), "tree output: {tree:?}");
+        assert!(tree[1].contains("$0.38"), "tree price: {tree:?}");
+        // Line 1 still describes the root: its model, its context fill.
+        assert!(tree[0].contains("tree-root-model"), "{tree:?}");
+        assert!(tree[0].contains("50.0k / 200.0k"), "{tree:?}");
     }
 
     #[test]

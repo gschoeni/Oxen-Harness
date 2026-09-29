@@ -225,14 +225,18 @@ struct Live {
     /// the last message. Two lines: the context-window fill, then the session's
     /// cumulative token/cost totals. Empty when there's nothing to show.
     status_lines: Vec<String>,
-    /// The active model, used to rebuild [`Live::status_lines`] from mid-turn
-    /// `Usage` events (which carry token counts but not the model name) so the
-    /// pinned meter's tokens and price update live as the agent works.
-    model: String,
-    /// The session's context window, paired with [`Live::model`] to rebuild the
-    /// trailer's `used / window (pct%)` from mid-turn `Usage` events (which
-    /// carry the current fill but not the fixed window size).
-    context_window: usize,
+    /// What [`Live::status_lines`] is built from, so the pinned meter can be
+    /// rebuilt without the agent: mid-turn `Usage` events update the fill and
+    /// the root's counters, and lane spend landing in the ledger re-prices
+    /// the total. `None` until a turn (or the idle prompt) arms the meters.
+    meters: Option<crate::turn::MeterFacts>,
+    /// Lines pinned beneath the meters that aren't the meters' own (the idle
+    /// prompt's background-commands hint), kept across meter refreshes.
+    status_extra: Vec<String>,
+    /// The fleet hub's spend epoch as of the last meter refresh; a lane's
+    /// call landing bumps the hub's, and the next fleet tick re-prices the
+    /// meter. `None` before the first tick adopts the hub's current value.
+    spend_epoch: Option<u64>,
     /// The compression-savings line (`⊙ compression …`), pinned directly above
     /// [`Live::status_lines`]. Updated in place on every `Compression` event
     /// instead of scrolling a new line into the conversation.
@@ -338,8 +342,9 @@ impl Live {
             repaint: paint::Repaint::default(),
             needs_brave_key: false,
             status_lines: Vec::new(),
-            model: String::new(),
-            context_window: 0,
+            meters: None,
+            status_extra: Vec::new(),
+            spend_epoch: None,
             compression_line: None,
             completion: None,
             model_items: None,
@@ -506,6 +511,14 @@ impl Live {
     /// picture that no longer changes; a fresh lane event repaints on its own.
     pub(super) fn tick_fleet(&mut self) -> bool {
         let target_changed = self.sync_fleet_target();
+        // A lane's call landed in the ledger since the meter was last built:
+        // re-price it, so the running total counts the whole tree as it
+        // spends — not only when the root's own next call reports usage.
+        let epoch = self.fleet.spend_epoch();
+        let repriced = match self.spend_epoch.replace(epoch) {
+            Some(seen) if seen != epoch => self.refresh_meters(),
+            _ => false,
+        };
         let (present, animating) = {
             let board = self.fleet.lock();
             let primary = board.primary();
@@ -525,7 +538,42 @@ impl Live {
         for line in notices {
             self.print_line(&line);
         }
-        animating || changed || announced || target_changed
+        animating || changed || announced || target_changed || repriced
+    }
+
+    /// Arm the pinned meters with a fresh snapshot and paint it.
+    pub(super) fn set_meters(&mut self, facts: crate::turn::MeterFacts) {
+        self.meters = Some(facts);
+        self.refresh_meters();
+    }
+
+    /// Rebuild [`Live::status_lines`] from the armed meters. Reports whether
+    /// anything is armed (and so whether the lines changed at all).
+    pub(super) fn refresh_meters(&mut self) -> bool {
+        let Some(facts) = &self.meters else {
+            return false;
+        };
+        let mut lines = facts.lines(&self.ui);
+        lines.extend(self.status_extra.iter().cloned());
+        self.status_lines = lines;
+        true
+    }
+
+    /// A mid-turn usage update: move the armed meters to the live figures
+    /// and rebuild the pinned trailer so the fill, tokens-used and running
+    /// price climb in real time.
+    pub(super) fn update_meters(
+        &mut self,
+        context_tokens: usize,
+        prompt_tokens: usize,
+        completion_tokens: usize,
+    ) {
+        if let Some(facts) = self.meters.as_mut() {
+            facts.context_tokens = context_tokens;
+            facts.prompt_tokens = prompt_tokens;
+            facts.completion_tokens = completion_tokens;
+        }
+        self.refresh_meters();
     }
 
     fn media_lines(&self) -> Vec<String> {
@@ -1023,6 +1071,96 @@ mod tests {
     /// while a fleet is on the hub, plus one tick after the last one leaves
     /// (to clear the block), and the wrap-up line the sink left on the hub
     /// is printed on that same tick.
+    /// A lane's call landing in the ledger re-prices the pinned meter on the
+    /// next fleet tick, so the running total counts the whole tree as it
+    /// spends — the root's own `Usage` events never mention a lane.
+    #[test]
+    fn lane_spend_landing_in_the_ledger_reprices_the_pinned_meter() {
+        use crate::fleet_ui::{apply_fleet_event, FleetHub, FleetState};
+        use harness_agent::fleet::FleetEvent;
+        use harness_store::{HistoryStore, SessionMeta, UsageDetail};
+
+        crate::pricing::seed_for_test(
+            "live-tree-model",
+            Some(harness_local::source::ModelPricing {
+                input_cost_per_token: 0.000_001,
+                output_cost_per_token: 0.000_002,
+            }),
+        );
+        let store = std::sync::Arc::new(HistoryStore::open_in_memory().unwrap());
+        let root = store.create_session(&SessionMeta::default()).unwrap();
+        let lane = store
+            .create_session(&SessionMeta {
+                parent_session: root.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+        let record = |session: &str, prompt: usize| {
+            store
+                .record_model_usage_detailed(
+                    "live-tree-model",
+                    "oxen_cloud",
+                    prompt,
+                    0,
+                    &UsageDetail {
+                        session_id: session,
+                        kind: "turn",
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        };
+        record(&root, 100_000);
+
+        let mut l = live(120, 24);
+        let hub = std::sync::Arc::new(FleetHub::default());
+        l.fleet = hub.clone();
+        hub.install("t", FleetState::new(&["scan".into()], None));
+        l.set_meters(crate::turn::MeterFacts {
+            model: "live-tree-model".to_string(),
+            window: 200_000,
+            context_tokens: 50_000,
+            prompt_tokens: 100_000,
+            completion_tokens: 0,
+            ledger: Some(crate::spend::Ledger::new(store.clone(), root.clone())),
+        });
+        assert!(
+            l.status_lines[1].contains("100.0k tokens used"),
+            "{:?}",
+            l.status_lines
+        );
+        assert!(l.status_lines[1].contains("$0.10"), "{:?}", l.status_lines);
+        // The first tick adopts the hub's epoch; a quiet fleet then stays put.
+        l.tick_fleet();
+        assert!(!l.tick_fleet(), "nothing spent, nothing repainted");
+
+        // A lane spends (its call lands in the ledger; the spawner reports the
+        // tree budget): the next tick repaints with the tree's figures.
+        record(&lane, 400_000);
+        apply_fleet_event(
+            &hub,
+            &l.ui.clone(),
+            false,
+            "t",
+            &FleetEvent::Budget {
+                usage: harness_agent::TreeUsage {
+                    tokens: 400_000,
+                    requests: 1,
+                    spawns: 1,
+                },
+                limits: harness_agent::TreeLimits::default(),
+            },
+        );
+        assert!(l.tick_fleet(), "lane spend repaints the meter");
+        assert!(
+            l.status_lines[1].contains("500.0k tokens used"),
+            "{:?}",
+            l.status_lines
+        );
+        assert!(l.status_lines[1].contains("$0.50"), "{:?}", l.status_lines);
+        assert!(!l.tick_fleet(), "and settles again");
+    }
+
     #[test]
     fn the_fleet_tick_covers_the_block_clearing_and_the_wrap_up_line() {
         use crate::fleet_ui::{FleetHub, FleetState};

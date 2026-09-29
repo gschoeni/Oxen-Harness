@@ -16,11 +16,14 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use harness_agent::{Agent, AgentError, AgentEvent};
+use harness_store::HistoryStore;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::queue::MessageQueue;
 use crate::render::truncate;
+use crate::spend::Ledger;
 use crate::theme::Ui;
+use crate::turn::MeterFacts;
 
 use crate::interrupt::{arm_notice, interrupted_lines, CtrlC, ExitGuard};
 
@@ -45,7 +48,9 @@ pub(crate) async fn run_prompt(
     first: crate::turn::TurnRequest,
     ui: &Ui,
     queue: &mut MessageQueue,
+    store: &Arc<HistoryStore>,
 ) -> Result<(bool, String)> {
+    let ledger = Ledger::for_agent(store, agent);
     let term = LiveTerminal::new(ui.decorates())?;
     let (rows, cols) = (term.rows, term.cols);
     // While the composer owns the terminal, a `spawn_agents` fleet must paint
@@ -68,11 +73,9 @@ pub(crate) async fn run_prompt(
     // Show the meters in their pinned slots from the start of the turn.
     {
         let mut s = state.borrow_mut();
-        // Remember the model + window so mid-turn `Usage` events can rebuild the
-        // context trailer live (they carry token counts, not these fixed facts).
-        s.model = agent.model().to_string();
-        s.context_window = agent.context_window();
-        s.status_lines = crate::turn::context_usage_lines(agent, ui);
+        // Arm the meters with the ledger so mid-turn `Usage` events and lane
+        // spend can rebuild the context trailer live, agent or no agent.
+        s.set_meters(MeterFacts::of(agent, Some(ledger.clone())));
         s.compression_line = crate::commands::compression::status_line(agent, ui);
     }
 
@@ -95,7 +98,7 @@ pub(crate) async fn run_prompt(
             TurnOutcome::Done(result) => {
                 // Learn this model's rate (once) so the refreshed trailer can
                 // show the session's running cost. Cheap when already cached.
-                crate::pricing::warm_for(agent.model()).await;
+                crate::pricing::warm_for(agent.base_url(), agent.model()).await;
                 {
                     let mut s = state.borrow_mut();
                     if let Err(e) = &result {
@@ -114,7 +117,7 @@ pub(crate) async fn run_prompt(
                     }
                     // Refresh the pinned meters (they sit above the divider,
                     // not in the scrollback) with the turn's totals.
-                    s.status_lines = crate::turn::context_usage_lines(agent, ui);
+                    s.set_meters(MeterFacts::of(agent, Some(ledger.clone())));
                     s.compression_line = crate::commands::compression::status_line(agent, ui);
                     s.render();
                 }
@@ -184,8 +187,10 @@ pub(crate) enum Idle {
 /// tear the terminal down so the caller can run a turn or a command in cooked
 /// mode. `seed` pre-fills the input (e.g. a draft carried over from a turn);
 /// `history` is loaded for Up/Down recall and updated with the submission;
-/// `status` is the context-usage trailer (its two lines) pinned just above the
-/// divider, and `compression` the savings line pinned just above that.
+/// `meters` feeds the context-usage trailer (its two lines) pinned just above
+/// the divider — armed rather than pre-rendered, so a fleet the last turn
+/// left running keeps re-pricing it — and `compression` is the savings line
+/// pinned just above that.
 ///
 /// Returns [`Idle::Submit`] with the trimmed text, or [`Idle::Exit`] to quit.
 pub(crate) async fn read_idle(
@@ -193,7 +198,7 @@ pub(crate) async fn read_idle(
     queue: &mut MessageQueue,
     history: &mut Vec<String>,
     seed: &str,
-    status: Vec<String>,
+    meters: MeterFacts,
     compression: Option<String>,
 ) -> Result<Idle> {
     let term = LiveTerminal::new(ui.decorates())?;
@@ -216,9 +221,8 @@ pub(crate) async fn read_idle(
         if !seed.is_empty() {
             s.composer = Composer::seeded(seed);
         }
-        let mut status = status;
-        status.extend(background);
-        s.status_lines = status;
+        s.status_extra = background.into_iter().collect();
+        s.set_meters(meters);
         s.compression_line = compression;
         s.sync_queue(queue.items());
         s.set_title(TitleState::Idle);
