@@ -32,12 +32,12 @@ import {
   saveBest,
   savePref,
   sceneColors,
-  U,
   type HeroGameDefinition,
   type PointerInput,
   type SfxEvent,
 } from "./gameKit";
 import type { SfxName } from "./sfx";
+import { CardFrame, CardTitle, Footer, H, Line, loadTable, ProgressStrip, rankWord, recordScore, screenColors, W, type ScoreEntry, type ScreenColors, type StripMark } from "./terminal";
 import { HuntScene, newTrip, terrainForMiles, tripKey, tripKeyUp, tripPause, tripPointer, tripResult, tripUpdate, type HuntTrip } from "./hunt";
 
 type Phase = "camp" | "occupation" | "store" | "trail" | "hunt" | "message" | "choice" | "river" | "over";
@@ -196,18 +196,13 @@ const shortName = (name: string) => (name === "Wagon Boss" ? "Boss" : name);
 // Both live in localStorage so a first run has names to beat and the attract
 // screen can show who you lost last time — the original's social hook.
 
-interface ScoreEntry {
-  name: string;
-  score: number;
-  occupation: string;
-}
-
 interface Tomb {
   name: string;
   cause: string;
   day: number;
 }
 
+const TABLE_KEY = "trail-scores";
 const SEED_TABLE: ScoreEntry[] = [
   { name: "Marcus Whitman", score: 5400, occupation: "Banker" },
   { name: "Narcissa Prentiss", score: 4300, occupation: "Carpenter" },
@@ -215,27 +210,6 @@ const SEED_TABLE: ScoreEntry[] = [
   { name: "Tabitha Brown", score: 2900, occupation: "Carpenter" },
   { name: "Ezra Meeker", score: 2100, occupation: "Farmer" },
 ];
-
-function loadTable(): ScoreEntry[] {
-  try {
-    const raw = loadPref("trail-scores");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length) return parsed;
-    }
-  } catch {
-    // fall through to the seed
-  }
-  return SEED_TABLE;
-}
-
-/** Insert a finished run; returns its 1-based rank, or 0 if it didn't place. */
-function recordScore(score: number, occupation: string): number {
-  const table = [...loadTable(), { name: "You", score, occupation }].sort((a, b) => b.score - a.score).slice(0, 5);
-  savePref("trail-scores", JSON.stringify(table));
-  const i = table.findIndex((e) => e.name === "You" && e.score === score);
-  return i < 0 ? 0 : i + 1;
-}
 
 function loadTomb(): Tomb | null {
   try {
@@ -349,7 +323,7 @@ function finish(s: OregonState): OregonState {
   const score = scoreOf(s);
   const best = saveBest("trail", score);
   const newBest = s.best > 0 ? score > s.best : false;
-  const rank = recordScore(score, OCCUPATIONS[s.occupation].name);
+  const rank = recordScore(TABLE_KEY, SEED_TABLE, score, OCCUPATIONS[s.occupation].name);
   return cue({ ...s, score, best, newBest, rank }, newBest ? "best" : "good");
 }
 
@@ -1128,67 +1102,17 @@ function oregonUpdate(s: OregonState, dt: number): OregonState {
 
 // ---- rendering -------------------------------------------------------------
 
-function Line({ x, y, c, size = 8, anchor, children }: { x: number; y: number; c: string; size?: number; anchor?: "start" | "middle" | "end"; children: string }) {
-  return (
-    <text x={x} y={y} fill={c} fontFamily="var(--font-readout)" fontSize={size} textAnchor={anchor} xmlSpace="preserve">
-      {children}
-    </text>
-  );
-}
-
-const W = COLS * U; // screen width in viewBox units
-const H = ROWS * U;
-
-function screenColors(p: ThemePalette) {
-  const c = sceneColors(p);
-  return {
-    bg: c.sky,
-    fg: c.text,
-    dim: c.mountainBack || c.line,
-    accent: c.accent,
-    good: c.grass,
-    bad: c.danger,
-    frame: c.line,
-  };
-}
-
-type ScreenColors = ReturnType<typeof screenColors>;
-
 /** The status header: a progress bar marked with every landmark ahead and
     behind, and a wagon inching toward Oregon. */
+const STRIP_MARKS: StripMark[] = LANDMARKS.map((lm) => ({ frac: lm.mile / TRAIL_MILES, type: lm.type, key: lm.name }));
+
 function Header(s: OregonState, sc: ScreenColors) {
-  const frac = clamp(s.miles / TRAIL_MILES, 0, 1);
-  const barX = 10;
-  const barW = W - 20;
-  const wagonX = barX + barW * frac;
-  const barY = 20;
   return (
     <g>
       <Line x={10} y={13} c={sc.fg} size={9}>{`Day ${s.day}`}</Line>
       <Line x={W / 2} y={13} c={sc.dim} size={9} anchor="middle">{dateStr(s.day)}</Line>
       <Line x={W - 10} y={13} c={sc.accent} size={9} anchor="end">{`${Math.round(s.miles)}/${TRAIL_MILES} mi`}</Line>
-      <rect x={barX} y={barY} width={barW} height={4} fill={sc.frame} opacity={0.3} />
-      <rect x={barX} y={barY} width={barW * frac} height={4} fill={sc.good} opacity={0.65} />
-      {LANDMARKS.map((lm) => {
-        const x = Math.round(barX + (barW * lm.mile) / TRAIL_MILES);
-        const behind = s.miles >= lm.mile;
-        const c = behind ? sc.dim : sc.accent;
-        const o = behind ? 0.6 : 1;
-        if (lm.type === "fort") return <rect key={lm.name} x={x - 1} y={barY + 0.5} width={3} height={3} fill={c} opacity={o} />;
-        if (lm.type === "river")
-          return (
-            <g key={lm.name} opacity={o}>
-              <rect x={x - 1} y={barY + 2} width={1} height={1} fill={c} />
-              <rect x={x} y={barY + 1} width={1} height={1} fill={c} />
-              <rect x={x + 1} y={barY + 2} width={1} height={1} fill={c} />
-            </g>
-          );
-        if (lm.type === "end") return <rect key={lm.name} x={x - 1} y={barY - 1} width={2} height={6} fill={c} opacity={o} />;
-        return <rect key={lm.name} x={x} y={barY} width={1} height={4} fill={c} opacity={o} />;
-      })}
-      <rect x={wagonX - 2} y={barY - 2} width={5} height={4} fill={sc.fg} />
-      <rect x={wagonX - 3} y={barY} width={1} height={2} fill={sc.fg} />
-      <rect x={wagonX + 2} y={barY} width={1} height={2} fill={sc.fg} />
+      <ProgressStrip frac={clamp(s.miles / TRAIL_MILES, 0, 1)} marks={STRIP_MARKS} sc={sc} />
     </g>
   );
 }
@@ -1312,13 +1236,12 @@ function MessageScreen(s: OregonState, sc: ScreenColors) {
   return (
     <g>
       {Header(s, sc)}
-      <rect x={16} y={38} width={W - 32} height={72} fill="#000" opacity={0.5} />
-      <rect x={16} y={38} width={W - 32} height={72} fill="none" stroke={tone} strokeWidth={1} opacity={0.8} />
-      <PxText x={W / 2} y={58} size={11} fill={tone} shadow={sc.bg} anchor="middle">{s.msgTitle}</PxText>
+      <CardFrame y={38} height={72} tone={tone} />
+      <CardTitle y={58} tone={tone} sc={sc}>{s.msgTitle}</CardTitle>
       {s.msgLines.map((line, i) => (
         <Line key={i} x={W / 2} y={74 + i * 11} c={sc.fg} size={8} anchor="middle">{line}</Line>
       ))}
-      <Line x={W / 2} y={H - 8} c={sc.dim} size={7} anchor="middle">press any key to continue</Line>
+      <Footer sc={sc}>press any key to continue</Footer>
     </g>
   );
 }
@@ -1327,15 +1250,14 @@ function ChoiceScreen(s: OregonState, sc: ScreenColors) {
   return (
     <g>
       {Header(s, sc)}
-      <rect x={16} y={36} width={W - 32} height={82} fill="#000" opacity={0.5} />
-      <rect x={16} y={36} width={W - 32} height={82} fill="none" stroke={sc.accent} strokeWidth={1} opacity={0.8} />
-      <PxText x={W / 2} y={54} size={11} fill={sc.accent} shadow={sc.bg} anchor="middle">{s.msgTitle}</PxText>
+      <CardFrame y={36} height={82} tone={sc.accent} />
+      <CardTitle y={54} tone={sc.accent} sc={sc}>{s.msgTitle}</CardTitle>
       {s.msgLines.map((line, i) => (
         <Line key={i} x={W / 2} y={68 + i * 11} c={sc.fg} size={8} anchor="middle">{line}</Line>
       ))}
       <Line x={40} y={100} c={sc.good} size={8}>{`1  ${s.choiceOptions[0]}`}</Line>
       <Line x={W / 2 + 10} y={100} c={sc.good} size={8}>{`2  ${s.choiceOptions[1]}`}</Line>
-      <Line x={W / 2} y={H - 8} c={sc.dim} size={7} anchor="middle">what do you do?</Line>
+      <Footer sc={sc}>what do you do?</Footer>
     </g>
   );
 }
@@ -1359,8 +1281,6 @@ function OccupationScreen(s: OregonState, sc: ScreenColors) {
   );
 }
 
-const rankWord = (rank: number) => (rank === 1 ? "#1 of all time!" : `#${rank} of all time`);
-
 function OverScreen(s: OregonState, sc: ScreenColors) {
   if (s.arrived) {
     return (
@@ -1370,7 +1290,7 @@ function OverScreen(s: OregonState, sc: ScreenColors) {
         <Line x={W / 2} y={66} c={sc.fg} size={9} anchor="middle">{`${aliveCount(s)} of 5 survived the trail`}</Line>
         <PxText x={W / 2} y={92} size={13} fill={sc.accent} shadow={sc.bg} anchor="middle">{`SCORE ${s.score}   BEST ${s.best}`}</PxText>
         {s.rank > 0 && <Line x={W / 2} y={108} c={sc.good} size={8} anchor="middle">{rankWord(s.rank)}</Line>}
-        <Line x={W / 2} y={H - 8} c={sc.dim} size={7} anchor="middle">press any key to travel again</Line>
+        <Footer sc={sc}>press any key to travel again</Footer>
       </g>
     );
   }
@@ -1391,7 +1311,7 @@ function OverScreen(s: OregonState, sc: ScreenColors) {
       <Line x={W / 2} y={86} c={sc.dim} size={8} anchor="middle">{`died of ${s.cause}`}</Line>
       <Line x={W / 2} y={102} c={sc.accent} size={8} anchor="middle">{`Score ${s.score}   Best ${s.best}`}</Line>
       {s.rank > 0 && <Line x={W / 2} y={114} c={sc.good} size={7} anchor="middle">{rankWord(s.rank)}</Line>}
-      <Line x={W / 2} y={H - 8} c={sc.dim} size={7} anchor="middle">press any key to travel again</Line>
+      <Footer sc={sc}>press any key to travel again</Footer>
     </g>
   );
 }
@@ -1450,7 +1370,7 @@ function OregonRender(s: OregonState, p: ThemePalette) {
     the all-time table on the right, and last run's grave by the trail. */
 function OregonAttract(p: ThemePalette) {
   const c = sceneColors(p);
-  const table = loadTable().slice(0, 3);
+  const table = loadTable(TABLE_KEY, SEED_TABLE).slice(0, 3);
   const tomb = loadTomb();
   return (
     <GameFrame label="The Oxen Trail title screen: a wagon bound for Oregon">
