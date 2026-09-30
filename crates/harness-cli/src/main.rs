@@ -102,6 +102,13 @@ struct Args {
     #[arg(long, value_name = "MODEL_ID")]
     local: Option<String>,
 
+    /// Start in bypass permission mode: every edit, shell command, and git
+    /// action runs without asking (circuit breakers still refuse). Applies to
+    /// this run only — the saved default is untouched. Handy for `-p` runs,
+    /// which cannot prompt and would otherwise decline anything gated.
+    #[arg(long)]
+    yolo: bool,
+
     #[command(subcommand)]
     command: Option<TopCommand>,
 }
@@ -344,6 +351,13 @@ async fn main() -> Result<()> {
     let base_url = client.base_url().to_string();
     let mut tools = build_tool_registry(&workspace, &ui, &base_url);
     let config = agent_config(&model, context_window, &tools, &workspace, &ui);
+    if args.yolo {
+        // The gate is one shared Arc, so this reaches the resume factory, the
+        // fleet spawner, and every subagent gate derived from it.
+        if let Some(gate) = &config.permissions {
+            gate.set_session_mode(harness_permissions::PermissionMode::Bypass);
+        }
+    }
 
     endpoint::register_fleet_tool(&mut tools, &client, &config, &workspace, store.clone(), &ui);
 
@@ -407,6 +421,9 @@ async fn main() -> Result<()> {
             eprintln!("--print needs a prompt: pass one as an argument or pipe it on stdin");
             std::process::exit(2);
         };
+        if args.yolo {
+            eprintln!("{}", commands::permissions::yolo_notice(&ui, false));
+        }
         let code = commands::print::run(&mut agent, &ui, prompt).await;
         preview::shutdown().await;
         std::process::exit(code);
@@ -446,6 +463,10 @@ async fn main() -> Result<()> {
     );
     // No blank line after the banner: the idle prompt sets itself off with
     // one, and the cursor's own row is the spacer above the pinned meters.
+    if args.yolo {
+        println!();
+        println!("{}", commands::permissions::yolo_notice(&ui, true));
+    }
     if let Some(n) = resumed_entries {
         println!();
         for line in commands::resume::restored_lines(&ui, n, ends_mid_turn(agent.messages())) {
@@ -531,5 +552,15 @@ mod tests {
         assert_eq!(parse(&["oxen-harness"]).resume, None);
         // `--continue` still refuses to share the wagon with `--resume`.
         assert!(Args::try_parse_from(["oxen-harness", "-c", "--resume", "8f3c"]).is_err());
+    }
+
+    #[test]
+    fn yolo_is_off_unless_asked_for() {
+        assert!(!parse(&["oxen-harness"]).yolo);
+        assert!(parse(&["oxen-harness", "--yolo"]).yolo);
+        // It composes with the headless form — the run that needs it most.
+        let args = parse(&["oxen-harness", "--yolo", "-p", "fix the flaky test"]);
+        assert!(args.yolo);
+        assert_eq!(args.print.as_deref(), Some("fix the flaky test"));
     }
 }

@@ -96,6 +96,28 @@ pub(crate) fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> R
     Ok(())
 }
 
+/// The boot-time warning for `--yolo`: the one line that tells the user the
+/// gate is off before the first prompt. Loud on purpose — bypass is the
+/// mode that turns a mistaken `rm` into a real one.
+///
+/// A headless `-p` run has no REPL to switch back in, so it is not told about
+/// `/permissions`.
+pub(crate) fn yolo_notice(ui: &Ui, interactive: bool) -> String {
+    let way_back = if interactive {
+        " — `/permissions` switches back"
+    } else {
+        ""
+    };
+    format!(
+        "  {} {}\n  {}",
+        ui.red("⚠ --yolo: permission checks are OFF."),
+        ui.cream("Edits, shell commands, and git run without asking."),
+        ui.dim(&format!(
+            "Circuit breakers still refuse the worst commands. This run only{way_back}."
+        )),
+    )
+}
+
 /// Print the mode and every allow/deny rule in force, with its scope.
 fn print_summary(
     gate: Option<&harness_permissions::PermissionGate>,
@@ -147,4 +169,20 @@ fn print_summary(
         "    {}",
         ui.dim("hard limits (rm -rf /, ~, .git writes) always refuse · audit: ~/.oxen-harness/permissions.jsonl"),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::yolo_notice;
+    use crate::theme::Ui;
+
+    #[test]
+    fn yolo_notice_names_the_flag_and_the_way_back() {
+        let notice = yolo_notice(&Ui::plain(), true);
+        assert!(notice.contains("--yolo"), "{notice}");
+        assert!(notice.contains("OFF"), "{notice}");
+        assert!(notice.contains("/permissions"), "{notice}");
+        // A headless run has no REPL to type it in.
+        assert!(!yolo_notice(&Ui::plain(), false).contains("/permissions"));
+    }
 }

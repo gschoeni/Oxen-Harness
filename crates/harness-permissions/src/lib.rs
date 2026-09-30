@@ -236,6 +236,13 @@ impl PermissionGate {
         }
     }
 
+    /// Switch the mode for this process only, leaving the persisted default
+    /// untouched. This is the `--yolo` path: one unattended or trusted run
+    /// should not silently make every future session bypass the gate.
+    pub fn set_session_mode(&self, mode: PermissionMode) {
+        self.policy.write().expect("policy poisoned").mode = mode;
+    }
+
     /// Reload allow/deny rules and mode from disk (after Settings edits), for
     /// the live session. Keeps in-memory session grants.
     pub fn reload_policy(&self) {
@@ -665,7 +672,7 @@ impl PermissionGate {
                 // lanes included) but nothing persists — a new chat starts
                 // back at the configured default, and circuit breakers keep
                 // refusing regardless.
-                self.policy.write().expect("policy poisoned").mode = PermissionMode::Bypass;
+                self.set_session_mode(PermissionMode::Bypass);
                 self.audit(
                     &request.tool,
                     &request.command,
@@ -947,6 +954,27 @@ mod tests {
             ),
             GateReview::Allow
         ));
+    }
+
+    #[test]
+    fn session_mode_switch_is_live_but_never_persisted() {
+        let _env = testutil::env_guard();
+        let (_home, _ws, gate) = gate(None);
+        gate.set_session_mode(PermissionMode::Bypass);
+        assert_eq!(gate.mode(), PermissionMode::Bypass);
+        // A dangerous command now runs without a prompt...
+        assert!(matches!(
+            gate.review(
+                "run_shell",
+                &shell_args("rm -rf ./build"),
+                effect_of("run_shell")
+            ),
+            GateReview::Allow
+        ));
+        // ...but the next session still boots with the saved default.
+        assert_eq!(policy::load_global().mode, None);
+        // Subagent gates share the policy, so lanes follow the switch too.
+        assert_eq!(gate.for_subagent().mode(), PermissionMode::Bypass);
     }
 
     #[test]

@@ -1282,3 +1282,18 @@ a transcript that ends on unanswered tool calls settles them with persisted
 synthetic results, because the provider rejects a `tool_use` without a
 `tool_result` and the model must know the call did nothing.
 
+## `--yolo` is a session switch, not a saved one (2026-09-30)
+
+**A CLI flag that turns the permission gate off must not outlive the run.**
+`--yolo` starts the session in `bypass` mode through
+`PermissionGate::set_session_mode`, which changes the shared in-memory policy
+(so the resume factory, the fleet spawner, and every subagent gate follow) and
+never writes `permissions.json`. `/permissions bypass` remains the persisting
+form. The distinction matters because the flag's main use is an unattended
+`-p` run in a script: that script should not quietly flip the default for the
+person's next interactive session.
+
+The boot notice is unconditional and loud (red, under the banner; on stderr
+for `-p` so stdout stays the model's answer), and the meter reads `bypass` for
+the whole run. Circuit breakers fire in every mode, `--yolo` included.
+

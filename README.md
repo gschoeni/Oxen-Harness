@@ -80,6 +80,7 @@ See [`app/README.md`](app/README.md) for the npm-based alternative (`npm install
 | Resume | `--resume <SESSION_ID>` flag (id printed on the death screen), or bare `--resume` for a picker | new session |
 | Web search | `BRAVE_API_KEY` env (or `BRAVE_SEARCH_API_KEY`), or `~/.oxen-harness/.env` | always offered; key enables results |
 | Local model | `--local <MODEL_ID>` flag (runs llama.cpp instead of a remote endpoint) | remote Oxen.ai |
+| Permissions | `/permissions` in the REPL (`relaxed` / `cautious` / `bypass`, persists to `~/.oxen-harness/permissions.json`); `--yolo` starts one run in `bypass` without saving it, and says so under the banner | `relaxed` |
 | Theme | `/theme` in the REPL or `oxen-harness theme use <name>` (persists to `~/.oxen-harness/config.toml`) | Oregon Trail |
 
 ### Pointing at a different Oxen host
@@ -533,7 +534,10 @@ the copy, so a wrong turn is retried without losing the record.
 
 **Headless.** `oxen-harness -p "summarize src/lib.rs"` runs one turn with the
 plain renderer and exits; with no prompt it reads stdin (`git diff | oxen-harness
--p`), so the agent slots into scripts and pipelines.
+-p`), so the agent slots into scripts and pipelines. A headless run cannot
+answer a permission prompt, so anything the gate would ask about is declined;
+add `--yolo` to run it in `bypass` mode for that one invocation (the warning
+goes to stderr, so stdout stays the model's answer).
 
 ## Extending the agent
 
