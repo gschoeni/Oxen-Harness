@@ -330,7 +330,7 @@ fn research_profile_is_enforced_on_direct_restore_and_session_switch() {
         AgentConfig::default(),
     )
     .unwrap();
-    full.load_session(id).unwrap();
+    full.load_session(id.clone()).unwrap();
     assert!(full
         .tool_definitions()
         .iter()
@@ -345,6 +345,12 @@ fn research_profile_is_enforced_on_direct_restore_and_session_switch() {
         .tool_definitions()
         .iter()
         .any(|d| d["function"]["name"] == "retrieve_original"));
+    full.load_session(id).unwrap();
+    full.start_new_session(&SessionMeta::default()).unwrap();
+    assert!(full
+        .tool_definitions()
+        .iter()
+        .any(|d| d["function"]["name"] == "write_file"));
 }
 
 #[test]

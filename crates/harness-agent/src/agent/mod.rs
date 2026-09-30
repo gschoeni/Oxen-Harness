@@ -448,6 +448,9 @@ impl Agent {
             self.store.append_message(&session_id, &system)?;
             messages.push(system);
         }
+        self.lane_profile = crate::lane_profile::LaneProfile::Full;
+        self.tools = self.lane_profile.filter(self.base_tools.clone());
+        self.invalidate_tool_cache();
         self.session_id = session_id;
         self.messages = messages;
         self.last_persisted_seq = self.messages.len() as i64 - 1;
