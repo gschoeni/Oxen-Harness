@@ -5,6 +5,23 @@
 
 ---
 
+## Research lane profiles — 2026-09-29
+
+`spawn_agents` accepts per-agent `profile: "research"`; `map_agents` applies
+its optional profile to every non-leaf item lane (the reduce lane stays full).
+Research keeps only enabled file read/search, web search/fetch and
+parked-content retrieval capabilities.
+Full access remains the default. The profile is durable session state and is
+enforced at agent construction and restore, including follow-ups and forks.
+Inherited project conventions remain intact; built-in delegation guidance is
+stripped and an idempotent profile appendix explains the restricted capabilities.
+Parent guidance advertises research for read/search/fetch work. Session switches
+derive tools from the preserved host registry, so returning to a parent restores
+its enabled tools even after compression changes. Mock-provider tests exercise
+reads and reject edits, shell, Git, delegation and media calls without changing files.
+The standard-registry fixed-overhead estimate falls from 7,508 to 2,744 tokens
+(~63%); actual provider token counts and project prompts will vary.
+
 ## Phase Overview
 
 | Phase | Goal | Status |

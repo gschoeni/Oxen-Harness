@@ -34,7 +34,14 @@ use crate::fleet::{run_fleet, FleetEvent, FleetLimits, FleetSink, SpawnAgent, Su
 use crate::lane::{
     lane_budget, render_results, AgentTree, FailureKind, LaneStatus, LiveLane, SubagentResult,
 };
+use crate::lane_profile::{LaneProfile, LANE_PROFILE_STATE};
 use harness_llm::types::ChatMessage;
+
+#[derive(Default)]
+pub(crate) struct LaneOptions {
+    pub fork: bool,
+    pub profile: LaneProfile,
+}
 
 /// Stable identifier the model uses to call the fleet tool.
 pub const FLEET_TOOL: &str = "spawn_agents";
@@ -636,7 +643,7 @@ impl FleetSpawner {
         lane: Option<std::sync::Arc<crate::worktree::LaneWorktree>>,
         cancel: CancellationToken,
     ) -> Result<Agent, AgentError> {
-        self.build_agent_with(label, fleet, lane, cancel, false)
+        self.build_agent_with(label, fleet, lane, cancel, LaneOptions::default())
     }
 
     /// [`Self::build_agent`], optionally as a fork: the lane starts from the
@@ -648,15 +655,16 @@ impl FleetSpawner {
         fleet: &str,
         lane: Option<std::sync::Arc<crate::worktree::LaneWorktree>>,
         cancel: CancellationToken,
-        fork: bool,
+        options: LaneOptions,
     ) -> Result<Agent, AgentError> {
         // Everything a lane inherits differently from its parent — model
         // role, gate, round budget, attachments, prompt — is decided in one
         // place, shared with `Agent::side_agent`.
-        let (client, config) = {
+        let (client, mut config) = {
             let endpoint = self.endpoint.lock().expect("fleet endpoint poisoned");
             (endpoint.client.clone(), endpoint.config.for_subagent())
         };
+        options.profile.apply_prompt(&mut config.system_prompt);
         // An isolated lane works in its own checkout, so its file and shell
         // tools must point there rather than at the shared project.
         let workspace_lane = lane.clone().or_else(|| self.workspace_lane.clone());
@@ -706,7 +714,7 @@ impl FleetSpawner {
         };
         // A fork with nothing to fork from is refused before any session row
         // exists for it.
-        let source = match fork {
+        let source = match options.fork {
             true => Some(self.fork_source().ok_or_else(|| {
                 AgentError::Tool(ToolError::Execution(
                     "fork: true needs a conversation to fork from, and none was published for \
@@ -717,14 +725,18 @@ impl FleetSpawner {
             false => None,
         };
         let session = store.create_session(&meta)?;
+        store.save_session_state(&session, LANE_PROFILE_STATE, &options.profile)?;
         let mut tools = crate::agent::subagent_tools(tools);
-        let fork_slot = self.add_nested_tools(
-            &mut tools,
-            &config,
-            &session,
-            &cancel,
-            workspace_lane.clone(),
-        );
+        // Incoming forks use the parent source above, not a nested spawner.
+        let fork_slot = (options.profile == LaneProfile::Full).then(|| {
+            self.add_nested_tools(
+                &mut tools,
+                &config,
+                &session,
+                &cancel,
+                workspace_lane.clone(),
+            )
+        });
         let mut agent = if let Some(source) = source {
             // The parent's messages become the lane's starting context as one
             // snapshot row (not a message row each: a long conversation forked
@@ -754,7 +766,9 @@ impl FleetSpawner {
                 agent.set_usage_store(store.clone());
             }
         }
-        agent.set_fork_slot(fork_slot);
+        if let Some(fork_slot) = fork_slot {
+            agent.set_fork_slot(fork_slot);
+        }
         self.adopt(&mut agent, label, fleet, cancel, workspace_lane)?;
         Ok(agent)
     }
@@ -787,6 +801,8 @@ impl FleetSpawner {
             config = config.for_subagent();
             ancestor = store.session_meta(&ancestor)?.parent_session;
         }
+        let profile = LaneProfile::load(&store, id)?;
+        profile.apply_prompt(&mut config.system_prompt);
         let workspace_lane = store
             .session_state::<crate::worktree::WorktreeSnapshot>(
                 id,
@@ -810,10 +826,13 @@ impl FleetSpawner {
             None => self.tools.clone(),
         };
         let mut tools = crate::agent::subagent_tools(tools);
-        let fork_slot =
-            self.add_nested_tools(&mut tools, &config, id, &cancel, workspace_lane.clone());
+        let fork_slot = (profile == LaneProfile::Full).then(|| {
+            self.add_nested_tools(&mut tools, &config, id, &cancel, workspace_lane.clone())
+        });
         let mut agent = Agent::resume_from_store(client, tools, store, id.to_string(), config)?;
-        agent.set_fork_slot(fork_slot);
+        if let Some(fork_slot) = fork_slot {
+            agent.set_fork_slot(fork_slot);
+        }
         self.adopt(&mut agent, label, fleet, cancel, workspace_lane)?;
         Ok(agent)
     }
@@ -1290,9 +1309,9 @@ fn patches_section(
 pub struct FleetAgentSpec {
     /// Short display name for this agent's lane, e.g. "auth-flow" (1-3 words).
     pub name: String,
-    /// The complete task for this agent. It runs with the full tool set but a
-    /// fresh context: it cannot see this conversation, so include everything
-    /// it needs (paths, symbols, constraints, expected output format).
+    /// The complete task for this agent. It uses the selected profile and a
+    /// fresh context unless forked: include paths, symbols, constraints and
+    /// expected output format.
     pub prompt: String,
     /// Optional: make the agent's final answer a JSON object. Give the keys it
     /// must carry as `{"required": ["verdict", "files"]}`; the parsed object
@@ -1314,6 +1333,10 @@ pub struct FleetAgentSpec {
     /// use for work that depends on the conversation, not for reading.
     #[serde(default)]
     pub fork: Option<bool>,
+    /// full (default) keeps enabled tools; research allows only file read/search,
+    /// web search/fetch and parked-content retrieval, including on follow-ups.
+    #[serde(default)]
+    pub profile: LaneProfile,
 }
 
 /// Arguments for `spawn_agents`.
@@ -1441,7 +1464,7 @@ impl TypedTool for FleetTool {
          all their results back at once. Use this to fan independent work out — reviewing or \
          searching from several angles, exploring different parts of a codebase, drafting \
          alternative approaches — when the subtasks don't depend on each other. Each agent has \
-         the full tool set but sees ONLY its own prompt (not this conversation), so make every \
+         the selected profile's tools (full by default; research for read-only investigation) but sees ONLY its own prompt (not this conversation), so make every \
          prompt self-contained: include paths, names, constraints, and the output you want back. \
          Results return labeled by agent name. Use 2-6 agents; prefer a few well-scoped agents \
          over many vague ones. Delegation is bounded by the configured depth; each agent is told which tools it can use. If the agents will EDIT \
@@ -1539,6 +1562,7 @@ impl FleetTool {
             .iter()
             .map(|a| a.fork.unwrap_or(false))
             .collect();
+        let profiles: Vec<LaneProfile> = args.agents.iter().map(|a| a.profile).collect();
         let spill = spawner.tools.overflow_store().cloned();
         let tasks: Vec<SubagentTask> = args
             .agents
@@ -1582,7 +1606,10 @@ impl FleetTool {
                             &fleet,
                             lane_for_build.get(index).cloned(),
                             cancel,
-                            forks[index],
+                            LaneOptions {
+                                fork: forks[index],
+                                profile: profiles[index],
+                            },
                         )
                     }
                 },
@@ -1629,6 +1656,10 @@ fn budget_footer(spawner: &FleetSpawner) -> String {
         usage.tokens, limits.max_tokens, usage.spawns, limits.max_spawns, left
     )
 }
+
+#[cfg(test)]
+#[path = "fleet_research_tests.rs"]
+mod research_tests;
 
 #[cfg(test)]
 mod tests {

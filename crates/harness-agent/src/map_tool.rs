@@ -23,8 +23,11 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::fleet::{FleetLimits, FleetSink, SubagentTask};
-use crate::fleet_tool::{inputs_section, next_fleet_id, FleetSpawner, MAX_FLEET_AGENTS};
+use crate::fleet_tool::{
+    inputs_section, next_fleet_id, FleetSpawner, LaneOptions, MAX_FLEET_AGENTS,
+};
 use crate::lane::{render_results, LaneStatus, SubagentResult};
+use crate::lane_profile::LaneProfile;
 
 pub const MAP_AGENTS_TOOL: &str = "map_agents";
 
@@ -72,6 +75,10 @@ pub struct MapAgentsArgs {
     /// (like ask_model) instead of an agent.
     #[serde(default)]
     pub leaf: Option<bool>,
+    /// full (default) keeps enabled tools; research limits item lanes to
+    /// read/search/fetch. Ignored for leaf calls; the reduce lane stays full.
+    #[serde(default)]
+    pub profile: LaneProfile,
     /// Default true: wait for every item and return the rows. Set false to
     /// return at once and keep working; the rows are delivered to you
     /// automatically when the run finishes — never poll for them.
@@ -171,7 +178,8 @@ impl TypedTool for MapAgentsTool {
          parked result to read, questions to answer). `{{item}}` in the prompt is the item; \
          a <<ccr:HASH>> item is handed to its agent as parked input. Set `leaf` when no tools \
          are needed (one cheap model call per item). `reduce: \"agent\"` folds the rows through \
-         one more agent with `reduce_prompt`. Use the returned run_id to resume finished rows; refresh recomputes them."
+         one more agent with `reduce_prompt`. Use the returned run_id to resume finished \
+         rows; refresh recomputes them."
     }
 
     /// Fans out agents that may edit and run commands: alone in its wave,
@@ -258,7 +266,7 @@ impl TypedTool for MapAgentsTool {
                 .and_then(|root| harness_tools::Workspace::new(root).ok())
                 .and_then(|ws| ws.resolve(item).ok())
                 .and_then(|path| std::fs::read(path).ok());
-            let context = format!(
+            let mut context = format!(
                 "{session}\n{run_id}\n{model}\n{leaf}\n{}\n{:?}",
                 render(&args.prompt, item, index),
                 file.map(|bytes| {
@@ -267,6 +275,10 @@ impl TypedTool for MapAgentsTool {
                     h.finish()
                 })
             );
+            // Preserve legacy/full keys while separating research results.
+            if !leaf && args.profile == LaneProfile::Research {
+                context.push_str("\nprofile:research");
+            }
             memo_key(item, &context, &args.output_schema)
         };
         let keys: Vec<_> = items
@@ -309,8 +321,15 @@ impl TypedTool for MapAgentsTool {
                     .max_parallel
                     .unwrap_or(DEFAULT_MAP_PARALLEL)
                     .clamp(1, MAX_FLEET_AGENTS);
-                self.run_lanes(&items, &pending, &args.prompt, &schema, parallel, call)
-                    .await?
+                self.run_lanes(
+                    &items,
+                    &pending,
+                    &args.prompt,
+                    &schema,
+                    (parallel, args.profile),
+                    call,
+                )
+                .await?
             };
             for (index, result) in pending.iter().zip(fresh) {
                 if result.status == LaneStatus::Done
@@ -357,7 +376,7 @@ impl MapAgentsTool {
         pending: &[usize],
         template: &str,
         schema: &Option<serde_json::Value>,
-        parallel: usize,
+        options: (usize, LaneProfile),
         call: &CallContext,
     ) -> Result<Vec<SubagentResult>, ToolError> {
         self.spawner
@@ -385,12 +404,21 @@ impl MapAgentsTool {
                 &self.sink,
                 &fleet,
                 tasks,
-                FleetLimits::with_concurrency(parallel),
+                FleetLimits::with_concurrency(options.0),
                 {
                     let spawner = self.spawner.clone();
                     let fleet = fleet.clone();
                     move |index: usize, cancel: CancellationToken| {
-                        spawner.build_agent(&labels[index], &fleet, None, cancel)
+                        spawner.build_agent_with(
+                            &labels[index],
+                            &fleet,
+                            None,
+                            cancel,
+                            LaneOptions {
+                                profile: options.1,
+                                ..Default::default()
+                            },
+                        )
                     }
                 },
                 call.call_id.as_deref(),
@@ -435,7 +463,7 @@ impl MapAgentsTool {
             .await
     }
 
-    /// Fold the rows through one more lane.
+    /// Fold the rows through a full lane, independently of the item profile.
     async fn reduce(
         &self,
         rows: &[SubagentResult],
@@ -513,6 +541,138 @@ mod tests {
         fn started(&self, _: &str, _: &[String], _: CancellationToken, _: Option<&str>) {}
         fn event(&self, _: &str, _: &FleetEvent) {}
         fn finished(&self, _: &str) {}
+    }
+
+    #[test]
+    fn item_profile_defaults_to_full_and_rejects_unknown_values() {
+        let args = serde_json::json!({"items": ["a"], "prompt": "read {{item}}"});
+        assert_eq!(
+            serde_json::from_value::<MapAgentsArgs>(args.clone())
+                .unwrap()
+                .profile,
+            LaneProfile::Full
+        );
+        let mut invalid = args;
+        invalid["profile"] = "unknown".into();
+        assert!(serde_json::from_value::<MapAgentsArgs>(invalid).is_err());
+    }
+
+    #[tokio::test]
+    async fn research_map_items_survive_cold_resume_without_narrowing_reduce_or_reusing_full_rows()
+    {
+        use crate::lane_profile::{LaneProfile, LANE_PROFILE_STATE, RESEARCH_TOOLS};
+
+        let mut server = mockito::Server::new_async().await;
+        let research = server
+            .mock("POST", "/chat/completions")
+            .match_request(|req| {
+                let body: serde_json::Value = serde_json::from_slice(req.body().unwrap()).unwrap();
+                let tools = body["tools"].as_array().unwrap();
+                tools.len() == RESEARCH_TOOLS.len()
+                    && tools
+                        .iter()
+                        .all(|d| RESEARCH_TOOLS.contains(&d["function"]["name"].as_str().unwrap()))
+            })
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("research evidence"))
+            .expect(1)
+            .create_async()
+            .await;
+        let full = server
+            .mock("POST", "/chat/completions")
+            .match_request(|req| {
+                let body: serde_json::Value = serde_json::from_slice(req.body().unwrap()).unwrap();
+                body["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d["function"]["name"] == "write_file")
+            })
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("full result"))
+            .expect(2)
+            .create_async()
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let parent = store.create_session(&SessionMeta::default()).unwrap();
+        let make = || {
+            Arc::new(
+                FleetSpawner::new(
+                    OxenClient::new(server.url(), "k", "m"),
+                    ToolRegistry::default_for_workspace(
+                        harness_tools::Workspace::new(dir.path()).unwrap(),
+                    ),
+                    AgentConfig::default(),
+                )
+                .with_workspace(dir.path())
+                .with_store(store.clone())
+                .with_session(parent.clone()),
+            )
+        };
+        let spawner = make();
+        let tool = MapAgentsTool::new(spawner.clone(), Arc::new(QuietSink));
+        let mut args = serde_json::json!({
+            "items": ["a"], "prompt": "read {{item}}", "profile": "research",
+            "run_id": "profile-map", "reduce": "agent", "reduce_prompt": "combine evidence"
+        });
+        let out = tool.invoke(args.clone()).await.unwrap();
+        assert!(out.contains("full result"), "{out}");
+        let lanes = store.lanes_of(&parent).unwrap();
+        assert_eq!(lanes.len(), 2);
+        let mut research_id = None;
+        for lane in &lanes {
+            let profile = LaneProfile::load(&store, &lane.id).unwrap();
+            let resumed = make()
+                .resume_lane(&lane.id, "check", "resume", CancellationToken::new())
+                .unwrap();
+            if profile == LaneProfile::Research {
+                research_id = Some(lane.id.clone());
+                assert_eq!(resumed.tool_definitions().len(), RESEARCH_TOOLS.len());
+                assert!(resumed
+                    .tool_definitions()
+                    .iter()
+                    .all(|d| RESEARCH_TOOLS.contains(&d["function"]["name"].as_str().unwrap())));
+            } else {
+                assert!(resumed
+                    .tool_definitions()
+                    .iter()
+                    .any(|d| d["function"]["name"] == "write_file"));
+            }
+        }
+        let id = research_id.unwrap();
+        assert_eq!(
+            store
+                .session_state::<LaneProfile>(&id, LANE_PROFILE_STATE)
+                .unwrap(),
+            Some(LaneProfile::Research)
+        );
+        drop(tool);
+        drop(spawner);
+        args.as_object_mut().unwrap().remove("reduce");
+        args.as_object_mut().unwrap().remove("reduce_prompt");
+        let tool = MapAgentsTool::new(make(), Arc::new(QuietSink));
+        assert!(tool
+            .invoke(args.clone())
+            .await
+            .unwrap()
+            .contains("already answered"));
+        args["profile"] = "full".into();
+        assert!(!tool
+            .invoke(args.clone())
+            .await
+            .unwrap()
+            .contains("already answered"));
+        args.as_object_mut().unwrap().remove("profile");
+        assert!(tool
+            .invoke(args)
+            .await
+            .unwrap()
+            .contains("already answered"));
+        research.assert_async().await;
+        full.assert_async().await;
     }
 
     #[test]

@@ -166,7 +166,9 @@ pub const DELEGATION_GUIDELINE: &str = "\n- Delegate reading, not deciding. Your
     trying several approaches, hand that out and keep the results: `spawn_agents` for 2-6 \
     distinct, self-contained tasks (a whole subsystem each — not one file each), `map_agents` \
     for the same task over a list of items (every item is guaranteed a result), `ask_model` \
-    for cheap questions over parked content with no tools needed. Don't delegate what you can \
+    for cheap questions over parked content with no tools needed. Set `profile: \"research\"` \
+    on lanes that only read, search or fetch: they cost roughly a third of a full lane. \
+    Don't delegate what you can \
     do in a few tool calls yourself, and don't spawn an agent to spawn agents. An agent sees \
     only its prompt: say what to read, what to decide, and the shape of answer you want back \
     (an `output_schema` when you'll act on it mechanically). Parked content goes in `inputs` \
@@ -613,6 +615,8 @@ mod tests {
         });
         assert!(with.contains("`spawn_agents` / `map_agents` / `ask_model`"));
         assert!(with.contains("Delegate reading, not deciding."));
+        assert!(with.contains("profile: \"research\""));
+        assert!(with.contains("roughly a third of a full lane"));
         let without = system_prompt_with(OptionalTools::default());
         assert!(!without.contains("spawn_agents"));
         let leaf = strip_delegation_sections(&with);

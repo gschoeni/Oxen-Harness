@@ -790,6 +790,23 @@ impl ToolRegistry {
         self.tools.remove(name)
     }
 
+    /// Keep only enabled named capabilities, with a roster independent of the
+    /// source registry. Metadata and retained description overrides survive.
+    pub fn only(&self, names: &[&str]) -> Self {
+        let mut tools = Self {
+            roster: Roster::default(),
+            ..self.clone()
+        };
+        tools.tools.retain(|name, _| names.contains(&name.as_str()));
+        tools
+            .description_overrides
+            .retain(|name, _| tools.tools.contains_key(name));
+        for name in tools.tools.keys() {
+            tools.roster.insert(name);
+        }
+        tools
+    }
+
     /// Replace the description advertised to the model for `name`. No-op for
     /// dispatch; only the model-facing definition changes.
     pub fn set_description_override(

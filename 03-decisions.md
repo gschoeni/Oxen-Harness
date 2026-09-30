@@ -5,6 +5,27 @@
 
 ---
 
+## Research subagents — 2026-09-29
+
+Research is an opt-in per-lane allowlist, not a permission-mode shortcut or
+schema-only filter. Persist `LaneProfile` as `lane_profile` session state
+(no database migration); missing state means legacy/full, invalid state is an
+error. Agent constructors and session loads enforce the allowlist so a cold
+restore cannot silently widen capabilities. Registry filtering preserves
+metadata/preferences and creates an independent roster. Research has no shell,
+custom HTTP actions, media/UI or tool-bearing delegation, while read/search/web
+and `retrieve_original` remain available. Keep inherited system/project
+instructions intact, strip the known built-in delegation sections, and append
+the capability contract once rather than guessing where custom sections start.
+Map item lanes share the same profile machinery; reduce lanes remain full so
+synthesis can use the parent's enabled tools. Tool-less leaves ignore the profile.
+Research memo keys are separate; legacy/full keys stay compatible. Keep the
+unfiltered host registry on the agent, including compression-tool changes, so
+loading a restricted session does not permanently narrow later sessions.
+Further prompt-core reduction is deferred until hosts expose those sections
+structurally. Network reads are allowed; this is
+not an offline or general-purpose security sandbox.
+
 ## Provider & Models
 
 **Oxen.ai is the only provider** (2026-06-21)

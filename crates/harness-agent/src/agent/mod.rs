@@ -65,6 +65,9 @@ pub(crate) fn subagent_tools(mut tools: ToolRegistry) -> ToolRegistry {
 pub struct Agent {
     client: OxenClient,
     tools: ToolRegistry,
+    /// Host-enabled capabilities before the current session profile is applied.
+    base_tools: ToolRegistry,
+    lane_profile: crate::lane_profile::LaneProfile,
     store: Arc<HistoryStore>,
     /// Persistent destination for aggregate usage. Usually the session store;
     /// detached agents keep their transcript in memory but inherit this ledger
@@ -216,7 +219,8 @@ impl Agent {
     }
 
     pub(crate) fn make_tool_less(&mut self, system: &str) {
-        self.tools = ToolRegistry::new();
+        self.base_tools = ToolRegistry::new();
+        self.tools = self.base_tools.clone();
         self.invalidate_tool_cache();
         self.config.system_prompt = Some(system.to_string());
         self.messages.retain(|m| m.role != "system");
@@ -260,10 +264,15 @@ impl Agent {
         }
         let attachments = config.attachment_root.clone().map(AttachmentStore::new);
         let ccr = setup_compression(&config, &mut tools);
+        let lane_profile = crate::lane_profile::LaneProfile::load(&store, &session_id)?;
+        let base_tools = tools;
+        let tools = lane_profile.filter(base_tools.clone());
         let steer = tools.steer_notifier();
         Ok(Self {
             client,
             tools,
+            base_tools,
+            lane_profile,
             usage_store: store.clone(),
             store,
             session_id,
@@ -326,6 +335,9 @@ impl Agent {
         }
         let attachments = config.attachment_root.clone().map(AttachmentStore::new);
         let ccr = setup_compression(&config, &mut tools);
+        let lane_profile = crate::lane_profile::LaneProfile::load(&store, &session_id)?;
+        let base_tools = tools;
+        let tools = lane_profile.filter(base_tools.clone());
         // Seed the cumulative count from the loaded transcript so a resumed
         // session's dashboard reflects prior usage instead of starting at 0.
         let tokens_used = budget::estimate_prompt_tokens(&messages, &tools.definitions());
@@ -336,6 +348,8 @@ impl Agent {
         let mut agent = Self {
             client,
             tools,
+            base_tools,
+            lane_profile,
             usage_store: store.clone(),
             store,
             session_id,
@@ -467,6 +481,9 @@ impl Agent {
             .store
             .session_state(&session_id, RULE_HISTORY_STATE)?
             .unwrap_or_default();
+        self.lane_profile = crate::lane_profile::LaneProfile::load(&self.store, &session_id)?;
+        self.tools = self.lane_profile.filter(self.base_tools.clone());
+        self.invalidate_tool_cache();
         self.session_id = session_id;
         self.messages = messages;
         self.rule_history = rule_history;

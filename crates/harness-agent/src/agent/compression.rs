@@ -38,13 +38,15 @@ impl Agent {
         self.compression_cache.clear();
         match mode {
             CompressionMode::On => {
-                self.ccr = setup_compression(&self.config, &mut self.tools);
+                self.ccr = setup_compression(&self.config, &mut self.base_tools);
             }
             CompressionMode::Audit | CompressionMode::Off => {
-                self.tools.remove(harness_tools::RETRIEVE_ORIGINAL_TOOL);
+                self.base_tools
+                    .remove(harness_tools::RETRIEVE_ORIGINAL_TOOL);
                 self.ccr = None;
             }
         }
+        self.tools = self.lane_profile.filter(self.base_tools.clone());
         // The tool set just changed; the context meter's cached tool weight
         // must be recomputed from the new definitions.
         self.invalidate_tool_cache();
