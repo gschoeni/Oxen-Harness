@@ -3,6 +3,7 @@
 //! tombstone exit screen.
 
 use crate::almanac::{pick, today};
+use crate::spend::Price;
 
 use super::{flourish, Ui};
 
@@ -27,9 +28,9 @@ pub struct RecentTrail {
 pub struct BannerFacts<'a> {
     /// Cumulative all-time token count; replaces the "Total tokens used" row.
     pub tokens_used: usize,
-    /// Estimated all-time Oxen cloud spend across every model and project.
-    /// `None` when pricing hasn't landed yet — rendered as "—".
-    pub cost_usd: Option<f64>,
+    /// Estimated all-time spend across every model and project. `None` when
+    /// nothing can be priced yet — rendered as "—".
+    pub spend: Option<Price>,
     /// Today's reading for the "Weather" row; `None` renders "—", so a banner
     /// never waits on a reading that isn't ready.
     pub weather: Option<&'a str>,
@@ -124,8 +125,11 @@ pub fn banner(
         // replaced in place; a fallback spend row is added below for custom
         // themes without either slot. "Date" always opens on today.
         if label == "Next landmark" || label == "Total dollars spent" {
-            let spent = facts.cost_usd.map(format_usd).unwrap_or_else(|| "—".into());
-            out.push_str(&journal_row(ui, "Total dollars spent", &spent));
+            out.push_str(&journal_row(
+                ui,
+                "Total dollars spent",
+                &spend_value(facts.spend.as_ref()),
+            ));
             spend_rendered = true;
         } else if label == "Total tokens used" {
             // Rendered live after this loop — skip the static flavor copy.
@@ -148,8 +152,11 @@ pub fn banner(
         &format!("{} tokens", facts.tokens_used),
     ));
     if !spend_rendered {
-        let spent = facts.cost_usd.map(format_usd).unwrap_or_else(|| "—".into());
-        out.push_str(&journal_row(ui, "Total dollars spent", &spent));
+        out.push_str(&journal_row(
+            ui,
+            "Total dollars spent",
+            &spend_value(facts.spend.as_ref()),
+        ));
     }
 
     // The trails already blazed in this workspace — one keystroke from being
@@ -179,6 +186,19 @@ pub fn banner(
 /// Format a US-dollar amount for the banner's spend readout. Sub-cent totals
 /// show extra precision (e.g. `$0.0042`) so early usage isn't shown as `$0.00`;
 /// larger amounts use standard two-decimal currency (mirrors the desktop UI).
+/// The "Total dollars spent" value: the priced figure — `$0.00` for a ledger
+/// with nothing in it — with any unpriced models named beside it, or "—"
+/// when there is nothing to price with yet.
+fn spend_value(spend: Option<&Price>) -> String {
+    match spend {
+        Some(price) => price.label().unwrap_or_else(|| match price {
+            Price::Priced(usd) => format_usd(*usd),
+            _ => "—".into(),
+        }),
+        None => "—".into(),
+    }
+}
+
 pub(crate) fn format_usd(amount: f64) -> String {
     if amount > 0.0 && amount < 0.01 {
         format!("${amount:.4}")
@@ -356,7 +376,7 @@ mod tests {
     fn facts<'a>(tokens_used: usize, cost_usd: Option<f64>) -> BannerFacts<'a> {
         BannerFacts {
             tokens_used,
-            cost_usd,
+            spend: cost_usd.map(Price::Priced),
             ..BannerFacts::default()
         }
     }
@@ -448,6 +468,25 @@ mod tests {
         assert!(priced.contains("$0.42"));
         let unavailable = banner(&ui, "u", "m", "w", "s", &BannerFacts::default());
         assert!(unavailable.contains("Total dollars spent"));
+    }
+
+    #[test]
+    fn banner_names_what_it_could_not_price() {
+        let ui = Ui::plain();
+        // Usage on a model with no catalog rate is a floor, not a total: the
+        // row says so, instead of a bare number that reads as the whole bill.
+        let partial = BannerFacts {
+            spend: Some(Price::Partial {
+                usd: 12.5,
+                unpriced: vec!["gpt-6-1-sol".into()],
+            }),
+            ..BannerFacts::default()
+        };
+        let b = banner(&ui, "u", "m", "w", "s", &partial);
+        assert!(b.contains("$12.50 + no rate for gpt-6-1-sol"), "{b}");
+        // An empty ledger is a real, priced zero — not "unavailable".
+        let empty = banner(&ui, "u", "m", "w", "s", &facts(0, Some(0.0)));
+        assert!(empty.contains("$0.00"), "{empty}");
     }
 
     #[test]

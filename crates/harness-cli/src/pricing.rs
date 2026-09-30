@@ -13,6 +13,7 @@
 //! the session was free.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use harness_local::source::ModelPricing;
@@ -22,6 +23,29 @@ use harness_local::source::ModelPricing;
 /// an absent key ("not fetched yet"), so we don't re-fetch a known-unpriced
 /// model every turn.
 static CACHE: Mutex<Option<HashMap<String, Option<ModelPricing>>>> = Mutex::new(None);
+
+/// Whether a catalog has been fetched over the network this process. A
+/// cache seeded from disk ([`seed_from_disk`]) is warm enough to price with,
+/// but still owes the endpoint one fetch for current rates.
+static FETCHED: AtomicBool = AtomicBool::new(false);
+
+/// Prime the cache with the rates the last catalog fetch left on disk (see
+/// `harness_local::rates`), so startup surfaces can price all-time spend
+/// before the network answers. A no-op once anything is cached.
+pub(crate) fn seed_from_disk() {
+    seed(harness_local::rates::load());
+}
+
+fn seed(rates: impl IntoIterator<Item = (String, ModelPricing)>) {
+    let mut guard = CACHE.lock().expect("pricing cache poisoned");
+    if guard.as_ref().is_some_and(|c| !c.is_empty()) {
+        return;
+    }
+    let cache = guard.get_or_insert_with(HashMap::new);
+    for (id, rate) in rates {
+        cache.insert(id, Some(rate));
+    }
+}
 
 /// Fetch pricing for `model` from the catalog at `base_url` — the endpoint
 /// the session actually talks to, not the saved default, since a `--host`
@@ -34,7 +58,7 @@ static CACHE: Mutex<Option<HashMap<String, Option<ModelPricing>>>> = Mutex::new(
 /// completion picker's price tags, the lanes of a fleet on another model)
 /// read rates without their own request.
 pub(crate) async fn warm_for(base_url: &str, model: &str) {
-    if cached(model).is_some() {
+    if FETCHED.load(Ordering::Relaxed) && cached(model).is_some() {
         return;
     }
     let token = harness_runtime::connection::effective_api_key(base_url);
@@ -54,6 +78,7 @@ pub(crate) async fn warm_for(base_url: &str, model: &str) {
         for (id, rate) in catalog {
             cache.insert(id, Some(rate));
         }
+        FETCHED.store(true, Ordering::Relaxed);
     }
 }
 
@@ -64,12 +89,13 @@ fn cached(model: &str) -> Option<Option<ModelPricing>> {
     guard.as_ref().and_then(|c| c.get(model).copied())
 }
 
-/// Whether a catalog fetch has landed at all — a lock read, never a request.
+/// Whether any rates are on hand — a catalog fetch, or the disk seed of the
+/// last one — a lock read, never a request.
 ///
 /// Startup surfaces (the banner's all-time spend) price whatever is on record
 /// from this cache instead of awaiting the network: `false` means "not priced
-/// *yet*", and the figure fills in on the next usage update rather than
-/// holding the first prompt back.
+/// *yet*" (a first run ever), and the figure fills in on the next usage
+/// update rather than holding the first prompt back.
 pub(crate) fn is_warm() -> bool {
     let guard = CACHE.lock().expect("pricing cache poisoned");
     guard.as_ref().is_some_and(|c| !c.is_empty())
@@ -141,6 +167,18 @@ mod tests {
     #[test]
     fn unfetched_model_has_no_rate() {
         assert!(session_rate("never-fetched-xyz").is_none());
+    }
+
+    #[test]
+    fn a_disk_seed_makes_the_cache_warm_without_a_fetch() {
+        super::seed(vec![(
+            "seeded-model-d".to_string(),
+            ModelPricing {
+                input_cost_per_token: 0.000_001,
+                output_cost_per_token: 0.000_002,
+            },
+        )]);
+        assert!(is_warm(), "yesterday's rates are enough to price with");
     }
 
     #[test]

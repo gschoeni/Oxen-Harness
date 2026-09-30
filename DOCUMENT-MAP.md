@@ -37,7 +37,7 @@ oxen-harness/
     harness-permissions/     — The tool-call gate: tree-sitter shell classification, relaxed/cautious/bypass modes, circuit breakers, trash + snapshots, and the plan-mode latch that holds the tree read-only in every mode.
     harness-store/           — SQLite history (verbatim) + JSONL export; rusqlite_migration schema versioning; rich session metadata; session forks (fork_session/forked_from/user_turns).
     harness-oxen/            — Version config/data + export/share traces via the `oxen` CLI (testable Runner shell-out; no liboxen).
-    harness-local/           — Local models: extensible GGUF catalog (Qwen3 + Bonsai), downloads + disk tracking, llama-server launcher.
+    harness-local/           — Local models: extensible GGUF catalog (Qwen3 + Bonsai), downloads + disk tracking, llama-server launcher; limits.rs / rates.rs cache the hosted catalog's per-model limits and per-token rates on disk (model-limits.json / model-rates.json).
     harness-theme/           — Configurable themes (palette + voice): built-ins, TOML/JSON load/save with partial overrides, active-theme store.
     harness-agent/           — The agent (Ralph) loop (llm + tools + store); the fleet (run_fleet: N parallel detached subagents, FleetLimits clocks) + the model-facing spawn_agents tool (FleetSpawner/FleetSink);
                                  lane.rs (a lane's typed SubagentResult + the AgentTree of running lanes), lane_tools.rs (send_to_agent / read_agent), tree.rs (the TreeBudget: one billable-token pool per root turn, carved into a wallet per lane),

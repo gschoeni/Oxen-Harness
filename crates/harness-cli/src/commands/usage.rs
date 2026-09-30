@@ -6,6 +6,7 @@ use harness_core::fmt::human_tokens;
 use harness_llm::ChatMessage;
 use harness_store::{HistoryStore, ModelUsage};
 
+use crate::spend::Price;
 use crate::theme::{format_usd, Ui};
 
 struct PricedUsage {
@@ -48,38 +49,21 @@ async fn priced_rows(store: &HistoryStore) -> Vec<PricedUsage> {
     rows
 }
 
-/// Known cost across every recorded model, priced from the process-wide
-/// pricing cache rather than a catalog request — the banner asks for this
-/// while the first prompt is being drawn, so it must never touch the network.
+/// All-time spend across every recorded model and project, priced from the
+/// process-wide rate cache rather than a catalog request — the banner asks
+/// for this while the first prompt is being drawn, so it must never touch
+/// the network. Models the cache can't price are named, not dropped, so the
+/// figure never reads as the whole bill when it isn't.
 ///
-/// Returns `None` when usage exists but nothing on record can be priced: an
-/// endpoint catalog with no rate for it, or (at startup) a cache the
-/// background warm-up hasn't filled yet. Either way the banner shows "—".
-pub(crate) fn total_cost_usd(store: &HistoryStore) -> Option<f64> {
-    // Nothing is priced yet (the warm-up is still in flight): "—" is honest
-    // where "$0.00" would not be.
+/// `None` when there is nothing to price with yet (a first run ever, before
+/// any catalog has been seen) or the ledger can't be read: the banner then
+/// shows "—".
+pub(crate) fn total_spend(store: &HistoryStore) -> Option<Price> {
     if !crate::pricing::is_warm() {
         return None;
     }
-    let Ok(usage) = store.model_usage_breakdown() else {
-        return Some(0.0);
-    };
-    let has_usage = !usage.is_empty();
-    let costs: Vec<f64> = usage
-        .iter()
-        .filter_map(|u| {
-            let rate = crate::pricing::session_rate(&u.model)?;
-            Some(rate.cost_of(
-                u.prompt_tokens.max(0) as usize,
-                u.completion_tokens.max(0) as usize,
-            ))
-        })
-        .collect();
-    if has_usage && costs.is_empty() {
-        None
-    } else {
-        Some(costs.into_iter().sum())
-    }
+    let usage = store.model_usage_breakdown().ok()?;
+    Some(crate::spend::price_rows(&usage).price)
 }
 
 /// All-time token throughput. Existing transcripts are estimated once as a

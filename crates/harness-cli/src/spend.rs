@@ -177,16 +177,32 @@ impl Price {
                 usd: cost,
                 unpriced,
             } => Some(match usd(*cost) {
-                Some(cost) => format!("{cost} + no rate for {}", unpriced.join(", ")),
-                None => format!("no rate for {}", unpriced.join(", ")),
+                Some(cost) => format!("{cost} + no rate for {}", name_models(unpriced)),
+                None => format!("no rate for {}", name_models(unpriced)),
             }),
-            Price::Unpriced(models) => Some(format!("no rate for {}", models.join(", "))),
+            Price::Unpriced(models) => Some(format!("no rate for {}", name_models(models))),
         }
     }
 }
 
+/// The first few unpriced models by name, the rest counted — an all-time
+/// figure can span a dozen models the catalog never listed.
+fn name_models(models: &[String]) -> String {
+    const NAMED: usize = 2;
+    let named = models
+        .iter()
+        .take(NAMED)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    match models.len().saturating_sub(NAMED) {
+        0 => named,
+        more => format!("{named} +{more} more"),
+    }
+}
+
 /// Price usage rows with the process-wide rate cache (see [`crate::pricing`]).
-fn price_rows(rows: &[ModelUsage]) -> Spend {
+pub(crate) fn price_rows(rows: &[ModelUsage]) -> Spend {
     price_rows_with(rows, pricing::is_warm(), pricing::session_rate)
 }
 
@@ -325,6 +341,24 @@ mod tests {
         assert_eq!(
             spend.price.label().as_deref(),
             Some("$0.11 + no rate for mystery")
+        );
+    }
+
+    #[test]
+    fn a_long_list_of_unpriced_models_is_named_two_at_a_time() {
+        let spend = price_rows_with(
+            &[
+                row("a", 10, 1),
+                row("b", 10, 1),
+                row("c", 10, 1),
+                row("d", 10, 1),
+            ],
+            true,
+            rates,
+        );
+        assert_eq!(
+            spend.price.label().as_deref(),
+            Some("no rate for a, b +2 more")
         );
     }
 

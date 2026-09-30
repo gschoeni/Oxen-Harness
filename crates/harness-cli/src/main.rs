@@ -335,6 +335,11 @@ async fn main() -> Result<()> {
     // the pricing catalog feeds the banner's spend row and the context
     // trailer's rate, and both read "not priced yet" without complaint.
     // A headless `-p` run shows neither figure, so it doesn't even ask.
+    // Yesterday's rates price the banner right away; the fetch refreshes
+    // them for the trailer and tomorrow's banner.
+    if args.print.is_none() {
+        pricing::seed_from_disk();
+    }
     let warm_pricing = args.print.is_none().then(|| {
         tokio::spawn({
             let base_url = client.base_url().to_string();
@@ -429,10 +434,11 @@ async fn main() -> Result<()> {
         std::process::exit(code);
     }
 
-    // Give the catalog fetch a moment to land so the banner can show real
-    // spend, then move on regardless: an endpoint that's slow (or down) costs
-    // a dash in one row, never the first prompt.
-    if let Some(warm) = warm_pricing {
+    // A first run ever has no rates on disk: give the catalog fetch a moment
+    // to land so the banner can show real spend, then move on regardless —
+    // an endpoint that's slow (or down) costs a dash in one row, never the
+    // first prompt. With rates on disk there is nothing to wait for.
+    if let Some(warm) = warm_pricing.filter(|_| !pricing::is_warm()) {
         let _ = tokio::time::timeout(std::time::Duration::from_millis(250), warm).await;
     }
 
@@ -455,7 +461,7 @@ async fn main() -> Result<()> {
             &session,
             &theme::BannerFacts {
                 tokens_used: commands::usage::total_tokens(&store),
-                cost_usd: commands::usage::total_cost_usd(&store),
+                spend: commands::usage::total_spend(&store),
                 weather: Some(almanac::weather()),
                 recent: &recent,
             },

@@ -215,7 +215,7 @@ fn reprint_banner(agent: &Agent, ui: &Ui, ctx: &ReplContext<'_>) {
             &session,
             &theme::BannerFacts {
                 tokens_used: crate::commands::usage::total_tokens(ctx.store),
-                cost_usd: crate::commands::usage::total_cost_usd(ctx.store),
+                spend: crate::commands::usage::total_spend(ctx.store),
                 weather: Some(crate::almanac::weather()),
                 recent: &recent,
             },

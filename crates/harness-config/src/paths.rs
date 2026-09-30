@@ -131,6 +131,13 @@ pub fn model_limits_file() -> Result<PathBuf, ConfigError> {
     under("model-limits.json")
 }
 
+/// `~/.oxen-harness/model-rates.json` — catalog-reported per-token rates by
+/// model id, refreshed by every hosted-catalog fetch and read at startup so
+/// the banner can price all-time spend without waiting on the network.
+pub fn model_rates_file() -> Result<PathBuf, ConfigError> {
+    under("model-rates.json")
+}
+
 /// `~/.oxen-harness/last-crash` — the marker a fatal-signal handler leaves
 /// behind when a run dies on SIGSEGV/SIGBUS/etc., read (and consumed) by the
 /// next launch so the crash gets reported instead of vanishing (see the

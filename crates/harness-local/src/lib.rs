@@ -26,6 +26,7 @@ pub mod fit;
 pub mod gguf;
 pub mod hardware;
 pub mod limits;
+pub mod rates;
 pub mod resolve;
 pub mod runtime;
 pub mod server;

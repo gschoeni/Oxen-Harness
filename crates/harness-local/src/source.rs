@@ -618,7 +618,7 @@ pub async fn oxen_search_models(
 /// Per-token US-dollar pricing for a cloud model (input and output priced
 /// separately, matching the Oxen models API's `input_cost_per_token` /
 /// `output_cost_per_token`). Costs are per single token.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ModelPricing {
     pub input_cost_per_token: f64,
     pub output_cost_per_token: f64,
@@ -660,7 +660,7 @@ pub async fn oxen_model_pricing_catalog_at(
     base_url: &str,
     token: Option<&str>,
 ) -> Result<HashMap<String, ModelPricing>, LocalError> {
-    Ok(fetch_oxen_models(base_url, token)
+    let catalog: HashMap<String, ModelPricing> = fetch_oxen_models(base_url, token)
         .await?
         .into_iter()
         .filter_map(|entry| {
@@ -669,7 +669,11 @@ pub async fn oxen_model_pricing_catalog_at(
                 .and_then(OxenPricing::rates)
                 .map(|rates| (entry.id, rates))
         })
-        .collect())
+        .collect();
+    // Remember the rates on disk so the next startup can price all-time
+    // spend before this fetch would have landed (see `rates`).
+    crate::rates::record(catalog.iter().map(|(id, rate)| (id.clone(), *rate)));
+    Ok(catalog)
 }
 
 // ===========================================================================
