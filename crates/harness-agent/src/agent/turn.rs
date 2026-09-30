@@ -203,6 +203,8 @@ impl Agent {
                     "endpoint": self.client.base_url(),
                     "kind": error_kind(e),
                     "error": e.to_string(),
+                    "status": e.llm().and_then(|llm| llm.status()),
+                    "detail": e.llm().and_then(|llm| llm.detail()),
                 }),
             );
         }

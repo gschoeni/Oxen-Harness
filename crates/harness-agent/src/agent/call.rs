@@ -645,10 +645,11 @@ mod tests {
     #[tokio::test]
     async fn failures_are_appended_to_the_error_log() {
         let mut server = mockito::Server::new_async().await;
+        let provider_body = r#"{"error":{"title":"The model provider returned an error.","detail":"upstream closed the stream"}}"#;
         server
             .mock("POST", "/chat/completions")
             .with_status(502)
-            .with_body(r#"{"error":{"title":"The model provider returned an error."}}"#)
+            .with_body(provider_body)
             .create_async()
             .await;
 
@@ -683,6 +684,14 @@ mod tests {
         assert_eq!(entries[1]["model"], "claude-opus-4-8");
         assert_eq!(entries[1]["endpoint"], server.url());
         assert!(entries[1]["ts"].as_str().unwrap().ends_with('Z'));
+        // The terminal entry keeps what the provider actually said, not just
+        // the one-line summary, so a failure is diagnosable from the log alone.
+        assert_eq!(entries[1]["status"], 502);
+        assert_eq!(entries[1]["detail"], provider_body);
+        assert!(entries[1]["error"]
+            .as_str()
+            .unwrap()
+            .contains("upstream closed the stream"));
     }
 
     #[tokio::test]

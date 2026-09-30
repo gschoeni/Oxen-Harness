@@ -180,9 +180,13 @@ impl OxenClient {
 
 /// Pull a human-readable reason out of an Oxen API error body, so callers show
 /// "You have run out of credits." rather than a wall of raw JSON. Oxen's shape is
-/// `{"error":{"type":..,"title":..},"status":..,"status_message":..}`, but other
-/// services vary, so we try the friendliest fields in priority order and fall
-/// back to the trimmed body when none are present.
+/// `{"error":{"type":..,"title":..,"detail":..},"status":..,"status_message":..}`,
+/// where `title` names the category and `detail` carries what actually went
+/// wrong — for a relayed provider failure the title is always "The model
+/// provider returned an error." and only the detail says why, so the detail
+/// wins when both are present. Other services vary, so the friendliest fields
+/// are tried in priority order, falling back to the trimmed body when none are
+/// present. The result is flattened to one line: it is a notice, not a report.
 pub(crate) fn extract_api_error(body: &str) -> String {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
         return body.trim().to_string();
@@ -194,10 +198,11 @@ pub(crate) fn extract_api_error(body: &str) -> String {
             cur = cur.get(*key)?;
         }
         cur.as_str()
-            .map(|s| s.trim().to_string())
+            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|s| !s.is_empty())
     };
-    at(&["error", "title"])
+    at(&["error", "detail"])
+        .or_else(|| at(&["error", "title"]))
         .or_else(|| at(&["error", "message"]))
         .or_else(|| at(&["error", "description"]))
         .or_else(|| at(&["error"])) // some APIs return `{"error": "message"}`
@@ -297,6 +302,15 @@ mod tests {
         // Oxen's insufficient-credits shape → the human `error.title`.
         let body = r#"{"error":{"type":"insufficient_credits","title":"You have run out of credits."},"status":"error","status_message":"insufficient_credits"}"#;
         assert_eq!(extract_api_error(body), "You have run out of credits.");
+
+        // A relayed provider failure: the title is the same generic sentence
+        // every time, so the detail (what the provider said) is the line shown,
+        // squashed onto one line.
+        let body = r#"{"error":{"type":"model_response_error","title":"The model provider returned an error.","detail":"Invalid 'input[3].output':\n  string too long"},"status":"error"}"#;
+        assert_eq!(
+            extract_api_error(body),
+            "Invalid 'input[3].output': string too long"
+        );
 
         // OpenAI-style `error.message`.
         assert_eq!(

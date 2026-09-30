@@ -47,3 +47,17 @@ pub enum AgentError {
         source: Box<LlmError>,
     },
 }
+
+impl AgentError {
+    /// The model-endpoint failure behind this error, whether it surfaced
+    /// directly or as the last of an exhausted retry run — so a host or log
+    /// can reach the status and raw provider body without matching both
+    /// variants.
+    pub fn llm(&self) -> Option<&LlmError> {
+        match self {
+            AgentError::Llm(e) => Some(e),
+            AgentError::RetriesExhausted { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
