@@ -149,7 +149,7 @@ pub fn banner(
     out.push_str(&journal_row(
         ui,
         "Total tokens used",
-        &format!("{} tokens", facts.tokens_used),
+        &format!("{} tokens", format_count(facts.tokens_used)),
     ));
     if !spend_rendered {
         out.push_str(&journal_row(
@@ -203,6 +203,36 @@ pub(crate) fn format_usd(amount: f64) -> String {
     } else {
         format!("${amount:.2}")
     }
+}
+
+/// A count scaled to a readable magnitude: `999`, `1.2K`, `143.2M`, `2B`.
+/// One decimal place, dropped when it is zero; a value that rounds up to the
+/// next unit moves to it (`999_950` is `1M`, never `1000K`).
+pub(crate) fn format_count(count: usize) -> String {
+    const UNITS: [(u128, &str); 4] = [
+        (1_000_000_000_000, "T"),
+        (1_000_000_000, "B"),
+        (1_000_000, "M"),
+        (1_000, "K"),
+    ];
+    let count = count as u128;
+    let mut bigger = None;
+    for (unit, suffix) in UNITS {
+        if count >= unit {
+            // Tenths of a unit, rounded half up, in integer math so large
+            // counts don't pick up float error.
+            let tenths = (count * 10 + unit / 2) / unit;
+            return match (bigger, tenths % 10) {
+                // Rounded up to a full 1000 of this unit: 1 of the next. The
+                // largest unit has nowhere to promote to and keeps counting.
+                (Some(bigger), _) if tenths >= 10_000 => format!("1{bigger}"),
+                (_, 0) => format!("{}{suffix}", tenths / 10),
+                (_, frac) => format!("{}.{frac}{suffix}", tenths / 10),
+            };
+        }
+        bigger = Some(suffix);
+    }
+    count.to_string()
 }
 
 /// Render the word as 5-row block "figlet" letters (only the glyphs we need).
@@ -437,7 +467,23 @@ mod tests {
         let b = banner(&ui, "u", "m", "w", "s", &facts(1234, None));
         // The live cumulative count replaces the static flavor value.
         assert!(b.contains("Total tokens used"));
-        assert!(b.contains("1234 tokens"));
+        assert!(b.contains("1.2K tokens"), "{b}");
+    }
+
+    #[test]
+    fn format_count_scales_to_a_readable_magnitude() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(1_000), "1K");
+        assert_eq!(format_count(1_234), "1.2K");
+        assert_eq!(format_count(143_212_172), "143.2M");
+        assert_eq!(format_count(2_000_000_000), "2B");
+        // Rounding up past a unit boundary promotes instead of "1000K".
+        assert_eq!(format_count(999_949), "999.9K");
+        assert_eq!(format_count(999_950), "1M");
+        assert_eq!(format_count(999_999_999), "1B");
+        // The largest unit absorbs everything above it.
+        assert_eq!(format_count(5_000_000_000_000_000), "5000T");
     }
 
     #[test]
@@ -449,7 +495,7 @@ mod tests {
         let ui = Ui::with(false, Arc::new(theme));
         let b = banner(&ui, "u", "m", "w", "s", &facts(555, Some(1.25)));
         assert!(b.contains("Total tokens used"));
-        assert!(b.contains("555 tokens"));
+        assert!(b.contains("555 tokens"), "{b}");
         assert!(b.contains("Total dollars spent"));
         assert!(b.contains("$1.25"));
         // No duplicate rows.
