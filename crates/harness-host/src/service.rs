@@ -18,7 +18,10 @@ use harness_agent::{Agent, AgentConfig, AgentEvent};
 use harness_llm::{Attachment, OxenClient};
 use harness_local::{fit, llama_server_path, LocalServer, ModelStore};
 use harness_protocol::{ProtocolEvent, SessionInfo, SessionView};
-use harness_store::{HistoryStore, SessionMeta, SessionSummary};
+use harness_store::{
+    HistoryError, HistoryStore, SessionEndpoint, SessionMeta, SessionSummary, MODE_CLOUD,
+    MODE_LOCAL,
+};
 use harness_tools::{AskUserTool, CanvasTool, ToolRegistry, Workspace};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -277,6 +280,33 @@ enum TurnKind {
     Deliver,
 }
 
+/// Whether a session's row names a local model that can still be run: it was
+/// recorded as local (or predates the `mode` column and ran against a
+/// loopback `llama-server`), its weights are on disk, and the runtime is
+/// installed.
+fn recorded_local(meta: &SessionMeta) -> Result<bool, String> {
+    let local = match meta.mode.as_str() {
+        MODE_LOCAL => true,
+        "" => meta.base_url.starts_with("http://127.0.0.1:"),
+        _ => false,
+    };
+    if !local || llama_server_path().is_none() {
+        return Ok(false);
+    }
+    let store = ModelStore::open().map_err(|e| format!("opening the local model store: {e}"))?;
+    Ok(store.is_installed(&meta.model))
+}
+
+/// Lock a chat's agent for a settings change. A turn holds the agent for its
+/// whole run, so this refuses rather than hang the caller until the reply
+/// finishes.
+fn lock_between_turns(
+    arc: &Arc<Mutex<Agent>>,
+) -> Result<tokio::sync::MutexGuard<'_, Agent>, String> {
+    arc.try_lock()
+        .map_err(|_| "finish the current turn to switch models".to_string())
+}
+
 /// Configures and builds a [`SessionService`].
 pub struct SessionServiceBuilder {
     sink: Arc<dyn EventSink>,
@@ -406,12 +436,13 @@ pub struct SessionService {
     pub agents: Mutex<HashMap<String, Arc<Mutex<Agent>>>>,
     /// The session the host currently shows.
     pub current: Mutex<Option<String>>,
-    /// A local `llama-server` kept alive while a local model is selected.
+    /// The one local `llama-server`, kept alive while new chats start on its
+    /// model or a chat held in memory is on it.
     pub local_server: Mutex<Option<LocalServer>>,
-    /// The local model id in use, so new sessions reuse it instead of the cloud.
+    /// The local model new sessions start on, instead of the cloud one.
     pub local_model: Mutex<Option<String>>,
-    /// The selected cloud model id, used for new sessions (and live swaps)
-    /// when no local model is active.
+    /// The cloud model new sessions start on when no local model is active.
+    /// A chat's own model lives on its session row, not here.
     pub cloud_model: Mutex<String>,
     /// The active project's directory — new chats are rooted here. Empty
     /// means "the launch directory" (resolved lazily by [`Self::active_root`]).
@@ -530,6 +561,17 @@ impl SessionService {
             if s.model_id() == id && s.is_alive() {
                 return Ok((s.base_url().to_string(), s.context_size() as usize));
             }
+            // Replacing a live server kills it under whatever is streaming
+            // from it, so a model that is mid-reply in some chat keeps it.
+            if s.is_alive() {
+                let serving = s.model_id().to_string();
+                if self.mid_turn_on(&serving).await? {
+                    return Err(format!(
+                        "{serving} is mid-reply in another chat, and only one local model \
+                         runs at a time — wait for it to finish, or pick a cloud model here"
+                    ));
+                }
+            }
             // Drop (and kill) the stale server *before* starting the new one:
             // two resident models can exceed the machine's memory.
             *guard = None;
@@ -564,17 +606,33 @@ impl SessionService {
         Ok(result)
     }
 
+    /// Whether a turn is in flight in any chat recorded on `model`.
+    async fn mid_turn_on(&self, model: &str) -> Result<bool, String> {
+        let running: Vec<String> = self.cancels.lock().await.keys().cloned().collect();
+        let store = self.store()?;
+        for id in running {
+            match store.session_meta(&id) {
+                Ok(meta) if meta.model == model => return Ok(true),
+                Ok(_) | Err(HistoryError::SessionNotFound(_)) => {}
+                Err(e) => return Err(format!("reading session {id}: {e}")),
+            }
+        }
+        Ok(false)
+    }
+
     /// The client, model label, and context window for rebuilding an
     /// *existing* session: the model that chat was last on, not whichever one
     /// another chat picked since — each chat owns its model.
     ///
-    /// The recorded model is honored when it can still be reached the way the
-    /// row says it was: a local model whose server is up (or is the active
-    /// local choice), or a cloud model on the endpoint we are configured for.
-    /// Anything else — a local model whose server is gone, a transcript
-    /// imported from another tool, a chat from a since-changed connection —
-    /// falls back to the default for new chats, since its model id means
-    /// nothing to the current endpoint.
+    /// A cloud model is honored when it was recorded against the endpoint we
+    /// are configured for. A local model is honored when it is still
+    /// installed; if its server isn't up the agent is built *dormant*, on
+    /// the dead address the row remembers, and [`Self::ready_for_turn`]
+    /// starts the server when the chat is next sent to — opening a chat
+    /// never loads a model. Anything else (a transcript imported from
+    /// another tool, a chat from a since-changed connection, a local model
+    /// since deleted) falls back to the default for new chats, since its
+    /// model id means nothing here; the first turn says so.
     async fn client_for_session(
         &self,
         session: &str,
@@ -586,20 +644,25 @@ impl SessionService {
         if meta.model.is_empty() {
             return self.client_for().await;
         }
-        if let Some((base_url, ctx)) = self.live_local_server(&meta.model).await {
+        if meta.mode != MODE_LOCAL {
+            let client = (self.client_factory)(&meta.model)?;
+            if client.base_url() == meta.base_url {
+                let context_window = harness_local::limits::context_window(&meta.model);
+                return Ok((client, meta.model, context_window));
+            }
+        }
+        if recorded_local(&meta)? {
+            let (base_url, context_window) = match self.live_local_server(&meta.model).await {
+                Some((base_url, ctx)) => (base_url, Some(ctx)),
+                None => (
+                    meta.base_url,
+                    meta.context_window.and_then(|w| usize::try_from(w).ok()),
+                ),
+            };
             let client = OxenClient::new(base_url, "local", &meta.model);
-            return Ok((client, meta.model, Some(ctx)));
+            return Ok((client, meta.model, context_window));
         }
-        let active_local = self.local_model.lock().await.clone();
-        if active_local.as_deref() == Some(meta.model.as_str()) {
-            return self.client_for().await;
-        }
-        let client = (self.client_factory)(&meta.model)?;
-        if client.base_url() != meta.base_url {
-            return self.client_for().await;
-        }
-        let context_window = harness_local::limits::context_window(&meta.model);
-        Ok((client, meta.model, context_window))
+        self.client_for().await
     }
 
     /// The running local server's base URL and context size, if it is alive
@@ -615,30 +678,50 @@ impl SessionService {
         })
     }
 
-    /// Stop defaulting new chats to a local model. Its server is shut down
-    /// only when no chat held in memory is still on it — another tab may be
-    /// mid-turn on that model, and killing the server would fail its stream.
-    pub async fn release_local_model(&self) -> Result<(), String> {
+    /// [`MODE_LOCAL`] when `model` is the local model new chats start on,
+    /// else [`MODE_CLOUD`].
+    async fn mode_of(&self, model: &str) -> &'static str {
+        if self.local_model.lock().await.as_deref() == Some(model) {
+            MODE_LOCAL
+        } else {
+            MODE_CLOUD
+        }
+    }
+
+    /// Stop defaulting new chats to a local model, and shut its server down
+    /// unless a chat held in memory is still on it.
+    pub async fn release_local_model(&self) {
         *self.local_model.lock().await = None;
-        let serving = {
-            let guard = self.local_server.lock().await;
-            guard.as_ref().map(|s| s.model_id().to_string())
+        self.drop_idle_local_server().await;
+    }
+
+    /// Shut the local server down once nothing needs it: it isn't what new
+    /// chats start on, and no chat held in memory (the one in view, or any
+    /// mid-turn) is recorded on its model. Its weights are gigabytes of
+    /// memory, and a chat that comes back to it restarts it on its next turn.
+    ///
+    /// If a chat's row can't be read the server is kept: wrongly keeping it
+    /// costs memory, wrongly killing it fails a reply mid-stream.
+    async fn drop_idle_local_server(&self) {
+        if self.local_model.lock().await.is_some() {
+            return;
+        }
+        let held: Vec<String> = self.agents.lock().await.keys().cloned().collect();
+        let Ok(store) = self.store() else {
+            return;
         };
-        let Some(serving) = serving else {
-            return Ok(());
+        let mut guard = self.local_server.lock().await;
+        let Some(serving) = guard.as_ref().map(|s| s.model_id().to_string()) else {
+            return;
         };
-        let live: Vec<String> = self.agents.lock().await.keys().cloned().collect();
-        let store = self.store()?;
-        for id in live {
-            let meta = store
-                .session_meta(&id)
-                .map_err(|e| format!("reading session {id}: {e}"))?;
-            if meta.model == serving {
-                return Ok(());
+        for id in held {
+            match store.session_meta(&id) {
+                Ok(meta) if meta.model == serving => return,
+                Ok(_) | Err(HistoryError::SessionNotFound(_)) => {}
+                Err(_) => return,
             }
         }
-        *self.local_server.lock().await = None;
-        Ok(())
+        *guard = None;
     }
 
     /// Switch the chat in view to a cloud `model` — see
@@ -653,58 +736,147 @@ impl SessionService {
     /// Switch one chat to a cloud `model`, continuing the same conversation:
     /// the transcript stays, only the model (and, if coming from a local
     /// model, the client) is swapped. The choice is recorded on the session,
-    /// so that chat — and only that chat — comes back on it; other chats keep
-    /// their own models. It also becomes the default for new chats, persisted
-    /// so it survives a restart.
+    /// so that chat — and only that chat — comes back on it. Other chats keep
+    /// their own models, and so does the default new chats start on.
     pub async fn set_session_model(
         &self,
         session: &str,
         model: &str,
     ) -> Result<SessionInfo, String> {
-        let model = model.trim().to_string();
+        let model = model.trim();
         if model.is_empty() {
             return Err("model id cannot be empty".into());
         }
         let arc = self.agent_or_build(session).await?;
-        // A turn holds the agent for its whole run; waiting on it would hang
-        // the caller until the reply finishes.
-        let mut agent = arc
-            .try_lock()
-            .map_err(|_| "finish the current turn to switch models".to_string())?;
-        let client = (self.client_factory)(&model)?;
-        // The new model's catalog-reported limits, when cached; `None` falls
-        // back to the name-derived window and the configured reply reserve.
-        let context_window = harness_local::limits::context_window(&model);
-        // Record the switch before making it, so the row a cold resume
-        // rebuilds from never lags the live agent.
-        self.store()?
-            .set_session_model(
-                session,
-                &model,
-                client.base_url(),
-                context_window.map(|w| w as i64),
-            )
-            .map_err(|e| format!("recording {model} on session {session}: {e}"))?;
-
-        // Swap the live conversation onto the cloud client + model in place.
-        agent.set_client(client.clone());
-        agent.set_model(&model);
-        agent.set_context_window(context_window);
-        agent.set_max_output_tokens(harness_local::limits::max_output_tokens(&model));
-        agent.set_accepts_images(harness_local::limits::accepts_images(&model));
-        // Follow the swap through to the fleet spawner so a later
-        // spawn_agents fleet runs on the new model/endpoint.
-        if let Some(spawner) = self.fleet_spawner_for(session) {
-            spawner.set_client(client);
-            spawner.set_model(&model);
-        }
+        let mut agent = lock_between_turns(&arc)?;
+        let client = (self.client_factory)(model)?;
+        // The new model's catalog-reported window, when cached; `None` falls
+        // back to the name-derived one.
+        let context_window = harness_local::limits::context_window(model);
+        self.move_agent(&mut agent, client, model, MODE_CLOUD, context_window)?;
         let info = self.info_for(&agent);
         drop(agent);
-
-        harness_runtime::models::set_selected(&model).map_err(|e| e.to_string())?;
-        *self.cloud_model.lock().await = model;
-        self.release_local_model().await?;
+        // This chat may have been the last one on the local server.
+        self.drop_idle_local_server().await;
         Ok(info)
+    }
+
+    /// Switch one chat to a downloaded local model, continuing the same
+    /// conversation — the local counterpart of [`Self::set_session_model`].
+    /// Starts the model's server now (the user just picked it), reusing a
+    /// running one. Unlike [`Self::use_local_model`] it opens no new chat and
+    /// leaves the default for new chats alone.
+    pub async fn set_session_local_model(
+        &self,
+        session: &str,
+        id: &str,
+    ) -> Result<SessionInfo, String> {
+        if llama_server_path().is_none() {
+            return Err(format!(
+                "the local runtime isn't installed. {}",
+                harness_local::install_hint()
+            ));
+        }
+        let arc = self.agent_or_build(session).await?;
+        let mut agent = lock_between_turns(&arc)?;
+        let (base_url, context) = self.ensure_local_server(id).await?;
+        let client = OxenClient::new(base_url, "local", id);
+        self.move_agent(&mut agent, client, id, MODE_LOCAL, Some(context))?;
+        Ok(self.info_for(&agent))
+    }
+
+    /// Point a chat's agent at `model` on `client`, recording the move on its
+    /// session row first so the row a cold resume rebuilds from never lags
+    /// the live agent.
+    fn move_agent(
+        &self,
+        agent: &mut Agent,
+        client: OxenClient,
+        model: &str,
+        mode: &str,
+        context_window: Option<usize>,
+    ) -> Result<(), String> {
+        let session = agent.session_id().to_string();
+        self.store()?
+            .set_session_model(
+                &session,
+                &SessionEndpoint {
+                    model,
+                    base_url: client.base_url(),
+                    mode,
+                    context_window: context_window.map(|w| w as i64),
+                },
+            )
+            .map_err(|e| format!("recording {model} on session {session}: {e}"))?;
+        agent.set_client(client.clone());
+        agent.set_model(model);
+        // `None` limits fall back to the name-derived window and the
+        // configured reply reserve.
+        agent.set_context_window(context_window);
+        agent.set_max_output_tokens(harness_local::limits::max_output_tokens(model));
+        agent.set_accepts_images(harness_local::limits::accepts_images(model));
+        // Follow the move through to the fleet spawner so a later
+        // spawn_agents fleet runs on the new model/endpoint.
+        if let Some(spawner) = self.fleet_spawner_for(&session) {
+            spawner.set_client(client);
+            spawner.set_model(model);
+        }
+        Ok(())
+    }
+
+    /// Bring a chat's agent in line with where its turn must run, right
+    /// before the turn — the things that are deliberately not done when a
+    /// chat is merely opened:
+    ///
+    /// - a local-model chat gets its server started (or restarted, if it
+    ///   died or was shut down while the chat sat idle);
+    /// - a chat rebuilt on the default because its recorded model can't be
+    ///   reached says so, once, and its row is brought up to date;
+    /// - the compression setting, which is global, reaches a chat that was
+    ///   already in memory when it changed.
+    async fn ready_for_turn(&self, session: &str, arc: &Arc<Mutex<Agent>>) -> Result<(), String> {
+        let meta = self
+            .store()?
+            .session_meta(session)
+            .map_err(|e| format!("reading session {session}: {e}"))?;
+        let mut agent = arc.lock().await;
+        agent.set_compression_mode(harness_runtime::compression::mode());
+
+        // An empty address means the row isn't ours to correct (a transcript
+        // imported from another tool): it keeps the model it was made with.
+        let fell_back = agent.model() != meta.model;
+        if fell_back && !meta.model.is_empty() && !meta.base_url.is_empty() {
+            let model = agent.model().to_string();
+            self.sink.emit(ProtocolEvent::Notice {
+                session: session.to_string(),
+                kind: "model_unreachable".into(),
+                text: format!(
+                    "{} can't be reached from here anymore — this chat continues on {model}.",
+                    meta.model
+                ),
+            });
+            let endpoint = SessionEndpoint {
+                model: &model,
+                base_url: agent.base_url(),
+                mode: self.mode_of(&model).await,
+                context_window: Some(agent.context_window() as i64),
+            };
+            return self
+                .store()?
+                .set_session_model(session, &endpoint)
+                .map_err(|e| format!("recording {model} on session {session}: {e}"));
+        }
+
+        let on_live_server = match self.live_local_server(&meta.model).await {
+            Some((base_url, _)) => agent.base_url() == base_url,
+            None => false,
+        };
+        if !fell_back && !on_live_server && recorded_local(&meta)? {
+            let (base_url, context) = self.ensure_local_server(&meta.model).await?;
+            let client = OxenClient::new(base_url, "local", &meta.model);
+            self.move_agent(&mut agent, client, &meta.model, MODE_LOCAL, Some(context))?;
+        }
+        Ok(())
     }
 
     // --- Agent assembly ------------------------------------------------------
@@ -1229,6 +1401,7 @@ impl SessionService {
         client: OxenClient,
         model_label: &str,
         context_window: Option<usize>,
+        mode: &str,
         workspace_root: &Path,
     ) -> Result<Agent, String> {
         let store = self.store()?;
@@ -1238,6 +1411,7 @@ impl SessionService {
                 model: model_label.to_string(),
                 provider: "oxen".into(),
                 base_url: client.base_url().to_string(),
+                mode: mode.to_string(),
                 context_window: context_window.map(|w| w as i64),
                 ..Default::default()
             })
@@ -1313,7 +1487,8 @@ impl SessionService {
     /// active local model if any.
     async fn build_fresh_agent(&self, root: &Path) -> Result<Agent, String> {
         let (client, label, ctx) = self.client_for().await?;
-        self.new_agent(client, &label, ctx, root)
+        let mode = self.mode_of(&label).await;
+        self.new_agent(client, &label, ctx, mode, root)
     }
 
     /// Build an agent bound to an existing session id, rooted at `root` (its
@@ -1402,6 +1577,7 @@ impl SessionService {
             .lock()
             .expect("session tasks poisoned")
             .retain(|id, _| kept.contains(id));
+        self.drop_idle_local_server().await;
     }
 
     /// Register an agent under its session id, make it the current chat, then
@@ -1770,6 +1946,9 @@ impl SessionService {
             Ok(arc) => arc,
             Err(e) => return (Err(e), Vec::new()),
         };
+        if let Err(e) = self.ready_for_turn(session, &arc).await {
+            return (Err(e), Vec::new());
+        }
 
         let sid = session.to_string();
         // The context window is fixed for the turn; capture it once so live
@@ -2132,10 +2311,11 @@ impl SessionService {
 
     // --- Live settings swaps -----------------------------------------------------
 
-    /// Switch the current chat to a downloaded local model: ensure a
-    /// `llama-server` is running for it (with a context window sized to this
-    /// machine) and rebuild the agent against it. The model must already be
-    /// downloaded.
+    /// Start a fresh chat on a downloaded local model and make that model
+    /// what new chats start on: ensure a `llama-server` is running for it
+    /// (with a context window sized to this machine) and build an agent
+    /// against it. The model must already be downloaded. To move an existing
+    /// chat onto a local model instead, see [`Self::set_session_local_model`].
     ///
     /// If the running server is already serving `id` (e.g. "Use model" clicked
     /// again), it is reused as-is — starting a second copy would double the
@@ -2158,6 +2338,7 @@ impl SessionService {
             OxenClient::new(&base_url, "local", id),
             id,
             Some(context),
+            MODE_LOCAL,
             &root,
         )?;
 

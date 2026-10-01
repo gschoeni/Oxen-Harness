@@ -314,6 +314,22 @@ pub struct SessionMeta {
     pub parent_session: String,
 }
 
+/// [`SessionMeta::mode`] for a session on a local `llama-server`.
+pub const MODE_LOCAL: &str = "local";
+/// [`SessionMeta::mode`] for a session on the configured cloud endpoint.
+pub const MODE_CLOUD: &str = "cloud";
+
+/// The model a session runs on and how it is reached — the part of
+/// [`SessionMeta`] a mid-chat model switch rewrites.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionEndpoint<'a> {
+    pub model: &'a str,
+    pub base_url: &'a str,
+    /// [`MODE_LOCAL`] or [`MODE_CLOUD`].
+    pub mode: &'a str,
+    pub context_window: Option<i64>,
+}
+
 /// A session as shown in the chat-history list: its metadata plus a derived
 /// title (the first user message) and how many messages it holds.
 #[derive(Debug, Clone, Serialize)]
@@ -738,21 +754,26 @@ impl HistoryStore {
         })
     }
 
-    /// Record that a session now runs on `model` at `base_url` — a mid-chat
-    /// model switch. The row is what a cold resume rebuilds the chat from, so
-    /// without this a reopened chat would come back on whatever model another
-    /// chat picked last.
+    /// Record where a session now runs — a mid-chat model switch. The row is
+    /// what a cold resume rebuilds the chat from, so without this a reopened
+    /// chat would come back on whatever model another chat picked last.
     pub fn set_session_model(
         &self,
         session_id: &str,
-        model: &str,
-        base_url: &str,
-        context_window: Option<i64>,
+        endpoint: &SessionEndpoint<'_>,
     ) -> Result<(), HistoryError> {
         let conn = self.lock()?;
         let updated = conn.execute(
-            "UPDATE sessions SET model = ?2, base_url = ?3, context_window = ?4 WHERE id = ?1",
-            rusqlite::params![session_id, model, base_url, context_window],
+            "UPDATE sessions
+             SET model = ?2, base_url = ?3, mode = ?4, context_window = ?5
+             WHERE id = ?1",
+            rusqlite::params![
+                session_id,
+                endpoint.model,
+                endpoint.base_url,
+                endpoint.mode,
+                endpoint.context_window
+            ],
         )?;
         if updated == 0 {
             return Err(HistoryError::SessionNotFound(session_id.to_string()));
@@ -2263,25 +2284,23 @@ mod tests {
         let session = store.create_session(&meta()).unwrap();
         let other = store.create_session(&meta()).unwrap();
 
-        store
-            .set_session_model(
-                &session,
-                "gpt-5",
-                "https://hub.example/api/ai",
-                Some(400_000),
-            )
-            .unwrap();
+        let gpt = SessionEndpoint {
+            model: "gpt-5",
+            base_url: "https://hub.example/api/ai",
+            mode: MODE_CLOUD,
+            context_window: Some(400_000),
+        };
+        store.set_session_model(&session, &gpt).unwrap();
 
         let switched = store.session_meta(&session).unwrap();
         assert_eq!(switched.model, "gpt-5");
         assert_eq!(switched.base_url, "https://hub.example/api/ai");
+        assert_eq!(switched.mode, MODE_CLOUD);
         assert_eq!(switched.context_window, Some(400_000));
         // Only that chat moved.
         assert_eq!(store.session_meta(&other).unwrap().model, "claude-opus-4-8");
 
-        let err = store
-            .set_session_model("does-not-exist", "gpt-5", "", None)
-            .unwrap_err();
+        let err = store.set_session_model("does-not-exist", &gpt).unwrap_err();
         assert!(matches!(err, HistoryError::SessionNotFound(_)));
     }
 

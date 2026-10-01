@@ -527,6 +527,7 @@ const swapModel = async (model: string, session?: string) => ({
   session_id: session ?? sampleSession.session_id,
 });
 export const setModel = vi.fn(swapModel);
+export const setLocalModel = vi.fn(async (session: string, id: string) => swapModel(id, session));
 
 // The study game + the model roles it shares a settings section with.
 export const sampleStudyProfile: StudyProfile = {
@@ -710,6 +711,7 @@ export function resetIpc() {
   removeCloudModel.mockReset().mockResolvedValue(sampleCloudModels);
   searchOxenModels.mockReset().mockResolvedValue(sampleOxenHits);
   setModel.mockReset().mockImplementation(swapModel);
+  setLocalModel.mockReset().mockImplementation(async (session: string, id: string) => swapModel(id, session));
   listThemes.mockReset().mockResolvedValue(sampleThemes);
   activeTheme.mockReset().mockResolvedValue(sampleTheme);
   useTheme.mockReset().mockResolvedValue(sampleTheme);

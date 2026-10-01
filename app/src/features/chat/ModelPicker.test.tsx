@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
-import { addCloudModel, setModel } from "../../test/ipcMock";
+import { addCloudModel, setLocalModel, setModel, useLocalModel } from "../../test/ipcMock";
 import { ModelPicker } from "./ModelPicker";
 import { useStore } from "../../lib/store";
 import { resetAll } from "../../test/utils";
@@ -80,6 +80,45 @@ describe("ModelPicker", () => {
     fireEvent.click(screen.getByText("Claude Opus 4.8"));
     expect(screen.getByText("Set up a local model…")).toBeInTheDocument();
     expect(screen.getByText("Configure a cloud model…")).toBeInTheDocument();
+  });
+
+  describe("picking a local model", () => {
+    function open() {
+      useStore.setState({
+        session: {
+          model: "claude-sonnet-4-6",
+          workspace: "/x",
+          session_id: "s1",
+          tokens_used: 0,
+          context_tokens: 0,
+          context_window: 200000,
+          compression_mode: "off",
+        },
+        threads: { s1: [] },
+        cloudModels: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", selected: true }],
+        localSwitch: null,
+      });
+      render(<ModelPicker disabled={false} />);
+      fireEvent.click(screen.getByText("Claude Sonnet 4.6"));
+    }
+
+    it("swaps it into this chat rather than opening a new one", async () => {
+      open();
+      fireEvent.click(await screen.findByText("Qwen3 8B · Q4_K_M"));
+      await waitFor(() => expect(setLocalModel).toHaveBeenCalledWith("s1", expect.any(String)));
+      expect(useLocalModel).not.toHaveBeenCalled();
+      await waitFor(() => expect(useStore.getState().session?.session_id).toBe("s1"));
+    });
+
+    it("says why in the chat when the swap is refused", async () => {
+      setLocalModel.mockRejectedValueOnce("qwen3-1.7b is mid-reply in another chat");
+      open();
+      fireEvent.click(await screen.findByText("Qwen3 8B · Q4_K_M"));
+      await waitFor(() =>
+        expect(JSON.stringify(useStore.getState().threads.s1)).toContain("mid-reply in another chat"),
+      );
+      expect(useStore.getState().session?.model).toBe("claude-sonnet-4-6");
+    });
   });
 
   it("shows per-million rates on cloud rows and 'free' on local rows", async () => {

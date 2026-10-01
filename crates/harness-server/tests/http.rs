@@ -812,3 +812,66 @@ async fn the_study_game_answers_while_a_turn_is_running() {
         .unwrap();
     assert_eq!(turn.await.unwrap()["text"], "The sum is 5.");
 }
+
+/// `POST /v1/model` switches the chat it names, not whichever one the server
+/// has in view; without `session` it falls back to the chat in view.
+#[tokio::test]
+async fn a_model_switch_names_its_chat_over_http() {
+    let llm = mockito::Server::new_async().await;
+    let workspace = tempfile::tempdir().unwrap();
+    let server = boot(llm.url(), workspace.path()).await;
+    let base = server.base_url();
+
+    let base = &base;
+    let new_session = || async move {
+        let info: Value = client()
+            .post(format!("{base}/v1/sessions"))
+            .bearer_auth(TOKEN)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        info["session_id"].as_str().unwrap().to_string()
+    };
+    let switch = |body: Value| async move {
+        let info: Value = client()
+            .post(format!("{base}/v1/model"))
+            .bearer_auth(TOKEN)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        info
+    };
+    let first = new_session().await;
+    let second = new_session().await; // now in view
+
+    let info = switch(json!({"model": "some-other-model", "session": first})).await;
+    assert_eq!(info["session_id"], first.as_str());
+    assert_eq!(info["model"], "some-other-model");
+
+    let info = switch(json!({"model": "a-third-model"})).await;
+    assert_eq!(info["session_id"], second.as_str());
+    assert_eq!(info["model"], "a-third-model");
+
+    // Each chat reopens on its own model.
+    for (session, model) in [(&first, "some-other-model"), (&second, "a-third-model")] {
+        let view: Value = client()
+            .get(format!("{base}/v1/sessions/{session}"))
+            .bearer_auth(TOKEN)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(view["info"]["model"], model);
+    }
+}

@@ -30,8 +30,9 @@ export function ModelPicker({
   const cloudModels = useStore((s) => s.cloudModels);
   const loadCloudModels = useStore((s) => s.loadCloudModels);
   const changeModel = useStore((s) => s.changeModel);
-  const switchToLocalModel = useStore((s) => s.switchToLocalModel);
+  const changeLocalModel = useStore((s) => s.changeLocalModel);
   const openSettings = useStore((s) => s.openSettings);
+  const ingestNotice = useStore((s) => s.ingestNotice);
   // Live phase while a local model's server is starting (null when idle).
   const localSwitch = useStore((s) => s.localSwitch);
 
@@ -106,6 +107,23 @@ export function ModelPicker({
       .catch(() => {});
   }, [open, loadCloudModels]);
 
+  // Run a swap for the chat in view. A refusal (the chat is mid-turn, another
+  // chat is using the one local server) lands in that chat as a notice rather
+  // than vanishing: the button would otherwise just snap back, unexplained.
+  async function swap(run: () => Promise<void>) {
+    const session = useStore.getState().session?.session_id;
+    setBusy(true);
+    try {
+      await run();
+    } catch (err) {
+      if (session) {
+        ingestNotice({ session, kind: "model_switch", text: `Couldn't switch models: ${String(err)}` });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function pickCloud(id: string, name: string) {
     setOpen(false);
     if (id === model) return;
@@ -113,12 +131,7 @@ export function ModelPicker({
       onStartupChoice({ id, label: name, local: false });
       return;
     }
-    setBusy(true);
-    try {
-      await changeModel(id);
-    } finally {
-      setBusy(false);
-    }
+    await swap(() => changeModel(id));
   }
 
   // Save a catalog model to the user's list, then switch to it.
@@ -141,12 +154,7 @@ export function ModelPicker({
       onStartupChoice({ id: local.id, label: local.display, local: true });
       return;
     }
-    setBusy(true);
-    try {
-      await switchToLocalModel(local.id);
-    } finally {
-      setBusy(false);
-    }
+    await swap(() => changeLocalModel(local.id));
   }
 
   const needle = query.trim().toLowerCase();

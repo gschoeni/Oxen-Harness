@@ -209,6 +209,19 @@ pub(crate) async fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui
     // Follow the swap through to the fleet spawner so a later spawn_agents
     // fleet runs on the new model, not the one captured at startup.
     crate::endpoint::update_fleet_endpoint(None, Some(id));
+    // The session remembers the swap too: `--resume` picks its model from
+    // the session row, and would otherwise come back on the old one.
+    if let Err(e) = record_session_model(
+        agent.usage_store(),
+        agent.session_id(),
+        id,
+        agent.base_url(),
+    ) {
+        println!(
+            "  {} {e}",
+            ui.dim("couldn't record the model on this session (a resume will use the old one):")
+        );
+    }
     // An id we've never seen (not in the cloud catalog, not an installed local
     // model) is saved as a custom catalog entry so it shows up in the picker
     // from now on — here and in the desktop. Only a *cataloged* id is
@@ -250,6 +263,26 @@ pub(crate) async fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui
         ui.dim(&rate)
     );
     Ok(())
+}
+
+/// Record a mid-session model switch on the session row. The swap keeps the
+/// client it already has, so how the session is reached (`mode`) is unchanged.
+fn record_session_model(
+    store: &harness_store::HistoryStore,
+    session: &str,
+    model: &str,
+    base_url: &str,
+) -> Result<(), harness_store::HistoryError> {
+    let meta = store.session_meta(session)?;
+    store.set_session_model(
+        session,
+        &harness_store::SessionEndpoint {
+            model,
+            base_url,
+            mode: &meta.mode,
+            context_window: harness_local::limits::context_window(model).map(|w| w as i64),
+        },
+    )
 }
 
 // ===========================================================================
@@ -654,6 +687,33 @@ mod tests {
             },
             local,
         }
+    }
+
+    #[test]
+    fn a_model_switch_is_recorded_so_resume_comes_back_on_it() {
+        let store = harness_store::HistoryStore::open_in_memory().unwrap();
+        let session = store
+            .create_session(&harness_store::SessionMeta {
+                workspace: "/tmp/proj".into(),
+                model: "claude-opus-4-8".into(),
+                base_url: "https://hub.oxen.ai/api/ai".into(),
+                mode: harness_store::MODE_CLOUD.into(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        record_session_model(&store, &session, "gpt-5", "https://hub.oxen.ai/api/ai").unwrap();
+
+        // `--resume` reads exactly this row for its model.
+        let meta = store.session_meta(&session).unwrap();
+        assert_eq!(meta.model, "gpt-5");
+        assert_eq!(meta.mode, harness_store::MODE_CLOUD);
+
+        let err = record_session_model(&store, "no-such-session", "gpt-5", "").unwrap_err();
+        assert!(matches!(
+            err,
+            harness_store::HistoryError::SessionNotFound(_)
+        ));
     }
 
     #[test]

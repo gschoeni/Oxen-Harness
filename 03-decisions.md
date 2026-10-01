@@ -1415,22 +1415,40 @@ the in-memory agent, switching tabs evicts the idle agent, and the rebuild
 used the global "last picked" model. The session row never learned of a
 mid-chat switch, so the history list was wrong too.
 
-**The session row is the model's home.** A switch writes `model`, `base_url`
-and `context_window` to the row before swapping the live agent, and a cold
-resume rebuilds from the row (`client_for_session`). The global selection is
-only the default a *new* chat starts on.
+**The session row is the model's home.** A switch writes `model`, `base_url`,
+`mode` (`local`/`cloud`) and `context_window` to the row before swapping the
+live agent, and a cold resume rebuilds from the row (`client_for_session`).
+The CLI's `/model` writes the row too, so `--resume` comes back on it.
 
-**A switch names its chat.** `set_session_model(session, model)`; the desktop
-passes the tab's session id, `POST /v1/model` takes an optional `session`.
-A chat mid-turn refuses the switch instead of blocking until the reply ends.
-Starring a default in Settings no longer touches the open chat.
+**A switch names its chat and touches nothing else.**
+`set_session_model(session, model)` for cloud, `set_session_local_model` for
+local — both in place, same conversation. The desktop passes the tab's
+session id; `POST /v1/model` takes an optional `session`. Neither changes
+what new chats start on: that is the Settings star (and a project's starting
+model). A chat mid-turn refuses the switch instead of blocking until the
+reply ends, and the picker shows the refusal as a notice in that chat.
 
-**A recorded model is honored only where it can be reached**: a local model
-whose server is up or is the active local choice, or a cloud model recorded
-against the endpoint we are configured for. Otherwise (local server gone,
-imported transcript, changed connection) the chat reopens on the default.
-Reopening a tab never starts a local server on its own.
+**Opening a chat loads nothing; sending to it does.** A local-model chat
+whose server isn't up is rebuilt *dormant*, and `ready_for_turn` starts the
+server right before its next turn (also covering a server that crashed).
+One local model runs at a time: replacing a server that is mid-reply in
+another chat is refused, not done.
 
-**Going cloud in one tab doesn't kill a local server another live chat is
-on** (`release_local_model`); it is dropped only when no in-memory chat's row
-names its model.
+**The local server lives only while something needs it**: it is the
+new-chat default, or a chat held in memory (in view, or mid-turn) is recorded
+on its model. `evict_idle` drops it otherwise — the weights are gigabytes,
+and the chat reloads them on its next send. The cost is a reload after
+tabbing away from a local chat and back.
+
+**A model that can't be reached falls back, out loud.** An imported
+transcript, a chat from a since-changed connection, or a local model since
+deleted reopens on the default. Opening it rewrites nothing; the first turn
+that runs emits a `model_unreachable` notice and updates the row, so the
+history list and the picker agree.
+
+**Compression mode is global and now behaves like it**: `ready_for_turn`
+applies the saved mode at every turn, so a chat that was in memory when the
+setting changed no longer keeps the old one.
+
+`crates/harness-host/tests/service.rs` has an opt-in live test of the local
+lifecycle (`OXEN_HARNESS_LIVE_LOCAL=<model id>`, `--run-ignored only`).

@@ -811,11 +811,18 @@ export const removeCloudModel = (id: string) =>
  *  descriptions included (empty query = the full catalog). */
 export const searchOxenModels = (query: string) =>
   invoke<OxenModelHit[]>("search_oxen_models", { query });
-/** Switch one chat (and the default for new chats) to a cloud model, continuing
- *  the same conversation. `session` names the chat — each tab owns its model —
- *  and defaults to the backend's current one. Resolves with that chat's info. */
+/** Switch one chat to a cloud model, continuing the same conversation.
+ *  `session` names the chat — each tab owns its model — and defaults to the
+ *  backend's current one. The default for new chats is not touched (that is
+ *  `selectCloudModelForNewChats`). Resolves with that chat's info. */
 export const setModel = (model: string, session?: string) =>
   invoke<SessionInfo>("set_model", { model, session });
+
+/** Switch one chat to a downloaded local model in place, starting its server.
+ *  Unlike `useLocalModel` it opens no new chat and leaves the new-chat default
+ *  alone. Resolves with that chat's info. */
+export const setLocalModel = (session: string, id: string) =>
+  invoke<SessionInfo>("set_local_model", { session, id });
 
 export const onModelProgress = (handler: (p: DownloadProgress) => void) =>
   listen<DownloadProgress>("models://progress", (e) => handler(e.payload));

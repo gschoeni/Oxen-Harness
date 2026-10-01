@@ -161,6 +161,15 @@ describe("Settings", () => {
     );
   });
 
+  it("starring a default changes what new chats start on, not the open chat", async () => {
+    render(<Settings />);
+    await userEvent.click(screen.getByRole("button", { name: /cloud models/i }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Make default model" }));
+    expect(ipc.selectCloudModelForNewChats).toHaveBeenCalledWith("claude-sonnet-4-6");
+    expect(ipc.setModel).not.toHaveBeenCalled();
+  });
+
   it("searches the catalog and adds a hit to the saved models", async () => {
     render(<Settings />);
     await userEvent.click(screen.getByRole("button", { name: /cloud models/i }));

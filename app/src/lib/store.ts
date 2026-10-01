@@ -46,6 +46,7 @@ import {
   selectCloudModelForNewChats,
   setActiveProject,
   setCompressionMode,
+  setLocalModel,
   setModel,
   setReviewStatus as setReviewStatusIpc,
   setReviewStatusMany as setReviewStatusManyIpc,
@@ -715,11 +716,15 @@ interface AppState {
   loadCloudModels: () => Promise<void>;
   /** Swap the chat in view to a cloud model in place, continuing the same
    *  conversation (keeps the thread; only the model changes). Other tabs keep
-   *  their own models. */
+   *  their own models, and the default for new chats is untouched. */
   changeModel: (model: string) => Promise<void>;
   /** Switch context compression for the live chat (persisted for new ones too). */
   changeCompressionMode: (mode: CompressionMode) => Promise<void>;
-  /** Switch to a downloaded local model — starts a fresh chat on it. */
+  /** Swap the chat in view to a downloaded local model in place — the local
+   *  counterpart of `changeModel`. Starts the model's server. */
+  changeLocalModel: (id: string) => Promise<void>;
+  /** Start a fresh chat on a downloaded local model and make it what new
+   *  chats start on (the setup wizard's "Use model", a project's first chat). */
   switchToLocalModel: (id: string) => Promise<void>;
   /** Live status while switching to a local model (its server is starting), so
    *  the UI can show progress instead of an opaque "Switching…". Null when idle. */
@@ -1084,6 +1089,18 @@ export const useStore = create<AppState>((rawSet, get) => {
 
   // Re-render a chat's thread from its persisted transcript (its settled
   // state, once a turn this client only rejoined has ended out of sight).
+  /** Take in a chat's info after an in-place model swap: the backend kept the
+   *  same session, so the thread stays and only that chat's info changes. A
+   *  tab that came into view while the request was out keeps its own. */
+  function applyModelSwap(info: SessionInfo) {
+    set((s) => ({
+      session: !s.session || s.session.session_id === info.session_id ? info : s.session,
+      infos: { ...s.infos, [info.session_id]: info },
+      threads: { ...s.threads, [info.session_id]: s.threads[info.session_id] ?? [] },
+    }));
+    void get().refreshHistory(); // the history list shows each chat's model
+  }
+
   async function reloadTranscript(id: string) {
     const messages = await sessionMessages(id).catch(() => undefined);
     if (messages === undefined) return;
@@ -1669,16 +1686,19 @@ export const useStore = create<AppState>((rawSet, get) => {
       // The swap belongs to the tab it was made in: name that chat, so a tab
       // switch while the request is out can neither retarget it nor have the
       // answer overwrite the chat now in view.
-      const info = await setModel(model, get().session?.session_id);
-      // In-place swap: the backend kept the same session, so keep the thread and
-      // only update the model/info for that chat.
-      set((s) => ({
-        session: !s.session || s.session.session_id === info.session_id ? info : s.session,
-        infos: { ...s.infos, [info.session_id]: info },
-        threads: { ...s.threads, [info.session_id]: s.threads[info.session_id] ?? [] },
-      }));
-      get().loadCloudModels(); // refresh the selected flag
-      get().refreshHistory(); // the history list shows each chat's model
+      applyModelSwap(await setModel(model, get().session?.session_id));
+    },
+
+    changeLocalModel: async (id) => {
+      const session = get().session?.session_id;
+      // Nothing in view to swap: the fresh-chat path is the only one left.
+      if (!session) return get().switchToLocalModel(id);
+      set({ localSwitch: { model: id, phase: "starting", startedAt: Date.now() } });
+      try {
+        applyModelSwap(await setLocalModel(session, id));
+      } finally {
+        set({ localSwitch: null });
+      }
     },
 
     switchToLocalModel: async (id) => {

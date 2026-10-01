@@ -515,6 +515,25 @@ describe("store: each chat owns its model", () => {
     expect(useStore.getState().infos["tab-a"].model).toBe("gpt-5");
   });
 
+  it("swaps a local model into the chat in view instead of opening a new one", async () => {
+    useStore.setState({ session: chat("tab-a", "claude-opus-4-8"), threads: { "tab-a": [] } });
+    await useStore.getState().changeLocalModel("qwen3-1.7b");
+
+    expect(ipc.setLocalModel).toHaveBeenCalledWith("tab-a", "qwen3-1.7b");
+    expect(ipc.useLocalModel).not.toHaveBeenCalled();
+    expect(useStore.getState().session).toMatchObject({ session_id: "tab-a", model: "qwen3-1.7b" });
+    expect(useStore.getState().localSwitch).toBeNull();
+  });
+
+  it("clears the loading strip when a local swap fails", async () => {
+    useStore.setState({ session: chat("tab-a", "claude-opus-4-8") });
+    ipc.setLocalModel.mockRejectedValueOnce("qwen3-8b is mid-reply in another chat");
+
+    await expect(useStore.getState().changeLocalModel("qwen3-1.7b")).rejects.toBeTruthy();
+    expect(useStore.getState().localSwitch).toBeNull();
+    expect(useStore.getState().session?.model).toBe("claude-opus-4-8");
+  });
+
   it("leaves the tab now in view alone when a switch lands after a tab change", async () => {
     useStore.setState({ session: chat("tab-a", "claude-opus-4-8") });
     let land: (info: ReturnType<typeof chat>) => void = () => {};

@@ -177,7 +177,7 @@ Models and connection:
 
 ```
 GET  /v1/models        cloud-model catalog
-POST /v1/model         {model, session?} → SessionInfo — swaps that chat (default: the current one) in place; each chat keeps its own model
+POST /v1/model         {model, session?} → SessionInfo — swaps that chat (default: the current one) in place; each chat keeps its own model, the new-chat default is untouched, and a chat mid-turn refuses (400)
 GET  /v1/connection    host + key presence (never the secrets)
 PUT  /v1/connection    {host, api_key, brave_api_key} → 204 (then refresh-client per live session)
 ```

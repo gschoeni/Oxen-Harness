@@ -1,8 +1,9 @@
 //! Models, local and cloud: the setup wizard's catalog (curated and Hugging
 //! Face, each quant annotated with how it fits this machine), the
 //! llama.cpp runtime install, weight downloads, and switching what the chat
-//! runs on. A local switch starts a fresh server + session; a cloud switch
-//! swaps the live conversation in place (continuing the chat).
+//! runs on. Each chat owns its model: the picker swaps one chat in place
+//! (cloud or local, continuing the conversation), while "use this model"
+//! from setup starts a fresh chat and sets what new chats start on.
 
 use harness_local::{fit, ModelRef, ModelStore};
 use harness_protocol::{ProtocolEvent, SessionInfo};
@@ -375,6 +376,18 @@ pub(crate) async fn use_local_model(
     state.use_local_model(&id).await
 }
 
+/// Switch one chat to a downloaded local model in place, continuing the same
+/// conversation: the model picker's choice for the tab it sits in. Starts the
+/// model's server; opens no new chat and leaves the new-chat default alone.
+#[tauri::command]
+pub(crate) async fn set_local_model(
+    state: State<'_, AppState>,
+    session: String,
+    id: String,
+) -> Result<SessionInfo, String> {
+    state.set_session_local_model(&session, &id).await
+}
+
 // ===========================================================================
 // Cloud models — a small catalog of built-in models plus any the user adds,
 // and the selected default. Switching swaps the live conversation in place
@@ -409,8 +422,8 @@ pub(crate) async fn remove_cloud_model(
 /// transcript stays, only the model (and, if coming from a local model, the
 /// client) is swapped. `session` names the chat — the tab the picker was used
 /// in — so a tab switch mid-request can't retarget it; other chats keep their
-/// own models. Also makes it the default for new chats and persists the choice
-/// so it survives a restart.
+/// own models, and the default for new chats is untouched (that is the
+/// Settings star, [`select_cloud_model_for_new_chats`]).
 #[tauri::command]
 pub(crate) async fn set_model(
     state: State<'_, AppState>,
@@ -435,5 +448,6 @@ pub(crate) async fn select_cloud_model_for_new_chats(
     }
     harness_runtime::models::set_selected(&model).map_err(|error| error.to_string())?;
     *state.cloud_model.lock().await = model;
-    state.release_local_model().await
+    state.release_local_model().await;
+    Ok(())
 }

@@ -313,9 +313,48 @@ async fn each_chat_keeps_its_own_model_across_tab_switches() {
         "some-other-model"
     );
 
-    // A chat opened after the switch starts on the newest pick.
+    // A tab's pick is that tab's alone: a chat opened afterwards still
+    // starts on the default.
     let third = service.new_session().await.unwrap();
-    assert_eq!(third.model, "some-other-model");
+    assert_eq!(third.model, "claude-opus-4-8");
+}
+
+/// A turn holds its agent until the reply ends; a switch aimed at that chat
+/// is refused at once rather than hanging the caller behind the reply.
+#[tokio::test]
+async fn a_chat_mid_turn_refuses_a_model_switch() {
+    let mut server = mockito::Server::new_async().await;
+    let _ask = sse_mock(&mut server, ASK_SSE);
+
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+    let session = service.new_session().await.unwrap().session_id;
+
+    // Park a turn on a question, so the chat is reliably mid-turn.
+    let turn = tokio::spawn({
+        let service = service.clone();
+        let session = session.clone();
+        async move { service.run_turn(&session, "ask me".into(), vec![]).await }
+    });
+    wait_for(&sink, || {
+        sink.events()
+            .iter()
+            .any(|e| matches!(e, ProtocolEvent::Question { .. }))
+            .then_some(())
+    })
+    .await;
+
+    let err = service
+        .set_session_model(&session, "some-other-model")
+        .await
+        .unwrap_err();
+    assert!(err.contains("finish the current turn"), "{err}");
+    let recorded = service.store().unwrap().session_meta(&session).unwrap();
+    assert_eq!(recorded.model, "claude-opus-4-8");
+
+    service.cancel_turn(&session).await;
+    let _ = turn.await.unwrap();
 }
 
 /// The switch names its chat, so it lands there even when another chat is
@@ -407,6 +446,84 @@ async fn a_chat_from_another_endpoint_reopens_on_the_default_model() {
 
     let view = service.resume_session(&foreign).await.unwrap();
     assert_eq!(view.info.model, "claude-opus-4-8");
+}
+
+/// Reopening on the default is silent (opening a chat changes nothing); the
+/// first turn that actually runs on it says so in the chat and brings the
+/// row along, so the history list and the picker name the same model.
+#[tokio::test]
+async fn a_fallback_is_announced_and_recorded_when_the_chat_next_runs() {
+    let mut server = mockito::Server::new_async().await;
+    let _reply = sse_mock(&mut server, FINAL_SSE);
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+
+    let store = service.store().unwrap();
+    let foreign = store
+        .create_session(&harness_store::SessionMeta {
+            workspace: workspace.path().display().to_string(),
+            model: "model-from-elsewhere".into(),
+            provider: "oxen".into(),
+            base_url: "https://elsewhere.example/api/ai".into(),
+            mode: harness_store::MODE_CLOUD.into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    service.resume_session(&foreign).await.unwrap();
+    assert_eq!(
+        store.session_meta(&foreign).unwrap().model,
+        "model-from-elsewhere",
+        "opening a chat must not rewrite it"
+    );
+
+    service
+        .run_turn(&foreign, "go".into(), vec![])
+        .await
+        .expect("turn runs on the default");
+
+    let notices: Vec<String> = sink
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            ProtocolEvent::Notice { session, text, .. } if session == foreign => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].contains("model-from-elsewhere"), "{notices:?}");
+    assert!(notices[0].contains("claude-opus-4-8"), "{notices:?}");
+
+    let recorded = store.session_meta(&foreign).unwrap();
+    assert_eq!(recorded.model, "claude-opus-4-8");
+    assert_eq!(recorded.base_url, server.url());
+}
+
+/// A chat started here records how it is reached, so a later resume can tell
+/// a cloud chat from a local one without guessing from its address.
+#[tokio::test]
+async fn a_new_chat_records_its_mode() {
+    let server = mockito::Server::new_async().await;
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+
+    let info = service.new_session().await.unwrap();
+    let store = service.store().unwrap();
+    assert_eq!(
+        store.session_meta(&info.session_id).unwrap().mode,
+        harness_store::MODE_CLOUD
+    );
+
+    service
+        .set_session_model(&info.session_id, "some-other-model")
+        .await
+        .unwrap();
+    assert_eq!(
+        store.session_meta(&info.session_id).unwrap().mode,
+        harness_store::MODE_CLOUD
+    );
 }
 
 #[tokio::test]
@@ -1016,4 +1133,90 @@ async fn background_work_that_finishes_while_idle_is_announced_and_delivered() {
     );
     // Delivered once: a second call has nothing to do.
     assert_eq!(service.deliver_pending(&session).await, Ok(None));
+}
+
+/// The local-model lifecycle against a real `llama-server` — the one path a
+/// mock endpoint can't stand in for. Needs the runtime and a downloaded
+/// model, so it only runs when asked:
+///
+/// ```bash
+/// OXEN_HARNESS_LIVE_LOCAL=<installed model id> \
+///   cargo nextest run -p harness-host --run-ignored only live_local
+/// ```
+///
+/// It uses whatever `OXEN_HARNESS_DIR` points at (default `~/.oxen-harness`)
+/// for the runtime and weights; chats go to an in-memory store.
+#[tokio::test]
+#[ignore = "needs llama-server and a downloaded model; set OXEN_HARNESS_LIVE_LOCAL"]
+async fn live_local_chat_loads_its_model_on_send_not_on_open() {
+    let model = std::env::var("OXEN_HARNESS_LIVE_LOCAL")
+        .expect("set OXEN_HARNESS_LIVE_LOCAL to an installed local model id");
+    let cloud = mockito::Server::new_async().await;
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let url = cloud.url();
+    let service = Arc::new(
+        SessionService::builder(sink.clone())
+            .cloud_model("claude-opus-4-8")
+            .store(Arc::new(HistoryStore::open_in_memory().unwrap()))
+            .active_project(workspace.path())
+            .client_factory(move |model| Ok(OxenClient::new(url.clone(), "sk-test", model)))
+            .build(),
+    );
+    let serving = || async {
+        let guard = service.local_server.lock().await;
+        guard.as_ref().map(|s| s.model_id().to_string())
+    };
+    let say_hi = |session: String| {
+        let service = service.clone();
+        async move {
+            let prompt = "Reply with the single word: hi. Do not call any tools.";
+            let turn = service.run_turn(&session, prompt.into(), vec![]);
+            match tokio::time::timeout(Duration::from_secs(300), turn).await {
+                Ok(result) => result.expect("local turn runs"),
+                Err(_) => {
+                    service.cancel_turn(&session).await;
+                    panic!("local turn timed out");
+                }
+            }
+        }
+    };
+
+    // Picking a local model swaps it into the chat in place and loads it.
+    let chat = service.new_session().await.unwrap().session_id;
+    let info = service
+        .set_session_local_model(&chat, &model)
+        .await
+        .expect("local model starts");
+    assert_eq!(info.session_id, chat);
+    assert_eq!(info.model, model);
+    assert_eq!(serving().await.as_deref(), Some(model.as_str()));
+    let store = service.store().unwrap();
+    assert_eq!(
+        store.session_meta(&chat).unwrap().mode,
+        harness_store::MODE_LOCAL
+    );
+    say_hi(chat.clone()).await;
+
+    // The pick was this chat's alone: a new chat is a cloud one, and with
+    // the local chat out of memory nothing needs the server any more.
+    let other = service.new_session().await.unwrap();
+    assert_eq!(other.model, "claude-opus-4-8");
+    assert_eq!(serving().await, None);
+
+    // Reopening the local chat names its model but loads nothing…
+    let view = service.resume_session(&chat).await.unwrap();
+    assert_eq!(view.info.model, model);
+    assert_eq!(serving().await, None);
+
+    // …sending to it does.
+    say_hi(chat.clone()).await;
+    assert_eq!(serving().await.as_deref(), Some(model.as_str()));
+
+    // Going cloud in that chat lets the server go.
+    service
+        .set_session_model(&chat, "claude-opus-4-8")
+        .await
+        .unwrap();
+    assert_eq!(serving().await, None);
 }

@@ -303,6 +303,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::models::cancel_download,
                 commands::models::remove_model,
                 commands::models::use_local_model,
+                commands::models::set_local_model,
                 commands::models::list_cloud_models,
                 commands::models::add_cloud_model,
                 commands::models::remove_cloud_model,
