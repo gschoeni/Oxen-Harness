@@ -1354,3 +1354,27 @@ game overlaps its own requests (a prefetch while an answer is graded), and
 both files are saved whole. A batch plans under the lock, calls the model
 without it, and re-reads before saving; an answer grades first, then records.
 
+## Study game, second pass (2026-09-30)
+
+**The checker is a second opinion, not a gate.** Fresh questions go through
+one more completion that may reject them. If that call fails, can't be read,
+or rejects the whole batch, the questions are kept: a broken checker must
+not be able to stop the game, and the player's `F` flag is the backstop.
+
+**Flagging voids, it doesn't just hide.** A flagged question stays in the
+bank (so the writer is told not to produce it again) but every attempt at it
+is removed from the progress log, since mastery is replayed from that log.
+
+**Stakes are bonus-only.** Oxen are lost to wrong answers and pay a bonus at
+the end; nothing ends a run early or takes points away. Punishing a wrong
+answer in a learning tool trades honesty for score-keeping.
+
+**Ride-along means the agent's edits.** Reading files the agent read teaches
+the codebase; explaining the agent's diff is what lets you accept its work.
+The edits come from the transcript's `edit_file`/`write_file` arguments, so
+no git state or snapshot is needed.
+
+**Columns are measured, not assumed.** Themes pick the readout font, and
+their advance widths differ by half; text cabinets ask `textCols` how many
+characters fit rather than hard-coding a count for the widest face.
+

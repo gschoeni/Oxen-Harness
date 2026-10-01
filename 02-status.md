@@ -859,3 +859,33 @@ fmt clean, TypeScript clean, 721 frontend tests (study cabinet 17, wrapper 13).
 
 Not done: a TUI version (the HTTP routes are there for one); weighting
 understanding by region size; the Usage page splitting out `study` spend.
+
+### Study game, second pass (2026-09-30)
+
+After a first real session: the cabinet is now as wide as the composer with
+type measured from the live font, and the weaknesses listed after the first
+build were worked through.
+
+- **Questions:** material is a window of one focus file plus the places other
+  files use what it defines; a second completion checks fresh questions and
+  drops the ones it rejects; `F` on a result card flags a question as wrong
+  (retired, its answers struck); ride-along quizzes the agent's actual edits;
+  formats lean on recall (typed answers, a new ordering kind, predictions,
+  which-file).
+- **Mastery:** each question has its own review schedule (1/3/7/14/30 days, a
+  miss due in ten minutes); guessable formats and big regions earn less per
+  answer; understanding weighs regions by size.
+- **Cabinet:** `O` opens the question's file in the editor; three oxen as a
+  bonus-only stake; due reviews shown on the mode screen; a one-line offer
+  above the composer when a turn runs long, and a ride-along offer when a
+  long turn ends.
+- **Live check** (`deepseek-v4-1-flash`): a batch is now ~22 s and ~14k
+  tokens (was ~16 s, ~9k) — the verification call.
+
+Verification: 1410 Rust tests (harness-study 41), 749 frontend tests, clippy,
+fmt, and TypeScript clean in both workspaces.
+
+Still open: no TUI version; the Usage page doesn't split out `study` spend;
+with a local model active the study role's cloud id goes to the local server;
+the editor opens the file but can't jump to the question's line.
+
