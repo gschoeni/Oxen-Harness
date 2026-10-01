@@ -172,6 +172,7 @@ When adding a new file to the project, update this document map.
 - `app/src/features/chat/games/study.tsx` — the cabinet: modes, eight legs, fort replay, hints, level; pure state that queues backend requests.
 - `app/src/features/chat/games/studyHost.ts` — maps the cabinet's requests onto ipc for the chat on screen.
 - `app/src/features/chat/games/gameKit.tsx` — `requests` / `deliver` / `textEntry`: how a pure game reaches the backend and collects typed input.
+- `app/src/features/chat/StudyNudge.tsx` — the one-line offer above the composer when a turn runs long, and the ride-along offer when a long turn ends.
 - `app/src/features/settings/ModelRoles.tsx` — Settings → Cloud models → Model roles (study, smol, summary).
 
 ## Workbench modules and workflows
