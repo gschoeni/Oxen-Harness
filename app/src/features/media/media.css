@@ -529,10 +529,199 @@
   max-height: 60vh;
   overflow: auto;
 }
+/* The actions sit directly under the picture they act on. */
 .gallery-actions {
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+/* --- A/B comparison (CompareView): two layers in one frame, B clipped at
+   the divider; under it, the two sides and the candidates for them. --- */
+.compare {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+.compare-stage {
+  position: relative;
+  align-self: center;
+  width: 100%;
+  max-width: 100%;
+  max-height: min(52vh, 560px);
+  overflow: hidden;
+  background: #000;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+.compare-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.compare-tag {
+  position: absolute;
+  top: var(--space-2);
+  max-width: 45%;
+  padding: 0 var(--space-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-2xs);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  color: var(--text);
+  pointer-events: none;
+}
+.compare-tag.a {
+  left: var(--space-2);
+}
+.compare-tag.b {
+  right: var(--space-2);
+}
+.compare-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 35%);
+  outline: none;
+}
+.compare-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-pill);
+  background: #fff;
+  color: #111;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 45%);
+}
+.compare-divider:focus-visible .compare-grip {
+  box-shadow: 0 0 0 3px var(--accent);
+}
+.compare-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) 0;
+}
+.compare-slots {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.compare-slot {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+.compare-slot:disabled {
+  cursor: default;
+}
+.compare-slot.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.compare-slot-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.compare-slot-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+}
+.compare-slot-detail {
+  font-size: var(--text-3xs);
+  color: var(--text-tertiary);
+}
+.compare-badge {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font-size: var(--text-3xs);
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--bg);
+}
+.compare-badge.b {
+  background: var(--text);
+}
+.compare-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.compare-options {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding-bottom: var(--space-1);
+}
+.compare-option {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 84px;
+  padding: var(--space-1);
+  background: transparent;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.compare-option:hover,
+.compare-option.on {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.compare-option .compare-badge {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+}
+.compare-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+}
+.compare-option-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-3xs);
 }
 /* --- the project page's media card --- */
 .project-media-empty {

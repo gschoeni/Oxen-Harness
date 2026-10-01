@@ -4,17 +4,30 @@
 // the point of the view — every row is a real link in the chain the file
 // came from (an attachment, an earlier generation, a project file) or went
 // into (later generations that used this one), and the ones that are
-// library items open in place.
+// library items open in place. The actions sit right under the picture,
+// where the thing they act on is; Compare swaps the picture for an A/B
+// divider between the generation's inputs and its output (CompareView).
 
 import { useMemo, useState, type DragEvent, type ReactNode } from "react";
 import { Button } from "../../components/ui";
-import { Check, Copy, Download, FileCode2, FolderTree, MessageSquare, Paperclip, TriangleAlert } from "lucide-react";
+import {
+  Check,
+  Copy,
+  Download,
+  FileCode2,
+  FolderTree,
+  MessageSquare,
+  Paperclip,
+  SquareSplitHorizontal,
+  TriangleAlert,
+} from "lucide-react";
 import { useStore } from "../../lib/store";
 import type { MediaItem, MediaSource } from "../../lib/types";
 import { elapsedSince, fmtBytes, fmtUsd, whenLabel } from "../../lib/media";
 import { useAssetSrc } from "../files/useAssetSrc";
 import { setDragPaths } from "../files/dnd";
 import { downloadLabel, useDownload } from "./useDownload";
+import { CompareView, compareOptions } from "./CompareView";
 
 const NONE: MediaItem[] = [];
 type View = "details" | "raw";
@@ -32,15 +45,76 @@ export function GenerationDetail({
   onOpen: (id: string) => void;
 }) {
   const [view, setView] = useState<View>("details");
+  // Compare stays on while stepping through the feed: flipping through a run
+  // of edits with the divider up is the point of it.
+  const [comparing, setComparing] = useState(false);
   const stageAttachment = useStore((s) => s.stageAttachment);
   const openInViewer = useStore((s) => s.openInViewer);
   const revealInFiles = useStore((s) => s.revealInFiles);
   const resume = useStore((s) => s.resume);
   const sessionId = useStore((s) => s.session?.session_id);
   const fromThisChat = item.session === sessionId;
+  const options = useMemo(() => compareOptions(item, lineageInputs(item)), [item]);
+  const comparable = options.length >= 2;
   return (
     <div className="gallery-detail" aria-label="Generation details">
-      <Preview item={item} workspace={workspace} bust={bust} />
+      {comparing && comparable ? (
+        <CompareView
+          key={item.id}
+          workspace={workspace}
+          options={options}
+          bust={bust}
+          aspect={item.width && item.height ? item.width / item.height : undefined}
+        />
+      ) : (
+        <Preview item={item} workspace={workspace} bust={bust} />
+      )}
+      <div className="gallery-actions">
+        {comparable && (
+          <Button
+            type="button"
+            size="sm"
+            variant={comparing ? "primary" : "default"}
+            aria-pressed={comparing}
+            onClick={() => setComparing((c) => !c)}
+            title="Slide between what went in and what came out"
+          >
+            <SquareSplitHorizontal size={13} /> {comparing ? "Stop comparing" : "Compare with input"}
+          </Button>
+        )}
+        {item.path && (
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => stageAttachment(`${workspace}/${item.path}`)}
+            title="Attach to your next message as a reference"
+          >
+            <Paperclip size={13} /> Use as reference
+          </Button>
+        )}
+        {item.path && <DownloadButton workspace={workspace} path={item.path} />}
+        {item.path && (
+          <Button type="button" size="sm" onClick={() => openInViewer([item.path!])}>
+            <FileCode2 size={13} /> Open in editor
+          </Button>
+        )}
+        {item.path && (
+          <Button type="button" size="sm" onClick={() => revealInFiles(item.path!)}>
+            <FolderTree size={13} /> Reveal in Files
+          </Button>
+        )}
+        <CopyButton text={item.agent_prompt ?? item.prompt} label="Copy prompt" />
+        {!fromThisChat && (
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void resume(item.session)}
+            title="Open the chat that asked for this"
+          >
+            <MessageSquare size={13} /> Open chat
+          </Button>
+        )}
+      </div>
       <div className="gallery-detail-body">
         <div className="segmented gallery-detail-mode" role="tablist" aria-label="Metadata view">
           {(["details", "raw"] as View[]).map((v) => (
@@ -57,40 +131,6 @@ export function GenerationDetail({
           ))}
         </div>
         {view === "details" ? <Details item={item} workspace={workspace} onOpen={onOpen} /> : <Raw item={item} />}
-        <div className="gallery-actions">
-          {item.path && (
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => stageAttachment(`${workspace}/${item.path}`)}
-              title="Attach to your next message as a reference"
-            >
-              <Paperclip size={13} /> Use as reference
-            </Button>
-          )}
-          {item.path && <DownloadButton workspace={workspace} path={item.path} />}
-          {item.path && (
-            <Button type="button" size="sm" onClick={() => openInViewer([item.path!])}>
-              <FileCode2 size={13} /> Open in editor
-            </Button>
-          )}
-          {item.path && (
-            <Button type="button" size="sm" onClick={() => revealInFiles(item.path!)}>
-              <FolderTree size={13} /> Reveal in Files
-            </Button>
-          )}
-          <CopyButton text={item.agent_prompt ?? item.prompt} label="Copy prompt" />
-          {!fromThisChat && (
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => void resume(item.session)}
-              title="Open the chat that asked for this"
-            >
-              <MessageSquare size={13} /> Open chat
-            </Button>
-          )}
-        </div>
       </div>
     </div>
   );
