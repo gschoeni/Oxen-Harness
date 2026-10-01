@@ -1125,41 +1125,10 @@ mod tests {
     #[test]
     fn default_tool_definitions_stay_within_budget() {
         // The tool-schema block is fixed overhead resent on every model call, so
-        // it directly shrinks the usable context window. Pin its size so a new
-        // tool or a verbose schema can't silently balloon the prefix. Current
-        // size is ~11.6K chars (~2.9K tokens): the background-task trio
-        // (`is_background` + `task_output` + `kill_task`), `edit_file`'s batch
-        // form (~900 chars, repaid the first time a rename lands six call
-        // sites in one call), and `retrieve_original` (~400, now always
-        // present because output caps drop content nothing else can recover).
-        // Derived schemas document every field and enum variant — deliberate
-        // spend; `schema_for` strips what carries no meaning. Two raises in one
-        // feature is the limit: the next tool either replaces one, or argues
-        // for its permanent prefix cost in the commit that adds it.
-        //
-        // `gh` (~0.9K, 13.5K → 14.5K): the tool that checks and opens PRs,
-        // so it earns its permanent seat next to `git`.
-        //
-        // The shell-patience contract (~0.4K, 14.5K → 15.2K): `run_shell`'s
-        // sixty-second wait, the promise that a backgrounded task's final
-        // output arrives on its own, `task_output`'s `wait_ms`, and the
-        // `update_plan`/`ask_user` hygiene lines. Unusually, this spend buys
-        // *fewer* calls rather than more capability: it deletes poll loops,
-        // plan-only turns, and questions the model could have answered from
-        // the repo — each of which costs a whole round trip (system prompt,
-        // tools, transcript) every time it happens.
-        //
-        // Line-addressed edits (~0.6K, 15.2K → 15.9K): `edit_file` hunks may
-        // name a line range instead of retyping the old text. Modelled on
-        // oh-my-pi's hashline, whose benchmark lifted weak models' edit
-        // success 2-10x — exactly the local GGUF class this harness ships —
-        // and it cuts output tokens on every large rewrite.
-        //
-        // Ranged retrieval (~0.4K, 15.9K → 16.3K): `retrieve_original` reads
-        // a slice, greps, or chunks parked content instead of loading it
-        // whole. This is what lets an oversized result stay out of the
-        // context (the recursive-language-model move); the three arguments
-        // pay for themselves the first time a 100K listing is not re-read.
+        // it directly shrinks the usable context window. Pin its size (~12.9K
+        // chars, ~3.2K tokens today) so a new tool or a verbose schema can't
+        // silently balloon the prefix: whatever raises this argues for its
+        // permanent cost in the commit that does it.
         let workspace = Workspace::new(".").unwrap();
         let registry = ToolRegistry::default_for_workspace(workspace);
         let chars: usize = registry
@@ -1168,8 +1137,8 @@ mod tests {
             .map(|d| d.to_string().len())
             .sum();
         assert!(
-            chars < 16_300,
-            "default tool definitions grew to {chars} chars (budget 16300)"
+            chars < 13_000,
+            "default tool definitions grew to {chars} chars (budget 13000)"
         );
     }
 }
