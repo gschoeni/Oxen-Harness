@@ -37,14 +37,14 @@ describe("HeroGame wrapper", () => {
     expect(screen.getByLabelText(/Press escape to make camp/i)).toBeInTheDocument();
   });
 
-  it("follows the saved sound preference in the hero but starts muted in the dock", async () => {
+  it("follows the saved sound preference in the hero but starts muted in the work panel", async () => {
     const { unmount } = render(<HeroGame gameName="tumbleweed" palette={palette} />);
     const toggle = screen.getByRole("button", { name: /mute game sound/i });
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     await userEvent.click(toggle);
     expect(sfx.sfxPreference()).toBe(false);
     unmount();
-    render(<HeroGame gameName="tumbleweed" palette={palette} variant="dock" />);
+    render(<HeroGame gameName="tumbleweed" palette={palette} variant="panel" />);
     expect(screen.getByRole("button", { name: /unmute game sound/i })).toHaveAttribute("aria-pressed", "false");
   });
 
@@ -122,7 +122,7 @@ describe("HeroGame wrapper", () => {
         ? { project: "p", workspace: "/p", understanding: 0, level: 1, answered: 0, territories: [] }
         : { mode: "expedition", questions: [], territory: "src", tokens_used: 0, model: "" },
     );
-    render(<HeroGame gameName="study" palette={palette} variant="dock" host={{ perform }} autoStart />);
+    render(<HeroGame gameName="study" palette={palette} variant="panel" host={{ perform }} autoStart />);
     // No start combo, no click: the mode screen is up and the stage has focus.
     expect(screen.getAllByText("CHOOSE YOUR TRAIL").length).toBeGreaterThan(0);
     expect(stage()).toHaveFocus();

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { Chat } from "./Chat";
 import { TitleBar } from "../../TitleBar";
+import { Workbench } from "../workbench/Workbench";
 import { useStore } from "../../lib/store";
 import { startTurn, transcriptToItems } from "./thread";
 import * as ipc from "../../test/ipcMock";
@@ -171,36 +172,49 @@ describe("Chat", () => {
     expect(useStore.getState().heroGame).toBe("oregon");
   });
 
-  it("opens the arcade dock during a run so you can play while streaming", async () => {
+  it("puts the game in the work panel during a run, from the title bar", async () => {
     ipc.runTurn.mockImplementationOnce(() => new Promise(() => {})); // stays in flight
     render(
       <>
         <TitleBar />
         <Chat />
+        <Workbench />
       </>,
     );
     await userEvent.type(screen.getByPlaceholderText(/ask the agent/i), "go");
     await userEvent.keyboard("{Enter}");
-    // With a turn in flight the title bar offers the arcade toggle.
-    await userEvent.click(screen.getByLabelText(/Toggle the arcade/i));
-    expect(screen.getByRole("dialog", { name: /arcade/i })).toBeInTheDocument();
-    // The study cabinet opens already started; MENU is the way back to the
-    // other cabinets, playable without leaving the chat.
-    await userEvent.click(screen.getByRole("button", { name: /back to arcade menu/i }));
-    expect(screen.getByRole("tab", { name: "Trail" })).toBeInTheDocument();
+    // With a turn in flight the title bar offers the game.
+    const toggle = screen.getByLabelText(/Toggle the study game/i);
+    await userEvent.click(toggle);
+    // It is a view of the right-hand panel, not something floating over the chat…
+    const panel = screen.getByRole("region", { name: "Current work" });
+    expect(within(panel).getAllByLabelText(/Trail of Understanding/).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    // …already started; MENU is the way back to the other cabinets.
+    await userEvent.click(within(panel).getByRole("button", { name: /back to arcade menu/i }));
+    expect(within(panel).getByRole("tab", { name: "Trail" })).toBeInTheDocument();
+    // The same button folds the panel away.
+    await userEvent.click(toggle);
+    expect(useStore.getState().dockCollapsed.right).toBe(true);
   });
 
   it("offers the study game under the composer while a turn runs, one key from a question", async () => {
     ipc.runTurn.mockImplementationOnce(() => new Promise(() => {})); // stays in flight
-    render(<Chat />);
+    render(
+      <>
+        <Chat />
+        <Workbench />
+      </>,
+    );
     // Nothing to offer while the agent is idle.
     expect(screen.queryByRole("button", { name: /study while it works/i })).toBeNull();
     await userEvent.type(screen.getByPlaceholderText(/ask the agent/i), "go");
     await userEvent.keyboard("{Enter}");
 
     await userEvent.click(await screen.findByRole("button", { name: /study while it works/i }));
-    // The dock opens on the study cabinet, already started…
-    expect(screen.getByRole("dialog", { name: /arcade/i })).toBeInTheDocument();
+    // The work panel opens on the study cabinet, already started…
+    expect(useStore.getState().rightTab["s1"]).toBe("study");
     expect(useStore.getState().heroGame).toBe("study");
     expect(screen.getAllByText("CHOOSE YOUR TRAIL").length).toBeGreaterThan(0);
     // …the button steps aside, and picking a trail asks for questions while
@@ -209,6 +223,26 @@ describe("Chat", () => {
     await userEvent.keyboard("1");
     await waitFor(() => expect(ipc.studyBatch).toHaveBeenCalledWith("s1", expect.objectContaining({ mode: "expedition" })));
     expect(useStore.getState().runStatus["s1"]).toBe("running");
+  });
+
+  it("keeps the game up when the agent opens a file mid-run, and says what it held back", async () => {
+    ipc.runTurn.mockImplementationOnce(() => new Promise(() => {}));
+    render(
+      <>
+        <Chat />
+        <Workbench />
+      </>,
+    );
+    await userEvent.type(screen.getByPlaceholderText(/ask the agent/i), "go");
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(await screen.findByRole("button", { name: /study while it works/i }));
+
+    act(() => useStore.getState().openWorkView("s1", { view: "editor", path: "src/main.rs" }, true));
+    expect(useStore.getState().rightTab["s1"]).toBe("study");
+    expect(screen.getAllByText("CHOOSE YOUR TRAIL").length).toBeGreaterThan(0);
+    // Opening it yourself still works.
+    act(() => useStore.getState().openWorkView("s1", { view: "editor", path: "src/main.rs" }));
+    expect(useStore.getState().rightTab["s1"]).toBe("editor");
   });
 
   it("sends a typed message and renders the user + assistant turn", async () => {

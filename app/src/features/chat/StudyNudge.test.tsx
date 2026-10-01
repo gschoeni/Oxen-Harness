@@ -5,11 +5,13 @@ vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { useStore } from "../../lib/store";
 import { resetAll } from "../../test/utils";
+import { sampleSession } from "../../test/ipcMock";
 import { NUDGE_AFTER_MS, NUDGE_LINGER_MS, resetStudyNudge, StudyNudge } from "./StudyNudge";
 
 describe("StudyNudge", () => {
   beforeEach(() => {
     resetAll();
+    useStore.setState({ session: sampleSession });
     resetStudyNudge();
     vi.useFakeTimers();
   });
@@ -34,16 +36,16 @@ describe("StudyNudge", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("opens the dock on the study cabinet", () => {
+  it("opens the work panel on the study cabinet", () => {
     render(<StudyNudge running />);
     act(() => void vi.advanceTimersByTime(NUDGE_AFTER_MS));
     fireEvent.click(screen.getByRole("button", { name: "Study" }));
     expect(useStore.getState().heroGame).toBe("study");
-    expect(useStore.getState().gameDockOpen).toBe(true);
+    expect(useStore.getState().rightTab[sampleSession.session_id]).toBe("study");
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("stays silent after being dismissed, and while the dock is already open", () => {
+  it("stays silent after being dismissed, and while the game is already on screen", () => {
     const first = render(<StudyNudge running />);
     act(() => void vi.advanceTimersByTime(NUDGE_AFTER_MS));
     fireEvent.click(screen.getByRole("button", { name: /stop offering/i }));
@@ -54,7 +56,7 @@ describe("StudyNudge", () => {
     expect(screen.queryByRole("status")).toBeNull();
 
     resetStudyNudge();
-    act(() => useStore.setState({ gameDockOpen: true }));
+    act(() => useStore.setState({ rightTab: { [sampleSession.session_id]: "study" } }));
     act(() => void vi.advanceTimersByTime(NUDGE_AFTER_MS));
     expect(screen.queryByRole("status")).toBeNull();
   });

@@ -177,6 +177,17 @@ function saveDockLayout(layout: DockLayout) {
   setUi("docks", layout);
 }
 
+/** The work view that hosts the study game (and the other cabinets). */
+export const STUDY_VIEW = "study";
+
+/** Whether a chat's work view should stay put when its agent opens something:
+ *  the user pinned it, or they are mid-game — the cabinet is played *while*
+ *  the agent works, so an agent's file open must not swap it away and throw
+ *  out the run. */
+function holdsWorkView(context: { pinned?: boolean; current: ViewTarget } | undefined): context is { pinned?: boolean; current: ViewTarget } {
+  return !!context && (!!context.pinned || context.current.view === STUDY_VIEW);
+}
+
 /** The layout patch that expands the right column out of its rail for an
  *  agent's open — the same arithmetic as a click on the rail: take only the
  *  work view's minimum and fold the left side when the window can't fit
@@ -475,10 +486,8 @@ interface AppState {
   theme: Theme | null;
   /** Which empty-state hero game the player has chosen (persisted). Null falls
    *  back to the active theme's default game. Shared by the hero and the
-   *  play-while-you-work game dock so both show the same cabinet. */
+   *  work panel's study view so both show the same cabinet. */
   heroGame: string | null;
-  /** Whether the floating game dock is open (lets you play during a live turn). */
-  gameDockOpen: boolean;
   /** Whether an Oxen API key resolves, and which models need none. Null until
    *  first read (or if the read failed) — unknown never prompts for a key. */
   keyStatus: KeyStatus | null;
@@ -655,8 +664,6 @@ interface AppState {
   toggleMode: () => void;
   /** Choose (and persist) the empty-state hero game. */
   setHeroGame: (name: string) => void;
-  /** Open/close the floating game dock. */
-  setGameDockOpen: (open: boolean) => void;
   applyTheme: (t: Theme) => void;
   /** Re-read the history list (and projects). Resolves true when it loaded,
    *  false when the previous lists were kept after a transient failure. */
@@ -962,6 +969,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       // What the chat on screen was shown, and what its pin kept out.
       let revealed = false;
       const keptOut: string[] = [];
+      let heldBy = "";
       for (const [session, view] of Object.entries(next.rightTab)) {
         const pane = next.editorTabs[session];
         const changed = view !== previous.rightTab[session] || pane !== previous.editorTabs[session] || next.activeCanvas[session] !== previous.activeCanvas[session] || (view === "browser" && next.session?.session_id === session && next.browserUrl !== previous.browserUrl);
@@ -974,9 +982,12 @@ export const useStore = create<AppState>((rawSet, get) => {
         }
         if (view === "canvas") target.id = next.activeCanvas[session] ?? undefined;
         if (view === "browser") target.url = next.browserUrl ?? undefined;
-        if (workContexts[session]?.pinned) {
+        if (holdsWorkView(workContexts[session])) {
           rightTab[session] = workContexts[session].current.view;
-          if (session === onScreen) keptOut.push(target.path ?? target.paths?.join(", ") ?? target.view);
+          if (session === onScreen) {
+            keptOut.push(target.path ?? target.paths?.join(", ") ?? target.view);
+            heldBy = workContexts[session].pinned ? "your pinned work view — unpin it to follow along" : "the study game — it stays up until you leave it";
+          }
           continue;
         }
         rightTab[session] = target.view;
@@ -992,7 +1003,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       // A pin keeps the agent's opens out of the work view on purpose; the
       // chat says so, so "they are looking at it now" isn't silently false.
       const threads = keptOut.length && onScreen
-        ? { threads: { ...next.threads, [onScreen]: appendNotice(next.threads[onScreen] ?? [], `Opened ${keptOut.join(", ")} behind your pinned work view — unpin it to follow along`) } }
+        ? { threads: { ...next.threads, [onScreen]: appendNotice(next.threads[onScreen] ?? [], `Opened ${keptOut.join(", ")} behind ${heldBy}`) } }
         : {};
       return { ...patch, rightTab, workContexts, ...layout, ...threads };
     });
@@ -1286,7 +1297,6 @@ export const useStore = create<AppState>((rawSet, get) => {
     mode: initialMode(),
     theme: null,
     heroGame: getUi("heroGame") ?? null,
-    gameDockOpen: false,
     keyStatus: null,
     refreshKeyStatus: async () => {
       // A failed read leaves the status unknown rather than guessing "no key":
@@ -1351,7 +1361,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     openWorkView: (session, target, agent = false) => {
       target = availableTarget(target);
       set((s) => {
-        if (agent && s.workContexts[session]?.pinned) return {};
+        if (agent && holdsWorkView(s.workContexts[session])) return {};
         const previous = s.workContexts[session];
         // Hydrating a disabled package's file must keep its saved forward history.
         const context = previous && JSON.stringify(availableTarget(previous.current)) === JSON.stringify(target)
@@ -1405,7 +1415,6 @@ export const useStore = create<AppState>((rawSet, get) => {
       setUi("heroGame", name);
       set({ heroGame: name });
     },
-    setGameDockOpen: (open) => set({ gameDockOpen: open }),
 
     applyTheme: (theme) => {
       applyThemePalette(theme);

@@ -1,4 +1,4 @@
-/* Cabinet chrome stays outside the playfield, including at dock widths. */
+/* Cabinet chrome stays outside the playfield, including at narrow panel widths. */
 .hero-game .arcade-toolbar {
   display: flex;
   align-items: center;
@@ -97,20 +97,15 @@
   letter-spacing: 0.15em;
   opacity: 1;
 }
-.game-dock:has(.hero-game) {
-  width: 460px;
-}
 /* The study cabinet is mostly reading, so it takes the full chat column — the
-   same width as the composer — in the hero and in the dock. The rest of the
+   same width as the composer — in the hero. (In the work panel it takes the
+   panel's width.) The rest of the
    hero (status panel, chips) keeps its narrow measure, centered beneath. */
 .hero:has(.hero-game[data-game="study"]) {
   max-width: var(--chat-column);
 }
 .hero:has(.hero-game[data-game="study"]) > :not(.hero-screen) {
   max-width: 480px;
-}
-.game-dock:has(.hero-game[data-game="study"]) {
-  width: var(--chat-column);
 }
 .hero-game[data-game="study"] .hero-game-entry-input {
   font-size: var(--text-lg);

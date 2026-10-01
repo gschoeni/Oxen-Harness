@@ -64,12 +64,12 @@ interface HeroGameProps {
   hint?: string;
   /** When provided, the attract screen shows cabinet-select tabs. */
   onSelectGame?: (name: string) => void;
-  variant?: "hero" | "dock";
+  variant?: "hero" | "panel";
   /** The backend for cabinets that queue requests (see gameKit's
       `HeroGameHost`). Without one, a request fails with a clear message. */
   host?: HeroGameHost;
   /** Skip the attract screen and take the keyboard as soon as this mounts —
-      for a cabinet opened on purpose (the dock's study game), where a start
+      for a cabinet opened on purpose (the work panel's study game), where a start
       combo is one more step between "I'll study" and the first question. */
   autoStart?: boolean;
 }
@@ -83,9 +83,9 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
   const [combo, setCombo] = useState(0);
   const comboRef = useRef(0);
   const [state, setState] = useState(() => definition.initialState());
-  // Sound: the hero follows the saved preference; the dock always starts muted
+  // Sound: the hero follows the saved preference; the work panel always starts muted
   // so a game popped open mid-turn doesn't chirp over your work.
-  const [sound, setSound] = useState(() => (variant === "dock" ? false : sfxPreference()));
+  const [sound, setSound] = useState(() => (variant === "panel" ? false : sfxPreference()));
   const [daily, setDaily] = useState(() => dailyPreference());
   const lastSfx = useRef(0);
   const lastRequest = useRef(0);
@@ -314,7 +314,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
   function toggleSound() {
     const next = !sound;
     setSound(next);
-    if (variant !== "dock") setSfxPreference(next);
+    if (variant !== "panel") setSfxPreference(next);
     if (playing) stageRef.current?.focus();
     if (next) {
       unlockSfx();

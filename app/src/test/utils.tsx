@@ -16,7 +16,6 @@ export function resetAll() {
   useStore.setState({
     theme: null,
     heroGame: null,
-    gameDockOpen: false,
     keyStatus: null,
     session: null,
     sessions: [],

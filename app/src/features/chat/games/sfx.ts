@@ -5,7 +5,7 @@
 // gameKit) and the HeroGame wrapper plays whatever is new after each update.
 //
 // Sound is opt-in per player (localStorage `oxen-hero-sound`, default on in the
-// hero) and always starts muted in the floating dock so a streaming turn stays
+// hero) and always starts muted in the work panel so a streaming turn stays
 // quiet unless you flip it on for the session.
 
 export type SfxName =

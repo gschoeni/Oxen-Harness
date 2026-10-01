@@ -16,7 +16,6 @@ import { ChatTabs } from "../tabs/ChatTabs";
 import { Composer } from "./Composer";
 import { Queue } from "./Queue";
 import { Hero } from "./Hero";
-import { GameDock } from "./GameDock";
 import { StudyNudge } from "./StudyNudge";
 import { TokenMeter } from "./TokenMeter";
 import { StreamingWrite } from "./StreamingWrite";
@@ -80,9 +79,6 @@ export function Chat() {
   const addSnippet = useStore((s) => s.addSnippet);
   const removeSnippet = useStore((s) => s.removeSnippet);
   const workspace = useStore((s) => s.session?.workspace);
-  // The floating game dock lets you play a round while a turn streams, so a long
-  // run doesn't send you off to another app. Its toggle lives in the title bar.
-  const gameDockOpen = useStore((s) => s.gameDockOpen);
   // The most recent canvas in this chat, and whether the panel is currently
   // showing it — used to offer a one-click "reopen canvas" when it's closed.
   const sessionCanvases = useStore((s) => (s.session ? s.canvases[s.session.session_id] : undefined));
@@ -309,7 +305,6 @@ export function Chat() {
       )}
       <QuestionPrompt />
       <ApprovalPrompt />
-      {gameDockOpen && started && <GameDock />}
       {started && <StudyNudge running={running} />}
       {started && <TokenMeter />}
       <Composer

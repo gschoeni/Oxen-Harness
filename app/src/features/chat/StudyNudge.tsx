@@ -8,9 +8,8 @@
 
 import { GraduationCap, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useStore } from "../../lib/store";
-import { openStudyDock } from "./studyDock";
-import "./gamedock.css";
+import { openStudyView, useStudyViewShowing } from "./studyPanel";
+import "./study.css";
 
 /** How long a turn runs before the offer appears. */
 export const NUDGE_AFTER_MS = 45_000;
@@ -28,7 +27,7 @@ export function resetStudyNudge() {
 }
 
 export function StudyNudge({ running }: { running: boolean }) {
-  const dockOpen = useStore((s) => s.gameDockOpen);
+  const showing = useStudyViewShowing();
   const [offer, setOffer] = useState<Offer>("none");
   const ranLong = useRef(false);
 
@@ -54,10 +53,10 @@ export function StudyNudge({ running }: { running: boolean }) {
     return () => window.clearTimeout(timer);
   }, [running]);
 
-  if (offer === "none" || dockOpen || silenced) return null;
+  if (offer === "none" || showing || silenced) return null;
 
   function open() {
-    openStudyDock();
+    openStudyView();
     setOffer("none");
   }
 

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { FileText, Images, PanelTop, PanelsTopLeft, Globe } from "lucide-react";
+import { FileText, GraduationCap, Images, PanelTop, PanelsTopLeft, Globe } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { useDocument, type ViewProps } from "../../workbench-sdk";
 import type { CanvasDoc } from "../../lib/types";
@@ -9,6 +9,8 @@ import { Preview } from "../../features/preview/Preview";
 import { Browser } from "../../features/browser/Browser";
 import { GalleryPanel } from "../../features/media/GalleryPanel";
 import { EditorPane } from "../../features/files/EditorPane";
+import { StudyView } from "../../features/chat/StudyView";
+import { STUDY_VIEW } from "../../lib/store";
 
 export default [
   {
@@ -49,6 +51,13 @@ export default [
     icon: Globe,
     description: "Explore links from your conversation.",
     component: () => <Browser />,
+  },
+  {
+    id: STUDY_VIEW,
+    title: "Study",
+    icon: GraduationCap,
+    description: "Learn the code your agent is writing.",
+    component: () => <StudyView />,
   },
 ] satisfies ViewModule[];
 

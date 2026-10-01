@@ -5,7 +5,7 @@
 // utility buttons (project home, arcade, inspector, settings) sit at its
 // right edge, clear of the macOS traffic lights on the left.
 
-import { DOCK_SHORTCUT } from "./features/chat/studyDock";
+import { STUDY_SHORTCUT, toggleStudyView, useStudyViewShowing } from "./features/chat/studyPanel";
 import { Activity, Code2, Files, Gamepad2, Settings } from "lucide-react";
 import { useActiveProject, useStore } from "./lib/store";
 
@@ -20,8 +20,7 @@ export function TitleBar() {
   });
   const project = useActiveProject();
   const openProjectHome = useStore((s) => s.openProjectHome);
-  const gameDockOpen = useStore((s) => s.gameDockOpen);
-  const setGameDockOpen = useStore((s) => s.setGameDockOpen);
+  const studyShowing = useStudyViewShowing();
   const openInspector = useStore((s) => s.openInspector);
   const runningCount = useStore((s) => {
     const sessions = new Set(s.threadsSnapshot?.running ?? []);
@@ -86,10 +85,10 @@ export function TitleBar() {
         {hasThread && (
           <button
             className="dev-view-btn"
-            onClick={() => setGameDockOpen(!gameDockOpen)}
-            aria-pressed={gameDockOpen}
-            title={`Study or play while your agent works (${DOCK_SHORTCUT})`}
-            aria-label="Toggle the arcade"
+            onClick={toggleStudyView}
+            aria-pressed={studyShowing}
+            title={`Study or play while your agent works (${STUDY_SHORTCUT})`}
+            aria-label="Toggle the study game"
           >
             <Gamepad2 size={15} />
           </button>

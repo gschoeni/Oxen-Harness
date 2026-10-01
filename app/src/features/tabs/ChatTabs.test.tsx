@@ -273,15 +273,20 @@ describe("chat tab shortcuts", () => {
     expect(useStore.getState().historyOpen).toBe(false);
   });
 
-  it("⌘J shows and hides the game dock, but not from behind Settings", () => {
+  it("⌘J shows the game in the work panel and folds the panel away again", () => {
     render(<Shortcuts />);
+    const view = () => useStore.getState().rightTab[useStore.getState().session!.session_id];
     press("j", { metaKey: true });
-    expect(useStore.getState().gameDockOpen).toBe(true);
+    expect(view()).toBe("study");
+    expect(useStore.getState().dockCollapsed.right).toBeFalsy();
     press("j", { metaKey: true });
-    expect(useStore.getState().gameDockOpen).toBe(false);
+    expect(useStore.getState().dockCollapsed.right).toBe(true);
+    // Pressed again it comes back; from behind Settings it does nothing.
+    press("j", { metaKey: true });
+    expect(useStore.getState().dockCollapsed.right).toBe(false);
     act(() => useStore.setState({ settingsOpen: true }));
     press("j", { metaKey: true });
-    expect(useStore.getState().gameDockOpen).toBe(false);
+    expect(useStore.getState().dockCollapsed.right).toBe(false);
   });
 
   it("⌘digit jumps to a tab, ⌃Tab cycles (wrapping), ⌘9 is the last", async () => {

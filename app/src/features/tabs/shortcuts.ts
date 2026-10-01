@@ -1,11 +1,11 @@
 // The strip's keyboard, installed once at the app root (like the dock
 // shortcuts): ⌘T new chat · ⌘W close · ⌃Tab / ⌃⇧Tab and ⌘⌥→ / ⌘⌥← cycle ·
-// ⌘1–8 jump, ⌘9 last · ⌘K the history · ⌘J the game dock. The chat ones stand down while Home, Settings,
+// ⌘1–8 jump, ⌘9 last · ⌘K the history · ⌘J the study game. The chat ones stand down while Home, Settings,
 // or the history covers the chat; ⌘K works anywhere but Settings.
 
 import { useEffect } from "react";
 import { useStore } from "../../lib/store";
-import { toggleGameDock } from "../chat/studyDock";
+import { toggleStudyView } from "../chat/studyPanel";
 
 export function useChatTabShortcuts() {
   useEffect(() => {
@@ -29,11 +29,10 @@ export function useChatTabShortcuts() {
         return;
       }
       if (s.homeOpen || s.settingsOpen || s.historyOpen || !s.session) return;
-      // The dock floats over a chat that has started; before that the same
-      // cabinet is already on screen as the hero.
+      // The game plays in the right-hand work panel.
       if (plainMod && key === "j") {
         e.preventDefault();
-        toggleGameDock();
+        toggleStudyView();
         return;
       }
       const ids = s.chatTabs[s.session.workspace] ?? [];
