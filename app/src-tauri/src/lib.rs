@@ -284,7 +284,6 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::rules::list_rule_suggestions,
                 commands::rules::save_rules,
                 commands::rules::check_rule_pattern,
-                commands::rules::draft_rule,
                 commands::models::installed_local_models,
                 commands::models::install_llama,
                 commands::models::detect_hardware,

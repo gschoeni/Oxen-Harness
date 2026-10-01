@@ -57,10 +57,9 @@ pub struct RuleSpec {
     /// Set false to keep a rule in the file without it firing.
     #[serde(default = "yes")]
     pub enabled: bool,
-    /// What the user asked for, when the model wrote this rule. Kept so
-    /// reopening it restores the conversation's starting point instead of an
-    /// empty box — the description is usually a better record of *intent*
-    /// than the regex it produced.
+    /// What the user asked for, on a rule an earlier build's model wrote
+    /// from a description. Nothing sets it now; it is kept so those saved
+    /// rules round-trip with their record of intent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     /// A line this rule is meant to catch, used to seed the editor's tester.
