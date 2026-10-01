@@ -32,7 +32,8 @@
   gap: var(--space-2);
   flex-shrink: 0;
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  height: var(--pane-strip-h);
+  padding: 0 var(--space-3);
   background: var(--surface);
   border: none;
   border-bottom: 1px solid var(--separator);
@@ -64,8 +65,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  min-height: 44px;
-  padding: var(--space-2) var(--space-3);
+  height: var(--pane-strip-h);
+  padding: 0 var(--space-3);
   flex-shrink: 0;
   overflow-x: auto;
   background: var(--surface);
@@ -142,21 +143,23 @@
    one, mirrored. */
 .dock-toggle.right {
   position: absolute;
-  top: var(--space-2);
+  /* Centered in the column's first row, which is always a strip. */
+  top: calc((var(--pane-strip-h) - var(--control-h-sm)) / 2);
   left: var(--space-2);
   z-index: var(--z-sticky);
 }
 /* Reserve the toggle's slot in whichever element is the column's first row:
-   the dock tab strip when several docks share the side, else the editor's
-   file-tab strip when it has one, else the panel's header. */
-.dock-column.right .dock-tabs {
-  padding-left: 36px;
+   the dock tab strip when several docks share the side, else the work
+   panel's view bar, else the editor's file-tab strip when it has one, else
+   the panel's header. The slot is the toggle's inset, its width, and a gap. */
+.dock-column.right {
+  --dock-toggle-slot: calc(var(--space-2) + var(--control-h-sm) + var(--space-1));
 }
-.dock-column.right:not(:has(.dock-tabs)) .canvas-head {
-  padding-left: 40px;
-}
-.dock-column.right:not(:has(.dock-tabs)) .editor-pane .editor-tabs {
-  padding-left: 40px;
+.dock-column.right .dock-tabs,
+.dock-column.right:not(:has(.dock-tabs)) .workbench-head,
+.dock-column.right:not(:has(.dock-tabs, .workbench-head)) .canvas-head,
+.dock-column.right:not(:has(.dock-tabs, .workbench-head)) .editor-pane .editor-tabs {
+  padding-left: var(--dock-toggle-slot);
 }
 /* With the file tabs owning the slot, the header below gets its edge back,
    and the toggle re-centers against the slimmer tab strip. */
@@ -165,14 +168,6 @@
 }
 .dock-column.right:not(:has(.dock-tabs)):has(.editor-tabs) .dock-toggle.right {
   top: 4px;
-}
-/* The work panel's view bar is the first row: center the toggle in it, and
-   keep the bar's own buttons out from under it. */
-.dock-column.right:not(:has(.dock-tabs)):has(.workbench-head) .dock-toggle.right {
-  top: calc((var(--pane-strip-h) - var(--control-h-sm)) / 2);
-}
-.dock-column.right:not(:has(.dock-tabs)) .workbench-head {
-  padding-left: calc(var(--space-2) + var(--control-h-sm) + var(--space-1));
 }
 
 /* A collapsed column: a rail of icons. Clicking one brings its dock back. */

@@ -54,10 +54,11 @@
   --control-h: 32px;
   --control-h-lg: 34px;
 
-  /* Pane header rows — the chat column and the work panel each open with a
-     strip (chat tabs / work-view bar) and then a header (chat status / the
-     view's own head). Both columns read these, so the rules under each row
-     run straight across the window. */
+  /* Pane header rows — every column opens with a strip (Home / chat tabs /
+     work-view bar) and then a header (Files head / chat status / the view's
+     own head). All of them read these two heights, borders included, so the
+     rules under each row run straight across the window. Never size one of
+     those rows with a literal. */
   --pane-strip-h: 40px;
   --pane-head-h: 44px;
 
@@ -145,6 +146,7 @@
   --surface-hover: #ebe9df;
   --separator: rgba(20, 18, 14, 0.1);
   --separator-strong: rgba(20, 18, 14, 0.16);
+  --border: var(--separator);
   --text: #1d1b16;
   --text-secondary: #59564d;
   --text-tertiary: #8a867b;
@@ -163,6 +165,7 @@
   --surface-hover: #2e2c29;
   --separator: rgba(255, 255, 255, 0.09);
   --separator-strong: rgba(255, 255, 255, 0.15);
+  --border: var(--separator);
   --text: #f6f4ef;
   --text-secondary: #b6b2a9;
   --text-tertiary: #888379;
@@ -182,6 +185,7 @@
     --surface-hover: #2e2c29;
     --separator: rgba(255, 255, 255, 0.09);
     --separator-strong: rgba(255, 255, 255, 0.15);
+    --border: var(--separator);
     --text: #f6f4ef;
     --text-secondary: #b6b2a9;
     --text-tertiary: #888379;

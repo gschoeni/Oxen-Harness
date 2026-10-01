@@ -13,13 +13,15 @@
 .chat-tabs {
   /* How far the active tab's feet reach past its sides. */
   --tab-foot: 8px;
+  /* The gap above the tabs; a tab is the rest of the strip's height. */
+  --tab-inset: 6px;
   display: flex;
   /* Tabs stand on the strip's bottom edge; the buttons stay centered. */
   align-items: flex-end;
   gap: var(--space-1);
   flex-shrink: 0;
   min-height: var(--pane-strip-h);
-  padding: 6px var(--space-2) 0;
+  padding: var(--tab-inset) var(--space-2) 0;
   background: var(--surface);
   /* The rule under the strip is painted inside it, so the active tab (which
      reaches the very bottom) covers its stretch of it and joins the chat. */
@@ -79,7 +81,7 @@
   /* Never squeezed past a readable title: the strip scrolls instead. */
   min-width: 140px;
   max-width: 220px;
-  height: 34px;
+  height: calc(var(--pane-strip-h) - var(--tab-inset));
   padding: 0 var(--space-1) 4px var(--space-3);
   background: transparent;
   border: none;

@@ -26,6 +26,41 @@ describe("chat column tokens", () => {
   });
 });
 
+// The rows that open each column sit side by side, so their heights must be
+// the same number: a strip (Home / chat tabs / work-view bar), then a header
+// (Files head / chat status / the view's head). Each reads the shared token;
+// a literal here is how the rules under them stop lining up.
+describe("pane header rows", () => {
+  const ROWS: [sheet: string, selector: string, token: string][] = [
+    ["/src/features/docks/docks.css", ".projects-nav", "--pane-strip-h"],
+    ["/src/features/docks/docks.css", ".dock-tabs", "--pane-strip-h"],
+    ["/src/features/tabs/tabs.css", ".chat-tabs", "--pane-strip-h"],
+    ["/src/features/workbench/workbench.css", ".workbench-head", "--pane-strip-h"],
+    ["/src/features/files/files.css", ".ft-head", "--pane-head-h"],
+    ["/src/features/chat/chat.css", ".chat-status", "--pane-head-h"],
+    ["/src/features/canvas/canvas.css", ".canvas-head", "--pane-head-h"],
+  ];
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  it.each(ROWS)("%s %s takes its height from %s", (sheet, selector, token) => {
+    const rule = new RegExp(`(?:^|\\})\\s*${escape(selector)}\\s*\\{([^}]*)\\}`).exec(
+      (sheets[sheet] ?? "").replace(/\/\*[\s\S]*?\*\//g, ""),
+    )?.[1];
+    expect(rule, `${selector} not found in ${sheet}`).toBeDefined();
+    const heights = [...(rule ?? "").matchAll(/(?:^|[\s;])(?:min-)?height:\s*([^;]+);/g)].map((m) => m[1].trim());
+    expect(heights).toEqual([`var(${token})`]);
+  });
+
+  it("lets no variant of a view header set its own height", () => {
+    const offenders = Object.entries(sheets).flatMap(([path, css]) =>
+      [...css.matchAll(/\.(preview|editor|gallery)-head\s*\{[^}]*?(?:min-)?height:[^;]+;/g)].map(
+        (m) => `${path}: .${m[1]}-head`,
+      ),
+    );
+    expect(offenders).toEqual([]);
+  });
+});
+
 // Properties whose values come from a token scale: type (--text-*), space
 // (--space-*), and radius (--radius-*). A literal px here is a size the scale
 // doesn't know about, so it drifts from every neighbour that used the scale.
@@ -59,7 +94,7 @@ const BASELINE: Record<string, number> = {
   "/src/features/chat/chat.css": 43,
   "/src/features/chat/plan.css": 2,
   "/src/features/chat/toolcall.css": 6,
-  "/src/features/docks/docks.css": 7,
+  "/src/features/docks/docks.css": 4,
   "/src/features/files/files.css": 40,
   "/src/features/history/history.css": 7,
   "/src/features/inspector/dev.css": 6,
@@ -74,7 +109,7 @@ const BASELINE: Record<string, number> = {
   "/src/features/settings/settings.css": 46,
   "/src/features/settings/teaching.css": 2,
   "/src/features/skills/skills.css": 5,
-  "/src/features/tabs/tabs.css": 6,
+  "/src/features/tabs/tabs.css": 5,
   "/src/features/tools/tools.css": 2,
 };
 

@@ -5,6 +5,13 @@
   flex-direction: column;
   position: relative;
   background: var(--bg);
+  /* The column's edge against the chat, its full height — the bar above the
+     view included — at the same weight as the left column's. */
+  border-left: var(--frame-border-w) solid var(--separator-strong);
+}
+/* A view inside draws no second edge of its own. */
+.workbench .canvas {
+  border-left: none;
 }
 .workbench-head {
   display: flex;
@@ -13,8 +20,8 @@
   /* Same height as the chat tab strip beside it (see --pane-strip-h). */
   flex-shrink: 0;
   height: var(--pane-strip-h);
-  padding: 0 var(--space-7) 0 var(--space-3);
-  border-bottom: 1px solid var(--border);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--separator);
 }
 .workbench-view-select {
   max-width: 55%;
