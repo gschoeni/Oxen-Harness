@@ -8,8 +8,7 @@
 //!
 //! Successive commands share a working directory and environment — see
 //! [`session`] for why that isn't a long-lived shell process. Every command
-//! also runs with the non-interactive defaults in [`non_interactive_env`], and
-//! shapes a dedicated tool does better are redirected by [`intercept`].
+//! also runs with the non-interactive defaults in [`non_interactive_env`].
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -20,7 +19,6 @@ use serde::Deserialize;
 use crate::sandbox::Workspace;
 use crate::{CallContext, ToolError, TypedTool};
 
-pub mod intercept;
 pub mod session;
 
 use crate::steer::SteerSignal;
@@ -81,12 +79,6 @@ pub struct ShellTool {
     /// the same reason the fs tools share their state: fleet lanes run against
     /// one registry, so they see one shell.
     session: Arc<Mutex<ShellSession>>,
-    /// Whether to redirect commands that have a dedicated tool (see
-    /// [`intercept`]). Off unless the host also registered those tools.
-    intercepting: bool,
-    /// Which tools are registered right now, so a redirect is only made to
-    /// one the model can actually call. `None` assumes they all are.
-    roster: Option<crate::Roster>,
     /// Fires when the user says something mid-turn; a foreground wait races
     /// against it so an interruption isn't stuck behind a slow command.
     steer: Option<SteerSignal>,
@@ -99,8 +91,6 @@ impl ShellTool {
             workspace,
             tasks: None,
             session,
-            intercepting: false,
-            roster: None,
             steer: None,
         }
     }
@@ -121,28 +111,8 @@ impl ShellTool {
             workspace,
             tasks: Some(tasks),
             session,
-            intercepting: false,
-            roster: None,
             steer: None,
         }
-    }
-
-    /// Redirect `grep`/`find`/`cat`-shaped commands to the dedicated tools
-    /// (see [`intercept`]). Only turn this on in a registry that actually
-    /// registers `search_files`/`find_files`/`read_file` — otherwise the model
-    /// is pointed at a tool it doesn't have.
-    pub fn intercepting(mut self, enabled: bool) -> Self {
-        self.intercepting = enabled;
-        self
-    }
-
-    /// Redirect like [`Self::intercepting`], but only to tools still present
-    /// in `roster` — the registry's live list, which shrinks when the user
-    /// disables a tool after the registry was built.
-    pub fn intercepting_for(mut self, roster: crate::Roster) -> Self {
-        self.intercepting = true;
-        self.roster = Some(roster);
-        self
     }
 
     /// Watch `signal` while waiting on a foreground command: when the user
@@ -254,14 +224,6 @@ impl TypedTool for ShellTool {
 
     async fn run(&self, args: ShellArgs, _call: &CallContext) -> Result<String, ToolError> {
         let command = &args.command;
-        // A redirect is a *result*, not an error: an error reads as a
-        // malfunction and gets retried, a result gets acted on.
-        if self.intercepting {
-            let available = |tool: &str| self.roster.as_ref().is_none_or(|r| r.contains(tool));
-            if let Some(redirect) = intercept::intercept(command, available) {
-                return Ok(redirect);
-            }
-        }
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
         let background = args.is_background.unwrap_or(false);
         let (cwd, env) = {
@@ -821,45 +783,6 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("[less]"), "{out}");
-    }
-
-    #[tokio::test]
-    async fn an_intercepting_shell_redirects_instead_of_running() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("hay.txt"), "needle\n").unwrap();
-        let tool = ShellTool::new(Workspace::new(dir.path()).unwrap()).intercepting(true);
-        let out = tool
-            .invoke(serde_json::json!({"command": "grep -rn needle ."}))
-            .await
-            .unwrap();
-        assert!(out.starts_with("Blocked: use search_files"), "{out}");
-        // It really didn't run: no exit code, no match.
-        assert!(!out.contains("exit_code"), "{out}");
-        assert!(!out.contains("hay.txt"), "{out}");
-    }
-
-    #[cfg(not(windows))]
-    #[tokio::test]
-    async fn a_leading_space_still_reaches_the_shell() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("hay.txt"), "needle\n").unwrap();
-        let tool = ShellTool::new(Workspace::new(dir.path()).unwrap()).intercepting(true);
-        let out = tool
-            .invoke(serde_json::json!({"command": " grep -rn needle ."}))
-            .await
-            .unwrap();
-        assert!(out.contains("hay.txt"), "{out}");
-    }
-
-    #[tokio::test]
-    async fn interception_is_off_by_default() {
-        let dir = tempfile::tempdir().unwrap();
-        let tool = ShellTool::new(Workspace::new(dir.path()).unwrap());
-        let out = tool
-            .invoke(serde_json::json!({"command": "find ."}))
-            .await
-            .unwrap();
-        assert!(out.contains("exit_code"), "{out}");
     }
 
     #[cfg(not(windows))]

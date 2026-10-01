@@ -274,8 +274,8 @@ async fn research_filter_preserves_parent_preferences_and_metadata() {
         Err(ToolError::UnknownTool(_))
     ));
     research.remove("read_file");
-    assert!(tools.roster().contains("read_file"));
-    assert!(tools.roster().contains("write_file"));
+    assert!(tools.get("read_file").is_some());
+    assert!(tools.get("write_file").is_some());
     assert_eq!(parent_defs, tools.definitions());
 }
 
