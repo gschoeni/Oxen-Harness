@@ -96,6 +96,30 @@ describe("GalleryPanel", () => {
     expect(screen.getByTitle("second")).toHaveClass("selected");
   });
 
+  it("downloads a generation from its tile and from the detail view", async () => {
+    useStore.setState({
+      media: { "/w": [item(), item({ id: "v1", kind: "video", status: "processing", path: null, prompt: "a race" })] },
+    });
+    render(<GalleryPanel />);
+    // Only a finished generation has a file to hand over.
+    const fromTile = await screen.findByRole("button", { name: "Download image" });
+    expect(screen.queryByRole("button", { name: "Download video" })).toBeNull();
+    await userEvent.click(fromTile);
+    expect(ipc.fsDownload).toHaveBeenCalledWith("/w", "generations/2026-09-13/1402-an-ox-at-dawn-1.png");
+    // The tile's button did not open the generation.
+    expect(screen.queryByLabelText("Generation details")).toBeNull();
+    expect(await screen.findByRole("button", { name: "Saved to Downloads" })).toHaveAttribute(
+      "title",
+      "/Users/me/Downloads/1402-an-ox-at-dawn-1.png",
+    );
+
+    await userEvent.click(screen.getByTitle("an ox at dawn"));
+    ipc.fsDownload.mockRejectedValueOnce("could not write /Users/me/Downloads/x.png: disk full");
+    await userEvent.click(screen.getByRole("button", { name: "Download" }));
+    const failed = await screen.findByRole("button", { name: "Download failed" });
+    expect(failed).toHaveAttribute("title", "could not write /Users/me/Downloads/x.png: disk full");
+  });
+
   it("steps through the filtered feed with the header buttons and the arrow keys", async () => {
     useStore.setState({
       media: {
@@ -273,6 +297,7 @@ describe("GalleryPanel layout", () => {
     expect(scroll).toBeTruthy();
     const grid = scroll!.querySelector(":scope > .gallery-grid");
     expect(grid).toBeTruthy();
-    expect(grid!.querySelectorAll(":scope > .gallery-tile")).toHaveLength(2);
+    // Each finished tile fills a slot (the grid cell) it shares with its download button.
+    expect(grid!.querySelectorAll(":scope > .gallery-tile-slot > .gallery-tile")).toHaveLength(2);
   });
 });

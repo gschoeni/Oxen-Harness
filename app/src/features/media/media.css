@@ -187,6 +187,47 @@
   color: var(--danger);
   border-color: var(--danger);
 }
+/* A finished tile with its download button: the slot is the grid cell, the
+   button surfaces on hover or keyboard focus and stays up while it reports. */
+.gallery-tile-slot {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.gallery-tile-download {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--separator-strong);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  color: var(--text);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.gallery-tile-slot:hover .gallery-tile-download,
+.gallery-tile-download:focus-visible,
+.gallery-tile-download:not(.idle) {
+  opacity: 1;
+}
+.gallery-tile-download:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.gallery-tile-download.saved {
+  color: var(--accent);
+}
+.gallery-tile-download.failed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
 @media (prefers-reduced-motion: reduce) {
   .gallery-tile.inflight,
   .gallery-tile-loading {

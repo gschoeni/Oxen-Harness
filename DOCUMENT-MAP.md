@@ -155,6 +155,7 @@ When adding a new file to the project, update this document map.
 - `crates/harness-media/src/library.rs` — `MediaSource` / `SourceOrigin`: each reference traced to the chat attachment, earlier generation, or project file it came from; `agent_prompt` and the hub's `provider` record on every manifest row.
 - `app/src/features/media/GalleryPanel.tsx` — the Gallery dock shows the grid or one generation, never both; back button, prev/next stepper, arrow keys.
 - `app/src/features/media/GenerationDetail.tsx` — one generation in full: prompt, request, output, the lineage trail (inputs above, outputs below, library items open in place), identity, and the raw manifest row.
+- `app/src/features/media/useDownload.ts` — the Download gesture (gallery tiles + detail view): copy the file to ~/Downloads, report on the button.
 
 ## Prairie arcade — 2026-09-18
 

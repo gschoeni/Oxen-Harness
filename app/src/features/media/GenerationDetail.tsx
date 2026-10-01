@@ -8,12 +8,13 @@
 
 import { useMemo, useState, type DragEvent, type ReactNode } from "react";
 import { Button } from "../../components/ui";
-import { Check, Copy, FileCode2, FolderTree, MessageSquare, Paperclip } from "lucide-react";
+import { Check, Copy, Download, FileCode2, FolderTree, MessageSquare, Paperclip, TriangleAlert } from "lucide-react";
 import { useStore } from "../../lib/store";
 import type { MediaItem, MediaSource } from "../../lib/types";
 import { elapsedSince, fmtBytes, fmtUsd, whenLabel } from "../../lib/media";
 import { useAssetSrc } from "../files/useAssetSrc";
 import { setDragPaths } from "../files/dnd";
+import { downloadLabel, useDownload } from "./useDownload";
 
 const NONE: MediaItem[] = [];
 type View = "details" | "raw";
@@ -67,6 +68,7 @@ export function GenerationDetail({
               <Paperclip size={13} /> Use as reference
             </Button>
           )}
+          {item.path && <DownloadButton workspace={workspace} path={item.path} />}
           {item.path && (
             <Button type="button" size="sm" onClick={() => openInViewer([item.path!])}>
               <FileCode2 size={13} /> Open in editor
@@ -404,6 +406,22 @@ function Raw({ item }: { item: MediaItem }) {
       </div>
       <pre className="gallery-raw-json">{text}</pre>
     </section>
+  );
+}
+
+function DownloadButton({ workspace, path }: { workspace: string; path: string }) {
+  const { state, detail, download } = useDownload(workspace, path);
+  const Icon = state === "saved" ? Check : state === "failed" ? TriangleAlert : Download;
+  return (
+    <Button
+      type="button"
+      size="sm"
+      onClick={() => void download()}
+      disabled={state === "saving"}
+      title={state === "idle" || state === "saving" ? "Save a copy to your Downloads folder" : detail}
+    >
+      <Icon size={13} /> {downloadLabel(state)}
+    </Button>
   );
 }
 

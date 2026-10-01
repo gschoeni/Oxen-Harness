@@ -437,6 +437,9 @@ export const sampleMediaPrefs: MediaPrefs = {
 };
 export const listMedia = vi.fn(async (_root: string): Promise<MediaItem[]> => []);
 export const cancelMedia = vi.fn(async (_id: string) => {});
+export const fsDownload = vi.fn(
+  async (_root: string, path: string) => `/Users/me/Downloads/${path.split("/").pop()}`,
+);
 export const getMediaPrefs = vi.fn(async (): Promise<MediaPrefs> => ({ ...sampleMediaPrefs }));
 export const setMediaPrefs = vi.fn(async (_prefs: MediaPrefs) => {});
 export const listMediaModels = vi.fn(async (_kind?: string, _refresh?: boolean): Promise<MediaModelSummary[]> => []);
@@ -652,6 +655,9 @@ export function resetIpc() {
   setPreviewAutoVerify.mockReset().mockResolvedValue(undefined);
   listMedia.mockReset().mockResolvedValue([]);
   cancelMedia.mockReset().mockResolvedValue(undefined);
+  fsDownload
+    .mockReset()
+    .mockImplementation(async (_root: string, path: string) => `/Users/me/Downloads/${path.split("/").pop()}`);
   getMediaPrefs.mockReset().mockResolvedValue({ ...sampleMediaPrefs });
   setMediaPrefs.mockReset().mockResolvedValue(undefined);
   listMediaModels.mockReset().mockResolvedValue([]);

@@ -298,6 +298,10 @@ export const fsReadFile = (root: string, path: string) =>
 export const fsCreateEntry = (root: string, path: string, isDir: boolean) =>
   invoke<void>("fs_create_entry", { root, path, isDir });
 
+/** Copy a workspace file into the user's Downloads folder (never replacing
+ *  one already there); resolves with where it landed. */
+export const fsDownload = (root: string, path: string) =>
+  invoke<string>("fs_download", { root, path });
 /** The canonical absolute path of a workspace file, symlink-checked against
  *  the workspace boundary — the only path that may be handed to the asset
  *  protocol (`convertFileSrc`). Errors for anything that resolves outside. */

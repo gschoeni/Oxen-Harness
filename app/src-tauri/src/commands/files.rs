@@ -489,6 +489,72 @@ pub(crate) fn fs_create_entry(root: String, path: String, is_dir: bool) -> Resul
     }
 }
 
+/// Copy a workspace file into the user's Downloads folder and return where
+/// it landed. The project's copy stays put: this is the "give me the file"
+/// gesture (the gallery's and the file tree's Download) for taking something
+/// outside the app.
+#[tauri::command]
+pub(crate) async fn fs_download(
+    app: tauri::AppHandle,
+    root: String,
+    path: String,
+) -> Result<String, String> {
+    let file = resolve(&root, &path)?;
+    if !file.is_file() {
+        return Err(format!("not a file: {path}"));
+    }
+    let downloads = tauri::Manager::path(&app)
+        .download_dir()
+        .map_err(|e| format!("could not find the Downloads folder: {e}"))?;
+    tauri::async_runtime::spawn_blocking(move || copy_into(&file, &downloads))
+        .await
+        .map_err(|e| format!("download did not finish: {e}"))?
+        .map(|dest| dest.display().to_string())
+}
+
+/// Copy `file` into `dir` under its own name, or `name-2.ext`, `name-3.ext`, …
+/// when that name is taken: a download never replaces a file already there.
+fn copy_into(file: &Path, dir: &Path) -> Result<PathBuf, String> {
+    let name = file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("not a file: {}", file.display()))?;
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, format!(".{ext}")),
+        _ => (name, String::new()),
+    };
+    fs::create_dir_all(dir).map_err(|e| format!("could not open {}: {e}", dir.display()))?;
+    let mut source =
+        fs::File::open(file).map_err(|e| format!("could not read {}: {e}", file.display()))?;
+    for n in 1u32.. {
+        let dest = dir.join(if n == 1 {
+            name.to_string()
+        } else {
+            format!("{stem}-{n}{ext}")
+        });
+        // `create_new` claims the name atomically, so two downloads racing
+        // for it can't overwrite each other.
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dest)
+        {
+            Ok(mut out) => {
+                if let Err(e) = std::io::copy(&mut source, &mut out) {
+                    // Best-effort: don't leave a truncated file behind; the
+                    // copy failure is the error the user needs.
+                    let _ = fs::remove_file(&dest);
+                    return Err(format!("could not write {}: {e}", dest.display()));
+                }
+                return Ok(dest);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not write {}: {e}", dest.display())),
+        }
+    }
+    Err(format!("no free name for {name} in {}", dir.display()))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -802,6 +868,41 @@ mod tests {
         fs::write(dir.join("blob.bin"), [0u8, 159, 146, 150]).unwrap();
         assert!(fs_read_file(root, "blob.bin".into()).is_err());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_download_keeps_its_name_and_never_replaces_a_file() {
+        let dir = workspace("download");
+        let source = dir.join("project/0425-an-ox-1.png");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, b"pixels").unwrap();
+        let downloads = dir.join("Downloads");
+
+        let first = copy_into(&source, &downloads).unwrap();
+        assert_eq!(first, downloads.join("0425-an-ox-1.png"));
+        assert_eq!(fs::read(&first).unwrap(), b"pixels");
+
+        fs::write(&first, b"the user's own edit").unwrap();
+        let second = copy_into(&source, &downloads).unwrap();
+        assert_eq!(second, downloads.join("0425-an-ox-1-2.png"));
+        assert_eq!(fs::read(&first).unwrap(), b"the user's own edit");
+        assert_eq!(
+            copy_into(&source, &downloads).unwrap(),
+            downloads.join("0425-an-ox-1-3.png")
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_source_reports_the_file() {
+        let dir = workspace("download-missing");
+        let err = copy_into(&dir.join("gone.mp4"), &dir.join("Downloads")).unwrap_err();
+        assert!(
+            err.contains("could not read") && err.contains("gone.mp4"),
+            "{err}"
+        );
+        assert!(!dir.join("Downloads/gone.mp4").exists());
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
 

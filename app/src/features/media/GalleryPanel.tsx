@@ -223,6 +223,7 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
                 selected={item.id === selected}
                 onSelect={() => open(item.id)}
                 onCancel={() => cancelMedia(item.id)}
+                downloadable
               />
             ))}
           </div>

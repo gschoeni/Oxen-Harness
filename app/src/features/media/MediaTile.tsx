@@ -6,11 +6,12 @@
 // view's job, so the grid reads as one even contact sheet.
 
 import { useEffect, useRef, useState, type DragEvent } from "react";
-import { Film, X } from "lucide-react";
+import { Check, Download, Film, TriangleAlert, X } from "lucide-react";
 import type { MediaItem } from "../../lib/types";
 import { elapsedSince, isInFlight } from "../../lib/media";
 import { useAssetSrc } from "../files/useAssetSrc";
 import { setDragPaths } from "../files/dnd";
+import { downloadLabel, useDownload } from "./useDownload";
 
 export function MediaTile({
   item,
@@ -19,6 +20,7 @@ export function MediaTile({
   selected = false,
   onSelect,
   onCancel,
+  downloadable = false,
 }: {
   item: MediaItem;
   /** The project root the item's paths are relative to. */
@@ -28,6 +30,8 @@ export function MediaTile({
   onSelect?: () => void;
   /** Shown as a × on an in-flight tile; omit to hide the control. */
   onCancel?: () => void;
+  /** Show a download button over a finished tile (on hover or focus). */
+  downloadable?: boolean;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -66,7 +70,7 @@ export function MediaTile({
       </button>
     );
   }
-  return (
+  const tile = (
     <button
       ref={ref}
       type="button"
@@ -82,6 +86,32 @@ export function MediaTile({
           <Film size={11} /> {item.duration_secs ? `${item.duration_secs}s` : "video"}
         </span>
       )}
+    </button>
+  );
+  if (!downloadable) return tile;
+  // A button can't hold a button, so the download sits beside the tile in a
+  // slot that takes the tile's place in the grid.
+  return (
+    <div className="gallery-tile-slot">
+      {tile}
+      <TileDownload workspace={workspace} path={item.path} kind={item.kind} />
+    </div>
+  );
+}
+
+function TileDownload({ workspace, path, kind }: { workspace: string; path: string; kind: MediaItem["kind"] }) {
+  const { state, detail, download } = useDownload(workspace, path);
+  const Icon = state === "saved" ? Check : state === "failed" ? TriangleAlert : Download;
+  return (
+    <button
+      type="button"
+      className={`gallery-tile-download ${state}`}
+      onClick={() => void download()}
+      disabled={state === "saving"}
+      aria-label={state === "idle" ? `Download ${kind}` : downloadLabel(state)}
+      title={state === "idle" || state === "saving" ? "Download" : detail}
+    >
+      <Icon size={12} />
     </button>
   );
 }
