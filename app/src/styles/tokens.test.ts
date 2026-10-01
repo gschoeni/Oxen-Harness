@@ -76,7 +76,7 @@ const BASELINE: Record<string, number> = {
   "/src/features/settings/teaching.css": 2,
   "/src/features/skills/skills.css": 5,
   "/src/features/tabs/tabs.css": 6,
-  "/src/features/tools/tools.css": 3,
+  "/src/features/tools/tools.css": 2,
 };
 
 // The scale itself: every step has to be legible on a laptop screen without

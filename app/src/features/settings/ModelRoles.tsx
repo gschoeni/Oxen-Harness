@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getModelRoles, setModelRole } from "../../lib/ipc";
+import { Select } from "../../components/ui/Select";
 import type { CloudModel, ModelRole, ModelRoles } from "../../lib/types";
 
 /** The routed roles, in display order: what each one does and what it falls
@@ -59,27 +60,22 @@ export function ModelRolesSection({ models }: { models: CloudModel[] }) {
           const value = roles?.[role] ?? "";
           // A role assigned from the CLI may name a model that isn't saved
           // here; keep it selectable so the select never shows something else.
-          const options = value && !models.some((m) => m.id === value) ? [{ id: value, name: value, selected: false }, ...models] : models;
-          const id = `model-role-${role}`;
+          const options = [
+            { value: "", label: `Use ${fallback}` },
+            ...(value && !models.some((m) => m.id === value) ? [{ value, label: value }] : []),
+            ...models.map((m) => ({ value: m.id, label: m.id })),
+          ];
           return (
             <div className="media-field" key={role}>
-              {/* The label names only the role, so the select's accessible
-                  name isn't its whole option list. */}
-              <label className="media-field-label" htmlFor={id}>{label}</label>
-              <select
-                id={id}
-                className="field-input media-select"
+              <span className="media-field-label">{label}</span>
+              <Select
+                label={label}
                 value={value}
+                options={options}
                 disabled={roles === null}
-                onChange={(e) => assign(role, e.target.value)}
-              >
-                <option value="">Use {fallback}</option>
-                {options.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.id}
-                  </option>
-                ))}
-              </select>
+                onValueChange={(model) => assign(role, model)}
+                searchable
+              />
               <span className="media-field-hint">{blurb}</span>
             </div>
           );

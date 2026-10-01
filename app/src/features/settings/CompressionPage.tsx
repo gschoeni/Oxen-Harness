@@ -8,7 +8,7 @@
 // for new chats. The composer's CompressionPicker offers the same switch inline.
 
 import { useEffect, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { Select } from "../../components/ui/Select";
 import { getCompressionMode, setCompressionMode, totalTokensSaved } from "../../lib/ipc";
 import type { CompressionMode } from "../../lib/types";
 import "../tools/tools.css";
@@ -78,22 +78,13 @@ export function CompressionPage() {
 
         <label className="field">
           <span className="field-name">Mode</span>
-          <span className="tool-select">
-            <select
-              className="tool-input"
-              value={mode ?? "off"}
-              disabled={mode === null}
-              onChange={(e) => change(e.target.value as CompressionMode)}
-              aria-label="Compression mode"
-            >
-              {MODES.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={15} />
-          </span>
+          <Select
+            label="Compression mode"
+            value={mode ?? "off"}
+            options={MODES}
+            disabled={mode === null}
+            onValueChange={(value) => change(value as CompressionMode)}
+          />
         </label>
 
         {MODES.map((m) => (

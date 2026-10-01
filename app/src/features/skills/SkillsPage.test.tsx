@@ -120,7 +120,8 @@ describe("SkillsPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: /new skill/i }));
 
     await userEvent.type(screen.getByPlaceholderText("release-notes"), "deploy-steps");
-    await userEvent.selectOptions(screen.getByLabelText("Skill scope"), "project");
+    await userEvent.click(screen.getByRole("combobox", { name: "Skill scope" }));
+    await userEvent.click(screen.getByRole("option", { name: /^This project only/ }));
     await userEvent.type(
       screen.getByPlaceholderText(/writes release notes from the git log/i),
       "Walks through our deploy procedure.",
@@ -234,12 +235,11 @@ describe("SkillsPage", () => {
   it("names the active project in the scope choice", async () => {
     render(<SkillsPage />);
     await userEvent.click(await screen.findByRole("button", { name: /new skill/i }));
-    expect(
-      screen.getByRole("option", { name: "This project only — OxenHarness" }),
-    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("combobox", { name: "Skill scope" }));
+    const choice = screen.getByRole("option", { name: "This project only — OxenHarness" });
 
     // Choosing it makes the hint say exactly where the skill will land.
-    await userEvent.selectOptions(screen.getByLabelText("Skill scope"), "project");
+    await userEvent.click(choice);
     expect(screen.getByText(/saved into OxenHarness's repo/i)).toBeInTheDocument();
   });
 
@@ -268,7 +268,8 @@ describe("SkillsPage", () => {
     render(<SkillsPage />);
     await openSkill("release-notes");
     await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
-    await userEvent.selectOptions(screen.getByLabelText("Skill scope"), "project");
+    await userEvent.click(screen.getByRole("combobox", { name: "Skill scope" }));
+    await userEvent.click(screen.getByRole("option", { name: /^This project only/ }));
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(ipc.deleteSkill).toHaveBeenCalledWith("global", "release-notes"));

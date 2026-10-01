@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "../../components/ui";
+import { Select } from "../../components/ui/Select";
 import { ShieldAlert, X } from "lucide-react";
 import {
   addPermissionRule,
@@ -17,6 +18,16 @@ import {
 import type { PermissionsView, PermissionRuleKind, PermissionScope } from "../../lib/types";
 import "../tools/tools.css";
 import "./permissions.css";
+
+const SCOPES: { value: PermissionScope; label: string }[] = [
+  { value: "project", label: "This project" },
+  { value: "global", label: "Everywhere" },
+];
+const KINDS: { value: PermissionRuleKind; label: string }[] = [
+  { value: "allow", label: "Allow prefix" },
+  { value: "allow_exact", label: "Allow exact" },
+  { value: "deny", label: "Deny prefix" },
+];
 
 /** The three modes, in escalation order, with the copy shown under the select. */
 const MODES: { value: string; label: string; blurb: string }[] = [
@@ -151,25 +162,18 @@ export function PermissionsPage() {
             addRule();
           }}
         >
-          <select
-            className="perms-select"
+          <Select
+            label="Rule scope"
             value={draftScope}
-            onChange={(e) => setDraftScope(e.target.value as PermissionScope)}
-            aria-label="Rule scope"
-          >
-            <option value="project">This project</option>
-            <option value="global">Everywhere</option>
-          </select>
-          <select
-            className="perms-select"
+            options={SCOPES}
+            onValueChange={(value) => setDraftScope(value as PermissionScope)}
+          />
+          <Select
+            label="Rule kind"
             value={draftKind}
-            onChange={(e) => setDraftKind(e.target.value as PermissionRuleKind)}
-            aria-label="Rule kind"
-          >
-            <option value="allow">Allow prefix</option>
-            <option value="allow_exact">Allow exact</option>
-            <option value="deny">Deny prefix</option>
-          </select>
+            options={KINDS}
+            onValueChange={(value) => setDraftKind(value as PermissionRuleKind)}
+          />
           <input
             className="perms-input"
             placeholder="e.g. cargo test — or a full command for exact rules"

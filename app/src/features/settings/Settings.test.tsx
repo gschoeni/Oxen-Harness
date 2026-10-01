@@ -82,19 +82,21 @@ describe("Settings", () => {
     render(<Settings />);
     await userEvent.click(screen.getByRole("button", { name: /cloud models/i }));
 
-    const study = (await screen.findByLabelText("Study game")) as HTMLSelectElement;
+    const study = await screen.findByRole("combobox", { name: "Study game" });
     await waitFor(() => expect(study).not.toBeDisabled());
-    expect(study.value).toBe("");
+    expect(study).toHaveTextContent("Use the smol model, then the chat's model");
     // A role set elsewhere (the CLI) to an unsaved model stays selectable.
-    expect((screen.getByLabelText("Smol") as HTMLSelectElement).value).toBe("legacy-model");
+    expect(screen.getByRole("combobox", { name: "Smol" })).toHaveTextContent("legacy-model");
 
     const saved = ipc.sampleCloudModels[0].id;
-    await userEvent.selectOptions(study, saved);
+    await userEvent.click(study);
+    await userEvent.click(screen.getByRole("option", { name: saved }));
     expect(ipc.setModelRole).toHaveBeenCalledWith("study", saved);
-    await waitFor(() => expect(study.value).toBe(saved));
+    await waitFor(() => expect(study).toHaveTextContent(saved));
 
     // Picking the fallback row clears the override.
-    await userEvent.selectOptions(study, "");
+    await userEvent.click(study);
+    await userEvent.click(screen.getByRole("option", { name: /^Use the smol model/ }));
     expect(ipc.setModelRole).toHaveBeenLastCalledWith("study", null);
   });
 
@@ -196,14 +198,13 @@ describe("Settings", () => {
 
     const select = await screen.findByRole("combobox", { name: /compression mode/i });
     // The persisted mode loads into the select, and all three modes are offered.
-    await vi.waitFor(() => expect(select).toHaveValue("audit"));
-    expect(
-      screen.getAllByRole("option").map((o) => (o as HTMLOptionElement).value),
-    ).toEqual(["off", "audit", "on"]);
+    await vi.waitFor(() => expect(select).toHaveTextContent("Audit"));
+    await userEvent.click(select);
+    expect(screen.getAllByRole("option").map((o) => o.dataset.value)).toEqual(["off", "audit", "on"]);
     // The all-time savings stat is shown.
     expect(screen.getByText("12,345")).toBeInTheDocument();
 
-    await userEvent.selectOptions(select, "on");
+    await userEvent.click(screen.getByRole("option", { name: "On" }));
     expect(ipc.setCompressionMode).toHaveBeenCalledWith("on");
   });
 

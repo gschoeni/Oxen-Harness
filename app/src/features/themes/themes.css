@@ -86,7 +86,6 @@
   font-size: var(--text-sm);
   color: var(--text-tertiary);
 }
-.theme-selects select,
 .theme-panel-body textarea {
   background: var(--surface);
   color: var(--text);
@@ -96,7 +95,6 @@
   font: inherit;
   font-size: var(--text-md);
 }
-.theme-selects select:focus,
 .theme-panel-body textarea:focus {
   outline: none;
   border-color: var(--accent);

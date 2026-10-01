@@ -10,6 +10,8 @@ export interface SelectOption {
   label: string;
   description?: string;
   icon?: ReactNode;
+  /** A short right-aligned figure (a price, a count), also shown on the trigger. */
+  hint?: string;
   disabled?: boolean;
 }
 export interface SelectProps {
@@ -19,7 +21,15 @@ export interface SelectProps {
   onValueChange: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Put a filter box above the options — for lists too long to scan. */
+  searchable?: boolean;
   className?: string;
+}
+
+function matches(option: SelectOption, terms: string[]) {
+  const text =
+    `${option.label} ${option.description ?? ""} ${option.hint ?? ""}`.toLocaleLowerCase();
+  return terms.every((term) => text.includes(term));
 }
 
 /** Standard single-choice selector. The shared menu also tells native work
@@ -31,6 +41,7 @@ export function Select({
   onValueChange,
   placeholder = "Choose…",
   disabled = false,
+  searchable = false,
   className = "",
 }: SelectProps) {
   const [open, setOpen] = useState(false);
@@ -40,18 +51,30 @@ export function Select({
   });
   const trigger = useRef<HTMLButtonElement>(null);
   const popover = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(value);
   const typed = useRef({ text: "", at: 0 });
   const id = useId();
   const selected = options.find((option) => option.value === value);
-  const enabled = options.filter((option) => !option.disabled);
+  const terms = searchable
+    ? query.toLocaleLowerCase().split(/\s+/).filter(Boolean)
+    : [];
+  const visible = terms.length
+    ? options.filter((option) => matches(option, terms))
+    : options;
+  const enabled = visible.filter((option) => !option.disabled);
   const activeValue = (
     enabled.find((option) => option.value === highlighted) ??
     enabled.find((option) => option.value === value) ??
     enabled[0]
   )?.value;
-  const unavailable = disabled || !enabled.length;
+  const unavailable = disabled || options.every((option) => option.disabled);
   const expanded = open && !unavailable;
+  const activeId =
+    activeValue === undefined
+      ? undefined
+      : `${id}-${options.findIndex((option) => option.value === activeValue)}`;
 
   function items() {
     return Array.from(
@@ -65,13 +88,15 @@ export function Select({
     if (restoreFocus) trigger.current?.focus();
   }
   function show(fallback: "first" | "last" = "first") {
+    const choices = options.filter((option) => !option.disabled);
     setHighlighted(
-      enabled.find((option) => option.value === value)?.value ??
+      choices.find((option) => option.value === value)?.value ??
         (fallback === "last"
-          ? enabled[enabled.length - 1]?.value
-          : enabled[0]?.value) ??
+          ? choices[choices.length - 1]?.value
+          : choices[0]?.value) ??
         "",
     );
+    setQuery("");
     typed.current = { text: "", at: 0 };
     setOpen(true);
   }
@@ -133,6 +158,10 @@ export function Select({
   }, [expanded]);
 
   useEffect(() => {
+    if (expanded) search.current?.focus();
+  }, [expanded]);
+
+  useEffect(() => {
     if (expanded)
       items()
         .find((item) => item.dataset.value === activeValue)
@@ -166,20 +195,24 @@ export function Select({
       return;
     }
     if (event.key === "Tab") {
-      // DOM focus stays on the combobox; Tab follows the normal document order.
-      close(false);
+      // Tab follows the normal document order from the combobox, so a search
+      // box (portalled to the end of the document) hands focus back first.
+      close(searchable);
       return;
     }
     const rows = items();
     if (!rows.length) return;
     const current = rows.findIndex((row) => row.dataset.value === activeValue);
-    if (event.key === "Enter" || event.key === " ") {
+    // In a searchable menu the keys that edit text belong to the search box.
+    if (event.key === "Enter" || (event.key === " " && !searchable)) {
       event.preventDefault();
       event.stopPropagation();
       rows[current]?.click();
       return;
     }
     let next: HTMLButtonElement | undefined;
+    if (searchable && event.key !== "ArrowDown" && event.key !== "ArrowUp")
+      return;
     if (event.key === "Home") next = rows[0];
     else if (event.key === "End") next = rows[rows.length - 1];
     else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -228,7 +261,7 @@ export function Select({
         aria-controls={expanded ? id : undefined}
         aria-activedescendant={
           expanded
-            ? `${id}-${options.findIndex((option) => option.value === activeValue)}`
+            ? activeId
             : undefined
         }
         disabled={unavailable}
@@ -255,6 +288,9 @@ export function Select({
           </span>
         )}
         <span className="select-value">{selected?.label ?? placeholder}</span>
+        {selected?.hint && (
+          <span className="select-trigger-hint">{selected.hint}</span>
+        )}
         <ChevronDown size={14} className="select-chevron" aria-hidden="true" />
       </button>
       {expanded &&
@@ -263,15 +299,35 @@ export function Select({
             <Menu
               id={id}
               aria-label={label}
-              className="select-menu"
+              className={`select-menu ${searchable ? "searchable" : ""}`}
               data-keyboard={keyboard}
               onKeyDown={navigate}
             >
-              <MenuHead>{label}</MenuHead>
-              {options.map((option, index) => (
+              {searchable ? (
+                <div className="select-search">
+                  <input
+                    ref={search}
+                    type="search"
+                    className="select-search-input"
+                    placeholder="Search…"
+                    aria-label={`Search ${label}`}
+                    aria-controls={id}
+                    aria-activedescendant={activeId}
+                    spellCheck={false}
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                  />
+                </div>
+              ) : (
+                <MenuHead>{label}</MenuHead>
+              )}
+              {!visible.length && (
+                <div className="select-empty">No matches</div>
+              )}
+              {visible.map((option) => (
                 <MenuItem
                   key={option.value}
-                  id={`${id}-${index}`}
+                  id={`${id}-${options.indexOf(option)}`}
                   data-highlighted={option.value === activeValue}
                   onPointerDown={(event) => event.preventDefault()}
                   onPointerMove={() => {
@@ -284,6 +340,7 @@ export function Select({
                   name={option.label}
                   aria-label={option.label}
                   description={option.description}
+                  hint={option.hint}
                   icon={
                     option.icon && (
                       <span className="select-option-icon" aria-hidden="true">

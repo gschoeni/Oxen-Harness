@@ -10,8 +10,9 @@
 // write/preview markdown editor. Show and edit take over the whole subpage.
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronRight, GraduationCap, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, GraduationCap, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/ui";
+import { Select } from "../../components/ui/Select";
 import { deleteSkill, listSkills, listTools, saveSkill, setSkillEnabled } from "../../lib/ipc";
 import { useActiveProject } from "../../lib/store";
 import type { SkillInfo, SkillScope, ToolInfo } from "../../lib/types";
@@ -387,20 +388,18 @@ function SkillEditor({
           </label>
           <label className="tool-field">
             <span className="field-name">Available in</span>
-            <span className="tool-select">
-              <select
-                className="tool-input"
-                value={scope}
-                onChange={(e) => setScope(e.target.value as SkillScope)}
-                aria-label="Skill scope"
-              >
-                <option value="global">Every project (global)</option>
-                <option value="project">
-                  {project ? `This project only — ${project.name}` : "This project only"}
-                </option>
-              </select>
-              <ChevronDown size={15} />
-            </span>
+            <Select
+              label="Skill scope"
+              value={scope}
+              options={[
+                { value: "global", label: "Every project (global)" },
+                {
+                  value: "project",
+                  label: project ? `This project only — ${project.name}` : "This project only",
+                },
+              ]}
+              onValueChange={(value) => setScope(value as SkillScope)}
+            />
             <span className="tool-field-hint" title={project?.path}>
               {scope === "project" && project
                 ? `Saved into ${project.name}'s repo (.oxen-harness/skills/), so your team gets it too.`

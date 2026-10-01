@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "../../components/ui";
+import { Select } from "../../components/ui/Select";
 import {
   exportTheme,
   importTheme,
@@ -133,30 +134,23 @@ export function ThemesPanel() {
         <summary>✨ Vibe-code a new theme</summary>
         <div className="theme-panel-body">
           <div className="theme-selects">
-            <label>
-              Mood
-              <select value={mood} onChange={(e) => setMood(e.target.value)}>
-                {MOODS.map((m) => (
-                  <option key={m}>{m}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Colors
-              <select value={colors} onChange={(e) => setColors(e.target.value)}>
-                {COLORS.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Voice
-              <select value={voice} onChange={(e) => setVoice(e.target.value)}>
-                {VOICES.map((v) => (
-                  <option key={v}>{v}</option>
-                ))}
-              </select>
-            </label>
+            {(
+              [
+                ["Mood", MOODS, mood, setMood],
+                ["Colors", COLORS, colors, setColors],
+                ["Voice", VOICES, voice, setVoice],
+              ] as const
+            ).map(([label, choices, value, set]) => (
+              <label key={label}>
+                {label}
+                <Select
+                  label={label}
+                  value={value}
+                  options={choices.map((choice) => ({ value: choice, label: choice }))}
+                  onValueChange={set}
+                />
+              </label>
+            ))}
           </div>
           <textarea
             rows={2}

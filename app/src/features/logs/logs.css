@@ -72,8 +72,7 @@
   gap: var(--space-2);
   flex-wrap: wrap;
 }
-.log-search,
-.log-select {
+.log-search {
   height: var(--control-h-lg);
   border: 1px solid var(--separator);
   border-radius: var(--radius-sm);
@@ -92,8 +91,7 @@
   padding: 0 var(--space-3);
   color: var(--text-tertiary);
 }
-.log-search:focus-within,
-.log-select:focus {
+.log-search:focus-within {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 50%, var(--separator-strong));
   box-shadow: var(--focus-ring);
@@ -108,10 +106,9 @@
   font: inherit;
   font-size: var(--text-sm);
 }
-.log-select {
-  padding: 0 var(--space-3);
+.select-trigger.log-select {
+  height: var(--control-h-lg);
   max-width: 200px;
-  cursor: pointer;
 }
 /* ---- toolbar: status segmented (left) + bulk actions (right) ------------ */
 .log-toolbar {

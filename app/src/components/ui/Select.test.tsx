@@ -161,3 +161,52 @@ it("keeps an active option when the available choices change while open", async 
   await userEvent.keyboard("{Enter}");
   expect(change).toHaveBeenCalledWith("workflow");
 });
+
+it("filters a searchable menu as you type and picks the match with Enter", async () => {
+  const change = vi.fn();
+  render(
+    <>
+      <Select
+        label="Work view"
+        value="file"
+        options={[...options, { value: "priced", label: "Priced", hint: "$0.04" }]}
+        onValueChange={change}
+        searchable
+      />
+      <button>Next control</button>
+    </>,
+  );
+  const trigger = screen.getByRole("combobox");
+  expect(trigger).not.toHaveTextContent("$0.04");
+  await userEvent.click(trigger);
+  const search = screen.getByRole("searchbox", { name: "Search Work view" });
+  expect(search).toHaveFocus();
+  expect(screen.getByRole("option", { name: "Priced" })).toHaveTextContent("$0.04");
+
+  // Words match anywhere in the label or description, in any order.
+  await userEvent.keyboard("video prompts");
+  expect(screen.getAllByRole("option")).toHaveLength(1);
+  expect(search).toHaveAttribute(
+    "aria-activedescendant",
+    screen.getByRole("option", { name: "Oxen workflow" }).id,
+  );
+
+  await userEvent.clear(search);
+  await userEvent.keyboard("zzz");
+  expect(screen.queryByRole("option")).not.toBeInTheDocument();
+  expect(screen.getByText("No matches")).toBeInTheDocument();
+  await userEvent.keyboard("{Enter}");
+  expect(change).not.toHaveBeenCalled();
+
+  await userEvent.clear(search);
+  await userEvent.keyboard("ox{Enter}");
+  expect(change).toHaveBeenCalledWith("workflow");
+  expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+
+  // Reopening starts from a clean query, and Tab dismisses the menu.
+  await userEvent.click(trigger);
+  expect(screen.getByRole("searchbox")).toHaveValue("");
+  await userEvent.tab();
+  expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+});

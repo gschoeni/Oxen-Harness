@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Ban, Check, Download, FileText, Import, RotateCcw, Search } from "lucide-react";
 import { Button } from "../../components/ui";
+import { Select } from "../../components/ui/Select";
 import { exportFinetuning, importExternal, importSourcesScan, pickExportPath } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import type { ImportSourceStatus, ReviewStatus, SessionSummary } from "../../lib/types";
@@ -268,51 +269,47 @@ export function LogsPage() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <select className="log-select" value={model} onChange={(e) => setModel(e.target.value)}>
-            <option value="">All models</option>
-            {models.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+          <Select
+            className="log-select"
+            label="Model"
+            value={model}
+            options={[{ value: "", label: "All models" }, ...models.map((m) => ({ value: m, label: m }))]}
+            onValueChange={setModel}
+            searchable
+          />
           {hasImported && (
-            <select className="log-select" value={source} onChange={(e) => setSource(e.target.value)}>
-              <option value="">All sources</option>
-              <option value="native">This app</option>
-              {Object.entries(SOURCE_LABELS).map(([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
-            </select>
+            <Select
+              className="log-select"
+              label="Source"
+              value={source}
+              options={[
+                { value: "", label: "All sources" },
+                { value: "native", label: "This app" },
+                ...Object.entries(SOURCE_LABELS).map(([value, label]) => ({ value, label })),
+              ]}
+              onValueChange={setSource}
+            />
           )}
           {workspaces.length > 1 && (
-            <select
+            <Select
               className="log-select"
+              label="Project"
               value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
-              title={workspace || "All projects"}
-            >
-              <option value="">All projects</option>
-              {workspaces.map((w) => (
-                <option key={w} value={w}>
-                  {baseName(w)}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: "", label: "All projects" },
+                ...workspaces.map((w) => ({ value: w, label: baseName(w), description: w })),
+              ]}
+              onValueChange={setWorkspace}
+              searchable
+            />
           )}
-          <select
+          <Select
             className="log-select"
-            value={minMessages}
-            onChange={(e) => setMinMessages(Number(e.target.value))}
-          >
-            {LENGTHS.map((l) => (
-              <option key={l.value} value={l.value}>
-                {l.label}
-              </option>
-            ))}
-          </select>
+            label="Length"
+            value={String(minMessages)}
+            options={LENGTHS.map((l) => ({ value: String(l.value), label: l.label }))}
+            onValueChange={(value) => setMinMessages(Number(value))}
+          />
           {activeFilters && (
             <Button size="sm" variant="ghost" onClick={resetFilters}>
               <RotateCcw size={13} /> Clear filters

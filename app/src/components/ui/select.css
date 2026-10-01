@@ -35,6 +35,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.select-trigger-hint {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
 .select-trigger-icon,
 .select-option-icon {
   display: inline-flex;
@@ -77,6 +84,42 @@
   padding: var(--space-2) var(--space-3) var(--space-3);
   font-size: var(--text-3xs);
   font-weight: 600;
+}
+/* The search box stays put while the options scroll beneath it; the negative
+   margin lets it cover the menu's own padding so no row peeks out above. */
+.select-search {
+  position: sticky;
+  top: calc(-1 * var(--space-2));
+  z-index: 1;
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) 0;
+  padding: var(--space-2);
+  background: var(--surface);
+}
+.select-search-input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.select-search-input:focus {
+  border-color: var(--accent);
+}
+/* Keeps a keyboard-highlighted row from scrolling under the search box. */
+.select-menu.searchable {
+  scroll-padding-top: calc(var(--control-h) + var(--space-4));
+}
+.select-empty {
+  padding: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.select-option .menu-hint {
+  font-variant-numeric: tabular-nums;
 }
 .select-option.menu-item {
   gap: var(--space-3);

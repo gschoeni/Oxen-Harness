@@ -11,6 +11,8 @@ import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
 import { getMediaPrefs, listMediaModels, setMediaPrefs } from "../../lib/ipc";
 import type { MediaModelSummary, MediaPrefs } from "../../lib/types";
+import { Select } from "../../components/ui/Select";
+import type { SelectOption } from "../../components/ui/Select";
 import { ToolSwitch } from "../tools/ToolSwitch";
 
 export function MediaPage() {
@@ -216,19 +218,17 @@ function ModelField({
   const known = models && models.length > 0;
   // The saved model may not be in the fetched catalog (renamed, offline):
   // keep it selectable so the select never silently shows something else.
-  const options = known && !models.some((m) => m.id === value) ? [{ id: value, price: "", kind: "image", developer: null, summary: null, inputs: [] } as MediaModelSummary, ...models] : models;
+  const options: SelectOption[] = known
+    ? [
+        ...(models.some((m) => m.id === value) ? [] : [{ value, label: value }]),
+        ...models.map((m) => ({ value: m.id, label: m.id, hint: m.price || undefined })),
+      ]
+    : [];
   return (
-    <label className="media-field" htmlFor={id}>
+    <label className="media-field" htmlFor={known ? undefined : id}>
       <span className="media-field-label">{label}</span>
       {known ? (
-        <select id={id} className="field-input media-select" value={value} onChange={(e) => onChange(e.target.value)}>
-          {options!.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.id}
-              {m.price ? ` — ${m.price}` : ""}
-            </option>
-          ))}
-        </select>
+        <Select label={label} value={value} options={options} onValueChange={onChange} searchable />
       ) : (
         <input
           id={id}

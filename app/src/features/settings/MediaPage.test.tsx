@@ -41,12 +41,15 @@ describe("MediaPage", () => {
 
     // The image model select lists the catalog with prices; video falls back
     // to a text field because the catalog returned nothing.
-    const imageSelect = screen.getByLabelText("Image") as HTMLSelectElement;
-    expect([...imageSelect.options].map((o) => o.textContent)).toEqual([
-      "black-forest-labs-flux-2-klein-4b — $0.01/image",
-      "nano-banana-2 — $0.13/image",
+    await userEvent.click(screen.getByRole("combobox", { name: "Image" }));
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "black-forest-labs-flux-2-klein-4b$0.01/image",
+      "nano-banana-2$0.13/image",
     ]);
-    await userEvent.selectOptions(imageSelect, "nano-banana-2");
+    // The catalog is long, so the picker filters as you type.
+    await userEvent.keyboard("banana");
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    await userEvent.keyboard("{Enter}");
     expect(ipc.setMediaPrefs).toHaveBeenLastCalledWith(
       expect.objectContaining({ default_image_model: "nano-banana-2" }),
     );

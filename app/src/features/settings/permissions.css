@@ -146,14 +146,6 @@
   margin-top: var(--space-2);
   flex-wrap: wrap;
 }
-.perms-select {
-  font-size: var(--text-sm);
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--separator-strong);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2);
-}
 .perms-input {
   flex: 1;
   min-width: 220px;

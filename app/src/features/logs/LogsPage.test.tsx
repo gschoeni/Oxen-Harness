@@ -68,7 +68,8 @@ describe("LogsPage import panel", () => {
     expect(nativeRow.querySelector(".log-source-badge")).toBeNull();
 
     // "This app" narrows the list to native chats only.
-    await userEvent.selectOptions(screen.getByDisplayValue("All sources"), "This app");
+    await userEvent.click(screen.getByRole("combobox", { name: "Source" }));
+    await userEvent.click(screen.getByRole("option", { name: "This app" }));
     expect(screen.queryByText("Imported chat")).toBeNull();
     expect(screen.getByText("Native chat")).toBeInTheDocument();
   });

@@ -4,8 +4,9 @@
 // with a raw-JSON mode for schemas the simple builder can't represent.
 
 import { useState } from "react";
-import { ChevronDown, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/ui";
+import { Select } from "../../components/ui/Select";
 import type { CustomToolSpec } from "../../lib/types";
 
 /** One argument row in the simple parameter builder. */
@@ -244,21 +245,12 @@ export function ToolEditor({
                   aria-label={`Parameter ${i + 1} name`}
                   spellCheck={false}
                 />
-                <span className="tool-select">
-                  <select
-                    className="tool-input"
-                    value={r.type}
-                    onChange={(e) => updateRow(i, { type: e.target.value as ParamRow["type"] })}
-                    aria-label={`Parameter ${i + 1} type`}
-                  >
-                    {PARAM_TYPES.map((t) => (
-                      <option key={t.value} value={t.value}>
-                        {t.label}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </span>
+                <Select
+                  label={`Parameter ${i + 1} type`}
+                  value={r.type}
+                  options={PARAM_TYPES}
+                  onValueChange={(type) => updateRow(i, { type: type as ParamRow["type"] })}
+                />
                 <input
                   className="tool-input"
                   value={r.description}
