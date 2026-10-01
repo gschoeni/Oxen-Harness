@@ -1636,6 +1636,7 @@ dependencies = [
  "harness-review",
  "harness-runtime",
  "harness-store",
+ "harness-study",
  "harness-tools",
  "reqwest 0.12.28",
  "serde_json",
@@ -1826,6 +1827,21 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "uuid",
+]
+
+[[package]]
+name = "harness-study"
+version = "0.0.3"
+dependencies = [
+ "async-trait",
+ "harness-config",
+ "harness-protocol",
+ "harness-tools",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

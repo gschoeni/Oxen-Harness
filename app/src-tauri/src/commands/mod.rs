@@ -31,6 +31,7 @@ pub(crate) mod review;
 pub(crate) mod rules;
 pub(crate) mod session;
 pub(crate) mod skills;
+pub(crate) mod study;
 pub(crate) mod theme;
 pub(crate) mod threads;
 pub(crate) mod tools;
