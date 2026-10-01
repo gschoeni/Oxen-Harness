@@ -109,6 +109,41 @@ export function ProgressStrip({ frac, marks, sc, y = 20 }: { frac: number; marks
   );
 }
 
+// ---- measuring the readout face ------------------------------------------------
+// Themes choose the readout font, and their widths differ a lot (VT323 is
+// 0.4em a character, a typical monospace 0.6em). A fixed column count either
+// wastes a third of the screen or runs off it, so text cabinets ask how many
+// characters fit a width at a size, measured from the live font.
+
+/** Assumed when the font can't be measured (tests, no canvas). */
+const FALLBACK_ADVANCE = 0.6;
+let measured: { key: string; advance: number } | null = null;
+
+/** The readout face's character advance, in em. */
+export function readoutAdvance(): number {
+  if (typeof document === "undefined" || /jsdom/i.test(globalThis.navigator?.userAgent ?? "")) return FALLBACK_ADVANCE;
+  try {
+    const family = getComputedStyle(document.documentElement).getPropertyValue("--font-readout").trim() || "monospace";
+    // Re-measure once web fonts finish loading: before that the fallback
+    // face answers, and its width isn't the pixel font's.
+    const key = `${family}|${document.fonts?.status ?? ""}`;
+    if (measured?.key === key) return measured.advance;
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (!ctx) return FALLBACK_ADVANCE;
+    ctx.font = `100px ${family}`;
+    const advance = ctx.measureText("abcdefghij0123456789").width / 20 / 100;
+    measured = { key, advance: advance > 0.2 && advance < 1 ? advance : FALLBACK_ADVANCE };
+    return measured.advance;
+  } catch {
+    return FALLBACK_ADVANCE;
+  }
+}
+
+/** How many readout characters of `size` fit in `width` viewBox units. */
+export function textCols(width: number, size: number): number {
+  return Math.max(20, Math.floor(width / (size * readoutAdvance() * 1.03)));
+}
+
 /** Greedy word wrap for the readout face, which is close to monospace at the
     sizes the cabinets use: `cols` is the character budget per line. Words
     longer than a line are split so nothing runs off the screen. */

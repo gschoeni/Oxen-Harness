@@ -100,9 +100,20 @@
 .game-dock:has(.hero-game) {
   width: 460px;
 }
-/* The study cabinet is mostly reading, so its dock is wider than the arcade's. */
+/* The study cabinet is mostly reading, so it takes the full chat column — the
+   same width as the composer — in the hero and in the dock. The rest of the
+   hero (status panel, chips) keeps its narrow measure, centered beneath. */
+.hero:has(.hero-game[data-game="study"]) {
+  max-width: var(--chat-column);
+}
+.hero:has(.hero-game[data-game="study"]) > :not(.hero-screen) {
+  max-width: 480px;
+}
 .game-dock:has(.hero-game[data-game="study"]) {
-  width: 600px;
+  width: var(--chat-column);
+}
+.hero-game[data-game="study"] .hero-game-entry-input {
+  font-size: var(--text-lg);
 }
 /* The answer box a text game opens under its screen (see `textEntry`). */
 .hero-game .hero-game-entry {
