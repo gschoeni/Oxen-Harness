@@ -640,6 +640,9 @@ impl SessionService {
             session: session.to_string(),
             pending: self.pending_questions.clone(),
         })));
+        // The agent's view of how well the user knows this codebase (from
+        // the study game), so it can pitch its explanations.
+        tools.register_typed(harness_study::UnderstandingTool::new(workspace_root));
         tools.set_asides(self.asides_for(session, tools.asides()));
         if let Some(tasks) = tools.background_tasks().cloned() {
             self.watch_tasks(session, tasks);
@@ -1089,6 +1092,7 @@ impl SessionService {
             roles: harness_agent::ModelRoles {
                 smol: limits.smol_model,
                 summary: limits.summary_model,
+                study: limits.study_model,
             },
             // A model that keeps failing hands the call to the next one rather
             // than ending the turn.
@@ -2311,6 +2315,7 @@ impl SessionService {
         registry.register_typed(harness_agent::SendToAgentTool::new(spawner.clone(), sink));
         registry.register_typed(harness_agent::ReadAgentTool::new(spawner.clone()));
         registry.register_typed(harness_agent::AskModelTool::new(spawner));
+        registry.register_typed(harness_study::UnderstandingTool::new(&root));
         Ok(registry)
     }
 }

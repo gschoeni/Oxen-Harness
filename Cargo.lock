@@ -886,6 +886,7 @@ dependencies = [
  "harness-review",
  "harness-runtime",
  "harness-store",
+ "harness-study",
  "harness-theme",
  "harness-tools",
  "image",
@@ -960,6 +961,7 @@ dependencies = [
  "harness-review",
  "harness-runtime",
  "harness-store",
+ "harness-study",
  "harness-tools",
  "mockito",
  "reqwest",
@@ -1199,6 +1201,23 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "uuid",
+]
+
+[[package]]
+name = "harness-study"
+version = "0.0.3"
+dependencies = [
+ "async-trait",
+ "harness-config",
+ "harness-protocol",
+ "harness-tools",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

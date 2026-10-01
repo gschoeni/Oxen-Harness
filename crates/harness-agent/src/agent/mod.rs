@@ -844,11 +844,51 @@ impl Agent {
         }
     }
 
+    /// A tool-less agent for one-shot side work that runs *beside* a
+    /// session rather than inside it: its transcript lives in memory and is
+    /// never persisted, but every call is billed to `usage_session` in
+    /// `usage_store` under the caller's call kind (see [`Agent::complete_as`]).
+    /// Unlike [`Agent::side_agent`] it needs no live session agent, so a
+    /// host can run it while that session's turn holds the agent lock.
+    pub fn detached(
+        client: OxenClient,
+        config: AgentConfig,
+        usage_store: Arc<HistoryStore>,
+        usage_session: impl Into<String>,
+    ) -> Result<Agent, AgentError> {
+        let store = Arc::new(HistoryStore::open_in_memory()?);
+        let session = store.create_session(&SessionMeta {
+            model: config.model.clone(),
+            ..Default::default()
+        })?;
+        let mut agent =
+            Agent::new_with(client, ToolRegistry::new(), store, session, config, false)?;
+        agent.disable_transcript_persistence();
+        agent.set_usage_store(usage_store);
+        agent.set_usage_session(usage_session.into());
+        Ok(agent)
+    }
+
     /// Run a one-shot completion that is *not* part of the session transcript
     /// (no tools, nothing persisted). Used for side tasks like generating a
     /// theme from a natural-language description, reusing the session's model
     /// and endpoint.
     pub async fn complete(&self, system: &str, user: &str) -> Result<String, AgentError> {
+        self.complete_as(system, user, "oneshot")
+            .await
+            .map(|(text, _)| text)
+    }
+
+    /// [`Agent::complete`] with the usage ledger's call `kind` chosen by the
+    /// caller, so a feature's spend (the study game's question writing, say)
+    /// can be told apart from other one-shot work in the same session. Also
+    /// returns the tokens (prompt + completion) the call cost.
+    pub async fn complete_as(
+        &self,
+        system: &str,
+        user: &str,
+        kind: &str,
+    ) -> Result<(String, usize), AgentError> {
         let messages = vec![
             ChatMessage::system(system.to_string()),
             ChatMessage::user(user.to_string()),
@@ -867,7 +907,7 @@ impl Agent {
             &self.config.model,
             prompt,
             completion,
-            "oneshot",
+            kind,
             &CallOutcome {
                 model: Some(self.config.model.clone()),
                 cached_prompt_tokens: assembled
@@ -882,7 +922,7 @@ impl Agent {
                 retries: 0,
             },
         );
-        Ok(assembled.content)
+        Ok((assembled.content, prompt.saturating_add(completion)))
     }
 
     /// Spin up a detached agent for an isolated side task (e.g. one step of a
@@ -1438,6 +1478,42 @@ mod tests {
         assert_eq!(tree.free_slots(), 1);
     }
 
+    /// A detached agent runs beside a session: its one-shot is billed to the
+    /// session it names (in the store it was handed), and reports its cost.
+    #[tokio::test]
+    async fn a_detached_one_shot_bills_the_named_session() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose("answer"))
+            .create_async()
+            .await;
+        let ledger = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let owner = test_session(&ledger, "m");
+        let side = Agent::detached(
+            OxenClient::new(server.url(), "k", "cheap"),
+            AgentConfig {
+                model: "cheap".into(),
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+            ledger.clone(),
+            owner.clone(),
+        )
+        .unwrap();
+        assert_eq!(side.usage_session(), owner);
+        let (text, tokens) = side.complete_as("s", "u", "study").await.unwrap();
+        assert_eq!(text, "answer");
+        assert!(tokens > 0);
+        let usage = ledger.usage_for_session(&owner).unwrap();
+        assert_eq!(
+            (usage.prompt_tokens + usage.completion_tokens) as usize,
+            tokens
+        );
+    }
+
     /// A cold resume must re-teach the read-before-edit guard everything this
     /// transcript already read — the reads are in the resumed model's context,
     /// so refusing an edit "from memory" would be a false accusation. Seen in
@@ -1828,7 +1904,7 @@ mod tests {
                 model: "frontier".into(),
                 roles: crate::config::ModelRoles {
                     smol: Some("smol-reviewer".into()),
-                    summary: None,
+                    ..Default::default()
                 },
                 ..AgentConfig::default()
             },

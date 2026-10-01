@@ -294,6 +294,9 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui, base_url: &str
         harness_runtime::media::api_for(base_url),
         asker,
     ));
+    // How well the user knows this codebase (from the desktop's study game),
+    // so the agent can pitch its explanations.
+    tools.register_typed(harness_study::UnderstandingTool::new(workspace.root()));
     // `open_file` (the desktop's file-viewer panel) is deliberately NOT
     // registered: the terminal has no viewer surface, and a host-surface tool
     // that can't surface anything would just mislead the model (the prompt
@@ -497,6 +500,7 @@ pub(crate) fn agent_config(
         roles: harness_agent::ModelRoles {
             smol: limits.smol_model,
             summary: limits.summary_model,
+            study: limits.study_model,
         },
         // A model that keeps failing hands the call to the next one rather
         // than ending the turn.

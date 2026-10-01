@@ -267,6 +267,7 @@ const CLEAR_WORDS: &[&str] = &["clear", "none", "default", "off"];
 enum Role {
     Summary,
     Smol,
+    Study,
     Fallback,
 }
 
@@ -275,6 +276,7 @@ impl Role {
         match word.to_ascii_lowercase().as_str() {
             "summary" | "summaries" => Some(Self::Summary),
             "smol" | "small" => Some(Self::Smol),
+            "study" | "quiz" => Some(Self::Study),
             "fallback" | "fallbacks" => Some(Self::Fallback),
             _ => None,
         }
@@ -285,6 +287,7 @@ impl Role {
         match self {
             Self::Summary => "summary",
             Self::Smol => "smol",
+            Self::Study => "study",
             Self::Fallback => "fallbacks",
         }
     }
@@ -294,6 +297,7 @@ impl Role {
         match self {
             Self::Summary => "compaction summaries",
             Self::Smol => "fleet lanes and review passes",
+            Self::Study => "study-game questions and grading (falls back to smol)",
             Self::Fallback => "tried in order when the session model keeps failing",
         }
     }
@@ -303,6 +307,7 @@ impl Role {
         match self {
             Self::Summary => "summary model",
             Self::Smol => "smol model",
+            Self::Study => "study model",
             Self::Fallback => "fallback chain",
         }
     }
@@ -312,6 +317,7 @@ impl Role {
         match self {
             Self::Summary => "Which model should write compaction summaries?",
             Self::Smol => "Which model should run fleet lanes and review passes?",
+            Self::Study => "Which model should write and grade the study game's questions?",
             Self::Fallback => {
                 "Pick the fallback models, in the order they should be tried \
                  (space checks, enter confirms)."
@@ -392,7 +398,7 @@ fn resolve_model_id(ids: &[&str], input: &str) -> Resolved {
     }
 }
 
-/// `/model roles [summary|smol|fallback [model-id|clear]]` — show or change
+/// `/model roles [summary|smol|study|fallback [model-id|clear]]` — show or change
 /// the models a session routes work to. Roles are persisted, not live: like
 /// the desktop's settings pages, they apply to new and resumed chats.
 fn handle_roles(cmd: RolesCmd, agent: &Agent, ui: &Ui) -> Result<()> {
@@ -406,7 +412,7 @@ fn handle_roles(cmd: RolesCmd, agent: &Agent, ui: &Ui) -> Result<()> {
                 "  {} {}",
                 ui.red("✗"),
                 ui.dim(&format!(
-                    "unknown role `{word}` — expected summary, smol, or fallback"
+                    "unknown role `{word}` — expected summary, smol, study, or fallback"
                 )),
             );
             Ok(())
@@ -488,6 +494,11 @@ fn print_roles(agent: &Agent, ui: &Ui) {
             limits.smol_model.clone().unwrap_or_else(|| dash.clone()),
             Role::Smol.blurb(),
         ),
+        (
+            Role::Study.label(),
+            limits.study_model.clone().unwrap_or_else(|| dash.clone()),
+            Role::Study.blurb(),
+        ),
         (Role::Fallback.label(), fallbacks, Role::Fallback.blurb()),
         ("spend cap", ceiling, "per-session token ceiling"),
     ];
@@ -511,7 +522,7 @@ fn print_roles(agent: &Agent, ui: &Ui) {
     println!(
         "  {}",
         ui.dim(
-            "/model roles summary|smol|fallback [model-id] to change \
+            "/model roles summary|smol|study|fallback [model-id] to change \
              · fallback clear to empty it · applies to new and resumed chats"
         )
     );
@@ -533,6 +544,7 @@ fn pick_role(role: Role, ui: &Ui) -> Result<()> {
     let assigned: Vec<String> = match role {
         Role::Summary => limits.summary_model.clone().into_iter().collect(),
         Role::Smol => limits.smol_model.clone().into_iter().collect(),
+        Role::Study => limits.study_model.clone().into_iter().collect(),
         Role::Fallback => limits.fallback_models.clone(),
     };
     let mark = |id: &str| match assigned.iter().position(|a| a == id) {
@@ -599,6 +611,7 @@ fn assign(role: Role, chosen: Vec<String>, ui: &Ui) -> Result<()> {
     match role {
         Role::Summary => limits.summary_model = chosen.first().cloned(),
         Role::Smol => limits.smol_model = chosen.first().cloned(),
+        Role::Study => limits.study_model = chosen.first().cloned(),
         Role::Fallback => limits.fallback_models = chosen.clone(),
     }
     if let Err(e) = harness_runtime::limits::save(&limits) {
@@ -677,6 +690,10 @@ mod tests {
             Some(RolesCmd::Pick(Role::Summary))
         );
         assert_eq!(parse_roles("role smol"), Some(RolesCmd::Pick(Role::Smol)));
+        assert_eq!(
+            parse_roles("roles study"),
+            Some(RolesCmd::Pick(Role::Study))
+        );
         assert_eq!(
             parse_roles("roles fallbacks"),
             Some(RolesCmd::Pick(Role::Fallback))

@@ -16,6 +16,7 @@ harness-local = { workspace = true }
 harness-permissions = { workspace = true }
 harness-preview = { workspace = true }
 harness-media = { workspace = true }
+harness-study = { workspace = true }
 harness-runtime = { workspace = true }
 harness-review = { workspace = true }
 harness-loop = { workspace = true }

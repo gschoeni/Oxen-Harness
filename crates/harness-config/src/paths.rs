@@ -227,6 +227,18 @@ pub fn loops_dir() -> Result<PathBuf, ConfigError> {
     Ok(dir)
 }
 
+/// `~/.oxen-harness/study/` — the codebase study game's per-project progress
+/// and question caches (one subdirectory per project; personal, not shared
+/// with the repository).
+pub fn study_dir() -> Result<PathBuf, ConfigError> {
+    let dir = under("study")?;
+    std::fs::create_dir_all(&dir).map_err(|source| ConfigError::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    Ok(dir)
+}
+
 /// `~/.oxen-harness/models/` — downloaded local model weights.
 pub fn models_dir() -> Result<PathBuf, ConfigError> {
     under("models")

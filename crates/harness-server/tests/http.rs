@@ -574,3 +574,101 @@ async fn filters_events_by_session() {
         "session A's events leaked into B's filtered stream"
     );
 }
+
+/// The study model's reply: one multiple-choice question about `src/lib.rs`.
+const STUDY_SSE: &str = concat!(
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"[{\\\"kind\\\":\\\"multiple_choice\\\",\\\"prompt\\\":\\\"What does add return?\\\",\\\"options\\\":[\\\"a+b\\\",\\\"a-b\\\",\\\"a*b\\\",\\\"zero\\\"],\\\"answer\\\":0,\\\"explanation\\\":\\\"It adds.\\\",\\\"source_path\\\":\\\"src/lib.rs\\\",\\\"source_lines\\\":[1,1],\\\"difficulty\\\":1}]\"},\"finish_reason\":\"stop\"}]}\n\n",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":300,\"completion_tokens\":40,\"total_tokens\":340}}\n\n",
+    "data: [DONE]\n\n"
+);
+
+#[tokio::test]
+async fn study_round_trip_over_http() {
+    let mut llm = mockito::Server::new_async().await;
+    let _m = sse_mock(&mut llm, STUDY_SSE);
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(workspace.path().join("src")).unwrap();
+    std::fs::write(
+        workspace.path().join("src/lib.rs"),
+        "pub fn add(a: u32, b: u32) -> u32 { a + b }\n",
+    )
+    .unwrap();
+    let server = boot(llm.url(), workspace.path()).await;
+    let base = server.base_url();
+    let info: Value = client()
+        .post(format!("{base}/v1/sessions"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session = info["session_id"].as_str().unwrap().to_string();
+
+    // A fresh project: one territory, nothing understood yet.
+    let profile: Value = client()
+        .get(format!("{base}/v1/sessions/{session}/study/profile"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(profile["level"], 1);
+    assert_eq!(profile["territories"][0]["id"], "src");
+
+    let batch: Value = client()
+        .post(format!("{base}/v1/sessions/{session}/study/batch"))
+        .bearer_auth(TOKEN)
+        .json(&json!({"mode": "expedition", "count": 1}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let question = &batch["questions"][0];
+    assert_eq!(question["prompt"], "What does add return?");
+    assert_eq!(
+        question["source_excerpt"],
+        "pub fn add(a: u32, b: u32) -> u32 { a + b }"
+    );
+    // The answer never crosses the wire with the question.
+    assert!(question.get("answer").is_none());
+    assert_eq!(batch["tokens_used"], 340);
+
+    let result: Value = client()
+        .post(format!("{base}/v1/sessions/{session}/study/answer"))
+        .bearer_auth(TOKEN)
+        .json(&json!({"question_id": question["id"], "answer": "0"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(result["grade"]["verdict"], "full");
+    assert_eq!(result["profile"]["answered"], 1);
+    assert!(result["profile"]["understanding"].as_f64().unwrap() > 0.0);
+
+    // A mode with nothing to ask about says why, as a 400.
+    let ride = client()
+        .post(format!("{base}/v1/sessions/{session}/study/batch"))
+        .bearer_auth(TOKEN)
+        .json(&json!({"mode": "ride_along"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ride.status(), 400);
+    let body: Value = ride.json().await.unwrap();
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("hasn't read or edited"));
+}

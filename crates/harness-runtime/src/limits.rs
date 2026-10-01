@@ -29,6 +29,10 @@ pub struct Limits {
     /// model.
     #[serde(default)]
     pub smol_model: Option<String>,
+    /// The model the codebase study game writes and grades questions on.
+    /// `None` falls back to the smol model, then the session model.
+    #[serde(default)]
+    pub study_model: Option<String>,
     /// Models to try, in order, when the session model keeps failing
     /// transiently and its retries are spent. Empty means a failing provider
     /// ends the turn, which is the old behavior.
@@ -79,6 +83,7 @@ mod tests {
                 max_session_tokens: Some(2_000_000),
                 summary_model: Some("gemini-2-5-flash".into()),
                 smol_model: Some("claude-haiku-4-5".into()),
+                study_model: Some("deepseek-v4-1-flash".into()),
                 fallback_models: vec!["claude-sonnet-5".into()],
                 max_tree_tokens: Some(500_000),
                 max_tree_parallel: Some(2),
@@ -88,6 +93,7 @@ mod tests {
             assert_eq!(loaded.max_session_tokens, Some(2_000_000));
             assert_eq!(loaded.summary_model.as_deref(), Some("gemini-2-5-flash"));
             assert_eq!(loaded.smol_model.as_deref(), Some("claude-haiku-4-5"));
+            assert_eq!(loaded.study_model.as_deref(), Some("deepseek-v4-1-flash"));
             assert_eq!(loaded.fallback_models, vec!["claude-sonnet-5".to_string()]);
         });
     }

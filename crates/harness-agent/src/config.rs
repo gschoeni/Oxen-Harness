@@ -123,6 +123,10 @@ pub enum Role {
     Smol,
     /// Compaction summaries, which re-read a whole elided span.
     Summary,
+    /// The codebase study game: writing and grading quiz questions. Falls
+    /// back to `Smol` before the session model, since it is the same kind of
+    /// cheap side work.
+    Study,
 }
 
 /// Per-role model overrides. Empty by default: no routing at all.
@@ -130,6 +134,7 @@ pub enum Role {
 pub struct ModelRoles {
     pub smol: Option<String>,
     pub summary: Option<String>,
+    pub study: Option<String>,
 }
 
 impl ModelRoles {
@@ -140,6 +145,7 @@ impl ModelRoles {
             Role::Default => None,
             Role::Smol => self.smol.as_deref(),
             Role::Summary => self.summary.as_deref(),
+            Role::Study => self.study.as_deref().or(self.smol.as_deref()),
         };
         configured.unwrap_or(session_model)
     }
@@ -417,11 +423,29 @@ mod tests {
         let roles = ModelRoles {
             smol: Some("haiku".into()),
             summary: None,
+            study: None,
         };
         assert_eq!(roles.resolve(Role::Smol, "opus"), "haiku");
         // Roles are independent: configuring one doesn't route the others.
         assert_eq!(roles.resolve(Role::Summary, "opus"), "opus");
         assert_eq!(roles.resolve(Role::Default, "opus"), "opus");
+    }
+
+    #[test]
+    fn the_study_role_falls_back_to_smol_then_the_session_model() {
+        let unset = ModelRoles::default();
+        assert_eq!(unset.resolve(Role::Study, "opus"), "opus");
+        let via_smol = ModelRoles {
+            smol: Some("haiku".into()),
+            ..Default::default()
+        };
+        assert_eq!(via_smol.resolve(Role::Study, "opus"), "haiku");
+        let own = ModelRoles {
+            smol: Some("haiku".into()),
+            study: Some("flash".into()),
+            ..Default::default()
+        };
+        assert_eq!(own.resolve(Role::Study, "opus"), "flash");
     }
 
     #[test]

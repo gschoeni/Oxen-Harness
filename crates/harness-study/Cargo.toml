@@ -1,0 +1,27 @@
+[package]
+name = "harness-study"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The codebase study game's backend: territories, spaced-repetition mastery, LLM-written questions, and grading"
+
+[dependencies]
+harness-protocol = { workspace = true }
+harness-config = { workspace = true }
+harness-tools = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+sha2 = "0.10"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true }
+
+[lints]
+workspace = true

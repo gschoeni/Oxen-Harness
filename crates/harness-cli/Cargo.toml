@@ -30,6 +30,7 @@ harness-loop = { workspace = true }
 harness-review = { workspace = true }
 harness-preview = { workspace = true }
 harness-media = { workspace = true }
+harness-study = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

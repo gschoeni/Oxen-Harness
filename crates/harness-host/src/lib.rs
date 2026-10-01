@@ -19,6 +19,7 @@
 mod agents;
 mod bridges;
 mod service;
+mod study;
 mod threads;
 pub mod translate;
 mod view_development;

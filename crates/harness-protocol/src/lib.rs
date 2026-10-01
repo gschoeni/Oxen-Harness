@@ -19,8 +19,9 @@ mod event;
 pub use dto::{
     AgentSummary, ApprovalAnswer, Choice, InterjectRequest, InterjectResponse, LoopResult,
     MediaItem, MediaModelSummary, MediaSource, MediaUpload, Question, QuestionAnswer,
-    RenameRequest, ReviewResult, SessionInfo, SessionView, TaskSummary, ThreadEntry,
-    ThreadSnapshot, TurnRequest, TurnResponse,
+    RenameRequest, ReviewResult, SessionInfo, SessionView, StudyAnswerRequest, StudyAnswerResult,
+    StudyBatch, StudyBatchRequest, StudyGrade, StudyProfile, StudyQuestion, StudyTerritory,
+    TaskSummary, ThreadEntry, ThreadSnapshot, TurnRequest, TurnResponse,
 };
 pub use event::{
     ApprovalKind, ApprovalPhase, FleetActivityKind, FleetAgentPhase, FleetSource, LocalPhase,

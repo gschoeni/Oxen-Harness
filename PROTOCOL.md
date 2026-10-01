@@ -155,6 +155,23 @@ POST /v1/sessions/{id}/review    {base_branch?} → ReviewResult (events: review
 POST /v1/sessions/{id}/loop      {name?, goal?} → LoopResult   (events: agent.*)
 ```
 
+The study game (a codebase quiz played while a turn runs — none of these
+wait on the session's turn):
+
+```
+GET  /v1/sessions/{id}/study/profile   → StudyProfile (level, understanding %, mastery per territory)
+POST /v1/sessions/{id}/study/batch     {mode, count?, exclude?} → StudyBatch
+POST /v1/sessions/{id}/study/answer    {question_id, answer, hint_used?} → StudyAnswerResult
+```
+
+`mode` is `expedition` (the whole workspace, weakest territory first),
+`fresh_tracks` (uncommitted changes, else the last commits), `ride_along`
+(files the session's agent touched), or `review` (missed questions and faded
+territories). Questions never carry their answer: submit one and read the
+`grade` (`full` / `partial` / `wrong`, with feedback) plus the updated
+profile. `answer` is the option index for choice questions, free text
+otherwise. A mode with nothing to ask about answers 400 with the reason.
+
 Models and connection:
 
 ```

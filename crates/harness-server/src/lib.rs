@@ -184,6 +184,9 @@ pub fn build_router(config: ServerConfig) -> Router {
             post(interject_agent),
         )
         .route("/v1/sessions/{id}/refresh-client", post(refresh_client))
+        .route("/v1/sessions/{id}/study/profile", get(study_profile))
+        .route("/v1/sessions/{id}/study/batch", post(study_batch))
+        .route("/v1/sessions/{id}/study/answer", post(study_answer))
         .route("/v1/sessions/{id}/review", post(run_review))
         .route("/v1/sessions/{id}/loop", post(run_loop))
         .route("/v1/questions/{id}/answer", post(answer_question))
@@ -697,6 +700,41 @@ async fn run_review(
             .run_code_review(&id, request.base_branch)
             .await?,
     ))
+}
+
+/// The study game's profile for the session's project: understanding level
+/// and mastery per territory.
+async fn study_profile(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<harness_protocol::StudyProfile>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(state.service.study_profile(&id)?))
+}
+
+/// A batch of study questions for a mode (cached where possible, the rest
+/// written by the study model).
+async fn study_batch(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<harness_protocol::StudyBatchRequest>,
+) -> ApiResult<Json<harness_protocol::StudyBatch>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(state.service.study_batch(&id, request).await?))
+}
+
+/// Grade a study answer and record it; returns the grade and the updated
+/// profile.
+async fn study_answer(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<harness_protocol::StudyAnswerRequest>,
+) -> ApiResult<Json<harness_protocol::StudyAnswerResult>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(state.service.study_answer(&id, request).await?))
 }
 
 #[derive(Deserialize)]
