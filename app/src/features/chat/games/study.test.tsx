@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { StudyAnswerRequest, StudyBatchRequest, StudyProfile, StudyQuestion } from "../../../lib/types";
 import type { GameRequest, GameResult } from "./gameKit";
-import { RUN_LEGS, STUDY_ANSWER, STUDY_BATCH, STUDY_PROFILE, StudyGame as G, type StudyState } from "./study";
+import { RUN_LEGS, STUDY_ANSWER, STUDY_BATCH, STUDY_FLAG, STUDY_OPEN, STUDY_PROFILE, StudyGame as G, type StudyState } from "./study";
 
 const palette = { title: "#f0be8c", primary: "#60b060", secondary: "#aa6e3c", text: "#ece2ce", muted: "#968d7d", danger: "#c94c4c", link: "#f0be8c", background: "#0f1115", surface: "#17191f", border: "#2a2d35" };
 
@@ -201,6 +201,87 @@ describe("Trail of Understanding", () => {
     expect(again.phase).toBe("mode");
     expect(again.profile).not.toBeNull();
     expect(again.score).toBe(0);
+  });
+
+  it("takes an ordering as the step numbers typed in sequence", () => {
+    const steps: StudyQuestion = { ...question("free_text"), kind: "order", options: ["stream the reply", "make room", "run tools"] };
+    const be = backend((r) => {
+      if (r.kind === STUDY_PROFILE) return { ok: true, value: profile() };
+      if (r.kind === STUDY_BATCH) return { ok: true, value: { mode: "expedition", questions: [steps], territory: "agent", tokens_used: 0, model: "" } };
+      return { ok: true, value: { grade: { verdict: "full", feedback: "Right order.", correct_answer: "2 → 1 → 3", explanation: "" }, profile: profile(), tokens_used: 0 } };
+    });
+    let s = be.settle(press(be.settle(G.initialState()), "1"));
+    const screen = renderToStaticMarkup(G.render(s, palette));
+    expect(screen).toContain("PUT IN ORDER");
+    expect(screen).toContain("make room");
+    expect(G.textEntry!(s)?.placeholder).toContain("e.g. 321");
+    // Digits pressed outside the box don't answer it, and a short sequence waits.
+    expect(press(s, "2").phase).toBe("question");
+    expect(G.handleText!(s, "2 1").phase).toBe("question");
+    s = G.handleText!(s, "2, 1, 3");
+    expect(s.phase).toBe("grading");
+    expect(s.requests[s.requests.length - 1].payload).toMatchObject({ answer: "213" });
+  });
+
+  it("strikes a flagged question from the run and asks the backend to retire it", () => {
+    const be = backend((r) => {
+      if (r.kind === STUDY_PROFILE) return { ok: true, value: profile() };
+      if (r.kind === STUDY_BATCH) return { ok: true, value: { mode: "expedition", questions: [question(), question()], territory: "agent", tokens_used: 0, model: "" } };
+      if (r.kind === STUDY_FLAG) return { ok: true, value: profile(2, 11) };
+      return { ok: true, value: { grade: { verdict: "wrong", feedback: "Not that one.", correct_answer: "Sleeps", explanation: "" }, profile: profile(2, 9), tokens_used: 0 } };
+    });
+    let s = be.settle(press(be.settle(G.initialState()), "1"));
+    s = be.settle(press(s, "1"));
+    expect(s.oxen).toBe(2);
+    expect(s.missed).toHaveLength(1);
+    expect(renderToStaticMarkup(G.render(s, palette))).toContain("F this question is wrong");
+    s = press(s, "f");
+    expect(s.requests[s.requests.length - 1]).toMatchObject({ kind: STUDY_FLAG, payload: { question_id: "q1" } });
+    // The run forgets what the bad question did: the ox and the miss.
+    expect(s.oxen).toBe(3);
+    expect(s.missed).toHaveLength(0);
+    expect(s.phase).toBe("result");
+    expect(renderToStaticMarkup(G.render(s, palette))).toContain("STRUCK FROM THE RECORD");
+    s = be.settle(s);
+    expect(s.profile?.understanding).toBe(11);
+    // Flagging twice does nothing more; any other key rides on.
+    expect(press(s, "F").requests).toHaveLength(s.requests.length);
+    expect(press(s, "Enter").current?.id).toBe("q2");
+  });
+
+  it("asks the host to open the question's file from the result and the hint", () => {
+    const be = happyBackend();
+    let s = be.settle(press(be.settle(G.initialState()), "1"));
+    const hint = press(s, "h", "o");
+    expect(hint.phase).toBe("hint");
+    expect(hint.requests[hint.requests.length - 1]).toMatchObject({ kind: STUDY_OPEN, payload: { path: "crates/agent/src/turn.rs" } });
+    s = be.settle(press(s, "1"));
+    const opened = press(s, "O");
+    expect(opened.phase).toBe("result");
+    expect(opened.requests[opened.requests.length - 1].kind).toBe(STUDY_OPEN);
+  });
+
+  it("loses an ox to a wrong answer and pays a bonus for each that arrives", () => {
+    const be = happyBackend((a) => (a.question_id === "q1" ? "wrong" : "full"));
+    let s = be.settle(press(be.settle(G.initialState()), "1"));
+    s = be.settle(press(s, "1"));
+    expect(s.oxen).toBe(2);
+    expect(renderToStaticMarkup(G.render(s, palette))).toContain("LOST AN OX");
+    let guard = 0;
+    while (s.phase !== "over" && guard++ < 60) {
+      if (s.phase === "question") s = be.settle(press(s, "1"));
+      else s = be.settle(press(s, "Enter"));
+    }
+    const over = renderToStaticMarkup(G.render(s, palette));
+    expect(over).toContain("2 of 3 oxen made it: +100");
+    // 7 legs + a half-point fort replay + the oxen, before streak bonuses.
+    expect(s.score).toBeGreaterThanOrEqual(7 * 100 + 50 + 100);
+  });
+
+  it("tells you on the mode screen when reviews are due", () => {
+    const due = { ...profile(), due: 4 };
+    const be = backend((r) => (r.kind === STUDY_PROFILE ? { ok: true, value: due } : undefined));
+    expect(renderToStaticMarkup(G.render(be.settle(G.initialState()), palette))).toContain("4 reviews are due");
   });
 
   it("says why a trail can't start and returns to the mode screen", () => {

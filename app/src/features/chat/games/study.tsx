@@ -46,12 +46,14 @@ import {
   type TextEntry,
 } from "./gameKit";
 import type { SfxName } from "./sfx";
-import { CardFrame, CardTitle, Footer, H, Line, loadTable, ProgressStrip, rankWord, recordScore, screenColors, W, wrapText, type ScoreEntry, type ScreenColors, type StripMark } from "./terminal";
+import { CardFrame, CardTitle, Footer, H, Line, loadTable, ProgressStrip, rankWord, recordScore, screenColors, textCols, W, wrapText, type ScoreEntry, type ScreenColors, type StripMark } from "./terminal";
 
 // Request kinds the cabinet queues; games/studyHost.ts serves them.
 export const STUDY_PROFILE = "study.profile";
 export const STUDY_BATCH = "study.batch";
 export const STUDY_ANSWER = "study.answer";
+export const STUDY_FLAG = "study.flag";
+export const STUDY_OPEN = "study.open";
 
 /** Questions in one run. */
 export const RUN_LEGS = 8;
@@ -62,6 +64,11 @@ const FORT_REPLAYS = 2;
 const BATCH = 5;
 /** A region this far below its peak earns a "fading" trail event. */
 const FADING = 0.4;
+/** The team you set out with. A wrong answer loses an ox; each one that
+    reaches the end is worth a bonus. A carrot, never a wall: the run goes on
+    with no oxen left. */
+const OXEN = 3;
+const OX_BONUS = 50;
 
 type Phase = "mode" | "scouting" | "message" | "question" | "hint" | "grading" | "result" | "over" | "error";
 type Tone = "good" | "bad" | "neutral";
@@ -69,7 +76,7 @@ type Tone = "good" | "bad" | "neutral";
 export const MODES: { key: StudyMode; name: string; blurb: string }[] = [
   { key: "expedition", name: "Expedition", blurb: "the whole codebase, weakest region first" },
   { key: "fresh_tracks", name: "Fresh tracks", blurb: "what changed lately, from git" },
-  { key: "ride_along", name: "Ride-along", blurb: "the files your agent is touching" },
+  { key: "ride_along", name: "Ride-along", blurb: "what your agent just changed" },
   { key: "review", name: "Review", blurb: "missed questions and fading regions" },
 ];
 
@@ -113,9 +120,14 @@ export interface StudyState {
   grade: StudyGrade | null;
   gained: number;
   leveledUp: boolean;
+  /** The question on the result card was flagged as wrong and struck. */
+  flagged: boolean;
+  /** An ox was lost to the last answer (shown on its result card). */
+  oxLost: boolean;
 
   // scoring
   score: number;
+  oxen: number;
   streak: number;
   bestStreak: number;
   correct: number;
@@ -177,7 +189,10 @@ function fresh(best = loadBest("study"), profile: StudyProfile | null = null, re
     grade: null,
     gained: 0,
     leveledUp: false,
+    flagged: false,
+    oxLost: false,
     score: 0,
+    oxen: OXEN,
     streak: 0,
     bestStreak: 0,
     correct: 0,
@@ -198,7 +213,8 @@ function fresh(best = loadBest("study"), profile: StudyProfile | null = null, re
 
 const cue = (s: StudyState, ...names: SfxName[]): StudyState => ({ ...s, sfx: pushSfx(s.sfx, ...names) });
 
-const isChoice = (q: StudyQuestion | null) => !!q && q.kind !== "free_text";
+const isChoice = (q: StudyQuestion | null) => !!q && (q.kind === "multiple_choice" || q.kind === "true_false");
+const isOrder = (q: StudyQuestion | null) => q?.kind === "order";
 
 const modeName = (mode: StudyMode) => MODES.find((m) => m.key === mode)?.name ?? "Expedition";
 
@@ -242,7 +258,7 @@ function nextQuestion(s: StudyState): StudyState {
   // Fort replays come first: they are already in hand.
   if (s.fort.length > 0) {
     const [current, ...fort] = s.fort;
-    return { ...s, fort, current, replay: true, phase: "question", hintUsed: false, grade: null };
+    return { ...s, fort, current, replay: true, phase: "question", hintUsed: false, grade: null, flagged: false, oxLost: false };
   }
   if (s.queue.length === 0) {
     if (s.batchPending) return { ...s, phase: "scouting", current: null };
@@ -266,6 +282,8 @@ function nextQuestion(s: StudyState): StudyState {
     phase: "question",
     hintUsed: false,
     grade: null,
+    flagged: false,
+    oxLost: false,
   };
   // Keep a question in hand so the player never waits between legs.
   if (!next.batchPending && !next.batchError && next.queue.length < Math.min(2, legsAhead(next))) {
@@ -313,6 +331,7 @@ function applyGrade(s: StudyState, result: StudyAnswerResult): StudyState {
   const gained = Math.round(points) + bonus;
   const before = s.profile?.level ?? s.startLevel;
   const leveledUp = result.profile.level > before;
+  const oxLost = verdict === "wrong" && !s.replay && s.oxen > 0;
   const next: StudyState = {
     ...s,
     phase: "result",
@@ -320,6 +339,8 @@ function applyGrade(s: StudyState, result: StudyAnswerResult): StudyState {
     grade: result.grade,
     gained,
     leveledUp,
+    oxLost,
+    oxen: s.oxen - (oxLost ? 1 : 0),
     profile: result.profile,
     score: s.score + gained,
     streak,
@@ -334,10 +355,41 @@ function applyGrade(s: StudyState, result: StudyAnswerResult): StudyState {
 }
 
 function finish(s: StudyState): StudyState {
-  const best = saveBest("study", s.score);
-  const newBest = s.best > 0 ? s.score > s.best : false;
-  const rank = recordScore(TABLE_KEY, SEED_TABLE, s.score, modeName(s.mode));
-  return cue({ ...s, phase: "over", current: null, best, newBest, rank }, newBest ? "best" : "good");
+  const score = s.score + s.oxen * OX_BONUS;
+  const best = saveBest("study", score);
+  const newBest = s.best > 0 ? score > s.best : false;
+  const rank = recordScore(TABLE_KEY, SEED_TABLE, score, modeName(s.mode));
+  return cue({ ...s, phase: "over", current: null, score, best, newBest, rank }, newBest ? "best" : "good");
+}
+
+/** "This question is wrong": retire it everywhere and take back what it
+    did to this run — its points, its miss, the ox it cost. */
+function flag(s: StudyState): StudyState {
+  const q = s.current;
+  if (!q || s.flagged) return s;
+  const requests = pushRequest(s.requests, STUDY_FLAG, { question_id: q.id });
+  return cue(
+    {
+      ...s,
+      requests,
+      flagged: true,
+      score: s.score - s.gained,
+      gained: 0,
+      oxen: s.oxen + (s.oxLost ? 1 : 0),
+      oxLost: false,
+      correct: s.correct - (s.grade?.verdict === "full" && !s.replay ? 1 : 0),
+      missed: s.missed.filter((m) => m.id !== q.id),
+      fort: s.fort.filter((m) => m.id !== q.id),
+      queue: s.queue.filter((m) => m.id !== q.id),
+    },
+    "tick",
+  );
+}
+
+/** Open the file the question on screen was about in the editor pane. */
+function openSource(s: StudyState): StudyState {
+  if (!s.current) return s;
+  return { ...s, requests: pushRequest(s.requests, STUDY_OPEN, { path: s.current.source_path }) };
 }
 
 /** Give up on a question whose answer couldn't be graded: the leg counts,
@@ -391,8 +443,11 @@ function studyKey(s: StudyState, key: string): StudyState {
       return s;
     }
     case "hint":
+      if (key === "o" || key === "O") return openSource(s);
       return { ...s, phase: "question" };
     case "result":
+      if (key === "f" || key === "F") return flag(s);
+      if (key === "o" || key === "O") return openSource(s);
       return advance(s);
     case "over":
       return cue({ ...fresh(s.best, s.profile, s.requests) }, "menu");
@@ -409,12 +464,21 @@ function studyKey(s: StudyState, key: string): StudyState {
 function studyText(s: StudyState, text: string): StudyState {
   if (s.phase !== "question" || isChoice(s.current)) return s;
   if (text.trim() === "?") return { ...s, phase: "hint", hintUsed: true };
+  if (isOrder(s.current)) {
+    // An ordering is the option numbers in sequence; anything else typed
+    // around them (spaces, commas, arrows) is ignored. Wait for a full one.
+    const digits = text.replace(/\D/g, "");
+    return digits.length === s.current!.options.length ? submit(s, digits) : s;
+  }
   return submit(s, text.trim());
 }
 
 function studyEntry(s: StudyState): TextEntry | null {
   if (s.phase !== "question" || isChoice(s.current)) return null;
-  return { label: "Your answer", placeholder: "type your answer — or ? for a hint", key: s.current?.id ?? "" };
+  const placeholder = isOrder(s.current)
+    ? `type the order, e.g. ${s.current!.options.map((_, i) => i + 1).reverse().join("")} — or ? for a hint`
+    : "type your answer — or ? for a hint";
+  return { label: "Your answer", placeholder, key: s.current?.id ?? "" };
 }
 
 function studyDeliver(s: StudyState, request: GameRequest, result: GameResult): StudyState {
@@ -454,6 +518,11 @@ function studyDeliver(s: StudyState, request: GameRequest, result: GameResult): 
     };
     return s.phase === "scouting" ? nextQuestion(next) : next;
   }
+  if (request.kind === STUDY_FLAG) {
+    // The record without the struck answers. A failure leaves the question
+    // in the bank; the run's own bookkeeping already let it go.
+    return result.ok ? { ...s, profile: result.value as StudyProfile } : s;
+  }
   if (request.kind === STUDY_ANSWER) {
     if (request.id !== s.answerPending) return s;
     if (!result.ok) return toError({ ...s, answerPending: 0 }, result.error, "question");
@@ -464,27 +533,35 @@ function studyDeliver(s: StudyState, request: GameRequest, result: GameResult): 
 
 // ---- layout shared by rendering and taps ---------------------------------------
 
-const TEXT_COLS = 60;
-const PROMPT_TOP = 40;
-const LINE_STEP = 8;
+// Text sizes, in viewBox units. The screen is as wide as the composer, so
+// these land around 20px (body) and 17px (small) on screen.
+const BODY = 8;
+const SMALL = 6.5;
+const PROMPT_TOP = 41;
+const LINE_STEP = 9;
 const MODE_TOP = 52;
 const MODE_STEP = 15;
+/** Lines of body text that fit between the header and the footer. */
+const QUESTION_LINES = 9;
+const TEXT_W = W - 20;
 
 /** Where a question's prompt and options sit. Long options get two lines
-    unless the whole question would overflow the screen. */
+    unless the whole question would overflow the screen. Columns come from
+    the live font, so a narrow face fills the width instead of wrapping early. */
 function layoutQuestion(q: StudyQuestion) {
-  const prompt = wrapText(q.prompt, TEXT_COLS, 4);
-  let options = q.options.map((o) => wrapText(o, TEXT_COLS - 4, 2));
-  if (prompt.length + options.reduce((n, o) => n + o.length, 0) > 10) {
-    options = q.options.map((o) => wrapText(o, TEXT_COLS - 4, 1));
+  const cols = textCols(TEXT_W, BODY);
+  const prompt = wrapText(q.prompt, cols, 4);
+  let options = q.options.map((o) => wrapText(o, cols - 4, 2));
+  if (prompt.length + options.reduce((n, o) => n + o.length, 0) > QUESTION_LINES) {
+    options = q.options.map((o) => wrapText(o, cols - 4, 1));
   }
-  let y = PROMPT_TOP + prompt.length * LINE_STEP + 4;
+  let y = PROMPT_TOP + prompt.length * LINE_STEP + 3;
   const rows = options.map((lines) => {
     const row = { y, lines };
-    y += lines.length * LINE_STEP + 2;
+    y += lines.length * LINE_STEP + 1;
     return row;
   });
-  return { prompt, rows };
+  return { prompt, rows, end: y };
 }
 
 function studyPointer(s: StudyState, p: PointerInput): StudyState {
@@ -518,10 +595,17 @@ function levelLine(profile: StudyProfile | null) {
 
 function Header(s: StudyState, sc: ScreenColors) {
   const where = s.replay ? "FORT REVIEW" : `LEG ${Math.min(s.leg + 1, RUN_LEGS)}/${RUN_LEGS}`;
+  const left = s.phase === "result" || s.phase === "over" ? `SCORE ${s.score}` : where;
   return (
     <g>
-      <Line x={10} y={13} c={sc.fg} size={9}>{s.phase === "result" || s.phase === "over" ? `SCORE ${s.score}` : where}</Line>
-      <Line x={W / 2} y={13} c={sc.dim} size={8} anchor="middle">{wrapText(regionName(s), 30, 1)[0]}</Line>
+      <Line x={10} y={13} c={sc.fg} size={9}>{left}</Line>
+      {/* The team: one block per ox still pulling. */}
+      <g aria-label={`${s.oxen} of ${OXEN} oxen`}>
+        {Array.from({ length: OXEN }, (_, i) => (
+          <rect key={i} x={72 + i * 7} y={7} width={5} height={5} fill={i < s.oxen ? sc.good : sc.frame} opacity={i < s.oxen ? 0.9 : 0.35} />
+        ))}
+      </g>
+      <Line x={W / 2 + 10} y={13} c={sc.dim} size={8} anchor="middle">{wrapText(regionName(s), 26, 1)[0]}</Line>
       <Line x={W - 10} y={13} c={sc.accent} size={9} anchor="end">{levelLine(s.profile)}</Line>
       <ProgressStrip frac={clamp(s.leg / RUN_LEGS, 0, 1)} marks={STRIP_MARKS} sc={sc} />
     </g>
@@ -548,16 +632,20 @@ function ModeScreen(s: StudyState, sc: ScreenColors) {
     : s.profileError
       ? "Couldn't read your progress — you can still ride."
       : "Answer questions about this codebase while your agent works.";
+  const due = p?.due ?? 0;
   return (
     <g>
       <PxText x={W / 2} y={18} size={12} fill={sc.accent} shadow={sc.bg} anchor="middle">CHOOSE YOUR TRAIL</PxText>
-      <Line x={W / 2} y={32} c={sc.dim} size={7.5} anchor="middle">{sub}</Line>
-      {MODES.map((m, i) => (
-        <g key={m.key}>
-          <Line x={18} y={MODE_TOP + i * MODE_STEP} c={sc.accent} size={9}>{`${i + 1}  ${m.name}`}</Line>
-          <Line x={112} y={MODE_TOP + i * MODE_STEP} c={sc.fg} size={7}>{m.blurb}</Line>
-        </g>
-      ))}
+      <Line x={W / 2} y={32} c={sc.dim} size={BODY} anchor="middle">{sub}</Line>
+      {MODES.map((m, i) => {
+        const blurb = m.key === "review" && due > 0 ? `${due} ${due === 1 ? "review is" : "reviews are"} due` : m.blurb;
+        return (
+          <g key={m.key}>
+            <Line x={18} y={MODE_TOP + i * MODE_STEP} c={sc.accent} size={9}>{`${i + 1}  ${m.name}`}</Line>
+            <Line x={108} y={MODE_TOP + i * MODE_STEP} c={m.key === "review" && due > 0 ? sc.good : sc.fg} size={BODY}>{blurb}</Line>
+          </g>
+        );
+      })}
       <Line x={W / 2} y={H - 8} c={sc.dim} size={7} anchor="middle">
         {s.best > 0 ? `${RUN_LEGS} questions a run · best score ${s.best}` : `${RUN_LEGS} questions a run · the model writes them from your code`}
       </Line>
@@ -583,35 +671,49 @@ function ScoutingScreen(s: StudyState, sc: ScreenColors, p: ThemePalette) {
   );
 }
 
+const KIND_LABEL: Record<StudyQuestion["kind"], string> = {
+  multiple_choice: "PICK ONE",
+  true_false: "TRUE OR FALSE",
+  free_text: "SHORT ANSWER",
+  order: "PUT IN ORDER",
+};
+
 function QuestionScreen(s: StudyState, sc: ScreenColors) {
   const q = s.current;
   if (!q) return <g>{Header(s, sc)}</g>;
-  const { prompt, rows } = layoutQuestion(q);
-  const kind = q.kind === "free_text" ? "SHORT ANSWER" : q.kind === "true_false" ? "TRUE OR FALSE" : "PICK ONE";
+  const { prompt, rows, end } = layoutQuestion(q);
   const waiting = s.phase === "grading";
+  const typed = !isChoice(q);
+  const footer = waiting
+    ? "grading…"
+    : isChoice(q)
+      ? `1-${q.options.length} answer   H hint (half points)`
+      : "⏎ answer   ? hint (half points)";
   return (
     <g>
       {Header(s, sc)}
-      <Line x={10} y={30} c={sc.dim} size={6}>{`${kind} · DIFFICULTY ${clamp(q.difficulty, 1, 3)}/3${q.cached ? " · FROM YOUR NOTES" : ""}${s.hintUsed ? " · HINT USED" : ""}`}</Line>
+      <Line x={10} y={31} c={sc.dim} size={SMALL}>{`${KIND_LABEL[q.kind] ?? "QUESTION"} · DIFFICULTY ${clamp(q.difficulty, 1, 3)}/3${q.cached ? " · FROM YOUR NOTES" : ""}${s.hintUsed ? " · HINT USED" : ""}`}</Line>
       {prompt.map((line, i) => (
-        <Line key={i} x={10} y={PROMPT_TOP + i * LINE_STEP} c={sc.fg} size={7}>{line}</Line>
+        <Line key={i} x={10} y={PROMPT_TOP + i * LINE_STEP} c={sc.fg} size={BODY}>{line}</Line>
       ))}
       {rows.map((row, i) => (
         <g key={i}>
-          <Line x={12} y={row.y} c={sc.accent} size={7}>{`${i + 1}`}</Line>
+          <Line x={12} y={row.y} c={sc.accent} size={BODY}>{`${i + 1}`}</Line>
           {row.lines.map((line, j) => (
-            <Line key={j} x={24} y={row.y + j * LINE_STEP} c={waiting ? sc.dim : sc.good} size={7}>{line}</Line>
+            <Line key={j} x={24} y={row.y + j * LINE_STEP} c={waiting ? sc.dim : sc.good} size={BODY}>{line}</Line>
           ))}
         </g>
       ))}
-      {!isChoice(q) && (
-        <Line x={10} y={PROMPT_TOP + prompt.length * LINE_STEP + 10} c={sc.accent} size={7}>
-          {waiting ? "The study model is reading your answer…" : "▶ Type your answer in the box below."}
+      {typed && (
+        <Line x={10} y={Math.min(end + 6, H - 18)} c={sc.accent} size={BODY}>
+          {waiting
+            ? "The study model is reading your answer…"
+            : isOrder(q)
+              ? "▶ Type the step numbers in order in the box below."
+              : "▶ Type your answer in the box below."}
         </Line>
       )}
-      <Footer sc={sc}>
-        {waiting ? "grading…" : isChoice(q) ? `1-${q.options.length} answer   H hint (half points)` : "⏎ answer   ? hint (half points)"}
-      </Footer>
+      <Footer sc={sc}>{footer}</Footer>
     </g>
   );
 }
@@ -619,17 +721,18 @@ function QuestionScreen(s: StudyState, sc: ScreenColors) {
 function HintScreen(s: StudyState, sc: ScreenColors) {
   const q = s.current;
   if (!q) return <g />;
-  const lines = (q.source_excerpt || "(no excerpt — open the file to read it)").split("\n").slice(0, 9);
+  const cols = textCols(W - 44, SMALL);
+  const lines = (q.source_excerpt || "(no excerpt — press O to read the file)").split("\n").slice(0, 8);
   return (
     <g>
       {Header(s, sc)}
       <CardFrame y={27} height={93} tone={sc.accent} />
       <CardTitle y={40} tone={sc.accent} sc={sc} size={9}>FROM THE SOURCE</CardTitle>
-      <Line x={W / 2} y={50} c={sc.accent} size={6} anchor="middle">{wrapText(sourceLabel(q), 70, 1)[0]}</Line>
+      <Line x={W / 2} y={50} c={sc.accent} size={SMALL} anchor="middle">{wrapText(sourceLabel(q), cols, 1)[0]}</Line>
       {lines.map((line, i) => (
-        <Line key={i} x={22} y={61 + i * 6.5} c={sc.fg} size={5.5}>{line.replace(/\t/g, "  ").slice(0, 76)}</Line>
+        <Line key={i} x={22} y={61 + i * 7.5} c={sc.fg} size={SMALL}>{line.replace(/\t/g, "  ").slice(0, cols)}</Line>
       ))}
-      <Footer sc={sc}>any key returns to the question</Footer>
+      <Footer sc={sc}>O opens the file   any other key returns to the question</Footer>
     </g>
   );
 }
@@ -639,13 +742,21 @@ function ResultScreen(s: StudyState, sc: ScreenColors) {
   const q = s.current;
   if (!g || !q) return <g>{Header(s, sc)}</g>;
   const full = g.verdict === "full";
-  const tone = full ? sc.good : g.verdict === "partial" ? sc.accent : sc.bad;
-  const title = full ? "RIGHT!" : g.verdict === "partial" ? "CLOSE" : "NOT QUITE";
+  const tone = s.flagged ? sc.dim : full ? sc.good : g.verdict === "partial" ? sc.accent : sc.bad;
+  const title = s.flagged ? "STRUCK FROM THE RECORD" : full ? "RIGHT!" : g.verdict === "partial" ? "CLOSE" : "NOT QUITE";
+  const cols = textCols(W - 44, 7);
+  const small = textCols(W - 44, SMALL);
   const blocks: { text: string; c: string; size: number }[] = [];
-  if (s.leveledUp) blocks.push({ text: `▲ LEVEL UP — YOU ARE NOW LEVEL ${s.profile?.level ?? ""}`, c: sc.good, size: 7 });
-  for (const line of wrapText(g.feedback, 62, 2)) blocks.push({ text: line, c: sc.fg, size: 7 });
-  if (!full) for (const line of wrapText(`Answer: ${g.correct_answer}`, 62, 2)) blocks.push({ text: line, c: sc.accent, size: 7 });
-  for (const line of wrapText(g.explanation, 70, 3)) blocks.push({ text: line, c: sc.dim, size: 6 });
+  if (s.flagged) {
+    blocks.push({ text: "This question won't be asked again, and your answer", c: sc.fg, size: 7 });
+    blocks.push({ text: "to it no longer counts for or against you.", c: sc.fg, size: 7 });
+  } else {
+    if (s.leveledUp) blocks.push({ text: `▲ LEVEL UP — YOU ARE NOW LEVEL ${s.profile?.level ?? ""}`, c: sc.good, size: 7 });
+    for (const line of wrapText(g.feedback, cols, 2)) blocks.push({ text: line, c: sc.fg, size: 7 });
+    if (!full) for (const line of wrapText(`Answer: ${g.correct_answer}`, cols, 2)) blocks.push({ text: line, c: sc.accent, size: 7 });
+    for (const line of wrapText(g.explanation, small, 3)) blocks.push({ text: line, c: sc.dim, size: SMALL });
+  }
+  const tally = s.flagged ? "" : `+${s.gained}${s.streak > 1 ? ` · STREAK ${s.streak}` : ""}${s.oxLost ? " · LOST AN OX" : ""}`;
   return (
     <g>
       {Header(s, sc)}
@@ -654,9 +765,9 @@ function ResultScreen(s: StudyState, sc: ScreenColors) {
       {blocks.slice(0, 7).map((b, i) => (
         <Line key={i} x={W / 2} y={54 + i * 8} c={b.c} size={b.size} anchor="middle">{b.text}</Line>
       ))}
-      <Line x={22} y={115} c={sc.accent} size={5.5}>{wrapText(sourceLabel(q), 58, 1)[0]}</Line>
-      <Line x={W - 22} y={115} c={tone} size={7} anchor="end">{`+${s.gained}${s.streak > 1 ? ` · STREAK ${s.streak}` : ""}`}</Line>
-      <Footer sc={sc}>press any key to ride on</Footer>
+      <Line x={22} y={115} c={sc.accent} size={SMALL}>{wrapText(sourceLabel(q), Math.max(20, small - 22), 1)[0]}</Line>
+      <Line x={W - 22} y={115} c={tone} size={7} anchor="end">{tally}</Line>
+      <Footer sc={sc}>{s.flagged ? "O open the file   any other key rides on" : "O open the file   F this question is wrong   any other key rides on"}</Footer>
     </g>
   );
 }
@@ -681,7 +792,7 @@ function ErrorScreen(s: StudyState, sc: ScreenColors) {
     <g>
       <CardFrame y={20} height={96} tone={sc.bad} />
       <CardTitle y={40} tone={sc.bad} sc={sc}>TRAIL BLOCKED</CardTitle>
-      {wrapText(s.errorText, 58, 6).map((line, i) => (
+      {wrapText(s.errorText, textCols(W - 44, 7), 6).map((line, i) => (
         <Line key={i} x={W / 2} y={56 + i * 9} c={sc.fg} size={7} anchor="middle">{line}</Line>
       ))}
       <Footer sc={sc}>{s.errorBack === "mode" ? "press any key to pick another trail" : "any key tries again   S skips this question"}</Footer>
@@ -698,19 +809,22 @@ function OverScreen(s: StudyState, sc: ScreenColors) {
   return (
     <g>
       <PxText x={W / 2} y={28} size={15} fill={sc.good} shadow={sc.bg} anchor="middle">{s.newBest ? "NEW BEST!" : s.cutShort ? "THE TRAIL RAN OUT" : "TRAIL'S END"}</PxText>
-      <Line x={W / 2} y={46} c={sc.fg} size={9} anchor="middle">{`${s.correct} of ${asked} answered in full · best streak ${s.bestStreak}`}</Line>
-      <Line x={W / 2} y={60} c={delta >= 0 ? sc.good : sc.bad} size={9} anchor="middle">
+      <Line x={W / 2} y={44} c={sc.fg} size={9} anchor="middle">{`${s.correct} of ${asked} answered in full · best streak ${s.bestStreak}`}</Line>
+      <Line x={W / 2} y={57} c={delta >= 0 ? sc.good : sc.bad} size={9} anchor="middle">
         {`Understanding ${s.startUnderstanding.toFixed(1)}% → ${now.toFixed(1)}%`}
       </Line>
-      <Line x={W / 2} y={72} c={level > s.startLevel ? sc.good : sc.dim} size={8} anchor="middle">
+      <Line x={W / 2} y={69} c={level > s.startLevel ? sc.good : sc.dim} size={8} anchor="middle">
         {level > s.startLevel ? `Level ${s.startLevel} → ${level}` : `Level ${level}`}
       </Line>
-      <PxText x={W / 2} y={94} size={13} fill={sc.accent} shadow={sc.bg} anchor="middle">{`SCORE ${s.score}   BEST ${s.best}`}</PxText>
-      {s.rank > 0 && <Line x={W / 2} y={107} c={sc.good} size={8} anchor="middle">{rankWord(s.rank)}</Line>}
+      <Line x={W / 2} y={82} c={s.oxen > 0 ? sc.good : sc.dim} size={7} anchor="middle">
+        {s.oxen > 0 ? `${s.oxen} of ${OXEN} oxen made it: +${s.oxen * OX_BONUS}` : "No oxen made it — you walked the last miles."}
+      </Line>
+      <PxText x={W / 2} y={97} size={13} fill={sc.accent} shadow={sc.bg} anchor="middle">{`SCORE ${s.score}   BEST ${s.best}`}</PxText>
+      {s.rank > 0 && <Line x={W / 2} y={108} c={sc.good} size={8} anchor="middle">{rankWord(s.rank)}</Line>}
       {s.cutShort && s.batchError ? (
-        <Line x={W / 2} y={117} c={sc.bad} size={6} anchor="middle">{wrapText(s.batchError, 80, 1)[0]}</Line>
+        <Line x={W / 2} y={118} c={sc.bad} size={SMALL} anchor="middle">{wrapText(s.batchError, textCols(TEXT_W, SMALL), 1)[0]}</Line>
       ) : (
-        s.tokens > 0 && <Line x={W / 2} y={117} c={sc.dim} size={6} anchor="middle">{`${s.tokens.toLocaleString()} tokens spent writing and grading`}</Line>
+        s.tokens > 0 && <Line x={W / 2} y={118} c={sc.dim} size={SMALL} anchor="middle">{`${s.tokens.toLocaleString()} tokens spent writing and grading`}</Line>
       )}
       <Footer sc={sc}>press any key to ride again</Footer>
     </g>

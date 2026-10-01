@@ -533,6 +533,7 @@ export const studyAnswer = vi.fn(async (_session: string, _request: StudyAnswerR
   profile: sampleStudyProfile,
   tokens_used: 0,
 }));
+export const studyFlag = vi.fn(async (_session: string, _questionId: string) => sampleStudyProfile);
 export const getModelRoles = vi.fn(async (): Promise<ModelRoles> => ({ study: null, smol: null, summary: null }));
 export const setModelRole = vi.fn(async (role: ModelRole, model: string | null): Promise<ModelRoles> => ({
   study: null,
@@ -728,6 +729,7 @@ export function resetIpc() {
     profile: sampleStudyProfile,
     tokens_used: 0,
   });
+  studyFlag.mockReset().mockResolvedValue(sampleStudyProfile);
   getModelRoles.mockReset().mockResolvedValue({ study: null, smol: null, summary: null });
   setModelRole.mockReset().mockImplementation(async (role: ModelRole, model: string | null) => ({ study: null, smol: null, summary: null, [role]: model }));
   runCodeReview.mockReset().mockResolvedValue({

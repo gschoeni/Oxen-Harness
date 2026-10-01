@@ -1223,6 +1223,10 @@ export interface StudyTerritory {
   last_answered_at?: number;
   /** How far mastery has fallen from its peak, 0..1. */
   faded: number;
+  /** Source files in the region; bigger regions take more answers. */
+  files?: number;
+  /** Questions here whose spaced review has come due. */
+  due?: number;
 }
 
 export interface StudyProfile {
@@ -1232,6 +1236,8 @@ export interface StudyProfile {
   understanding: number;
   level: number;
   answered: number;
+  /** Reviews due right now, across regions. */
+  due?: number;
   territories: StudyTerritory[];
 }
 
@@ -1242,7 +1248,8 @@ export type StudyVerdict = "full" | "partial" | "wrong";
 export interface StudyQuestion {
   id: string;
   territory: string;
-  kind: "multiple_choice" | "true_false" | "free_text";
+  /** `order`: put the options in sequence, answered with their numbers ("3142"). */
+  kind: "multiple_choice" | "true_false" | "free_text" | "order";
   prompt: string;
   options: string[];
   source_path: string;
@@ -1269,7 +1276,8 @@ export interface StudyBatch {
 
 export interface StudyAnswerRequest {
   question_id: string;
-  /** The option index (as text) for choice questions, the typed answer otherwise. */
+  /** The option index (as text) for choice questions, the option numbers in
+   *  sequence for an ordering, the typed answer otherwise. */
   answer: string;
   hint_used?: boolean;
 }

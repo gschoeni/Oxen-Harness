@@ -17,6 +17,7 @@ import { Composer } from "./Composer";
 import { Queue } from "./Queue";
 import { Hero } from "./Hero";
 import { GameDock } from "./GameDock";
+import { StudyNudge } from "./StudyNudge";
 import { TokenMeter } from "./TokenMeter";
 import { StreamingWrite } from "./StreamingWrite";
 import { isMediaPath } from "../../lib/attachments";
@@ -309,6 +310,7 @@ export function Chat() {
       <QuestionPrompt />
       <ApprovalPrompt />
       {gameDockOpen && started && <GameDock />}
+      {started && <StudyNudge running={running} />}
       {started && <TokenMeter />}
       <Composer
         busy={running}

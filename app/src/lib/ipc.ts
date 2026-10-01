@@ -554,6 +554,11 @@ export const studyBatch = (session: string, request: StudyBatchRequest) =>
 export const studyAnswer = (session: string, request: StudyAnswerRequest) =>
   invoke<StudyAnswerResult>("study_answer", { session, request });
 
+/** Retire a question the player says is wrong and strike its answers from the
+ *  record; resolves with the profile without them. */
+export const studyFlag = (session: string, questionId: string) =>
+  invoke<StudyProfile>("study_flag", { session, request: { question_id: questionId } });
+
 /** The study / smol / summary model overrides. */
 export const getModelRoles = () => invoke<ModelRoles>("get_model_roles");
 

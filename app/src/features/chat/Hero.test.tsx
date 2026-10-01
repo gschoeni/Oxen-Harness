@@ -5,7 +5,7 @@ vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { Hero } from "./Hero";
 import { useStore } from "../../lib/store";
-import { sampleTheme, studyBatch, studyProfile } from "../../test/ipcMock";
+import { sampleTheme, studyBatch, studyFlag, studyProfile } from "../../test/ipcMock";
 import { STUDY_NEEDS_KEY, studyHost } from "./games/studyHost";
 import { STUDY_BATCH, STUDY_PROFILE } from "./games/study";
 import { resetAll } from "../../test/utils";
@@ -94,5 +94,14 @@ describe("the study cabinet without an API key", () => {
     await expect(studyHost("s1", true).perform(STUDY_BATCH, request)).resolves.toBeTruthy();
     studyBatch.mockRejectedValue("Oxen API error (429): slow down");
     await expect(studyHost("s1", false).perform(STUDY_BATCH, request)).rejects.toBe("Oxen API error (429): slow down");
+  });
+
+  it("opens a question's file in the editor pane and retires a flagged one", async () => {
+    const opened: string[] = [];
+    const host = studyHost("s1", false, (path) => opened.push(path));
+    await host.perform("study.open", { path: "crates/agent/src/turn.rs" });
+    expect(opened).toEqual(["crates/agent/src/turn.rs"]);
+    await host.perform("study.flag", { question_id: "q1" });
+    expect(studyFlag).toHaveBeenCalledWith("s1", "q1");
   });
 });
