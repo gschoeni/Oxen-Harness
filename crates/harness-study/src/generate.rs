@@ -28,6 +28,11 @@ pub fn prompt(material: &Material, count: usize, avoid: &[String]) -> String {
     let free_text = if count >= 3 { 1 } else { 0 };
     let true_false = if count >= 4 { 1 } else { 0 };
     let choice = count - free_text - true_false;
+    let where_ = if material.numbered {
+        "\"source_lines\": [first, last] line numbers within that file's excerpt"
+    } else {
+        "\"excerpt\": the one to six lines of the material that hold the answer, quoted verbatim"
+    };
     let mut out = format!(
         "{}\n\nWrite exactly {count} questions: {choice} multiple_choice (4 options, one \
          correct, plausible distractors), {true_false} true_false, {free_text} free_text (a \
@@ -36,10 +41,10 @@ pub fn prompt(material: &Material, count: usize, avoid: &[String]) -> String {
          Each element: {{\"kind\": \"multiple_choice\"|\"true_false\"|\"free_text\", \
          \"prompt\": string, \"options\": [string] (empty for free_text; [\"True\",\"False\"] for \
          true_false), \"answer\": 0-based index of the correct option (or the reference answer \
-         string for free_text), \"explanation\": one or two sentences, \"source_path\": one of the \
-         excerpted paths exactly as labelled, \"source_lines\": [first, last] within the excerpt, \
-         \"difficulty\": 1|2|3}}.\n",
-        material.framing
+         string for free_text), \"explanation\": one or two sentences, \"source_path\": the file \
+         the answer is in, exactly as it appears in the material, {where}, \"difficulty\": 1|2|3}}.\n",
+        material.framing,
+        where = where_
     );
     if !avoid.is_empty() {
         out.push_str("\nDo not repeat these existing questions:\n");
@@ -83,14 +88,21 @@ pub fn parse(
     now: i64,
     root: &Path,
 ) -> Result<Vec<StoredQuestion>, StudyError> {
-    let json = extract_array(reply).ok_or_else(|| StudyError::Model {
-        model: model.to_string(),
-        detail: "the reply held no JSON array of questions".into(),
-    })?;
-    let raws: Vec<Raw> = serde_json::from_str(json).map_err(|e| StudyError::Model {
-        model: model.to_string(),
-        detail: format!("the question JSON didn't parse: {e}"),
-    })?;
+    let raws = salvage(reply);
+    if raws.is_empty() {
+        return Err(StudyError::Model {
+            model: model.to_string(),
+            detail: if reply.trim().is_empty() {
+                "the reply was empty (the model may have spent its whole reply budget thinking)"
+                    .into()
+            } else {
+                format!(
+                    "the reply held no question objects; it began: {}",
+                    truncate_chars(reply.trim(), 160)
+                )
+            },
+        });
+    }
     let mut out = Vec::new();
     for raw in raws {
         if let Some(q) = validate(raw, material, model, now, root) {
@@ -146,6 +158,11 @@ fn validate(
             if index >= options.len() {
                 return None;
             }
+            let (options, index) = if kind == "multiple_choice" {
+                shuffled(options, index, &raw.prompt)
+            } else {
+                (options, index)
+            };
             (kind, options, index.to_string())
         }
         "free_text" => {
@@ -168,9 +185,11 @@ fn validate(
         // otherwise pin it to the first excerpt so the hint has somewhere to go.
         material.files.first().cloned().unwrap_or(source_path)
     };
+    // Line numbers only mean something when the material was file heads.
     let source_lines = raw
         .source_lines
         .as_ref()
+        .filter(|_| material.numbered)
         .filter(|l| l.len() == 2 && l[0] >= 1 && l[1] >= l[0])
         .map(|l| (l[0], l[1]));
     let excerpt = excerpt_from_disk(root, &source_path, source_lines)
@@ -200,6 +219,30 @@ fn validate(
     })
 }
 
+/// Reorder a question's options and return where the correct one landed.
+/// Models tend to write the right answer first, which turns a quiz into
+/// "press 1"; the order is derived from the prompt so a cached question
+/// keeps its layout between runs.
+fn shuffled(options: Vec<String>, answer: usize, seed: &str) -> (Vec<String>, usize) {
+    let mut keyed: Vec<(String, bool, String)> = options
+        .into_iter()
+        .enumerate()
+        .map(|(i, option)| {
+            let key = crate::short_hash(&format!("{seed}\n{option}"), 16);
+            (key, i == answer, option)
+        })
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    let index = keyed
+        .iter()
+        .position(|(_, correct, _)| *correct)
+        .unwrap_or(0);
+    (
+        keyed.into_iter().map(|(_, _, option)| option).collect(),
+        index,
+    )
+}
+
 /// The hint excerpt, read from the real file so it can't be hallucinated.
 fn excerpt_from_disk(root: &Path, rel: &str, lines: Option<(u32, u32)>) -> Option<String> {
     let (first, last) = lines?;
@@ -217,11 +260,35 @@ fn excerpt_from_disk(root: &Path, rel: &str, lines: Option<(u32, u32)>) -> Optio
     Some(truncate_chars(&chunk.join("\n"), EXCERPT_CHARS))
 }
 
-/// The outermost JSON array in a reply, tolerating prose or fences around it.
-pub(crate) fn extract_array(reply: &str) -> Option<&str> {
-    let start = reply.find('[')?;
-    let end = reply.rfind(']')?;
-    (end > start).then(|| &reply[start..=end])
+/// Every question object that parses, read one at a time from the first
+/// array in the reply. Reading element by element (rather than the array as
+/// a whole) tolerates prose and fences around the JSON, an object that isn't
+/// a question, and — the case seen live — a reply cut off mid-array, which
+/// still yields the questions that arrived whole.
+fn salvage(reply: &str) -> Vec<Raw> {
+    let Some(start) = reply.find('[') else {
+        return Vec::new();
+    };
+    let mut rest = &reply[start + 1..];
+    let mut out = Vec::new();
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_whitespace() || c == ',');
+        if !rest.starts_with('{') {
+            return out;
+        }
+        let mut stream = serde_json::Deserializer::from_str(rest).into_iter::<serde_json::Value>();
+        match stream.next() {
+            Some(Ok(value)) => {
+                let consumed = stream.byte_offset();
+                if let Ok(raw) = serde_json::from_value::<Raw>(value) {
+                    out.push(raw);
+                }
+                rest = &rest[consumed..];
+            }
+            // A truncated or malformed element ends the usable part.
+            _ => return out,
+        }
+    }
 }
 
 /// The outermost JSON object in a reply.
@@ -253,6 +320,7 @@ mod tests {
             framing: "test".into(),
             files: vec!["src/lib.rs".into()],
             text: "### src/lib.rs\n…".into(),
+            numbered: true,
         }
     }
 
@@ -285,7 +353,11 @@ mod tests {
         let qs = parse(reply, &m, "m", 7, dir.path()).unwrap();
         assert_eq!(qs.len(), 3);
         assert_eq!(qs[0].question.source_excerpt, "line two");
-        assert_eq!(qs[0].answer, "1");
+        // Options are shuffled; the stored index still points at the right one.
+        let mut sorted = qs[0].question.options.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["four", "one", "three", "two"]);
+        assert_eq!(qs[0].correct_answer(), "two");
         assert_eq!(qs[1].question.options, vec!["True", "False"]);
         assert_eq!(qs[1].answer, "0");
         assert_eq!(qs[1].question.source_path, "src/lib.rs");
@@ -298,13 +370,55 @@ mod tests {
     }
 
     #[test]
+    fn diff_material_quotes_its_hint_instead_of_reading_lines_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = Material {
+            numbered: false,
+            ..material(dir.path())
+        };
+        assert!(prompt(&m, 2, &[]).contains("quoted verbatim"));
+        assert!(!prompt(&m, 2, &[]).contains("source_lines"));
+        let reply = r#"[{"kind":"true_false","prompt":"The diff adds a line.","answer":0,"source_path":"src/lib.rs","source_lines":[2,2],"excerpt":"+added line"}]"#;
+        let qs = parse(reply, &m, "m", 0, dir.path()).unwrap();
+        assert_eq!(qs[0].question.source_excerpt, "+added line");
+        assert_eq!(qs[0].question.source_lines, None);
+    }
+
+    #[test]
+    fn shuffling_is_stable_and_spreads_the_correct_answer() {
+        let options = || vec!["a".to_string(), "b".into(), "c".into(), "d".into()];
+        let (first, index) = shuffled(options(), 0, "prompt one");
+        assert_eq!(first[index], "a");
+        assert_eq!(shuffled(options(), 0, "prompt one"), (first, index));
+        // Across prompts the right answer doesn't sit in one slot.
+        let slots: std::collections::BTreeSet<usize> = (0..24)
+            .map(|i| shuffled(options(), 0, &format!("prompt {i}")).1)
+            .collect();
+        assert!(slots.len() >= 3, "{slots:?}");
+    }
+
+    #[test]
+    fn a_reply_cut_off_mid_array_keeps_the_whole_questions() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = material(dir.path());
+        let reply = r#"[{"kind":"true_false","prompt":"There are three lines.","answer":0,"source_path":"src/lib.rs","source_lines":[1,3]},
+ {"kind":"multiple_choice","prompt":"Which line is sec"#;
+        let qs = parse(reply, &m, "m", 0, dir.path()).unwrap();
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0].question.kind, "true_false");
+    }
+
+    #[test]
     fn an_unusable_reply_is_a_model_error() {
         let dir = tempfile::tempdir().unwrap();
         let m = material(dir.path());
-        assert!(matches!(
-            parse("no json here", &m, "m", 0, dir.path()),
-            Err(StudyError::Model { .. })
-        ));
+        let err = parse("I can't do that.", &m, "m", 0, dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("it began: I can't do that."),
+            "{err}"
+        );
+        let empty = parse("  ", &m, "m", 0, dir.path()).unwrap_err();
+        assert!(empty.to_string().contains("reply was empty"), "{empty}");
         assert!(matches!(
             parse("[]", &m, "m", 0, dir.path()),
             Err(StudyError::Model { .. })

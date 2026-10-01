@@ -644,7 +644,8 @@ async fn study_round_trip_over_http() {
     let result: Value = client()
         .post(format!("{base}/v1/sessions/{session}/study/answer"))
         .bearer_auth(TOKEN)
-        .json(&json!({"question_id": question["id"], "answer": "0"}))
+        // Options are shuffled server-side; answering by text is accepted too.
+        .json(&json!({"question_id": question["id"], "answer": "a+b"}))
         .send()
         .await
         .unwrap()

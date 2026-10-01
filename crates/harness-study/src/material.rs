@@ -30,6 +30,10 @@ pub struct Material {
     pub files: Vec<String>,
     /// The labelled excerpts.
     pub text: String,
+    /// Whether the excerpts are whole-file heads, so a line number in them is
+    /// a line number in the file. A diff's are not: its hints must quote the
+    /// material rather than be read back from disk by line.
+    pub numbered: bool,
 }
 
 /// Excerpts from a territory's files. `seed` rotates which files are read
@@ -81,6 +85,7 @@ pub fn for_territory(
         ),
         files: used,
         text,
+        numbered: true,
     })
 }
 
@@ -108,6 +113,7 @@ pub fn for_files(
         framing: framing.to_string(),
         files: used,
         text,
+        numbered: true,
     })
 }
 
@@ -154,6 +160,7 @@ pub fn fresh_tracks(
         framing: framing.to_string(),
         files,
         text: truncate(&text, MATERIAL_CHARS),
+        numbered: false,
     }))
 }
 

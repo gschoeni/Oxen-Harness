@@ -435,7 +435,7 @@ mod tests {
             .answer(
                 &StudyAnswerRequest {
                     question_id: choice.id.clone(),
-                    answer: "0".into(),
+                    answer: "a+b".into(),
                     hint_used: false,
                 },
                 &model,

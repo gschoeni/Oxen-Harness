@@ -874,7 +874,7 @@ impl Agent {
     /// theme from a natural-language description, reusing the session's model
     /// and endpoint.
     pub async fn complete(&self, system: &str, user: &str) -> Result<String, AgentError> {
-        self.complete_as(system, user, "oneshot")
+        self.one_shot(system, user, "oneshot", None)
             .await
             .map(|(text, _)| text)
     }
@@ -883,17 +883,40 @@ impl Agent {
     /// caller, so a feature's spend (the study game's question writing, say)
     /// can be told apart from other one-shot work in the same session. Also
     /// returns the tokens (prompt + completion) the call cost.
+    ///
+    /// Unlike `complete`, the request carries an explicit reply ceiling (the
+    /// config's response reserve): a structured reply cut off at a provider's
+    /// small default is worse than useless to the caller parsing it.
     pub async fn complete_as(
         &self,
         system: &str,
         user: &str,
         kind: &str,
     ) -> Result<(String, usize), AgentError> {
+        self.one_shot(
+            system,
+            user,
+            kind,
+            Some(self.config.effective_response_reserve()),
+        )
+        .await
+    }
+
+    async fn one_shot(
+        &self,
+        system: &str,
+        user: &str,
+        kind: &str,
+        max_tokens: Option<usize>,
+    ) -> Result<(String, usize), AgentError> {
         let messages = vec![
             ChatMessage::system(system.to_string()),
             ChatMessage::user(user.to_string()),
         ];
-        let request = ChatRequest::new(&self.config.model, messages).streaming(true);
+        let mut request = ChatRequest::new(&self.config.model, messages).streaming(true);
+        if let Some(max_tokens) = max_tokens {
+            request = request.max_tokens(max_tokens);
+        }
         // A one-shot side task, not the cancellable turn loop: run it to completion.
         let _slot = self.tree_call_slot(&CancellationToken::new()).await?;
         let started = std::time::Instant::now();

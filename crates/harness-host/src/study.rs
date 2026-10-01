@@ -15,6 +15,9 @@ use harness_study::{BatchContext, Completer, Completion, StudyError, StudyServic
 
 use crate::SessionService;
 
+/// The reply ceiling for a study completion.
+const STUDY_REPLY_TOKENS: usize = 8_192;
+
 /// The usage ledger's call kind for study spend.
 const USAGE_KIND: &str = "study";
 
@@ -103,6 +106,9 @@ impl SessionService {
             // Catalog limits are per model; a study model that isn't the
             // session's must not inherit the session's.
             max_output_tokens: harness_local::limits::max_output_tokens(&model),
+            // A batch of questions is ~1.5k tokens of JSON; the headroom is
+            // for models that think before they answer.
+            response_reserve: STUDY_REPLY_TOKENS,
             model,
             system_prompt: None,
             error_log: harness_config::paths::errors_log().ok(),
