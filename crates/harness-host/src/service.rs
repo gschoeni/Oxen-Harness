@@ -1350,7 +1350,7 @@ impl SessionService {
     /// Report the current session info, initializing the agent if needed.
     /// A chat mid-turn holds its agent lock for the whole turn, so this
     /// never waits on it: the vitals fall back to what the store knows (see
-    /// [`Self::mid_turn_info`]) rather than stalling a client's boot behind
+    /// `Self::mid_turn_info`) rather than stalling a client's boot behind
     /// a turn that may be parked on the user.
     pub async fn session_info(&self) -> Result<SessionInfo, String> {
         let arc = self.current_agent().await?;

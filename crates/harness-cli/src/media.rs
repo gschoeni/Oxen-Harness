@@ -29,7 +29,7 @@ static STAGED: Mutex<Vec<Staged>> = Mutex::new(Vec::new());
 
 /// The same chips as the generation tools see them: every label handed out
 /// here is mirrored into this registry, so `generate_image` can resolve
-/// "[Image #2]" to the file the user dropped. Process-wide, like [`STAGED`]
+/// `[Image #2]` to the file the user dropped. Process-wide, like [`STAGED`]
 /// — the CLI runs one session.
 static REFS: OnceLock<Arc<harness_media::MediaRefs>> = OnceLock::new();
 

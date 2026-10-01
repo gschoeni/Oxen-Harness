@@ -310,7 +310,7 @@ impl AgentConfig {
     ///   (see [`crate::prompt::subagent_appendix`]);
     /// - stale tool output is compressed out of its requests unless the
     ///   parent switched compression off entirely, and its resident context
-    ///   is capped at [`LANE_RESIDENT_CHARS`]: a lane reads page after page
+    ///   is capped at `LANE_RESIDENT_CHARS`: a lane reads page after page
     ///   and re-sends every one on every round, which is where a fleet's
     ///   tokens went before either;
     /// - it sits one level deeper in the tree and shares the tree budget.

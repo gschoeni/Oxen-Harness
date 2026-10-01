@@ -602,7 +602,7 @@ impl Agent {
     /// Set (or clear) whether the model accepts image input, after a live
     /// model swap — pairs with [`Agent::set_model`] like the other limit
     /// setters. `Some(false)` keeps pictures out of every request from now
-    /// on (see [`Agent::outbound_messages`]); the transcript itself keeps
+    /// on (see `Agent::outbound_messages`); the transcript itself keeps
     /// them, so switching back to a multimodal model restores its sight.
     pub fn set_accepts_images(&mut self, accepts: Option<bool>) {
         self.config.accepts_images = accepts;

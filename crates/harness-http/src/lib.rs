@@ -149,7 +149,7 @@ impl Backoff {
     }
 
     /// The actual wait to sleep after the `attempt`-th failure: a computed
-    /// delay is [`jittered`] so concurrent retriers don't wake in lockstep,
+    /// delay is `jittered` so concurrent retriers don't wake in lockstep,
     /// while a server's hint is obeyed exactly — shortening it would only
     /// re-send before the server said it may. `None` means stop retrying,
     /// as for [`Backoff::delay_for`].

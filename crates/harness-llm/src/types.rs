@@ -351,7 +351,7 @@ impl ChatRequest {
     /// The JSON body actually sent on the wire, as bytes: the serialized
     /// request, plus `cache_control` markers applied to each anchored message.
     ///
-    /// The markers are applied *during* serialization (see [`WireRequest`]),
+    /// The markers are applied *during* serialization (see `WireRequest`),
     /// so a request is written straight from the typed structs to the output
     /// buffer — no intermediate `serde_json::Value` tree of the whole
     /// transcript (which costs 2–4× the JSON text, per call, on top of the

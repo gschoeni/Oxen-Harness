@@ -365,6 +365,9 @@ fn describe_model(model: &MediaModel) -> String {
 // ---- generate_image / generate_video ---------------------------------------
 
 /// Arguments to `generate_image`.
+// Field docs are the schema text the model reads, so the `[Image #N]` chip
+// labels stay verbatim rather than being escaped for rustdoc.
+#[allow(rustdoc::broken_intra_doc_links)]
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct GenerateImageArgs {
     /// What to generate, written for an image model: subject, style,
@@ -402,6 +405,9 @@ pub struct GenerateImageArgs {
 }
 
 /// Arguments to `generate_video`.
+// Field docs are the schema text the model reads, so the `[Image #N]` chip
+// labels stay verbatim rather than being escaped for rustdoc.
+#[allow(rustdoc::broken_intra_doc_links)]
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct GenerateVideoArgs {
     /// What happens in the clip, written for a video model: subject,
