@@ -31,7 +31,7 @@ pub enum PermissionMode {
     #[default]
     Relaxed,
     /// Only recognizably read-only commands run unprompted; file writes/edits
-    /// and `git commit` prompt too.
+    /// prompt too.
     Cautious,
     /// Nothing prompts — except circuit breakers, which fire in every mode.
     Bypass,

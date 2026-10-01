@@ -336,9 +336,7 @@ pub fn approval_kind(kind: harness_permissions::ApprovalKind) -> harness_protoco
     match kind {
         harness_permissions::ApprovalKind::Shell => harness_protocol::ApprovalKind::Shell,
         harness_permissions::ApprovalKind::FileEdit => harness_protocol::ApprovalKind::FileEdit,
-        harness_permissions::ApprovalKind::GitCommit => harness_protocol::ApprovalKind::GitCommit,
         harness_permissions::ApprovalKind::TaskKill => harness_protocol::ApprovalKind::TaskKill,
-        harness_permissions::ApprovalKind::Ship => harness_protocol::ApprovalKind::Ship,
     }
 }
 

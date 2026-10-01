@@ -238,7 +238,7 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
          project directory. Available tools: `find_files` (locate files by glob), \
          `search_files` (regex content search), `read_file` (line-numbered, supports \
          offset/limit), `write_file`, `edit_file` (exact-string patch), `run_shell`, \
-         `git`, `update_plan` (maintain a task checklist), \
+         `update_plan` (maintain a task checklist), \
          `ask_user_question` (interview the user){web_tool}{canvas_tool}{open_file_tool}{agents_tool}{media_tool}.\n\n\
          Guidelines:\n\
          - Prefer the dedicated tools over shell equivalents: use `find_files` not \
@@ -477,7 +477,7 @@ pub fn background_task_delivery(
 /// unresolved options.
 pub const PLAN_MODE_ENTER: &str = "\
 <plan-mode>
-Plan mode is on. The working tree is read-only: file writes and edits, git operations that change anything, background-task kills, any shell command that is not provably read-only, and any other tool that is not read-only (custom tools, dev servers) will all be refused until the user leaves plan mode. Do not test the limits, and do not ask to have them lifted.
+Plan mode is on. The working tree is read-only: file writes and edits, background-task kills, any shell command that is not provably read-only, and any other tool that is not read-only (custom tools, dev servers) will all be refused until the user leaves plan mode. Do not test the limits, and do not ask to have them lifted.
 
 Do this instead:
 

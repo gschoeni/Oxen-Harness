@@ -33,9 +33,11 @@ pub enum ApprovalPhase {
 pub enum ApprovalKind {
     Shell,
     FileEdit,
-    GitCommit,
     TaskKill,
-    /// Publishing to the remote: a git push or a PR creation.
+    /// Never sent now that commits and pushes are `run_shell` commands (they
+    /// ask as [`Self::Shell`]); kept, with [`Self::Ship`], so clients that
+    /// match on the full set still parse.
+    GitCommit,
     Ship,
 }
 

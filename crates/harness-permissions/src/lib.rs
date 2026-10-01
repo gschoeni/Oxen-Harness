@@ -65,13 +65,8 @@ struct SessionGrants {
     prefixes: Vec<String>,
     /// Cautious mode: file writes/edits approved for the session.
     edits: bool,
-    /// Cautious mode: git commits approved for the session.
-    commits: bool,
     /// Cautious mode: background-task kills approved for the session.
     kills: bool,
-    /// Cautious mode: publishing to the remote (git push) approved for the
-    /// session.
-    ships: bool,
 }
 
 /// The gate's verdict before any user interaction.
@@ -115,10 +110,6 @@ pub enum ToolEffect {
     /// Writes, runs a process, or has effects the harness can't see.
     Mutating,
 }
-
-/// The `git` tool operations that only read the repository, so they run
-/// while plan mode holds the tree read-only and never ask in cautious mode.
-const GIT_READ_ONLY_OPS: &[&str] = &["status", "diff", "log"];
 
 /// Shell rc files a tool must never write: they execute on the user's next
 /// shell start, making them a self-privilege-escalation vector.
@@ -262,7 +253,6 @@ impl PermissionGate {
         match tool {
             "run_shell" => self.review_shell(args),
             "write_file" | "edit_file" => self.review_file_edit(tool, args),
-            "git" => self.review_git(args),
             "kill_task" => self.review_kill_task(args),
             _ => GateReview::Allow,
         }
@@ -299,10 +289,6 @@ impl PermissionGate {
                 }
                 format!("writing {path}")
             }
-            "git" => match args.get("operation").and_then(|o| o.as_str())? {
-                op if GIT_READ_ONLY_OPS.contains(&op) => return None,
-                op => format!("git {op}"),
-            },
             "kill_task" => "terminating a background task".to_string(),
             "run_shell" => {
                 let command = args.get("command").and_then(|c| c.as_str())?;
@@ -470,63 +456,9 @@ impl PermissionGate {
         }))
     }
 
-    /// The `git` tool's operations are a fixed allow-list, so the gate matches
-    /// on the operation name: reads flow, commits ask in cautious mode, and
-    /// everything else — `push` today, any operation added later — is treated
-    /// as publishing. Fail closed: a new git operation must be classified here
-    /// before it runs unprompted in cautious mode.
-    fn review_git(&self, args: &serde_json::Value) -> GateReview {
-        match args.get("operation").and_then(|o| o.as_str()) {
-            // Malformed arguments: let the tool's own parsing produce the error.
-            None => GateReview::Allow,
-            Some(op) if GIT_READ_ONLY_OPS.contains(&op) => GateReview::Allow,
-            Some("commit") => {
-                let policy = self.policy.read().expect("policy poisoned").clone();
-                let approved = self.grants.read().expect("grants poisoned").commits;
-                if policy.mode != PermissionMode::Cautious || approved {
-                    return GateReview::Allow;
-                }
-                let message = args.get("message").and_then(|m| m.as_str()).unwrap_or("");
-                GateReview::Ask(Box::new(ApprovalRequest {
-                    kind: ApprovalKind::GitCommit,
-                    tool: "git".to_string(),
-                    command: format!("git commit — {message}"),
-                    risk: Risk::Unknown,
-                    reasons: Vec::new(),
-                    grant_label: "all git commits".to_string(),
-                    offer_project_grant: false,
-                    offer_trash: false,
-                }))
-            }
-            Some(_) => self.review_ship("git", "git push -u origin HEAD".to_string()),
-        }
-    }
-
-    /// Publishing work to the remote (a push) mirrors how the classifier
-    /// treats `run_shell git push`: [`Risk::Unknown`], so it asks in cautious
-    /// mode and flows in relaxed/bypass, and one session grant covers the
-    /// pushes that follow.
-    fn review_ship(&self, tool: &str, command: String) -> GateReview {
-        let policy = self.policy.read().expect("policy poisoned").clone();
-        let approved = self.grants.read().expect("grants poisoned").ships;
-        if policy.mode != PermissionMode::Cautious || approved {
-            return GateReview::Allow;
-        }
-        GateReview::Ask(Box::new(ApprovalRequest {
-            kind: ApprovalKind::Ship,
-            tool: tool.to_string(),
-            command,
-            risk: Risk::Unknown,
-            reasons: Vec::new(),
-            grant_label: "all git pushes".to_string(),
-            offer_project_grant: false,
-            offer_trash: false,
-        }))
-    }
-
     /// Terminating a background task kills a whole process group the model
     /// itself started (a dev server, a build). That's self-management, not an
-    /// arbitrary `kill -9` — so it's gated like file writes and git commits:
+    /// arbitrary `kill -9` — so it's gated like file writes:
     /// ask in cautious mode (with an "all task kills" session grant), allow
     /// in relaxed/bypass. Without this arm the tool name would slip past the
     /// classifier entirely while the equivalent `run_shell kill` asks.
@@ -723,9 +655,7 @@ impl PermissionGate {
                 }
             }
             ApprovalKind::FileEdit => grants.edits = true,
-            ApprovalKind::GitCommit => grants.commits = true,
             ApprovalKind::TaskKill => grants.kills = true,
-            ApprovalKind::Ship => grants.ships = true,
         }
     }
 
@@ -891,8 +821,8 @@ mod tests {
     /// mutating built-ins are exclusive, everything else is shared.
     fn effect_of(tool: &str) -> ToolEffect {
         match tool {
-            "run_shell" | "write_file" | "edit_file" | "git" | "kill_task"
-            | "ask_user_question" | "custom_post" => ToolEffect::Mutating,
+            "run_shell" | "write_file" | "edit_file" | "kill_task" | "ask_user_question"
+            | "custom_post" => ToolEffect::Mutating,
             _ => ToolEffect::ReadOnly,
         }
     }
@@ -1220,9 +1150,9 @@ mod tests {
         ));
         assert!(matches!(
             gate.review(
-                "git",
-                &serde_json::json!({"operation": "commit", "message": "wip"}),
-                effect_of("git")
+                "run_shell",
+                &shell_args("git commit -m wip"),
+                effect_of("run_shell")
             ),
             GateReview::Ask(_)
         ));
@@ -1239,11 +1169,10 @@ mod tests {
         std::env::remove_var("OXEN_HARNESS_DIR");
     }
 
-    /// Publishing (git push) must ask in cautious mode — the tool name must
-    /// not slip past the gate while `run_shell git push` would ask. Reads
-    /// still flow.
+    /// There is no `git` tool: commits and pushes go through `run_shell`, and
+    /// cautious mode must still ask for them while repository reads flow.
     #[tokio::test]
-    async fn cautious_mode_gates_pushes_behind_one_ship_grant() {
+    async fn cautious_mode_asks_before_shell_commits_and_pushes() {
         let _env = testutil::env_guard();
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("OXEN_HARNESS_DIR", home.path());
@@ -1261,82 +1190,59 @@ mod tests {
             ws.path(),
             Arc::new(Scripted(Some(ApprovalDecision::AllowSession))),
         );
+        let review =
+            |command: &str| gate.review("run_shell", &shell_args(command), effect_of("run_shell"));
 
-        // Reads flow without asking.
-        for (tool, op) in [("git", "status"), ("git", "diff"), ("git", "log")] {
+        for command in ["git status", "git diff HEAD", "git log --oneline -5"] {
             assert!(
-                matches!(
-                    gate.review(tool, &serde_json::json!({"operation": op}), effect_of(tool)),
-                    GateReview::Allow
-                ),
-                "{tool} {op} should flow"
+                matches!(review(command), GateReview::Allow),
+                "`{command}` should flow"
             );
         }
-        // Publishing asks…
-        let GateReview::Ask(request) = gate.review(
-            "git",
-            &serde_json::json!({"operation": "push"}),
-            effect_of("git"),
-        ) else {
+        for command in [
+            "git add -A && git commit -m 'wip'",
+            "git commit --amend --no-edit",
+            "git rebase main",
+        ] {
+            assert!(
+                matches!(review(command), GateReview::Ask(_)),
+                "`{command}` should ask"
+            );
+        }
+        let GateReview::Ask(request) = review("git push -u origin HEAD") else {
             panic!("expected git push to ask in cautious mode");
         };
-        assert_eq!(request.kind, ApprovalKind::Ship);
-        // …and one session grant covers the pushes that follow.
+        assert_eq!(request.kind, ApprovalKind::Shell);
+        // One session grant covers the pushes that follow, not other git writes.
         let (outcome, _) = gate.resolve(*request).await;
         assert!(matches!(outcome, GateOutcome::Allow));
-        assert!(matches!(
-            gate.review(
-                "git",
-                &serde_json::json!({"operation": "push"}),
-                effect_of("git")
-            ),
-            GateReview::Allow
-        ));
+        assert!(matches!(review("git push origin main"), GateReview::Allow));
+        assert!(matches!(review("git commit -m more"), GateReview::Ask(_)));
         std::env::remove_var("OXEN_HARNESS_DIR");
     }
 
-    /// Fail closed: an operation the gate doesn't recognize (added to a tool
-    /// later, never classified here) is treated as publishing, not waved past.
+    /// Relaxed mode lets a plain commit or push through (both are
+    /// Risk::Unknown, below relaxed's bar); a force-push still asks.
     #[test]
-    fn unrecognized_git_operations_ask_in_cautious_mode() {
-        let _env = testutil::env_guard();
-        let home = tempfile::tempdir().unwrap();
-        std::env::set_var("OXEN_HARNESS_DIR", home.path());
-        let ws = tempfile::tempdir().unwrap();
-        harness_config::io::write_versioned(
-            &policy::project_permissions_file(ws.path()),
-            SCHEMA_VERSION,
-            &PermissionsConfig {
-                mode: Some(PermissionMode::Cautious),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let gate = PermissionGate::new(ws.path(), Arc::new(Scripted(None)));
-        assert!(matches!(
-            gate.review(
-                "git",
-                &serde_json::json!({"operation": "rebase"}),
-                effect_of("git")
-            ),
-            GateReview::Ask(_)
-        ));
-        std::env::remove_var("OXEN_HARNESS_DIR");
-    }
-
-    /// Relaxed mode matches `run_shell git push` parity: publishing flows
-    /// without asking (plain push is Risk::Unknown, below relaxed's bar).
-    #[test]
-    fn relaxed_mode_allows_pushes_without_asking() {
+    fn relaxed_mode_allows_shell_commits_and_pushes_without_asking() {
         let _env = testutil::env_guard();
         let (_home, _ws, gate) = gate(None);
+        for command in ["git commit -m wip", "git push origin main"] {
+            assert!(
+                matches!(
+                    gate.review("run_shell", &shell_args(command), effect_of("run_shell")),
+                    GateReview::Allow
+                ),
+                "`{command}` should flow in relaxed mode"
+            );
+        }
         assert!(matches!(
             gate.review(
-                "git",
-                &serde_json::json!({"operation": "push"}),
-                effect_of("git")
+                "run_shell",
+                &shell_args("git push --force origin main"),
+                effect_of("run_shell")
             ),
-            GateReview::Allow
+            GateReview::Ask(_)
         ));
     }
 
@@ -1390,28 +1296,6 @@ mod tests {
             );
         }
 
-        // git: reads flow, everything else is refused.
-        for op in ["status", "diff", "log"] {
-            assert!(matches!(
-                gate.review(
-                    "git",
-                    &serde_json::json!({ "operation": op }),
-                    effect_of("git")
-                ),
-                GateReview::Allow
-            ));
-        }
-        for op in ["commit", "push", "rebase"] {
-            denied(
-                gate.review(
-                    "git",
-                    &serde_json::json!({ "operation": op }),
-                    effect_of("git"),
-                ),
-                op,
-            );
-        }
-
         // Background-task kills are process control, not research.
         denied(
             gate.review(
@@ -1432,7 +1316,13 @@ mod tests {
                 "`{command}` is read-only and should run while planning"
             );
         }
-        for command in ["cargo build", "rm -rf ./build", "echo hi > out.txt"] {
+        for command in [
+            "cargo build",
+            "rm -rf ./build",
+            "echo hi > out.txt",
+            "git commit -m wip",
+            "git push origin main",
+        ] {
             denied(
                 gate.review("run_shell", &shell_args(command), effect_of("run_shell")),
                 command,
@@ -1484,10 +1374,6 @@ mod tests {
                 &serde_json::json!({ "no": "path" }),
                 effect_of("write_file")
             ),
-            GateReview::Allow
-        ));
-        assert!(matches!(
-            gate.review("git", &serde_json::json!({}), effect_of("git")),
             GateReview::Allow
         ));
         // An ungated read-only tool is unaffected.

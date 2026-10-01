@@ -107,10 +107,6 @@ pub(crate) fn oregon_trail() -> Theme {
         lines(&["Yoking the oxen", "Setting the wagon in motion"]),
     );
     tool_verbs.insert(
-        s("git"),
-        lines(&["Caulking the wagon", "Fording the river"]),
-    );
-    tool_verbs.insert(
         s("web_search"),
         lines(&["Wiring the telegraph", "Asking at the telegraph office"]),
     );
@@ -346,7 +342,6 @@ fn midnight() -> Theme {
         ("find_files", &["Searching", "Globbing"]),
         ("search_files", &["Grepping", "Scanning"]),
         ("run_shell", &["Running", "Executing"]),
-        ("git", &["Working with git"]),
         ("web_search", &["Searching the web"]),
         ("ask_user_question", &["Checking in with you"]),
         ("default", &["Working"]),
@@ -435,7 +430,6 @@ fn synthwave() -> Theme {
         ("find_files", &["Scanning the grid", "Sweeping the radar"]),
         ("search_files", &["Hunting the signal", "Tracing the beat"]),
         ("run_shell", &["Hitting the gas", "Engaging turbo"]),
-        ("git", &["Syncing the mainframe"]),
         ("web_search", &["Dialing the modem", "Pinging the net"]),
         ("ask_user_question", &["Hailing the driver"]),
         ("default", &["Cruising"]),
@@ -532,7 +526,6 @@ fn new_york_times() -> Theme {
         ),
         ("search_files", &["Chasing the lead", "Working the beat"]),
         ("run_shell", &["Running the presses", "Going to press"]),
-        ("git", &["Putting the edition to bed"]),
         (
             "web_search",
             &["Calling the newsroom", "Working the sources"],
@@ -623,7 +616,6 @@ fn cupertino() -> Theme {
         ("find_files", &["Finding files"]),
         ("search_files", &["Searching"]),
         ("run_shell", &["Running"]),
-        ("git", &["Working with git"]),
         ("web_search", &["Searching the web"]),
         ("ask_user_question", &["Checking in"]),
         ("default", &["Working"]),

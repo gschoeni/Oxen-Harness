@@ -22,14 +22,9 @@ pub enum ApprovalKind {
     Shell,
     /// A `write_file`/`edit_file` call (cautious mode).
     FileEdit,
-    /// A `git` tool commit (cautious mode).
-    GitCommit,
     /// A `kill_task` call terminating a background task's process group
     /// (cautious mode) — gated like the equivalent `run_shell` kill would be.
     TaskKill,
-    /// Publishing work to the remote: a `git` tool push (cautious mode) —
-    /// gated like the equivalent `run_shell` `git push` would be.
-    Ship,
 }
 
 /// Everything a host needs to render one approval prompt.

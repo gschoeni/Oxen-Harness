@@ -5,7 +5,7 @@
 //! a [`ToolRegistry`] for dispatching model tool calls by name, and the
 //! concrete tools the agent uses: file read/write/edit, glob file discovery,
 //! and regex content search ([`fs`]), sandboxed shell execution ([`shell`]),
-//! git operations ([`git`]), Brave-backed web search ([`web`]), the task
+//! Brave-backed web search ([`web`]), the task
 //! checklist ([`plan`]), asking the user structured multiple-choice questions
 //! ([`ask`]), side-panel documents ([`canvas`]), and opening project files in
 //! the user's viewer ([`viewer`]). All file access is confined to a
@@ -34,7 +34,6 @@ use serde::{Deserialize, Serialize};
 pub mod ask;
 pub mod canvas;
 pub mod fs;
-pub mod git;
 mod http_body;
 pub mod path_lock;
 pub mod plan;
@@ -56,7 +55,6 @@ pub use fs::{
     FileState, Freshness, PathRule, EDIT_FILE_TOOL, FIND_FILES_TOOL, READ_FILE_TOOL,
     SEARCH_FILES_TOOL, WRITE_FILE_TOOL,
 };
-pub use git::GIT_TOOL;
 pub use plan::{parse_plan_arguments, plan_is_open, PlanItem, PlanStatus, PlanTool, PLAN_TOOL};
 pub use retrieve::{RetrieveOriginalTool, RETRIEVE_ORIGINAL_TOOL};
 pub use sandbox::Workspace;
@@ -680,7 +678,6 @@ impl ToolRegistry {
         );
         replace(&mut tools, fs::FindFilesTool::new(workspace.clone()));
         replace(&mut tools, fs::SearchTool::new(workspace.clone()));
-        replace(&mut tools, git::GitTool::new(workspace.clone()));
         let shell =
             shell::ShellTool::with_tasks(workspace, tasks.clone()).intercepting_for(tools.roster());
         replace(&mut tools, shell.with_steer(signal.clone()));
@@ -881,7 +878,7 @@ impl ToolRegistry {
     }
 
     /// Construct the default tool set rooted at a workspace: fs read/write/edit,
-    /// find (glob), search (grep), shell, git, and web search (which prompts for
+    /// find (glob), search (grep), shell, and web search (which prompts for
     /// a Brave API key on first use if none is configured).
     pub fn default_for_workspace(workspace: Workspace) -> Self {
         Self::default_for_workspace_with_web_key(workspace, None)
@@ -917,7 +914,6 @@ impl ToolRegistry {
             ))
             .with_typed(fs::FindFilesTool::new(workspace.clone()))
             .with_typed(fs::SearchTool::new(workspace.clone()))
-            .with_typed(git::GitTool::new(workspace.clone()))
             // Planning/checklist tool — always available so any host gets it.
             .with_typed(plan::PlanTool::new())
             // Fetch a web page into context (no key needed); pairs with the
@@ -1185,7 +1181,6 @@ mod tests {
             vec![
                 fs::EDIT_FILE_TOOL,
                 fs::FIND_FILES_TOOL,
-                git::GIT_TOOL,
                 tasks::KILL_TASK_TOOL,
                 fs::READ_FILE_TOOL,
                 retrieve::RETRIEVE_ORIGINAL_TOOL,

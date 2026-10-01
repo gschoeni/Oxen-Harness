@@ -199,7 +199,6 @@ async fn research_lane_reads_but_rejects_mutation_calls_including_followups() {
         "write_file",
         "edit_file",
         "run_shell",
-        "git",
         "spawn_agents",
         "send_to_agent",
         "generate_image",

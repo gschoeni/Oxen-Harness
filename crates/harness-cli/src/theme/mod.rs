@@ -423,7 +423,6 @@ mod tests {
             "find_files",
             "search_files",
             "run_shell",
-            "git",
             "web_search",
             "ask_user_question",
             "wat",

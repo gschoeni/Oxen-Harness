@@ -1,7 +1,7 @@
 //! Per-tool preferences, shared by the CLI and desktop app.
 //!
 //! The agent ships a fixed set of built-in tools (file read/write/edit, search,
-//! shell, git, web search, planning). This module lets the user turn individual
+//! shell, web search, planning). This module lets the user turn individual
 //! tools off and override the description the model sees for a tool, persisted to
 //! `~/.oxen-harness/tools.json` (versioned, safe to share — no secrets).
 //!

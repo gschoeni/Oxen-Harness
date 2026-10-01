@@ -105,9 +105,7 @@ fn question_text(request: &ApprovalRequest) -> String {
     let action = match request.kind {
         ApprovalKind::Shell => "The agent wants to run:",
         ApprovalKind::FileEdit => "The agent wants to write:",
-        ApprovalKind::GitCommit => "The agent wants to commit:",
         ApprovalKind::TaskKill => "The agent wants to kill a background task:",
-        ApprovalKind::Ship => "The agent wants to publish to the remote:",
     };
     let mut text = format!("{action}\n\n{}\n", command_block(&request.command));
     if !request.reasons.is_empty() {
