@@ -69,7 +69,8 @@ describe("Chat", () => {
     const box = screen.getByPlaceholderText(/ask the agent/i);
     await userEvent.type(box, "/");
     expect(screen.getByRole("listbox", { name: "Slash commands" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /\/loop/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/queue/i })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /\/loop/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /\/exit/i })).not.toBeInTheDocument();
   });
 
@@ -85,15 +86,6 @@ describe("Chat", () => {
     await userEvent.type(box, "/frobnicate this");
     await userEvent.keyboard("{Enter}");
     expect(ipc.runTurn).toHaveBeenCalledWith("s1", "/frobnicate this", []);
-  });
-
-  it("runs a saved loop through the desktop loop bridge", async () => {
-    render(<Chat />);
-    const box = screen.getByPlaceholderText(/ask the agent/i);
-    await userEvent.type(box, "/loop run green-tests");
-    await userEvent.keyboard("{Enter}");
-    await waitFor(() => expect(ipc.runLoop).toHaveBeenCalledWith("s1", "green-tests", undefined));
-    expect(ipc.runTurn).not.toHaveBeenCalled();
   });
 
   it("shows the empty state with the hero game attract screen and example prompts", () => {

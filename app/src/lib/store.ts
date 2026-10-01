@@ -29,7 +29,6 @@ import {
   resumeSession,
   runCodeReview as runCodeReviewIpc,
   runTurn,
-  runLoop,
   retryTurn,
   deliverPending,
   cancelAgent,
@@ -289,7 +288,7 @@ const MAX_QUEUE = 50;
 const MAX_CANVASES = 12;
 const MAX_CACHED_THREADS = 4;
 /** How many *running* background sessions keep their thread resident beyond
- *  the cache cap. A fleet or loop can have dozens of chats streaming at once,
+ *  the cache cap. A fleet can have dozens of chats streaming at once,
  *  and every resident thread is up to 300 items with 16 KB tool args each —
  *  so only the most recently active few stay; the rest keep running headless
  *  (their transcript persists on the backend) and rebuild their thread from
@@ -730,8 +729,6 @@ interface AppState {
    *  changes, or PR-style against `baseBranch`). The findings land in the thread
    *  as a settled exchange, so a follow-up "fix 1 and 3" just works. */
   startCodeReview: (baseBranch?: string) => void;
-  /** Run a saved loop, or an ad-hoc goal, in the current chat. */
-  startLoop: (name?: string, goal?: string) => void;
   /** Add local command output to the current thread. */
   addNotice: (text: string) => void;
   /** Advance a session's review progress card to the next pipeline step. */
@@ -1859,42 +1856,6 @@ export const useStore = create<AppState>((rawSet, get) => {
             settleRunStatus(id);
             void refreshThreadsAfterSeen(id);
           }
-        });
-    },
-
-    startLoop: (name, goal) => {
-      const id = get().session?.session_id;
-      if (!id || get().runStatus[id] === "running") return;
-      const label = goal ? `/loop goal ${goal}` : `/loop run ${name ?? "default"}`;
-      set((s) => ({
-        runStatus: { ...s.runStatus, [id]: "running" },
-        threads: { ...s.threads, [id]: startTurn(s.threads[id] ?? [], label, []) },
-      }));
-      runLoop(id, name, goal)
-        .then((result) =>
-          set((s) => ({
-            threads: {
-              ...s.threads,
-              [id]: finalizeAssistant(s.threads[id] ?? [], result.summary),
-            },
-          })),
-        )
-        .catch((error) =>
-          set((s) => ({
-            threads: {
-              ...s.threads,
-              [id]: finalizeAssistant(s.threads[id] ?? [], `Loop failed: ${String(error)}`),
-            },
-          })),
-        )
-        .finally(() => {
-          set((s) => {
-            const runStatus = { ...s.runStatus };
-            delete runStatus[id];
-            return { runStatus };
-          });
-          get().refreshHistory();
-          get().refreshTotalTokens();
         });
     },
 

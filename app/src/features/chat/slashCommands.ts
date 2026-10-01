@@ -9,7 +9,6 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/model", description: "Pick or switch the model", usage: "/model [id]" },
   { name: "/theme", aliases: ["/themes"], description: "Change the theme", usage: "/theme [use <name>]" },
   { name: "/queue", description: "Show or manage queued messages", usage: "/queue [add|clear]" },
-  { name: "/loop", aliases: ["/loops"], description: "Run or manage verification loops", usage: "/loop [list|show|new|run|goal|import|export|rm]" },
   { name: "/code-review", aliases: ["/review"], description: "Review uncommitted changes or compare a branch", usage: "/code-review [base-branch]" },
   { name: "/export", description: "Export this transcript as JSONL", usage: "/export [path]" },
   { name: "/skills", aliases: ["/skill"], description: "Open the discovered skills" },

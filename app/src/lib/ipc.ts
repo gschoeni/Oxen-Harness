@@ -89,9 +89,6 @@ import type {
   FleetBudgetEvent,
   FleetAgentEvent,
   FleetStartedEvent,
-  LoopRunResult,
-  LoopSpec,
-  LoopSummary,
   PreviewBounds,
   PreviewConsoleEvent,
   PreviewEvent,
@@ -388,29 +385,8 @@ export const cancelFleet = (session: string, fleet: string) =>
 export const cancelAgent = (session: string, lane: string) =>
   invoke<boolean>("cancel_agent", { session, lane });
 
-// ---- verification loops ---------------------------------------------------
-
-export const listLoops = () => invoke<LoopSummary[]>("list_loops");
-export const loopsPath = () => invoke<string>("loops_path");
-export const getLoop = (name: string) => invoke<LoopSpec>("get_loop", { name });
-export const saveLoop = (spec: LoopSpec) => invoke<void>("save_loop", { spec });
-export const importLoop = (path: string) => invoke<LoopSpec>("import_loop", { path });
-export const exportLoop = (name: string, path: string) => invoke<string>("export_loop", { name, path });
-export const removeLoop = (name: string) => invoke<void>("remove_loop", { name });
-export const runLoop = (session: string, name?: string, goal?: string) =>
-  invoke<LoopRunResult>("run_loop", { session, name, goal });
-
-export async function pickLoopImportPath(): Promise<string | null> {
-  const selected = await open({ multiple: false, filters: [{ name: "Loop", extensions: ["toml"] }] });
-  return typeof selected === "string" ? selected : null;
-}
-
 export const themeLocation = () => invoke<string | null>("theme_location");
 export const setThemeLocation = (location: string | null) => invoke<void>("set_theme_location", { location });
-
-export async function pickLoopExportPath(name: string): Promise<string | null> {
-  return (await save({ defaultPath: `${name}.toml`, filters: [{ name: "Loop", extensions: ["toml"] }] })) ?? null;
-}
 
 /** Retry a turn that failed before replying (e.g. a 401 before an API key was
  *  set), continuing the same conversation. The failed attempt's user message is

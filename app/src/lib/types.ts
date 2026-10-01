@@ -167,7 +167,7 @@ export interface ThreadEntry {
 export interface ThreadSnapshot {
   /** Every native thread, newest activity first. */
   entries: ThreadEntry[];
-  /** Session ids with work in flight (a turn, review, or loop) — from the
+  /** Session ids with work in flight (a turn or review) — from the
    *  host's authoritative registry, correct even after a UI restart. */
   running: string[];
 }
@@ -1179,35 +1179,6 @@ export interface PlanItem {
   /** Present-continuous form shown while active, e.g. "Wiring CLI rendering". */
   active_form: string;
   status: PlanStatus;
-}
-
-// ---- verification loops ---------------------------------------------------
-
-export interface LoopSummary {
-  name: string;
-  slug: string;
-  description: string;
-  verify: string;
-  builtin: boolean;
-  installed: boolean;
-}
-
-export interface LoopSpec {
-  schema_version: number;
-  name: string;
-  description: string;
-  goal: string;
-  success_criteria: string[];
-  verify?: { type: "command"; command: string; timeout_ms: number } | { type: "rubric"; threshold: number } | null;
-  gates: unknown[];
-  max_iterations: number;
-  token_budget?: number | null;
-}
-
-export interface LoopRunResult {
-  succeeded: boolean;
-  iterations: number;
-  summary: string;
 }
 
 // ---- workspace files (the Files tree + Editor/viewer dock) ------------------
