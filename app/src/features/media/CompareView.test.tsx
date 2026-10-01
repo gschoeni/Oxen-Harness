@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -134,7 +134,9 @@ describe("comparing in the gallery detail", () => {
     // Side B is drawn over A and clipped at the divider.
     const divider = screen.getByRole("slider", { name: "Comparison divider" });
     expect(divider).toHaveAttribute("aria-valuenow", "50");
-    const b = await screen.findByAltText("Side B: 0453-lantern-harbor-1.png");
+    // The clip is on side B's wrapper; the picture itself is never restyled.
+    const b = (await screen.findByAltText("Side B: 0453-lantern-harbor-1.png")).parentElement!;
+    expect(b).toHaveClass("compare-side", "b");
     expect(b).toHaveStyle({ clipPath: "inset(0 0 0 50%)" });
     divider.focus();
     await userEvent.keyboard("{ArrowRight}{ArrowRight}");
@@ -147,6 +149,55 @@ describe("comparing in the gallery detail", () => {
     expect(side("A")).toHaveAccessibleName("Side A: 0453-lantern-harbor-1.png");
     await userEvent.click(screen.getByRole("button", { name: /Stop comparing/ }));
     expect(container.querySelector(".gallery-detail-preview")).not.toBeNull();
+  });
+
+  it("holds its pictures still: resolved once, no reload on a swap, a pick, or a cache bust", async () => {
+    const { container } = await openDetail([item({ sources: [source(1), source(2)] })]);
+    await userEvent.click(screen.getByRole("button", { name: /Compare with input/ }));
+    const layer = (side: string) => container.querySelector<HTMLImageElement>(`.compare-side.${side} img`);
+    await waitFor(() => expect(layer("a") && layer("b")).toBeTruthy());
+    const [nodeA, nodeB] = [layer("a")!, layer("b")!];
+    const srcA = nodeA.src;
+    const srcB = nodeB.src;
+    await waitFor(() => expect(container.querySelectorAll("img.compare-thumb")).toHaveLength(3));
+    const resolved = ipc.fsAssetPath.mock.calls.length;
+
+    // Swapping reuses the two elements and the URLs already in hand: no
+    // unmount, no async gap in which a side is empty.
+    await userEvent.click(screen.getByRole("button", { name: "Swap sides" }));
+    expect(layer("a")).toBe(nodeA);
+    expect(layer("b")).toBe(nodeB);
+    expect(nodeA.src).toBe(srcB);
+    expect(nodeB.src).toBe(srcA);
+
+    // So does picking another reference.
+    await userEvent.click(screen.getByRole("radio", { name: /^Side B:/ }));
+    await userEvent.click(screen.getByRole("button", { name: /photo2\.png/ }));
+    expect(layer("b")).toBe(nodeB);
+    expect(nodeB.src).toContain("/w/generations/refs/ref2.png");
+
+    // A file landing in the output folder re-keys the gallery's URLs, but
+    // not the comparison that is on screen.
+    act(() => useStore.getState().ingestFsChange({ root: "/w", paths: ["generations/2026-10-01/new.png"] }));
+    await waitFor(() => expect(ipc.listMedia).toHaveBeenCalledTimes(2));
+    expect(nodeB.src).toContain("/w/generations/refs/ref2.png");
+    expect(nodeB.src).not.toContain("?v=");
+    expect(ipc.fsAssetPath.mock.calls.length).toBe(resolved);
+
+    // Dragging moves the clip and nothing else.
+    const stage = container.querySelector<HTMLElement>(".compare-stage")!;
+    stage.getBoundingClientRect = () => ({ left: 100, width: 400, top: 0, height: 225, right: 500, bottom: 225, x: 100, y: 0, toJSON: () => ({}) });
+    stage.setPointerCapture = () => {};
+    stage.hasPointerCapture = () => true;
+    // jsdom's PointerEvent carries no coordinates; a MouseEvent of the same type does.
+    const pointer = (type: string, clientX: number) =>
+      fireEvent(stage, new MouseEvent(type, { bubbles: true, button: 0, clientX }));
+    pointer("pointerdown", 200);
+    expect(screen.getByRole("slider")).toHaveAttribute("aria-valuenow", "25");
+    pointer("pointermove", 9999);
+    expect(screen.getByRole("slider")).toHaveAttribute("aria-valuenow", "100");
+    expect(layer("a")).toBe(nodeA);
+    expect(nodeA).not.toHaveAttribute("style");
   });
 
   it("picks a side, then the picture that goes on it", async () => {
@@ -203,7 +254,7 @@ describe("comparing in the gallery detail", () => {
       }),
     ]);
     await userEvent.click(screen.getByRole("button", { name: /Compare with input/ }));
-    const layer = (side: string) => container.querySelector<HTMLVideoElement>(`video.compare-layer.${side}`);
+    const layer = (side: string) => container.querySelector<HTMLVideoElement>(`.compare-side.${side} video`);
     await waitFor(() => expect(layer("a") && layer("b")).toBeTruthy());
     const a = layer("a")!;
     const b = layer("b")!;

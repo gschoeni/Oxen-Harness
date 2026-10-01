@@ -8,13 +8,28 @@
 // candidate wears the badge of the side it is on, the two sides can never
 // hold the same picture (picking the other side's swaps them), and ⇄ flips
 // them. Two videos play in step, so the divider compares the same moment.
+//
+// The frame is built to hold still, because any blink reads as "the two
+// pictures are flickering":
+// - Every candidate's URL is resolved once, up front, and pinned for the life
+//   of the comparison. Changing a side is then a plain `src` change (the old
+//   picture stays up until the new one is ready) instead of an async gap, and
+//   a file landing in the output folder mid-compare (the gallery's cache
+//   bust) does not reload what is on screen.
+// - The divider never restyles a picture. Each side is a wrapper; side B's
+//   wrapper is what gets clipped, and the pictures inside are composited
+//   layers decoded synchronously — a big PNG that WebKit re-decoded on every
+//   repaint would blank for a frame and show side A through it.
+// - The frame takes the output's shape, once. It does not follow whichever
+//   picture happens to be on side B.
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { ArrowLeftRight, Pause, Play } from "lucide-react";
 import { IconButton } from "../../components/ui";
 import { isImagePath, isVideoPath } from "../../lib/attachments";
 import type { MediaItem, MediaSource } from "../../lib/types";
-import { useAssetSrc } from "../files/useAssetSrc";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { fsAssetPath } from "../../lib/ipc";
 
 /** One thing that can sit on a side of the comparison. */
 export interface CompareOption {
@@ -58,6 +73,35 @@ export function compareOptions(item: MediaItem, inputs: MediaSource[]): CompareO
   return options;
 }
 
+/** Asset URLs for every candidate, resolved once through the same canonical
+ *  boundary check as `useAssetSrc` (a path outside the workspace yields
+ *  nothing) and never re-keyed while the comparison is open. */
+function useAssetSrcs(workspace: string, paths: string[], bust: number): Record<string, string> {
+  const [srcs, setSrcs] = useState<Record<string, string>>({});
+  // Pinned at mount: see the note on holding still, above.
+  const version = useRef(bust).current;
+  const key = paths.join("\n");
+  useEffect(() => {
+    let stale = false;
+    setSrcs({});
+    for (const path of key ? key.split("\n") : []) {
+      fsAssetPath(workspace, path)
+        .then((real) => {
+          if (stale) return;
+          const src = convertFileSrc(real) + (version ? `?v=${version}` : "");
+          setSrcs((prev) => (prev[path] === src ? prev : { ...prev, [path]: src }));
+        })
+        .catch(() => {
+          /* outside the boundary (or gone): that side stays empty */
+        });
+    }
+    return () => {
+      stale = true;
+    };
+  }, [workspace, key, version]);
+  return srcs;
+}
+
 /** How far an arrow key moves the divider, in percent. */
 const KEY_STEP = 2;
 /** How far two clips may drift apart before the follower is pulled back. */
@@ -76,12 +120,24 @@ export function CompareView({
   /** The output's width / height, when the manifest knows it. */
   aspect?: number;
 }) {
+  const srcs = useAssetSrcs(
+    workspace,
+    useMemo(() => options.map((o) => o.path), [options]),
+    bust,
+  );
   const [a, setA] = useState(options[0].path);
   const [b, setB] = useState(options[options.length - 1].path);
   const [filling, setFilling] = useState<Side>("a");
   const [split, setSplit] = useState(50);
   const [playing, setPlaying] = useState(true);
+  // The output's shape: from the manifest, else measured when it first loads.
   const [frame, setFrame] = useState(aspect);
+  const measure = (option: CompareOption) =>
+    option.output && frame === undefined
+      ? (w: number, h: number) => {
+          if (w > 0 && h > 0) setFrame(w / h);
+        }
+      : undefined;
   const stage = useRef<HTMLDivElement>(null);
   const videos = useRef<Partial<Record<Side, HTMLVideoElement | null>>>({});
 
@@ -106,7 +162,7 @@ export function CompareView({
   function moveTo(clientX: number) {
     const box = stage.current?.getBoundingClientRect();
     if (!box || box.width === 0) return;
-    setSplit(Math.round(Math.max(0, Math.min(100, ((clientX - box.left) / box.width) * 100))));
+    setSplit(Math.max(0, Math.min(100, ((clientX - box.left) / box.width) * 100)));
   }
 
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {
@@ -117,6 +173,10 @@ export function CompareView({
 
   function onPointerMove(e: PointerEvent<HTMLDivElement>) {
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) moveTo(e.clientX);
+  }
+
+  function onPointerEnd(e: PointerEvent<HTMLDivElement>) {
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture?.(e.pointerId);
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -135,7 +195,7 @@ export function CompareView({
     // gallery's previous/next.
     e.preventDefault();
     e.stopPropagation();
-    setSplit(Math.max(0, Math.min(100, next)));
+    setSplit(Math.max(0, Math.min(100, Math.round(next))));
   }
 
   useEffect(() => {
@@ -154,33 +214,38 @@ export function CompareView({
     if (Math.abs(follow.currentTime - lead.currentTime) > MAX_DRIFT_SECS) follow.currentTime = lead.currentTime;
   }
 
+  const shape = frame ?? 16 / 9;
   return (
     <div className="compare">
       <div
         ref={stage}
         className="compare-stage"
-        style={{ aspectRatio: frame ?? 16 / 9 }}
+        style={{ aspectRatio: shape, "--compare-aspect": shape } as CSSProperties}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
+        onPointerUp={onPointerEnd}
+        onPointerCancel={onPointerEnd}
       >
-        <Layer
-          side="a"
-          option={sideA}
-          workspace={workspace}
-          bust={bust}
-          videoRef={(el) => (videos.current.a = el)}
-        />
-        <Layer
-          side="b"
-          option={sideB}
-          workspace={workspace}
-          bust={bust}
-          clip={split}
-          videoRef={(el) => (videos.current.b = el)}
-          onTimeUpdate={keepInStep}
-          // The frame takes side B's shape (the output, unless they were swapped).
-          onSize={(w, h) => w > 0 && h > 0 && setFrame(w / h)}
-        />
+        <div className="compare-side a">
+          <Layer
+            side="a"
+            option={sideA}
+            src={srcs[sideA.path]}
+            videoRef={(el) => (videos.current.a = el)}
+            onSize={measure(sideA)}
+          />
+        </div>
+        {/* Drawn over A and clipped at the divider: B is what's right of it. */}
+        <div className="compare-side b" style={{ clipPath: `inset(0 0 0 ${split}%)` }}>
+          <Layer
+            side="b"
+            option={sideB}
+            src={srcs[sideB.path]}
+            videoRef={(el) => (videos.current.b = el)}
+            onTimeUpdate={keepInStep}
+            onSize={measure(sideB)}
+          />
+        </div>
         <span className="compare-tag a" title={sideA.title}>
           <b>A</b> {sideA.title}
         </span>
@@ -195,8 +260,8 @@ export function CompareView({
           aria-label="Comparison divider"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={split}
-          aria-valuetext={`${split}% side A, ${100 - split}% side B`}
+          aria-valuenow={Math.round(split)}
+          aria-valuetext={`${Math.round(split)}% side A, ${100 - Math.round(split)}% side B`}
           onKeyDown={onKeyDown}
         >
           <span className="compare-grip" aria-hidden="true">
@@ -243,7 +308,7 @@ export function CompareView({
                     title={`${o.title} — ${o.detail}`}
                     onClick={() => choose(o.path)}
                   >
-                    <Thumb option={o} workspace={workspace} bust={bust} />
+                    <Thumb option={o} src={srcs[o.path]} />
                     {on && <span className={`compare-badge ${on}`}>{on.toUpperCase()}</span>}
                     <span className="compare-option-name">{o.output ? "Output" : o.title}</span>
                   </button>
@@ -292,39 +357,31 @@ function Slot({
   );
 }
 
-/** One side of the frame. Side B is drawn over A and clipped at the divider. */
+/** The picture or clip on one side. The element is reused when the side's
+ *  choice changes, so the old picture stays up until the new one has loaded. */
 function Layer({
   side,
   option,
-  workspace,
-  bust,
-  clip,
+  src,
   videoRef,
   onTimeUpdate,
   onSize,
 }: {
   side: Side;
   option: CompareOption;
-  workspace: string;
-  bust: number;
-  clip?: number;
+  src: string | undefined;
   videoRef: (el: HTMLVideoElement | null) => void;
   onTimeUpdate?: () => void;
   onSize?: (width: number, height: number) => void;
 }) {
-  const src = useAssetSrc(workspace, option.path, bust);
   if (!src) return null;
-  const shared = {
-    className: `compare-layer ${side}`,
-    style: clip === undefined ? undefined : { clipPath: `inset(0 0 0 ${clip}%)` },
-    draggable: false,
-  };
   return option.kind === "video" ? (
     <video
-      {...shared}
+      className="compare-layer"
       ref={videoRef}
       src={src}
       aria-label={`Side ${side.toUpperCase()}: ${option.title}`}
+      draggable={false}
       autoPlay
       muted
       loop
@@ -335,16 +392,17 @@ function Layer({
     />
   ) : (
     <img
-      {...shared}
+      className="compare-layer"
       src={src}
       alt={`Side ${side.toUpperCase()}: ${option.title}`}
+      draggable={false}
+      decoding="sync"
       onLoad={(e) => onSize?.(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
     />
   );
 }
 
-function Thumb({ option, workspace, bust }: { option: CompareOption; workspace: string; bust: number }) {
-  const src = useAssetSrc(workspace, option.path, bust);
+function Thumb({ option, src }: { option: CompareOption; src: string | undefined }) {
   if (!src) return <span className="compare-thumb blank" aria-hidden="true" />;
   return option.kind === "video" ? (
     <video className="compare-thumb" src={src} muted playsInline preload="metadata" />

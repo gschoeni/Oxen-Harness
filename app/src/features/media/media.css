@@ -540,6 +540,11 @@
 
 /* --- A/B comparison (CompareView): two layers in one frame, B clipped at
    the divider; under it, the two sides and the candidates for them. --- */
+/* The frame's height follows its width; a scrollbar that came and went with
+   that height would change the width again, and the layout would oscillate. */
+.gallery-detail:has(.compare) {
+  scrollbar-gutter: stable;
+}
 .compare {
   flex-shrink: 0;
   display: flex;
@@ -548,14 +553,26 @@
 .compare-stage {
   position: relative;
   align-self: center;
-  width: 100%;
-  max-width: 100%;
-  max-height: min(52vh, 560px);
+  /* Exactly the picture's box: as wide as the dock, unless that would make
+     it taller than the preview's cap — then as wide as the cap allows. The
+     divider can't be dragged out over letterbox bars that way. */
+  width: min(100%, calc(min(52vh, 560px) * var(--compare-aspect)));
   overflow: hidden;
   background: #000;
   cursor: ew-resize;
   touch-action: none;
   user-select: none;
+}
+/* A side fills the frame; B's is the one the divider clips. The picture
+   inside is its own composited layer, so moving the clip never repaints
+   (and re-decodes) it — that repaint is what makes a comparison flicker. */
+.compare-side {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.compare-side.b {
+  will-change: clip-path;
 }
 .compare-layer {
   position: absolute;
@@ -563,7 +580,8 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
-  pointer-events: none;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 .compare-tag {
   position: absolute;
