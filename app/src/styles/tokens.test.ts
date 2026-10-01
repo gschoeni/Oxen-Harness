@@ -70,7 +70,7 @@ const BASELINE: Record<string, number> = {
   "/src/features/preview/preview.css": 6,
   "/src/features/projects/projects.css": 2,
   "/src/features/questions/questions.css": 4,
-  "/src/features/rules/rules.css": 25,
+  "/src/features/rules/rules.css": 18,
   "/src/features/settings/permissions.css": 2,
   "/src/features/settings/settings.css": 46,
   "/src/features/settings/teaching.css": 2,
