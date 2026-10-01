@@ -294,10 +294,6 @@ export const fsListDir = (root: string, path: string) =>
 export const fsReadFile = (root: string, path: string) =>
   invoke<FileBody>("fs_read_file", { root, path });
 
-/** Save the editor's buffer back to disk. */
-export const fsWriteFile = (root: string, path: string, content: string) =>
-  invoke<void>("fs_write_file", { root, path, content });
-
 /** Create an empty file or a folder (fails if the path already exists). */
 export const fsCreateEntry = (root: string, path: string, isDir: boolean) =>
   invoke<void>("fs_create_entry", { root, path, isDir });
@@ -779,8 +775,6 @@ export const cancelDownload = (id: string) => invoke<void>("cancel_download", { 
 export const removeModel = (id: string) => invoke<void>("remove_model", { id });
 /** Switch the current session to a downloaded local model (starts a fresh chat). */
 export const useLocalModel = (id: string) => invoke<SessionInfo>("use_local_model", { id });
-/** Homebrew fallback when the platform has no managed runtime (`llama://install`). */
-export const installLlama = () => invoke<void>("install_llama");
 
 // ---- cloud models ----------------------------------------------------------
 
@@ -809,9 +803,6 @@ export const onRuntimeInstall = (handler: (e: RuntimeInstallEvent) => void) =>
 /** Phases of switching to a local model (runtime init → loading → ready). */
 export const onLocalStatus = (handler: (e: LocalStatus) => void) =>
   listen<LocalStatus>("local://status", (e) => handler(e.payload));
-
-export const onLlamaInstall = (handler: (line: string) => void) =>
-  listen<string>("llama://install", (e) => handler(e.payload));
 
 // ---- themes ----------------------------------------------------------------
 

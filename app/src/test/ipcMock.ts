@@ -451,7 +451,6 @@ export const fsReadFile = vi.fn(async (_root: string, _path: string) => ({
   truncated: false,
   size: 0,
 }));
-export const fsWriteFile = vi.fn(async (_root: string, _path: string, _content: string) => {});
 export const fsCreateEntry = vi.fn(async (_root: string, _path: string, _isDir: boolean) => {});
 export const fsAssetPath = vi.fn(async (root: string, path: string) => `${root}/${path}`);
 export const fsWatch = vi.fn(async (_root: string) => {});
@@ -499,13 +498,11 @@ export const hfTokenPresent = vi.fn(async () => false);
 export const setHfToken = vi.fn(async () => {});
 export const downloadModel = vi.fn(async () => {});
 export const cancelDownload = vi.fn(async () => {});
-export const installLlama = vi.fn(async () => {});
 export const removeModel = vi.fn(async () => {});
 export const useLocalModel = vi.fn(async () => ({ ...sampleSession, session_id: "local-session" }));
 export const onModelProgress = listener("modelProgress");
 export const onRuntimeInstall = listener("runtimeInstall");
 export const onLocalStatus = listener("localStatus");
-export const onLlamaInstall = listener("llamaInstall");
 
 // ---- cloud models ----------------------------------------------------------
 export const listCloudModels = vi.fn(async () => sampleCloudModels);
@@ -659,7 +656,6 @@ export function resetIpc() {
   listMediaModels.mockReset().mockResolvedValue([]);
   fsListDir.mockReset().mockResolvedValue([]);
   fsReadFile.mockReset().mockResolvedValue({ content: "", truncated: false, size: 0 });
-  fsWriteFile.mockReset().mockResolvedValue(undefined);
   fsCreateEntry.mockReset().mockResolvedValue(undefined);
   fsAssetPath.mockReset().mockImplementation(async (root: string, path: string) => `${root}/${path}`);
   gitStatus.mockReset().mockResolvedValue(null);
@@ -682,7 +678,6 @@ export function resetIpc() {
   setHfToken.mockReset().mockResolvedValue(undefined);
   downloadModel.mockReset().mockResolvedValue(undefined);
   cancelDownload.mockReset().mockResolvedValue(undefined);
-  installLlama.mockReset().mockResolvedValue(undefined);
   removeModel.mockReset().mockResolvedValue(undefined);
   useLocalModel.mockReset().mockResolvedValue({ ...sampleSession, session_id: "local-session" });
   listCloudModels.mockReset().mockResolvedValue(sampleCloudModels);
@@ -756,7 +751,6 @@ export function resetIpc() {
     onModelProgress,
     onRuntimeInstall,
     onLocalStatus,
-    onLlamaInstall,
     onPreviewStatus,
     onPreviewConsole,
     onBrowserOpen,
@@ -771,7 +765,7 @@ export const applyAgentPatch = vi.fn().mockResolvedValue(undefined);
 export const onViewOpen = vi.fn(async (_handler: unknown) => () => {});
 export const workbenchRequest = vi.fn(async (_session: string, action: string, payload: Record<string, unknown> = {}): Promise<unknown> => {
   if (action === "read") { const body = await fsReadFile(sampleSession.workspace, String(payload.path)); return {path:payload.path,content:body.content,revision:body.content}; }
-  if (action === "save") { await fsWriteFile(sampleSession.workspace,String(payload.path),String(payload.content)); return {path:payload.path,content:payload.content,revision:payload.content}; }
+  if (action === "save") { return {path:payload.path,content:payload.content,revision:payload.content}; }
   if (action === "list") return {views:[],nodes:[]};
   if (action === "models") return [];
   return null;
