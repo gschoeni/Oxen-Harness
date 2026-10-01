@@ -8,6 +8,14 @@ import { resetAll } from "../../test/utils";
 import { sampleSession } from "../../test/ipcMock";
 import { NUDGE_AFTER_MS, NUDGE_LINGER_MS, resetStudyNudge, StudyNudge } from "./StudyNudge";
 
+/** Render the nudge through a turn long enough to earn the offer. */
+function endLongTurn() {
+  const view = render(<StudyNudge running />);
+  act(() => void vi.advanceTimersByTime(NUDGE_AFTER_MS));
+  view.rerender(<StudyNudge running={false} />);
+  return view;
+}
+
 describe("StudyNudge", () => {
   beforeEach(() => {
     resetAll();
@@ -25,11 +33,15 @@ describe("StudyNudge", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("offers the study cabinet once a turn runs long, then a ride-along when it ends", () => {
+  it("says nothing while a long turn is still running", () => {
+    render(<StudyNudge running />);
+    act(() => void vi.advanceTimersByTime(NUDGE_AFTER_MS * 10));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("offers a ride-along when a long turn ends, then lets it go", () => {
     const { rerender } = render(<StudyNudge running />);
     act(() => void vi.advanceTimersByTime(NUDGE_AFTER_MS));
-    expect(screen.getByRole("status")).toHaveTextContent(/been at it a while/);
-
     rerender(<StudyNudge running={false} />);
     expect(screen.getByRole("status")).toHaveTextContent(/explain what it changed/);
     act(() => void vi.advanceTimersByTime(NUDGE_LINGER_MS));
@@ -37,8 +49,7 @@ describe("StudyNudge", () => {
   });
 
   it("opens the work panel on the study cabinet", () => {
-    render(<StudyNudge running />);
-    act(() => void vi.advanceTimersByTime(NUDGE_AFTER_MS));
+    endLongTurn();
     fireEvent.click(screen.getByRole("button", { name: "Study" }));
     expect(useStore.getState().heroGame).toBe("study");
     expect(useStore.getState().rightTab[sampleSession.session_id]).toBe("study");
@@ -46,18 +57,16 @@ describe("StudyNudge", () => {
   });
 
   it("stays silent after being dismissed, and while the game is already on screen", () => {
-    const first = render(<StudyNudge running />);
-    act(() => void vi.advanceTimersByTime(NUDGE_AFTER_MS));
+    const first = endLongTurn();
     fireEvent.click(screen.getByRole("button", { name: /stop offering/i }));
     expect(screen.queryByRole("status")).toBeNull();
     first.unmount();
-    render(<StudyNudge running />);
-    act(() => void vi.advanceTimersByTime(NUDGE_AFTER_MS));
+    endLongTurn();
     expect(screen.queryByRole("status")).toBeNull();
 
     resetStudyNudge();
     act(() => useStore.setState({ rightTab: { [sampleSession.session_id]: "study" } }));
-    act(() => void vi.advanceTimersByTime(NUDGE_AFTER_MS));
+    endLongTurn();
     expect(screen.queryByRole("status")).toBeNull();
   });
 });
