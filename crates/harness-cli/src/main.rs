@@ -125,11 +125,6 @@ enum TopCommand {
         #[command(subcommand)]
         action: commands::theme::ThemeAction,
     },
-    /// Run and manage self-verifying agent loops (run / list / new / show ...).
-    Loop {
-        #[command(subcommand)]
-        action: commands::loops::LoopAction,
-    },
     /// Export or share a conversation as an Oxen repo (transcript + attachments).
     Trace {
         #[command(subcommand)]
@@ -205,19 +200,10 @@ async fn main() -> Result<()> {
     let mut ui = Ui::detect(Arc::new(theme));
     let mut args = Args::parse();
 
-    // Subcommands that manage state and exit before the REPL. `loop run` is the
-    // exception: it needs a live agent, so it falls through and runs once the
-    // session is built (instead of entering the interactive REPL).
-    let mut pending_loop: Option<harness_loop::LoopSpec> = None;
+    // Subcommands that manage state and exit before the REPL.
     match args.command.take() {
         Some(TopCommand::Models { action }) => return local::run_models(action, &ui).await,
         Some(TopCommand::Theme { action }) => return commands::theme::run_theme(action, &ui).await,
-        Some(TopCommand::Loop { action }) => {
-            match commands::loops::handle_cli(action, &ui).await? {
-                commands::loops::Dispatch::Done => return Ok(()),
-                commands::loops::Dispatch::Run(spec) => pending_loop = Some(*spec),
-            }
-        }
         Some(TopCommand::Trace { action }) => return commands::trace::run_trace(action, &ui),
         Some(TopCommand::Oxen { action }) => return commands::oxen::run_oxen(action, &ui),
         Some(TopCommand::Project { action }) => return commands::project::run_project(action, &ui),
@@ -320,9 +306,9 @@ async fn main() -> Result<()> {
     // Resolve which model to run and how to reach it (cloud or a local
     // llama-server). The server guard is kept alive for the whole session —
     // dropping it shuts the background process down. A first run with nothing
-    // persisted gets one model pick on the way through, but never in the runs
-    // nobody is watching: headless `-p` and a one-shot `loop run`.
-    let interactive = args.print.is_none() && pending_loop.is_none();
+    // persisted gets one model pick on the way through, but never in a
+    // headless `-p` run nobody is watching.
+    let interactive = args.print.is_none();
     let Endpoint {
         client,
         model,
@@ -484,19 +470,8 @@ async fn main() -> Result<()> {
     // and friends) are discovered once per workspace.
     custom_commands::install_for(workspace.root());
 
-    // Shared per-run context (store, session, resume factory) used by both the
-    // one-shot loop path and the interactive REPL.
+    // Shared per-run context (store, session, resume factory) for the REPL.
     let ctx = ReplContext::new(&store, &session, workspace.root(), &rebuild_agent);
-
-    // `oxen-harness loop run ...`: run the loop once, then exit (no REPL).
-    // Dev servers the loop started must be stopped on *both* paths — the
-    // manager is a process-wide static, so nothing drops them for us.
-    if let Some(spec) = pending_loop {
-        let outcome = commands::loops::run(spec, &mut agent, &ui, workspace.root()).await;
-        preview::shutdown().await;
-        outcome?;
-        return Ok(());
-    }
 
     // Interactive TTYs use the bordered, bottom-pinned box composer (multi-line,
     // history, queue) for both idle and in-turn input. Pipes, dumb terminals, and

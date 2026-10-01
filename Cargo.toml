@@ -18,7 +18,6 @@ members = [
     "crates/harness-runtime",
     "crates/harness-host",
     "crates/harness-server",
-    "crates/harness-loop",
     "crates/harness-review",
     "crates/harness-preview",
     "crates/harness-media",
@@ -55,7 +54,6 @@ harness-theme = { path = "crates/harness-theme" }
 harness-agent = { path = "crates/harness-agent" }
 harness-runtime = { path = "crates/harness-runtime" }
 harness-host = { path = "crates/harness-host" }
-harness-loop = { path = "crates/harness-loop" }
 harness-review = { path = "crates/harness-review" }
 harness-preview = { path = "crates/harness-preview" }
 harness-media = { path = "crates/harness-media" }

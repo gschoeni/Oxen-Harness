@@ -810,7 +810,7 @@ fn dto_wire_shapes() {
 }
 
 #[test]
-fn review_and_loop_result_wire_shapes() {
+fn review_result_wire_shape() {
     let review: harness_protocol::ReviewResult = serde_json::from_value(serde_json::json!({
         "status": "ok",
         "user": "review my diff",
@@ -821,15 +821,6 @@ fn review_and_loop_result_wire_shapes() {
     .unwrap();
     assert_eq!(review.status, "ok");
     assert_eq!(review.findings, 2);
-
-    let outcome: harness_protocol::LoopResult = serde_json::from_value(serde_json::json!({
-        "succeeded": true,
-        "iterations": 3,
-        "summary": "Loop complete: all gates passed after 3 iteration(s).",
-    }))
-    .unwrap();
-    assert!(outcome.succeeded);
-    assert_eq!(outcome.iterations, 3);
 }
 
 #[test]

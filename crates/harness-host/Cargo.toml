@@ -19,7 +19,6 @@ harness-media = { workspace = true }
 harness-study = { workspace = true }
 harness-runtime = { workspace = true }
 harness-review = { workspace = true }
-harness-loop = { workspace = true }
 harness-compress = { workspace = true }
 harness-store = { workspace = true }
 harness-tools = { workspace = true }

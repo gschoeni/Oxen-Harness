@@ -1,4 +1,4 @@
-//! Bounded child-process capture shared by tools and verification loops.
+//! Bounded child-process capture shared by the process-running tools.
 
 use std::io;
 use std::process::Stdio;

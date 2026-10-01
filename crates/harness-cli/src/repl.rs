@@ -24,10 +24,6 @@ pub enum Command {
     /// Queue command: the raw text after `/queue` (e.g. `add fix the bug`), or
     /// `None` to list the queue. Kept raw so message text keeps its spaces.
     Queue(Option<String>),
-    /// Loop command: the raw text after `/loop` (e.g. `run default` or
-    /// `goal make tests pass`), or `None` to list loops. Kept raw so goal text
-    /// keeps its spaces.
-    Loop(Option<String>),
     /// Code review: the raw text after `/code-review` (a base branch, or a
     /// subcommand like `steps`), or `None` to review uncommitted changes.
     CodeReview(Option<String>),
@@ -151,13 +147,6 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
         aliases: &[],
         description: "manage the message queue",
         build: Command::Queue,
-        completer: ArgCompleter::None,
-    },
-    SlashSpec {
-        name: "/loop",
-        aliases: &["/loops"],
-        description: "run or list loops",
-        build: Command::Loop,
         completer: ArgCompleter::None,
     },
     SlashSpec {
@@ -478,19 +467,6 @@ mod tests {
         );
         // `/q` stays an exit alias, not a queue command.
         assert_eq!(parse_command("/q"), Command::Exit);
-    }
-
-    #[test]
-    fn loop_keeps_raw_remainder() {
-        assert_eq!(parse_command("/loop"), Command::Loop(None));
-        assert_eq!(
-            parse_command("/loop run default"),
-            Command::Loop(Some("run default".into()))
-        );
-        assert_eq!(
-            parse_command("/loop goal make every test pass"),
-            Command::Loop(Some("goal make every test pass".into()))
-        );
     }
 
     #[test]

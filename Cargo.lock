@@ -878,7 +878,6 @@ dependencies = [
  "harness-crash",
  "harness-llm",
  "harness-local",
- "harness-loop",
  "harness-media",
  "harness-oxen",
  "harness-permissions",
@@ -953,7 +952,6 @@ dependencies = [
  "harness-core",
  "harness-llm",
  "harness-local",
- "harness-loop",
  "harness-media",
  "harness-permissions",
  "harness-preview",
@@ -1024,23 +1022,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
-]
-
-[[package]]
-name = "harness-loop"
-version = "0.0.3"
-dependencies = [
- "globset",
- "harness-agent",
- "harness-config",
- "harness-core",
- "harness-tools",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "toml",
 ]
 
 [[package]]

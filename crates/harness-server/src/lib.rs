@@ -188,7 +188,6 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/v1/sessions/{id}/study/batch", post(study_batch))
         .route("/v1/sessions/{id}/study/answer", post(study_answer))
         .route("/v1/sessions/{id}/review", post(run_review))
-        .route("/v1/sessions/{id}/loop", post(run_loop))
         .route("/v1/questions/{id}/answer", post(answer_question))
         .route("/v1/approvals/{id}/answer", post(answer_approval))
         .route("/v1/model", post(set_model))
@@ -735,29 +734,6 @@ async fn study_answer(
 ) -> ApiResult<Json<harness_protocol::StudyAnswerResult>> {
     authorize(&state, &headers, None)?;
     Ok(Json(state.service.study_answer(&id, request).await?))
-}
-
-#[derive(Deserialize)]
-struct LoopRequest {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    goal: Option<String>,
-}
-
-async fn run_loop(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    Json(request): Json<LoopRequest>,
-) -> ApiResult<Json<harness_protocol::LoopResult>> {
-    authorize(&state, &headers, None)?;
-    Ok(Json(
-        state
-            .service
-            .run_loop(&id, request.name, request.goal)
-            .await?,
-    ))
 }
 
 #[derive(Deserialize)]

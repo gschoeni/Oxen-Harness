@@ -7,7 +7,7 @@
 //! - **Live composer** (interactive turns): the composer already owns the
 //!   terminal, paints the hub's block in its pinned area, and drives lane
 //!   focus with ↑/↓ or alt+digits — the sink only feeds state.
-//! - **Cooked mode** (e.g. a fleet during `oxen-harness loop run`): the sink
+//! - **Cooked mode** (a fleet outside the live composer, e.g. a headless `-p` run): the sink
 //!   starts its own [`BlockPainter`], which paints in place and owns the
 //!   keyboard (1-9 focus, esc overview, ctrl-c stop).
 //! - **Plain terminals** (pipes, `NO_COLOR`): milestone lines only.

@@ -36,7 +36,7 @@ pub(crate) struct Endpoint {
 /// `--local` that can't start — or an unreachable cloud endpoint — prints the
 /// death screen and exits.
 ///
-/// `interactive` is false for the runs nobody is watching (`-p`, `loop run`):
+/// `interactive` is false for the runs nobody is watching (`-p`):
 /// they never get the first-run model pick, however empty the config is.
 pub(crate) async fn resolve_endpoint(
     args: &Args,

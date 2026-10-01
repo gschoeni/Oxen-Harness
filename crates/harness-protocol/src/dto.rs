@@ -325,14 +325,6 @@ pub struct ReviewResult {
     pub tokens_used: usize,
 }
 
-/// What a verification-loop run resolved to.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct LoopResult {
-    pub succeeded: bool,
-    pub iterations: u32,
-    pub summary: String,
-}
-
 /// A request to give a session a name of the user's choosing. A blank name
 /// clears it, so the session titles itself by its first message again.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -385,7 +377,7 @@ pub struct ThreadEntry {
 pub struct ThreadSnapshot {
     /// Every native thread, newest activity first.
     pub entries: Vec<ThreadEntry>,
-    /// Session ids with work in flight right now (a turn, review, or loop) —
+    /// Session ids with work in flight right now (a turn or a review) —
     /// read from the host's authoritative in-flight registry, so it is correct
     /// even after a UI restart.
     pub running: Vec<String>,

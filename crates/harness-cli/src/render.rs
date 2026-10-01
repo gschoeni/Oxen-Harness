@@ -1,7 +1,7 @@
 //! Live rendering of an agent turn: a trail-status spinner while the model
 //! thinks or a tool runs, assistant text streamed through the Markdown
 //! renderer, and themed tool lines. Shared by the REPL prompt flow and the
-//! loop runner so both surfaces feel identical.
+//! code-review runner so both surfaces feel identical.
 //!
 //! Per-event formatting lives in [`crate::event_lines`] (shared with the live
 //! composer); this renderer only maps each [`Cue`] onto cooked-mode stdout

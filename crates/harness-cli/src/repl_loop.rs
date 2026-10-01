@@ -308,13 +308,6 @@ async fn handle_line(
                 return Ok(true);
             }
         }
-        Command::Loop(rest) => {
-            // A running loop streams turns the user can Ctrl-C to quit.
-            if commands::loops::handle_repl(rest, agent, ui, ctx.workspace_root).await? {
-                print!("{}", theme::death_screen(ui, &ctx.session()));
-                return Ok(true);
-            }
-        }
         Command::CodeReview(rest) => {
             // A running review streams turns the user can Ctrl-C to quit.
             if commands::review::handle_repl(rest, agent, ui, ctx.workspace_root).await? {

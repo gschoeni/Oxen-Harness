@@ -217,16 +217,6 @@ pub fn skills_dir() -> Result<PathBuf, ConfigError> {
     Ok(dir)
 }
 
-/// `~/.oxen-harness/loops/` — shareable loop specs + run journals.
-pub fn loops_dir() -> Result<PathBuf, ConfigError> {
-    let dir = under("loops")?;
-    std::fs::create_dir_all(&dir).map_err(|source| ConfigError::Io {
-        path: dir.clone(),
-        source,
-    })?;
-    Ok(dir)
-}
-
 /// `~/.oxen-harness/study/` — the codebase study game's per-project progress
 /// and question caches (one subdirectory per project; personal, not shared
 /// with the repository).

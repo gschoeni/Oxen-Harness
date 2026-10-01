@@ -375,27 +375,6 @@ impl SessionServiceBuilder {
     }
 }
 
-/// One loop journal as its wire result.
-fn loop_result(journal: &harness_loop::LoopJournal) -> harness_protocol::LoopResult {
-    let succeeded = journal.succeeded();
-    let iterations = journal.iterations();
-    let summary = if succeeded {
-        format!("Loop complete: all gates passed after {iterations} iteration(s).")
-    } else {
-        let reason = journal
-            .stop
-            .clone()
-            .map(|s| s.headline())
-            .unwrap_or_else(|| "stopped".into());
-        format!("Loop stopped after {iterations} iteration(s): {reason}.")
-    };
-    harness_protocol::LoopResult {
-        succeeded,
-        iterations,
-        summary,
-    }
-}
-
 /// Open the shared on-disk history store (the same DB the agents persist to).
 fn open_history_store() -> Result<HistoryStore, String> {
     let path = harness_config::paths::history_db().map_err(|e| e.to_string())?;
@@ -1896,7 +1875,7 @@ impl SessionService {
         self.pending_approvals.deliver(id, answer);
     }
 
-    // --- Runners (code review, verification loops) -----------------------------
+    // --- Runners (code review) ------------------------------------------------
 
     /// Run the configurable code-review pipeline for a chat's workspace:
     /// uncommitted changes by default, or PR-style against `base_branch`.
@@ -2046,75 +2025,6 @@ impl SessionService {
         };
         self.cancels.lock().await.remove(session);
         // Detached reviewers record their own provider usage in the ledger.
-        self.evict_idle().await;
-        result
-    }
-
-    /// Run a saved verification loop (or an ad-hoc one from `goal`) on a
-    /// chat's agent, streaming its agent activity as `agent.*` events. Owns
-    /// the session lock and cancellation token for the whole cycle.
-    pub async fn run_loop(
-        &self,
-        session: &str,
-        name: Option<String>,
-        goal: Option<String>,
-    ) -> Result<harness_protocol::LoopResult, String> {
-        use harness_loop::{LoopEvent, LoopRunner, LoopSpec, LoopStore};
-
-        let store = LoopStore::open().map_err(|e| e.to_string())?;
-        let spec = if let Some(goal) = goal.filter(|s| !s.trim().is_empty()) {
-            LoopSpec::from_goal(goal)
-        } else {
-            store
-                .resolve(name.as_deref().unwrap_or("default"))
-                .map_err(|e| e.to_string())?
-        };
-        let arc = self.agent_or_build(session).await?;
-        let cancel = CancellationToken::new();
-        {
-            let mut cancels = self.cancels.lock().await;
-            if cancels.contains_key(session) {
-                return Err("a turn is already running in this chat".to_string());
-            }
-            cancels.insert(session.to_string(), cancel.clone());
-        }
-        self.reopen_for_run(session);
-        let root = self.session_workspace(session);
-        let runner =
-            LoopRunner::new(spec.clone(), root).persisting_to(store.journal_path_for(&spec.name));
-        let sid = session.to_string();
-        let sink = self.sink.clone();
-        let stream_batch = StreamBatch::new(self.sink.clone(), sid.clone());
-        let result = {
-            let mut agent = arc.lock().await;
-            agent.set_cancel_token(cancel);
-            runner
-                .run(&mut agent, |event| {
-                    // Tokens batch; every other loop event — tool brackets,
-                    // iteration and verify transitions — is a boundary that
-                    // flushes the tail first, so a turn's closing text can't
-                    // sit buffered while gates run. Only the thread-visible
-                    // slice (batched text, tool starts/ends) rides the wire.
-                    if let LoopEvent::Agent(event @ AgentEvent::Token(_)) = event {
-                        stream_batch.absorb(event);
-                        return;
-                    }
-                    stream_batch.flush();
-                    if let LoopEvent::Agent(
-                        event @ (AgentEvent::ToolStart { .. } | AgentEvent::ToolEnd { .. }),
-                    ) = event
-                    {
-                        if let Some(event) = translate::agent_event(&sid, 0, event) {
-                            sink.emit(event);
-                        }
-                    }
-                })
-                .await
-                .map(|journal| loop_result(&journal))
-                .map_err(|e| e.to_string())
-        };
-        stream_batch.flush();
-        self.cancels.lock().await.remove(session);
         self.evict_idle().await;
         result
     }
@@ -2325,10 +2235,9 @@ mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
 
     use harness_agent::AgentEvent;
-    use harness_loop::{LoopJournal, StopReason};
     use harness_protocol::ProtocolEvent;
 
-    use super::{loop_result, EventSink, StreamBatch};
+    use super::{EventSink, StreamBatch};
 
     #[derive(Default)]
     struct RecordingSink(StdMutex<Vec<ProtocolEvent>>);
@@ -2479,20 +2388,5 @@ mod tests {
             })
             .collect();
         assert_eq!(names, ["write_file", "edit_file"]);
-    }
-
-    #[test]
-    fn loop_result_distinguishes_success_from_a_stopped_run() {
-        let mut success = LoopJournal::new("green", "make checks pass");
-        success.finish(StopReason::Succeeded);
-        let result = loop_result(&success);
-        assert!(result.succeeded);
-        assert!(result.summary.contains("all gates passed"));
-
-        let mut stopped = LoopJournal::new("green", "make checks pass");
-        stopped.finish(StopReason::MaxIterations);
-        let result = loop_result(&stopped);
-        assert!(!result.succeeded);
-        assert!(result.summary.contains("iteration limit"));
     }
 }

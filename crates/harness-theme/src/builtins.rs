@@ -251,43 +251,38 @@ pub(crate) fn oregon_trail() -> Theme {
                 },
                 HelpItem {
                     key: s("7."),
-                    title: s("Set the wagon rolling"),
-                    hint: s("— /loop run [name]  (work until the gate is green)"),
-                },
-                HelpItem {
-                    key: s("8."),
                     title: s("Inspect the wagon"),
                     hint: s("— /code-review [branch]  (find → verify → report on your changes)"),
                 },
                 HelpItem {
-                    key: s("9."),
+                    key: s("8."),
                     title: s("Choose your departure"),
                     hint: s(
                         "— /location <place>  (set where the trail begins; /departing works too)",
                     ),
                 },
                 HelpItem {
-                    key: s("10."),
+                    key: s("9."),
                     title: s("Check your know-how"),
                     hint: s("— /skills  (the workflows the agent has learned)"),
                 },
                 HelpItem {
-                    key: s("11."),
+                    key: s("10."),
                     title: s("Show your papers"),
                     hint: s("— /auth  (set your Oxen API key)"),
                 },
                 HelpItem {
-                    key: s("12."),
+                    key: s("11."),
                     title: s("Lighten the load"),
                     hint: s("— /compression [off|audit|on]  (context compression)"),
                 },
                 HelpItem {
-                    key: s("13."),
+                    key: s("12."),
                     title: s("Press on after a mishap"),
                     hint: s("— /retry  (continue a turn that died mid-trail)"),
                 },
                 HelpItem {
-                    key: s("14."),
+                    key: s("13."),
                     title: s("Make camp / End"),
                     hint: s("— /exit  (or Ctrl-D)"),
                 },

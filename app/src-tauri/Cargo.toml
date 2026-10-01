@@ -56,7 +56,6 @@ harness-agent = { path = "../../crates/harness-agent" }
 harness-permissions = { path = "../../crates/harness-permissions" }
 harness-review = { path = "../../crates/harness-review" }
 harness-preview = { path = "../../crates/harness-preview" }
-harness-loop = { path = "../../crates/harness-loop" }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 percent-encoding = "2"

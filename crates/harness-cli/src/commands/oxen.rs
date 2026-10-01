@@ -1,5 +1,5 @@
 //! `oxen-harness oxen` — version the harness config directory
-//! (`~/.oxen-harness`) with Oxen, so settings, themes, and loops can be tracked
+//! (`~/.oxen-harness`) with Oxen, so settings and themes can be tracked
 //! and shared. Opt-in: nothing is versioned until `oxen init` is run; after that
 //! config writes snapshot automatically.
 

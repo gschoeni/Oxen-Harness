@@ -26,7 +26,6 @@ harness-agent = { workspace = true }
 harness-compress = { workspace = true }
 harness-permissions = { workspace = true }
 harness-runtime = { workspace = true }
-harness-loop = { workspace = true }
 harness-review = { workspace = true }
 harness-preview = { workspace = true }
 harness-media = { workspace = true }

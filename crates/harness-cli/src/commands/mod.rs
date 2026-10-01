@@ -1,7 +1,7 @@
 //! One module per user-facing command, for both of the CLI's surfaces: the
 //! in-REPL `/slash` commands and the `oxen-harness <cmd>` subcommands.
 //!
-//! The pattern (copy [`loops`] — it has both surfaces):
+//! The pattern (copy [`theme`] — it has both surfaces):
 //!
 //! - `pub async fn handle_repl(rest, agent, ui, …)` — the `/command` body.
 //!   Parse the raw remainder yourself (so multi-word arguments keep their
@@ -26,7 +26,6 @@ pub(crate) mod auth;
 pub(crate) mod compression;
 pub(crate) mod gallery;
 pub(crate) mod location;
-pub(crate) mod loops;
 pub(crate) mod model;
 pub(crate) mod oxen;
 pub(crate) mod permissions;
