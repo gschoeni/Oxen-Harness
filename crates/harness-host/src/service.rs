@@ -811,6 +811,7 @@ impl SessionService {
     pub async fn media_models(
         &self,
         kind: Option<&str>,
+        refresh: bool,
     ) -> Result<Vec<harness_protocol::MediaModelSummary>, String> {
         let api = harness_runtime::media::api();
         let base = api
@@ -819,13 +820,12 @@ impl SessionService {
             .unwrap_or_else(|| harness_core::DEFAULT_BASE_URL.to_string());
         let http = reqwest::Client::new();
         let cache = harness_media::catalog_cache_path(&base);
-        let catalog = harness_media::Catalog::load(
-            &http,
-            &base,
-            api.as_ref().map(|a| a.api_key.as_str()),
-            cache.as_deref(),
-        )
-        .await?;
+        let key = api.as_ref().map(|a| a.api_key.as_str());
+        let catalog = if refresh {
+            harness_media::Catalog::refresh(&http, &base, key, cache.as_deref()).await?
+        } else {
+            harness_media::Catalog::load(&http, &base, key, cache.as_deref()).await?
+        };
         let kind = kind.and_then(|k| match k {
             "image" => Some(harness_media::MediaKind::Image),
             "video" => Some(harness_media::MediaKind::Video),

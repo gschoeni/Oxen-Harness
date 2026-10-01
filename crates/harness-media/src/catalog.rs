@@ -543,13 +543,8 @@ impl Catalog {
                 return Ok(cached);
             }
         }
-        match Self::fetch(http, base_url, api_key).await {
-            Ok((catalog, raw)) => {
-                if let Some(path) = cache {
-                    write_cache(path, raw);
-                }
-                Ok(catalog)
-            }
+        match Self::refresh(http, base_url, api_key, cache).await {
+            Ok(catalog) => Ok(catalog),
             Err(e) => match cache.and_then(read_cache) {
                 Some((_, stale)) => {
                     tracing::warn!("media catalog fetch failed ({e}); using the cached copy");
@@ -558,6 +553,23 @@ impl Catalog {
                 None => Err(e),
             },
         }
+    }
+
+    /// Fetch the catalog from the hub regardless of the cache's age, and
+    /// rewrite the cache. Unlike [`Catalog::load`] a failed fetch is an
+    /// error: someone asking for the newest models must not be handed the
+    /// old list as if it were fresh.
+    pub async fn refresh(
+        http: &reqwest::Client,
+        base_url: &str,
+        api_key: Option<&str>,
+        cache: Option<&Path>,
+    ) -> Result<Self, String> {
+        let (catalog, raw) = Self::fetch(http, base_url, api_key).await?;
+        if let Some(path) = cache {
+            write_cache(path, raw);
+        }
+        Ok(catalog)
     }
 
     async fn fetch(
@@ -841,5 +853,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(c3.models().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn refresh_refetches_a_fresh_cache_and_reports_a_dead_hub() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache/media-models.json");
+        let mut server = mockito::Server::new_async().await;
+        let m = server
+            .mock("GET", "/api/ai/models")
+            .with_body(sample().to_string())
+            .expect(2)
+            .create_async()
+            .await;
+        let http = reqwest::Client::new();
+        let base = format!("{}/api/ai", server.url());
+        Catalog::load(&http, &base, None, Some(&cache))
+            .await
+            .unwrap();
+        // The cache is fresh, yet a refresh goes back to the hub.
+        let c = Catalog::refresh(&http, &base, None, Some(&cache))
+            .await
+            .unwrap();
+        assert_eq!(c.models().len(), 4);
+        m.assert_async().await;
+
+        // No stale fallback: the caller hears that the hub was unreachable.
+        let dead = Catalog::refresh(&http, "http://127.0.0.1:9/api/ai", None, Some(&cache)).await;
+        assert!(dead.is_err());
     }
 }

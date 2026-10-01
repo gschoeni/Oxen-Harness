@@ -557,6 +557,9 @@ struct MediaQuery {
     root: Option<String>,
     /// `image` or `video`, for the models listing.
     kind: Option<String>,
+    /// Refetch the models listing from the hub instead of the day-long cache.
+    #[serde(default)]
+    refresh: bool,
 }
 
 /// The project's media library (generations and in-flight jobs), newest
@@ -605,7 +608,8 @@ async fn set_media_prefs(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The hub's image/video models for pickers (`?kind=image|video`).
+/// The hub's image/video models for pickers (`?kind=image|video`,
+/// `&refresh=true` to bypass the cache).
 async fn media_models(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -613,7 +617,10 @@ async fn media_models(
 ) -> ApiResult<Json<Vec<harness_protocol::MediaModelSummary>>> {
     authorize(&state, &headers, None)?;
     Ok(Json(
-        state.service.media_models(query.kind.as_deref()).await?,
+        state
+            .service
+            .media_models(query.kind.as_deref(), query.refresh)
+            .await?,
     ))
 }
 

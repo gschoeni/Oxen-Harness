@@ -439,7 +439,7 @@ export const listMedia = vi.fn(async (_root: string): Promise<MediaItem[]> => []
 export const cancelMedia = vi.fn(async (_id: string) => {});
 export const getMediaPrefs = vi.fn(async (): Promise<MediaPrefs> => ({ ...sampleMediaPrefs }));
 export const setMediaPrefs = vi.fn(async (_prefs: MediaPrefs) => {});
-export const listMediaModels = vi.fn(async (_kind?: string): Promise<MediaModelSummary[]> => []);
+export const listMediaModels = vi.fn(async (_kind?: string, _refresh?: boolean): Promise<MediaModelSummary[]> => []);
 export const onMediaChanged = listener("mediaChanged");
 
 // ---- workspace files (Files tree + Editor dock) -------------------------------

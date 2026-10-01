@@ -617,9 +617,10 @@ export const getMediaPrefs = () => invoke<MediaPrefs>("get_media_prefs");
 /** Persist the media preferences; applies to new (and resumed) chats. */
 export const setMediaPrefs = (prefs: MediaPrefs) => invoke<void>("set_media_prefs", { prefs });
 
-/** The hub's image/video models for pickers (`kind` = image | video). */
-export const listMediaModels = (kind?: "image" | "video") =>
-  invoke<MediaModelSummary[]>("list_media_models", { kind: kind ?? null });
+/** The hub's image/video models for pickers (`kind` = image | video). The
+ *  catalog is cached for a day; `refresh` refetches it from the hub. */
+export const listMediaModels = (kind?: "image" | "video", refresh = false) =>
+  invoke<MediaModelSummary[]>("list_media_models", { kind: kind ?? null, refresh });
 
 /** The project's media library changed (a generation queued, progressed,
  *  finished, or failed). Carries the whole list. */

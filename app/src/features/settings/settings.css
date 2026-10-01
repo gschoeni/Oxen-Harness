@@ -894,6 +894,19 @@
   gap: var(--space-1);
   min-width: 200px;
 }
+.media-models-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.media-refreshing {
+  animation: spin var(--dur-spin) linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .media-refreshing {
+    animation: none;
+  }
+}
 .media-field {
   display: flex;
   flex-direction: column;

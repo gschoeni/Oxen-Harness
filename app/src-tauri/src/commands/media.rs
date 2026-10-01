@@ -34,10 +34,14 @@ pub(crate) fn set_media_prefs(prefs: harness_runtime::media::MediaPrefs) -> Resu
 }
 
 /// The hub's image/video models (`kind` = `image` | `video` | omitted).
+/// `refresh` refetches from the hub instead of the day-long cache.
 #[tauri::command]
 pub(crate) async fn list_media_models(
     state: State<'_, AppState>,
     kind: Option<String>,
+    refresh: Option<bool>,
 ) -> Result<Vec<harness_protocol::MediaModelSummary>, String> {
-    state.media_models(kind.as_deref()).await
+    state
+        .media_models(kind.as_deref(), refresh.unwrap_or(false))
+        .await
 }

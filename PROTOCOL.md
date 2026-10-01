@@ -97,7 +97,7 @@ GET    /v1/media?root=                  the project's image/video generations, n
 POST   /v1/media/{generation}/cancel    cancel an in-flight generation by its hub id
 GET    /v1/media/prefs                  media preferences → MediaPrefs {default_image_model, default_video_model, output_dir, per_generation_usd, per_run_usd}
 PUT    /v1/media/prefs                  replace the media preferences (applies to new/resumed chats)
-GET    /v1/media/models?kind=           the hub's image/video models → [MediaModelSummary {id, kind, price, developer, summary, inputs}]
+GET    /v1/media/models?kind=&refresh=  the hub's image/video models (cached a day; refresh=true refetches) → [MediaModelSummary {id, kind, price, developer, summary, inputs}]
 POST   /v1/sessions/{id}/agents/{agent}/cancel     stop one running lane (its id rides on `fleet.agent`); the rest of its fleet carries on; 404 once it has ended
 POST   /v1/sessions/{id}/agents/{agent}/interject  {text} → {accepted} — steer one running lane
 GET    /v1/sessions/{id}/agents/{agent}/patch     saved isolated patch as a JSON string

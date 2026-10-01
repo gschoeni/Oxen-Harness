@@ -56,6 +56,25 @@ describe("MediaPage", () => {
     expect((screen.getByLabelText("Video") as HTMLInputElement).tagName).toBe("INPUT");
   });
 
+  it("refetches the catalog on demand and keeps the list when the hub is down", async () => {
+    const model = (id: string) => ({ id, kind: "image" as const, price: "", developer: null, summary: null, inputs: [] });
+    ipc.listMediaModels.mockImplementation(async (kind?: string, refresh?: boolean) =>
+      kind === "image" ? (refresh ? [model("old"), model("brand-new")] : [model("old")]) : [],
+    );
+    render(<MediaPage />);
+    const refresh = await screen.findByRole("button", { name: "Refresh the model catalog" });
+    await userEvent.click(refresh);
+    expect(ipc.listMediaModels).toHaveBeenCalledWith("image", true);
+    await userEvent.click(await screen.findByRole("combobox", { name: "Image" }));
+    expect(screen.getByRole("option", { name: "brand-new" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+
+    ipc.listMediaModels.mockRejectedValueOnce("hub unreachable");
+    await userEvent.click(refresh);
+    expect(await screen.findByText(/Couldn't refresh the catalog: hub unreachable/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Image" })).toBeEnabled();
+  });
+
   it("saves the hub repo and the Oxen commit switch", async () => {
     render(<MediaPage />);
     const repo = (await screen.findByLabelText("Hub repo")) as HTMLInputElement;

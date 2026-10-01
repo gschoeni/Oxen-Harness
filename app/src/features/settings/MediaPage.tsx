@@ -8,9 +8,10 @@
 // applies to new (and resumed) chats.
 
 import { useEffect, useState } from "react";
-import { Check } from "lucide-react";
+import { Check, RefreshCw } from "lucide-react";
 import { getMediaPrefs, listMediaModels, setMediaPrefs } from "../../lib/ipc";
 import type { MediaModelSummary, MediaPrefs } from "../../lib/types";
+import { IconButton } from "../../components/ui";
 import { Select } from "../../components/ui/Select";
 import type { SelectOption } from "../../components/ui/Select";
 import { ToolSwitch } from "../tools/ToolSwitch";
@@ -21,6 +22,23 @@ export function MediaPage() {
   const [videoModels, setVideoModels] = useState<MediaModelSummary[] | null>(null);
   const [savedAt, setSavedAt] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+
+  // One refetch renews the shared cache, so the second listing reads from it.
+  // A failure keeps the lists already on screen.
+  async function refreshModels() {
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      setImageModels(await listMediaModels("image", true));
+      setVideoModels(await listMediaModels("video"));
+    } catch (e) {
+      setRefreshError(String(e));
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   useEffect(() => {
     getMediaPrefs()
@@ -79,7 +97,18 @@ export function MediaPage() {
       </section>
 
       <section className="settings-section">
-        <div className="settings-label">Default models</div>
+        <div className="media-models-head">
+          <div className="settings-label">Default models</div>
+          <IconButton
+            size="sm"
+            aria-label="Refresh the model catalog"
+            title="Fetch the latest models from Oxen"
+            disabled={refreshing}
+            onClick={refreshModels}
+          >
+            <RefreshCw size={14} className={refreshing ? "media-refreshing" : undefined} />
+          </IconButton>
+        </div>
         <p className="hint">
           What the agent uses when it doesn't name a model. It can still pick any model from the
           catalog for a specific job (a reference-to-video model, an upscaler).
@@ -98,6 +127,9 @@ export function MediaPage() {
           models={videoModels}
           onChange={(v) => update({ default_video_model: v })}
         />
+        {refreshError && (
+          <span className="save-status err">Couldn't refresh the catalog: {refreshError}</span>
+        )}
       </section>
 
       <section className="settings-section">
