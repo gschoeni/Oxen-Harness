@@ -4,7 +4,7 @@
 //! runs on. A local switch starts a fresh server + session; a cloud switch
 //! swaps the live conversation in place (continuing the chat).
 
-use harness_local::{fit, install_llama_server, ModelRef, ModelStore};
+use harness_local::{fit, ModelRef, ModelStore};
 use harness_protocol::{ProtocolEvent, SessionInfo};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -276,17 +276,6 @@ fn token_for(model: &ModelRef) -> Option<String> {
             harness_config::secrets::get("OXEN_API_KEY").filter(|t| !t.trim().is_empty())
         }
     }
-}
-
-/// Install `llama-server` for the user, streaming progress via `llama://install`.
-#[tauri::command]
-pub(crate) async fn install_llama(app: AppHandle) -> Result<(), String> {
-    install_llama_server(|line| {
-        let _ = app.emit("llama://install", line.to_string());
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 /// The machine's compute profile (RAM, accelerator), so the setup flow can

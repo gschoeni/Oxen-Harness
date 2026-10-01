@@ -1,5 +1,5 @@
 //! Workspace files — the Files tree and the Editor pane browse, read, and
-//! write files inside a chat's working directory. Every command takes the
+//! create files inside a chat's working directory. Every command takes the
 //! workspace root (the frontend knows it from the session) plus a
 //! workspace-relative path, and refuses anything that would escape the root,
 //! so the webview can never reach outside the project it's showing.
@@ -472,13 +472,6 @@ pub(crate) fn fs_read_file(root: String, path: String) -> Result<FileBody, Strin
     })
 }
 
-/// Save the editor's buffer back to disk.
-#[tauri::command]
-pub(crate) fn fs_write_file(root: String, path: String, content: String) -> Result<(), String> {
-    let file = resolve(&root, &path)?;
-    fs::write(&file, content).map_err(|e| format!("could not save {path}: {e}"))
-}
-
 /// Create an empty file or a directory. Fails if something already exists at
 /// the path, so a typo can't silently truncate a real file.
 #[tauri::command]
@@ -723,7 +716,6 @@ mod tests {
 
         let root = dir.display().to_string();
         assert!(fs_read_file(root.clone(), "leak.txt".into()).is_err());
-        assert!(fs_write_file(root.clone(), "leak.txt".into(), "overwrite".into()).is_err());
         assert!(fs_read_file(root.clone(), "leakdir/secret.txt".into()).is_err());
         assert!(fs_create_entry(root.clone(), "leakdir/new.txt".into(), false).is_err());
         assert!(fs_asset_path(root.clone(), "leak.txt".into()).is_err());
@@ -796,10 +788,10 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_edits_and_refuses_existing_targets() {
+    fn reads_files_and_refuses_existing_targets() {
         let dir = workspace("roundtrip");
         let root = dir.display().to_string();
-        fs_write_file(root.clone(), "README.md".into(), "updated".into()).unwrap();
+        fs::write(dir.join("README.md"), "updated").unwrap();
         let body = fs_read_file(root.clone(), "README.md".into()).unwrap();
         assert_eq!(body.content, "updated");
         assert!(!body.truncated);
