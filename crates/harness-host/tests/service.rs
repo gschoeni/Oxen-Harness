@@ -718,6 +718,7 @@ async fn view_authoring_is_workspace_scoped_and_keeps_drafts_per_conversation() 
         workspace.path(),
         FeatureFlags {
             workbench_customization: true,
+            ..FeatureFlags::default()
         },
     );
     let first = service.new_session().await.unwrap().session_id;
