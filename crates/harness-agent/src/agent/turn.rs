@@ -891,6 +891,11 @@ impl Agent {
         }
 
         let mut loop_stop = None;
+        // Images wait until every call in the round has its result: a user
+        // message between two results of one reply leaves the later call
+        // unanswered as far as the provider is concerned, a 400 that fails
+        // this turn and every later one on the same transcript.
+        let mut image_followups: Vec<Vec<String>> = Vec::new();
         for (call, result) in calls.iter().zip(results) {
             // A call whose task vanished (a panicking tool) still owes the
             // model a result, or the provider rejects the unpaired call.
@@ -922,17 +927,20 @@ impl Agent {
             let result = self.park_oversized(&call.function.name, result);
             // A tool that produced an image (e.g. the preview screenshot) marks
             // it in-band; the `tool` role is text-only, so the image rides in
-            // as a user message right after the result.
+            // as a user message after the round's results.
             match harness_core::attach::extract_image_markers(&result, "(image attached below)") {
                 Some((cleaned, paths)) => {
                     self.push(ChatMessage::tool_result(call.id.clone(), cleaned))?;
                     for path in &paths {
                         on_event(&AgentEvent::ImageAttached { path: path.clone() });
                     }
-                    self.push_tool_images(&paths)?;
+                    image_followups.push(paths);
                 }
                 None => self.push(ChatMessage::tool_result(call.id.clone(), result))?,
             }
+        }
+        for paths in &image_followups {
+            self.push_tool_images(paths)?;
         }
         Ok(loop_stop)
     }
@@ -2111,6 +2119,103 @@ mod tests {
             }
             other => panic!("expected multimodal user message, got {other:?}"),
         }
+    }
+
+    /// Two image-producing calls in one reply: both results come first, then
+    /// the images. Interleaving them (result, image, result, image) made the
+    /// provider reject the transcript — the second call had no result
+    /// "immediately after" the reply.
+    #[tokio::test]
+    async fn images_from_parallel_calls_follow_all_of_the_rounds_results() {
+        struct SnapTool(std::path::PathBuf);
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        struct SnapArgs {}
+        #[async_trait::async_trait]
+        impl harness_tools::TypedTool for SnapTool {
+            const NAME: &'static str = "snap";
+            type Args = SnapArgs;
+            fn description(&self) -> &str {
+                "take a snapshot"
+            }
+            async fn run(
+                &self,
+                _: SnapArgs,
+                _call: &harness_tools::CallContext,
+            ) -> Result<String, harness_tools::ToolError> {
+                const PNG: &[u8] = &[
+                    0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D',
+                    b'R', 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1f, 0x15, 0xc4, 0x89,
+                ];
+                std::fs::write(&self.0, PNG).unwrap();
+                Ok(format!(
+                    "Captured. {}",
+                    harness_core::attach::image_marker(&self.0.display().to_string())
+                ))
+            }
+        }
+
+        let two_calls = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": "",
+                    "tool_calls": [
+                        {"index": 0, "id": "snap_a", "function": {"name": "snap", "arguments": "{}"}},
+                        {"index": 1, "id": "snap_b", "function": {"name": "snap", "arguments": "{}"}}
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(format!("data: {two_calls}\n\ndata: [DONE]\n\n"))
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("image attached below".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("both look good"))
+            .create_async()
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "claude-opus-4-8");
+        let client = OxenClient::new(server.url(), "key", "claude-opus-4-8");
+        let mut tools = ToolRegistry::new();
+        tools.register_typed(SnapTool(dir.path().join("shot.png")));
+        let config = AgentConfig {
+            system_prompt: None,
+            ..AgentConfig::default()
+        };
+        let mut agent = Agent::new(client, tools, store, session, config).unwrap();
+
+        let out = agent.run_turn("compare two shots", |_| {}).await.unwrap();
+        assert_eq!(out, "both look good");
+
+        let shape: Vec<(&str, Option<&str>)> = agent
+            .messages()
+            .iter()
+            .map(|m| (m.role.as_str(), m.tool_call_id.as_deref()))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("user", None),
+                ("assistant", None),
+                ("tool", Some("snap_a")),
+                ("tool", Some("snap_b")),
+                ("user", None),
+                ("user", None),
+                ("assistant", None),
+            ]
+        );
     }
 
     #[tokio::test]

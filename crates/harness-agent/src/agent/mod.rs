@@ -1201,6 +1201,7 @@ impl Agent {
     /// keep the images and a later multimodal model can still look at them.
     fn outbound_messages(&self) -> Vec<ChatMessage> {
         let mut messages = self.messages.clone();
+        regroup_tool_results(&mut messages);
         // A tool call the model produced with no arguments, or arguments cut
         // off mid-JSON, is kept verbatim in the transcript but must not be
         // re-sent as-is: providers reject a call whose `arguments` isn't
@@ -1312,6 +1313,41 @@ fn sendable_arguments(arguments: &str) -> String {
         return arguments.to_string();
     }
     serde_json::json!({ "unparsed_arguments": arguments }).to_string()
+}
+
+/// Move every round's `tool` results directly behind the assistant message
+/// that made the calls, ahead of anything that got in between them.
+///
+/// Providers require a reply's results to follow it with nothing in between.
+/// Transcripts written before image follow-ups waited for the whole round
+/// hold `result, image, result, image` after a reply with two image-producing
+/// calls, and every request on such a chat is a 400. The stored history stays
+/// verbatim; only what is sent is put in order. A no-op on a well-formed
+/// transcript.
+fn regroup_tool_results(messages: &mut [ChatMessage]) {
+    let mut start = 0;
+    while start < messages.len() {
+        let is_round = messages[start].role == "assistant"
+            && messages[start]
+                .tool_calls
+                .as_deref()
+                .is_some_and(|calls| !calls.is_empty());
+        start += 1;
+        if !is_round {
+            continue;
+        }
+        // The round runs to the next assistant message; within it, results
+        // go first and everything else keeps its order behind them.
+        let len = messages[start..]
+            .iter()
+            .position(|m| m.role == "assistant")
+            .unwrap_or(messages.len() - start);
+        let round = &mut messages[start..start + len];
+        if let Some(last_result) = round.iter().rposition(|m| m.role == "tool") {
+            round[..=last_result].sort_by_key(|m| m.role != "tool");
+        }
+        start += len;
+    }
 }
 
 /// The ids of the tool calls in a transcript's trailing assistant round that
@@ -2001,6 +2037,106 @@ mod tests {
         );
         assert_eq!(unanswered_tool_call_ids(&[ChatMessage::user("hi")]), None);
         assert_eq!(unanswered_tool_call_ids(&[]), None);
+    }
+
+    #[test]
+    fn regroup_tool_results_pulls_a_rounds_results_ahead_of_interleaved_messages() {
+        use harness_llm::types::{FunctionCall, ToolCall};
+        let call = |id: &str| ToolCall {
+            id: id.into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "generate_image".into(),
+                arguments: "{}".into(),
+            },
+        };
+        let texts = |messages: &[ChatMessage]| -> Vec<String> {
+            messages
+                .iter()
+                .map(|m| m.content_text().unwrap_or_default())
+                .collect()
+        };
+        // The shape older builds stored: each image right after its result.
+        let mut interleaved = vec![
+            ChatMessage::user("make two"),
+            ChatMessage::assistant_with_tools("calls".into(), vec![call("c1"), call("c2")]),
+            ChatMessage::tool_result("c1", "result 1"),
+            ChatMessage::user("image 1"),
+            ChatMessage::tool_result("c2", "result 2"),
+            ChatMessage::user("image 2"),
+            ChatMessage::assistant("done"),
+            ChatMessage::user("next"),
+        ];
+        regroup_tool_results(&mut interleaved);
+        assert_eq!(
+            texts(&interleaved),
+            ["make two", "calls", "result 1", "result 2", "image 1", "image 2", "done", "next"]
+        );
+
+        // Already in order: untouched, including a round with one result
+        // and a follow-up, and a later round of its own.
+        let ordered = vec![
+            ChatMessage::user("go"),
+            ChatMessage::assistant_with_tools("first".into(), vec![call("a")]),
+            ChatMessage::tool_result("a", "result a"),
+            ChatMessage::user("image a"),
+            ChatMessage::assistant_with_tools("second".into(), vec![call("b")]),
+            ChatMessage::tool_result("b", "result b"),
+        ];
+        let mut regrouped = ordered.clone();
+        regroup_tool_results(&mut regrouped);
+        assert_eq!(texts(&regrouped), texts(&ordered));
+    }
+
+    /// A chat stored with the interleaved shape goes out in an order the
+    /// provider accepts, so it can be continued without touching its history.
+    #[tokio::test]
+    async fn a_transcript_with_interleaved_image_followups_is_sent_regrouped() {
+        let mut server = mockito::Server::new_async().await;
+        let ok = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                r#""tool_call_id":"c1".*"tool_call_id":"c2".*image 1.*image 2.*go on"#.into(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(crate::test_support::sse_prose("picking up"))
+            .expect(1)
+            .create_async()
+            .await;
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "m");
+        let call = |id: &str| serde_json::json!({"id": id, "type": "function", "function": {"name": "generate_image", "arguments": "{}"}});
+        for m in [
+            serde_json::json!({"role": "user", "content": "make two"}),
+            serde_json::json!({"role": "assistant", "tool_calls": [call("c1"), call("c2")]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c1", "content": "result 1"}),
+            serde_json::json!({"role": "user", "content": "image 1"}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c2", "content": "result 2"}),
+            serde_json::json!({"role": "user", "content": "image 2"}),
+        ] {
+            store.append_message(&session, &m).unwrap();
+        }
+        let mut agent = Agent::resume_from_store(
+            OxenClient::new(server.url(), "k", "m"),
+            harness_tools::ToolRegistry::new(),
+            store.clone(),
+            session.clone(),
+            AgentConfig {
+                system_prompt: None,
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+
+        let text = agent.run_turn("go on", |_| {}).await.unwrap();
+        ok.assert_async().await;
+        assert_eq!(text, "picking up");
+        // The stored history is left as it was written.
+        let stored = store
+            .messages_typed_after::<ChatMessage>(&session, -1)
+            .unwrap();
+        assert_eq!(stored[3].content_text().as_deref(), Some("image 1"));
     }
 
     /// A stored transcript that stops on an unanswered tool call (the app
