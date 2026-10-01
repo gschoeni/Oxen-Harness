@@ -28,6 +28,7 @@ export default function App() {
   const sessionId = useStore((s) => s.session?.session_id);
   const workspace = useStore((s) => s.session?.workspace ?? null);
   const syncPreview = useStore((s) => s.syncPreview);
+  const refreshKeyStatus = useStore((s) => s.refreshKeyStatus);
 
   // The layout is whatever the dock registry says: each side is a column of
   // however many docks currently have content (tabbed), independently sized
@@ -43,6 +44,12 @@ export default function App() {
   useEffect(() => {
     if (sessionId) syncPreview(sessionId).catch(() => {});
   }, [sessionId, syncPreview]);
+
+  // Learn whether a key is set before the first message, not from its 401.
+  // Re-read on a new chat and when Settings closes, where a key can be saved.
+  useEffect(() => {
+    if (!settingsOpen) void refreshKeyStatus();
+  }, [sessionId, settingsOpen, refreshKeyStatus]);
 
   // Watch the current workspace natively so the Files tree and open editor
   // views refresh when any process touches files on disk (batches arrive as

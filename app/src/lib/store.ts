@@ -1,5 +1,6 @@
 import { navigate, travel, type WorkContext } from "../features/workbench/context";
 import { availableTarget, resolveView } from "../features/workbench/registry";
+import { loadKeyStatus, type KeyStatus } from "./apiKey";
 import { CHAT_MIN_FIT, FILES_DEFAULT_WIDTH, RAIL_W, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "../features/docks/layout";
 import type { ViewTarget } from "../workbench-sdk";
 // Global app state. Chats are multi-session: each chat owns a thread, a run
@@ -478,6 +479,14 @@ interface AppState {
   heroGame: string | null;
   /** Whether the floating game dock is open (lets you play during a live turn). */
   gameDockOpen: boolean;
+  /** Whether an Oxen API key resolves, and which models need none. Null until
+   *  first read (or if the read failed) — unknown never prompts for a key. */
+  keyStatus: KeyStatus | null;
+  /** Re-read `keyStatus` from the host. */
+  refreshKeyStatus: () => Promise<void>;
+  /** Save an Oxen API key from the up-front prompt and authenticate the
+   *  chat's running agent. Rejects if saving fails, so the form can say why. */
+  saveApiKey: (session: string, key: string) => Promise<void>;
   /** The chat currently shown. */
   session: SessionInfo | null;
   /** All-time total tokens used across every session (drives the hero's stat). */
@@ -1278,6 +1287,17 @@ export const useStore = create<AppState>((rawSet, get) => {
     theme: null,
     heroGame: getUi("heroGame") ?? null,
     gameDockOpen: false,
+    keyStatus: null,
+    refreshKeyStatus: async () => {
+      // A failed read leaves the status unknown rather than guessing "no key":
+      // a wrong guess would nag someone who is already signed in.
+      const keyStatus = await loadKeyStatus().catch(() => null);
+      set({ keyStatus });
+    },
+    saveApiKey: async (session, key) => {
+      await configureOxenKey(session, key);
+      await get().refreshKeyStatus();
+    },
     session: null,
     totalTokensUsed: 0,
     totalCostUsd: null,
@@ -2111,6 +2131,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       // Save + authenticate the running agent first; if this throws, the card
       // stays put so the form can show the error and let the user try again.
       await configureOxenKey(session, key);
+      void get().refreshKeyStatus();
       // Retire the card, open a fresh reply bubble, and retry the failed turn
       // (which continues the existing transcript — no duplicate user message).
       set((s) => ({

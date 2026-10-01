@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { ArrowLeft, Check, ExternalLink, FileImage, FileText, FolderOpen, GitBranch, MessageSquare, Paperclip, Pencil, Plus, Send, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, ExternalLink, FileImage, FileText, FolderOpen, GitBranch, KeyRound, MessageSquare, Paperclip, Pencil, Plus, Send, Trash2, X } from "lucide-react";
 import { Button, IconButton, Modal } from "../../components/ui";
 import { addProjectContext, getConnection, openExternal, pickProjectContext, removeProjectContext, updateProject } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
@@ -33,6 +33,10 @@ export function ProjectHome({
   const [chatError, setChatError] = useState("");
   const [startupModel, setStartupModel] = useState<StartupModelChoice | null>(null);
   const removeProject = useStore((state) => state.removeProject);
+  const openSettings = useStore((state) => state.openSettings);
+  // A chat started here uses the default hosted model unless a local one is
+  // picked below, so say a key is missing before the first prompt is spent.
+  const needsKey = useStore((state) => state.keyStatus !== null && !state.keyStatus.hasKey) && !startupModel?.local;
   const [pendingDelete, setPendingDelete] = useState(false);
   const cleanName = name.trim();
   const cleanGoal = goal.trim();
@@ -149,6 +153,13 @@ export function ProjectHome({
 
       <div className="project-home-grid">
         <section className="project-home-main">
+          {needsKey && (
+            <div className="project-home-key" role="status">
+              <KeyRound size={15} />
+              <span>No Oxen API key is set yet. Add one to chat with a hosted model, or pick a local model below.</span>
+              <Button size="sm" variant="primary" onClick={() => openSettings("connection")}>Add API key</Button>
+            </div>
+          )}
           <form className="project-composer" onSubmit={(event) => void submit(event)}>
             <textarea
               aria-label="Ask about this project"

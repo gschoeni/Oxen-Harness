@@ -2,8 +2,10 @@
 // content (wordmark, tagline, status, prompts) rendered three very different
 // ways: an 8-bit trail screen, a broadsheet masthead, or a clean app splash.
 
+import { needsApiKey } from "../../lib/apiKey";
 import { useStore } from "../../lib/store";
 import { formatUsd } from "../../lib/format";
+import { ApiKeyWelcome } from "./ApiKeyPrompt";
 import { DEFAULT_HERO_GAME, HeroGame } from "./heroGames";
 import { useGameHost } from "./games/studyHost";
 import { getScene } from "./scenes";
@@ -29,6 +31,10 @@ interface HeroProps {
 }
 
 function Chips({ examples, busy, onPick }: HeroProps) {
+  // Without a key every example would only come back as a 401, so the key
+  // card takes their place until one is saved (or a local model is chosen).
+  const needsKey = useStore((s) => needsApiKey(s.keyStatus, s.session?.model));
+  if (needsKey) return <ApiKeyWelcome />;
   return (
     <div className="examples">
       {examples.map((ex) => (

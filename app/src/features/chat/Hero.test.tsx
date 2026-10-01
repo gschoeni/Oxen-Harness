@@ -6,6 +6,8 @@ vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 import { Hero } from "./Hero";
 import { useStore } from "../../lib/store";
 import { sampleTheme, studyBatch, studyProfile } from "../../test/ipcMock";
+import { STUDY_NEEDS_KEY, studyHost } from "./games/studyHost";
+import { STUDY_BATCH, STUDY_PROFILE } from "./games/study";
 import { resetAll } from "../../test/utils";
 
 beforeEach(() => resetAll());
@@ -75,5 +77,22 @@ describe("Hero default game", () => {
     expect(await screen.findByText("PLAY TO MAP WHAT")).toBeInTheDocument();
     expect(screen.queryByText("TRAIL BLOCKED")).not.toBeInTheDocument();
     expect(studyBatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("the study cabinet without an API key", () => {
+  const request = { mode: "expedition" as const, count: 5, exclude: [] };
+
+  it("says a key is needed instead of relaying the provider's 401", async () => {
+    studyBatch.mockRejectedValue("Oxen API error (401): unauthorized");
+    await expect(studyHost("s1", true).perform(STUDY_BATCH, request)).rejects.toThrow(STUDY_NEEDS_KEY);
+    // The saved profile needs no model, so the title card still fills in.
+    await expect(studyHost("s1", true).perform(STUDY_PROFILE, undefined)).resolves.toBeTruthy();
+  });
+
+  it("leaves other failures, and endpoints that take no key, alone", async () => {
+    await expect(studyHost("s1", true).perform(STUDY_BATCH, request)).resolves.toBeTruthy();
+    studyBatch.mockRejectedValue("Oxen API error (429): slow down");
+    await expect(studyHost("s1", false).perform(STUDY_BATCH, request)).rejects.toBe("Oxen API error (429): slow down");
   });
 });

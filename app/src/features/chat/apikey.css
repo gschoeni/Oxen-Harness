@@ -15,6 +15,13 @@
   padding: var(--space-4);
   animation: apikey-in var(--dur) var(--ease);
 }
+/* The same card in the empty chat, asked for up front: centred under the
+   hero, where the example prompts would be. */
+.apikey-card.welcome {
+  align-self: center;
+  text-align: left;
+  pointer-events: auto;
+}
 @keyframes apikey-in {
   from {
     opacity: 0;

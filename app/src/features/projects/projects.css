@@ -245,6 +245,19 @@
   text-align: center;
 }
 .project-home-empty p { max-width: 460px; line-height: 1.55; font-size: var(--text-sm); }
+.project-home-key {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  color: var(--text-secondary);
+  background: var(--accent-tint);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+.project-home-key span { flex: 1; min-width: 0; line-height: 1.45; }
+.project-home-key svg { flex-shrink: 0; color: var(--accent); }
 .project-home-error { margin-top: var(--space-3); padding: var(--space-3); color: var(--danger); background: var(--danger-soft); border-radius: var(--radius-sm); font-size: var(--text-sm); }
 
 /* Guidance panel: quiet cards, section names in the board's label voice. */

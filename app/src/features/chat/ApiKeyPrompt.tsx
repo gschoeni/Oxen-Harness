@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ArrowRight, Eye, EyeOff, KeyRound } from "lucide-react";
 import { Button } from "../../components/ui";
 import { getConnection } from "../../lib/ipc";
@@ -13,8 +13,59 @@ type ApiKeyItem = Extract<Item, { kind: "apikey" }>;
  *  authenticates the running chat and retries the failed turn, so the
  *  conversation continues without a trip to Settings or a fresh session. */
 export function ApiKeyPrompt({ item }: { item: ApiKeyItem }) {
-  const sessionId = useStore((s) => s.session?.session_id);
   const submitApiKey = useStore((s) => s.submitApiKey);
+  return (
+    <ApiKeyCard
+      why={(host) => (
+        <>
+          That request wasn’t authorized — no API key is set for {host}. Paste one to continue
+          this chat.
+        </>
+      )}
+      action="Save & retry"
+      // On success the card is removed from the thread, unmounting the form.
+      onSave={(session, key) => submitApiKey(session, item.id, key)}
+      autoFocus
+    />
+  );
+}
+
+/** The same card before anything was sent: an empty chat with no key shows it
+ *  where the example prompts would be, so the first message isn't spent
+ *  discovering a 401. Saving it brings the examples back. */
+export function ApiKeyWelcome() {
+  const saveApiKey = useStore((s) => s.saveApiKey);
+  return (
+    <ApiKeyCard
+      className="welcome"
+      why={(host) => (
+        <>
+          No API key is set for {host} yet. Paste one to start chatting — or pick a local model
+          below, which needs none.
+        </>
+      )}
+      action="Save key"
+      onSave={saveApiKey}
+    />
+  );
+}
+
+function ApiKeyCard({
+  why,
+  action,
+  onSave,
+  className = "",
+  autoFocus = false,
+}: {
+  /** The line under the title, given the endpoint the key is for. */
+  why: (host: ReactNode) => ReactNode;
+  action: string;
+  onSave: (session: string, key: string) => Promise<void>;
+  className?: string;
+  /** Only the recovery card takes focus; up front, the composer keeps it. */
+  autoFocus?: boolean;
+}) {
+  const sessionId = useStore((s) => s.session?.session_id);
   const openSettings = useStore((s) => s.openSettings);
 
   const [key, setKey] = useState("");
@@ -38,16 +89,18 @@ export function ApiKeyPrompt({ item }: { item: ApiKeyItem }) {
     setSaving(true);
     setError(null);
     try {
-      // On success the card is removed from the thread, unmounting this form.
-      await submitApiKey(sessionId, item.id, trimmed);
+      await onSave(sessionId, trimmed);
     } catch (err) {
       setError(String(err));
+    } finally {
+      // A save that worked normally unmounts the card; if it is still here,
+      // it must not stay locked on "Saving…".
       setSaving(false);
     }
   }
 
   return (
-    <div className="apikey-card">
+    <div className={`apikey-card ${className}`.trim()}>
       <div className="apikey-head">
         <span className="apikey-icon">
           <KeyRound size={15} />
@@ -55,9 +108,7 @@ export function ApiKeyPrompt({ item }: { item: ApiKeyItem }) {
         <div className="apikey-head-text">
           <div className="apikey-title">Connect your Oxen account</div>
           <div className="apikey-sub">
-            That request wasn’t authorized — no API key is set for{" "}
-            <code className="apikey-host">{host || "your Oxen endpoint"}</code>. Paste one to
-            continue this chat.
+            {why(<code className="apikey-host">{host || "your Oxen endpoint"}</code>)}
           </div>
         </div>
       </div>
@@ -73,7 +124,7 @@ export function ApiKeyPrompt({ item }: { item: ApiKeyItem }) {
             autoCapitalize="off"
             autoCorrect="off"
             autoComplete="off"
-            autoFocus
+            autoFocus={autoFocus}
             disabled={saving}
             onChange={(e) => setKey(e.target.value)}
           />
@@ -88,7 +139,7 @@ export function ApiKeyPrompt({ item }: { item: ApiKeyItem }) {
           </button>
         </div>
         <Button type="submit" variant="primary" size="sm" disabled={!key.trim() || saving}>
-          {saving ? "Saving…" : "Save & retry"}
+          {saving ? "Saving…" : action}
           {!saving && <ArrowRight size={15} />}
         </Button>
       </form>

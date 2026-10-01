@@ -1,6 +1,5 @@
 import {
   activeTheme,
-  configureOxenKey,
   exportFinetuning,
   pickExportPath,
   setThemeLocation,
@@ -91,7 +90,7 @@ export async function dispatchSlashCommand(text: string): Promise<boolean> {
         else {
           const id = state.session?.session_id;
           if (!id) break;
-          await configureOxenKey(id, args);
+          await state.saveApiKey(id, args);
           note("Oxen API key saved.");
         }
         break;

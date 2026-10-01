@@ -97,6 +97,38 @@ describe("Chat", () => {
     expect(screen.getByText("Explain this codebase")).toBeInTheDocument();
   });
 
+  it("asks for an API key up front instead of offering prompts that would 401", async () => {
+    ipc.getConnection.mockResolvedValue({ ...ipc.sampleConnection, api_key: "", env_key_available: false });
+    await act(() => useStore.getState().refreshKeyStatus());
+    render(<Chat />);
+
+    expect(screen.getByText(/Connect your Oxen account/i)).toBeInTheDocument();
+    expect(screen.getByText(/No API key is set for/)).toBeInTheDocument();
+    expect(screen.queryByText("Explain this codebase")).not.toBeInTheDocument();
+    // The card is an offer, not a gate: typing is where the cursor stays.
+    expect(screen.getByPlaceholderText(/ask the agent/i)).toHaveFocus();
+
+    ipc.getConnection.mockResolvedValue(ipc.sampleConnection);
+    await userEvent.type(screen.getByPlaceholderText(/Oxen API key/i), "sk-live-key");
+    await userEvent.click(screen.getByRole("button", { name: "Save key" }));
+
+    expect(ipc.configureOxenKey).toHaveBeenCalledWith("s1", "sk-live-key");
+    // Nothing was sent on the user's behalf; the examples are back.
+    expect(ipc.runTurn).not.toHaveBeenCalled();
+    expect(await screen.findByText("Explain this codebase")).toBeInTheDocument();
+    expect(screen.queryByText(/Connect your Oxen account/i)).not.toBeInTheDocument();
+  });
+
+  it("asks for no key when the chat runs on a local model", async () => {
+    ipc.getConnection.mockResolvedValue({ ...ipc.sampleConnection, api_key: "", env_key_available: false });
+    await act(() => useStore.getState().refreshKeyStatus());
+    useStore.setState({ session: { ...ipc.sampleSession, session_id: "s1", model: "qwen3-8b-q4-k-m" } });
+    render(<Chat />);
+
+    expect(screen.queryByText(/Connect your Oxen account/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Explain this codebase")).toBeInTheDocument();
+  });
+
   it("keeps the hero up when a fresh chat holds only system notices", async () => {
     render(<Chat />);
     // `/location` (and other local commands) drop a notice into an otherwise

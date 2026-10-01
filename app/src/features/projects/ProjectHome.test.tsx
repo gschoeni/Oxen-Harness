@@ -7,6 +7,7 @@ vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 import { ProjectHome } from "./ProjectHome";
 import * as ipc from "../../lib/ipc";
 import { resetAll } from "../../test/utils";
+import { useStore } from "../../lib/store";
 import type { Project } from "../../lib/types";
 
 function project(overrides: Partial<Project> = {}): Project {
@@ -46,6 +47,28 @@ it.each([{ isComposing: true }, { keyCode: 229 }])(
     }
   },
 );
+
+describe("a project home with no API key", () => {
+  it("says so before the first prompt and leads to where a key is added", async () => {
+    useStore.setState({ keyStatus: { hasKey: false, localModels: [] } });
+    render(<ProjectHome project={project()} onBack={() => {}} onProjectChanged={() => {}} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(/No Oxen API key is set yet/);
+    await userEvent.click(screen.getByRole("button", { name: "Add API key" }));
+    expect(useStore.getState().settingsOpen).toBe(true);
+    expect(useStore.getState().settingsPage).toBe("connection");
+  });
+
+  it("stays quiet when a key resolves or the answer isn't known yet", () => {
+    const { unmount } = render(<ProjectHome project={project()} onBack={() => {}} onProjectChanged={() => {}} />);
+    expect(screen.queryByRole("button", { name: "Add API key" })).not.toBeInTheDocument();
+    unmount();
+
+    useStore.setState({ keyStatus: { hasKey: true, localModels: [] } });
+    render(<ProjectHome project={project()} onBack={() => {}} onProjectChanged={() => {}} />);
+    expect(screen.queryByRole("button", { name: "Add API key" })).not.toBeInTheDocument();
+  });
+});
 
 describe("the project's repository card", () => {
   it("saves a well-formed namespace/name and keeps the other fields", async () => {
