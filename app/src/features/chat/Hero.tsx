@@ -5,6 +5,7 @@
 import { useStore } from "../../lib/store";
 import { formatUsd } from "../../lib/format";
 import { DEFAULT_HERO_GAME, HeroGame } from "./heroGames";
+import { useGameHost } from "./games/studyHost";
 import { getScene } from "./scenes";
 import { StatusPanel } from "./StatusPanel";
 
@@ -43,6 +44,7 @@ export function Hero(props: HeroProps) {
   const theme = useStore((s) => s.theme);
   const heroGame = useStore((s) => s.heroGame);
   const setHeroGame = useStore((s) => s.setHeroGame);
+  const gameHost = useGameHost();
   // The hero's "Total tokens used" shows the all-time grand total across every
   // session, so a fresh chat opens with your running tally rather than 0.
   const tokensUsed = useStore((s) => s.totalTokensUsed);
@@ -151,6 +153,7 @@ export function Hero(props: HeroProps) {
             palette={palette}
             hint={hint}
             onSelectGame={setHeroGame}
+            host={gameHost}
           />
         )}
       </div>

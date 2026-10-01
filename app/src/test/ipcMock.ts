@@ -32,7 +32,14 @@ import type {
   TaskSummary,
   MediaItem,
   MediaModelSummary,
-  MediaPrefs, UsageBreakdown } from "../lib/types";
+  MediaPrefs, UsageBreakdown,
+  ModelRole,
+  ModelRoles,
+  StudyAnswerRequest,
+  StudyAnswerResult,
+  StudyBatch,
+  StudyBatchRequest,
+  StudyProfile } from "../lib/types";
 
 // ---- event plumbing --------------------------------------------------------
 
@@ -534,6 +541,36 @@ export const removeCloudModel = vi.fn(async () => sampleCloudModels);
 export const searchOxenModels = vi.fn(async () => sampleOxenHits);
 export const setModel = vi.fn(async () => ({ ...sampleSession, session_id: "model-switched" }));
 
+// The study game + the model roles it shares a settings section with.
+export const sampleStudyProfile: StudyProfile = {
+  project: "demo-1234abcd",
+  workspace: "/demo",
+  understanding: 12,
+  level: 2,
+  answered: 3,
+  territories: [{ id: "src", name: "src", mastery: 0.35, answered: 3, correct: 2, faded: 0 }],
+};
+export const studyProfile = vi.fn(async (_session: string) => sampleStudyProfile);
+export const studyBatch = vi.fn(async (_session: string, _request: StudyBatchRequest): Promise<StudyBatch> => ({
+  mode: "expedition",
+  questions: [],
+  territory: "src",
+  tokens_used: 0,
+  model: "",
+}));
+export const studyAnswer = vi.fn(async (_session: string, _request: StudyAnswerRequest): Promise<StudyAnswerResult> => ({
+  grade: { verdict: "full", feedback: "Right.", correct_answer: "", explanation: "" },
+  profile: sampleStudyProfile,
+  tokens_used: 0,
+}));
+export const getModelRoles = vi.fn(async (): Promise<ModelRoles> => ({ study: null, smol: null, summary: null }));
+export const setModelRole = vi.fn(async (role: ModelRole, model: string | null): Promise<ModelRoles> => ({
+  study: null,
+  smol: null,
+  summary: null,
+  [role]: model,
+}));
+
 export const runCodeReview = vi.fn(async (): Promise<CodeReviewRunResult> => ({
   status: "ok",
   user: "Run a code review of the uncommitted changes in this workspace.",
@@ -725,6 +762,15 @@ export function resetIpc() {
   deleteSkill.mockReset().mockResolvedValue(undefined);
   setSkillEnabled.mockReset().mockResolvedValue(undefined);
   attachmentPath.mockReset().mockImplementation(async (path: string) => (path.startsWith("/") ? path : `/ws/${path}`));
+  studyProfile.mockReset().mockResolvedValue(sampleStudyProfile);
+  studyBatch.mockReset().mockResolvedValue({ mode: "expedition", questions: [], territory: "src", tokens_used: 0, model: "" });
+  studyAnswer.mockReset().mockResolvedValue({
+    grade: { verdict: "full", feedback: "Right.", correct_answer: "", explanation: "" },
+    profile: sampleStudyProfile,
+    tokens_used: 0,
+  });
+  getModelRoles.mockReset().mockResolvedValue({ study: null, smol: null, summary: null });
+  setModelRole.mockReset().mockImplementation(async (role: ModelRole, model: string | null) => ({ study: null, smol: null, summary: null, [role]: model }));
   runCodeReview.mockReset().mockResolvedValue({
     status: "ok",
     user: "Run a code review of the uncommitted changes in this workspace.",

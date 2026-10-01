@@ -396,7 +396,7 @@ export interface ThemeStyle {
   shadow: string; // "pixel" | "soft" | "glow" | "none"
   hero: string; // "pixel" | "newspaper" | "minimal"
   scene: string; // "trail" | "grid" | "none" — the pixel hero's fallback artwork
-  game?: string; // "tumbleweed" | "oregon" | "hunt" | "none" — the pixel hero's default game
+  game?: string; // "tumbleweed" | "oregon" | "hunt" | "study" | "none" — the pixel hero's default game
   // (the player can switch cabinets at runtime; "none" opts into a static scene)
 }
 
@@ -1275,3 +1275,93 @@ export interface ProjectOpenEvent {
   /** `gallery`, `settings:<page>`, or `session:<id>`. */
   surface: string | null;
 }
+
+// ---- the codebase study game ("Trail of Understanding") ----------------------
+// Mirrors harness_protocol's Study* DTOs.
+
+/** One territory of the project (a crate, a feature directory, the docs)
+ *  with the player's decayed mastery of it. */
+export interface StudyTerritory {
+  /** The territory's path relative to the workspace root (`docs` for root Markdown). */
+  id: string;
+  name: string;
+  /** 0..1, after spaced-repetition decay. */
+  mastery: number;
+  answered: number;
+  correct: number;
+  last_answered_at?: number;
+  /** How far mastery has fallen from its peak, 0..1. */
+  faded: number;
+}
+
+export interface StudyProfile {
+  project: string;
+  workspace: string;
+  /** 0..100 across the whole project. */
+  understanding: number;
+  level: number;
+  answered: number;
+  territories: StudyTerritory[];
+}
+
+export type StudyMode = "expedition" | "fresh_tracks" | "ride_along" | "review";
+export type StudyVerdict = "full" | "partial" | "wrong";
+
+/** A question as the client sees it — the answer stays server-side. */
+export interface StudyQuestion {
+  id: string;
+  territory: string;
+  kind: "multiple_choice" | "true_false" | "free_text";
+  prompt: string;
+  options: string[];
+  source_path: string;
+  source_lines?: [number, number];
+  source_excerpt: string;
+  difficulty: number;
+  cached: boolean;
+}
+
+export interface StudyBatchRequest {
+  mode: StudyMode;
+  count?: number;
+  /** Question ids already used this run. */
+  exclude?: string[];
+}
+
+export interface StudyBatch {
+  mode: string;
+  questions: StudyQuestion[];
+  territory: string;
+  tokens_used: number;
+  model: string;
+}
+
+export interface StudyAnswerRequest {
+  question_id: string;
+  /** The option index (as text) for choice questions, the typed answer otherwise. */
+  answer: string;
+  hint_used?: boolean;
+}
+
+export interface StudyGrade {
+  verdict: StudyVerdict;
+  feedback: string;
+  correct_answer: string;
+  explanation: string;
+}
+
+export interface StudyAnswerResult {
+  grade: StudyGrade;
+  profile: StudyProfile;
+  tokens_used: number;
+}
+
+/** Per-role model overrides from limits.json; unset roles fall back
+ *  (study → smol → the session model). */
+export interface ModelRoles {
+  study?: string | null;
+  smol?: string | null;
+  summary?: string | null;
+}
+
+export type ModelRole = "study" | "smol" | "summary";

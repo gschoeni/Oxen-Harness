@@ -57,6 +57,45 @@ describe("HeroGame wrapper", () => {
     expect(window.localStorage.getItem("oxen-hero-daily")).toBe("1");
   });
 
+  it("performs a game's queued requests through the host and delivers the replies", async () => {
+    const question = { id: "q1", territory: "src", kind: "free_text", prompt: "Which function makes room in the context?", options: [], source_path: "src/turn.rs", source_excerpt: "", difficulty: 1, cached: false };
+    const profile = { project: "p", workspace: "/p", understanding: 10, level: 2, answered: 1, territories: [] };
+    const perform = vi.fn(async (kind: string, _payload: unknown) => {
+      if (kind === "study.profile") return profile;
+      if (kind === "study.batch") return { mode: "expedition", questions: [question], territory: "src", tokens_used: 0, model: "m" };
+      return { grade: { verdict: "full", feedback: "Right.", correct_answer: "make_room", explanation: "" }, profile, tokens_used: 0 };
+    });
+    render(<HeroGame gameName="study" palette={palette} host={{ perform }} />);
+    // The profile loads on the attract screen, before any play.
+    await screen.findByText("LEVEL 2");
+    expect(perform).toHaveBeenCalledWith("study.profile", null);
+    // The study cabinet has no daily run to share.
+    expect(screen.queryByRole("button", { name: /daily/i })).toBeNull();
+
+    fireEvent.pointerDown(stage(), { clientX: 50, clientY: 50 });
+    fireEvent.pointerUp(stage(), { clientX: 50, clientY: 50 });
+    await userEvent.keyboard("1");
+    expect(perform).toHaveBeenCalledWith("study.batch", expect.objectContaining({ mode: "expedition" }));
+
+    // A free-text question opens the answer box; typing there never reaches
+    // the game's key handler, and submitting sends the answer for grading.
+    const input = await screen.findByLabelText("Your answer");
+    await userEvent.type(input, "make_room{Enter}");
+    expect(perform).toHaveBeenCalledWith("study.answer", { question_id: "q1", answer: "make_room", hint_used: false });
+    await screen.findAllByText("RIGHT!"); // pixel titles render twice (shadow + face)
+    expect(screen.queryByLabelText("Your answer")).toBeNull();
+    // Focusing the cabinet's own answer box must not have paused the game.
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("fails a request with a clear message when no host is connected", async () => {
+    render(<HeroGame gameName="study" palette={palette} />);
+    fireEvent.pointerDown(stage(), { clientX: 50, clientY: 50 });
+    fireEvent.pointerUp(stage(), { clientX: 50, clientY: 50 });
+    await userEvent.keyboard("1");
+    await screen.findAllByText("TRAIL BLOCKED");
+  });
+
   it("plays queued cues once each when sound is on", () => {
     const play = vi.spyOn(sfx, "playSfx").mockImplementation(() => undefined);
     render(<HeroGame gameName="tumbleweed" palette={palette} />);

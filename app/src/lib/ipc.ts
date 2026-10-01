@@ -74,6 +74,13 @@ import type {
   SkillInfo,
   SkillScope,
   CodeReviewConfig,
+  ModelRole,
+  ModelRoles,
+  StudyAnswerRequest,
+  StudyAnswerResult,
+  StudyBatch,
+  StudyBatchRequest,
+  StudyProfile,
   CodeReviewProgressEvent,
   CodeReviewRunResult,
   CodeReviewTokenEvent,
@@ -575,6 +582,26 @@ export const removePermissionRule = (
  *  session as a settled exchange. `cancelTurn(session)` stops it. */
 export const runCodeReview = (session: string, baseBranch?: string) =>
   invoke<CodeReviewRunResult>("run_code_review", { session, baseBranch: baseBranch ?? null });
+
+/** The study game's profile for the project `session` is rooted in: the
+ *  understanding level and mastery per territory. */
+export const studyProfile = (session: string) => invoke<StudyProfile>("study_profile", { session });
+
+/** Questions for one stretch of a study run. Rejects with the reason when the
+ *  mode has nothing to ask about. Never waits on the chat's turn. */
+export const studyBatch = (session: string, request: StudyBatchRequest) =>
+  invoke<StudyBatch>("study_batch", { session, request });
+
+/** Grade an answer and record it; resolves with the grade and the new profile. */
+export const studyAnswer = (session: string, request: StudyAnswerRequest) =>
+  invoke<StudyAnswerResult>("study_answer", { session, request });
+
+/** The study / smol / summary model overrides. */
+export const getModelRoles = () => invoke<ModelRoles>("get_model_roles");
+
+/** Assign a role's model, or clear it with `null` (it then falls back). */
+export const setModelRole = (role: ModelRole, model: string | null) =>
+  invoke<ModelRoles>("set_model_role", { role, model });
 
 /** The saved code-review pipeline (steps + findings cap), for Settings. */
 export const getCodeReviewConfig = () => invoke<CodeReviewConfig>("get_code_review_config");

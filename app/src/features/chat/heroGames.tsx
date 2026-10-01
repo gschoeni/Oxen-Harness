@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ThemePalette } from "../../lib/types";
-import { dailyLabel, dailyPreference, pointerAsKey, seedRun, setDailyPreference, type HeroGameDefinition, type PointerInput, type SfxEvent } from "./games/gameKit";
+import { dailyLabel, dailyPreference, pointerAsKey, seedRun, setDailyPreference, type GameRequest, type GameResult, type HeroGameDefinition, type HeroGameHost, type PointerInput, type SfxEvent } from "./games/gameKit";
 import { playSfx, setSfxPreference, sfxPreference, unlockSfx } from "./games/sfx";
 import { TumbleweedDodgeGame } from "./games/tumbleweed";
 import { OxenTrailGame } from "./games/oregonTrail";
 import { HuntGame } from "./games/hunt";
+import { StudyGame } from "./games/study";
 import "./games/arcade.css";
 
-export type { HeroGameDefinition } from "./games/gameKit";
+export type { HeroGameDefinition, HeroGameHost } from "./games/gameKit";
 
 type AnyHeroGameDefinition = HeroGameDefinition<any>;
 
@@ -17,6 +18,7 @@ export const HERO_GAMES = {
   tumbleweed: TumbleweedDodgeGame,
   oregon: OxenTrailGame,
   hunt: HuntGame,
+  study: StudyGame,
 } satisfies Record<string, AnyHeroGameDefinition>;
 
 export type HeroGameName = keyof typeof HERO_GAMES;
@@ -60,10 +62,15 @@ interface HeroGameProps {
   /** When provided, the attract screen shows cabinet-select tabs. */
   onSelectGame?: (name: string) => void;
   variant?: "hero" | "dock";
+  /** The backend for cabinets that queue requests (see gameKit's
+      `HeroGameHost`). Without one, a request fails with a clear message. */
+  host?: HeroGameHost;
 }
 
-export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "hero" }: HeroGameProps) {
+export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "hero", host }: HeroGameProps) {
   const definition = useMemo(() => getHeroGame(gameName), [gameName]);
+  const definitionRef = useRef(definition);
+  definitionRef.current = definition;
   const [playing, setPlaying] = useState(false);
   const [paused, setPaused] = useState(false);
   const [combo, setCombo] = useState(0);
@@ -74,6 +81,9 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
   const [sound, setSound] = useState(() => (variant === "dock" ? false : sfxPreference()));
   const [daily, setDaily] = useState(() => dailyPreference());
   const lastSfx = useRef(0);
+  const lastRequest = useRef(0);
+  const [entryText, setEntryText] = useState("");
+  const entryRef = useRef<HTMLInputElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const pointerStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const entries = Object.entries(HERO_GAMES) as [string, AnyHeroGameDefinition][];
@@ -187,7 +197,9 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
     }
     function onFocus(e: FocusEvent) {
       const cabinet = (e.target as HTMLElement | null)?.closest(".hero-game");
-      if (isEditableTarget(e) || (cabinet && cabinet !== stageRef.current?.parentElement)) pause();
+      // The cabinet's own answer box is part of play, not a reason to pause.
+      if (cabinet && cabinet === stageRef.current?.parentElement) return;
+      if (isEditableTarget(e) || cabinet) pause();
     }
     document.addEventListener("focusin", onFocus);
     window.addEventListener("blur", pause);
@@ -234,6 +246,49 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
     }
     lastSfx.current = newest;
   }, [state, sound, playing]);
+
+  // Perform whatever the game asked of the backend since the last render, and
+  // hand each outcome back through `deliver`. A reply that lands after the
+  // cabinet was swapped is dropped: it belongs to a state that no longer exists.
+  useEffect(() => {
+    const queue: GameRequest[] | undefined = (state as any)?.requests;
+    if (!queue || queue.length === 0 || !definition.deliver) return;
+    const fresh = queue.filter((request) => request.id > lastRequest.current);
+    if (fresh.length === 0) return;
+    lastRequest.current = queue[queue.length - 1].id;
+    for (const request of fresh) {
+      const settle = (result: GameResult) => {
+        if (definitionRef.current !== definition) return;
+        setState((current: any) => definition.deliver!(current, request, result));
+      };
+      if (!host) {
+        settle({ ok: false, error: "This game needs the app's backend, which isn't connected here." });
+        continue;
+      }
+      host.perform(request.kind, request.payload).then(
+        (value) => settle({ ok: true, value }),
+        (error) => settle({ ok: false, error: String(error?.message ?? error) }),
+      );
+    }
+  }, [state, definition, host]);
+
+  // A game waiting on typed input gets a real text box under the screen.
+  const entry = playing && !paused && definition.textEntry ? definition.textEntry(state) : null;
+  const entryActive = !!entry;
+  useEffect(() => {
+    if (entryActive) {
+      setEntryText("");
+      entryRef.current?.focus();
+    }
+  }, [entryActive]);
+
+  function submitEntry(e: React.FormEvent) {
+    e.preventDefault();
+    if (!definition.handleText) return;
+    const text = entryText;
+    setEntryText("");
+    setState((current: any) => definition.handleText!(current, text));
+  }
 
   function toggleSound() {
     const next = !sound;
@@ -294,7 +349,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
     : `${definition.title}. Press up, up, down, down to play, or click the screen.`;
 
   return (
-    <div className="hero-game" data-variant={variant} aria-label={label}>
+    <div className="hero-game" data-variant={variant} data-game={gameName} aria-label={label}>
       <div className="arcade-toolbar">
         {showTabs && !playing && (
           <div className="hero-game-tabs" role="tablist" aria-label="Choose a game">
@@ -313,7 +368,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
         )}
         {/* These controls must never cover the game HUD. */}
         <div className="hero-game-switches">
-          {!playing && (
+          {!playing && !definition.noDaily && (
             <button className={daily ? "hero-game-switch active" : "hero-game-switch"} onClick={toggleDaily} aria-pressed={daily} title="Daily run: everyone gets today's trail">
               {daily ? `DAILY ${dailyLabel()}` : "DAILY"}
             </button>
@@ -343,7 +398,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
         </>}
       </div>
       <div ref={stageRef} tabIndex={0} className="hero-game-stage" aria-label={`${definition.title} playfield`} onPointerDown={onPointerDown} onPointerUp={onPointerUp} onPointerCancel={() => (pointerStart.current = null)}>
-        {!playing && definition.renderAttract ? definition.renderAttract(palette) : definition.render(state, palette)}
+        {!playing && definition.renderAttract ? definition.renderAttract(palette, state) : definition.render(state, palette)}
         {playing && paused && (
           <div className="hero-game-pause" role="status">
             <span>PAUSED</span>
@@ -351,6 +406,27 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
           </div>
         )}
       </div>
+      {entry && (
+        <form className="hero-game-entry" onSubmit={submitEntry}>
+          <input
+            ref={entryRef}
+            className="hero-game-entry-input"
+            type="text"
+            value={entryText}
+            aria-label={entry.label}
+            placeholder={entry.placeholder}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            autoComplete="off"
+            onChange={(e) => setEntryText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") stageRef.current?.focus();
+            }}
+          />
+          <button type="submit" className="hero-game-switch">ANSWER ↵</button>
+        </form>
+      )}
       {playing && definition.help && <div className="arcade-controls">{definition.help}</div>}
       {/* The start bar lives below the screen art (not over it): the hint line,
           then the ↑↑↓↓ combo you enter to play. */}

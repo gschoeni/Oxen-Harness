@@ -213,6 +213,49 @@ export function pushSfx(queue: SfxEvent[] | undefined, ...names: SfxName[]): Sfx
   return out.length > 12 ? out.slice(out.length - 12) : out;
 }
 
+// ---- host requests ------------------------------------------------------------------
+// Games are pure state, so they can't call the backend either. A game that
+// needs data (the study cabinet asks for questions and grades) queues requests
+// the same way it queues sound: append to `state.requests` with rising ids, and
+// the wrapper performs anything newer than the last id it saw through the
+// injected `HeroGameHost`, handing the outcome back via the definition's
+// `deliver`. Tests drive a game by calling `deliver` directly, or hand the
+// wrapper a fake host.
+
+export interface GameRequest {
+  id: number;
+  /** What to do, e.g. `"study.batch"`. The host decides what kinds it serves. */
+  kind: string;
+  payload: unknown;
+}
+
+export type GameResult = { ok: true; value: unknown } | { ok: false; error: string };
+
+/** The backend a cabinet may call. One method, so a fake is one function. */
+export interface HeroGameHost {
+  perform: (kind: string, payload: unknown) => Promise<unknown>;
+}
+
+let nextRequestId = 1;
+
+export function pushRequest(queue: GameRequest[] | undefined, kind: string, payload: unknown = null): GameRequest[] {
+  const out = [...(queue ?? []), { id: nextRequestId++, kind, payload }];
+  return out.length > 16 ? out.slice(out.length - 16) : out;
+}
+
+/** The newest request id in a queue (0 when empty) — what a game stores to
+    recognise the reply it is waiting for. */
+export function lastRequestId(queue: GameRequest[] | undefined): number {
+  return queue && queue.length ? queue[queue.length - 1].id : 0;
+}
+
+/** A line of typed input a game is waiting for (see `textEntry`). */
+export interface TextEntry {
+  /** Accessible label for the input. */
+  label: string;
+  placeholder?: string;
+}
+
 // ---- reduced motion -----------------------------------------------------------------
 // Shake, hit-stop and flashes scale down for players who asked the OS for less
 // motion. Games multiply their juice durations/amplitudes by `motionScale()`.
@@ -371,8 +414,19 @@ export interface HeroGameDefinition<State = unknown> {
   onPause?: (state: State) => State;
   update: (state: State, dt: number) => State;
   render: (state: State, p: ThemePalette) => React.JSX.Element;
-  /** Static title card shown until the start combo is entered. */
-  renderAttract?: (p: ThemePalette) => React.JSX.Element;
+  /** Static title card shown until the start combo is entered. Receives the
+      current state so a cabinet can show something it loaded (a profile). */
+  renderAttract?: (p: ThemePalette, state: State) => React.JSX.Element;
+  /** The outcome of a request the game queued on `state.requests`. Runs on
+      the attract screen too, so a cabinet can load data before play. */
+  deliver?: (state: State, request: GameRequest, result: GameResult) => State;
+  /** When this returns an entry, the wrapper shows a text input under the
+      screen and routes the submitted line to `handleText` — for answers
+      that need typing, which the key handler can't collect. */
+  textEntry?: (state: State) => TextEntry | null;
+  handleText?: (state: State, text: string) => State;
+  /** Hide the DAILY switch: the game has no seeded run to share. */
+  noDaily?: boolean;
   /** Which keys, while playing, route to handleKey. Defaults to the arrow keys
       plus space/enter. Text games widen this to digits and letters. */
   keys?: (key: string) => boolean;

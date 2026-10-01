@@ -8,6 +8,7 @@
 import { GripVertical, X } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { DEFAULT_HERO_GAME, HeroGame } from "./heroGames";
+import { useGameHost } from "./games/studyHost";
 import type { ThemePalette } from "../../lib/types";
 import "./gamedock.css";
 
@@ -32,6 +33,7 @@ export function GameDock() {
   const themeGame = useStore((s) => (typeof s.theme?.style?.game === "string" ? s.theme.style.game : undefined));
   const setHeroGame = useStore((s) => s.setHeroGame);
   const close = useStore((s) => s.setGameDockOpen);
+  const gameHost = useGameHost();
 
   // The dock always shows a real game (never the "none" static scene).
   const chosen = heroGame ?? themeGame;
@@ -47,7 +49,7 @@ export function GameDock() {
         </button>
       </div>
       <div className="hero-screen hero-game-screen game-dock-screen">
-        <HeroGame gameName={gameName} palette={palette} onSelectGame={setHeroGame} variant="dock" />
+        <HeroGame gameName={gameName} palette={palette} onSelectGame={setHeroGame} variant="dock" host={gameHost} />
       </div>
       <p className="game-dock-foot">Click in to play — your agent keeps working.</p>
     </div>
