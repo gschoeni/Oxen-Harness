@@ -889,3 +889,11 @@ Still open: no TUI version; the Usage page doesn't split out `study` spend;
 with a local model active the study role's cloud id goes to the local server;
 the editor opens the file but can't jump to the question's line.
 
+**Playing while the agent runs (2026-09-30).** Verified end to end and made
+one step: a "Study while it works" button under the composer during a turn,
+⌘J to toggle the dock, and a dock whose study cabinet starts itself with the
+keyboard (press 1-4). `the_study_game_answers_while_a_turn_is_running`
+(harness-server) parks a turn and plays profile → batch → answer → flag
+against it. Closing the dock mid-run still discards that run (answers already
+given are recorded).
+
