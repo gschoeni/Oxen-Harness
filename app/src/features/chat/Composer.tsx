@@ -265,7 +265,7 @@ const ComposerToolbar = memo(function ComposerToolbar({ busy }: { busy: boolean 
       <ModelPicker disabled={busy} />
       {advancedSettingsEnabled() && <CompressionPicker disabled={busy} />}
       <CodeReviewPicker disabled={busy} />
-      {busy && <StudyButton />}
+      <StudyButton busy={busy} />
     </div>
   );
 });
