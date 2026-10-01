@@ -262,7 +262,7 @@ You may:
   1. Travel the trail        — just type what you want done
   2. Learn about the trail   — /help
   3. See the Oregon Top Ten  — /export [path]  (save the journey as JSONL)
-  4. Trade your oxen         — /model [name]  (/model roles: summary, smol, fallbacks)
+  4. Trade your oxen         — /model [name]  (/model roles: summary, smol, study, fallbacks)
   5. Change your colors      — /theme  (select, create, import, export)
   6. Pack the wagon          — /queue add <msg> … then /queue run
   7. Set the wagon rolling   — /loop run [name]  (work until the gate is green)

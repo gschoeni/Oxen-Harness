@@ -54,6 +54,9 @@ oxen-harness/
                                  commands.rs (custom slash commands from Markdown templates: .oxen-harness/commands + .claude/commands, $ARGUMENTS expansion).
     harness-loop/            — Goal-driven, self-verifying loops (discover→verify→iterate): LoopSpec/Verify, runner, journal, shareable store + built-ins.
     harness-review/          — Configurable code-review pipeline: ordered prompt steps (find→verify→report default), diff targets (uncommitted / vs base branch), isolated side-agent runner (fan-out steps run as a parallel fleet), structured findings.
+    harness-study/           — The study game's backend ("Trail of Understanding"): territories.rs (best-first split of a workspace into regions), progress.rs (attempt log → mastery with a two-week half-life, the StudyProfile),
+                                 bank.rs (per-project question cache), material.rs (source slabs per mode: a territory's files / the git diff / files the session's agent touched), generate.rs + grade.rs (prompts and lenient JSON parsers),
+                                 service.rs (StudyService: profile, batch, answer; the model behind a Completer trait), tool.rs (the `understanding` tool). Files live in ~/.oxen-harness/study/<project-key>/.
     harness-cli/             — The `oxen-harness` interactive REPL binary. Slash-command handlers live in commands/ (auth, compression, location, loops, model [+ /model roles], oxen, permissions, plan [/plan read-only mode], preview, queue, resume, rewind [/fork, /rewind], review, rules, theme, trace, ui, usage, print [-p headless]);
                                  custom_commands.rs holds the workspace's Markdown commands; graphics.rs draws inline images (kitty / iTerm2, env-detected) and OSC 8 links; the live sticky-bottom composer in live/ (card.rs: the streaming command-output card + Ctrl+O results;
                                  keys: Esc cancels, Ctrl+Q/Ctrl+Enter queue, Alt+↑ un-queue, Ctrl+O expand); the meters (branch, mode, timer) in turn.rs, priced from the session tree's usage ledger by spend.rs; the fleet lanes display in fleet_ui.rs/fleet_sink.rs.
@@ -159,6 +162,17 @@ When adding a new file to the project, update this document map.
 - `app/src/features/chat/games/arcadeArt.tsx` — deterministic pixel vistas, terrain texture, trees, wagon, and title plaques.
 - `app/src/features/chat/games/arcade.css` — cabinet controls outside the playfield, explicit play/pause buttons, and dock sizing.
 - `app/src/features/chat/games/{tumbleweed,hunt,oregonTrail}.tsx` — runner Stampede, focused hunting, and the Trail's camp/river decisions; regression tests beside each game.
+
+## Study game — 2026-09-30
+
+- `crates/harness-study/` — the backend (see the crate list above); `examples/territories.rs` prints a workspace's split.
+- `crates/harness-host/src/study.rs` — `SessionService::study_profile/batch/answer` on a detached agent with the `study` model role; never waits on the chat's turn.
+- `app/src-tauri/src/commands/study.rs` — the study commands plus `get_model_roles` / `set_model_role`.
+- `app/src/features/chat/games/terminal.tsx` — the terminal-screen kit both text cabinets share: readout line, cards, landmark strip, word wrap, seeded top-5.
+- `app/src/features/chat/games/study.tsx` — the cabinet: modes, eight legs, fort replay, hints, level; pure state that queues backend requests.
+- `app/src/features/chat/games/studyHost.ts` — maps the cabinet's requests onto ipc for the chat on screen.
+- `app/src/features/chat/games/gameKit.tsx` — `requests` / `deliver` / `textEntry`: how a pure game reaches the backend and collects typed input.
+- `app/src/features/settings/ModelRoles.tsx` — Settings → Cloud models → Model roles (study, smol, summary).
 
 ## Workbench modules and workflows
 
