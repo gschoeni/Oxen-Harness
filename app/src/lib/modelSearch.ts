@@ -11,3 +11,14 @@ export function searchChatModels(catalog: OxenModelHit[], query: string): OxenMo
     [h.id, h.name, h.developer, h.summary].some((f) => f.toLowerCase().includes(needle)),
   );
 }
+
+/** A listing ordered newest release first, so a model the endpoint just
+ *  started hosting leads instead of hiding in the alphabet. Undated models
+ *  (fine-tunes, older entries) follow, by name. */
+export function newestFirst(hits: OxenModelHit[]): OxenModelHit[] {
+  return [...hits].sort(
+    (a, b) =>
+      (b.released_at ?? "").localeCompare(a.released_at ?? "") ||
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }),
+  );
+}

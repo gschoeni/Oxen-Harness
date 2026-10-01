@@ -3,11 +3,16 @@ import { Button } from "../../components/ui";
 import { ChevronDown, Cloud, Cpu, Download, Loader, Plus } from "lucide-react";
 import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../components/ui/Menu";
 import { addCloudModel, installedLocalModels, searchOxenModels } from "../../lib/ipc";
-import { searchChatModels } from "../../lib/modelSearch";
+import { newestFirst, searchChatModels } from "../../lib/modelSearch";
 import { catalogById, rateParts } from "../../lib/rates";
 import type { RateParts } from "../../lib/rates";
 import { useStore } from "../../lib/store";
 import type { ModelRef, OxenModelHit, StartupModelChoice } from "../../lib/types";
+
+/** How many unsaved hub models the menu offers: a glance at what's new when
+ *  idle, a fuller list once a search narrows it. */
+const NEWEST_ADDABLE = 6;
+const SEARCH_ADDABLE = 20;
 
 /** A compact model dropdown. In the chat composer it switches the active
  *  session; with `onStartupChoice` it only stages a model for a future chat. */
@@ -164,15 +169,17 @@ export function ModelPicker({
     (m) => m.id,
     (m) => m.display,
   );
-  // Only while searching: models the endpoint hosts that aren't saved yet.
+  // Models the endpoint hosts that aren't saved yet, newest release first:
+  // the latest few when idle, so a new model shows up without knowing to
+  // search for it, and every match while searching.
   const addable = useMemo(() => {
-    if (!needle) return [];
     const saved = new Set(cloudModels.map((m) => m.id));
-    return searchChatModels(hits, needle)
+    return newestFirst(searchChatModels(hits, needle))
       .filter((h) => !saved.has(h.id))
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }))
-      .slice(0, 8);
+      .slice(0, needle ? SEARCH_ADDABLE : NEWEST_ADDABLE);
   }, [hits, needle, cloudModels]);
+  // The unit legend sits on whichever priced section comes first.
+  const cloudHead = shownCloud.length > 0 || !needle;
   const nothingFound = !!needle && !shownCloud.length && !shownLocal.length && !addable.length;
 
   // Enter takes the top result: a saved model first, else the first addable.
@@ -241,7 +248,7 @@ export function ModelPicker({
             onKeyDown={onSearchKey}
           />
           <div className="picker-scroll">
-            {(shownCloud.length > 0 || !needle) && (
+            {cloudHead && (
               <MenuHead aside={priced && "$ per 1M tokens"}>Cloud models</MenuHead>
             )}
             {cloudModels.length === 0 && (
@@ -295,7 +302,9 @@ export function ModelPicker({
 
             {addable.length > 0 && (
               <>
-                <MenuHead aside={priced && "$ per 1M tokens"}>Available on Oxen</MenuHead>
+                <MenuHead aside={priced && !cloudHead && "$ per 1M tokens"}>
+                  {needle ? "Available on Oxen" : "Newest on Oxen"}
+                </MenuHead>
                 {addable.map((h) => {
                   const rate = rateParts(h.pricing);
                   return (

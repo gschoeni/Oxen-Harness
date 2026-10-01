@@ -225,6 +225,17 @@ describe("ModelPicker", () => {
       await waitFor(() => expect(setModel).toHaveBeenCalledWith("muse-spark-1-1"));
     });
 
+    it("offers the endpoint's newest unsaved models without a search", async () => {
+      setup();
+      // Muse Spark is in the hub's catalog but not in the saved list: it is
+      // one click away the moment the menu opens.
+      expect(await screen.findByTitle("Add muse-spark-1-1 to your models")).toBeInTheDocument();
+      expect(screen.getByText("Newest on Oxen")).toBeInTheDocument();
+      // Still chat models only, and never one that's already saved.
+      expect(screen.queryByText("Pix Gen")).toBeNull();
+      expect(screen.queryByTitle("Add claude-sonnet-4-6 to your models")).toBeNull();
+    });
+
     it("never offers non-chat models", async () => {
       const input = setup();
       await screen.findByLabelText("$3 in, $15 out per million tokens");

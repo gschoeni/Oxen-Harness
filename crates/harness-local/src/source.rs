@@ -442,6 +442,9 @@ pub struct OxenModelHit {
     pub context_length: Option<u64>,
     /// The model's maximum reply size in tokens, when the catalog reports it.
     pub max_output_tokens: Option<u64>,
+    /// The model's release date (`YYYY-MM-DD`), when the catalog reports it —
+    /// what lets a picker lead with the newest models.
+    pub released_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -471,6 +474,8 @@ struct OxenModelEntry {
     context_length: Option<u64>,
     #[serde(default)]
     max_output_tokens: Option<u64>,
+    #[serde(default)]
+    released_at: Option<String>,
 }
 
 /// Per-token pricing for a token-billed model, as reported by the Oxen models
@@ -593,6 +598,7 @@ pub async fn oxen_search_models(
                 outputs,
                 context_length: e.context_length,
                 max_output_tokens: e.max_output_tokens,
+                released_at: e.released_at.filter(|d| !d.is_empty()),
             }
         })
         .filter(|h| {
@@ -697,6 +703,9 @@ mod tests {
 
     #[tokio::test]
     async fn pricing_catalog_uses_the_configured_endpoint() {
+        // Every catalog fetch writes the limits cache: keep it out of the
+        // real harness dir, and out of the other tests' way.
+        let _home = crate::temp_harness_dir();
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("GET", "/api/ai/models")
@@ -724,6 +733,9 @@ mod tests {
 
     #[tokio::test]
     async fn model_search_uses_the_configured_endpoint_and_carries_details() {
+        // Every catalog fetch writes the limits cache: keep it out of the
+        // real harness dir, and out of the other tests' way.
+        let _home = crate::temp_harness_dir();
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("GET", "/api/ai/models")
@@ -794,7 +806,8 @@ mod tests {
                 r#"{"data":[
                     {"id":"muse-spark-1-1","endpoint":"/chat/completions",
                      "capabilities":{"input":["text"],"output":["text"]},
-                     "context_length":1000000,"max_output_tokens":64000},
+                     "context_length":1000000,"max_output_tokens":64000,
+                     "released_at":"2026-09-02"},
                     {"id":"older-model","endpoint":"/chat/completions",
                      "context_length":null,"max_output_tokens":null}
                 ]}"#,
@@ -810,6 +823,8 @@ mod tests {
         let muse = hits.iter().find(|h| h.id == "muse-spark-1-1").unwrap();
         assert_eq!(muse.context_length, Some(1_000_000));
         assert_eq!(muse.max_output_tokens, Some(64_000));
+        // The release date rides along so pickers can lead with new models.
+        assert_eq!(muse.released_at.as_deref(), Some("2026-09-02"));
         let older = hits.iter().find(|h| h.id == "older-model").unwrap();
         assert_eq!(older.context_length, None);
 

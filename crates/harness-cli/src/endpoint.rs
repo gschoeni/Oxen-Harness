@@ -561,6 +561,7 @@ mod tests {
             outputs: outputs.iter().map(|o| o.to_string()).collect(),
             context_length: None,
             max_output_tokens: None,
+            released_at: None,
         }
     }
 

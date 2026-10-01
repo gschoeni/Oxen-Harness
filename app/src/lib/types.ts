@@ -238,6 +238,8 @@ export interface OxenModelHit {
   context_length: number | null;
   /** The model's maximum reply size in tokens, when the catalog reports it. */
   max_output_tokens: number | null;
+  /** The model's release date (`YYYY-MM-DD`), when the catalog reports it. */
+  released_at: string | null;
 }
 
 // ---- local models ----------------------------------------------------------

@@ -167,6 +167,7 @@ export const sampleOxenHits: OxenModelHit[] = [
     outputs: ["text"],
     context_length: 1_000_000,
     max_output_tokens: 64_000,
+    released_at: "2026-02-17",
   },
   {
     id: "muse-spark-1-1",
@@ -180,6 +181,7 @@ export const sampleOxenHits: OxenModelHit[] = [
     outputs: ["text"],
     context_length: null,
     max_output_tokens: null,
+    released_at: "2026-09-02",
   },
   {
     id: "pix-gen",
@@ -193,6 +195,7 @@ export const sampleOxenHits: OxenModelHit[] = [
     outputs: ["image"],
     context_length: null,
     max_output_tokens: null,
+    released_at: null,
   },
 ];
 

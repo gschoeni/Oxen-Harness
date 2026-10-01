@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Button, Modal, Spinner } from "../../components/ui";
 import { Markdown } from "../../components/ui/Markdown";
 import { compactTokens } from "../../lib/format";
-import { searchChatModels } from "../../lib/modelSearch";
+import { newestFirst, searchChatModels } from "../../lib/modelSearch";
 import { addCloudModel, getConnection, removeCloudModel, searchOxenModels } from "../../lib/ipc";
 import { formatRate, ratesById } from "../../lib/rates";
 import { useStore } from "../../lib/store";
@@ -24,7 +24,9 @@ export function CloudModelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // The endpoint's catalog — fetched once on mount, searched client-side.
+  // The endpoint's catalog — fetched whenever the page is shown or the window
+  // regains focus (a model the hub added since is one click away), and
+  // searched client-side.
   const [host, setHost] = useState("");
   const [catalog, setCatalog] = useState<OxenModelHit[] | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -50,12 +52,25 @@ export function CloudModelsPage() {
   }
   useEffect(() => {
     loadCatalog();
+    // A refetch on focus keeps the listing it already shows: a failed or slow
+    // background refresh must not blank a page the user is reading.
+    const refresh = () => {
+      searchOxenModels("")
+        .then((listing) => {
+          setCatalog(listing);
+          setCatalogError(null);
+        })
+        .catch(() => {});
+    };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
   }, []);
 
-  // The chat-capable slice of the catalog matching the search box. Endpoints
-  // that don't annotate routes list everything rather than nothing.
+  // The chat-capable slice of the catalog matching the search box, newest
+  // release first. Endpoints that don't annotate routes list everything
+  // rather than nothing.
   const hits = useMemo(
-    () => (catalog ? searchChatModels(catalog, query) : []),
+    () => (catalog ? newestFirst(searchChatModels(catalog, query)) : []),
     [catalog, query],
   );
 
@@ -241,6 +256,11 @@ export function CloudModelsPage() {
                       </span>
                     )}
                     {rate && <span className="model-item-rate">{rate}</span>}
+                    {h.released_at && (
+                      <span className="model-item-rate" title="Release date">
+                        {h.released_at}
+                      </span>
+                    )}
                     {added ? (
                       <span className="catalog-item-added">
                         <Check size={14} /> Added
