@@ -951,3 +951,10 @@
 .media-switch-row {
   align-items: center;
 }
+
+/* Model roles (Cloud models page): one labelled select per routed role. */
+.model-roles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}

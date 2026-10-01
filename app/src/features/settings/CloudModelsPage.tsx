@@ -8,6 +8,7 @@ import { addCloudModel, getConnection, removeCloudModel, searchOxenModels } from
 import { formatRate, ratesById } from "../../lib/rates";
 import { useStore } from "../../lib/store";
 import type { CloudModel, OxenModelHit } from "../../lib/types";
+import { ModelRolesSection } from "./ModelRoles";
 
 /** Manage the cloud model catalog: browse + search what the configured Oxen
  *  endpoint serves (with per-token pricing and descriptions), add models from
@@ -171,6 +172,8 @@ export function CloudModelsPage() {
           </p>
         )}
       </section>
+
+      <ModelRolesSection models={cloudModels} />
 
       <section className="settings-section">
         <div className="settings-label">{host ? `Models on ${host}` : "Endpoint catalog"}</div>

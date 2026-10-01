@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -58,6 +58,27 @@ describe("Settings", () => {
     // Jump to Cloud models — the catalog renders the built-in model ids.
     await userEvent.click(screen.getByRole("button", { name: /cloud models/i }));
     expect((await screen.findAllByText("Claude Sonnet 4.6")).length).toBeGreaterThan(0);
+  });
+
+  it("assigns and clears model roles from the Cloud models page", async () => {
+    ipc.getModelRoles.mockResolvedValue({ study: null, smol: "legacy-model", summary: null });
+    render(<Settings />);
+    await userEvent.click(screen.getByRole("button", { name: /cloud models/i }));
+
+    const study = (await screen.findByLabelText("Study game")) as HTMLSelectElement;
+    await waitFor(() => expect(study).not.toBeDisabled());
+    expect(study.value).toBe("");
+    // A role set elsewhere (the CLI) to an unsaved model stays selectable.
+    expect((screen.getByLabelText("Smol") as HTMLSelectElement).value).toBe("legacy-model");
+
+    const saved = ipc.sampleCloudModels[0].id;
+    await userEvent.selectOptions(study, saved);
+    expect(ipc.setModelRole).toHaveBeenCalledWith("study", saved);
+    await waitFor(() => expect(study.value).toBe(saved));
+
+    // Picking the fallback row clears the override.
+    await userEvent.selectOptions(study, "");
+    expect(ipc.setModelRole).toHaveBeenLastCalledWith("study", null);
   });
 
   it("lists the endpoint's hosted chat models with rates on the Cloud models page", async () => {
