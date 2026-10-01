@@ -14,7 +14,8 @@ pub const SYSTEM: &str = "You write short quiz questions that help a developer u
 codebase they are working in. Every question must be answerable from the source excerpts you \
 are given and must point at the exact file (and lines) that holds the answer. Prefer questions \
 about intent, data flow, invariants, and why the code is shaped the way it is over trivia about \
-identifiers. Never ask about line numbers or counts. Reply with a JSON array only — no prose, no \
+identifiers. Never ask about line numbers or counts. The questions are read on a small screen: \
+keep each prompt under 220 characters and each option under 100. Reply with a JSON array only — no prose, no \
 code fences.";
 
 /// The most lines a hint excerpt shows.

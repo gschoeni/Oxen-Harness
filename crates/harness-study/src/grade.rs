@@ -26,10 +26,13 @@ pub fn grade_choice(q: &StoredQuestion, answer: &str) -> StudyGrade {
         Verdict::Wrong
     };
     let correct_answer = q.correct_answer();
+    // The result card shows the correct answer on its own line, so the
+    // feedback doesn't repeat it.
     let feedback = match verdict {
-        Verdict::Full => "Right.".to_string(),
-        _ => format!("No — it's \"{correct_answer}\"."),
-    };
+        Verdict::Full => "Right.",
+        _ => "Not that one.",
+    }
+    .to_string();
     StudyGrade {
         verdict: verdict.as_str().to_string(),
         feedback,
@@ -156,7 +159,7 @@ mod tests {
         let wrong = grade_choice(&q, "gamma");
         assert_eq!(wrong.verdict, "wrong");
         assert_eq!(wrong.correct_answer, "beta");
-        assert!(wrong.feedback.contains("beta"));
+        assert_eq!(wrong.feedback, "Not that one.");
         assert_eq!(grade_choice(&q, "9").verdict, "wrong");
     }
 
