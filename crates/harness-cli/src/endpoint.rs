@@ -287,13 +287,6 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui, base_url: &str
     tools.register_typed(generate_image);
     tools.register_typed(generate_video);
     tools.register_typed(media_status);
-    // Give the project a remote Oxen repository — confirmed through the same
-    // terminal picker, recorded in the project's config.
-    tools.register_typed(harness_runtime::repo_tool::CreateRepositoryTool::new(
-        workspace.root(),
-        harness_runtime::media::api_for(base_url),
-        asker,
-    ));
     // How well the user knows this codebase (from the desktop's study game),
     // so the agent can pitch its explanations.
     tools.register_typed(harness_study::UnderstandingTool::new(workspace.root()));

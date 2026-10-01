@@ -24,9 +24,9 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub context: Vec<ProjectContext>,
     /// The project's remote Oxen repository on the hub, as `namespace/name`
-    /// (e.g. `ox/my-app`). Optional: set by the `create_repository` tool,
-    /// the project's settings page, or `oxen-harness project set-repo`. It is
-    /// where generated media keeps its copies and where traces are shared;
+    /// (e.g. `ox/my-app`). Optional: set on the project's settings page or
+    /// with `oxen-harness project set-repo`. It is where generated media
+    /// keeps its copies and where traces are shared;
     /// the agent is told about it in the system prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_repo: Option<String>,
@@ -216,9 +216,7 @@ pub fn prompt_section(root: &Path) -> String {
             "\nRemote Oxen repository: {repo} (on the hub). Generated media keeps copies there; \
              `oxen push` targets it when the project is an Oxen repo."
         )),
-        None => section.push_str(
-            "\nRemote Oxen repository: none configured. If the user wants one, call `create_repository`.",
-        ),
+        None => section.push_str("\nRemote Oxen repository: none configured."),
     }
     if !config.context.is_empty() {
         section.push_str(

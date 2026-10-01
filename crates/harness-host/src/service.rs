@@ -991,13 +991,6 @@ impl SessionService {
         tools.register_typed(generate_image);
         tools.register_typed(generate_video);
         tools.register_typed(media_status);
-        // Give the project a remote Oxen repository — confirmed through the
-        // same question bridge, recorded in the project's config.
-        tools.register_typed(harness_runtime::repo_tool::CreateRepositoryTool::new(
-            workspace_root,
-            harness_runtime::media::api(),
-            asker,
-        ));
         harness_runtime::tools::load().apply(tools);
         // Skills load on demand through the `skill` tool; it's only
         // registered when the user has enabled skills, so an empty set costs

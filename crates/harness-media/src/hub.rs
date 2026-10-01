@@ -2,8 +2,7 @@
 //! repositories themselves (not files in them): who the key belongs to,
 //! whether `namespace/name` exists, and creating one.
 //!
-//! Shared by the media uploader (which needs the account's `playground`) and
-//! the `create_repository` tool (which gives a project its own remote). The
+//! Used by the media uploader, which needs the account's `playground`. The
 //! endpoints, all under the hub's `/api` root:
 //!
 //! - `GET /users/me` → `{ user: { username } }`

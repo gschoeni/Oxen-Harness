@@ -1,7 +1,6 @@
 //! `oxen-harness project` — inspect and set a project's durable metadata from
 //! the shell: today its remote Oxen repository (`namespace/name` on the hub),
-//! the same setting the desktop's project page edits and the agent's
-//! `create_repository` tool fills in. Reads and writes
+//! the same setting the desktop's project page edits. Reads and writes
 //! `<project>/.oxen-harness/project.json`; the project is the current
 //! directory unless `--path` says otherwise.
 
