@@ -23,10 +23,13 @@ export const HERO_GAMES = {
 
 export type HeroGameName = keyof typeof HERO_GAMES;
 
-export const DEFAULT_HERO_GAME: HeroGameName = "tumbleweed";
+// What a player who has never picked a cabinet sees (a saved choice, then a
+// theme's `[style] game`, come first). Study leads because it is the one game
+// about the user's own project; its attract screen needs no model or key.
+export const DEFAULT_HERO_GAME: HeroGameName = "study";
 
 export function getHeroGame(name: string | undefined): AnyHeroGameDefinition {
-  return HERO_GAMES[(name as HeroGameName) || DEFAULT_HERO_GAME] || TumbleweedDodgeGame;
+  return HERO_GAMES[(name as HeroGameName) || DEFAULT_HERO_GAME] || HERO_GAMES[DEFAULT_HERO_GAME];
 }
 
 // The Konami-style start combo. Requiring a deliberate sequence keeps stray

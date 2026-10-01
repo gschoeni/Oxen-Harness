@@ -92,7 +92,7 @@ describe("Chat", () => {
     render(<Chat />);
     expect(screen.getByText("OXEN TRAIL")).toBeInTheDocument();
     // The game waits on its attract screen for the ↑ ↑ ↓ ↓ start combo.
-    expect(screen.getByLabelText(/Tumbleweed Dodge\. Press up, up, down, down to play/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Trail of Understanding\. Press up, up, down, down to play/i)).toBeInTheDocument();
     expect(screen.queryByText(/Send a message to begin on your trail/i)).not.toBeInTheDocument();
     expect(screen.getByText("Explain this codebase")).toBeInTheDocument();
   });
@@ -123,7 +123,7 @@ describe("Chat", () => {
     expect(screen.getByLabelText(/Press up, up, down, down to play/i)).toBeInTheDocument();
     // The full ↑ ↑ ↓ ↓ combo starts the run.
     await userEvent.keyboard("{ArrowUp}{ArrowUp}{ArrowDown}{ArrowDown}");
-    expect(screen.getByLabelText(/Tumbleweed Dodge\. Press escape to make camp/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Trail of Understanding\. Press escape to make camp/i)).toBeInTheDocument();
     // Escape makes camp: back to the attract screen.
     await userEvent.keyboard("{Escape}");
     expect(screen.getByLabelText(/Press up, up, down, down to play/i)).toBeInTheDocument();
@@ -132,9 +132,11 @@ describe("Chat", () => {
   it("switches the hero cabinet between games from the attract screen", async () => {
     render(<Chat />);
     // Both cabinets are offered as tabs; picking one swaps the attract screen.
-    expect(screen.getByLabelText(/Tumbleweed Dodge\. Press up, up, down, down/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Trail of Understanding\. Press up, up, down, down/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: "Trail" }));
     expect(screen.getByLabelText(/The Oxen Trail\. Press up, up, down, down/i)).toBeInTheDocument();
+    // …and the pick is remembered over the default.
+    expect(useStore.getState().heroGame).toBe("oregon");
   });
 
   it("opens the arcade dock during a run so you can play while streaming", async () => {
