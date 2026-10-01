@@ -33,8 +33,8 @@ impl SessionService {
         })
     }
 
-    /// Session ids with work in flight right now — a turn, a review, or a
-    /// verification loop. Read from the cancel-token registry, which is the
+    /// Session ids with work in flight right now — a turn or a review.
+    /// Read from the cancel-token registry, which is the
     /// host's single source of truth for "busy" (every long-running operation
     /// registers there for mutual exclusion before it starts).
     pub async fn running_sessions(&self) -> Vec<String> {
