@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use sha2::{Digest, Sha256};
 
-use crate::attachment::{mime_for_extension, Attachment, AttachmentKind};
+use crate::attachment::{mime_for_extension, sniff_image_mime, Attachment, AttachmentKind};
 use crate::types::{ContentPart, MessageContent};
 
 /// Subdirectory (relative to the project root) holding stored attachments.
@@ -143,10 +143,17 @@ fn extension_of(value: &str) -> &str {
 /// String pre-sized to the final length — so the only transient copies alive
 /// are the raw bytes and the URI, never a third `format!` buffer holding the
 /// encoded payload a second time.
+///
+/// The media type comes from the bytes when they carry an image signature,
+/// and from `ext` otherwise: attachments stored before downscaled images were
+/// named for their re-encoded format hold JPEG bytes under a `.png` name, and
+/// a provider rejects the whole request when the two disagree. (Such a file's
+/// URI is a byte or two off [`hydrated_data_uri_len`]'s estimate.)
 fn encode_data_uri(ext: &str, bytes: &[u8]) -> String {
+    let mime = sniff_image_mime(bytes).unwrap_or_else(|| mime_for_extension(ext));
     let mut uri = String::with_capacity(hydrated_data_uri_len(ext, bytes.len()));
     uri.push_str(DATA_URI_SCHEME);
-    uri.push_str(mime_for_extension(ext));
+    uri.push_str(mime);
     uri.push_str(DATA_URI_BASE64_MARKER);
     base64::engine::general_purpose::STANDARD.encode_string(bytes, &mut uri);
     uri
@@ -262,6 +269,54 @@ mod tests {
             },
             other => panic!("expected parts, got {other:?}"),
         }
+    }
+
+    fn opaque_png(width: u32, height: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(width, height, image::Rgb([10, 20, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    fn hydrated_image_url(rel: String, root: &Path) -> String {
+        let mut content = MessageContent::Parts(vec![ContentPart::image(rel)]);
+        hydrate_content(&mut content, root);
+        match content {
+            MessageContent::Parts(parts) => match parts.into_iter().next() {
+                Some(ContentPart::ImageUrl { image_url }) => image_url.url,
+                other => panic!("expected image part, got {other:?}"),
+            },
+            other => panic!("expected parts, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_downscaled_png_is_stored_and_hydrated_as_the_jpeg_it_became() {
+        // A generated 2560×1440 PNG is shrunk and re-encoded as JPEG before it
+        // is stored; labelling it image/png made the provider 400 the turn.
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+        let att = Attachment::from_bytes("render.png", opaque_png(2560, 1440)).unwrap();
+        assert_eq!(att.mime, "image/jpeg");
+
+        let rel = match store.store_part(&att).unwrap() {
+            ContentPart::ImageUrl { image_url } => image_url.url,
+            other => panic!("expected image part, got {other:?}"),
+        };
+        assert!(rel.ends_with(".jpg"), "stored under its real format: {rel}");
+        assert!(hydrated_image_url(rel, dir.path()).starts_with("data:image/jpeg;base64,"));
+    }
+
+    #[test]
+    fn a_mislabelled_stored_image_hydrates_with_its_real_media_type() {
+        // Files written before the fix above: JPEG bytes under a `.png` name.
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+        let att = Attachment::from_bytes("render.png", opaque_png(2560, 1440)).unwrap();
+        let rel = store.store_bytes("png", &att.bytes).unwrap();
+        assert!(hydrated_image_url(rel, dir.path()).starts_with("data:image/jpeg;base64,"));
     }
 
     #[test]

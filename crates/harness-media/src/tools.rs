@@ -1466,8 +1466,15 @@ fn output_extension(kind: MediaKind, url: &str, bytes: &[u8], params: &Value) ->
     if bytes.starts_with(b"GIF8") {
         return "gif".into();
     }
+    // ISO base media: the major brand tells QuickTime from MP4, and players
+    // (and the hub's reference upload) pick a decoder by the name.
     if bytes.len() > 12 && &bytes[4..8] == b"ftyp" {
-        return "mp4".into();
+        return if &bytes[8..12] == b"qt  " {
+            "mov"
+        } else {
+            "mp4"
+        }
+        .into();
     }
     if bytes.starts_with(b"\x1A\x45\xDF\xA3") {
         return "webm".into();
@@ -2525,6 +2532,34 @@ mod tests {
         assert_eq!(
             output_extension(MediaKind::Video, "http://x/a?sig=1", b"", &Value::Null),
             "mp4"
+        );
+        // A video's container is read from its `ftyp` brand, whatever the URL says.
+        let mp4 = b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00";
+        let mov = b"\x00\x00\x00\x14ftypqt  \x00\x00\x02\x00";
+        for url in ["http://x/a.mov?sig=1", "http://x/a.mp4", "http://x/a"] {
+            assert_eq!(
+                output_extension(MediaKind::Video, url, mp4, &Value::Null),
+                "mp4"
+            );
+            assert_eq!(
+                output_extension(MediaKind::Video, url, mov, &Value::Null),
+                "mov"
+            );
+        }
+        // Older QuickTime files open with a `moov`/`mdat` atom and no brand.
+        assert_eq!(
+            output_extension(
+                MediaKind::Video,
+                "http://x/a.mov?sig=1",
+                b"\x00\x00\x00\x08wide\x00\x00\x00\x00mdat",
+                &Value::Null
+            ),
+            "mov"
+        );
+        let webp = b"RIFF\x24\x00\x00\x00WEBPVP8 ";
+        assert_eq!(
+            output_extension(MediaKind::Image, "http://x/a.png", webp, &Value::Null),
+            "webp"
         );
         assert_eq!(
             output_extension(

@@ -126,6 +126,14 @@ pub fn mime_for_extension(ext: &str) -> &'static str {
     }
 }
 
+/// The image media type `bytes` declare through their signature, when they
+/// carry one — the truth about a file whatever its name says.
+pub(crate) fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    image::guess_format(bytes)
+        .ok()
+        .map(|format| format.to_mime_type())
+}
+
 /// A file the user attached to a chat message, ready to become a [`ContentPart`].
 #[derive(Debug, Clone)]
 pub struct Attachment {
@@ -196,8 +204,15 @@ impl Attachment {
             AttachmentKind::Other if looks_like_text(&bytes) => AttachmentKind::Text,
             kind => kind,
         };
+        // An image's media type comes from its bytes when they carry a known
+        // signature: models return WebP or JPEG under any name, and a provider
+        // rejects the request when the declared type and the bytes disagree.
+        let mime = match kind {
+            AttachmentKind::Image => sniff_image_mime(&bytes).unwrap_or_else(|| kind.mime(ext)),
+            _ => kind.mime(ext),
+        };
         let mut attachment = Self {
-            mime: kind.mime(ext).to_string(),
+            mime: mime.to_string(),
             kind,
             bytes,
             filename,
@@ -282,14 +297,29 @@ impl Attachment {
         format!("data:{};base64,{}", self.mime, b64)
     }
 
-    /// The lower-cased file extension (without the dot), e.g. `png`. Empty if the
-    /// filename has none.
+    /// The lower-cased extension (without the dot) for the bytes as they will
+    /// be sent, e.g. `png`. Usually the filename's, but the bytes win when
+    /// they are a different image format — a downscaled `big.png` holds JPEG,
+    /// a model's `out.png` may be WebP — because a stored file is hydrated by
+    /// its name. Empty if the filename has none.
     pub fn extension(&self) -> String {
-        Path::new(&self.filename)
+        let named = Path::new(&self.filename)
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if mime_for_extension(&named) == self.mime {
+            return named;
+        }
+        match self.mime.as_str() {
+            "image/png" => "png".to_string(),
+            "image/jpeg" => "jpg".to_string(),
+            "image/gif" => "gif".to_string(),
+            "image/webp" => "webp".to_string(),
+            "image/bmp" => "bmp".to_string(),
+            "image/tiff" => "tiff".to_string(),
+            _ => named,
+        }
     }
 
     /// The content part to send to the model. Images become `image_url` parts and
@@ -382,6 +412,37 @@ mod tests {
         // Opaque pixels: re-encoded as JPEG, far smaller than the source.
         assert_eq!(a.mime, "image/jpeg");
         assert!(a.data_uri().starts_with("data:image/jpeg;base64,"));
+        // The extension follows the re-encoded bytes, not the filename.
+        assert_eq!(a.extension(), "jpg");
+    }
+
+    #[test]
+    fn an_images_media_type_follows_its_bytes_not_its_name() {
+        // A model handing back WebP (or JPEG) under a `.png` name.
+        let img = image::RgbImage::from_pixel(640, 480, image::Rgb([10, 20, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut out, image::ImageFormat::WebP)
+            .unwrap();
+        let webp = out.into_inner();
+
+        let a = Attachment::from_bytes("render.png", webp.clone()).unwrap();
+        assert_eq!(a.mime, "image/webp");
+        assert_eq!(a.extension(), "webp");
+        assert_eq!(a.bytes, webp, "in-range images are sent untouched");
+        assert!(a.data_uri().starts_with("data:image/webp;base64,"));
+
+        let a = Attachment::from_bytes("render.webp", webp).unwrap();
+        assert_eq!(a.mime, "image/webp");
+        assert_eq!(a.extension(), "webp");
+    }
+
+    #[test]
+    fn extension_is_the_filenames_when_the_bytes_are_untouched() {
+        let a = Attachment::from_bytes("Shot.PNG", png(640, 480)).unwrap();
+        assert_eq!(a.extension(), "png");
+        let a = Attachment::from_bytes("paper.pdf", b"%PDF-1.4".to_vec()).unwrap();
+        assert_eq!(a.extension(), "pdf");
     }
 
     #[test]
