@@ -72,9 +72,13 @@ interface HeroGameProps {
       for a cabinet opened on purpose (the work panel's study game), where a start
       combo is one more step between "I'll study" and the first question. */
   autoStart?: boolean;
+  /** Where "play" leads when this mount is only a title card: called in
+      place of starting here. The home screen's study cabinet uses it to
+      open the game in the work panel, which has the room to read it. */
+  playElsewhere?: () => void;
 }
 
-export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "hero", host, autoStart = false }: HeroGameProps) {
+export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "hero", host, autoStart = false, playElsewhere }: HeroGameProps) {
   const definition = useMemo(() => getHeroGame(gameName), [gameName]);
   const definitionRef = useRef(definition);
   definitionRef.current = definition;
@@ -114,6 +118,10 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
   const start = useCallback(() => {
     comboRef.current = 0;
     setCombo(0);
+    if (playElsewhere) {
+      playElsewhere();
+      return;
+    }
     unlockSfx();
     seedRun(seedSaltOf(definition, gameName));
     setState((current: any) => (definition.onStart ? definition.onStart(current) : definition.initialState()));
@@ -121,7 +129,7 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
     setPlaying(true);
     stageRef.current?.focus();
     if (sound) playSfx("start");
-  }, [definition, gameName, sound]);
+  }, [definition, gameName, sound, playElsewhere]);
 
   // Declared after the cabinet-reset effect above, so on mount (and on a swap
   // to an auto-starting cabinet) the reset runs first and this start sticks.

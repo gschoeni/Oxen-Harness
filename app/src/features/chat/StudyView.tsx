@@ -1,6 +1,6 @@
-// The game as a work view: the right-hand panel hosts the same cabinet the
-// empty-state hero does, so you can play while a turn streams without anything
-// floating over the chat. The study cabinet starts itself with the keyboard;
+// The game as a work view: the right-hand panel is where the cabinet is
+// played — before a chat starts (the home screen's title card opens it here)
+// and while a turn streams, without anything floating over the chat. The study cabinet starts itself with the keyboard;
 // the arcade cabinets (behind MENU) wait for a click.
 
 import { useStore } from "../../lib/store";
@@ -30,9 +30,6 @@ export function StudyView() {
   const heroGame = useStore((s) => s.heroGame);
   const themeGame = useStore((s) => (typeof s.theme?.style?.game === "string" ? s.theme.style.game : undefined));
   const setHeroGame = useStore((s) => s.setHeroGame);
-  // Before a chat's first message the hero already shows this cabinet in the
-  // chat column; two live cabinets would both take the same key presses.
-  const started = useStore((s) => !!s.session && (s.threads[s.session.session_id] ?? []).some((it) => it.kind !== "notice"));
   const gameHost = useGameHost();
 
   // The panel always shows a real game (never the "none" static scene).
@@ -40,13 +37,6 @@ export function StudyView() {
   const gameName = chosen && chosen !== "none" ? chosen : DEFAULT_HERO_GAME;
   const studying = gameName === "study";
 
-  if (!started) {
-    return (
-      <div className="workbench-welcome">
-        <p>The game is on the main screen until this chat gets going. Once your agent is working, it plays here.</p>
-      </div>
-    );
-  }
   return (
     <div className="study-view">
       <div className="hero-screen hero-game-screen study-view-screen">

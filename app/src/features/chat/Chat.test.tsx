@@ -147,7 +147,8 @@ describe("Chat", () => {
     expect(screen.getByText("Location set to Southern Oregon.")).toBeInTheDocument();
   });
 
-  it("starts the hero game only after the full start combo", async () => {
+  it("starts an arcade game in place only after the full start combo", async () => {
+    useStore.setState({ heroGame: "tumbleweed" });
     render(<Chat />);
     // Arrow keys aimed at the composer never reach the game — step away first.
     (document.activeElement as HTMLElement | null)?.blur();
@@ -156,10 +157,32 @@ describe("Chat", () => {
     expect(screen.getByLabelText(/Press up, up, down, down to play/i)).toBeInTheDocument();
     // The full ↑ ↑ ↓ ↓ combo starts the run.
     await userEvent.keyboard("{ArrowUp}{ArrowUp}{ArrowDown}{ArrowDown}");
-    expect(screen.getByLabelText(/Trail of Understanding\. Press escape to make camp/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Press escape to make camp/i)).toBeInTheDocument();
     // Escape makes camp: back to the attract screen.
     await userEvent.keyboard("{Escape}");
     expect(screen.getByLabelText(/Press up, up, down, down to play/i)).toBeInTheDocument();
+  });
+
+  it("keeps the study cabinet a title card on the home screen and plays it in the work panel", async () => {
+    render(
+      <>
+        <Chat />
+        <Workbench />
+      </>,
+    );
+    const hero = document.querySelector(".hero .hero-game") as HTMLElement;
+    expect(within(hero).getAllByText("TRAIL OF UNDERSTANDING").length).toBeGreaterThan(0);
+    // Pressing play (or the combo) doesn't start it in the hero…
+    await userEvent.click(within(hero).getByRole("button", { name: /Play Trail of Understanding/i }));
+    expect(hero.getAttribute("aria-label")).toMatch(/Press up, up, down, down to play/i);
+    expect(within(hero).queryByText("CHOOSE YOUR TRAIL")).toBeNull();
+    // …it opens in the right-hand panel, already started, before any message.
+    expect(useStore.getState().rightTab["s1"]).toBe("study");
+    const panel = screen.getByRole("region", { name: "Current work" });
+    expect(within(panel).getAllByText("CHOOSE YOUR TRAIL").length).toBeGreaterThan(0);
+    // The panel's cabinet has the keyboard: a trail is one key away.
+    await userEvent.keyboard("1");
+    await waitFor(() => expect(ipc.studyBatch).toHaveBeenCalledWith("s1", expect.objectContaining({ mode: "expedition" })));
   });
 
   it("switches the hero cabinet between games from the attract screen", async () => {

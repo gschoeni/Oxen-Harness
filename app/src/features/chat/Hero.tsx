@@ -8,6 +8,7 @@ import { formatUsd } from "../../lib/format";
 import { ApiKeyWelcome } from "./ApiKeyPrompt";
 import { DEFAULT_HERO_GAME, HeroGame } from "./heroGames";
 import { useGameHost } from "./games/studyHost";
+import { openStudyView } from "./studyPanel";
 import { getScene } from "./scenes";
 import { StatusPanel } from "./StatusPanel";
 
@@ -160,6 +161,9 @@ export function Hero(props: HeroProps) {
             hint={hint}
             onSelectGame={setHeroGame}
             host={gameHost}
+            // The study cabinet is a title card here: its questions need more
+            // room than the hero has, so playing opens it in the work panel.
+            playElsewhere={(gameName ?? DEFAULT_HERO_GAME) === "study" ? openStudyView : undefined}
           />
         )}
       </div>
