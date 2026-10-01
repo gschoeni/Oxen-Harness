@@ -457,6 +457,16 @@ six agents at a time, each with its own context and the tools you enabled.
 Agents may delegate within the configured depth limit (two levels by default).
 All descendants share token, request, and spawn budgets.
 
+For read-only investigation, set `profile: "research"` on each agent spec. It
+exposes only enabled `read_file`, `find_files`, `search_files`, `web_search`,
+`web_fetch`, and `retrieve_original` tools. Shell, edits, delegation, custom
+HTTP actions, UI and media tools are unavailable, even if the model tries to
+call them. The profile persists through follow-ups and cold resumes; omission
+(or `"full"`) preserves current behavior. Mixed-profile fleets are supported.
+Research retains project instructions and the inherited system prompt, so the
+savings come from smaller tool schemas, not discarded conventions. Web access
+is still allowed: this is not an offline sandbox.
+
 Ask naturally: “Review the filesystem code; split the work across a few agents.”
 
 **CLI:** type `/agents` to open the chooser. Use ↑/↓ and Enter to watch a
