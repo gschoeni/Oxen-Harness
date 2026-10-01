@@ -27,9 +27,8 @@ pub enum ApprovalKind {
     /// A `kill_task` call terminating a background task's process group
     /// (cautious mode) — gated like the equivalent `run_shell` kill would be.
     TaskKill,
-    /// Publishing work to the remote: a `git` tool push or a `gh` tool PR
-    /// creation (cautious mode) — gated like the equivalent `run_shell`
-    /// `git push`/`gh pr create` would be.
+    /// Publishing work to the remote: a `git` tool push (cautious mode) —
+    /// gated like the equivalent `run_shell` `git push` would be.
     Ship,
 }
 

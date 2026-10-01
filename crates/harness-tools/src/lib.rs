@@ -34,7 +34,6 @@ use serde::{Deserialize, Serialize};
 pub mod ask;
 pub mod canvas;
 pub mod fs;
-pub mod gh;
 pub mod git;
 mod http_body;
 pub mod path_lock;
@@ -57,7 +56,6 @@ pub use fs::{
     FileState, Freshness, PathRule, EDIT_FILE_TOOL, FIND_FILES_TOOL, READ_FILE_TOOL,
     SEARCH_FILES_TOOL, WRITE_FILE_TOOL,
 };
-pub use gh::{GhTool, GH_TOOL};
 pub use git::GIT_TOOL;
 pub use plan::{parse_plan_arguments, plan_is_open, PlanItem, PlanStatus, PlanTool, PLAN_TOOL};
 pub use retrieve::{RetrieveOriginalTool, RETRIEVE_ORIGINAL_TOOL};
@@ -683,7 +681,6 @@ impl ToolRegistry {
         replace(&mut tools, fs::FindFilesTool::new(workspace.clone()));
         replace(&mut tools, fs::SearchTool::new(workspace.clone()));
         replace(&mut tools, git::GitTool::new(workspace.clone()));
-        replace(&mut tools, gh::GhTool::new(workspace.clone()));
         let shell =
             shell::ShellTool::with_tasks(workspace, tasks.clone()).intercepting_for(tools.roster());
         replace(&mut tools, shell.with_steer(signal.clone()));
@@ -921,8 +918,6 @@ impl ToolRegistry {
             .with_typed(fs::FindFilesTool::new(workspace.clone()))
             .with_typed(fs::SearchTool::new(workspace.clone()))
             .with_typed(git::GitTool::new(workspace.clone()))
-            // GitHub PR checks/creation.
-            .with_typed(gh::GhTool::new(workspace.clone()))
             // Planning/checklist tool — always available so any host gets it.
             .with_typed(plan::PlanTool::new())
             // Fetch a web page into context (no key needed); pairs with the
@@ -1190,7 +1185,6 @@ mod tests {
             vec![
                 fs::EDIT_FILE_TOOL,
                 fs::FIND_FILES_TOOL,
-                gh::GH_TOOL,
                 git::GIT_TOOL,
                 tasks::KILL_TASK_TOOL,
                 fs::READ_FILE_TOOL,

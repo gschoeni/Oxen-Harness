@@ -15,10 +15,6 @@ pub struct OptionalTools {
     pub web_search: bool,
     pub canvas: bool,
     pub open_file: bool,
-    /// `gh` is registered by default but the user can disable it (or lack the
-    /// CLI); the prompt must not order the model to verify shipping through a
-    /// tool the registry would reject.
-    pub gh: bool,
     /// The agent tools (`spawn_agents`, `map_agents`, `ask_model`, …) — the
     /// fleet is registered after the prompt is built, so hosts set this from
     /// the same preference that decides whether it registers.
@@ -36,7 +32,6 @@ impl OptionalTools {
             web_search: tools.get(harness_tools::WEB_SEARCH_TOOL).is_some(),
             canvas: tools.get(harness_tools::CANVAS_TOOL).is_some(),
             open_file: tools.get(harness_tools::OPEN_FILE_TOOL).is_some(),
-            gh: tools.get(harness_tools::GH_TOOL).is_some(),
             agents: tools.get(crate::fleet_tool::FLEET_TOOL).is_some(),
             media: tools.get(harness_media::GENERATE_IMAGE_TOOL).is_some(),
         }
@@ -50,16 +45,6 @@ impl OptionalTools {
         self.agents = agents;
         self
     }
-
-    /// The default registry's optional set: `gh` is registered unless the
-    /// user disables it, the host-injected tools are not. Used where a prompt is built without a finished registry in hand
-    /// ([`crate::AgentConfig::default`], [`default_system_prompt`]).
-    pub fn default_registry() -> Self {
-        Self {
-            gh: true,
-            ..Self::default()
-        }
-    }
 }
 
 /// Build the default system prompt. `web_search` controls whether the
@@ -69,7 +54,7 @@ impl OptionalTools {
 pub fn default_system_prompt(web_search: bool) -> String {
     system_prompt_with(OptionalTools {
         web_search,
-        ..OptionalTools::default_registry()
+        ..OptionalTools::default()
     })
 }
 
@@ -222,7 +207,6 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
     } else {
         ""
     };
-    let gh_tool = if tools.gh { ", `gh` (GitHub PRs)" } else { "" };
     let agents_tool = if tools.agents {
         AGENTS_TOOL_LIST_ENTRY
     } else {
@@ -254,7 +238,7 @@ pub fn system_prompt_with(tools: OptionalTools) -> String {
          project directory. Available tools: `find_files` (locate files by glob), \
          `search_files` (regex content search), `read_file` (line-numbered, supports \
          offset/limit), `write_file`, `edit_file` (exact-string patch), `run_shell`, \
-         `git`{gh_tool}, `update_plan` (maintain a task checklist), \
+         `git`, `update_plan` (maintain a task checklist), \
          `ask_user_question` (interview the user){web_tool}{canvas_tool}{open_file_tool}{agents_tool}{media_tool}.\n\n\
          Guidelines:\n\
          - Prefer the dedicated tools over shell equivalents: use `find_files` not \
@@ -493,7 +477,7 @@ pub fn background_task_delivery(
 /// unresolved options.
 pub const PLAN_MODE_ENTER: &str = "\
 <plan-mode>
-Plan mode is on. The working tree is read-only: file writes and edits, git and gh operations that change anything, background-task kills, any shell command that is not provably read-only, and any other tool that is not read-only (custom tools, dev servers) will all be refused until the user leaves plan mode. Do not test the limits, and do not ask to have them lifted.
+Plan mode is on. The working tree is read-only: file writes and edits, git operations that change anything, background-task kills, any shell command that is not provably read-only, and any other tool that is not read-only (custom tools, dev servers) will all be refused until the user leaves plan mode. Do not test the limits, and do not ask to have them lifted.
 
 Do this instead:
 
@@ -578,13 +562,11 @@ mod tests {
         assert!(!bare.contains("web_search"));
         assert!(!bare.contains("`canvas`"));
         assert!(!bare.contains("`open_file`"));
-        assert!(!bare.contains("`gh`"));
 
         let full = system_prompt_with(OptionalTools {
             web_search: true,
             canvas: true,
             open_file: true,
-            gh: true,
             agents: false,
             media: true,
         });
@@ -595,16 +577,6 @@ mod tests {
         assert!(full.contains("`canvas` (show a document in a side panel)"));
         assert!(full.contains("`open_file` (show a project file in the user's file viewer)"));
         assert!(full.contains("`open_file` to put it in their file viewer"));
-        assert!(full.contains("`gh` (GitHub PRs)"));
-    }
-
-    #[test]
-    fn the_convenience_default_advertises_the_default_registry() {
-        // `gh` is registered unless the user disables it.
-        let default = default_system_prompt(false);
-        assert!(default.contains("`gh` (GitHub PRs)"));
-        let neither = system_prompt_with(OptionalTools::default());
-        assert!(!neither.contains("`gh`"));
     }
 
     #[test]

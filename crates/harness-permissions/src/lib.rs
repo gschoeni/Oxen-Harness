@@ -69,8 +69,8 @@ struct SessionGrants {
     commits: bool,
     /// Cautious mode: background-task kills approved for the session.
     kills: bool,
-    /// Cautious mode: publishing to the remote (git push, PR creation)
-    /// approved for the session.
+    /// Cautious mode: publishing to the remote (git push) approved for the
+    /// session.
     ships: bool,
 }
 
@@ -119,9 +119,6 @@ pub enum ToolEffect {
 /// The `git` tool operations that only read the repository, so they run
 /// while plan mode holds the tree read-only and never ask in cautious mode.
 const GIT_READ_ONLY_OPS: &[&str] = &["status", "diff", "log"];
-/// The `gh` tool operations that only read from GitHub (see
-/// [`GIT_READ_ONLY_OPS`]).
-const GH_READ_ONLY_OPS: &[&str] = &["pr_view", "pr_checks"];
 
 /// Shell rc files a tool must never write: they execute on the user's next
 /// shell start, making them a self-privilege-escalation vector.
@@ -266,7 +263,6 @@ impl PermissionGate {
             "run_shell" => self.review_shell(args),
             "write_file" | "edit_file" => self.review_file_edit(tool, args),
             "git" => self.review_git(args),
-            "gh" => self.review_gh(args),
             "kill_task" => self.review_kill_task(args),
             _ => GateReview::Allow,
         }
@@ -306,10 +302,6 @@ impl PermissionGate {
             "git" => match args.get("operation").and_then(|o| o.as_str())? {
                 op if GIT_READ_ONLY_OPS.contains(&op) => return None,
                 op => format!("git {op}"),
-            },
-            "gh" => match args.get("operation").and_then(|o| o.as_str())? {
-                op if GH_READ_ONLY_OPS.contains(&op) => return None,
-                op => format!("gh {op}"),
             },
             "kill_task" => "terminating a background task".to_string(),
             "run_shell" => {
@@ -510,30 +502,10 @@ impl PermissionGate {
         }
     }
 
-    /// The `gh` tool: `pr_view`/`pr_checks` are read-only and flow; everything
-    /// else — `pr_create` today, any operation added later — publishes to
-    /// GitHub and is gated as shipping. Same fail-closed default as
-    /// [`Self::review_git`].
-    fn review_gh(&self, args: &serde_json::Value) -> GateReview {
-        match args.get("operation").and_then(|o| o.as_str()) {
-            None => GateReview::Allow,
-            Some(op) if GH_READ_ONLY_OPS.contains(&op) => GateReview::Allow,
-            Some(op) => {
-                let what = match args.get("title").and_then(|t| t.as_str()) {
-                    Some(title) if !title.trim().is_empty() => {
-                        format!("gh {op} — {}", title.trim())
-                    }
-                    _ => format!("gh {op}"),
-                };
-                self.review_ship("gh", what)
-            }
-        }
-    }
-
-    /// Publishing work to the remote (a push, a PR) mirrors how the classifier
+    /// Publishing work to the remote (a push) mirrors how the classifier
     /// treats `run_shell git push`: [`Risk::Unknown`], so it asks in cautious
-    /// mode and flows in relaxed/bypass. A session grant covers both tools —
-    /// approving "publish this thread's work" once is one decision, not two.
+    /// mode and flows in relaxed/bypass, and one session grant covers the
+    /// pushes that follow.
     fn review_ship(&self, tool: &str, command: String) -> GateReview {
         let policy = self.policy.read().expect("policy poisoned").clone();
         let approved = self.grants.read().expect("grants poisoned").ships;
@@ -546,7 +518,7 @@ impl PermissionGate {
             command,
             risk: Risk::Unknown,
             reasons: Vec::new(),
-            grant_label: "all git pushes and PR creations".to_string(),
+            grant_label: "all git pushes".to_string(),
             offer_project_grant: false,
             offer_trash: false,
         }))
@@ -919,7 +891,7 @@ mod tests {
     /// mutating built-ins are exclusive, everything else is shared.
     fn effect_of(tool: &str) -> ToolEffect {
         match tool {
-            "run_shell" | "write_file" | "edit_file" | "git" | "gh" | "kill_task"
+            "run_shell" | "write_file" | "edit_file" | "git" | "kill_task"
             | "ask_user_question" | "custom_post" => ToolEffect::Mutating,
             _ => ToolEffect::ReadOnly,
         }
@@ -1267,11 +1239,11 @@ mod tests {
         std::env::remove_var("OXEN_HARNESS_DIR");
     }
 
-    /// Publishing (git push, gh pr_create) must ask in cautious mode — the
-    /// tool names must not slip past the gate while `run_shell git push`
-    /// would ask. Reads through both tools still flow.
+    /// Publishing (git push) must ask in cautious mode — the tool name must
+    /// not slip past the gate while `run_shell git push` would ask. Reads
+    /// still flow.
     #[tokio::test]
-    async fn cautious_mode_gates_pushes_and_pr_creation_as_one_ship_grant() {
+    async fn cautious_mode_gates_pushes_behind_one_ship_grant() {
         let _env = testutil::env_guard();
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("OXEN_HARNESS_DIR", home.path());
@@ -1291,13 +1263,7 @@ mod tests {
         );
 
         // Reads flow without asking.
-        for (tool, op) in [
-            ("git", "status"),
-            ("git", "diff"),
-            ("git", "log"),
-            ("gh", "pr_view"),
-            ("gh", "pr_checks"),
-        ] {
+        for (tool, op) in [("git", "status"), ("git", "diff"), ("git", "log")] {
             assert!(
                 matches!(
                     gate.review(tool, &serde_json::json!({"operation": op}), effect_of(tool)),
@@ -1315,22 +1281,14 @@ mod tests {
             panic!("expected git push to ask in cautious mode");
         };
         assert_eq!(request.kind, ApprovalKind::Ship);
-        assert!(matches!(
-            gate.review(
-                "gh",
-                &serde_json::json!({"operation": "pr_create", "title": "Fix the bug"}),
-                effect_of("gh")
-            ),
-            GateReview::Ask(_)
-        ));
-        // …and one session grant covers both tools.
+        // …and one session grant covers the pushes that follow.
         let (outcome, _) = gate.resolve(*request).await;
         assert!(matches!(outcome, GateOutcome::Allow));
         assert!(matches!(
             gate.review(
-                "gh",
-                &serde_json::json!({"operation": "pr_create"}),
-                effect_of("gh")
+                "git",
+                &serde_json::json!({"operation": "push"}),
+                effect_of("git")
             ),
             GateReview::Allow
         ));
@@ -1340,7 +1298,7 @@ mod tests {
     /// Fail closed: an operation the gate doesn't recognize (added to a tool
     /// later, never classified here) is treated as publishing, not waved past.
     #[test]
-    fn unrecognized_git_and_gh_operations_ask_in_cautious_mode() {
+    fn unrecognized_git_operations_ask_in_cautious_mode() {
         let _env = testutil::env_guard();
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("OXEN_HARNESS_DIR", home.path());
@@ -1363,21 +1321,13 @@ mod tests {
             ),
             GateReview::Ask(_)
         ));
-        assert!(matches!(
-            gate.review(
-                "gh",
-                &serde_json::json!({"operation": "release_create"}),
-                effect_of("gh")
-            ),
-            GateReview::Ask(_)
-        ));
         std::env::remove_var("OXEN_HARNESS_DIR");
     }
 
     /// Relaxed mode matches `run_shell git push` parity: publishing flows
     /// without asking (plain push is Risk::Unknown, below relaxed's bar).
     #[test]
-    fn relaxed_mode_allows_pushes_and_pr_creation_without_asking() {
+    fn relaxed_mode_allows_pushes_without_asking() {
         let _env = testutil::env_guard();
         let (_home, _ws, gate) = gate(None);
         assert!(matches!(
@@ -1385,14 +1335,6 @@ mod tests {
                 "git",
                 &serde_json::json!({"operation": "push"}),
                 effect_of("git")
-            ),
-            GateReview::Allow
-        ));
-        assert!(matches!(
-            gate.review(
-                "gh",
-                &serde_json::json!({"operation": "pr_create"}),
-                effect_of("gh")
             ),
             GateReview::Allow
         ));
@@ -1448,7 +1390,7 @@ mod tests {
             );
         }
 
-        // git/gh: reads flow, everything else is refused.
+        // git: reads flow, everything else is refused.
         for op in ["status", "diff", "log"] {
             assert!(matches!(
                 gate.review(
@@ -1459,32 +1401,12 @@ mod tests {
                 GateReview::Allow
             ));
         }
-        for op in ["pr_view", "pr_checks"] {
-            assert!(matches!(
-                gate.review(
-                    "gh",
-                    &serde_json::json!({ "operation": op }),
-                    effect_of("gh")
-                ),
-                GateReview::Allow
-            ));
-        }
         for op in ["commit", "push", "rebase"] {
             denied(
                 gate.review(
                     "git",
                     &serde_json::json!({ "operation": op }),
                     effect_of("git"),
-                ),
-                op,
-            );
-        }
-        for op in ["pr_create", "release_create"] {
-            denied(
-                gate.review(
-                    "gh",
-                    &serde_json::json!({ "operation": op }),
-                    effect_of("gh"),
                 ),
                 op,
             );

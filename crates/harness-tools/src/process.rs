@@ -16,10 +16,9 @@ pub struct CapturedOutput {
     pub timed_out: bool,
 }
 
-/// Run an allow-listed CLI (`git`, `gh`) in a working directory and shape the
-/// outcome the way the tools report it: stdout on success, a tool error naming
-/// the failed invocation otherwise. Shared by [`crate::git`] and [`crate::gh`]
-/// so the timeout/exit-code/truncation handling can't drift between them.
+/// Run an allow-listed CLI (`git`) in a working directory and shape the
+/// outcome the way the tool reports it: stdout on success, a tool error naming
+/// the failed invocation otherwise.
 pub(crate) async fn run_cli(
     binary: &str,
     args: &[String],
