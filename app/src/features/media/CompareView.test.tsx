@@ -190,9 +190,23 @@ describe("comparing in the gallery detail", () => {
     stage.setPointerCapture = () => {};
     stage.hasPointerCapture = () => true;
     // jsdom's PointerEvent carries no coordinates; a MouseEvent of the same type does.
-    const pointer = (type: string, clientX: number) =>
-      fireEvent(stage, new MouseEvent(type, { bubbles: true, button: 0, clientX }));
-    pointer("pointerdown", 200);
+    // A leftover selection must not stretch along with the drag.
+    const range = document.createRange();
+    range.selectNodeContents(container);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    expect(window.getSelection()!.isCollapsed).toBe(false);
+    const pointer = (type: string, clientX: number) => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX });
+      fireEvent(stage, event);
+      return event;
+    };
+    // The press is cancelled (no selection, no native image drag) and the
+    // divider takes focus so the arrow keys follow on from a drag.
+    expect(pointer("pointerdown", 200).defaultPrevented).toBe(true);
+    expect(pointer("mousedown", 200).defaultPrevented).toBe(true);
+    expect(window.getSelection()!.isCollapsed).toBe(true);
+    expect(screen.getByRole("slider")).toHaveFocus();
     expect(screen.getByRole("slider")).toHaveAttribute("aria-valuenow", "25");
     pointer("pointermove", 9999);
     expect(screen.getByRole("slider")).toHaveAttribute("aria-valuenow", "100");

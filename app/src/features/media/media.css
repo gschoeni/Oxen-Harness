@@ -561,7 +561,19 @@
   background: #000;
   cursor: ew-resize;
   touch-action: none;
+}
+/* A drag across the frame must not select it: a selection paints the accent
+   tint over the pictures, and it comes and goes as the pointer moves. WebKit
+   (the desktop webview) honors only the prefixed property, so both are set,
+   on everything inside; a selection reaching in from outside paints nothing. */
+.compare-stage,
+.compare-stage * {
+  -webkit-user-select: none;
   user-select: none;
+  -webkit-user-drag: none;
+}
+.compare-stage ::selection {
+  background: transparent;
 }
 /* A side fills the frame; B's is the one the divider clips. The picture
    inside is its own composited layer, so moving the clip never repaints

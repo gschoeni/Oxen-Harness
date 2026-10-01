@@ -20,6 +20,10 @@
 //   wrapper is what gets clipped, and the pictures inside are composited
 //   layers decoded synchronously — a big PNG that WebKit re-decoded on every
 //   repaint would blank for a frame and show side A through it.
+// - Dragging selects nothing. A selection paints the accent tint over the
+//   pictures and flips as the pointer moves; the press is cancelled and the
+//   frame is unselectable (with WebKit's prefixed property — it ignores the
+//   standard one).
 // - The frame takes the output's shape, once. It does not follow whichever
 //   picture happens to be on side B.
 
@@ -139,6 +143,7 @@ export function CompareView({
         }
       : undefined;
   const stage = useRef<HTMLDivElement>(null);
+  const divider = useRef<HTMLDivElement>(null);
   const videos = useRef<Partial<Record<Side, HTMLVideoElement | null>>>({});
 
   const byPath = useMemo(() => new Map(options.map((o) => [o.path, o])), [options]);
@@ -167,7 +172,16 @@ export function CompareView({
 
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {
     if (e.button !== 0) return;
+    // The press is a drag of the divider and nothing else: not the start of
+    // a text selection, not a native image drag. (CSS says the same; this
+    // holds even where it is not honored.) A selection left over from
+    // elsewhere would otherwise stretch to follow the pointer.
+    e.preventDefault();
+    window.getSelection?.()?.removeAllRanges();
     e.currentTarget.setPointerCapture?.(e.pointerId);
+    // Cancelling the press also cancels click-to-focus; the arrow keys
+    // should still work after a drag.
+    divider.current?.focus({ preventScroll: true });
     moveTo(e.clientX);
   }
 
@@ -222,6 +236,8 @@ export function CompareView({
         className="compare-stage"
         style={{ aspectRatio: shape, "--compare-aspect": shape } as CSSProperties}
         onPointerDown={onPointerDown}
+        // The compatibility mousedown is where WebKit starts a selection.
+        onMouseDown={(e) => e.preventDefault()}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerEnd}
         onPointerCancel={onPointerEnd}
@@ -253,6 +269,7 @@ export function CompareView({
           <b>B</b> {sideB.title}
         </span>
         <div
+          ref={divider}
           className="compare-divider"
           style={{ left: `${split}%` }}
           role="slider"
