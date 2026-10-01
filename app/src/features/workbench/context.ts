@@ -4,7 +4,6 @@ export interface WorkContext {
   current: ViewTarget;
   history: ViewTarget[];
   cursor: number;
-  pinned: boolean;
 }
 export function navigate(previous: WorkContext | undefined, target: ViewTarget): WorkContext {
   if (previous && JSON.stringify(previous.current) === JSON.stringify(target)) return previous;
@@ -13,7 +12,6 @@ export function navigate(previous: WorkContext | undefined, target: ViewTarget):
     current: target,
     history,
     cursor: history.length - 1,
-    pinned: previous?.pinned ?? false,
   };
 }
 export function travel(previous: WorkContext, offset: number): WorkContext {

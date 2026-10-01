@@ -6,7 +6,7 @@ vi.mock("../../lib/uiState", async (original) => ({
   ...await original<typeof import("../../lib/uiState")>(),
   getUi: (key: string) => ({
     workContexts: {
-      s1: { current: { view: "editor", path: "saved.txt" }, history: [{ view: "editor", path: "saved.txt" }], cursor: 0, pinned: false },
+      s1: { current: { view: "editor", path: "saved.txt" }, history: [{ view: "editor", path: "saved.txt" }], cursor: 0 },
     },
     docks: { widths: { right: 500 }, collapsed: { right: false } },
   })[key as "workContexts" | "docks"],

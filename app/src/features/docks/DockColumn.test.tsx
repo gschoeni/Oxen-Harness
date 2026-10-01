@@ -130,7 +130,7 @@ describe("Dock columns", () => {
 
   it("does not open for saved history, filesystem changes or a preview status sync", async () => {
     const target = { view: "editor", path: "saved.txt" };
-    useStore.setState({ workContexts: { s1: { current: target, history: [target], cursor: 0, pinned: false } } });
+    useStore.setState({ workContexts: { s1: { current: target, history: [target], cursor: 0 } } });
     const { container } = render(<DockColumn side="right" />);
     await act(async () => {
       useStore.getState().ingestFsChange({ root: ipc.sampleSession.workspace, paths: ["saved.txt"] });
@@ -142,7 +142,7 @@ describe("Dock columns", () => {
   it("does not show an empty panel for disabled customization history", () => {
     const target = { view: "view-studio", path: "views/example" };
     useStore.setState({
-      workContexts: { s1: { current: target, history: [target], cursor: 0, pinned: false } },
+      workContexts: { s1: { current: target, history: [target], cursor: 0 } },
       rightTab: { s1: "view-studio" },
     });
     const { container } = render(<DockColumn side="right" />);
@@ -172,7 +172,7 @@ describe("Dock columns", () => {
       { view: "editor", path: "other.txt" },
     ];
     useStore.setState({
-      workContexts: { s1: { current: history[1], history, cursor: 1, pinned: false } },
+      workContexts: { s1: { current: history[1], history, cursor: 1 } },
       rightTab: { s1: "editor" },
       editorTabs: { s1: { tabs: [["other.txt"]], active: 0 } },
     });
@@ -191,7 +191,7 @@ describe("Dock columns", () => {
       { view: "editor", path: "other.txt" },
     ];
     useStore.setState({
-      workContexts: { s1: { current: history[0], history, cursor: 0, pinned: false } },
+      workContexts: { s1: { current: history[0], history, cursor: 0 } },
       rightTab: { s1: "package:notes" },
     });
     render(<DockColumn side="right" />);

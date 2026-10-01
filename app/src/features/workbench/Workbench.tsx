@@ -1,5 +1,5 @@
 import { Component, Suspense, useEffect, useMemo, type ReactNode, type PointerEvent } from "react";
-import { ArrowLeft, ArrowRight, Pin, Workflow, PanelsTopLeft } from "lucide-react";
+import { ArrowLeft, ArrowRight, Workflow, PanelsTopLeft } from "lucide-react";
 import { Select } from "../../components/ui";
 import { useStore } from "../../lib/store";
 import { workbenchCustomizationEnabled, workflowsEnabled } from "../../lib/features";
@@ -104,15 +104,6 @@ function WorkbenchContent({
         <span className="workbench-resource" title={target.path ?? target.url}>
           {target.path?.split("/").pop() ?? target.url ?? ""}
         </span>
-        <button
-          className="icon-btn sm"
-          aria-label="Keep this view during agent work"
-          aria-pressed={context?.pinned ?? false}
-          onClick={() => useStore.getState().pinWorkView()}
-          title="Keep this view during agent work"
-        >
-          <Pin size={14} />
-        </button>
       </header>
       <div className="workbench-content">
         <ViewBoundary key={`${session}:${target.view}:${target.path ?? ""}`}>

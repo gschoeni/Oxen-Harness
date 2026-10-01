@@ -181,11 +181,10 @@ function saveDockLayout(layout: DockLayout) {
 export const STUDY_VIEW = "study";
 
 /** Whether a chat's work view should stay put when its agent opens something:
- *  the user pinned it, or they are mid-game — the cabinet is played *while*
- *  the agent works, so an agent's file open must not swap it away and throw
- *  out the run. */
-function holdsWorkView(context: { pinned?: boolean; current: ViewTarget } | undefined): context is { pinned?: boolean; current: ViewTarget } {
-  return !!context && (!!context.pinned || context.current.view === STUDY_VIEW);
+ *  the user is mid-game — the cabinet is played *while* the agent works, so
+ *  an agent's file open must not swap it away and throw out the run. */
+function holdsWorkView(context: { current: ViewTarget } | undefined): context is { current: ViewTarget } {
+  return !!context && context.current.view === STUDY_VIEW;
 }
 
 /** The layout patch that expands the right column out of its rail for an
@@ -481,7 +480,6 @@ interface AppState {
   workContexts: Record<string, WorkContext>;
   openWorkView: (session: string, target: ViewTarget, agent?: boolean) => void;
   travelWorkView: (offset: number) => void;
-  pinWorkView: () => void;
   mode: Mode;
   theme: Theme | null;
   /** Which empty-state hero game the player has chosen (persisted). Null falls
@@ -990,7 +988,7 @@ export const useStore = create<AppState>((rawSet, get) => {
           rightTab[session] = workContexts[session].current.view;
           if (session === onScreen) {
             keptOut.push(target.path ?? target.paths?.join(", ") ?? target.view);
-            heldBy = workContexts[session].pinned ? "your pinned work view — unpin it to follow along" : "the study game — it stays up until you leave it";
+            heldBy = "the study game — it stays up until you leave it";
           }
           continue;
         }
@@ -1386,10 +1384,6 @@ export const useStore = create<AppState>((rawSet, get) => {
       s.openWorkView(id, context.current);
       const workContexts = { ...get().workContexts, [id]: context }; setUi("workContexts", workContexts); set({workContexts});
     },
-    pinWorkView: () => set((s) => {
-      const id = s.session?.session_id; if (!id || !s.workContexts[id]) return {};
-      const workContexts = { ...s.workContexts, [id]: { ...s.workContexts[id], pinned: !s.workContexts[id].pinned } }; setUi("workContexts", workContexts); return { workContexts };
-    }),
     browserUrl: null,
     leftTab: null,
     chatTabs: parseChatTabs(getUi("chatTabs")),

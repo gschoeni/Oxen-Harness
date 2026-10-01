@@ -120,7 +120,7 @@ it.each(["view-studio", "view-manager", "package:demo"])(
     });
     const target = { view };
     useStore.setState({ workContexts: {
-      [sampleSession.session_id]: { current: target, history: [target], cursor: 0, pinned: false },
+      [sampleSession.session_id]: { current: target, history: [target], cursor: 0 },
     } });
     render(<Workbench />);
     expect(screen.queryByText("Customization mounted")).not.toBeInTheDocument();
@@ -133,7 +133,7 @@ it.each(["view-studio", "view-manager", "package:demo"])(
 it("falls back to a bundled file viewer for a previously installed view", () => {
   const target = { view: "package:demo", path: "notes.txt" };
   useStore.setState({ workContexts: {
-    [sampleSession.session_id]: { current: target, history: [target], cursor: 0, pinned: false },
+    [sampleSession.session_id]: { current: target, history: [target], cursor: 0 },
   } });
   render(<Workbench />);
   expect(screen.getByText("File contents")).toBeInTheDocument();

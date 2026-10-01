@@ -34,28 +34,6 @@ describe("conversation-owned work contexts", () => {
     expect(useStore.getState().dockCollapsed.right).toBe(false);
     expect(useStore.getState().workContexts.a.current.path).toBe("picks/2026-09-25-week-3.md");
   });
-  it("a pinned work view says when it kept an agent's open out of sight", () => {
-    useStore.setState({ session: { ...sampleSession, session_id: "a" }, threads: { a: [] } });
-    const s = useStore.getState();
-    s.openWorkView("a", { view: "gallery" });
-    s.pinWorkView();
-    s.ingestOpenFile({ session: "a", paths: ["notes.md"] });
-    const thread = useStore.getState().threads.a;
-    const last = thread[thread.length - 1];
-    expect(last.kind).toBe("notice");
-    expect(last.kind === "notice" && last.text).toContain("notes.md");
-    expect(useStore.getState().workContexts.a.current.view).toBe("gallery");
-  });
-  it("a pin stops agent focus changes but allows the user's explicit navigation", () => {
-    useStore.setState({ session: { ...sampleSession, session_id: "a" } });
-    const s = useStore.getState();
-    s.openWorkView("a", { view: "workflow", path: "a.graph.json" });
-    s.pinWorkView();
-    s.openWorkView("a", { view: "editor", path: "background.md" }, true);
-    expect(useStore.getState().workContexts.a.current.view).toBe("workflow");
-    s.openWorkView("a", { view: "gallery" });
-    expect(useStore.getState().workContexts.a.current.view).toBe("gallery");
-  });
   it("opening a browser in one conversation never overwrites another's URL", () => {
     useStore.setState({ session: { ...sampleSession, session_id: "a" } });
     useStore.getState().openBrowser("https://example.com/a");
