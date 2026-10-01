@@ -13,13 +13,17 @@ use tauri::State;
 
 use crate::state::AppState;
 
-/// How well the user understands the project `session` is rooted in.
+/// How well the user understands the project `session` is rooted in. Reading
+/// it walks the workspace tree, so it runs off the main thread.
 #[tauri::command]
-pub(crate) fn study_profile(
+pub(crate) async fn study_profile(
     state: State<'_, AppState>,
     session: String,
 ) -> Result<StudyProfile, String> {
-    state.study_profile(&session)
+    let service = state.service.clone();
+    tauri::async_runtime::spawn_blocking(move || service.study_profile(&session))
+        .await
+        .map_err(|e| format!("reading the study profile: {e}"))?
 }
 
 /// Questions for one stretch of a run. Rejects with the reason when the mode

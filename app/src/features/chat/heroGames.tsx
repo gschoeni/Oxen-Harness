@@ -120,8 +120,9 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
     function onKeyDown(e: KeyboardEvent) {
       const cabinet = document.activeElement?.closest(".hero-game") ?? (e.target as HTMLElement | null)?.closest(".hero-game");
       if (cabinet && cabinet !== stageRef.current?.parentElement) return;
-      // Keys aimed at the composer (or any input) never reach the game.
-      if (isEditableTarget(e) || e.repeat || (e.target as HTMLElement | null)?.closest("button")) return;
+      // Keys aimed at the composer (or any input) never reach the game, and
+      // neither do app shortcuts: ⌘1 switches a tab, it doesn't answer "1".
+      if (isEditableTarget(e) || e.repeat || e.metaKey || e.ctrlKey || e.altKey || (e.target as HTMLElement | null)?.closest("button")) return;
 
       if (!playing) {
         if (!(e.key in ARROW_GLYPHS)) {
@@ -274,13 +275,17 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
 
   // A game waiting on typed input gets a real text box under the screen.
   const entry = playing && !paused && definition.textEntry ? definition.textEntry(state) : null;
-  const entryActive = !!entry;
+  const entryKey = entry?.key ?? null;
+  const lastEntryKey = useRef<string | null>(null);
   useEffect(() => {
-    if (entryActive) {
+    if (entryKey === null) return;
+    // A pause unmounts the box; the draft only goes when the question does.
+    if (entryKey !== lastEntryKey.current) {
+      lastEntryKey.current = entryKey;
       setEntryText("");
-      entryRef.current?.focus();
     }
-  }, [entryActive]);
+    entryRef.current?.focus();
+  }, [entryKey]);
 
   function submitEntry(e: React.FormEvent) {
     e.preventDefault();

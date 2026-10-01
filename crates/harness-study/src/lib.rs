@@ -36,7 +36,7 @@ mod tool;
 
 use std::path::PathBuf;
 
-pub use service::{BatchContext, StudyService, DEFAULT_BATCH, MAX_BATCH};
+pub use service::{BatchContext, StudyService};
 pub use tool::{UnderstandingTool, UNDERSTANDING_TOOL};
 
 /// Errors from the study backend, each naming the failed operation.
@@ -57,6 +57,10 @@ pub enum StudyError {
         #[source]
         source: serde_json::Error,
     },
+    /// `git` could not be run, or a command that should work in a repository
+    /// failed — distinct from a repository that simply has nothing new.
+    #[error("study: git {args}: {detail}")]
+    Git { args: String, detail: String },
     /// The model call failed, or its reply held no usable questions.
     #[error("study model ({model}): {detail}")]
     Model { model: String, detail: String },
@@ -69,6 +73,10 @@ pub enum StudyError {
     Nothing(String),
     #[error("study: no question with id {0}")]
     UnknownQuestion(String),
+    /// A panic while the study files were being rewritten; they may be
+    /// half-updated, so nothing more is read or written through this lock.
+    #[error("study: the study files lock was poisoned by an earlier failure")]
+    Poisoned,
 }
 
 impl StudyError {

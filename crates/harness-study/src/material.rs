@@ -124,26 +124,28 @@ pub fn fresh_tracks(
     root: &Path,
     territories: &[Territory],
 ) -> Result<Option<Material>, StudyError> {
-    let Some(diff) = git(root, &["diff", "HEAD"]) else {
+    // The probe failing means "not a repository" (or one with no commit
+    // yet): nothing to study, not an error. Once it has succeeded, a later
+    // command failing is a real failure and is reported as one.
+    let Some(diff) = git(root, &["diff", "HEAD"])? else {
         return Ok(None);
     };
     let (text, files, framing) = if !diff.trim().is_empty() {
-        let names = git(root, &["diff", "HEAD", "--name-only"]).unwrap_or_default();
+        let names = git_ok(root, &["diff", "HEAD", "--name-only"])?;
         (
             diff,
             lines(&names),
             "The uncommitted changes in the working tree (a unified diff against HEAD).",
         )
     } else {
-        let log = git(
+        let log = git_ok(
             root,
             &["log", "-n", "3", "-p", "--format=commit %h — %s (%an)"],
-        )
-        .unwrap_or_default();
+        )?;
         if log.trim().is_empty() {
             return Ok(None);
         }
-        let names = git(root, &["log", "-n", "3", "--name-only", "--format="]).unwrap_or_default();
+        let names = git_ok(root, &["log", "-n", "3", "--name-only", "--format="])?;
         (
             log,
             lines(&names),
@@ -282,16 +284,29 @@ fn lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn git(root: &Path, args: &[&str]) -> Option<String> {
+/// Run git in `root`. `Ok(None)` is git itself saying no (a non-zero exit);
+/// `Err` is git not running at all.
+fn git(root: &Path, args: &[&str]) -> Result<Option<String>, StudyError> {
     let output = Command::new("git")
         .args(args)
         .current_dir(root)
         .output()
-        .ok()?;
+        .map_err(|e| StudyError::Git {
+            args: args.join(" "),
+            detail: format!("could not run git: {e}"),
+        })?;
     if !output.status.success() {
-        return None;
+        return Ok(None);
     }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
+}
+
+/// [`git`] for a command that must succeed in a working repository.
+fn git_ok(root: &Path, args: &[&str]) -> Result<String, StudyError> {
+    git(root, args)?.ok_or_else(|| StudyError::Git {
+        args: args.join(" "),
+        detail: "the command failed".into(),
+    })
 }
 
 #[cfg(test)]

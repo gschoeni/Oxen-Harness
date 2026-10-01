@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use crate::bank::StoredQuestion;
 use crate::material::Material;
+use crate::territories::{territory_for, Territory};
 use crate::StudyError;
 
 pub const SYSTEM: &str = "You write short quiz questions that help a developer understand a \
@@ -48,7 +49,7 @@ pub fn prompt(material: &Material, count: usize, avoid: &[String]) -> String {
     );
     if !avoid.is_empty() {
         out.push_str("\nDo not repeat these existing questions:\n");
-        for a in avoid.iter().take(20) {
+        for a in avoid.iter().rev().take(20) {
             out.push_str("- ");
             out.push_str(&truncate_chars(a, 100));
             out.push('\n');
@@ -84,6 +85,7 @@ struct Raw {
 pub fn parse(
     reply: &str,
     material: &Material,
+    territories: &[Territory],
     model: &str,
     now: i64,
     root: &Path,
@@ -105,7 +107,7 @@ pub fn parse(
     }
     let mut out = Vec::new();
     for raw in raws {
-        if let Some(q) = validate(raw, material, model, now, root) {
+        if let Some(q) = validate(raw, material, territories, model, now, root) {
             out.push(q);
         }
     }
@@ -121,6 +123,7 @@ pub fn parse(
 fn validate(
     raw: Raw,
     material: &Material,
+    territories: &[Territory],
     model: &str,
     now: i64,
     root: &Path,
@@ -181,8 +184,8 @@ fn validate(
     let source_path = if material.files.iter().any(|f| f == &source_path) {
         source_path
     } else {
-        // An unlabelled path is still worth keeping if it's in the region;
-        // otherwise pin it to the first excerpt so the hint has somewhere to go.
+        // A path the material never showed can't be trusted; pin the
+        // question to the first excerpt so the hint has somewhere to go.
         material.files.first().cloned().unwrap_or(source_path)
     };
     // Line numbers only mean something when the material was file heads.
@@ -199,7 +202,11 @@ fn validate(
     Some(StoredQuestion {
         question: StudyQuestion {
             id,
-            territory: material.territory_id.clone(),
+            // A diff or a ride-along spans regions: credit the one the
+            // answer's file is in, not the batch's first file.
+            territory: territory_for(territories, &source_path)
+                .map(|t| t.id.clone())
+                .unwrap_or_else(|| material.territory_id.clone()),
             kind,
             prompt,
             options,
@@ -350,7 +357,7 @@ mod tests {
  {"kind":"riddle","prompt":"Not a kind","answer":0}
 ]
 ```"#;
-        let qs = parse(reply, &m, "m", 7, dir.path()).unwrap();
+        let qs = parse(reply, &m, &[], "m", 7, dir.path()).unwrap();
         assert_eq!(qs.len(), 3);
         assert_eq!(qs[0].question.source_excerpt, "line two");
         // Options are shuffled; the stored index still points at the right one.
@@ -379,9 +386,37 @@ mod tests {
         assert!(prompt(&m, 2, &[]).contains("quoted verbatim"));
         assert!(!prompt(&m, 2, &[]).contains("source_lines"));
         let reply = r#"[{"kind":"true_false","prompt":"The diff adds a line.","answer":0,"source_path":"src/lib.rs","source_lines":[2,2],"excerpt":"+added line"}]"#;
-        let qs = parse(reply, &m, "m", 0, dir.path()).unwrap();
+        let qs = parse(reply, &m, &[], "m", 0, dir.path()).unwrap();
         assert_eq!(qs[0].question.source_excerpt, "+added line");
         assert_eq!(qs[0].question.source_lines, None);
+    }
+
+    #[test]
+    fn a_question_is_credited_to_the_region_its_file_is_in() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("other")).unwrap();
+        std::fs::write(dir.path().join("other/x.rs"), "fn x() {}\n").unwrap();
+        let m = Material {
+            files: vec!["src/lib.rs".into(), "other/x.rs".into()],
+            ..material(dir.path())
+        };
+        let territories = vec![
+            Territory {
+                id: "src".into(),
+                name: "src".into(),
+                files: vec![],
+            },
+            Territory {
+                id: "other".into(),
+                name: "other".into(),
+                files: vec![],
+            },
+        ];
+        let reply = r#"[{"kind":"true_false","prompt":"x takes no arguments.","answer":0,"source_path":"other/x.rs","source_lines":[1,1]},
+ {"kind":"true_false","prompt":"There are three lines.","answer":0,"source_path":"src/lib.rs","source_lines":[1,3]}]"#;
+        let qs = parse(reply, &m, &territories, "m", 0, dir.path()).unwrap();
+        assert_eq!(qs[0].question.territory, "other");
+        assert_eq!(qs[1].question.territory, "src");
     }
 
     #[test]
@@ -403,7 +438,7 @@ mod tests {
         let m = material(dir.path());
         let reply = r#"[{"kind":"true_false","prompt":"There are three lines.","answer":0,"source_path":"src/lib.rs","source_lines":[1,3]},
  {"kind":"multiple_choice","prompt":"Which line is sec"#;
-        let qs = parse(reply, &m, "m", 0, dir.path()).unwrap();
+        let qs = parse(reply, &m, &[], "m", 0, dir.path()).unwrap();
         assert_eq!(qs.len(), 1);
         assert_eq!(qs[0].question.kind, "true_false");
     }
@@ -412,15 +447,15 @@ mod tests {
     fn an_unusable_reply_is_a_model_error() {
         let dir = tempfile::tempdir().unwrap();
         let m = material(dir.path());
-        let err = parse("I can't do that.", &m, "m", 0, dir.path()).unwrap_err();
+        let err = parse("I can't do that.", &m, &[], "m", 0, dir.path()).unwrap_err();
         assert!(
             err.to_string().contains("it began: I can't do that."),
             "{err}"
         );
-        let empty = parse("  ", &m, "m", 0, dir.path()).unwrap_err();
+        let empty = parse("  ", &m, &[], "m", 0, dir.path()).unwrap_err();
         assert!(empty.to_string().contains("reply was empty"), "{empty}");
         assert!(matches!(
-            parse("[]", &m, "m", 0, dir.path()),
+            parse("[]", &m, &[], "m", 0, dir.path()),
             Err(StudyError::Model { .. })
         ));
     }

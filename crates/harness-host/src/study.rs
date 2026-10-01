@@ -11,7 +11,7 @@ use harness_agent::{Agent, AgentConfig, ModelRoles, Role};
 use harness_protocol::{
     StudyAnswerRequest, StudyAnswerResult, StudyBatch, StudyBatchRequest, StudyProfile,
 };
-use harness_study::{BatchContext, Completer, Completion, StudyError, StudyService};
+use harness_study::{BatchContext, Completer, Completion, StudyError, StudyMode, StudyService};
 
 use crate::SessionService;
 
@@ -21,27 +21,48 @@ const STUDY_REPLY_TOKENS: usize = 8_192;
 /// The usage ledger's call kind for study spend.
 const USAGE_KIND: &str = "study";
 
-/// [`Completer`] over a detached agent.
-struct AgentCompleter {
-    agent: Agent,
+/// [`Completer`] over a detached agent, built on first use: most study
+/// requests (a cached batch, a multiple-choice answer) never call the model,
+/// and shouldn't pay for a client and an agent they won't use.
+struct LazyCompleter<'a> {
+    service: &'a SessionService,
+    session: &'a str,
+    agent: tokio::sync::OnceCell<Agent>,
+}
+
+impl LazyCompleter<'_> {
+    async fn agent(&self) -> Result<&Agent, StudyError> {
+        self.agent
+            .get_or_try_init(|| self.service.study_agent(self.session))
+            .await
+            .map_err(|detail| StudyError::Model {
+                model: "study".into(),
+                detail,
+            })
+    }
 }
 
 #[async_trait::async_trait]
-impl Completer for AgentCompleter {
+impl Completer for LazyCompleter<'_> {
     async fn complete(&self, system: &str, user: &str) -> Result<Completion, StudyError> {
-        let (text, tokens_used) = self
-            .agent
-            .complete_as(system, user, USAGE_KIND)
-            .await
-            .map_err(|e| StudyError::Model {
-                model: self.model(),
-                detail: e.to_string(),
-            })?;
+        let agent = self.agent().await?;
+        let (text, tokens_used) =
+            agent
+                .complete_as(system, user, USAGE_KIND)
+                .await
+                .map_err(|e| StudyError::Model {
+                    model: agent.config().model.clone(),
+                    detail: e.to_string(),
+                })?;
         Ok(Completion { text, tokens_used })
     }
 
+    /// The model that ran — empty until a completion has.
     fn model(&self) -> String {
-        self.agent.config().model.clone()
+        self.agent
+            .get()
+            .map(|agent| agent.config().model.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -61,13 +82,19 @@ impl SessionService {
         request: StudyBatchRequest,
     ) -> Result<StudyBatch, String> {
         let service = self.study_service(session)?;
+        // Only the ride-along reads the transcript; the other modes never
+        // pay for deserializing a long chat.
+        let rides_along = StudyMode::parse(&request.mode) == Some(StudyMode::RideAlong);
         let context = BatchContext {
-            messages: self
-                .store()?
-                .messages(session)
-                .map_err(|e| format!("reading the chat's messages for the study game: {e}"))?,
+            messages: if rides_along {
+                self.store()?
+                    .messages(session)
+                    .map_err(|e| format!("reading the chat's messages for the study game: {e}"))?
+            } else {
+                Vec::new()
+            },
         };
-        let model = self.study_completer(session).await?;
+        let model = self.study_completer(session);
         service
             .batch(&request, &context, &model)
             .await
@@ -81,7 +108,7 @@ impl SessionService {
         request: StudyAnswerRequest,
     ) -> Result<StudyAnswerResult, String> {
         let service = self.study_service(session)?;
-        let model = self.study_completer(session).await?;
+        let model = self.study_completer(session);
         service
             .answer(&request, &model)
             .await
@@ -92,8 +119,16 @@ impl SessionService {
         StudyService::open(&self.session_workspace(session)).map_err(|e| e.to_string())
     }
 
+    fn study_completer<'a>(&'a self, session: &'a str) -> LazyCompleter<'a> {
+        LazyCompleter {
+            service: self,
+            session,
+            agent: tokio::sync::OnceCell::new(),
+        }
+    }
+
     /// A detached one-shot agent on the study role, billed to `session`.
-    async fn study_completer(&self, session: &str) -> Result<AgentCompleter, String> {
+    async fn study_agent(&self, session: &str) -> Result<Agent, String> {
         let (client, session_model, _) = self.client_for().await?;
         let limits = harness_runtime::limits::load();
         let roles = ModelRoles {
@@ -115,8 +150,7 @@ impl SessionService {
             request_log: harness_config::paths::requests_log().ok(),
             ..AgentConfig::default()
         };
-        let agent = Agent::detached(client, config, self.store()?, session)
-            .map_err(|e| format!("starting the study model: {e}"))?;
-        Ok(AgentCompleter { agent })
+        Agent::detached(client, config, self.store()?, session)
+            .map_err(|e| format!("starting the study model: {e}"))
     }
 }

@@ -15,9 +15,29 @@ words is full; one that has the right idea but misses a key part, or is right fo
 reason, is partial; anything else is wrong. Reply with a JSON object only: {\"verdict\": \
 \"full\"|\"partial\"|\"wrong\", \"feedback\": one sentence that corrects or confirms}.";
 
+/// A judged answer: the verdict as the progress file records it, and the
+/// grade as the client shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Graded {
+    pub verdict: Verdict,
+    pub grade: StudyGrade,
+}
+
+fn graded(verdict: Verdict, feedback: String, q: &StoredQuestion) -> Graded {
+    Graded {
+        verdict,
+        grade: StudyGrade {
+            verdict: verdict.as_str().to_string(),
+            feedback,
+            correct_answer: q.correct_answer(),
+            explanation: q.explanation.clone(),
+        },
+    }
+}
+
 /// Grade a choice answer given as an index, an option's text, a letter
 /// (`A`-`D`), or `true`/`false`.
-pub fn grade_choice(q: &StoredQuestion, answer: &str) -> StudyGrade {
+pub fn grade_choice(q: &StoredQuestion, answer: &str) -> Graded {
     let picked = choice_index(q, answer);
     let correct: Option<usize> = q.answer.parse().ok();
     let verdict = if picked.is_some() && picked == correct {
@@ -25,20 +45,13 @@ pub fn grade_choice(q: &StoredQuestion, answer: &str) -> StudyGrade {
     } else {
         Verdict::Wrong
     };
-    let correct_answer = q.correct_answer();
     // The result card shows the correct answer on its own line, so the
     // feedback doesn't repeat it.
     let feedback = match verdict {
         Verdict::Full => "Right.",
         _ => "Not that one.",
-    }
-    .to_string();
-    StudyGrade {
-        verdict: verdict.as_str().to_string(),
-        feedback,
-        correct_answer,
-        explanation: q.explanation.clone(),
-    }
+    };
+    graded(verdict, feedback.to_string(), q)
 }
 
 fn choice_index(q: &StoredQuestion, answer: &str) -> Option<usize> {
@@ -88,7 +101,7 @@ struct RawGrade {
 
 /// Read the grader's reply. An unparseable reply is scored partial with the
 /// reference answer as feedback, so a flaky grader never zeroes a player.
-pub fn parse_free_text(reply: &str, q: &StoredQuestion) -> StudyGrade {
+pub fn parse_free_text(reply: &str, q: &StoredQuestion) -> Graded {
     let parsed = extract_object(reply)
         .and_then(|json| serde_json::from_str::<RawGrade>(json).ok())
         .and_then(|raw| Verdict::parse(&raw.verdict).map(|v| (v, raw.feedback)));
@@ -103,22 +116,12 @@ pub fn parse_free_text(reply: &str, q: &StoredQuestion) -> StudyGrade {
             ),
         ),
     };
-    StudyGrade {
-        verdict: verdict.as_str().to_string(),
-        feedback,
-        correct_answer: q.answer.clone(),
-        explanation: q.explanation.clone(),
-    }
+    graded(verdict, feedback, q)
 }
 
 /// A blank free-text answer is wrong without asking anyone.
-pub fn blank_grade(q: &StoredQuestion) -> StudyGrade {
-    StudyGrade {
-        verdict: Verdict::Wrong.as_str().to_string(),
-        feedback: "No answer given.".into(),
-        correct_answer: q.correct_answer(),
-        explanation: q.explanation.clone(),
-    }
+pub fn blank_grade(q: &StoredQuestion) -> Graded {
+    graded(Verdict::Wrong, "No answer given.".into(), q)
 }
 
 #[cfg(test)]
@@ -154,13 +157,14 @@ mod tests {
     fn choice_answers_accept_index_letter_or_text() {
         let q = choice();
         for a in ["1", "b", "B", "Beta"] {
-            assert_eq!(grade_choice(&q, a).verdict, "full", "{a}");
+            assert_eq!(grade_choice(&q, a).grade.verdict, "full", "{a}");
         }
         let wrong = grade_choice(&q, "gamma");
-        assert_eq!(wrong.verdict, "wrong");
+        assert_eq!(wrong.verdict, Verdict::Wrong);
+        let wrong = wrong.grade;
         assert_eq!(wrong.correct_answer, "beta");
         assert_eq!(wrong.feedback, "Not that one.");
-        assert_eq!(grade_choice(&q, "9").verdict, "wrong");
+        assert_eq!(grade_choice(&q, "9").verdict, Verdict::Wrong);
     }
 
     #[test]
@@ -168,16 +172,16 @@ mod tests {
         let mut q = choice();
         q.question.kind = "free_text".into();
         q.answer = "the sandbox".into();
-        let full = parse_free_text("Sure: {\"verdict\":\"full\",\"feedback\":\"Yes.\"}", &q);
+        let full = parse_free_text("Sure: {\"verdict\":\"full\",\"feedback\":\"Yes.\"}", &q).grade;
         assert_eq!(
             (full.verdict.as_str(), full.feedback.as_str()),
             ("full", "Yes.")
         );
-        let bare = parse_free_text("{\"verdict\":\"wrong\"}", &q);
+        let bare = parse_free_text("{\"verdict\":\"wrong\"}", &q).grade;
         assert_eq!(bare.verdict, "wrong");
         assert!(bare.feedback.contains("the sandbox"));
         let junk = parse_free_text("I cannot", &q);
-        assert_eq!(junk.verdict, "partial");
+        assert_eq!(junk.verdict, Verdict::Partial);
         assert!(free_text_prompt(&q, "  it's the sandbox ").ends_with("answered: it's the sandbox"));
     }
 }

@@ -254,6 +254,9 @@ export interface TextEntry {
   /** Accessible label for the input. */
   label: string;
   placeholder?: string;
+  /** What is being answered. The draft is kept while this stays the same
+      (through a pause, say) and cleared when it changes. */
+  key: string;
 }
 
 // ---- reduced motion -----------------------------------------------------------------

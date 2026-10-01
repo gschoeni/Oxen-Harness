@@ -61,6 +61,10 @@ impl StoredQuestion {
 #[derive(Debug, Default)]
 pub struct Bank {
     pub questions: Vec<StoredQuestion>,
+    /// Lines that didn't parse, kept verbatim and written back on save: a
+    /// line this build can't read (damage, or a newer schema) is skipped,
+    /// never erased.
+    unreadable: Vec<String>,
 }
 
 impl Bank {
@@ -71,14 +75,14 @@ impl Bank {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(source) => return Err(StudyError::io("read", path, source)),
         };
-        let mut questions = Vec::new();
+        let mut bank = Self::default();
         for line in text.lines().filter(|l| !l.trim().is_empty()) {
-            // A damaged line loses one question, not the whole cache.
-            if let Ok(q) = serde_json::from_str::<StoredQuestion>(line) {
-                questions.push(q);
+            match serde_json::from_str::<StoredQuestion>(line) {
+                Ok(q) => bank.questions.push(q),
+                Err(_) => bank.unreadable.push(line.to_string()),
             }
         }
-        Ok(Self { questions })
+        Ok(bank)
     }
 
     pub fn save(&self, dir: &Path) -> Result<(), StudyError> {
@@ -89,6 +93,10 @@ impl Bank {
                 source,
             })?;
             out.push_str(&line);
+            out.push('\n');
+        }
+        for line in &self.unreadable {
+            out.push_str(line);
             out.push('\n');
         }
         harness_config::io::atomic_write(&dir.join(FILE), out.as_bytes())?;
@@ -240,6 +248,11 @@ mod tests {
         std::fs::write(&path, text).unwrap();
         let back = Bank::load(dir.path()).unwrap();
         assert_eq!(back.questions.len(), 1);
+        // Saving again keeps the line this build couldn't read.
+        back.save(dir.path()).unwrap();
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("{not json"));
         assert_eq!(back.get("a").unwrap().correct_answer(), "b");
     }
 }

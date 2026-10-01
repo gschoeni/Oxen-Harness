@@ -88,6 +88,34 @@ describe("HeroGame wrapper", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("keeps a typed draft through a pause and ignores app shortcuts", async () => {
+    const question = { id: "q1", territory: "src", kind: "free_text", prompt: "Which function makes room in the context?", options: [], source_path: "src/turn.rs", source_excerpt: "", difficulty: 1, cached: false };
+    const profile = { project: "p", workspace: "/p", understanding: 10, level: 2, answered: 1, territories: [] };
+    const perform = vi.fn(async (kind: string, _payload: unknown) => {
+      if (kind === "study.profile") return profile;
+      return { mode: "expedition", questions: [question], territory: "src", tokens_used: 0, model: "m" };
+    });
+    render(<HeroGame gameName="study" palette={palette} host={{ perform }} />);
+    fireEvent.pointerDown(stage(), { clientX: 50, clientY: 50 });
+    fireEvent.pointerUp(stage(), { clientX: 50, clientY: 50 });
+    // ⌘1 is the app's tab switch, not "pick trail 1": nothing is requested.
+    stage().focus();
+    await userEvent.keyboard("{Meta>}1{/Meta}");
+    expect(perform).not.toHaveBeenCalledWith("study.batch", expect.anything());
+
+    await userEvent.keyboard("1");
+    await userEvent.type(await screen.findByLabelText("Your answer"), "make_ro");
+    // Looking something up elsewhere pauses the game…
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    expect(screen.queryByLabelText("Your answer")).toBeNull();
+    // …and coming back finds the half-typed answer where it was left.
+    fireEvent.pointerDown(stage(), { clientX: 50, clientY: 50 });
+    fireEvent.pointerUp(stage(), { clientX: 50, clientY: 50 });
+    expect(await screen.findByLabelText("Your answer")).toHaveValue("make_ro");
+  });
+
   it("fails a request with a clear message when no host is connected", async () => {
     render(<HeroGame gameName="study" palette={palette} />);
     fireEvent.pointerDown(stage(), { clientX: 50, clientY: 50 });

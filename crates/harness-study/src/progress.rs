@@ -77,9 +77,6 @@ pub struct Progress {
     pub workspace: String,
     #[serde(default)]
     pub territories: BTreeMap<String, TerritoryProgress>,
-    /// The longest run of full answers in one expedition.
-    #[serde(default)]
-    pub best_streak: u32,
 }
 
 impl Progress {
@@ -112,11 +109,6 @@ impl Progress {
             .or_default()
             .attempts
             .push(attempt);
-    }
-
-    /// Whether anything has ever been answered.
-    pub fn is_empty(&self) -> bool {
-        self.territories.values().all(|t| t.attempts.is_empty())
     }
 
     /// The profile a host shows: every discovered territory (unexplored ones
@@ -341,14 +333,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut p = Progress::default();
         p.record("docs", attempt(5, Verdict::Partial));
-        p.best_streak = 3;
         p.save(dir.path()).unwrap();
         let back = Progress::load(dir.path()).unwrap();
         assert_eq!(back.territories["docs"].attempts.len(), 1);
-        assert_eq!(back.best_streak, 3);
         assert_eq!(back.schema_version, SCHEMA_VERSION);
         assert!(Progress::load(&dir.path().join("missing"))
             .unwrap()
+            .territories
             .is_empty());
     }
 

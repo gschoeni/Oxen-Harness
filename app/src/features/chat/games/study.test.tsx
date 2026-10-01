@@ -231,7 +231,32 @@ describe("Trail of Understanding", () => {
     s = be.settle(press(s, "Enter"));
     expect(s.phase).toBe("over");
     expect(s.cutShort).toBe(true);
-    expect(renderToStaticMarkup(G.render(s, palette))).toContain("2 of 2 answered in full");
+    // The failed prefetch was asked for once more before giving up…
+    expect(be.log.filter((r) => r.kind === STUDY_BATCH)).toHaveLength(3);
+    const over = renderToStaticMarkup(G.render(s, palette));
+    expect(over).toContain("2 of 2 answered in full");
+    // …and the last screen says why the trail ended.
+    expect(over).toContain("nothing to study");
+  });
+
+  it("recovers from one failed prefetch by asking again", () => {
+    let batches = 0;
+    const be = backend((r) => {
+      if (r.kind === STUDY_PROFILE) return { ok: true, value: profile() };
+      if (r.kind === STUDY_BATCH) {
+        batches += 1;
+        return batches === 2
+          ? { ok: false, error: "study model (m): 429" }
+          : { ok: true, value: { mode: "expedition", questions: [question(), question()], territory: "agent", tokens_used: 0, model: "" } };
+      }
+      return { ok: true, value: { grade: { verdict: "full", feedback: "Right.", correct_answer: "x", explanation: "" }, profile: profile(), tokens_used: 0 } };
+    });
+    let s = be.settle(press(be.settle(G.initialState()), "1"));
+    s = be.settle(press(be.settle(press(s, "1")), "Enter"));
+    s = be.settle(press(be.settle(press(s, "1")), "Enter"));
+    expect(s.phase).toBe("question");
+    expect(s.current?.id).toBe("q3");
+    expect(s.cutShort).toBe(false);
   });
 
   it("retries an answer the backend failed to grade", () => {
@@ -252,6 +277,33 @@ describe("Trail of Understanding", () => {
     expect(s.phase).toBe("question");
     s = be.settle(press(s, "1"));
     expect(s.phase).toBe("result");
+  });
+
+  it("lets a question whose grade keeps failing be skipped", () => {
+    const be = backend((r) => {
+      if (r.kind === STUDY_PROFILE) return { ok: true, value: profile() };
+      if (r.kind === STUDY_BATCH) return { ok: true, value: { mode: "expedition", questions: [question(), question(), question()], territory: "agent", tokens_used: 0, model: "" } };
+      return { ok: false, error: "study: no question with id q1" };
+    });
+    let s = be.settle(press(be.settle(G.initialState()), "1"));
+    s = be.settle(press(s, "1"));
+    expect(s.phase).toBe("error");
+    expect(renderToStaticMarkup(G.render(s, palette))).toContain("S skips this question");
+    s = press(s, "s");
+    expect(s.phase).toBe("question");
+    expect(s.current?.id).toBe("q2");
+    expect(s.leg).toBe(1);
+    expect(s.score).toBe(0);
+  });
+
+  it("names the region of the question on screen, not the newest batch", () => {
+    const be = happyBackend();
+    let s = be.settle(press(be.settle(G.initialState()), "1"));
+    // A prefetch for another region lands while this question is up.
+    s = { ...s, label: "some-other-region" };
+    const header = renderToStaticMarkup(G.render(s, palette));
+    expect(header).toContain(">agent<");
+    expect(header).not.toContain("some-other-region");
   });
 
   it("warns once about a fading region before the first question", () => {

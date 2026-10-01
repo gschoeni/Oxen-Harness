@@ -104,8 +104,10 @@ export interface StudyState {
   /** Request ids being waited on (0 = none). */
   batchPending: number;
   answerPending: number;
-  /** A prefetch that failed; only matters if the queue runs dry. */
+  /** Why the last batch failed; only matters if the queue runs dry. */
   batchError: string;
+  /** The dry queue already asked once more: a second failure ends the run. */
+  batchRetried: boolean;
 
   // the last answer
   grade: StudyGrade | null;
@@ -171,6 +173,7 @@ function fresh(best = loadBest("study"), profile: StudyProfile | null = null, re
     batchPending: 0,
     answerPending: 0,
     batchError: "",
+    batchRetried: false,
     grade: null,
     gained: 0,
     leveledUp: false,
@@ -244,9 +247,11 @@ function nextQuestion(s: StudyState): StudyState {
   if (s.queue.length === 0) {
     if (s.batchPending) return { ...s, phase: "scouting", current: null };
     if (s.batchError) {
-      // No more questions to be had. A run that never started says why;
-      // one underway ends where it stands.
+      // A run that never started says why. One underway asks once more — a
+      // single 429 on the prefetch shouldn't end it — then ends where it
+      // stands, with the reason on the last screen.
       if (s.leg === 0) return toError(s, s.batchError, "mode");
+      if (!s.batchRetried) return { ...requestBatch(s), batchRetried: true, phase: "scouting", current: null };
       return finish({ ...s, cutShort: true });
     }
     return { ...requestBatch(s), phase: "scouting", current: null };
@@ -335,6 +340,12 @@ function finish(s: StudyState): StudyState {
   return cue({ ...s, phase: "over", current: null, best, newBest, rank }, newBest ? "best" : "good");
 }
 
+/** Give up on a question whose answer couldn't be graded: the leg counts,
+    nothing is scored or recorded, and the streak ends. */
+function skip(s: StudyState): StudyState {
+  return advance({ ...s, leg: s.leg + (s.replay ? 0 : 1), streak: 0, grade: null, current: null });
+}
+
 /** After a result card: the fort, the end of the trail, or the next leg. */
 function advance(s: StudyState): StudyState {
   if (!s.fortDone && s.leg === FORT_AT && !s.replay) {
@@ -386,7 +397,10 @@ function studyKey(s: StudyState, key: string): StudyState {
     case "over":
       return cue({ ...fresh(s.best, s.profile, s.requests) }, "menu");
     case "error":
-      return s.errorBack === "mode" ? { ...fresh(s.best, s.profile, s.requests) } : { ...s, phase: s.errorBack };
+      if (s.errorBack === "mode") return { ...fresh(s.best, s.profile, s.requests) };
+      // A grade that keeps failing must not trap the run on one question.
+      if (key === "s" || key === "S") return skip(s);
+      return { ...s, phase: s.errorBack };
     default:
       return s; // scouting, grading: waiting on the backend
   }
@@ -400,7 +414,7 @@ function studyText(s: StudyState, text: string): StudyState {
 
 function studyEntry(s: StudyState): TextEntry | null {
   if (s.phase !== "question" || isChoice(s.current)) return null;
-  return { label: "Your answer", placeholder: "type your answer — or ? for a hint" };
+  return { label: "Your answer", placeholder: "type your answer — or ? for a hint", key: s.current?.id ?? "" };
 }
 
 function studyDeliver(s: StudyState, request: GameRequest, result: GameResult): StudyState {
@@ -408,7 +422,8 @@ function studyDeliver(s: StudyState, request: GameRequest, result: GameResult): 
     if (!result.ok) return { ...s, profileError: result.error };
     const profile = result.value as StudyProfile;
     // Until a run starts, the baseline follows the freshest profile.
-    const idle = s.phase === "mode";
+    // …and a run that began before any profile arrived adopts the first one.
+    const idle = s.phase === "mode" || s.profile === null;
     return {
       ...s,
       profile,
@@ -434,6 +449,8 @@ function studyDeliver(s: StudyState, request: GameRequest, result: GameResult): 
       batchPending: 0,
       // A batch with nothing new means the well is dry for this mode.
       batchError: queue.length === s.queue.length ? "No more questions could be written for this trail." : "",
+      // Asking again for a trail with nothing new would only spend tokens.
+      batchRetried: queue.length === s.queue.length ? true : s.batchRetried,
     };
     return s.phase === "scouting" ? nextQuestion(next) : next;
   }
@@ -504,11 +521,20 @@ function Header(s: StudyState, sc: ScreenColors) {
   return (
     <g>
       <Line x={10} y={13} c={sc.fg} size={9}>{s.phase === "result" || s.phase === "over" ? `SCORE ${s.score}` : where}</Line>
-      <Line x={W / 2} y={13} c={sc.dim} size={8} anchor="middle">{wrapText(s.label || modeName(s.mode), 30, 1)[0]}</Line>
+      <Line x={W / 2} y={13} c={sc.dim} size={8} anchor="middle">{wrapText(regionName(s), 30, 1)[0]}</Line>
       <Line x={W - 10} y={13} c={sc.accent} size={9} anchor="end">{levelLine(s.profile)}</Line>
       <ProgressStrip frac={clamp(s.leg / RUN_LEGS, 0, 1)} marks={STRIP_MARKS} sc={sc} />
     </g>
   );
+}
+
+/** The header's middle: the region the question on screen is from. Batches
+    can come from different regions, so this follows the question, not the
+    newest batch's label. */
+function regionName(s: StudyState) {
+  const id = s.current?.territory;
+  const region = id ? s.profile?.territories.find((t) => t.id === id) : undefined;
+  return region?.name || s.label || modeName(s.mode);
 }
 
 function sourceLabel(q: StudyQuestion) {
@@ -658,7 +684,7 @@ function ErrorScreen(s: StudyState, sc: ScreenColors) {
       {wrapText(s.errorText, 58, 6).map((line, i) => (
         <Line key={i} x={W / 2} y={56 + i * 9} c={sc.fg} size={7} anchor="middle">{line}</Line>
       ))}
-      <Footer sc={sc}>{s.errorBack === "mode" ? "press any key to pick another trail" : "press any key to try again"}</Footer>
+      <Footer sc={sc}>{s.errorBack === "mode" ? "press any key to pick another trail" : "any key tries again   S skips this question"}</Footer>
     </g>
   );
 }
@@ -681,7 +707,11 @@ function OverScreen(s: StudyState, sc: ScreenColors) {
       </Line>
       <PxText x={W / 2} y={94} size={13} fill={sc.accent} shadow={sc.bg} anchor="middle">{`SCORE ${s.score}   BEST ${s.best}`}</PxText>
       {s.rank > 0 && <Line x={W / 2} y={107} c={sc.good} size={8} anchor="middle">{rankWord(s.rank)}</Line>}
-      {s.tokens > 0 && <Line x={W / 2} y={117} c={sc.dim} size={6} anchor="middle">{`${s.tokens.toLocaleString()} tokens spent writing and grading`}</Line>}
+      {s.cutShort && s.batchError ? (
+        <Line x={W / 2} y={117} c={sc.bad} size={6} anchor="middle">{wrapText(s.batchError, 80, 1)[0]}</Line>
+      ) : (
+        s.tokens > 0 && <Line x={W / 2} y={117} c={sc.dim} size={6} anchor="middle">{`${s.tokens.toLocaleString()} tokens spent writing and grading`}</Line>
+      )}
       <Footer sc={sc}>press any key to ride again</Footer>
     </g>
   );
