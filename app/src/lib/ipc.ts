@@ -759,7 +759,7 @@ export const detectHardware = () => invoke<HardwareProfile>("detect_hardware");
 export const runtimeStatus = () => invoke<RuntimeStatus>("runtime_status");
 /** Download + set up the managed `llama-server` (streams `runtime://install`). */
 export const installRuntime = () => invoke<void>("install_runtime");
-/** The setup catalog: curated (fit + quant annotated) + featured Oxen models. */
+/** The setup catalog: curated models, fit + quant annotated. */
 export const listModelCatalog = () => invoke<CatalogModel[]>("list_model_catalog");
 /** Resolve a pasted Hugging Face repo/GGUF link into an annotated model. */
 export const resolveHfModel = (input: string) =>

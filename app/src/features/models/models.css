@@ -318,11 +318,6 @@
   font-size: var(--text-2xs);
   color: var(--text-tertiary);
 }
-.ls-empty {
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
-  line-height: 1.6;
-}
 
 /* Fit badges */
 .fit-badge {

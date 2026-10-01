@@ -55,6 +55,13 @@ describe("LocalSetup", () => {
     expect(await screen.findByText(/free of .*GB/)).toBeInTheDocument();
   });
 
+  it("offers the two model sources that work, and no Oxen.ai stub", async () => {
+    render(<LocalSetup />);
+    expect(await screen.findByRole("button", { name: "Recommended" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hugging Face" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Oxen.ai" })).not.toBeInTheDocument();
+  });
+
   it("offers to set up the runtime when none is present", async () => {
     ipc.runtimeStatus.mockResolvedValue({
       binary: null,

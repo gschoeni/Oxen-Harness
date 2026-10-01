@@ -34,7 +34,7 @@ import type {
 import { looksLikeRepo, useHfSearch } from "./useHfSearch";
 import "./models.css";
 
-type Tab = "recommended" | "huggingface" | "oxen";
+type Tab = "recommended" | "huggingface";
 
 const FIT_LABEL: Record<Fit, string> = {
   good: "Runs well",
@@ -47,7 +47,7 @@ function FitBadge({ fit }: { fit: Fit }) {
 }
 
 /** Local-model setup, embedded as the "Local models" settings subpage: detect
- *  the machine, set up the runtime, pick a model (curated / Hugging Face / Oxen)
+ *  the machine, set up the runtime, pick a model (curated / Hugging Face)
  *  with hardware-fit guidance + auto-quant, download it, and start chatting — all
  *  without the user touching a terminal. Closing the settings surface on "Use"
  *  drops the user straight into the freshly-started local chat. */
@@ -208,7 +208,6 @@ export function LocalSetup() {
   }
 
   const curated = catalog.filter((m) => m.source === "curated");
-  const oxen = catalog.filter((m) => m.source === "oxen");
 
   return (
     <div className="ls-body ls-embedded">
@@ -346,13 +345,13 @@ export function LocalSetup() {
           <section className="ls-section">
             <div className="ls-step">Install a model</div>
             <div className="ls-tabs">
-              {(["recommended", "huggingface", "oxen"] as Tab[]).map((t) => (
+              {(["recommended", "huggingface"] as Tab[]).map((t) => (
                 <button
                   key={t}
                   className={`ls-tab ${tab === t ? "active" : ""}`}
                   onClick={() => setTab(t)}
                 >
-                  {t === "recommended" ? "Recommended" : t === "huggingface" ? "Hugging Face" : "Oxen.ai"}
+                  {t === "recommended" ? "Recommended" : "Hugging Face"}
                 </button>
               ))}
             </div>
@@ -440,26 +439,6 @@ export function LocalSetup() {
                     </div>
                     <Button onClick={saveToken}>Save</Button>
                   </div>
-                )}
-              </div>
-            )}
-
-            {tab === "oxen" && (
-              <div className="ls-grid">
-                {oxen.length > 0 ? (
-                  oxen.map((m) => (
-                    <ModelCard
-                      key={m.id}
-                      model={m}
-                      active={selected?.id === m.id}
-                      onClick={() => pickModel(m)}
-                    />
-                  ))
-                ) : (
-                  <p className="ls-empty">
-                    Oxen.ai-hosted models are coming soon — pull curated weights straight from
-                    Oxen. For now, use the Recommended or Hugging Face tabs.
-                  </p>
                 )}
               </div>
             )}
