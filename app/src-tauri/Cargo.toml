@@ -59,6 +59,8 @@ harness-preview = { path = "../../crates/harness-preview" }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 percent-encoding = "2"
+# The Files tree's Delete moves to the system Trash (recoverable), never unlinks.
+trash = "5"
 
 # Native WKWebView snapshot for the preview_screenshot tool (versions match
 # the objc2 stack wry already pulls in).

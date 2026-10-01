@@ -455,6 +455,10 @@ export const fsReadFile = vi.fn(async (_root: string, _path: string) => ({
   size: 0,
 }));
 export const fsCreateEntry = vi.fn(async (_root: string, _path: string, _isDir: boolean) => {});
+export const fsRename = vi.fn(async (_root: string, path: string, name: string) => (path.includes("/") ? `${path.slice(0, path.lastIndexOf("/"))}/${name}` : name));
+export const fsDuplicate = vi.fn(async (_root: string, path: string) => path.replace(/(\.[^./]+)?$/, "-2$1"));
+export const fsTrash = vi.fn(async (_root: string, _path: string) => {});
+export const fsReveal = vi.fn(async (_root: string, _path: string) => {});
 export const fsAssetPath = vi.fn(async (root: string, path: string) => `${root}/${path}`);
 export const fsWatch = vi.fn(async (_root: string) => {});
 export const fsUnwatch = vi.fn(async (_root: string) => {});
@@ -664,6 +668,10 @@ export function resetIpc() {
   fsListDir.mockReset().mockResolvedValue([]);
   fsReadFile.mockReset().mockResolvedValue({ content: "", truncated: false, size: 0 });
   fsCreateEntry.mockReset().mockResolvedValue(undefined);
+  fsRename.mockReset().mockImplementation(async (_root: string, path: string, name: string) => (path.includes("/") ? `${path.slice(0, path.lastIndexOf("/"))}/${name}` : name));
+  fsDuplicate.mockReset().mockImplementation(async (_root: string, path: string) => path.replace(/(\.[^./]+)?$/, "-2$1"));
+  fsTrash.mockReset().mockResolvedValue(undefined);
+  fsReveal.mockReset().mockResolvedValue(undefined);
   fsAssetPath.mockReset().mockImplementation(async (root: string, path: string) => `${root}/${path}`);
   gitStatus.mockReset().mockResolvedValue(null);
   gitDiff.mockReset().mockResolvedValue({ content: "", truncated: false });

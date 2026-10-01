@@ -3,7 +3,8 @@
 // several images open as a gallery grid); drag rows into the chat to attach
 // them as context. The header creates files and folders in whichever
 // directory is selected, and the tree refreshes itself when the agent
-// finishes a turn (it may well have written files).
+// finishes a turn (it may well have written files). Right-click a row (or the
+// empty space below the tree) for the explorer's actions: see FileMenu.tsx.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import {
@@ -20,7 +21,7 @@ import {
   Image as ImageIcon,
   RotateCw,
 } from "lucide-react";
-import { fsCreateEntry, fsListDir } from "../../lib/ipc";
+import { fsCreateEntry, fsDownload, fsDuplicate, fsListDir, fsRename, fsReveal, fsTrash } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
 import { isImagePath, isVideoPath } from "../../lib/attachments";
@@ -28,6 +29,8 @@ import { setDragPaths } from "./dnd";
 import { diffTab, statusLetter } from "./diff";
 import { useGitStatus } from "./useGitStatus";
 import { DockToggle } from "../docks/DockToggle";
+import { FileMenu, type FileAction } from "./FileMenu";
+import type { MenuAt } from "../../components/ui/Menu";
 import type { FileEntry, GitFileState } from "../../lib/types";
 import "./files.css";
 
@@ -56,6 +59,13 @@ function isVisible(dir: string, expanded: Set<string>): boolean {
   for (let p = parentOf(dir); p !== ""; p = parentOf(p)) if (!expanded.has(p)) return false;
   return true;
 }
+
+/** `path` after `from` (itself or an ancestor of it) was renamed to `to`. */
+const rebase = (path: string, from: string, to: string) =>
+  path === from || isUnder(path, from) ? to + path.slice(from.length) : path;
+
+/** How long a "Saved to …" note stays under the header. */
+const NOTE_MS = 4000;
 
 /** The most directory listings kept in memory at once. Listings are only
  *  cached for directories whose rows are on screen (a collapse releases its
@@ -100,6 +110,8 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
   const workspace = useStore((s) => s.session?.workspace ?? null);
   const running = useStore((s) => !!s.session && s.runStatus[s.session.session_id] === "running");
   const openInViewer = useStore((s) => s.openInViewer);
+  const stageAttachment = useStore((s) => s.stageAttachment);
+  const retargetEditorPaths = useStore((s) => s.retargetEditorPaths);
   const filesReveal = useStore((s) => s.filesReveal);
   const clearFilesReveal = useStore((s) => s.clearFilesReveal);
   /** A reveal in progress: the path whose row to scroll to once its
@@ -126,6 +138,17 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
   const [targetDir, setTargetDir] = useState("");
   const [creating, setCreating] = useState<{ dir: string; isDir: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The open right-click menu: where, and on which row (null = the root). */
+  const [menu, setMenu] = useState<{ at: MenuAt; entry: FileEntry | null } | null>(null);
+  /** The row being renamed in place. */
+  const [renaming, setRenaming] = useState<string | null>(null);
+  /** A passing confirmation (where a download landed). */
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!note) return;
+    const timer = window.setTimeout(() => setNote(null), NOTE_MS);
+    return () => window.clearTimeout(timer);
+  }, [note]);
   const [changesOpen, setChangesOpen] = useState(true);
 
   /** Changed files per git; null = not a repository (section hidden). The
@@ -157,6 +180,9 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
     setSelected(new Set());
     setTargetDir("");
     setCreating(null);
+    setMenu(null);
+    setRenaming(null);
+    setNote(null);
     setError(null);
     if (workspace) void loadDir("");
   }, [workspace, loadDir]);
@@ -297,9 +323,9 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
     setDragPaths(e.dataTransfer, group.map((p) => `${workspace}/${p}`));
   }
 
-  function startCreate(isDir: boolean) {
-    if (targetDir && !expanded.has(targetDir)) setExpanded((prev) => expandDir(targetDir, prev));
-    setCreating({ dir: targetDir, isDir });
+  function startCreate(isDir: boolean, dir = targetDir) {
+    if (dir && !expanded.has(dir)) setExpanded((prev) => expandDir(dir, prev));
+    setCreating({ dir, isDir });
   }
 
   async function submitCreate(name: string) {
@@ -326,6 +352,129 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
       setError(String(e));
       setCreating(null);
     }
+  }
+
+  function openMenu(e: MouseEvent, entry: FileEntry | null) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (entry) {
+      // The menu acts on the row under the pointer, so that row is the selection.
+      setSelected(new Set([entry.path]));
+      setTargetDir(entry.is_dir ? entry.path : parentOf(entry.path));
+    }
+    setMenu({ at: { x: e.clientX, y: e.clientY }, entry });
+  }
+
+  async function pickAction(action: FileAction) {
+    if (!menu || !workspace) return;
+    const path = menu.entry?.path ?? "";
+    setMenu(null);
+    try {
+      switch (action) {
+        case "open":
+          openInViewer([path]);
+          break;
+        case "diff":
+          openDiff(path);
+          break;
+        case "attach":
+          stageAttachment(`${workspace}/${path}`);
+          break;
+        case "new-file":
+          startCreate(false, path);
+          break;
+        case "new-folder":
+          startCreate(true, path);
+          break;
+        case "download":
+          setNote(`Saved to ${await fsDownload(workspace, path)}`);
+          break;
+        case "reveal":
+          await fsReveal(workspace, path);
+          break;
+        case "copy-path":
+          await navigator.clipboard.writeText(path ? `${workspace}/${path}` : workspace);
+          break;
+        case "copy-relative-path":
+          await navigator.clipboard.writeText(path);
+          break;
+        case "rename":
+          setRenaming(path);
+          break;
+        case "duplicate": {
+          const copy = await fsDuplicate(workspace, path);
+          await loadDir(parentOf(path));
+          setSelected(new Set([copy]));
+          break;
+        }
+        case "trash":
+          await fsTrash(workspace, path);
+          setEntries((prev) => dropSubtree(prev, path));
+          setExpanded((prev) => new Set([...prev].filter((d) => d !== path && !isUnder(d, path))));
+          setSelected(new Set());
+          if (targetDir === path || isUnder(targetDir, path)) setTargetDir(parentOf(path));
+          retargetEditorPaths(path, null);
+          await loadDir(parentOf(path));
+          loadGit();
+          break;
+        case "refresh":
+          refresh();
+          break;
+      }
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function submitRename(name: string) {
+    const from = renaming;
+    setRenaming(null);
+    if (!from || !workspace) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === basename(from)) return;
+    try {
+      const to = await fsRename(workspace, from, trimmed);
+      // A renamed folder keeps its open shape: the expanded flags move with
+      // it, and the listings (keyed by the old paths) are fetched again.
+      const next = new Set([...expandedRef.current].map((d) => rebase(d, from, to)));
+      setExpanded(next);
+      setEntries((prev) => dropSubtree(prev, from));
+      setSelected(new Set([to]));
+      setTargetDir((dir) => rebase(dir, from, to));
+      retargetEditorPaths(from, to);
+      await loadDir(parentOf(from));
+      for (const dir of next) if ((dir === to || isUnder(dir, to)) && isVisible(dir, next)) void loadDir(dir);
+      loadGit();
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function renderRenameRow(entry: FileEntry, depth: number, open: boolean): ReactNode {
+    return (
+      // The field keeps the text-editing menu (paste a name), not the tree's.
+      <div className="ft-newrow" style={{ paddingLeft: 10 + depth * 14 }} onContextMenu={(e) => e.stopPropagation()}>
+        <span className="ft-chev-slot" />
+        <span className="ft-icon">{iconFor(entry, open)}</span>
+        <input
+          autoFocus
+          aria-label={`Rename ${entry.name}`}
+          defaultValue={entry.name}
+          // Select the name, not the extension: that is the part being retyped.
+          onFocus={(e) => {
+            const dot = entry.is_dir ? -1 : entry.name.lastIndexOf(".");
+            e.currentTarget.setSelectionRange(0, dot > 0 ? dot : entry.name.length);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void submitRename(e.currentTarget.value);
+            if (e.key === "Escape") setRenaming(null);
+          }}
+          onBlur={() => setRenaming(null)}
+        />
+      </div>
+    );
   }
 
   function renderNewRow(dir: string, depth: number): ReactNode {
@@ -358,6 +507,9 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
           const state = entry.is_dir ? undefined : gitByPath.get(entry.path);
           return (
             <div key={entry.path}>
+              {renaming === entry.path ? (
+                renderRenameRow(entry, depth, open)
+              ) : (
               <button
                 className={`ft-row${selected.has(entry.path) ? " selected" : ""}${state ? ` git-${state.status}` : ""}`}
                 data-path={entry.path}
@@ -366,6 +518,7 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
                 draggable={!entry.is_dir}
                 onDragStart={(e) => dragRow(e, entry)}
                 onClick={(e) => (entry.is_dir ? toggleDir(entry.path) : clickFile(e, entry.path))}
+                onContextMenu={(e) => openMenu(e, entry)}
               >
                 {entry.is_dir ? (
                   <ChevronRight size={13} className={`ft-chev${open ? " open" : ""}`} />
@@ -383,6 +536,7 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
                   </span>
                 )}
               </button>
+              )}
               {open && renderDir(entry.path, depth + 1)}
             </div>
           );
@@ -447,6 +601,11 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
         <DockToggle side="left" />
       </header>
       {error && <p className="ft-error">{error}</p>}
+      {note && (
+        <p className="ft-note" role="status">
+          {note}
+        </p>
+      )}
       {git !== null && git.length > 0 && (
         <section className="ft-changes" aria-label="Git changes">
           <button
@@ -494,10 +653,19 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
           )}
         </section>
       )}
-      <div className="ft-tree" role="tree">
+      <div className="ft-tree" role="tree" onContextMenu={(e) => openMenu(e, null)}>
         {renderDir("", 0)}
       </div>
-      <p className="ft-hint">⌘-click to select a group · drag files into the chat</p>
+      {menu && (
+        <FileMenu
+          at={menu.at}
+          entry={menu.entry}
+          changed={!!menu.entry && gitByPath.has(menu.entry.path)}
+          onClose={() => setMenu(null)}
+          onPick={(action) => void pickAction(action)}
+        />
+      )}
+      <p className="ft-hint">⌘-click to select a group · drag files into the chat · right-click for more</p>
     </nav>
   );
 }

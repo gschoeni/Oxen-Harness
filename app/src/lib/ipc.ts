@@ -302,6 +302,17 @@ export const fsCreateEntry = (root: string, path: string, isDir: boolean) =>
  *  one already there); resolves with where it landed. */
 export const fsDownload = (root: string, path: string) =>
   invoke<string>("fs_download", { root, path });
+/** Rename a file or folder in place (`name` is the new last component);
+ *  resolves with its new workspace-relative path. Never replaces an entry. */
+export const fsRename = (root: string, path: string, name: string) =>
+  invoke<string>("fs_rename", { root, path, name });
+/** Copy a file beside itself; resolves with the copy's workspace-relative path. */
+export const fsDuplicate = (root: string, path: string) =>
+  invoke<string>("fs_duplicate", { root, path });
+/** Move a file or folder to the system Trash (recoverable from there). */
+export const fsTrash = (root: string, path: string) => invoke<void>("fs_trash", { root, path });
+/** Show a workspace entry ("" = the project folder) in Finder / the file manager. */
+export const fsReveal = (root: string, path: string) => invoke<void>("fs_reveal", { root, path });
 /** The canonical absolute path of a workspace file, symlink-checked against
  *  the workspace boundary — the only path that may be handed to the asset
  *  protocol (`convertFileSrc`). Errors for anything that resolves outside. */

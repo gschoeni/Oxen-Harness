@@ -555,6 +555,148 @@ fn copy_into(file: &Path, dir: &Path) -> Result<PathBuf, String> {
     Err(format!("no free name for {name} in {}", dir.display()))
 }
 
+/// A workspace entry *itself*, for operations that move or remove it (rename,
+/// trash): its parent is resolved for real — so nothing outside the project
+/// is reachable — but the last component is not followed. Renaming a symlink
+/// renames the link, not the file it points at. The workspace root is not an
+/// entry: it can't be renamed or trashed from inside itself.
+fn resolve_entry(root: &str, rel: &str) -> Result<PathBuf, String> {
+    let rel_path = Path::new(rel);
+    let name = match rel_path.components().next_back() {
+        Some(Component::Normal(name)) => name,
+        _ => return Err(format!("not a workspace entry: {rel}")),
+    };
+    let parent = rel_path.parent().and_then(Path::to_str).unwrap_or("");
+    let entry = resolve(root, parent)?.join(name);
+    if entry.symlink_metadata().is_err() {
+        return Err(format!("{rel} no longer exists"));
+    }
+    Ok(entry)
+}
+
+/// `abs` (a canonical path inside the workspace) as the workspace-relative,
+/// forward-slashed path the frontend keys everything by.
+fn relative_to(root: &str, abs: &Path) -> Result<String, String> {
+    let canon_root =
+        fs::canonicalize(root).map_err(|e| format!("not a workspace directory: {root} ({e})"))?;
+    let rel = abs
+        .strip_prefix(&canon_root)
+        .map_err(|_| format!("path escapes the workspace: {}", abs.display()))?;
+    Ok(rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/"))
+}
+
+/// Rename a file or folder in place (`name` is the new last component, not a
+/// path) and return its new workspace-relative path. Refuses to land on an
+/// existing entry — a rename never replaces a file.
+#[tauri::command]
+pub(crate) fn fs_rename(root: String, path: String, name: String) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
+        return Err(format!("not a valid name: {name:?}"));
+    }
+    let from = resolve_entry(&root, &path)?;
+    let to = from.with_file_name(name);
+    if to == from {
+        return relative_to(&root, &to);
+    }
+    // On a case-insensitive volume `readme.md` "exists" when renaming
+    // README.md to it; that is the same entry, not a collision.
+    let same_entry = from
+        .file_name()
+        .is_some_and(|old| old.to_string_lossy().to_lowercase() == name.to_lowercase());
+    if to.symlink_metadata().is_ok() && !same_entry {
+        return Err(format!("{name} already exists"));
+    }
+    fs::rename(&from, &to).map_err(|e| format!("could not rename {path}: {e}"))?;
+    relative_to(&root, &to)
+}
+
+/// Copy a file beside itself (`name-2.ext`, …) and return the copy's
+/// workspace-relative path.
+#[tauri::command]
+pub(crate) fn fs_duplicate(root: String, path: String) -> Result<String, String> {
+    let file = resolve(&root, &path)?;
+    if !file.is_file() {
+        return Err(format!("only files can be duplicated: {path}"));
+    }
+    let dir = file
+        .parent()
+        .ok_or_else(|| format!("not a workspace entry: {path}"))?;
+    let copy = copy_into(&file, dir)?;
+    relative_to(&root, &copy)
+}
+
+/// Move a file or folder to the system Trash. Recoverable from there — the
+/// file tree never unlinks anything.
+#[tauri::command]
+pub(crate) async fn fs_trash(root: String, path: String) -> Result<(), String> {
+    let entry = resolve_entry(&root, &path)?;
+    tauri::async_runtime::spawn_blocking(move || move_to_trash(&entry))
+        .await
+        .map_err(|e| format!("could not move {path} to the Trash: {e}"))?
+        .map_err(|e| format!("could not move {path} to the Trash: {e}"))
+}
+
+fn move_to_trash(entry: &Path) -> Result<(), trash::Error> {
+    #[allow(unused_mut)]
+    let mut ctx = trash::TrashContext::default();
+    // The default on macOS scripts Finder, which needs an Automation grant the
+    // app would have to prompt for; the file manager API needs none.
+    #[cfg(target_os = "macos")]
+    trash::macos::TrashContextExtMacos::set_delete_method(
+        &mut ctx,
+        trash::macos::DeleteMethod::NsFileManager,
+    );
+    ctx.delete(entry)
+}
+
+/// Show a workspace entry in the system file manager (Finder, Explorer, …),
+/// selected where the platform can do that.
+#[tauri::command]
+pub(crate) fn fs_reveal(root: String, path: String) -> Result<(), String> {
+    let target = resolve(&root, &path)?;
+    if !target.exists() {
+        return Err(format!("{path} no longer exists"));
+    }
+    let failed = |e: std::io::Error| format!("could not open the file manager: {e}");
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("open")
+            .arg("-R")
+            .arg(&target)
+            .status()
+            .map_err(failed)?;
+        if !status.success() {
+            return Err(format!("could not reveal {path} in Finder"));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Explorer exits non-zero even when it opens, so only the spawn is checked.
+        let mut select = std::ffi::OsString::from("/select,");
+        select.push(&target);
+        Command::new("explorer")
+            .arg(select)
+            .spawn()
+            .map_err(failed)?;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        // No portable "select this file": open the folder that holds it.
+        let dir = if target.is_dir() {
+            target.as_path()
+        } else {
+            target.parent().unwrap_or(target.as_path())
+        };
+        Command::new("xdg-open").arg(dir).spawn().map_err(failed)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -902,6 +1044,100 @@ mod tests {
             "{err}"
         );
         assert!(!dir.join("Downloads/gone.mp4").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rename_moves_the_entry_and_never_replaces_another() {
+        let dir = workspace("rename");
+        let root = dir.to_string_lossy().to_string();
+
+        let renamed = fs_rename(root.clone(), "src/main.rs".into(), " lib.rs ".into()).unwrap();
+        assert_eq!(renamed, "src/lib.rs");
+        assert!(dir.join("src/lib.rs").is_file() && !dir.join("src/main.rs").exists());
+
+        // A folder renames with everything in it.
+        assert_eq!(
+            fs_rename(root.clone(), "src".into(), "source".into()).unwrap(),
+            "source"
+        );
+        assert!(dir.join("source/lib.rs").is_file());
+
+        // Landing on an existing entry is refused, and nothing moves.
+        fs::write(dir.join("notes.md"), "mine").unwrap();
+        let err = fs_rename(root.clone(), "README.md".into(), "notes.md".into()).unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(fs::read_to_string(dir.join("notes.md")).unwrap(), "mine");
+        assert!(dir.join("README.md").is_file());
+
+        // A name is one component: it can't smuggle the file somewhere else.
+        for bad in ["", "..", "a/b", "../escape.md", "a\\b"] {
+            let err = fs_rename(root.clone(), "README.md".into(), bad.into()).unwrap_err();
+            assert!(err.contains("not a valid name"), "{bad}: {err}");
+        }
+        let err = fs_rename(root.clone(), "gone.md".into(), "x.md".into()).unwrap_err();
+        assert!(err.contains("no longer exists"), "{err}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn renaming_a_symlink_renames_the_link_not_its_target() {
+        let dir = workspace("rename-link");
+        let root = dir.to_string_lossy().to_string();
+        std::os::unix::fs::symlink(dir.join("README.md"), dir.join("link.md")).unwrap();
+
+        assert_eq!(
+            fs_rename(root, "link.md".into(), "alias.md".into()).unwrap(),
+            "alias.md"
+        );
+        assert!(dir.join("README.md").is_file(), "the target stays put");
+        assert!(dir
+            .join("alias.md")
+            .symlink_metadata()
+            .unwrap()
+            .is_symlink());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn duplicate_copies_a_file_beside_itself() {
+        let dir = workspace("duplicate");
+        let root = dir.to_string_lossy().to_string();
+        assert_eq!(
+            fs_duplicate(root.clone(), "src/main.rs".into()).unwrap(),
+            "src/main-2.rs"
+        );
+        assert_eq!(
+            fs_duplicate(root.clone(), "src/main.rs".into()).unwrap(),
+            "src/main-3.rs"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("src/main-2.rs")).unwrap(),
+            "fn main() {}"
+        );
+        let err = fs_duplicate(root, "src".into()).unwrap_err();
+        assert!(err.contains("only files"), "{err}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_workspace_root_and_outside_paths_are_not_entries() {
+        let dir = workspace("entry");
+        let root = dir.to_string_lossy().to_string();
+        for bad in ["", ".", "..", "../outside.txt"] {
+            assert!(
+                resolve_entry(&root, bad).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+        assert_eq!(
+            resolve_entry(&root, "src/main.rs").unwrap(),
+            fs::canonicalize(dir.join("src/main.rs")).unwrap()
+        );
+        assert!(fs_reveal(root, "gone.txt".into())
+            .unwrap_err()
+            .contains("no longer exists"));
         fs::remove_dir_all(&dir).unwrap();
     }
 }

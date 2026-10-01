@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { diffTab } from "./diff";
 import { FilesPanel } from "./FilesPanel";
-import { fsCreateEntry, fsListDir, gitStatus, sampleSession } from "../../test/ipcMock";
+import {
+  fsCreateEntry,
+  fsDownload,
+  fsDuplicate,
+  fsListDir,
+  fsRename,
+  fsReveal,
+  fsTrash,
+  gitStatus,
+  sampleSession,
+} from "../../test/ipcMock";
 import { useStore } from "../../lib/store";
 import { resetAll } from "../../test/utils";
 
@@ -175,5 +185,140 @@ describe("FilesPanel", () => {
     render(<FilesPanel />);
     await screen.findByText("README.md");
     expect(screen.queryByRole("region", { name: "Git changes" })).not.toBeInTheDocument();
+  });
+});
+
+/** Right-click a tree row (or the tree itself) and return the menu. */
+async function rightClick(target: HTMLElement) {
+  fireEvent.contextMenu(target);
+  return screen.findByRole("listbox");
+}
+const pick = (name: string | RegExp) => userEvent.click(screen.getByRole("option", { name }));
+const actions = () => screen.getAllByRole("option").map((o) => o.textContent);
+
+describe("FilesPanel right-click menu", () => {
+  beforeEach(seedSession);
+
+  it("offers a file's actions, and downloads and reveals it", async () => {
+    render(<FilesPanel />);
+    const menu = await rightClick(await screen.findByText("logo.png"));
+    expect(menu).toHaveAccessibleName("Actions for logo.png");
+    expect(actions()).toEqual([
+      "Open",
+      "Add to chat",
+      "Download",
+      expect.stringMatching(/^Reveal in /),
+      "Copy path",
+      "Copy relative path",
+      "Rename…",
+      "Duplicate",
+      "Move to Trash",
+    ]);
+    // The row under the pointer becomes the selection.
+    expect(screen.getByTitle("logo.png")).toHaveClass("selected");
+
+    await pick("Download");
+    expect(fsDownload).toHaveBeenCalledWith(ROOT, "logo.png");
+    expect(await screen.findByRole("status")).toHaveTextContent("Saved to /Users/me/Downloads/logo.png");
+    expect(screen.queryByRole("listbox")).toBeNull();
+
+    await rightClick(screen.getByText("logo.png"));
+    await pick(/^Reveal in /);
+    expect(fsReveal).toHaveBeenCalledWith(ROOT, "logo.png");
+  });
+
+  it("offers a folder and the project root their own actions", async () => {
+    render(<FilesPanel />);
+    await rightClick(await screen.findByText("src"));
+    expect(actions()).toEqual([
+      "New file…",
+      "New folder…",
+      expect.stringMatching(/^Reveal in /),
+      "Copy path",
+      "Copy relative path",
+      "Rename…",
+      "Move to Trash",
+    ]);
+    // New file… creates inside the folder that was clicked.
+    await pick("New file…");
+    await userEvent.type(await screen.findByLabelText("New file name"), "lib.rs{Enter}");
+    await waitFor(() => expect(fsCreateEntry).toHaveBeenCalledWith(ROOT, "src/lib.rs", false));
+
+    const menu = await rightClick(screen.getByRole("tree"));
+    expect(menu).toHaveAccessibleName("Project actions");
+    expect(actions()).toEqual(["New file…", "New folder…", expect.stringMatching(/^Reveal in /), "Copy path", "Refresh"]);
+    await pick(/^Reveal in /);
+    expect(fsReveal).toHaveBeenCalledWith(ROOT, "");
+    await userEvent.keyboard("{Escape}");
+  });
+
+  it("copies the absolute and the relative path", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    render(<FilesPanel />);
+    await userEvent.click(await screen.findByText("src"));
+    await rightClick(await screen.findByText("main.rs"));
+    await pick("Copy path");
+    expect(writeText).toHaveBeenLastCalledWith(`${ROOT}/src/main.rs`);
+    await rightClick(screen.getByText("main.rs"));
+    await pick("Copy relative path");
+    expect(writeText).toHaveBeenLastCalledWith("src/main.rs");
+  });
+
+  it("renames in place, and open editor tabs follow the file", async () => {
+    render(<FilesPanel />);
+    await userEvent.click(await screen.findByText("src"));
+    await userEvent.click(await screen.findByText("main.rs"));
+    const id = sampleSession.session_id;
+    expect(useStore.getState().editorTabs[id]?.tabs).toEqual([["src/main.rs"]]);
+
+    // Renaming the folder carries the file open under it.
+    await rightClick(screen.getByText("src"));
+    await pick("Rename…");
+    const input = await screen.findByLabelText("Rename src");
+    expect(input).toHaveValue("src");
+    await userEvent.clear(input);
+    await userEvent.type(input, "source{Enter}");
+    await waitFor(() => expect(fsRename).toHaveBeenCalledWith(ROOT, "src", "source"));
+    await waitFor(() => expect(useStore.getState().editorTabs[id]?.tabs).toEqual([["source/main.rs"]]));
+    // The folder stays open under its new name.
+    await waitFor(() => expect(fsListDir).toHaveBeenCalledWith(ROOT, "source"));
+
+    // Escape leaves the name alone; so does an unchanged name.
+    fsRename.mockClear();
+    await rightClick(screen.getByText("README.md"));
+    await pick("Rename…");
+    await userEvent.type(await screen.findByLabelText("Rename README.md"), "x{Escape}");
+    expect(screen.queryByLabelText("Rename README.md")).toBeNull();
+    expect(fsRename).not.toHaveBeenCalled();
+  });
+
+  it("shows why a rename failed", async () => {
+    fsRename.mockRejectedValueOnce("hero.png already exists");
+    render(<FilesPanel />);
+    await rightClick(await screen.findByText("logo.png"));
+    await pick("Rename…");
+    const input = await screen.findByLabelText("Rename logo.png");
+    await userEvent.clear(input);
+    await userEvent.type(input, "hero.png{Enter}");
+    expect(await screen.findByText("hero.png already exists")).toBeInTheDocument();
+  });
+
+  it("duplicates a file and moves one to the Trash, closing its tab", async () => {
+    render(<FilesPanel />);
+    await userEvent.click(await screen.findByText("README.md"));
+    await userEvent.click(screen.getByText("logo.png"));
+    const id = sampleSession.session_id;
+
+    await rightClick(screen.getByText("logo.png"));
+    await pick("Duplicate");
+    await waitFor(() => expect(fsDuplicate).toHaveBeenCalledWith(ROOT, "logo.png"));
+
+    await rightClick(screen.getByText("logo.png"));
+    await pick("Move to Trash");
+    await waitFor(() => expect(fsTrash).toHaveBeenCalledWith(ROOT, "logo.png"));
+    await waitFor(() =>
+      expect(useStore.getState().editorTabs[id]).toEqual({ tabs: [["README.md"]], active: 0 }),
+    );
   });
 });

@@ -293,6 +293,23 @@
   border-radius: var(--frame-radius);
   box-shadow: var(--frame-shadow-lg);
 }
+/* A right-click menu (ContextMenu): a zero-size anchor pinned at the pointer;
+   the .menu inside is positioned relative to it. */
+.context-menu {
+  position: fixed;
+  z-index: var(--z-dropdown);
+  width: 0;
+  height: 0;
+}
+.context-menu .menu {
+  top: 0;
+  left: 0;
+  width: 220px;
+  max-height: min(480px, calc(100vh - var(--space-4)));
+}
+.menu-item.danger .menu-name {
+  color: var(--danger);
+}
 .menu-head {
   display: flex;
   justify-content: space-between;

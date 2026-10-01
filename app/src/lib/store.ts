@@ -905,6 +905,10 @@ interface AppState {
   activateEditorTab: (index: number) => void;
   /** Close one editor tab; closing the last one closes the pane. */
   closeEditorTab: (index: number) => void;
+  /** A workspace entry moved (`to`) or went away (`to` null): the current
+   *  chat's editor tabs on it — or, for a folder, on anything under it —
+   *  follow the move or close. */
+  retargetEditorPaths: (from: string, to: string | null) => void;
   /** Close the current chat's Editor/viewer pane (all tabs). */
   closeViewer: () => void;
   /** Re-read a workspace's git status into `gitStates` (silent on failure —
@@ -2652,6 +2656,27 @@ export const useStore = create<AppState>((rawSet, get) => {
           const active = Math.min(index < pane.active ? pane.active - 1 : pane.active, tabs.length - 1);
           editorTabs[id] = { tabs, active };
         }
+        return { editorTabs };
+      }),
+
+    retargetEditorPaths: (from, to) =>
+      set((s) => {
+        const id = s.session?.session_id;
+        const pane = id ? s.editorTabs[id] : undefined;
+        if (!id || !pane) return {};
+        const under = (p: string) => p === from || p.startsWith(`${from}/`);
+        if (!pane.tabs.some((tab) => tab.some(under))) return {};
+        const tabs: string[][] = [];
+        let active = 0;
+        pane.tabs.forEach((tab, i) => {
+          const next = to === null ? tab.filter((p) => !under(p)) : tab.map((p) => (under(p) ? to + p.slice(from.length) : p));
+          // The active tab stays active; if it closed, its right neighbor takes over.
+          if (i === pane.active) active = tabs.length;
+          if (next.length) tabs.push(next);
+        });
+        const editorTabs = { ...s.editorTabs };
+        if (!tabs.length) delete editorTabs[id];
+        else editorTabs[id] = { tabs, active: Math.min(active, tabs.length - 1) };
         return { editorTabs };
       }),
 

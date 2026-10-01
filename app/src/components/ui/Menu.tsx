@@ -1,8 +1,9 @@
 // Dropdown-menu primitives shared by the composer pickers (model, compression)
 // and any other popover list. Token-driven, no feature logic: the caller owns
 // the trigger button and the open state (via useMenuState), this file owns the
-// popover chrome, rows, and keyboard behavior.
-import { useEffect, useId, useRef, useState } from "react";
+// popover chrome, rows, and keyboard behavior. `ContextMenu` is the same menu
+// pinned at the pointer, for right-click.
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import type {
   ButtonHTMLAttributes,
@@ -154,5 +155,63 @@ export function MenuItem({
       )}
       {hint !== undefined && <span className="menu-hint">{hint}</span>}
     </button>
+  );
+}
+
+/** Where a context menu opened, in viewport coordinates. */
+export interface MenuAt {
+  x: number;
+  y: number;
+}
+
+/** A right-click menu pinned where the pointer was, nudged to stay inside the
+ *  window. Outside click or Escape dismisses it; the caller closes it when an
+ *  item is picked. Focus moves to the first item so the arrow keys work. */
+export function ContextMenu({
+  at,
+  onClose,
+  className = "",
+  label,
+  children,
+}: {
+  at: MenuAt;
+  onClose: () => void;
+  className?: string;
+  label?: string;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: at.x, top: at.y });
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  useLayoutEffect(() => {
+    const menu = ref.current?.querySelector<HTMLElement>(".menu");
+    const { width = 0, height = 0 } = menu?.getBoundingClientRect() ?? {};
+    setPos({
+      left: Math.max(0, Math.min(at.x, window.innerWidth - width)),
+      top: Math.max(0, Math.min(at.y, window.innerHeight - height)),
+    });
+    menu?.querySelector<HTMLButtonElement>(".menu-item:not(:disabled)")?.focus();
+  }, [at.x, at.y]);
+
+  return (
+    // A right-click on the menu itself is not a request for the webview's menu.
+    <div className={`context-menu ${className}`} ref={ref} style={pos} onContextMenu={(e) => e.preventDefault()}>
+      <Menu aria-label={label}>{children}</Menu>
+    </div>
   );
 }
