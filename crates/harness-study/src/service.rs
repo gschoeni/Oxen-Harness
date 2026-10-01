@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use harness_protocol::{
-    StudyAnswerRequest, StudyAnswerResult, StudyBatch, StudyBatchRequest, StudyProfile,
-    StudyQuestion,
+    StudyAnswerRequest, StudyAnswerResult, StudyBatch, StudyBatchRequest, StudyFlagRequest,
+    StudyProfile, StudyQuestion,
 };
 
 use crate::bank::{Bank, StoredQuestion};
@@ -85,11 +85,44 @@ impl StudyService {
     /// The player's understanding of this project right now.
     pub fn profile(&self) -> Result<StudyProfile, StudyError> {
         let territories = territories::discover(&self.root);
-        let progress = {
+        let (progress, bank) = {
             let _files = lock_files()?;
-            Progress::load(&self.dir)?
+            (Progress::load(&self.dir)?, Bank::load(&self.dir)?)
         };
-        Ok(progress.profile(&self.key, &self.root, &territories, now_secs()))
+        Ok(self.profile_of(&progress, &bank, &territories, now_secs()))
+    }
+
+    fn profile_of(
+        &self,
+        progress: &Progress,
+        bank: &Bank,
+        territories: &[Territory],
+        now: i64,
+    ) -> StudyProfile {
+        progress.profile(
+            &self.key,
+            &self.root,
+            territories,
+            &|territory| bank.due_count(territory, now),
+            now,
+        )
+    }
+
+    /// Mark a question wrong or unfair: it is never asked again, and every
+    /// answer given to it is struck from the record, since nothing a bad
+    /// question "taught" should move mastery either way.
+    pub fn flag(&self, request: &StudyFlagRequest) -> Result<StudyProfile, StudyError> {
+        let territories = territories::discover(&self.root);
+        let _files = lock_files()?;
+        let mut bank = Bank::load(&self.dir)?;
+        bank.flag(&request.question_id)
+            .ok_or_else(|| StudyError::UnknownQuestion(request.question_id.clone()))?;
+        bank.save(&self.dir)?;
+        let mut progress = Progress::load(&self.dir)?;
+        if progress.void(&request.question_id) > 0 {
+            progress.save(&self.dir)?;
+        }
+        Ok(self.profile_of(&progress, &bank, &territories, now_secs()))
     }
 
     /// A batch of questions for a mode: cached ones first, the rest freshly
@@ -130,6 +163,8 @@ impl StudyService {
                 now,
                 &self.root,
             )?;
+            let (fresh, check_tokens) = self.verified(fresh, &material, model).await?;
+            tokens_used += check_tokens;
             {
                 let _files = lock_files()?;
                 let mut bank = Bank::load(&self.dir)?;
@@ -159,6 +194,45 @@ impl StudyService {
             tokens_used,
             model: model_used,
         })
+    }
+
+    /// Have the model check freshly written questions against their source
+    /// and drop the ones it rejects — a wrong answer key teaches the wrong
+    /// thing and costs mastery the player didn't lose.
+    ///
+    /// The check is a second opinion, not a gate: if the call fails or its
+    /// reply can't be read, the questions are kept (the player can still
+    /// flag a bad one), and if it would reject every question the batch is
+    /// kept too, since a checker that dislikes everything is the likelier
+    /// fault. Returns the survivors and the tokens the check cost.
+    async fn verified(
+        &self,
+        fresh: Vec<StoredQuestion>,
+        material: &Material,
+        model: &dyn Completer,
+    ) -> Result<(Vec<StoredQuestion>, usize), StudyError> {
+        let Ok(reply) = model
+            .complete(
+                generate::VERIFY_SYSTEM,
+                &generate::verify_prompt(&fresh, material),
+            )
+            .await
+        else {
+            return Ok((fresh, 0));
+        };
+        let Some(rejected) = generate::rejected(&reply.text) else {
+            return Ok((fresh, reply.tokens_used));
+        };
+        if rejected.len() >= fresh.len() {
+            return Ok((fresh, reply.tokens_used));
+        }
+        let kept = fresh
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !rejected.contains(i))
+            .map(|(_, q)| q)
+            .collect();
+        Ok((kept, reply.tokens_used))
     }
 
     /// Read the files once and decide the batch: which cached questions it
@@ -196,7 +270,7 @@ impl StudyService {
         let (label, material) = match mode {
             StudyMode::Expedition | StudyMode::Review => {
                 let (t, label) = if mode == StudyMode::Review {
-                    let found = bank.missed(&exclude, count);
+                    let found = bank.due(&exclude, count, now);
                     take(found, &mut exclude);
                     let t = most_faded_territory(&progress, &territories, now)
                         .or_else(|| weakest_territory(&progress, &territories, now))
@@ -207,13 +281,18 @@ impl StudyService {
                     (t, t.name.clone())
                 };
                 let short = count.saturating_sub(exclude.len() - excluded.len());
-                let found = bank.pick(Some(&t.id), &exclude, short, now);
+                let found = bank.pick(&t.id, &exclude, short, now);
                 take(found, &mut exclude);
                 let filled = exclude.len() - excluded.len() >= count;
                 let material = if filled {
                     None
                 } else {
-                    Some(material::for_territory(&self.root, t, now as u64)?)
+                    Some(material::for_territory(
+                        &self.root,
+                        t,
+                        &territories,
+                        now as u64,
+                    )?)
                 };
                 (label, material)
             }
@@ -225,23 +304,14 @@ impl StudyService {
                     })?,
                 ),
             ),
-            StudyMode::RideAlong => {
-                let paths = material::ride_along_paths(&context.messages);
-                if paths.is_empty() {
-                    return Err(StudyError::Nothing(
-                        "the agent hasn't read or edited any files in this chat yet".into(),
-                    ));
-                }
-                (
-                    "ride-along".into(),
-                    Some(material::for_files(
-                        &self.root,
-                        &paths,
-                        "Files the coding agent read or edited most recently in this chat.",
-                        &territories,
-                    )?),
-                )
-            }
+            StudyMode::RideAlong => (
+                "ride-along".into(),
+                Some(material::ride_along(
+                    &self.root,
+                    &context.messages,
+                    &territories,
+                )?),
+            ),
         };
         let avoid = match &material {
             Some(material) => bank
@@ -279,6 +349,8 @@ impl StudyService {
         let mut tokens_used = 0;
         let graded = if stored.is_choice() {
             grade::grade_choice(&stored, &request.answer)
+        } else if stored.is_order() {
+            grade::grade_order(&stored, &request.answer)
         } else if request.answer.trim().is_empty() {
             grade::blank_grade(&stored)
         } else {
@@ -293,7 +365,7 @@ impl StudyService {
         };
         let now = now_secs();
         let territories = territories::discover(&self.root);
-        let progress = {
+        let profile = {
             let _files = lock_files()?;
             let mut progress = Progress::load(&self.dir)?;
             progress.record(
@@ -303,20 +375,21 @@ impl StudyService {
                     verdict: graded.verdict,
                     question_id: stored.question.id.clone(),
                     hint_used: request.hint_used,
+                    kind: Some(stored.question.kind.clone()),
                 },
             );
             // The bank first: if the second write fails and the client
             // retries, a question marked asked twice is harmless, where an
             // attempt recorded twice would move mastery twice.
             let mut bank = Bank::load(&self.dir)?;
-            bank.mark_asked(&stored.question.id, graded.verdict, now);
+            bank.mark_asked(&stored.question.id, graded.verdict, request.hint_used, now);
             bank.save(&self.dir)?;
             progress.save(&self.dir)?;
-            progress
+            self.profile_of(&progress, &bank, &territories, now)
         };
         Ok(StudyAnswerResult {
             grade: graded.grade,
-            profile: progress.profile(&self.key, &self.root, &territories, now),
+            profile,
             tokens_used,
         })
     }
@@ -336,7 +409,7 @@ fn scored<'a>(
                 .get(&t.id)
                 .map(|p| p.attempts.as_slice())
                 .unwrap_or(&[]);
-            (t, mastery_at(attempts, now))
+            (t, mastery_at(attempts, t.files.len(), now))
         })
         .collect()
 }
@@ -428,12 +501,16 @@ mod tests {
     const REPLY: &str = r#"[{"kind":"multiple_choice","prompt":"What does add return?","options":["a+b","a-b","a*b","0"],"answer":0,"explanation":"It adds.","source_path":"src/lib.rs","source_lines":[1,1],"difficulty":1},
 {"kind":"free_text","prompt":"Name the public function.","answer":"add","explanation":"","source_path":"src/lib.rs","source_lines":[1,1]}]"#;
 
+    /// The checker passing both of [`REPLY`]'s questions.
+    const CHECK_OK: &str =
+        r#"[{"index":0,"ok":true,"reason":""},{"index":1,"ok":true,"reason":""}]"#;
+
     #[tokio::test]
     async fn a_batch_generates_then_replays_from_the_cache() {
         let ws = workspace();
         let study = tempfile::tempdir().unwrap();
         let svc = StudyService::open_at(ws.path(), study.path()).unwrap();
-        let model = Canned::new(&[REPLY]);
+        let model = Canned::new(&[REPLY, CHECK_OK]);
         let request = StudyBatchRequest {
             mode: "expedition".into(),
             count: Some(2),
@@ -444,7 +521,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(batch.questions.len(), 2);
-        assert_eq!(batch.tokens_used, 10);
+        // Writing and checking each cost a call.
+        assert_eq!(batch.tokens_used, 20);
         assert_eq!(batch.model, "canned");
         assert!(batch.questions.iter().all(|q| !q.cached));
         // The prompt carried the source.
@@ -458,7 +536,7 @@ mod tests {
         assert_eq!(again.questions.len(), 2);
         assert!(again.questions.iter().all(|q| q.cached));
         assert_eq!(again.tokens_used, 0);
-        assert_eq!(model.prompts.lock().unwrap().len(), 1);
+        assert_eq!(model.prompts.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -466,7 +544,11 @@ mod tests {
         let ws = workspace();
         let study = tempfile::tempdir().unwrap();
         let svc = StudyService::open_at(ws.path(), study.path()).unwrap();
-        let model = Canned::new(&[REPLY, "{\"verdict\":\"partial\",\"feedback\":\"Close.\"}"]);
+        let model = Canned::new(&[
+            REPLY,
+            CHECK_OK,
+            "{\"verdict\":\"partial\",\"feedback\":\"Close.\"}",
+        ]);
         let batch = svc
             .batch(
                 &StudyBatchRequest {
@@ -543,11 +625,23 @@ mod tests {
         struct AnswersMidFlight<'a> {
             svc: &'a StudyService,
             question_id: String,
+            answered: std::sync::atomic::AtomicBool,
         }
 
         #[async_trait::async_trait]
         impl Completer for AnswersMidFlight<'_> {
             async fn complete(&self, _system: &str, _user: &str) -> Result<Completion, StudyError> {
+                // The writer's call is the one the answer races; the
+                // checker's call after it just passes everything.
+                if self
+                    .answered
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return Ok(Completion {
+                        text: r#"[{"index":0,"ok":true}]"#.into(),
+                        tokens_used: 1,
+                    });
+                }
                 self.svc
                     .answer(
                         &StudyAnswerRequest {
@@ -579,7 +673,7 @@ mod tests {
                     exclude: vec![],
                 },
                 &BatchContext::default(),
-                &Canned::new(&[REPLY]),
+                &Canned::new(&[REPLY, CHECK_OK]),
             )
             .await
             .unwrap();
@@ -601,6 +695,7 @@ mod tests {
                 &AnswersMidFlight {
                     svc: &svc,
                     question_id: choice.id.clone(),
+                    answered: std::sync::atomic::AtomicBool::new(false),
                 },
             )
             .await
@@ -662,6 +757,113 @@ mod tests {
                 .asked,
             0
         );
+    }
+
+    #[tokio::test]
+    async fn the_checker_drops_a_question_and_a_broken_checker_drops_none() {
+        let request = StudyBatchRequest {
+            mode: "expedition".into(),
+            count: Some(2),
+            exclude: vec![],
+        };
+        let ws = workspace();
+        let study = tempfile::tempdir().unwrap();
+        let svc = StudyService::open_at(ws.path(), study.path()).unwrap();
+        let strict = Canned::new(&[
+            REPLY,
+            r#"[{"index":0,"ok":false,"reason":"two options are right"},{"index":1,"ok":true,"reason":""}]"#,
+        ]);
+        let batch = svc
+            .batch(&request, &BatchContext::default(), &strict)
+            .await
+            .unwrap();
+        assert_eq!(batch.questions.len(), 1);
+        assert_eq!(batch.questions[0].kind, "free_text");
+        // The rejected question never reached the cache.
+        assert_eq!(Bank::load(study.path()).unwrap().questions.len(), 1);
+        assert!(strict.prompts.lock().unwrap()[1].contains("marked answer: a+b"));
+
+        // No verdict at all (the call failed): both questions are kept.
+        let other = tempfile::tempdir().unwrap();
+        let svc = StudyService::open_at(ws.path(), other.path()).unwrap();
+        let kept = svc
+            .batch(&request, &BatchContext::default(), &Canned::new(&[REPLY]))
+            .await
+            .unwrap();
+        assert_eq!(kept.questions.len(), 2);
+        // A checker that rejects everything is not believed either.
+        let third = tempfile::tempdir().unwrap();
+        let svc = StudyService::open_at(ws.path(), third.path()).unwrap();
+        let all_bad = r#"[{"index":0,"ok":false},{"index":1,"ok":false}]"#;
+        let kept = svc
+            .batch(
+                &request,
+                &BatchContext::default(),
+                &Canned::new(&[REPLY, all_bad]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(kept.questions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn flagging_a_question_retires_it_and_strikes_its_answers() {
+        let request = StudyBatchRequest {
+            mode: "expedition".into(),
+            count: Some(2),
+            exclude: vec![],
+        };
+        let ws = workspace();
+        let study = tempfile::tempdir().unwrap();
+        let svc = StudyService::open_at(ws.path(), study.path()).unwrap();
+        let model = Canned::new(&[REPLY, CHECK_OK]);
+        let batch = svc
+            .batch(&request, &BatchContext::default(), &model)
+            .await
+            .unwrap();
+        let choice = batch
+            .questions
+            .iter()
+            .find(|q| q.kind == "multiple_choice")
+            .unwrap();
+        let wrong = svc
+            .answer(
+                &StudyAnswerRequest {
+                    question_id: choice.id.clone(),
+                    answer: "a-b".into(),
+                    hint_used: false,
+                },
+                &model,
+            )
+            .await
+            .unwrap();
+        assert_eq!(wrong.profile.answered, 1);
+        // A fresh miss rests ten minutes before its review comes due.
+        assert_eq!(svc.profile().unwrap().due, 0);
+
+        let profile = svc
+            .flag(&StudyFlagRequest {
+                question_id: choice.id.clone(),
+            })
+            .unwrap();
+        assert_eq!(profile.answered, 0);
+        let bank = Bank::load(study.path()).unwrap();
+        assert!(bank.get(&choice.id).unwrap().flagged);
+        // The next batch can't serve it, though it is still in the file.
+        let again = svc
+            .batch(&request, &BatchContext::default(), &Canned::new(&[]))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(again, StudyError::Model { .. }),
+            "needs a fresh question: {again}"
+        );
+        assert!(matches!(
+            svc.flag(&StudyFlagRequest {
+                question_id: "nope".into()
+            }),
+            Err(StudyError::UnknownQuestion(_))
+        ));
     }
 
     #[tokio::test]

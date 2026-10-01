@@ -60,6 +60,11 @@ pub struct Attempt {
     pub question_id: String,
     #[serde(default)]
     pub hint_used: bool,
+    /// The question's format, which decides how much a right answer is
+    /// worth: picking from four can be a guess, typing can't. Absent in
+    /// attempts recorded before formats were weighed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -111,23 +116,37 @@ impl Progress {
             .push(attempt);
     }
 
+    /// Drop every attempt at `question_id` — it was flagged as wrong, so
+    /// nothing learned from it (in either direction) should stand.
+    pub fn void(&mut self, question_id: &str) -> usize {
+        let mut removed = 0;
+        for territory in self.territories.values_mut() {
+            let before = territory.attempts.len();
+            territory.attempts.retain(|a| a.question_id != question_id);
+            removed += before - territory.attempts.len();
+        }
+        removed
+    }
+
     /// The profile a host shows: every discovered territory (unexplored ones
     /// at zero), plus any territory the file knows that discovery no longer
-    /// finds (a renamed crate keeps its history).
+    /// finds (a renamed crate keeps its history). `due` reports how many
+    /// reviews are waiting in a territory.
     pub fn profile(
         &self,
         project: &str,
         workspace: &Path,
         territories: &[Territory],
+        due: &dyn Fn(&str) -> u32,
         now: i64,
     ) -> StudyProfile {
         let mut rows: Vec<StudyTerritory> = territories
             .iter()
-            .map(|t| self.territory_row(&t.id, &t.name, now))
+            .map(|t| self.territory_row(&t.id, &t.name, t.files.len(), due(&t.id), now))
             .collect();
         for id in self.territories.keys() {
             if !territories.iter().any(|t| &t.id == id) {
-                rows.push(self.territory_row(id, id, now));
+                rows.push(self.territory_row(id, id, 1, due(id), now));
             }
         }
         let answered = rows.iter().map(|r| r.answered).sum();
@@ -138,17 +157,25 @@ impl Progress {
             understanding,
             level: level_for(understanding),
             answered,
+            due: rows.iter().map(|r| r.due).sum(),
             territories: rows,
         }
     }
 
-    fn territory_row(&self, id: &str, name: &str, now: i64) -> StudyTerritory {
+    fn territory_row(
+        &self,
+        id: &str,
+        name: &str,
+        files: usize,
+        due: u32,
+        now: i64,
+    ) -> StudyTerritory {
         let attempts = self
             .territories
             .get(id)
             .map(|t| t.attempts.as_slice())
             .unwrap_or(&[]);
-        let m = mastery_at(attempts, now);
+        let m = mastery_at(attempts, files, now);
         StudyTerritory {
             id: id.to_string(),
             name: name.to_string(),
@@ -160,6 +187,8 @@ impl Progress {
                 .count() as u32,
             last_answered_at: attempts.last().map(|a| a.at),
             faded: m.faded(),
+            files: files as u32,
+            due,
         }
     }
 }
@@ -189,8 +218,28 @@ fn decay(value: f64, seconds: i64) -> f64 {
     value * 0.5f64.powf(seconds as f64 / HALF_LIFE_SECS)
 }
 
-/// Replay `attempts` (in order) to the mastery at `now`.
-pub fn mastery_at(attempts: &[Attempt], now: i64) -> Mastery {
+/// How much of the remaining distance to mastery one full answer covers,
+/// by format. Recognition is cheaper than recall and partly luck: a guess
+/// at four options is right a quarter of the time, at true/false half.
+fn full_gain(kind: Option<&str>) -> f64 {
+    match kind {
+        Some("true_false") => 0.18,
+        Some("multiple_choice") => 0.28,
+        Some("order") => 0.32,
+        _ => 0.35,
+    }
+}
+
+/// A bigger region takes more answers to know: each one covers less of it.
+/// Two files → ~1.25, forty → ~2.3, two hundred → ~2.9.
+fn depth_of(files: usize) -> f64 {
+    1.0 + (files.max(1) as f64).log2() / 4.0
+}
+
+/// Replay `attempts` (in order) to the mastery at `now` of a region of
+/// `files` source files.
+pub fn mastery_at(attempts: &[Attempt], files: usize, now: i64) -> Mastery {
+    let depth = depth_of(files);
     let mut m = 0.0f64;
     let mut peak = 0.0f64;
     let mut last: Option<i64> = None;
@@ -198,9 +247,10 @@ pub fn mastery_at(attempts: &[Attempt], now: i64) -> Mastery {
         if let Some(prev) = last {
             m = decay(m, a.at - prev);
         }
+        let full = full_gain(a.kind.as_deref());
         m = match a.verdict {
-            Verdict::Full => m + (1.0 - m) * if a.hint_used { 0.2 } else { 0.35 },
-            Verdict::Partial => m + (1.0 - m) * 0.15,
+            Verdict::Full => m + (1.0 - m) * if a.hint_used { full * 0.6 } else { full } / depth,
+            Verdict::Partial => m + (1.0 - m) * full * 0.4 / depth,
             Verdict::Wrong => m * 0.7,
         };
         peak = peak.max(m);
@@ -215,15 +265,18 @@ pub fn mastery_at(attempts: &[Attempt], now: i64) -> Mastery {
     }
 }
 
-/// Understanding is the mean mastery across every territory, as a
-/// percentage — unexplored regions count as zero, so it honestly reads as
-/// coverage as much as depth.
+/// Understanding is mastery averaged across every territory, weighted by
+/// the square root of its size — a two-file crate shouldn't count like the
+/// whole frontend, nor the frontend drown everything else. Unexplored
+/// regions count as zero, so it reads as coverage as much as depth.
 pub fn understanding_of(rows: &[StudyTerritory]) -> f32 {
-    if rows.is_empty() {
+    let weight = |r: &StudyTerritory| (r.files.max(1) as f32).sqrt();
+    let total: f32 = rows.iter().map(weight).sum();
+    if total <= 0.0 {
         return 0.0;
     }
-    let sum: f32 = rows.iter().map(|r| r.mastery).sum();
-    (sum / rows.len() as f32 * 100.0).clamp(0.0, 100.0)
+    let sum: f32 = rows.iter().map(|r| r.mastery * weight(r)).sum();
+    (sum / total * 100.0).clamp(0.0, 100.0)
 }
 
 /// Levels start at 1 and rise every eight points of understanding.
@@ -265,67 +318,115 @@ mod tests {
             verdict,
             question_id: "q".into(),
             hint_used: false,
+            kind: Some("free_text".into()),
+        }
+    }
+
+    fn territory(id: &str, files: usize) -> Territory {
+        Territory {
+            id: id.into(),
+            name: id.into(),
+            files: (0..files).map(|i| format!("{id}/f{i}.rs")).collect(),
         }
     }
 
     #[test]
     fn correct_answers_raise_mastery_and_wrong_ones_lower_it() {
-        let one = mastery_at(&[attempt(0, Verdict::Full)], 0);
+        let one = mastery_at(&[attempt(0, Verdict::Full)], 1, 0);
         assert!((one.now - 0.35).abs() < 1e-4);
-        let two = mastery_at(&[attempt(0, Verdict::Full), attempt(1, Verdict::Full)], 1);
+        let two = mastery_at(
+            &[attempt(0, Verdict::Full), attempt(1, Verdict::Full)],
+            1,
+            1,
+        );
         assert!(two.now > one.now);
-        let missed = mastery_at(&[attempt(0, Verdict::Full), attempt(1, Verdict::Wrong)], 1);
+        let missed = mastery_at(
+            &[attempt(0, Verdict::Full), attempt(1, Verdict::Wrong)],
+            1,
+            1,
+        );
         assert!(missed.now < one.now);
         assert!(missed.faded() > 0.0);
-        let partial = mastery_at(&[attempt(0, Verdict::Partial)], 0);
+        let partial = mastery_at(&[attempt(0, Verdict::Partial)], 1, 0);
         assert!(partial.now < one.now && partial.now > 0.0);
     }
 
     #[test]
     fn mastery_halves_every_two_weeks_without_practice() {
-        let fresh = mastery_at(&[attempt(0, Verdict::Full)], 0);
-        let later = mastery_at(&[attempt(0, Verdict::Full)], 14 * DAY);
+        let fresh = mastery_at(&[attempt(0, Verdict::Full)], 1, 0);
+        let later = mastery_at(&[attempt(0, Verdict::Full)], 1, 14 * DAY);
         assert!((later.now - fresh.now / 2.0).abs() < 1e-3);
         assert!((later.faded() - 0.5).abs() < 1e-3);
         assert_eq!(later.peak, fresh.peak);
     }
 
     #[test]
-    fn a_hint_earns_less() {
-        let plain = mastery_at(&[attempt(0, Verdict::Full)], 0);
-        let hinted = mastery_at(
-            &[Attempt {
-                hint_used: true,
-                ..attempt(0, Verdict::Full)
-            }],
-            0,
-        );
-        assert!(hinted.now < plain.now);
+    fn hints_guessable_formats_and_big_regions_earn_less() {
+        let of = |kind: &str, hint: bool, files: usize| {
+            mastery_at(
+                &[Attempt {
+                    hint_used: hint,
+                    kind: Some(kind.into()),
+                    ..attempt(0, Verdict::Full)
+                }],
+                files,
+                0,
+            )
+            .now
+        };
+        assert!(of("free_text", true, 1) < of("free_text", false, 1));
+        assert!(of("true_false", false, 1) < of("multiple_choice", false, 1));
+        assert!(of("multiple_choice", false, 1) < of("order", false, 1));
+        assert!(of("order", false, 1) < of("free_text", false, 1));
+        assert!(of("free_text", false, 200) < of("free_text", false, 2));
+        // An attempt from before formats were recorded keeps its old worth.
+        let legacy = Attempt {
+            kind: None,
+            ..attempt(0, Verdict::Full)
+        };
+        assert!((mastery_at(&[legacy], 1, 0).now - 0.35).abs() < 1e-4);
     }
 
     #[test]
-    fn the_profile_covers_every_territory_and_derives_a_level() {
+    fn the_profile_weighs_regions_by_size_and_derives_a_level() {
         let mut p = Progress::default();
-        p.record("crates/a", attempt(0, Verdict::Full));
-        let territories = vec![
-            Territory {
-                id: "crates/a".into(),
-                name: "a".into(),
-                files: vec![],
-            },
-            Territory {
-                id: "crates/b".into(),
-                name: "b".into(),
-                files: vec![],
-            },
-        ];
-        let profile = p.profile("proj", Path::new("/x"), &territories, 0);
+        p.record("small", attempt(0, Verdict::Full));
+        let territories = vec![territory("small", 1), territory("big", 9)];
+        let profile = p.profile(
+            "proj",
+            Path::new("/x"),
+            &territories,
+            &|id| u32::from(id == "big"),
+            0,
+        );
         assert_eq!(profile.territories.len(), 2);
         assert_eq!(profile.answered, 1);
-        // 0.35 mastery over two territories = 17.5%, level 3.
-        assert!((profile.understanding - 17.5).abs() < 0.01);
-        assert_eq!(profile.level, 3);
+        assert_eq!(profile.due, 1);
+        assert_eq!(profile.territories[1].files, 9);
+        // 0.35 in the small region, weights 1 and 3: 8.75%, level 2.
+        assert!(
+            (profile.understanding - 8.75).abs() < 0.01,
+            "{}",
+            profile.understanding
+        );
+        assert_eq!(profile.level, 2);
         assert_eq!(profile.territories[1].mastery, 0.0);
+    }
+
+    #[test]
+    fn voiding_a_question_removes_what_it_taught() {
+        let mut p = Progress::default();
+        p.record("a", attempt(0, Verdict::Wrong));
+        p.record(
+            "a",
+            Attempt {
+                question_id: "other".into(),
+                ..attempt(1, Verdict::Full)
+            },
+        );
+        assert_eq!(p.void("q"), 1);
+        assert_eq!(p.territories["a"].attempts.len(), 1);
+        assert_eq!(p.void("q"), 0);
     }
 
     #[test]
@@ -336,6 +437,10 @@ mod tests {
         p.save(dir.path()).unwrap();
         let back = Progress::load(dir.path()).unwrap();
         assert_eq!(back.territories["docs"].attempts.len(), 1);
+        assert_eq!(
+            back.territories["docs"].attempts[0].kind.as_deref(),
+            Some("free_text")
+        );
         assert_eq!(back.schema_version, SCHEMA_VERSION);
         assert!(Progress::load(&dir.path().join("missing"))
             .unwrap()

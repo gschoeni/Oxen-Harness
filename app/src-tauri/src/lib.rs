@@ -187,6 +187,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::study::study_profile,
                 commands::study::study_batch,
                 commands::study::study_answer,
+                commands::study::study_flag,
                 commands::study::get_model_roles,
                 commands::study::set_model_role,
                 commands::review::run_code_review,

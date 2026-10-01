@@ -54,6 +54,28 @@ pub fn grade_choice(q: &StoredQuestion, answer: &str) -> Graded {
     graded(verdict, feedback.to_string(), q)
 }
 
+/// Grade an ordering answer: the option numbers in sequence (`"3142"`,
+/// separators ignored). Every step in place is full; at least half in
+/// place, or the right steps with one neighbouring pair swapped, is partial.
+pub fn grade_order(q: &StoredQuestion, answer: &str) -> Graded {
+    let given: Vec<char> = answer.chars().filter(|c| c.is_ascii_digit()).collect();
+    let want: Vec<char> = q.answer.chars().collect();
+    let in_place = given.iter().zip(&want).filter(|(a, b)| a == b).count();
+    let verdict = if given == want {
+        Verdict::Full
+    } else if given.len() == want.len() && in_place * 2 >= want.len() {
+        Verdict::Partial
+    } else {
+        Verdict::Wrong
+    };
+    let feedback = match verdict {
+        Verdict::Full => "Right order.".to_string(),
+        Verdict::Partial => format!("{in_place} of {} steps in place.", want.len()),
+        Verdict::Wrong => "Not that order.".to_string(),
+    };
+    graded(verdict, feedback, q)
+}
+
 fn choice_index(q: &StoredQuestion, answer: &str) -> Option<usize> {
     let a = answer.trim();
     if a.is_empty() {
@@ -150,6 +172,9 @@ mod tests {
             asked: 0,
             last_verdict: None,
             last_asked_at: None,
+            flagged: false,
+            box_level: 0,
+            due_at: None,
         }
     }
 
@@ -165,6 +190,22 @@ mod tests {
         assert_eq!(wrong.correct_answer, "beta");
         assert_eq!(wrong.feedback, "Not that one.");
         assert_eq!(grade_choice(&q, "9").verdict, Verdict::Wrong);
+    }
+
+    #[test]
+    fn orderings_are_graded_by_steps_in_place() {
+        let mut q = choice();
+        q.question.kind = "order".into();
+        q.question.options = vec!["c".into(), "a".into(), "d".into(), "b".into()];
+        q.answer = "2413".into();
+        assert_eq!(grade_order(&q, "2413").verdict, Verdict::Full);
+        assert_eq!(grade_order(&q, "2, 4, 1, 3").verdict, Verdict::Full);
+        let swapped = grade_order(&q, "2431");
+        assert_eq!(swapped.verdict, Verdict::Partial);
+        assert_eq!(swapped.grade.feedback, "2 of 4 steps in place.");
+        assert_eq!(swapped.grade.correct_answer, "2 → 4 → 1 → 3");
+        assert_eq!(grade_order(&q, "1234").verdict, Verdict::Wrong);
+        assert_eq!(grade_order(&q, "24").verdict, Verdict::Wrong);
     }
 
     #[test]

@@ -6,7 +6,8 @@
 //! the game plays while the agent works.
 
 use harness_protocol::{
-    StudyAnswerRequest, StudyAnswerResult, StudyBatch, StudyBatchRequest, StudyProfile,
+    StudyAnswerRequest, StudyAnswerResult, StudyBatch, StudyBatchRequest, StudyFlagRequest,
+    StudyProfile,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -45,6 +46,16 @@ pub(crate) async fn study_answer(
     request: StudyAnswerRequest,
 ) -> Result<StudyAnswerResult, String> {
     state.study_answer(&session, request).await
+}
+
+/// Retire a question the player marked wrong and strike its answers.
+#[tauri::command]
+pub(crate) fn study_flag(
+    state: State<'_, AppState>,
+    session: String,
+    request: StudyFlagRequest,
+) -> Result<StudyProfile, String> {
+    state.study_flag(&session, request)
 }
 
 /// The per-role model overrides from `limits.json`. `None` means the role

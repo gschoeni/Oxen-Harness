@@ -187,6 +187,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/v1/sessions/{id}/study/profile", get(study_profile))
         .route("/v1/sessions/{id}/study/batch", post(study_batch))
         .route("/v1/sessions/{id}/study/answer", post(study_answer))
+        .route("/v1/sessions/{id}/study/flag", post(study_flag))
         .route("/v1/sessions/{id}/review", post(run_review))
         .route("/v1/questions/{id}/answer", post(answer_question))
         .route("/v1/approvals/{id}/answer", post(answer_approval))
@@ -734,6 +735,18 @@ async fn study_answer(
 ) -> ApiResult<Json<harness_protocol::StudyAnswerResult>> {
     authorize(&state, &headers, None)?;
     Ok(Json(state.service.study_answer(&id, request).await?))
+}
+
+/// Retire a study question the player marked wrong; its answers are struck
+/// from the record. Returns the updated profile.
+async fn study_flag(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<harness_protocol::StudyFlagRequest>,
+) -> ApiResult<Json<harness_protocol::StudyProfile>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(state.service.study_flag(&id, request)?))
 }
 
 #[derive(Deserialize)]

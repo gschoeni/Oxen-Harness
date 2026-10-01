@@ -639,7 +639,9 @@ async fn study_round_trip_over_http() {
     );
     // The answer never crosses the wire with the question.
     assert!(question.get("answer").is_none());
-    assert_eq!(batch["tokens_used"], 340);
+    // Two calls: the writer, then the checker (whose reply here isn't a
+    // verdict, so nothing is dropped).
+    assert_eq!(batch["tokens_used"], 680);
 
     let result: Value = client()
         .post(format!("{base}/v1/sessions/{session}/study/answer"))
@@ -657,6 +659,21 @@ async fn study_round_trip_over_http() {
     assert_eq!(result["grade"]["verdict"], "full");
     assert_eq!(result["profile"]["answered"], 1);
     assert!(result["profile"]["understanding"].as_f64().unwrap() > 0.0);
+
+    // Flagging the question strikes that answer from the record.
+    let flagged: Value = client()
+        .post(format!("{base}/v1/sessions/{session}/study/flag"))
+        .bearer_auth(TOKEN)
+        .json(&json!({"question_id": question["id"]}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(flagged["answered"], 0);
 
     // A mode with nothing to ask about says why, as a 400.
     let ride = client()

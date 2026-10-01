@@ -159,6 +159,7 @@ mod tests {
                 verdict: Verdict::Full,
                 question_id: "q".into(),
                 hint_used: false,
+                kind: None,
             },
         );
         progress.save(study.path()).unwrap();

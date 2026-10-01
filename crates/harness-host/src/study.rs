@@ -9,7 +9,8 @@
 
 use harness_agent::{Agent, AgentConfig, ModelRoles, Role};
 use harness_protocol::{
-    StudyAnswerRequest, StudyAnswerResult, StudyBatch, StudyBatchRequest, StudyProfile,
+    StudyAnswerRequest, StudyAnswerResult, StudyBatch, StudyBatchRequest, StudyFlagRequest,
+    StudyProfile,
 };
 use harness_study::{BatchContext, Completer, Completion, StudyError, StudyMode, StudyService};
 
@@ -112,6 +113,18 @@ impl SessionService {
         service
             .answer(&request, &model)
             .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Retire a question the player says is wrong, striking its answers
+    /// from the record. Returns the profile without them.
+    pub fn study_flag(
+        &self,
+        session: &str,
+        request: StudyFlagRequest,
+    ) -> Result<StudyProfile, String> {
+        self.study_service(session)?
+            .flag(&request)
             .map_err(|e| e.to_string())
     }
 

@@ -405,6 +405,13 @@ pub struct StudyTerritory {
     /// How much mastery has faded since its peak, 0..1 — what the game turns
     /// into "your memory of X is fading" events.
     pub faded: f32,
+    /// Source files in the territory: bigger regions take more answers to
+    /// master and weigh more in the project's understanding.
+    #[serde(default)]
+    pub files: u32,
+    /// Questions here whose spaced review has come due.
+    #[serde(default)]
+    pub due: u32,
 }
 
 /// The player's understanding of one project: the per-territory mastery
@@ -421,6 +428,9 @@ pub struct StudyProfile {
     pub level: u32,
     /// Questions answered all time, across territories.
     pub answered: u32,
+    /// Reviews due right now, across territories.
+    #[serde(default)]
+    pub due: u32,
     pub territories: Vec<StudyTerritory>,
 }
 
@@ -431,10 +441,12 @@ pub struct StudyQuestion {
     pub id: String,
     /// The territory id this question tests.
     pub territory: String,
-    /// `"multiple_choice"`, `"true_false"`, or `"free_text"`.
+    /// `"multiple_choice"`, `"true_false"`, `"free_text"`, or `"order"` (put
+    /// the options in sequence; answered with their numbers, e.g. `"3142"`).
     pub kind: String,
     pub prompt: String,
-    /// The options for a choice question (2-4 entries); empty for free text.
+    /// The options for a choice question (2-4 entries) or the shuffled steps
+    /// of an ordering question (3-5); empty for free text.
     #[serde(default)]
     pub options: Vec<String>,
     /// Where the answer lives, relative to the workspace root.
@@ -490,6 +502,12 @@ pub struct StudyAnswerRequest {
     /// Whether the hint was revealed before answering.
     #[serde(default)]
     pub hint_used: bool,
+}
+
+/// A question the player marks as wrong or unfair.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StudyFlagRequest {
+    pub question_id: String,
 }
 
 /// How an answer was judged.

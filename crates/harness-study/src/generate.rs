@@ -12,38 +12,65 @@ use crate::territories::{territory_for, Territory};
 use crate::StudyError;
 
 pub const SYSTEM: &str = "You write short quiz questions that help a developer understand a \
-codebase they are working in. Every question must be answerable from the source excerpts you \
-are given and must point at the exact file (and lines) that holds the answer. Prefer questions \
-about intent, data flow, invariants, and why the code is shaped the way it is over trivia about \
-identifiers. Never ask about line numbers or counts. The questions are read on a small screen: \
-keep each prompt under 220 characters and each option under 100. Reply with a JSON array only — no prose, no \
-code fences.";
+codebase they are working in. Every question must be answerable from the source you are given \
+and must point at the file that holds the answer. Test understanding, not memory of names: \
+what happens when this runs, what breaks if it changes, why it is shaped this way, how one \
+file relies on another, where you would go to change a behavior. Never ask about line numbers, \
+counts, or the exact spelling of an identifier. The questions are read on a small screen: keep \
+each prompt under 220 characters and each option under 100. Reply with a JSON array only — no \
+prose, no code fences.";
+
+pub const VERIFY_SYSTEM: &str = "You check quiz questions about a codebase against the source \
+they were written from. A question fails if its marked answer is wrong, if another option is \
+equally right, if it can't be answered from the source, or if it is ambiguous. Be strict about \
+correctness and lenient about style. Reply with a JSON array only: one {\"index\": number, \
+\"ok\": true|false, \"reason\": short string} per question.";
 
 /// The most lines a hint excerpt shows.
 const EXCERPT_LINES: usize = 12;
 const EXCERPT_CHARS: usize = 600;
 
+/// How a batch of `count` splits across formats. Recall beats recognition,
+/// so typed answers and orderings take the places true/false used to; a
+/// lone question is multiple choice, the quickest to answer.
+fn mix(count: usize) -> (usize, usize, usize) {
+    let order = usize::from(count >= 4);
+    let free_text = match count {
+        0..=1 => 0,
+        2..=4 => 1,
+        _ => 2,
+    };
+    (count - order - free_text, free_text, order)
+}
+
 /// The prompt for `count` questions from `material`. `avoid` lists prompts
 /// already in the bank for this region so the model steers clear of them.
 pub fn prompt(material: &Material, count: usize, avoid: &[String]) -> String {
-    let free_text = if count >= 3 { 1 } else { 0 };
-    let true_false = if count >= 4 { 1 } else { 0 };
-    let choice = count - free_text - true_false;
+    let (choice, free_text, order) = mix(count);
     let where_ = if material.numbered {
-        "\"source_lines\": [first, last] line numbers within that file's excerpt"
+        "\"source_lines\": [first, last] using the line numbers printed before each `|`"
     } else {
         "\"excerpt\": the one to six lines of the material that hold the answer, quoted verbatim"
     };
+    let across = if material.files.len() > 1 {
+        " At least one question must connect two of the files (how one uses the other), and \
+         one multiple_choice should ask which file you would open to change a behavior."
+    } else {
+        ""
+    };
     let mut out = format!(
         "{}\n\nWrite exactly {count} questions: {choice} multiple_choice (4 options, one \
-         correct, plausible distractors), {true_false} true_false, {free_text} free_text (a \
-         short answer of a few words to a sentence, with a reference answer). Spread them across \
-         the excerpts and vary difficulty 1-3.\n\n\
-         Each element: {{\"kind\": \"multiple_choice\"|\"true_false\"|\"free_text\", \
-         \"prompt\": string, \"options\": [string] (empty for free_text; [\"True\",\"False\"] for \
-         true_false), \"answer\": 0-based index of the correct option (or the reference answer \
-         string for free_text), \"explanation\": one or two sentences, \"source_path\": the file \
-         the answer is in, exactly as it appears in the material, {where}, \"difficulty\": 1|2|3}}.\n",
+         correct, plausible distractors — make at least one a \"what happens if…\" or \"what \
+         does this return when…\" prediction), {free_text} free_text (answered in a few words \
+         to a sentence, with a reference answer), {order} order (three to five steps of \
+         something the code does, listed in the correct order; if the material has no real \
+         sequence, write a multiple_choice instead).{across} Vary difficulty 1-3.\n\n\
+         Each element: {{\"kind\": \"multiple_choice\"|\"free_text\"|\"order\", \"prompt\": \
+         string, \"options\": [string] (the choices; for order, the steps in their correct \
+         order; empty for free_text), \"answer\": 0-based index of the correct option (the \
+         reference answer string for free_text; omit for order), \"explanation\": one or two \
+         sentences, \"source_path\": the file the answer is in, exactly as it appears in the \
+         material, {where}, \"difficulty\": 1|2|3}}.\n",
         material.framing,
         where = where_
     );
@@ -58,6 +85,50 @@ pub fn prompt(material: &Material, count: usize, avoid: &[String]) -> String {
     out.push_str("\n---\n\n");
     out.push_str(&material.text);
     out
+}
+
+/// The checker's prompt: each question with its marked answer, then the
+/// source it was written from.
+pub fn verify_prompt(questions: &[StoredQuestion], material: &Material) -> String {
+    let mut out = String::from("Questions to check:\n\n");
+    for (index, q) in questions.iter().enumerate() {
+        out.push_str(&format!(
+            "[{index}] ({}) {}\n",
+            q.question.kind, q.question.prompt
+        ));
+        for (i, option) in q.question.options.iter().enumerate() {
+            out.push_str(&format!("    {}. {option}\n", i + 1));
+        }
+        out.push_str(&format!(
+            "    marked answer: {}\n    file: {}\n\n",
+            q.correct_answer(),
+            q.question.source_path
+        ));
+    }
+    out.push_str("---\n\nThe source:\n\n");
+    out.push_str(&material.text);
+    out
+}
+
+#[derive(Debug, Deserialize)]
+struct RawCheck {
+    index: usize,
+    ok: bool,
+}
+
+/// The indices the checker rejected, or `None` when its reply can't be
+/// read — in which case the caller keeps every question rather than guess.
+pub fn rejected(reply: &str) -> Option<Vec<usize>> {
+    let start = reply.find('[')?;
+    let end = reply.rfind(']')?;
+    let checks: Vec<RawCheck> = serde_json::from_str(reply.get(start..=end)?).ok()?;
+    Some(
+        checks
+            .into_iter()
+            .filter(|c| !c.ok)
+            .map(|c| c.index)
+            .collect(),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,6 +239,19 @@ fn validate(
             };
             (kind, options, index.to_string())
         }
+        "order" => {
+            let steps: Vec<String> = raw
+                .options
+                .iter()
+                .map(|o| o.trim().to_string())
+                .filter(|o| !o.is_empty())
+                .collect();
+            if steps.len() < 3 || steps.len() > 5 {
+                return None;
+            }
+            let (options, sequence) = shuffled_steps(steps, &raw.prompt);
+            (kind, options, sequence)
+        }
         "free_text" => {
             let reference = match &raw.answer {
                 serde_json::Value::String(s) => s.trim().to_string(),
@@ -223,6 +307,9 @@ fn validate(
         asked: 0,
         last_verdict: None,
         last_asked_at: None,
+        flagged: false,
+        box_level: 0,
+        due_at: None,
     })
 }
 
@@ -247,6 +334,31 @@ fn shuffled(options: Vec<String>, answer: usize, seed: &str) -> (Vec<String>, us
     (
         keyed.into_iter().map(|(_, _, option)| option).collect(),
         index,
+    )
+}
+
+/// Shuffle an ordering question's steps. Returns the shuffled options and
+/// the answer: the option numbers (1-based, as the screen shows them) in
+/// the correct order, e.g. `"3142"`.
+fn shuffled_steps(steps: Vec<String>, seed: &str) -> (Vec<String>, String) {
+    let mut keyed: Vec<(String, usize, String)> = steps
+        .into_iter()
+        .enumerate()
+        .map(|(i, step)| (crate::short_hash(&format!("{seed}\n{step}"), 16), i, step))
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    // A shuffle that happens to be the right order would give the answer
+    // away as "1234"; turning it around can't be (three steps or more).
+    if keyed.iter().map(|k| k.1).is_sorted() {
+        keyed.reverse();
+    }
+    let mut sequence = vec![0usize; keyed.len()];
+    for (shown, (_, original, _)) in keyed.iter().enumerate() {
+        sequence[*original] = shown + 1;
+    }
+    (
+        keyed.into_iter().map(|(_, _, step)| step).collect(),
+        sequence.iter().map(|n| n.to_string()).collect(),
     )
 }
 
@@ -336,9 +448,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let m = material(dir.path());
         let p = prompt(&m, 5, &["What is line one?".into()]);
-        assert!(p.contains("3 multiple_choice"));
-        assert!(p.contains("1 true_false"));
-        assert!(p.contains("1 free_text"));
+        assert!(p.contains("2 multiple_choice"));
+        assert!(p.contains("2 free_text"));
+        assert!(p.contains("1 order"));
+        assert_eq!(mix(1), (1, 0, 0));
+        assert_eq!(mix(3), (2, 1, 0));
+        assert_eq!(mix(4), (2, 1, 1));
         assert!(p.contains("- What is line one?"));
         assert!(p.ends_with(m.text.as_str()));
     }
@@ -417,6 +532,52 @@ mod tests {
         let qs = parse(reply, &m, &territories, "m", 0, dir.path()).unwrap();
         assert_eq!(qs[0].question.territory, "other");
         assert_eq!(qs[1].question.territory, "src");
+    }
+
+    #[test]
+    fn ordering_questions_shuffle_their_steps_and_keep_the_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = material(dir.path());
+        let reply = r#"[{"kind":"order","prompt":"Order the steps of a turn.","options":["make room","stream the reply","run tool calls","repeat"],"source_path":"src/lib.rs","source_lines":[1,3]}]"#;
+        let q = &parse(reply, &m, &[], "m", 0, dir.path()).unwrap()[0];
+        assert_eq!(q.question.kind, "order");
+        assert_ne!(
+            q.question.options[0..2],
+            ["make room".to_string(), "stream the reply".to_string()]
+        );
+        // Reading the options in the answer's order gives the steps back.
+        let restored: Vec<&str> = q
+            .answer
+            .chars()
+            .map(|c| q.question.options[c.to_digit(10).unwrap() as usize - 1].as_str())
+            .collect();
+        assert_eq!(
+            restored,
+            vec!["make room", "stream the reply", "run tool calls", "repeat"]
+        );
+        assert_ne!(q.answer, "1234");
+        // Two steps aren't an ordering.
+        let short = r#"[{"kind":"order","prompt":"Order these two.","options":["a","b"],"source_path":"src/lib.rs"}]"#;
+        assert!(parse(short, &m, &[], "m", 0, dir.path()).is_err());
+    }
+
+    #[test]
+    fn the_checker_names_what_to_drop_and_an_unreadable_verdict_drops_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = material(dir.path());
+        let reply = r#"[{"kind":"true_false","prompt":"There are three lines.","answer":0,"source_path":"src/lib.rs","source_lines":[1,3]}]"#;
+        let qs = parse(reply, &m, &[], "m", 0, dir.path()).unwrap();
+        let p = verify_prompt(&qs, &m);
+        assert!(p.contains("[0] (true_false) There are three lines."));
+        assert!(p.contains("marked answer: True"));
+        assert!(p.ends_with(m.text.as_str()));
+        assert_eq!(
+            rejected(
+                r#"ok: [{"index":0,"ok":true,"reason":""},{"index":1,"ok":false,"reason":"two right"}]"#
+            ),
+            Some(vec![1])
+        );
+        assert_eq!(rejected("looks fine to me"), None);
     }
 
     #[test]

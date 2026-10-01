@@ -15,8 +15,13 @@ use crate::StudyError;
 
 const FILE: &str = "questions.jsonl";
 
-/// Don't re-ask a question answered fully within this window.
-const RECENT_SECS: i64 = 3 * 24 * 3600;
+const DAY: i64 = 24 * 3600;
+
+/// How long a question rests after a full answer, by the box it has reached:
+/// each success pushes the next review further out, a miss starts it over.
+const INTERVALS: [i64; 5] = [DAY, 3 * DAY, 7 * DAY, 14 * DAY, 30 * DAY];
+/// A missed question is due again almost at once — next run, not next week.
+const MISS_INTERVAL: i64 = 10 * 60;
 
 /// A question as stored: the client-facing part plus what only the grader
 /// sees.
@@ -36,16 +41,46 @@ pub struct StoredQuestion {
     pub last_verdict: Option<Verdict>,
     #[serde(default)]
     pub last_asked_at: Option<i64>,
+    /// The player marked it wrong or unfair. It is never asked again, but it
+    /// stays so the writer is told not to produce it a second time.
+    #[serde(default)]
+    pub flagged: bool,
+    /// How many times in a row it has been answered in full (capped at the
+    /// last interval) — the spaced-repetition box.
+    #[serde(default)]
+    pub box_level: u8,
+    /// When it is next worth asking; `None` until first asked.
+    #[serde(default)]
+    pub due_at: Option<i64>,
 }
 
 impl StoredQuestion {
+    /// Answered by picking one option (as opposed to typing).
     pub fn is_choice(&self) -> bool {
-        self.question.kind != "free_text"
+        matches!(
+            self.question.kind.as_str(),
+            "multiple_choice" | "true_false"
+        )
+    }
+
+    pub fn is_order(&self) -> bool {
+        self.question.kind == "order"
+    }
+
+    /// Whether it may be asked at `now`: never asked, or its rest is over.
+    pub fn is_due(&self, now: i64) -> bool {
+        !self.flagged && self.due_at.is_none_or(|due| due <= now)
     }
 
     /// The correct answer spelled out for a result card.
     pub fn correct_answer(&self) -> String {
-        if self.is_choice() {
+        if self.is_order() {
+            self.answer
+                .chars()
+                .map(String::from)
+                .collect::<Vec<_>>()
+                .join(" → ")
+        } else if self.is_choice() {
             self.answer
                 .parse::<usize>()
                 .ok()
@@ -119,20 +154,49 @@ impl Bank {
         added
     }
 
-    pub fn mark_asked(&mut self, id: &str, verdict: Verdict, at: i64) {
-        if let Some(q) = self.questions.iter_mut().find(|q| q.question.id == id) {
-            q.asked += 1;
-            q.last_verdict = Some(verdict);
-            q.last_asked_at = Some(at);
-        }
+    /// Record an answer and schedule the question's next review.
+    pub fn mark_asked(&mut self, id: &str, verdict: Verdict, hint_used: bool, at: i64) {
+        let Some(q) = self.questions.iter_mut().find(|q| q.question.id == id) else {
+            return;
+        };
+        q.asked += 1;
+        q.last_verdict = Some(verdict);
+        q.last_asked_at = Some(at);
+        let rest = match verdict {
+            // A hinted answer was read, not recalled: it earns no promotion.
+            Verdict::Full if hint_used => {
+                INTERVALS[(q.box_level as usize).min(INTERVALS.len() - 1)]
+            }
+            Verdict::Full => {
+                let rest = INTERVALS[(q.box_level as usize).min(INTERVALS.len() - 1)];
+                q.box_level = (q.box_level + 1).min(INTERVALS.len() as u8 - 1);
+                rest
+            }
+            Verdict::Partial => {
+                q.box_level = q.box_level.saturating_sub(1);
+                DAY
+            }
+            Verdict::Wrong => {
+                q.box_level = 0;
+                MISS_INTERVAL
+            }
+        };
+        q.due_at = Some(at + rest);
     }
 
-    /// Up to `n` questions for `territory` (any territory when `None`),
-    /// never one in `exclude`: unasked first, then missed, then the
-    /// longest-unasked, skipping anything answered fully in the last days.
+    /// Mark a question wrong or unfair. Returns the territory it belonged to.
+    pub fn flag(&mut self, id: &str) -> Option<String> {
+        let q = self.questions.iter_mut().find(|q| q.question.id == id)?;
+        q.flagged = true;
+        Some(q.question.territory.clone())
+    }
+
+    /// Up to `n` askable questions for `territory`, never one in `exclude`:
+    /// the most overdue reviews first, then questions never asked. A
+    /// question still resting after a good answer is left alone.
     pub fn pick(
         &self,
-        territory: Option<&str>,
+        territory: &str,
         exclude: &[String],
         n: usize,
         now: i64,
@@ -140,44 +204,35 @@ impl Bank {
         let mut candidates: Vec<&StoredQuestion> = self
             .questions
             .iter()
-            .filter(|q| territory.is_none_or(|t| q.question.territory == t))
-            .filter(|q| !exclude.contains(&q.question.id))
-            .filter(|q| {
-                !(q.last_verdict == Some(Verdict::Full)
-                    && q.last_asked_at.is_some_and(|at| now - at < RECENT_SECS))
-            })
+            .filter(|q| q.question.territory == territory)
+            .filter(|q| q.is_due(now) && !exclude.contains(&q.question.id))
             .collect();
-        candidates.sort_by_key(|q| (rank(q), q.last_asked_at.unwrap_or(0)));
+        candidates.sort_by_key(|q| (q.due_at.is_none(), q.due_at.unwrap_or(0)));
         candidates.truncate(n);
         candidates
     }
 
-    /// Questions missed or half-answered before, across every territory,
-    /// oldest miss first — the review mode's first draw.
-    pub fn missed(&self, exclude: &[String], n: usize) -> Vec<&StoredQuestion> {
+    /// Reviews that have come due, across every territory, most overdue
+    /// first — the review mode's draw.
+    pub fn due(&self, exclude: &[String], n: usize, now: i64) -> Vec<&StoredQuestion> {
         let mut out: Vec<&StoredQuestion> = self
             .questions
             .iter()
-            .filter(|q| {
-                matches!(
-                    q.last_verdict,
-                    Some(Verdict::Wrong) | Some(Verdict::Partial)
-                )
-            })
+            .filter(|q| q.due_at.is_some() && q.is_due(now))
             .filter(|q| !exclude.contains(&q.question.id))
             .collect();
-        out.sort_by_key(|q| q.last_asked_at.unwrap_or(0));
+        out.sort_by_key(|q| q.due_at.unwrap_or(0));
         out.truncate(n);
         out
     }
-}
 
-fn rank(q: &StoredQuestion) -> u8 {
-    match q.last_verdict {
-        None => 0,
-        Some(Verdict::Wrong) => 1,
-        Some(Verdict::Partial) => 2,
-        Some(Verdict::Full) => 3,
+    /// How many reviews are due in `territory` right now.
+    pub fn due_count(&self, territory: &str, now: i64) -> u32 {
+        self.questions
+            .iter()
+            .filter(|q| q.question.territory == territory)
+            .filter(|q| q.due_at.is_some() && q.is_due(now))
+            .count() as u32
     }
 }
 
@@ -206,11 +261,14 @@ mod tests {
             asked: 0,
             last_verdict: None,
             last_asked_at: None,
+            flagged: false,
+            box_level: 0,
+            due_at: None,
         }
     }
 
     #[test]
-    fn picking_prefers_unasked_then_missed_and_skips_recent_hits() {
+    fn answers_schedule_the_next_review_and_picking_follows_the_schedule() {
         let mut bank = Bank::default();
         bank.push_new(vec![
             stored("hit", "t"),
@@ -218,22 +276,40 @@ mod tests {
             stored("new", "t"),
             stored("other", "u"),
         ]);
-        bank.mark_asked("hit", Verdict::Full, 1000);
-        bank.mark_asked("miss", Verdict::Wrong, 900);
-        let ids: Vec<&str> = bank
-            .pick(Some("t"), &[], 5, 1000)
-            .iter()
-            .map(|q| q.question.id.as_str())
-            .collect();
-        assert_eq!(ids, vec!["new", "miss"]);
-        // Weeks later the hit is fair game again, after the others.
-        let later: Vec<&str> = bank
-            .pick(Some("t"), &["new".to_string()], 5, 1000 + 30 * 24 * 3600)
-            .iter()
-            .map(|q| q.question.id.as_str())
-            .collect();
-        assert_eq!(later, vec!["miss", "hit"]);
-        assert_eq!(bank.missed(&[], 5).len(), 1);
+        bank.mark_asked("hit", Verdict::Full, false, 1000);
+        bank.mark_asked("miss", Verdict::Wrong, false, 1000);
+        assert_eq!(bank.get("hit").unwrap().due_at, Some(1000 + DAY));
+        assert_eq!(bank.get("hit").unwrap().box_level, 1);
+        let ids = |found: Vec<&StoredQuestion>| -> Vec<String> {
+            found.iter().map(|q| q.question.id.clone()).collect()
+        };
+        // Right away: the hit rests, the miss isn't due for ten minutes.
+        assert_eq!(ids(bank.pick("t", &[], 5, 1000)), vec!["new"]);
+        // An hour on the miss is back, ahead of what was never asked.
+        assert_eq!(
+            ids(bank.pick("t", &[], 5, 1000 + 3600)),
+            vec!["miss", "new"]
+        );
+        assert_eq!(ids(bank.due(&[], 5, 1000 + 3600)), vec!["miss"]);
+        assert_eq!(bank.due_count("t", 1000 + 2 * DAY), 2);
+        // A second full answer pushes the next review out to three days.
+        bank.mark_asked("hit", Verdict::Full, false, 1000 + DAY);
+        assert_eq!(bank.get("hit").unwrap().due_at, Some(1000 + DAY + 3 * DAY));
+        // A hinted answer earns no promotion; a miss starts over.
+        bank.mark_asked("hit", Verdict::Full, true, 2000);
+        assert_eq!(bank.get("hit").unwrap().box_level, 2);
+        bank.mark_asked("hit", Verdict::Wrong, false, 3000);
+        assert_eq!(bank.get("hit").unwrap().box_level, 0);
+    }
+
+    #[test]
+    fn a_flagged_question_is_never_asked_again() {
+        let mut bank = Bank::default();
+        bank.push_new(vec![stored("bad", "t")]);
+        assert_eq!(bank.flag("bad").as_deref(), Some("t"));
+        assert!(bank.pick("t", &[], 5, 0).is_empty());
+        assert!(bank.due(&[], 5, i64::MAX).is_empty());
+        assert_eq!(bank.flag("nope"), None);
     }
 
     #[test]
