@@ -7,7 +7,7 @@ vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 import { ToolsPage } from "./ToolsPage";
 import { useStore } from "../../lib/store";
 import * as ipc from "../../test/ipcMock";
-import { resetAll } from "../../test/utils";
+import { resetAll, setFeatureFlags } from "../../test/utils";
 import type { ToolInfo } from "../../lib/types";
 
 const builtin: ToolInfo = {
@@ -34,9 +34,37 @@ const custom: ToolInfo = {
   config: { type: "HTTP POST", url: "https://api.example.com/lookup" },
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   resetAll();
   ipc.listTools.mockResolvedValue([builtin, custom]);
+  await setFeatureFlags({ advanced_settings: true });
+});
+
+describe("ToolsPage without advanced settings", () => {
+  beforeEach(() => setFeatureFlags());
+
+  it("lists and toggles saved custom tools but offers no way to create or edit one", async () => {
+    render(<ToolsPage />);
+    expect(await screen.findByText("lookup_customer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /new tool/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText("Disable lookup_customer"));
+    expect(ipc.setToolEnabled).toHaveBeenCalledWith("lookup_customer", false);
+
+    // Opening the row says what the tool calls, without the editor.
+    await userEvent.click(screen.getByText("lookup_customer"));
+    expect(screen.getByText("https://api.example.com/lookup")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete tool/i })).not.toBeInTheDocument();
+  });
+
+  it("drops the custom section entirely when there is nothing in it", async () => {
+    ipc.listTools.mockResolvedValue([builtin]);
+    render(<ToolsPage />);
+    expect(await screen.findByText("read_file")).toBeInTheDocument();
+    expect(screen.queryByText(/your tools/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/built-in tools/i)).toBeInTheDocument();
+  });
 });
 
 describe("ToolsPage", () => {

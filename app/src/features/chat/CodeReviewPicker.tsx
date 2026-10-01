@@ -8,6 +8,7 @@ import { useState, type FormEvent } from "react";
 import { Button } from "../../components/ui";
 import { ArrowRight, ChevronDown, SearchCode, Settings2 } from "lucide-react";
 import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../components/ui/Menu";
+import { advancedSettingsEnabled } from "../../lib/features";
 import { useStore } from "../../lib/store";
 
 export function CodeReviewPicker({ disabled }: { disabled: boolean }) {
@@ -75,16 +76,20 @@ export function CodeReviewPicker({ disabled }: { disabled: boolean }) {
               <ArrowRight size={14} />
             </button>
           </form>
-          <MenuSep />
-          <MenuItem
-            manage
-            checkSlot={<Settings2 size={15} className="menu-check" />}
-            name="Review settings…"
-            onSelect={() => {
-              setOpen(false);
-              openSettings("code-review");
-            }}
-          />
+          {advancedSettingsEnabled() && (
+            <>
+              <MenuSep />
+              <MenuItem
+                manage
+                checkSlot={<Settings2 size={15} className="menu-check" />}
+                name="Review settings…"
+                onSelect={() => {
+                  setOpen(false);
+                  openSettings("code-review");
+                }}
+              />
+            </>
+          )}
         </Menu>
       )}
     </div>

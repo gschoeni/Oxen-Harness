@@ -7,6 +7,7 @@ import {
   themeLocation,
   useTheme,
 } from "../../lib/ipc";
+import { advancedSettingsEnabled } from "../../lib/features";
 import { useStore } from "../../lib/store";
 import type { CompressionMode } from "../../lib/types";
 import { parseSlashCommand, SLASH_COMMANDS } from "./slashCommands";
@@ -54,8 +55,10 @@ export async function dispatchSlashCommand(text: string): Promise<boolean> {
         break;
       }
       case "/code-review":
-        if (args === "steps") state.openSettings("code-review");
-        else state.startCodeReview(args || undefined);
+        if (args === "steps") {
+          if (advancedSettingsEnabled()) state.openSettings("code-review");
+          else note("The review steps can't be edited in this release.");
+        } else state.startCodeReview(args || undefined);
         break;
       case "/export": {
         const id = state.session?.session_id;

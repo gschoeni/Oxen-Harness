@@ -8,7 +8,7 @@ vi.mock("./ModelPicker", async (importOriginal) => {
   return { ModelPicker: vi.fn(original.ModelPicker) };
 });
 
-import { resetAll } from "../../test/utils";
+import { resetAll, setFeatureFlags } from "../../test/utils";
 import { Composer, attachmentCountLabel } from "./Composer";
 import { ModelPicker } from "./ModelPicker";
 import { useStore } from "../../lib/store";
@@ -206,5 +206,24 @@ describe("composer typing", () => {
     expect(box.style.height).toBe("100px");
     unmount();
     expect(disconnect).toHaveBeenCalledOnce();
+  });
+});
+
+describe("composer toolbar", () => {
+  const props = { onSend: () => {}, onStop: () => {}, onAttach: () => {} };
+  afterEach(() => setFeatureFlags());
+
+  it("keeps model and review but not the compression picker by default", () => {
+    useStore.setState({ session: sampleSession });
+    render(<Composer {...props} busy={false} />);
+    expect(screen.getByText("Review")).toBeInTheDocument();
+    expect(screen.queryByText(/^Compression/)).not.toBeInTheDocument();
+  });
+
+  it("shows the compression picker with advanced settings on", async () => {
+    await setFeatureFlags({ advanced_settings: true });
+    useStore.setState({ session: sampleSession });
+    render(<Composer {...props} busy={false} />);
+    expect(screen.getByText(/^Compression/)).toBeInTheDocument();
   });
 });

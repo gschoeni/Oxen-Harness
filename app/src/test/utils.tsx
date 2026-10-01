@@ -1,8 +1,9 @@
 // Test helpers. Imported by test files (after their `vi.mock` of lib/ipc) so the
 // store reset here touches the same store instance bound to the mocked IPC.
+import { initFeatureFlags, type FeatureFlags } from "../lib/features";
 import { useStore } from "../lib/store";
 import { resetUiState } from "../lib/uiState";
-import { resetIpc } from "./ipcMock";
+import { loadFeatureFlags, resetIpc } from "./ipcMock";
 
 /** Reset IPC mocks, UI prefs, localStorage, and the global store to a clean slate. */
 export function resetAll() {
@@ -61,4 +62,16 @@ export function resetAll() {
     question: null,
     approvals: {},
   });
+}
+
+/** Boot the release flags as the host would report them; any left out are off.
+ *  Flags outlive `resetAll`, so a file that turns one on resets it per test. */
+export async function setFeatureFlags(on: Partial<FeatureFlags> = {}) {
+  loadFeatureFlags.mockResolvedValueOnce({
+    workbench_customization: false,
+    workflows: false,
+    advanced_settings: false,
+    ...on,
+  });
+  await initFeatureFlags();
 }

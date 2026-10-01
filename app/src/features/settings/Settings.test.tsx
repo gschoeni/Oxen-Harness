@@ -7,7 +7,7 @@ vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 import { Settings } from "./Settings";
 import { useStore } from "../../lib/store";
 import * as ipc from "../../test/ipcMock";
-import { resetAll } from "../../test/utils";
+import { resetAll, setFeatureFlags } from "../../test/utils";
 
 beforeEach(() => {
   resetAll();
@@ -21,6 +21,23 @@ beforeEach(() => {
 });
 
 describe("Settings", () => {
+  it("keeps the review step prompts out of the rail unless advanced settings are on", async () => {
+    await setFeatureFlags();
+    // A stale request for the hidden page lands somewhere real.
+    useStore.setState({ settingsPage: "code-review" });
+    const { unmount } = render(<Settings />);
+    expect(screen.queryByRole("button", { name: /Code review/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Compression/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Connection" })).toBeInTheDocument();
+    unmount();
+
+    await setFeatureFlags({ advanced_settings: true });
+    useStore.setState({ settingsPage: "connection" });
+    render(<Settings />);
+    expect(screen.getByRole("button", { name: /Code review/ })).toBeInTheDocument();
+    await setFeatureFlags();
+  });
+
   it("groups the rail so tools, skills, and rules read as one set", () => {
     render(<Settings />);
     const groups = [...document.querySelectorAll(".settings-rail-group")].map(

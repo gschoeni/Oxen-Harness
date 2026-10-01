@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { Button } from "../../components/ui";
+import { advancedSettingsEnabled } from "../../lib/features";
 import { getConnection, setConnection } from "../../lib/ipc";
 import { useActiveProject, useStore } from "../../lib/store";
 import type { SettingsPage } from "../../lib/types";
@@ -86,11 +87,19 @@ const TITLE: Record<SettingsPage, string> = {
   logs: "Training data",
 };
 
+/** Pages only shown with the `advanced_settings` release flag. The review
+ *  pipeline itself still runs from the composer; only editing its step
+ *  prompts is held back. */
+const ADVANCED: SettingsPage[] = ["code-review"];
+
 /** The full-screen settings surface: a left rail of subpages and a content pane.
  *  Replaces the old stacked settings modal — each concern (connection, models,
  *  tools, appearance, logs) now gets its own dedicated page. */
 export function Settings() {
-  const page = useStore((s) => s.settingsPage);
+  const requested = useStore((s) => s.settingsPage);
+  const nav = advancedSettingsEnabled() ? NAV : NAV.filter((item) => !ADVANCED.includes(item.page));
+  // Anything that still asks for a held-back page lands on the first one.
+  const page = nav.some((item) => item.page === requested) ? requested : "connection";
   const setPage = useStore((s) => s.setSettingsPage);
   const close = useStore((s) => s.setSettingsOpen);
   const project = useActiveProject();
@@ -127,7 +136,7 @@ export function Settings() {
             </span>
           </div>
           <nav className="settings-rail-nav">
-            {NAV.map((item) => (
+            {nav.map((item) => (
               <Fragment key={item.page}>
                 {item.group && <div className="settings-rail-group">{item.group}</div>}
                 <button

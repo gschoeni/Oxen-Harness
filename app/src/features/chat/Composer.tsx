@@ -6,6 +6,7 @@ import { CompressionPicker } from "./CompressionPicker";
 import { ModelPicker } from "./ModelPicker";
 import { parseSlashCommand, slashSuggestions } from "./slashCommands";
 import { isAudioPath, isImagePath, isVideoPath } from "../../lib/attachments";
+import { advancedSettingsEnabled } from "../../lib/features";
 import { useComposerSize } from "./useComposerSize";
 import { isComposingKey, PROMPT_INPUT_PROPS } from "../../lib/promptInput";
 
@@ -255,12 +256,13 @@ export function Composer({
 }
 
 // Draft changes don't affect the pickers; their own store subscriptions still
-// update model/compression labels as sessions change.
+// update model/compression labels as sessions change. The compression picker
+// is an advanced control: the mode stays switchable from Settings → Compression.
 const ComposerToolbar = memo(function ComposerToolbar({ busy }: { busy: boolean }) {
   return (
     <div className="composer-toolbar">
       <ModelPicker disabled={busy} />
-      <CompressionPicker disabled={busy} />
+      {advancedSettingsEnabled() && <CompressionPicker disabled={busy} />}
       <CodeReviewPicker disabled={busy} />
     </div>
   );

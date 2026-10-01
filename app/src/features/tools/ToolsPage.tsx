@@ -2,8 +2,10 @@
 // the description the model sees for each, and inspect its JSON schema.
 // Users can also add their own tools — a name, a description, and an HTTP
 // endpoint that receives the model's arguments as JSON — and edit them later
-// (see ToolEditor). Changes persist to tools.json and apply to new (and
-// resumed) chats — surfaced in a hint so the behavior isn't surprising.
+// (see ToolEditor). That editor is behind the `advanced_settings` release
+// flag; without it, custom tools already in tools.json are still listed and
+// can be switched on or off. Changes persist to tools.json and apply to new
+// (and resumed) chats — surfaced in a hint so the behavior isn't surprising.
 
 import { useEffect, useState } from "react";
 import { ChevronRight, Globe, Plus, RotateCcw, Wrench } from "lucide-react";
@@ -15,6 +17,7 @@ import {
   setToolDescription,
   setToolEnabled,
 } from "../../lib/ipc";
+import { advancedSettingsEnabled } from "../../lib/features";
 import { TeachingNav } from "../settings/TeachingNav";
 import type { CustomToolSpec, ToolInfo } from "../../lib/types";
 import { ToolEditor } from "./ToolEditor";
@@ -73,55 +76,58 @@ export function ToolsPage() {
   const builtins = tools?.filter((t) => t.builtin) ?? [];
   const custom = tools?.filter((t) => !t.builtin) ?? [];
   const enabledCount = builtins.filter((t) => t.enabled).length;
+  const editable = advancedSettingsEnabled();
 
   return (
     <div className="settings-page">
       <TeachingNav current="tools" />
-      <section className="settings-section">
-        <div className="settings-label">
-          Your tools{tools && custom.length > 0 && ` · ${custom.length}`}
-        </div>
-        <p className="hint">
-          Give the agent new abilities without writing code: name a tool, describe when to use
-          it, and point it at an HTTP endpoint. The model's arguments are sent as a JSON POST
-          body and the response comes back as the tool result. Changes apply to{" "}
-          <strong>new and resumed chats</strong>.
-        </p>
-        {error && <span className="save-status err">{error}</span>}
+      {(editable || custom.length > 0) && (
+        <section className="settings-section">
+          <div className="settings-label">
+            Your tools{tools && custom.length > 0 && ` · ${custom.length}`}
+          </div>
+          <p className="hint">
+            {editable
+              ? "Give the agent new abilities without writing code: name a tool, describe when to use it, and point it at an HTTP endpoint. The model's arguments are sent as a JSON POST body and the response comes back as the tool result."
+              : "Tools you added: each sends the model's arguments to an HTTP endpoint as a JSON POST body and returns the response as the tool result."}{" "}
+            Changes apply to <strong>new and resumed chats</strong>.
+          </p>
 
-        <div className="tool-list">
-          {custom.map((t) => (
-            <CustomToolRow
-              key={t.name}
-              tool={t}
-              onToggle={toggle}
-              onSave={saveCustom}
-              onDelete={deleteCustom}
-            />
-          ))}
-
-          {adding ? (
-            <div className="tool-row tool-row-new">
-              <div className="tool-editor-title">
-                <Globe size={15} className="tool-row-icon" />
-                New tool
-              </div>
-              <ToolEditor
-                onSave={async (spec) => {
-                  await saveCustom(spec);
-                  setAdding(false);
-                }}
-                onCancel={() => setAdding(false)}
+          <div className="tool-list">
+            {custom.map((t) => (
+              <CustomToolRow
+                key={t.name}
+                tool={t}
+                editable={editable}
+                onToggle={toggle}
+                onSave={saveCustom}
+                onDelete={deleteCustom}
               />
-            </div>
-          ) : (
-            <Button variant="outline" className="tool-add" onClick={() => setAdding(true)} disabled={tools === null}>
-              <Plus size={15} />
-              New tool
-            </Button>
-          )}
-        </div>
-      </section>
+            ))}
+
+            {!editable ? null : adding ? (
+              <div className="tool-row tool-row-new">
+                <div className="tool-editor-title">
+                  <Globe size={15} className="tool-row-icon" />
+                  New tool
+                </div>
+                <ToolEditor
+                  onSave={async (spec) => {
+                    await saveCustom(spec);
+                    setAdding(false);
+                  }}
+                  onCancel={() => setAdding(false)}
+                />
+              </div>
+            ) : (
+              <Button variant="outline" className="tool-add" onClick={() => setAdding(true)} disabled={tools === null}>
+                <Plus size={15} />
+                New tool
+              </Button>
+            )}
+          </div>
+        </section>
+      )}
 
       <section className="settings-section">
         <div className="settings-label">
@@ -130,6 +136,7 @@ export function ToolsPage() {
         <p className="hint">
           Turn capabilities on or off, or reword how a tool is described to the model.
         </p>
+        {error && <span className="save-status err">{error}</span>}
 
         <div className="tool-list">
           {tools === null ? (
@@ -221,14 +228,17 @@ function ToolRow({
 
 // ---- custom tool rows -------------------------------------------------------
 
-/** A user-added tool: expands into the same editor used to create it. */
+/** A user-added tool: expands into the same editor used to create it, or —
+ *  when editing is switched off for the release — into what it calls. */
 function CustomToolRow({
   tool,
+  editable,
   onToggle,
   onSave,
   onDelete,
 }: {
   tool: ToolInfo;
+  editable: boolean;
   onToggle: (name: string, enabled: boolean) => void;
   onSave: (spec: CustomToolSpec, prevName: string) => Promise<void>;
   onDelete: (name: string) => Promise<void>;
@@ -247,7 +257,18 @@ function CustomToolRow({
 
       <ToolSwitch name={tool.name} enabled={tool.enabled} onToggle={onToggle} />
 
-      {open && (
+      {open && !editable && (
+        <div className="tool-row-body">
+          <div className="field-name">Sends a JSON POST to</div>
+          <pre className="tool-schema-code">{url}</pre>
+          <details className="tool-schema">
+            <summary>Parameters schema</summary>
+            <pre className="tool-schema-code">{JSON.stringify(tool.parameters, null, 2)}</pre>
+          </details>
+        </div>
+      )}
+
+      {open && editable && (
         <div className="tool-row-body">
           <ToolEditor
             initial={{
