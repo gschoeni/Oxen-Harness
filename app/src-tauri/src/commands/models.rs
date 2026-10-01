@@ -1,5 +1,5 @@
-//! Models, local and cloud: the setup wizard's catalog (curated, Hugging Face,
-//! and Oxen-hosted, each quant annotated with how it fits this machine), the
+//! Models, local and cloud: the setup wizard's catalog (curated and Hugging
+//! Face, each quant annotated with how it fits this machine), the
 //! llama.cpp runtime install, weight downloads, and switching what the chat
 //! runs on. A local switch starts a fresh server + session; a cloud switch
 //! swaps the live conversation in place (continuing the chat).
@@ -46,7 +46,7 @@ pub(crate) struct CatalogModel {
     params: String,
     context: u32,
     note: String,
-    /// `"curated"`, `"huggingface"`, or `"oxen"`.
+    /// `"curated"` or `"huggingface"`.
     source: String,
     quants: Vec<QuantOption>,
     /// The quant auto-picked for this machine (best quality that fits), if any.
@@ -138,14 +138,14 @@ fn annotate_catalog_model(
 }
 
 /// The model catalog for the setup wizard: the curated family (hardware-fit and
-/// quant annotated) plus any featured Oxen.ai-hosted models. Hugging Face models
-/// come in via `resolve_hf_model` / `search_hf_models` instead.
+/// quant annotated). Hugging Face models come in via `resolve_hf_model` /
+/// `search_hf_models` instead.
 #[tauri::command]
 pub(crate) async fn list_model_catalog() -> Result<Vec<CatalogModel>, String> {
     let profile = harness_local::detect_hardware();
     let store = ModelStore::open().map_err(|e| e.to_string())?;
 
-    let mut out: Vec<CatalogModel> = harness_local::catalog()
+    Ok(harness_local::catalog()
         .iter()
         .map(|spec| {
             annotate_catalog_model(
@@ -162,25 +162,7 @@ pub(crate) async fn list_model_catalog() -> Result<Vec<CatalogModel>, String> {
                 &store,
             )
         })
-        .collect();
-
-    // Featured Oxen.ai-hosted models (a stub today), grouped by repo.
-    for model in harness_local::source::oxen_featured() {
-        out.push(annotate_catalog_model(
-            CatalogIdentity {
-                id: model.id.clone(),
-                display: model.display.clone(),
-                params: model.params.clone(),
-                context: model.context,
-                note: String::new(),
-                source: "oxen",
-            },
-            vec![model],
-            &profile,
-            &store,
-        ));
-    }
-    Ok(out)
+        .collect())
 }
 
 /// Resolve a pasted Hugging Face reference (repo or direct GGUF link) into a

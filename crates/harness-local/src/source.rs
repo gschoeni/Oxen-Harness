@@ -676,18 +676,6 @@ pub async fn oxen_model_pricing_catalog_at(
     Ok(catalog)
 }
 
-// ===========================================================================
-// Oxen.ai-hosted weights — plumbing is real (Origin::Oxen + download_url); the
-// featured catalog is a stub until the hosted-weights repos are published.
-// ===========================================================================
-
-/// Featured Oxen.ai-hosted models. Empty for now — the download path
-/// ([`ModelRef::download_url`] for [`Origin::Oxen`]) is wired up, so populate
-/// this once the repos exist (namespace TBD).
-pub fn oxen_featured() -> Vec<ModelRef> {
-    Vec::new()
-}
-
 /// Minimal percent-encoding for a query string (alnum + a few safe chars pass).
 fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
