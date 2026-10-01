@@ -64,7 +64,7 @@ function isVisible(dir: string, expanded: Set<string>): boolean {
 const rebase = (path: string, from: string, to: string) =>
   path === from || isUnder(path, from) ? to + path.slice(from.length) : path;
 
-/** How long a "Saved to …" note stays under the header. */
+/** How long a "Saved to …" toast stays up at the foot of the panel. */
 const NOTE_MS = 4000;
 
 /** The most directory listings kept in memory at once. Listings are only
@@ -601,11 +601,6 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
         <DockToggle side="left" />
       </header>
       {error && <p className="ft-error">{error}</p>}
-      {note && (
-        <p className="ft-note" role="status">
-          {note}
-        </p>
-      )}
       {git !== null && git.length > 0 && (
         <section className="ft-changes" aria-label="Git changes">
           <button
@@ -666,6 +661,11 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
         />
       )}
       <p className="ft-hint">⌘-click to select a group · drag files into the chat · right-click for more</p>
+      {note && (
+        <p className="ft-note" role="status">
+          {note}
+        </p>
+      )}
     </nav>
   );
 }

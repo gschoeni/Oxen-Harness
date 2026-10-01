@@ -158,12 +158,22 @@
   border-bottom: 1px solid var(--separator);
   overflow-wrap: anywhere;
 }
+/* A toast floating over the foot of the panel: it comes and goes without
+   moving the tree. */
 .ft-note {
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  bottom: var(--space-2);
+  z-index: var(--z-sticky);
   margin: 0;
   padding: var(--space-2) var(--space-3);
-  color: var(--text-secondary);
+  background: var(--surface-2);
+  color: var(--text);
   font-size: var(--text-xs);
-  border-bottom: 1px solid var(--separator);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2);
   overflow-wrap: anywhere;
 }
 .ft-empty {
