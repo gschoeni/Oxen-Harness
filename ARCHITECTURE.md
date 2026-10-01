@@ -69,6 +69,11 @@ own:
   `FleetSink` to render the lanes. A lane is a session under its parent
   (`lane.rs`: typed results, the live `AgentTree`), may spawn one level down,
   and spends from the turn's shared `TreeBudget` (`tree.rs`).
+- **`harness-study`** — the study game's backend: it carves a workspace into
+  territories, keeps a per-project mastery record that fades without practice,
+  and has a model write and grade quiz questions from the real source. The
+  model call sits behind one `Completer` trait, so the crate depends on no
+  agent and tests hand it canned JSON.
 - **`harness-loop`** / **`harness-review`** / **`harness-runtime`** — the
   goal/verify iteration loop on top of the agent; the configurable code-review
   pipeline (ordered prompt steps — a parallel three-lens find, then verify →
@@ -125,6 +130,7 @@ The crate seams are designed so common extensions touch one place:
 | **A theme/loop field** | Add the field (serde `default`) — partial-override loading means existing files keep working. |
 | **A built-in slash command** | Three synchronized spots in `harness-cli`: a `Command` variant + a `SLASH_COMMANDS` entry in [`repl.rs`](crates/harness-cli/src/repl.rs) (completion derives from that registry), and a dispatch arm in [`repl_loop.rs`](crates/harness-cli/src/repl_loop.rs) calling your new [`commands/`](crates/harness-cli/src/commands/mod.rs) module (a test fails if they drift). Model a command with subcommands on [`commands/loops.rs`](crates/harness-cli/src/commands/loops.rs); one that swaps the session on [`commands/rewind.rs`](crates/harness-cli/src/commands/rewind.rs). |
 | **A review step** | No code: edit the pipeline in `~/.oxen-harness/code-review.json` or Settings → Code review — steps are ordered prompts (placeholders: `{{target}}`, `{{diff}}`, `{{previous}}`, `{{max_findings}}`), and any step can carry parallel `agents`. Defaults + schema live in [`harness-review/src/config.rs`](crates/harness-review/src/config.rs). |
+| **A hero game cabinet** | Implement `HeroGameDefinition` (pure state: keys in, state out) in [`app/src/features/chat/games/`](app/src/features/chat/games/gameKit.tsx) and register it in `HERO_GAMES` ([`heroGames.tsx`](app/src/features/chat/heroGames.tsx)). A cabinet that needs the backend queues `requests` and receives each outcome through `deliver`; one that needs typed input declares `textEntry`. [`study.tsx`](app/src/features/chat/games/study.tsx) does both, and text cabinets share [`terminal.tsx`](app/src/features/chat/games/terminal.tsx). |
 | **A subagent fan-out** | Call [`harness_agent::fleet::run_fleet`](crates/harness-agent/src/fleet.rs) with `SubagentTask`s and a spawn source (`\|\| agent.side_agent()`), render its `FleetEvent`s; or let the model do it — the `spawn_agents` tool ([`fleet_tool.rs`](crates/harness-agent/src/fleet_tool.rs)) is registered by both hosts, with a `FleetSink` per host for the lanes display. |
 
 ## Conventions

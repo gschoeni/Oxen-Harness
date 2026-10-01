@@ -816,3 +816,46 @@ each, in `crates/harness-agent`:
 
 Verification: harness-agent 189 unit + 12 integration tests, harness-store 65,
 workspace clippy and fmt clean.
+
+## Trail of Understanding — the codebase study game (2026-09-30)
+
+A fourth cabinet in the hero and the GameDock ("Study"), beside the untouched
+Oxen Trail: while an agent works, it quizzes you on the project the chat is
+rooted in, and keeps a per-project understanding level that fades without
+practice.
+
+- **Play:** pick a trail — Expedition (whole workspace, weakest region first),
+  Fresh tracks (uncommitted diff, else the last three commits), Ride-along
+  (files the chat's agent read or edited), Review (missed questions, faded
+  regions). Eight questions a run; multiple choice and true/false answer with
+  1-4, short answers are typed into a box under the screen and graded by the
+  model with partial credit. `H` (or `?`) shows the source excerpt for half
+  the points; misses come back at the fort after leg 4; the over screen shows
+  score, streak, understanding before → after, and the tokens spent.
+- **Backend:** new `harness-study` crate (territories, mastery with a two-week
+  half-life, question cache, one-completion question writing, grading) behind
+  `SessionService::study_*`, Tauri commands, and
+  `/v1/sessions/{id}/study/{profile,batch,answer}`. Nothing waits on the
+  chat's turn: model calls run on a detached agent.
+- **Model:** a `study` role (`limits.json` `study_model`, `/model roles
+  study`, Settings → Cloud models → Model roles) falling back to `smol`, then
+  the session model. Spend is billed to the chat under call kind `study`.
+- **Agent:** an `understanding` tool reports the level and per-region mastery
+  so the model can pitch its explanations.
+- **Checked live** against the hub with `deepseek-v4-1-flash`: a five-question
+  batch in ~16 s (~9k tokens), a free-text grade in ~1.5 s (~550 tokens), a
+  cached replay at zero tokens. That run found and fixed four things canned
+  tests could not: a missing reply ceiling truncating the JSON, all-or-nothing
+  array parsing, the correct option always written first, and diff line
+  numbers being read as file lines.
+
+A review pass then fixed a lost-update race between a prefetching batch and
+an in-flight answer (study files are now rewritten under one lock, from a
+fresh read), per-question region credit for diff and ride-along batches, and
+several ways a run could end early or get stuck.
+
+Verification: 1463 Rust tests (harness-study 32), workspace and app clippy and
+fmt clean, TypeScript clean, 721 frontend tests (study cabinet 17, wrapper 13).
+
+Not done: a TUI version (the HTTP routes are there for one); weighting
+understanding by region size; the Usage page splitting out `study` spend.

@@ -1297,3 +1297,60 @@ The boot notice is unconditional and loud (red, under the banner; on stderr
 for `-p` so stdout stays the model's answer), and the meter reads `bypass` for
 the whole run. Circuit breakers fire in every mode, `--yolo` included.
 
+## The study game: keeping the developer in the loop (2026-09-30)
+
+**The Trail of Understanding is a second cabinet on the Oxen Trail's bones, not
+a reskin of it.** The trail game stays as it was; the shared screen pieces
+(readout line, cards, landmark strip, seeded top-5) moved to
+`games/terminal.tsx` and both cabinets import them.
+
+**The model never explores the workspace; the host hands it a slab of source.**
+A batch is one tool-less completion over ~14k characters the host gathered (a
+territory's files, the git diff, or the files the session's agent touched). A
+tool-using agent would ground questions no better and would turn "a few
+seconds" into a multi-round loop per batch. Hints are read back from the real
+file by line, so they can't be invented — except for diff material, whose
+line numbers aren't file lines, so those questions quote the diff instead.
+
+**The game must not wait on the chat.** It exists to be played *while* a turn
+runs, and a running turn holds its session's agent lock. So study calls use
+`Agent::detached`: a tool-less agent built from the client alone, billed to
+the session's ledger under call kind `study`. That is the "separate bucket":
+the chat's cost stays honest, and the spend is still tellable apart.
+
+**Answers stay on the server.** A `StudyQuestion` never carries its answer;
+the client submits and reads a grade. Choice questions are graded locally,
+free text by the model with partial credit. Options are shuffled at parse
+time (keyed on the prompt, so a cached question keeps its layout) because a
+live run showed the model writing the correct option first every time.
+
+**Mastery is derived, not stored.** `progress.json` is only the attempt log
+per territory; mastery is replayed from it at read time with a two-week
+half-life. Changing the formula needs no migration, and "fading" is just the
+gap between a territory's peak and its value now. Understanding is the mean
+across *all* territories, unexplored ones at zero, so it reads as coverage as
+much as depth.
+
+**Progress is personal.** It lives in `~/.oxen-harness/study/<project-key>/`,
+never in the repository: what one developer understands is not project state.
+
+**The agent reads the profile through a tool, not the prompt.** The
+`understanding` tool costs nothing until the model asks, and a prompt section
+would go stale within a turn of play.
+
+**Games stay pure; the backend is a queue.** A cabinet can't call ipc, so it
+appends to `state.requests` the way it appends sound cues, and the wrapper
+performs them through an injected host and calls `deliver`. A reply whose id
+the state isn't waiting on is dropped, which is what makes backing out of a
+run mid-request safe.
+
+**A `study` model role, falling back to `smol`.** Question writing is the
+same kind of cheap side work as fleet lanes, so an install that already set
+`smol` gets a sensible study model for free; Settings → Cloud models now
+assigns all three roles (previously CLI-only).
+
+**Study files are rewritten under one lock, never across a model call.** The
+game overlaps its own requests (a prefetch while an answer is graded), and
+both files are saved whole. A batch plans under the lock, calls the model
+without it, and re-reads before saving; an answer grades first, then records.
+
