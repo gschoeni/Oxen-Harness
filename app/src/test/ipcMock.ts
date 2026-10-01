@@ -519,7 +519,14 @@ export const listCloudModels = vi.fn(async () => sampleCloudModels);
 export const addCloudModel = vi.fn(async () => sampleCloudModels);
 export const removeCloudModel = vi.fn(async () => sampleCloudModels);
 export const searchOxenModels = vi.fn(async () => sampleOxenHits);
-export const setModel = vi.fn(async () => ({ ...sampleSession, session_id: "model-switched" }));
+/** Like the backend: the named chat (default: the current one) comes back on
+ *  the new model. */
+const swapModel = async (model: string, session?: string) => ({
+  ...sampleSession,
+  model,
+  session_id: session ?? sampleSession.session_id,
+});
+export const setModel = vi.fn(swapModel);
 
 // The study game + the model roles it shares a settings section with.
 export const sampleStudyProfile: StudyProfile = {
@@ -702,7 +709,7 @@ export function resetIpc() {
   addCloudModel.mockReset().mockResolvedValue(sampleCloudModels);
   removeCloudModel.mockReset().mockResolvedValue(sampleCloudModels);
   searchOxenModels.mockReset().mockResolvedValue(sampleOxenHits);
-  setModel.mockReset().mockResolvedValue({ ...sampleSession, session_id: "model-switched" });
+  setModel.mockReset().mockImplementation(swapModel);
   listThemes.mockReset().mockResolvedValue(sampleThemes);
   activeTheme.mockReset().mockResolvedValue(sampleTheme);
   useTheme.mockReset().mockResolvedValue(sampleTheme);

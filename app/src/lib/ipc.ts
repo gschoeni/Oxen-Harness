@@ -811,9 +811,11 @@ export const removeCloudModel = (id: string) =>
  *  descriptions included (empty query = the full catalog). */
 export const searchOxenModels = (query: string) =>
   invoke<OxenModelHit[]>("search_oxen_models", { query });
-/** Switch the current chat (and the default for new chats) to a cloud model,
- *  continuing the same conversation. Resolves with the updated session info. */
-export const setModel = (model: string) => invoke<SessionInfo>("set_model", { model });
+/** Switch one chat (and the default for new chats) to a cloud model, continuing
+ *  the same conversation. `session` names the chat — each tab owns its model —
+ *  and defaults to the backend's current one. Resolves with that chat's info. */
+export const setModel = (model: string, session?: string) =>
+  invoke<SessionInfo>("set_model", { model, session });
 
 export const onModelProgress = (handler: (p: DownloadProgress) => void) =>
   listen<DownloadProgress>("models://progress", (e) => handler(e.payload));

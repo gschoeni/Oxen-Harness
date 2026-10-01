@@ -713,8 +713,9 @@ interface AppState {
   adoptSession: (info: SessionInfo) => void;
   /** Refresh the cloud model catalog from the backend. */
   loadCloudModels: () => Promise<void>;
-  /** Swap the current chat to a cloud model in place, continuing the same
-   *  conversation (keeps the thread; only the model changes). */
+  /** Swap the chat in view to a cloud model in place, continuing the same
+   *  conversation (keeps the thread; only the model changes). Other tabs keep
+   *  their own models. */
   changeModel: (model: string) => Promise<void>;
   /** Switch context compression for the live chat (persisted for new ones too). */
   changeCompressionMode: (mode: CompressionMode) => Promise<void>;
@@ -1665,11 +1666,14 @@ export const useStore = create<AppState>((rawSet, get) => {
     },
 
     changeModel: async (model) => {
-      const info = await setModel(model);
+      // The swap belongs to the tab it was made in: name that chat, so a tab
+      // switch while the request is out can neither retarget it nor have the
+      // answer overwrite the chat now in view.
+      const info = await setModel(model, get().session?.session_id);
       // In-place swap: the backend kept the same session, so keep the thread and
-      // only update the model/info for the current chat.
+      // only update the model/info for that chat.
       set((s) => ({
-        session: info,
+        session: !s.session || s.session.session_id === info.session_id ? info : s.session,
         infos: { ...s.infos, [info.session_id]: info },
         threads: { ...s.threads, [info.session_id]: s.threads[info.session_id] ?? [] },
       }));

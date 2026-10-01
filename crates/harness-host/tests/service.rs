@@ -280,6 +280,135 @@ async fn set_model_swaps_the_live_agent() {
     assert_eq!(current.model, "some-other-model");
 }
 
+/// Switching tabs evicts the idle chat's agent, so coming back rebuilds it
+/// from the store — on the model *that chat* was on, not whichever one the
+/// other tab picked since.
+#[tokio::test]
+async fn each_chat_keeps_its_own_model_across_tab_switches() {
+    let server = mockito::Server::new_async().await;
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+
+    let first = service.new_session().await.unwrap();
+    let second = service.new_session().await.unwrap();
+    service
+        .set_session_model(&second.session_id, "some-other-model")
+        .await
+        .unwrap();
+
+    let view = service.resume_session(&first.session_id).await.unwrap();
+    assert_eq!(view.info.model, "claude-opus-4-8");
+    let view = service.resume_session(&second.session_id).await.unwrap();
+    assert_eq!(view.info.model, "some-other-model");
+
+    // The history list names each chat's own model too.
+    let store = service.store().unwrap();
+    assert_eq!(
+        store.session_meta(&first.session_id).unwrap().model,
+        "claude-opus-4-8"
+    );
+    assert_eq!(
+        store.session_meta(&second.session_id).unwrap().model,
+        "some-other-model"
+    );
+
+    // A chat opened after the switch starts on the newest pick.
+    let third = service.new_session().await.unwrap();
+    assert_eq!(third.model, "some-other-model");
+}
+
+/// The switch names its chat, so it lands there even when another chat is
+/// the one in view.
+#[tokio::test]
+async fn a_model_switch_targets_the_named_chat_not_the_one_in_view() {
+    let server = mockito::Server::new_async().await;
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+
+    let first = service.new_session().await.unwrap();
+    let second = service.new_session().await.unwrap(); // now in view
+
+    let info = service
+        .set_session_model(&first.session_id, "some-other-model")
+        .await
+        .unwrap();
+    assert_eq!(info.session_id, first.session_id);
+    assert_eq!(info.model, "some-other-model");
+
+    let in_view = service.session_info().await.unwrap();
+    assert_eq!(in_view.session_id, second.session_id);
+    assert_eq!(in_view.model, "claude-opus-4-8");
+}
+
+/// Two chats, two models, both turns in flight at once: each request goes
+/// out under its own chat's model.
+#[tokio::test]
+async fn chats_run_in_parallel_on_different_models() {
+    let mut server = mockito::Server::new_async().await;
+    let turn_on = |server: &mut mockito::ServerGuard, model: &str| {
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::PartialJson(
+                serde_json::json!({ "model": model }),
+            ))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(FINAL_SSE)
+            .expect(1)
+            .create()
+    };
+    let opus = turn_on(&mut server, "claude-opus-4-8");
+    let other = turn_on(&mut server, "some-other-model");
+
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+
+    let first = service.new_session().await.unwrap();
+    let second = service.new_session().await.unwrap();
+    service
+        .set_session_model(&second.session_id, "some-other-model")
+        .await
+        .unwrap();
+
+    let (a, b) = tokio::join!(
+        service.run_turn(&first.session_id, "go".into(), vec![]),
+        service.run_turn(&second.session_id, "go".into(), vec![]),
+    );
+    a.expect("first chat's turn");
+    b.expect("second chat's turn");
+    opus.assert_async().await;
+    other.assert_async().await;
+}
+
+/// A recorded model that the configured endpoint never served (a local
+/// model whose server is gone, an imported transcript) can't be honored:
+/// the chat reopens on the default instead of failing every turn.
+#[tokio::test]
+async fn a_chat_from_another_endpoint_reopens_on_the_default_model() {
+    let server = mockito::Server::new_async().await;
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+
+    let foreign = service
+        .store()
+        .unwrap()
+        .create_session(&harness_store::SessionMeta {
+            workspace: workspace.path().display().to_string(),
+            model: "qwen-local".into(),
+            provider: "oxen".into(),
+            base_url: "http://127.0.0.1:1".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let view = service.resume_session(&foreign).await.unwrap();
+    assert_eq!(view.info.model, "claude-opus-4-8");
+}
+
 #[tokio::test]
 async fn cancel_turn_without_a_running_turn_is_a_noop() {
     let server = mockito::Server::new_async().await;

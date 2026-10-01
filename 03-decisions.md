@@ -1407,3 +1407,30 @@ re-asked with a corrective (write the file in parts), not re-sampled as is.
 **An empty turn fails.** Past the re-sample bound the turn returns
 `AgentError::EmptyReply` naming the limit, and stores no blank assistant
 message. A silent empty reply read as "done" in both front ends.
+
+## A chat owns its model (2026-10-01)
+
+Picking a model in one tab changed every other tab: the model lived only on
+the in-memory agent, switching tabs evicts the idle agent, and the rebuild
+used the global "last picked" model. The session row never learned of a
+mid-chat switch, so the history list was wrong too.
+
+**The session row is the model's home.** A switch writes `model`, `base_url`
+and `context_window` to the row before swapping the live agent, and a cold
+resume rebuilds from the row (`client_for_session`). The global selection is
+only the default a *new* chat starts on.
+
+**A switch names its chat.** `set_session_model(session, model)`; the desktop
+passes the tab's session id, `POST /v1/model` takes an optional `session`.
+A chat mid-turn refuses the switch instead of blocking until the reply ends.
+Starring a default in Settings no longer touches the open chat.
+
+**A recorded model is honored only where it can be reached**: a local model
+whose server is up or is the active local choice, or a cloud model recorded
+against the endpoint we are configured for. Otherwise (local server gone,
+imported transcript, changed connection) the chat reopens on the default.
+Reopening a tab never starts a local server on its own.
+
+**Going cloud in one tab doesn't kill a local server another live chat is
+on** (`release_local_model`); it is dropped only when no in-memory chat's row
+names its model.

@@ -222,7 +222,8 @@ describe("ModelPicker", () => {
       fireEvent.change(input, { target: { value: "muse" } });
       fireEvent.click(await screen.findByTitle("Add muse-spark-1-1 to your models"));
       await waitFor(() => expect(addCloudModel).toHaveBeenCalledWith("muse-spark-1-1", "Muse Spark 1.1"));
-      await waitFor(() => expect(setModel).toHaveBeenCalledWith("muse-spark-1-1"));
+      // The switch names the chat the picker sits in.
+      await waitFor(() => expect(setModel).toHaveBeenCalledWith("muse-spark-1-1", "s1"));
     });
 
     it("offers the endpoint's newest unsaved models without a search", async () => {

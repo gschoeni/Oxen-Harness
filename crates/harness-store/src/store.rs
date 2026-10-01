@@ -738,6 +738,28 @@ impl HistoryStore {
         })
     }
 
+    /// Record that a session now runs on `model` at `base_url` — a mid-chat
+    /// model switch. The row is what a cold resume rebuilds the chat from, so
+    /// without this a reopened chat would come back on whatever model another
+    /// chat picked last.
+    pub fn set_session_model(
+        &self,
+        session_id: &str,
+        model: &str,
+        base_url: &str,
+        context_window: Option<i64>,
+    ) -> Result<(), HistoryError> {
+        let conn = self.lock()?;
+        let updated = conn.execute(
+            "UPDATE sessions SET model = ?2, base_url = ?3, context_window = ?4 WHERE id = ?1",
+            rusqlite::params![session_id, model, base_url, context_window],
+        )?;
+        if updated == 0 {
+            return Err(HistoryError::SessionNotFound(session_id.to_string()));
+        }
+        Ok(())
+    }
+
     /// List sessions that hold at least one user message, newest first.
     ///
     /// Each summary carries the first user message as a title so the UI can show
@@ -2232,6 +2254,34 @@ mod tests {
         assert_eq!(loaded.model, "claude-opus-4-8");
 
         let err = store.session_meta("does-not-exist").unwrap_err();
+        assert!(matches!(err, HistoryError::SessionNotFound(_)));
+    }
+
+    #[test]
+    fn a_model_switch_is_recorded_on_the_session_row() {
+        let store = store();
+        let session = store.create_session(&meta()).unwrap();
+        let other = store.create_session(&meta()).unwrap();
+
+        store
+            .set_session_model(
+                &session,
+                "gpt-5",
+                "https://hub.example/api/ai",
+                Some(400_000),
+            )
+            .unwrap();
+
+        let switched = store.session_meta(&session).unwrap();
+        assert_eq!(switched.model, "gpt-5");
+        assert_eq!(switched.base_url, "https://hub.example/api/ai");
+        assert_eq!(switched.context_window, Some(400_000));
+        // Only that chat moved.
+        assert_eq!(store.session_meta(&other).unwrap().model, "claude-opus-4-8");
+
+        let err = store
+            .set_session_model("does-not-exist", "gpt-5", "", None)
+            .unwrap_err();
         assert!(matches!(err, HistoryError::SessionNotFound(_)));
     }
 

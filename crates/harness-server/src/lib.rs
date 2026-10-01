@@ -786,6 +786,9 @@ async fn answer_approval(
 #[derive(Deserialize)]
 struct SetModelRequest {
     model: String,
+    /// The chat to switch; the current chat when absent.
+    #[serde(default)]
+    session: Option<String>,
 }
 
 async fn set_model(
@@ -794,7 +797,16 @@ async fn set_model(
     Json(request): Json<SetModelRequest>,
 ) -> ApiResult<Json<harness_protocol::SessionInfo>> {
     authorize(&state, &headers, None)?;
-    Ok(Json(state.service.set_model(&request.model).await?))
+    let info = match &request.session {
+        Some(session) => {
+            state
+                .service
+                .set_session_model(session, &request.model)
+                .await?
+        }
+        None => state.service.set_model(&request.model).await?,
+    };
+    Ok(Json(info))
 }
 
 async fn list_models(

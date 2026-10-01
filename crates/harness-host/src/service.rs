@@ -564,40 +564,147 @@ impl SessionService {
         Ok(result)
     }
 
-    /// Switch the current chat to a cloud `model`, continuing the same
-    /// conversation: the transcript stays, only the model (and, if coming
-    /// from a local model, the client) is swapped. Also makes it the default
-    /// for new chats and persists the choice so it survives a restart.
+    /// The client, model label, and context window for rebuilding an
+    /// *existing* session: the model that chat was last on, not whichever one
+    /// another chat picked since — each chat owns its model.
+    ///
+    /// The recorded model is honored when it can still be reached the way the
+    /// row says it was: a local model whose server is up (or is the active
+    /// local choice), or a cloud model on the endpoint we are configured for.
+    /// Anything else — a local model whose server is gone, a transcript
+    /// imported from another tool, a chat from a since-changed connection —
+    /// falls back to the default for new chats, since its model id means
+    /// nothing to the current endpoint.
+    async fn client_for_session(
+        &self,
+        session: &str,
+    ) -> Result<(OxenClient, String, Option<usize>), String> {
+        let meta = self
+            .store()?
+            .session_meta(session)
+            .map_err(|e| format!("reading session {session}: {e}"))?;
+        if meta.model.is_empty() {
+            return self.client_for().await;
+        }
+        if let Some((base_url, ctx)) = self.live_local_server(&meta.model).await {
+            let client = OxenClient::new(base_url, "local", &meta.model);
+            return Ok((client, meta.model, Some(ctx)));
+        }
+        let active_local = self.local_model.lock().await.clone();
+        if active_local.as_deref() == Some(meta.model.as_str()) {
+            return self.client_for().await;
+        }
+        let client = (self.client_factory)(&meta.model)?;
+        if client.base_url() != meta.base_url {
+            return self.client_for().await;
+        }
+        let context_window = harness_local::limits::context_window(&meta.model);
+        Ok((client, meta.model, context_window))
+    }
+
+    /// The running local server's base URL and context size, if it is alive
+    /// and serving `id`.
+    async fn live_local_server(&self, id: &str) -> Option<(String, usize)> {
+        let mut guard = self.local_server.lock().await;
+        let server = guard.as_mut()?;
+        (server.model_id() == id && server.is_alive()).then(|| {
+            (
+                server.base_url().to_string(),
+                server.context_size() as usize,
+            )
+        })
+    }
+
+    /// Stop defaulting new chats to a local model. Its server is shut down
+    /// only when no chat held in memory is still on it — another tab may be
+    /// mid-turn on that model, and killing the server would fail its stream.
+    pub async fn release_local_model(&self) -> Result<(), String> {
+        *self.local_model.lock().await = None;
+        let serving = {
+            let guard = self.local_server.lock().await;
+            guard.as_ref().map(|s| s.model_id().to_string())
+        };
+        let Some(serving) = serving else {
+            return Ok(());
+        };
+        let live: Vec<String> = self.agents.lock().await.keys().cloned().collect();
+        let store = self.store()?;
+        for id in live {
+            let meta = store
+                .session_meta(&id)
+                .map_err(|e| format!("reading session {id}: {e}"))?;
+            if meta.model == serving {
+                return Ok(());
+            }
+        }
+        *self.local_server.lock().await = None;
+        Ok(())
+    }
+
+    /// Switch the chat in view to a cloud `model` — see
+    /// [`Self::set_session_model`].
     pub async fn set_model(&self, model: &str) -> Result<SessionInfo, String> {
+        self.current_agent().await?;
+        let session = { self.current.lock().await.clone() }
+            .ok_or_else(|| "no current session".to_string())?;
+        self.set_session_model(&session, model).await
+    }
+
+    /// Switch one chat to a cloud `model`, continuing the same conversation:
+    /// the transcript stays, only the model (and, if coming from a local
+    /// model, the client) is swapped. The choice is recorded on the session,
+    /// so that chat — and only that chat — comes back on it; other chats keep
+    /// their own models. It also becomes the default for new chats, persisted
+    /// so it survives a restart.
+    pub async fn set_session_model(
+        &self,
+        session: &str,
+        model: &str,
+    ) -> Result<SessionInfo, String> {
         let model = model.trim().to_string();
         if model.is_empty() {
             return Err("model id cannot be empty".into());
         }
-        harness_runtime::models::set_selected(&model).map_err(|e| e.to_string())?;
-        *self.cloud_model.lock().await = model.clone();
-        // We're going cloud — drop any active local model/server.
-        *self.local_server.lock().await = None;
-        *self.local_model.lock().await = None;
-
-        // Swap the live conversation onto the cloud client + model in place.
-        let arc = self.current_agent().await?;
+        let arc = self.agent_or_build(session).await?;
+        // A turn holds the agent for its whole run; waiting on it would hang
+        // the caller until the reply finishes.
+        let mut agent = arc
+            .try_lock()
+            .map_err(|_| "finish the current turn to switch models".to_string())?;
         let client = (self.client_factory)(&model)?;
-        let mut agent = arc.lock().await;
-        agent.set_client(client.clone());
-        agent.set_model(&model);
         // The new model's catalog-reported limits, when cached; `None` falls
         // back to the name-derived window and the configured reply reserve.
-        agent.set_context_window(harness_local::limits::context_window(&model));
+        let context_window = harness_local::limits::context_window(&model);
+        // Record the switch before making it, so the row a cold resume
+        // rebuilds from never lags the live agent.
+        self.store()?
+            .set_session_model(
+                session,
+                &model,
+                client.base_url(),
+                context_window.map(|w| w as i64),
+            )
+            .map_err(|e| format!("recording {model} on session {session}: {e}"))?;
+
+        // Swap the live conversation onto the cloud client + model in place.
+        agent.set_client(client.clone());
+        agent.set_model(&model);
+        agent.set_context_window(context_window);
         agent.set_max_output_tokens(harness_local::limits::max_output_tokens(&model));
         agent.set_accepts_images(harness_local::limits::accepts_images(&model));
         // Follow the swap through to the fleet spawner so a later
         // spawn_agents fleet runs on the new model/endpoint.
-        let session = agent.session_id().to_string();
-        if let Some(spawner) = self.fleet_spawner_for(&session) {
+        if let Some(spawner) = self.fleet_spawner_for(session) {
             spawner.set_client(client);
             spawner.set_model(&model);
         }
-        Ok(self.info_for(&agent))
+        let info = self.info_for(&agent);
+        drop(agent);
+
+        harness_runtime::models::set_selected(&model).map_err(|e| e.to_string())?;
+        *self.cloud_model.lock().await = model;
+        self.release_local_model().await?;
+        Ok(info)
     }
 
     // --- Agent assembly ------------------------------------------------------
@@ -1210,9 +1317,10 @@ impl SessionService {
     }
 
     /// Build an agent bound to an existing session id, rooted at `root` (its
-    /// own recorded workspace), without leaking a throwaway session row.
+    /// own recorded workspace) and on its own recorded model, without leaking
+    /// a throwaway session row.
     async fn build_resumed_agent(&self, session_id: String, root: &Path) -> Result<Agent, String> {
-        let (client, label, ctx) = self.client_for().await?;
+        let (client, label, ctx) = self.client_for_session(&session_id).await?;
         self.resume_agent(client, &label, ctx, session_id, root)
     }
 

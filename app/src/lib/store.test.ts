@@ -503,6 +503,37 @@ describe("store: compression", () => {
   });
 });
 
+describe("store: each chat owns its model", () => {
+  const chat = (session_id: string, model: string) => ({ ...ipc.sampleSession, session_id, model });
+
+  it("names the chat in view when switching models", async () => {
+    useStore.setState({ session: chat("tab-a", "claude-opus-4-8") });
+    await useStore.getState().changeModel("gpt-5");
+
+    expect(ipc.setModel).toHaveBeenCalledWith("gpt-5", "tab-a");
+    expect(useStore.getState().session).toMatchObject({ session_id: "tab-a", model: "gpt-5" });
+    expect(useStore.getState().infos["tab-a"].model).toBe("gpt-5");
+  });
+
+  it("leaves the tab now in view alone when a switch lands after a tab change", async () => {
+    useStore.setState({ session: chat("tab-a", "claude-opus-4-8") });
+    let land: (info: ReturnType<typeof chat>) => void = () => {};
+    ipc.setModel.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
+
+    const switching = useStore.getState().changeModel("gpt-5");
+    // The user moves to another tab before the backend answers.
+    useStore.setState({ session: chat("tab-b", "claude-opus-4-8") });
+    land(chat("tab-a", "gpt-5"));
+    await switching;
+
+    expect(useStore.getState().session).toMatchObject({
+      session_id: "tab-b",
+      model: "claude-opus-4-8",
+    });
+    expect(useStore.getState().infos["tab-a"].model).toBe("gpt-5");
+  });
+});
+
 describe("store: local model load status", () => {
   it("creates the switch state for a load it didn't initiate (startup restore)", () => {
     // No switchToLocalModel ran — the event alone must surface the loading UI.

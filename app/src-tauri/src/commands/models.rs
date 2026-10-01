@@ -405,16 +405,22 @@ pub(crate) async fn remove_cloud_model(
     harness_runtime::models::remove(&id).map_err(|e| e.to_string())
 }
 
-/// Switch the current chat to a cloud `model`, continuing the same conversation:
-/// the transcript stays, only the model (and, if coming from a local model, the
-/// client) is swapped. Also makes it the default for new chats and persists the
-/// choice so it survives a restart.
+/// Switch one chat to a cloud `model`, continuing the same conversation: the
+/// transcript stays, only the model (and, if coming from a local model, the
+/// client) is swapped. `session` names the chat — the tab the picker was used
+/// in — so a tab switch mid-request can't retarget it; other chats keep their
+/// own models. Also makes it the default for new chats and persists the choice
+/// so it survives a restart.
 #[tauri::command]
 pub(crate) async fn set_model(
     state: State<'_, AppState>,
     model: String,
+    session: Option<String>,
 ) -> Result<SessionInfo, String> {
-    state.set_model(&model).await
+    match session {
+        Some(session) => state.set_session_model(&session, &model).await,
+        None => state.set_model(&model).await,
+    }
 }
 
 /// Select the cloud model used by future chats without changing any live chat.
@@ -429,7 +435,5 @@ pub(crate) async fn select_cloud_model_for_new_chats(
     }
     harness_runtime::models::set_selected(&model).map_err(|error| error.to_string())?;
     *state.cloud_model.lock().await = model;
-    *state.local_server.lock().await = None;
-    *state.local_model.lock().await = None;
-    Ok(())
+    state.release_local_model().await
 }

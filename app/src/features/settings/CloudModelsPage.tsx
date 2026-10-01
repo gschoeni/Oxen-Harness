@@ -4,7 +4,13 @@ import { Button, Modal, Spinner } from "../../components/ui";
 import { Markdown } from "../../components/ui/Markdown";
 import { compactTokens } from "../../lib/format";
 import { newestFirst, searchChatModels } from "../../lib/modelSearch";
-import { addCloudModel, getConnection, removeCloudModel, searchOxenModels } from "../../lib/ipc";
+import {
+  addCloudModel,
+  getConnection,
+  removeCloudModel,
+  searchOxenModels,
+  selectCloudModelForNewChats,
+} from "../../lib/ipc";
 import { formatRate, ratesById } from "../../lib/rates";
 import { useStore } from "../../lib/store";
 import type { CloudModel, OxenModelHit } from "../../lib/types";
@@ -17,7 +23,6 @@ import { ModelRolesSection } from "./ModelRoles";
 export function CloudModelsPage() {
   const cloudModels = useStore((s) => s.cloudModels);
   const loadCloudModels = useStore((s) => s.loadCloudModels);
-  const changeModel = useStore((s) => s.changeModel);
 
   const [id, setId] = useState("");
   const [name, setName] = useState("");
@@ -128,7 +133,10 @@ export function CloudModelsPage() {
 
   async function makeDefault(modelId: string) {
     try {
-      await changeModel(modelId);
+      // The default is what a *new* chat starts on. Open chats keep the
+      // model they are on — a tab's model only changes from its own picker.
+      await selectCloudModelForNewChats(modelId);
+      await loadCloudModels();
     } catch (err) {
       setError(String(err));
     }
