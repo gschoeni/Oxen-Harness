@@ -488,9 +488,23 @@ impl FleetHub {
     /// The process-wide hub the `spawn_agents` sink and the live composer
     /// share. (The review pipeline uses its own local hub — its painter and
     /// its state have the same owner, so nothing global is needed there.)
+    ///
+    /// Under test the hub is per thread instead: `cargo test` runs every test
+    /// of the binary in one process, and a shared hub hands one test's kept
+    /// composer draft to the next test's composer.
     pub(crate) fn global() -> Arc<FleetHub> {
-        static HUB: std::sync::OnceLock<Arc<FleetHub>> = std::sync::OnceLock::new();
-        HUB.get_or_init(|| Arc::new(FleetHub::default())).clone()
+        #[cfg(not(test))]
+        {
+            static HUB: std::sync::OnceLock<Arc<FleetHub>> = std::sync::OnceLock::new();
+            HUB.get_or_init(|| Arc::new(FleetHub::default())).clone()
+        }
+        #[cfg(test)]
+        {
+            thread_local! {
+                static HUB: Arc<FleetHub> = Arc::new(FleetHub::default());
+            }
+            HUB.with(Arc::clone)
+        }
     }
 
     /// Add `fleet` (replacing a same-named one, which a restarted fleet is).
