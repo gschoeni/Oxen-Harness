@@ -39,77 +39,32 @@ describe("RulesPage", () => {
     expect(saved.map((r) => r.name)).toEqual(["no-force-push"]);
   });
 
-  it("writes a rule through a conversation and shows the check it ran", async () => {
+  it("writes a rule by hand, with no model-drafting affordance", async () => {
     render(<RulesPage />);
     await userEvent.click(await screen.findByRole("button", { name: /New rule/ }));
 
-    await userEvent.type(
-      screen.getByPlaceholderText(/don't remove files/),
-      "don't delete migrations",
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(screen.queryByText(/Write it with the model/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
 
-    // What you asked and what it said are both in the thread — you can see an
-    // LLM wrote this, and what it decided.
-    expect(await screen.findByText("don't delete migrations")).toBeTruthy();
-    expect(screen.getByText(/Watching for rm on the migrations directory/)).toBeTruthy();
-    // The proposal shows its own check rather than claiming to have run one.
-    const proposal = document.querySelector(".rule-proposal");
-    expect(proposal?.textContent).toContain("catches");
-    expect(proposal?.textContent).toContain("rm db/migrations/0007_add_users.sql");
-
-    // …and the fields below fill in, with the example loaded into the tester.
-    expect(screen.getByDisplayValue("no-migration-deletes")).toBeTruthy();
-    expect(screen.getByDisplayValue("rm .*migrations/")).toBeTruthy();
-    expect(screen.getByDisplayValue(/rm db\/migrations/)).toBeTruthy();
-  });
-
-  it("carries the conversation so a follow-up revises rather than restarts", async () => {
-    render(<RulesPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /New rule/ }));
-    const composer = screen.getByPlaceholderText(/don't remove files/);
-    await userEvent.type(composer, "don't delete migrations");
-    await userEvent.click(screen.getByRole("button", { name: "Send" }));
-    await screen.findByText(/Watching for rm/);
-
-    // A one-click follow-up sends the previous turn back with it.
-    await userEvent.click(screen.getByRole("button", { name: "make it stricter" }));
-
-    expect(ipc.draftRule).toHaveBeenCalledTimes(2);
-    const [request, history] = ipc.draftRule.mock.calls[1]!;
-    expect(request).toBe("make it stricter");
-    expect(history).toHaveLength(1);
-    expect(history[0].asked).toBe("don't delete migrations");
-  });
-
-  it("saves the conversation and the example with the rule it produced", async () => {
-    render(<RulesPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /New rule/ }));
-    await userEvent.type(
-      screen.getByPlaceholderText(/don't remove files/),
-      "don't delete migrations",
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Send" }));
-    await screen.findByText(/Watching for rm/);
+    await userEvent.type(screen.getByPlaceholderText("no-unwrap"), "no-migration-deletes");
+    await userEvent.type(screen.getByPlaceholderText(/unwrap\\\(/), "rm .*migrations/");
+    await userEvent.type(screen.getByPlaceholderText(/Return a Result instead/), "Add a new migration.");
     // Saving waits on the tester's verdict — the page won't store a rule it
     // hasn't seen the engine accept.
     const save = screen.getByRole("button", { name: "Save rule" }) as HTMLButtonElement;
     await waitFor(() => expect(save.disabled).toBe(false));
-
     await userEvent.click(save);
 
     const saved = ipc.saveRules.mock.calls[0]?.[0]?.[0];
-    expect(saved?.prompt).toBe("don't delete migrations");
-    expect(saved?.sample).toBe("rm db/migrations/0007_add_users.sql");
+    expect(saved).toMatchObject({ name: "no-migration-deletes", when: "rm .*migrations/" });
   });
 
-  it("picks the conversation back up when a drafted rule is reopened", async () => {
+  it("opens a saved rule's tester on the rule's own sample", async () => {
     ipc.listRules.mockResolvedValue({
       user: [
         rule({
           name: "no-migration-deletes",
           when: "rm .*migrations/",
-          prompt: "don't delete migrations",
           sample: "rm db/migrations/0007_add_users.sql",
         }),
       ],
@@ -120,39 +75,10 @@ describe("RulesPage", () => {
     render(<RulesPage />);
     await userEvent.click(await screen.findByRole("button", { name: /Edit no-migration-deletes/ }));
 
-    // What you asked for is back, and the tester holds a line this rule is
-    // actually about — not an unrelated example reporting "no match".
-    expect(await screen.findByText("don't delete migrations")).toBeTruthy();
+    // A line this rule is actually about — not an unrelated example reporting
+    // "no match".
     expect(screen.getByDisplayValue("rm db/migrations/0007_add_users.sql")).toBeTruthy();
     expect(screen.queryByDisplayValue(/config.get/)).toBeNull();
-
-    // And a follow-up revises the saved rule rather than writing a stranger.
-    await userEvent.click(screen.getByRole("button", { name: "make it stricter" }));
-    const [, history] = ipc.draftRule.mock.calls[0]!;
-    expect(history[0].asked).toBe("don't delete migrations");
-    expect(history[0].rule).toContain("rm .*migrations/");
-  });
-
-  it("resumes a hand-written rule from the rule itself, having no prompt to show", async () => {
-    ipc.listRules.mockResolvedValue({
-      user: [rule()],
-      project: [],
-      project_path: ".oxen-harness/rules.json",
-    });
-
-    render(<RulesPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /Edit no-unwrap/ }));
-
-    // Nothing was asked for, so nothing is put in your mouth — but the rule
-    // still goes back as history, which is what makes a nudge revise it.
-    expect(document.querySelector(".rule-msg.earlier")).toBeNull();
-    await userEvent.type(
-      screen.getByPlaceholderText(/don't remove files/),
-      "also catch expect",
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Send" }));
-    const [, history] = ipc.draftRule.mock.calls[0]!;
-    expect(history[0].rule).toContain(".unwrap()");
   });
 
   it("says the tester is waiting for a pattern rather than claiming no match", async () => {

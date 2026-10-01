@@ -12,7 +12,6 @@ import { Trash2 } from "lucide-react";
 import { Button } from "../../components/ui";
 import { checkRulePattern } from "../../lib/ipc";
 import type { PatternCheck, RuleSpec } from "../../lib/types";
-import { RuleChat } from "./RuleChat";
 
 /** What the tester holds before anyone has chosen a sample. Recognisably an
  *  example rather than your code, so an unrelated "no match" doesn't read as a
@@ -43,9 +42,6 @@ export function RuleEditor({
   // every hand-written rule would come back paired with an unrelated line.
   const [chosen, setChosen] = useState(Boolean(draft.sample));
   const [check, setCheck] = useState<PatternCheck | null>(null);
-  // The rule as it was when the editor opened, which is what the conversation
-  // resumes from — the live draft changes under it as the model works.
-  const original = useRef(draft);
   // Guards against an out-of-order response overwriting a newer check.
   const latest = useRef(0);
 
@@ -91,18 +87,6 @@ export function RuleEditor({
 
   return (
     <div className={`rule-row editing ${draft.interrupt ? "interrupts" : "reminds"}`}>
-      <RuleChat
-        existing={original.current}
-        onProposal={({ sample: proposed, ...fields }) => {
-          setDraft({ ...draft, ...fields, sample: proposed ?? draft.sample });
-          // The model's example becomes the tester's sample, so a proposed
-          // rule shows itself catching something the moment it lands.
-          if (proposed) {
-            setSample(proposed);
-            setChosen(true);
-          }
-        }}
-      />
       <div className="rule-fields">
         <label className="rule-field">
           <span>Name</span>

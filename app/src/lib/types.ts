@@ -620,51 +620,11 @@ export interface RuleSpec {
   /** "once" (default) or "after:<n>" rounds. */
   repeat: string | null;
   enabled: boolean;
-  /** What was asked for, when the model wrote this rule — restored into the
-   *  editor's conversation so reopening continues it. */
+  /** What was asked for, on a rule an earlier version drafted with the model.
+   *  Nothing reads it now; it round-trips so saving doesn't strip the file. */
   prompt?: string | null;
   /** A line this rule is meant to catch, which seeds the editor's tester. */
   sample?: string | null;
-}
-
-/** A rule the model wrote from a description, with the examples it used to
- *  check its own pattern. Verified before it reaches the editor: it compiles,
- *  catches `example_match`, and leaves `example_miss` alone. */
-export interface DraftedRule {
-  name: string;
-  pattern: string;
-  scopes: string[];
-  message: string;
-  interrupt: boolean;
-  example_match: string;
-  example_miss: string;
-}
-
-/** One exchange in a rule-writing conversation, sent back so a follow-up
- *  revises the rule on the table instead of starting over. */
-export interface DraftTurn {
-  asked: string;
-  said: string;
-  rule: string | null;
-}
-
-/** What a drafting turn produced. */
-export interface DraftOutcome {
-  /** The model's own sentence, shown in the thread. */
-  note: string;
-  rule: DraftedRule;
-  /** How many attempts it took — a retry is visible rather than hidden lag. */
-  attempts: number;
-  /** Every ask so far as one line, saved with the rule so reopening it
-   *  restores the conversation's starting point. */
-  prompt: string;
-}
-
-/** `rules://draft` payload: a token as the model writes, or a note that its
- *  first attempt failed its own check and it's trying again. */
-export interface RuleDraftEvent {
-  delta?: string;
-  retry?: string;
 }
 
 /** A rule worth offering, with the words needed to decide on it. */

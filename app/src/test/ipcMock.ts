@@ -9,8 +9,6 @@ import type {
   CloudModel,
   CodeReviewRunResult,
   CompressionMode,
-  DraftOutcome,
-  DraftTurn,
   ConnectionView,
   HardwareProfile,
   HfHit,
@@ -284,25 +282,6 @@ export const listRules = vi.fn(
   }),
 );
 export const saveRules = vi.fn(async (_rules: RuleSpec[]) => {});
-export const draftRule = vi.fn(
-  async (request: string, history: DraftTurn[]): Promise<DraftOutcome> => ({
-    note: "Watching for rm on the migrations directory.",
-    attempts: 1,
-    // The host joins the conversation's asks; mirrored here so a test can see
-    // what would be saved with the rule.
-    prompt: [...history.map((t) => t.asked), request].join(", then "),
-    rule: {
-      name: "no-migration-deletes",
-      pattern: "rm .*migrations/",
-      scopes: ["tool"],
-      message: "Don't delete migrations — add a new one that reverses the change.",
-      interrupt: true,
-      example_match: "rm db/migrations/0007_add_users.sql",
-      example_miss: "cat db/migrations/0007_add_users.sql",
-    },
-  }),
-);
-export const onRuleDraft = listener("rules-draft");
 export const listRuleSuggestions = vi.fn(
   async (): Promise<RuleSuggestion[]> => [
     {
@@ -742,7 +721,6 @@ export function resetIpc() {
     .mockReset()
     .mockResolvedValue({ user: [], project: [], project_path: ".oxen-harness/rules.json" });
   saveRules.mockReset().mockResolvedValue(undefined);
-  draftRule.mockClear();
   listRuleSuggestions.mockClear();
   saveSkill.mockReset().mockResolvedValue(undefined);
   deleteSkill.mockReset().mockResolvedValue(undefined);
