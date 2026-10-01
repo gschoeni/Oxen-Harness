@@ -5,6 +5,7 @@
 // utility buttons (project home, arcade, inspector, settings) sit at its
 // right edge, clear of the macOS traffic lights on the left.
 
+import { DOCK_SHORTCUT } from "./features/chat/studyDock";
 import { Activity, Code2, Files, Gamepad2, Settings } from "lucide-react";
 import { useActiveProject, useStore } from "./lib/store";
 
@@ -87,7 +88,7 @@ export function TitleBar() {
             className="dev-view-btn"
             onClick={() => setGameDockOpen(!gameDockOpen)}
             aria-pressed={gameDockOpen}
-            title="Play a game while your agent works"
+            title={`Study or play while your agent works (${DOCK_SHORTCUT})`}
             aria-label="Toggle the arcade"
           >
             <Gamepad2 size={15} />

@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState, type DragEvent } from "react";
 import { ArrowUp, FileText, Film, Music, Paperclip, Square } from "lucide-react";
+import { StudyButton } from "./StudyButton";
 import { AttachmentImage } from "./AttachmentImage";
 import { CodeReviewPicker } from "./CodeReviewPicker";
 import { CompressionPicker } from "./CompressionPicker";
@@ -264,6 +265,7 @@ const ComposerToolbar = memo(function ComposerToolbar({ busy }: { busy: boolean 
       <ModelPicker disabled={busy} />
       {advancedSettingsEnabled() && <CompressionPicker disabled={busy} />}
       <CodeReviewPicker disabled={busy} />
+      {busy && <StudyButton />}
     </div>
   );
 });

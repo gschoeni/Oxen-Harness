@@ -690,3 +690,125 @@ async fn study_round_trip_over_http() {
         .unwrap()
         .contains("hasn't read or edited"));
 }
+
+/// The study game exists to be played while the agent works. A turn parked
+/// mid-flight holds its session's agent for as long as it runs; the study
+/// routes must answer anyway, model call included.
+#[tokio::test]
+async fn the_study_game_answers_while_a_turn_is_running() {
+    let mut llm = mockito::Server::new_async().await;
+    // Created first so study requests (told apart by their system prompts)
+    // never take a reply meant for the turn.
+    let study = llm
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::Regex(
+            "You write short quiz questions|You check quiz questions".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(STUDY_SSE)
+        .expect(2)
+        .create();
+    let _ask = sse_mock(&mut llm, ASK_SSE);
+    let _final = sse_mock(&mut llm, FINAL_SSE);
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(workspace.path().join("src")).unwrap();
+    std::fs::write(
+        workspace.path().join("src/lib.rs"),
+        "pub fn add(a: u32, b: u32) -> u32 { a + b }\n",
+    )
+    .unwrap();
+    let server = boot(llm.url(), workspace.path()).await;
+    let base = server.base_url();
+    let info: Value = client()
+        .post(format!("{base}/v1/sessions"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session = info["session_id"].as_str().unwrap().to_string();
+    let mut events = client()
+        .get(format!("{base}/v1/events?token={TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+
+    // Start a turn and leave it running: it parks on a question.
+    let (turn_base, turn_session) = (base.clone(), session.clone());
+    let turn = tokio::spawn(async move {
+        client()
+            .post(format!("{turn_base}/v1/sessions/{turn_session}/turns"))
+            .bearer_auth(TOKEN)
+            .json(&json!({"prompt": "ask me"}))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap()
+    });
+    let question = next_matching(&mut events, |e| e["type"] == "agent.question").await;
+    assert!(!turn.is_finished(), "the turn is still in flight");
+
+    // Every study route answers with the turn still running — within a
+    // bound, so a route that waited on the agent would fail, not hang.
+    let mid_turn = async {
+        let get = |path: String| {
+            let url = format!("{base}/v1/sessions/{session}/study/{path}");
+            async move { client().get(url).bearer_auth(TOKEN).send().await.unwrap() }
+        };
+        let post = |path: &str, body: Value| {
+            let url = format!("{base}/v1/sessions/{session}/study/{path}");
+            async move {
+                client()
+                    .post(url)
+                    .bearer_auth(TOKEN)
+                    .json(&body)
+                    .send()
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(get("profile".into()).await.status(), 200);
+        let batch: Value = post("batch", json!({"mode": "expedition", "count": 1}))
+            .await
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = batch["questions"][0]["id"].clone();
+        let graded: Value = post("answer", json!({"question_id": id, "answer": "a+b"}))
+            .await
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(graded["grade"]["verdict"], "full");
+        assert_eq!(post("flag", json!({"question_id": id})).await.status(), 200);
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), mid_turn)
+        .await
+        .expect("study routes must not wait on the running turn");
+    assert!(!turn.is_finished(), "and the turn was never disturbed");
+    study.assert();
+
+    // The turn then finishes normally.
+    let id = question["id"].as_str().unwrap();
+    client()
+        .post(format!("{base}/v1/questions/{id}/answer"))
+        .bearer_auth(TOKEN)
+        .json(&json!({"answers": [{
+            "header": "Storage",
+            "question": "Which DB?",
+            "selected": ["SQLite"],
+        }]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(turn.await.unwrap()["text"], "The sum is 5.");
+}

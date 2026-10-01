@@ -1067,6 +1067,12 @@
   align-items: center;
   gap: var(--space-1);
 }
+/* The study offer sits at the far end of the row, apart from the pickers. */
+.composer-toolbar .composer-study {
+  margin-left: auto;
+  gap: var(--space-1);
+  color: var(--accent);
+}
 /* In a narrow panel the pickers wrap to a second row; one still too wide for
    its row ellipsizes its label rather than overflowing. */
 .composer-toolbar > .picker {

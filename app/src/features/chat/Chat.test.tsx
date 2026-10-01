@@ -184,8 +184,31 @@ describe("Chat", () => {
     // With a turn in flight the title bar offers the arcade toggle.
     await userEvent.click(screen.getByLabelText(/Toggle the arcade/i));
     expect(screen.getByRole("dialog", { name: /arcade/i })).toBeInTheDocument();
-    // The dock hosts the same cabinet, playable without leaving the chat.
+    // The study cabinet opens already started; MENU is the way back to the
+    // other cabinets, playable without leaving the chat.
+    await userEvent.click(screen.getByRole("button", { name: /back to arcade menu/i }));
     expect(screen.getByRole("tab", { name: "Trail" })).toBeInTheDocument();
+  });
+
+  it("offers the study game under the composer while a turn runs, one key from a question", async () => {
+    ipc.runTurn.mockImplementationOnce(() => new Promise(() => {})); // stays in flight
+    render(<Chat />);
+    // Nothing to offer while the agent is idle.
+    expect(screen.queryByRole("button", { name: /study while it works/i })).toBeNull();
+    await userEvent.type(screen.getByPlaceholderText(/ask the agent/i), "go");
+    await userEvent.keyboard("{Enter}");
+
+    await userEvent.click(await screen.findByRole("button", { name: /study while it works/i }));
+    // The dock opens on the study cabinet, already started…
+    expect(screen.getByRole("dialog", { name: /arcade/i })).toBeInTheDocument();
+    expect(useStore.getState().heroGame).toBe("study");
+    expect(screen.getAllByText("CHOOSE YOUR TRAIL").length).toBeGreaterThan(0);
+    // …the button steps aside, and picking a trail asks for questions while
+    // the turn is still in flight.
+    expect(screen.queryByRole("button", { name: /study while it works/i })).toBeNull();
+    await userEvent.keyboard("1");
+    await waitFor(() => expect(ipc.studyBatch).toHaveBeenCalledWith("s1", expect.objectContaining({ mode: "expedition" })));
+    expect(useStore.getState().runStatus["s1"]).toBe("running");
   });
 
   it("sends a typed message and renders the user + assistant turn", async () => {

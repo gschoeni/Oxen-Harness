@@ -10,6 +10,7 @@ import { useStore } from "../../lib/store";
 import { DEFAULT_HERO_GAME, HeroGame } from "./heroGames";
 import { useGameHost } from "./games/studyHost";
 import type { ThemePalette } from "../../lib/types";
+import { DOCK_SHORTCUT } from "./studyDock";
 import "./gamedock.css";
 
 // Used only if a theme somehow has no palette; the games also self-default per
@@ -38,6 +39,9 @@ export function GameDock() {
   // The dock always shows a real game (never the "none" static scene).
   const chosen = heroGame ?? themeGame;
   const gameName = chosen && chosen !== "none" ? chosen : DEFAULT_HERO_GAME;
+  // The study cabinet is turn-based and opened to be used, so it starts at
+  // once; an arcade game waits for a click rather than running unattended.
+  const studying = gameName === "study";
 
   return (
     <div className="game-dock" role="dialog" aria-label="Arcade">
@@ -49,9 +53,13 @@ export function GameDock() {
         </button>
       </div>
       <div className="hero-screen hero-game-screen game-dock-screen">
-        <HeroGame gameName={gameName} palette={palette} onSelectGame={setHeroGame} variant="dock" host={gameHost} />
+        <HeroGame gameName={gameName} palette={palette} onSelectGame={setHeroGame} variant="dock" host={gameHost} autoStart={studying} />
       </div>
-      <p className="game-dock-foot">Click in to play — your agent keeps working.</p>
+      <p className="game-dock-foot">
+        {studying
+          ? `Press 1-4 to pick a trail — your agent keeps working. ${DOCK_SHORTCUT} hides this.`
+          : `Click in to play — your agent keeps working. ${DOCK_SHORTCUT} hides this.`}
+      </p>
     </div>
   );
 }

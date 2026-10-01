@@ -68,9 +68,13 @@ interface HeroGameProps {
   /** The backend for cabinets that queue requests (see gameKit's
       `HeroGameHost`). Without one, a request fails with a clear message. */
   host?: HeroGameHost;
+  /** Skip the attract screen and take the keyboard as soon as this mounts —
+      for a cabinet opened on purpose (the dock's study game), where a start
+      combo is one more step between "I'll study" and the first question. */
+  autoStart?: boolean;
 }
 
-export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "hero", host }: HeroGameProps) {
+export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "hero", host, autoStart = false }: HeroGameProps) {
   const definition = useMemo(() => getHeroGame(gameName), [gameName]);
   const definitionRef = useRef(definition);
   definitionRef.current = definition;
@@ -118,6 +122,15 @@ export function HeroGame({ gameName, palette, hint, onSelectGame, variant = "her
     stageRef.current?.focus();
     if (sound) playSfx("start");
   }, [definition, gameName, sound]);
+
+  // Declared after the cabinet-reset effect above, so on mount (and on a swap
+  // to an auto-starting cabinet) the reset runs first and this start sticks.
+  const autoStartedFor = useRef<typeof definition | null>(null);
+  useEffect(() => {
+    if (!autoStart || autoStartedFor.current === definition) return;
+    autoStartedFor.current = definition;
+    start();
+  }, [autoStart, definition, start]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {

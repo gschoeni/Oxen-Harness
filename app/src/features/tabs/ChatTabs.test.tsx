@@ -273,6 +273,17 @@ describe("chat tab shortcuts", () => {
     expect(useStore.getState().historyOpen).toBe(false);
   });
 
+  it("⌘J shows and hides the game dock, but not from behind Settings", () => {
+    render(<Shortcuts />);
+    press("j", { metaKey: true });
+    expect(useStore.getState().gameDockOpen).toBe(true);
+    press("j", { metaKey: true });
+    expect(useStore.getState().gameDockOpen).toBe(false);
+    act(() => useStore.setState({ settingsOpen: true }));
+    press("j", { metaKey: true });
+    expect(useStore.getState().gameDockOpen).toBe(false);
+  });
+
   it("⌘digit jumps to a tab, ⌃Tab cycles (wrapping), ⌘9 is the last", async () => {
     useStore.setState({ chatTabs: { [W]: ["s1", "s2", "s3"] } });
     render(<Shortcuts />);

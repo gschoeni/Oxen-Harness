@@ -116,6 +116,20 @@ describe("HeroGame wrapper", () => {
     expect(await screen.findByLabelText("Your answer")).toHaveValue("make_ro");
   });
 
+  it("starts at once when asked to, with the keyboard, so a trail is one key away", async () => {
+    const perform = vi.fn(async (kind: string, _payload: unknown) =>
+      kind === "study.profile"
+        ? { project: "p", workspace: "/p", understanding: 0, level: 1, answered: 0, territories: [] }
+        : { mode: "expedition", questions: [], territory: "src", tokens_used: 0, model: "" },
+    );
+    render(<HeroGame gameName="study" palette={palette} variant="dock" host={{ perform }} autoStart />);
+    // No start combo, no click: the mode screen is up and the stage has focus.
+    expect(screen.getAllByText("CHOOSE YOUR TRAIL").length).toBeGreaterThan(0);
+    expect(stage()).toHaveFocus();
+    await userEvent.keyboard("1");
+    expect(perform).toHaveBeenCalledWith("study.batch", expect.objectContaining({ mode: "expedition" }));
+  });
+
   it("fails a request with a clear message when no host is connected", async () => {
     render(<HeroGame gameName="study" palette={palette} />);
     fireEvent.pointerDown(stage(), { clientX: 50, clientY: 50 });
