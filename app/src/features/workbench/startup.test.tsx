@@ -25,6 +25,12 @@ it("restores history without opening the panel and registers views for the agent
   expect(container.querySelector(".dock-rail.right")).not.toBeInTheDocument();
   expect(container.querySelector(".app")).toHaveStyle({ "--dock-right-w": "0px" });
   await waitFor(() => expect(workbenchRequest).toHaveBeenCalledWith(
-    "s1", "register_views", expect.objectContaining({ views: expect.arrayContaining([expect.objectContaining({ id: "workflow" })]) }),
+    "s1", "register_views", expect.objectContaining({ views: expect.arrayContaining([expect.objectContaining({ id: "editor" })]) }),
   ));
+  // The workflow view is behind a release flag, so the agent is never told it exists.
+  for (const [, action, payload] of workbenchRequest.mock.calls) {
+    if (action === "register_views") expect(payload).not.toEqual(
+      expect.objectContaining({ views: expect.arrayContaining([expect.objectContaining({ id: "workflow" })]) }),
+    );
+  }
 });

@@ -2,9 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 import { useStore } from "../../lib/store";
 import { resetAll } from "../../test/utils";
-import { sampleSession } from "../../test/ipcMock";
+import { loadFeatureFlags, sampleSession } from "../../test/ipcMock";
+import { initFeatureFlags } from "../../lib/features";
 import "../../modules";
-beforeEach(resetAll);
+beforeEach(async () => {
+  resetAll();
+  // Graph files only resolve to the workflow view while its release flag is on.
+  loadFeatureFlags.mockResolvedValueOnce({ workbench_customization: false, workflows: true, advanced_settings: false });
+  await initFeatureFlags();
+});
 describe("conversation-owned work contexts", () => {
   it("resolves graph files, keeps background events in their conversation, and retains navigation", () => {
     useStore.setState({ session: { ...sampleSession, session_id: "a" } });

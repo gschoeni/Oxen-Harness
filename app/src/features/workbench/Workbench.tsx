@@ -2,7 +2,7 @@ import { Component, Suspense, useEffect, useMemo, type ReactNode, type PointerEv
 import { ArrowLeft, ArrowRight, Pin, Workflow, PanelsTopLeft } from "lucide-react";
 import { Select } from "../../components/ui";
 import { useStore } from "../../lib/store";
-import { workbenchCustomizationEnabled } from "../../lib/features";
+import { workbenchCustomizationEnabled, workflowsEnabled } from "../../lib/features";
 import { views, viewById, useViewRegistry, availableTarget } from "./registry";
 import { useWorkbenchAPI } from "./api";
 import type { ViewTarget } from "../../workbench-sdk";
@@ -126,7 +126,7 @@ function WorkbenchContent({
               <h2>{customizable ? "Your work, your view" : "Your work"}</h2>
               <p>
                 {customizable
-                  ? "Build a workflow, preview an app, or open a file. This space follows your conversation."
+                  ? `${workflowsEnabled() ? "Build a workflow, preview" : "Preview"} an app, or open a file. This space follows your conversation.`
                   : "Open a file to get started. This space follows your conversation."}
               </p>
               {customizable && (

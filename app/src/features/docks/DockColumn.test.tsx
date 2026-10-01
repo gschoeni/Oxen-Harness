@@ -3,7 +3,10 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
-vi.mock("../../lib/features", () => ({ workbenchCustomizationEnabled: vi.fn(() => false) }));
+vi.mock("../../lib/features", () => ({
+  workbenchCustomizationEnabled: vi.fn(() => false),
+  workflowsEnabled: vi.fn(() => false),
+}));
 vi.mock("../files/EditorPane", () => ({
   EditorPane: () => {
     const pane = useStore((s) => s.editorTabs[s.session!.session_id]);

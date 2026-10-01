@@ -4,7 +4,10 @@ import userEvent from "@testing-library/user-event";
 import { Workflow } from "lucide-react";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 vi.mock("../../modules", () => ({}));
-vi.mock("../../lib/features", () => ({ workbenchCustomizationEnabled: vi.fn(() => false) }));
+vi.mock("../../lib/features", () => ({
+  workbenchCustomizationEnabled: vi.fn(() => false),
+  workflowsEnabled: vi.fn(() => false),
+}));
 vi.mock("./packages", () => ({ refreshPackages: vi.fn(async () => []) }));
 const api = vi.hoisted(() => ({ open: vi.fn(), report: vi.fn() }));
 vi.mock("./api", () => ({ useWorkbenchAPI: () => api }));

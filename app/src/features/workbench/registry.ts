@@ -1,6 +1,6 @@
 import type { ViewModule, ViewTarget } from "../../workbench-sdk";
 import { useSyncExternalStore } from "react";
-import { workbenchCustomizationEnabled } from "../../lib/features";
+import { workbenchCustomizationEnabled, workflowsEnabled } from "../../lib/features";
 
 const modules = new Map<string, ViewModule>();
 const listeners = new Set<() => void>();
@@ -30,17 +30,22 @@ export function useViewRegistry() {
   );
   return views();
 }
+/** Release flags switch views off here rather than at registration, so a
+ *  disabled view never lists, resolves a file, or reaches the agent. */
 const viewEnabled = (id: string) =>
-  workbenchCustomizationEnabled() ||
-  !(id === "view-studio" || id === "view-manager" || id.startsWith("package:"));
+  id === "workflow"
+    ? workflowsEnabled()
+    : workbenchCustomizationEnabled() ||
+      !(id === "view-studio" || id === "view-manager" || id.startsWith("package:"));
 
 export const views = () => [...modules.values()].filter((view) => viewEnabled(view.id));
 export const viewById = (id: string) => viewEnabled(id) ? modules.get(id) : undefined;
 
-/** Old history can reference authoring screens or packages disabled this release. */
+/** Old history can reference authoring screens, packages or workflow graphs
+ *  disabled this release; a file-backed one reopens in a viewer that is on. */
 export function availableTarget(target: ViewTarget): ViewTarget {
   if (viewEnabled(target.view)) return target;
-  if (target.view.startsWith("package:") && target.path) {
+  if ((target.view.startsWith("package:") || target.view === "workflow") && target.path) {
     return { ...target, view: resolveView(target.path) };
   }
   return { view: "welcome" };
