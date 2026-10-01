@@ -897,3 +897,10 @@ keyboard (press 1-4). `the_study_game_answers_while_a_turn_is_running`
 against it. Closing the dock mid-run still discards that run (answers already
 given are recorded).
 
+**The game moved into the work panel (2026-09-30).** The floating dock is
+gone; the cabinet is the `study` work view (`features/chat/StudyView.tsx`,
+registered in `modules/builtins`). ⌘J, the titlebar button, the composer's
+"Study while it works", and the long-turn offer open it
+(`features/chat/studyPanel.ts`). While it is the work view, agent-driven
+opens are held back with a notice, as for a pinned view. 754 frontend tests.
+

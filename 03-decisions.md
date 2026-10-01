@@ -1378,3 +1378,10 @@ no git state or snapshot is needed.
 their advance widths differ by half; text cabinets ask `textCols` how many
 characters fit rather than hard-coding a count for the widest face.
 
+**The game is a work view, and it holds the panel against the agent.** It
+replaced a floating dock. Because the cabinet is played *while* the agent
+works, the agent opening a file would otherwise swap the view and discard
+the run, so a work context whose current view is `study` is treated like a
+pinned one for agent opens (the chat notes what was held back). A user's own
+open still navigates away — that is a choice, not an interruption.
+
