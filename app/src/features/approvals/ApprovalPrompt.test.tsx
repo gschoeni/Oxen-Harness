@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -74,6 +74,7 @@ describe("ApprovalPrompt", () => {
     await userEvent.click(screen.getByRole("button", { name: "Dangerously allow everything" }));
     expect(ipc.answerApproval).toHaveBeenCalledWith("a0", "bypass", undefined);
     expect(useStore.getState().approvals["s1"]).toBeUndefined();
+    await waitFor(() => expect(useStore.getState().session?.permission_mode).toBe("bypass"));
   });
 
   it("denies with the user's typed reason", async () => {

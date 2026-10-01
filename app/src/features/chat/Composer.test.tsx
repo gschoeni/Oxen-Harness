@@ -213,11 +213,18 @@ describe("composer toolbar", () => {
   const props = { onSend: () => {}, onStop: () => {}, onAttach: () => {} };
   afterEach(() => setFeatureFlags());
 
-  it("keeps model and review but not the compression picker by default", () => {
+  it("keeps model and permissions but not the compression picker by default", () => {
     useStore.setState({ session: sampleSession });
     render(<Composer {...props} busy={false} />);
-    expect(screen.getByText("Review")).toBeInTheDocument();
+    expect(screen.getByText("Relaxed")).toBeInTheDocument();
+    expect(screen.queryByText("Review")).not.toBeInTheDocument();
     expect(screen.queryByText(/^Compression/)).not.toBeInTheDocument();
+  });
+
+  it("leaves the permission picker usable while a turn runs", () => {
+    useStore.setState({ session: sampleSession });
+    render(<Composer {...props} busy={true} />);
+    expect(screen.getByText("Relaxed").closest("button")).toBeEnabled();
   });
 
   it("shows the compression picker with advanced settings on", async () => {

@@ -357,6 +357,54 @@ async fn a_chat_mid_turn_refuses_a_model_switch() {
     let _ = turn.await.unwrap();
 }
 
+/// The composer's permission picker: the switch belongs to one chat, takes
+/// effect while its turn is parked (the gate is read per tool call), and is
+/// never written to `permissions.json` — the desktop form of `--yolo`.
+#[tokio::test]
+async fn a_permission_mode_switch_is_live_per_chat_and_never_saved() {
+    use harness_permissions::PermissionMode;
+
+    let mut server = mockito::Server::new_async().await;
+    let _ask = sse_mock(&mut server, ASK_SSE);
+    let sink = Arc::new(CollectingSink::default());
+    let ws = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), ws.path());
+
+    let first = service.session_info().await.unwrap();
+    assert_eq!(first.permission_mode, "relaxed");
+    let second = service.new_session().await.unwrap();
+
+    let turn = tokio::spawn({
+        let service = service.clone();
+        let session = first.session_id.clone();
+        async move { service.run_turn(&session, "ask me".into(), vec![]).await }
+    });
+    wait_for(&sink, || {
+        sink.events()
+            .iter()
+            .any(|e| matches!(e, ProtocolEvent::Question { .. }))
+            .then_some(())
+    })
+    .await;
+
+    let mode = service
+        .set_session_permission_mode(&first.session_id, PermissionMode::Bypass)
+        .await
+        .unwrap();
+    assert_eq!(mode, PermissionMode::Bypass);
+    // A client rejoining the running chat sees the mode it is running under.
+    let view = service.resume_session(&first.session_id).await.unwrap();
+    assert!(view.running);
+    assert_eq!(view.info.permission_mode, "bypass");
+
+    service.cancel_turn(&first.session_id).await;
+    let _ = turn.await.unwrap();
+
+    let other = service.resume_session(&second.session_id).await.unwrap();
+    assert_eq!(other.info.permission_mode, "relaxed");
+    assert_eq!(harness_permissions::policy::load_global().mode, None);
+}
+
 /// The switch names its chat, so it lands there even when another chat is
 /// the one in view.
 #[tokio::test]

@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use harness_agent::{Agent, AgentConfig, AgentEvent};
 use harness_llm::{Attachment, OxenClient};
 use harness_local::{fit, llama_server_path, LocalServer, ModelStore};
+use harness_permissions::PermissionMode;
 use harness_protocol::{ProtocolEvent, SessionInfo, SessionView};
 use harness_store::{
     HistoryError, HistoryStore, SessionEndpoint, SessionMeta, SessionSummary, MODE_CLOUD,
@@ -1626,6 +1627,12 @@ impl SessionService {
             context_tokens: agent.context_tokens(),
             context_window: agent.context_window(),
             compression_mode: agent.compression_mode().as_str().to_string(),
+            // An agent built without a gate asks about nothing.
+            permission_mode: agent
+                .permission_gate()
+                .map_or(PermissionMode::Bypass, |gate| gate.mode())
+                .label()
+                .to_string(),
         }
     }
 
@@ -1658,14 +1665,24 @@ impl SessionService {
             .and_then(|store| store.session_meta(id).ok())
             .map(|meta| meta.model)
             .unwrap_or_default();
+        let workspace = self.session_workspace(id);
+        // The running turn's own gate; the saved default only if the lookup
+        // fails, which this best-effort readout tolerates.
+        let permission_mode = self
+            .workbenches
+            .lock()
+            .ok()
+            .and_then(|workbenches| workbenches.get(id).map(|w| w.gate.mode()))
+            .unwrap_or_else(|| harness_permissions::policy::PolicySet::load(&workspace).mode);
         SessionInfo {
             model,
-            workspace: self.session_workspace(id).display().to_string(),
+            workspace: workspace.display().to_string(),
             session_id: id.to_string(),
             tokens_used: 0,
             context_tokens: 0,
             context_window: 0,
             compression_mode: harness_runtime::compression::mode().as_str().to_string(),
+            permission_mode: permission_mode.label().to_string(),
         }
     }
 
@@ -2362,6 +2379,21 @@ impl SessionService {
         let mut agent = arc.lock().await;
         agent.set_compression_mode(mode);
         Ok(self.info_for(&agent))
+    }
+
+    /// Switch one chat's permission mode for as long as the app runs, leaving
+    /// the saved default alone — the composer picker's `--yolo`. It goes
+    /// through the session's gate rather than its agent, so it lands mid-turn
+    /// too: the very next tool call (and every subagent lane, which shares
+    /// the gate's policy) is reviewed under the new mode.
+    pub async fn set_session_permission_mode(
+        &self,
+        session: &str,
+        mode: PermissionMode,
+    ) -> Result<PermissionMode, String> {
+        let gate = self.workbench(session).await?.gate.clone();
+        gate.set_session_mode(mode);
+        Ok(gate.mode())
     }
 
     /// Rebuild a session agent's client for its own model (picking up freshly

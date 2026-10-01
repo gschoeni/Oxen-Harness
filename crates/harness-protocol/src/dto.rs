@@ -64,6 +64,10 @@ pub struct SessionInfo {
     /// The context-compression mode this session's agent runs with
     /// ("off"/"audit"/"on").
     pub compression_mode: String,
+    /// The permission mode this session's gate is in right now
+    /// ("relaxed"/"cautious"/"bypass") — the saved default unless the chat
+    /// switched its own.
+    pub permission_mode: String,
 }
 
 /// A resumed session: its info plus the verbatim transcript to re-render.

@@ -26,13 +26,19 @@ const ACTION_LABEL: Record<ApprovalRequestEvent["kind"], string> = {
 
 function ApprovalCard({ request }: { request: ApprovalRequestEvent }) {
   const clearApproval = useStore((s) => s.clearApproval);
+  const notePermissionMode = useStore((s) => s.notePermissionMode);
   const [reason, setReason] = useState("");
 
   function decide(decision: ApprovalChoice, message?: string) {
     clearApproval(request.session);
-    answerApproval(request.id, decision, message).catch(() => {
-      /* the request may have been cancelled; nothing to do */
-    });
+    answerApproval(request.id, decision, message)
+      .then(() => {
+        // The gate drops this chat into bypass; the composer's picker follows.
+        if (decision === "bypass") notePermissionMode(request.session, "bypass");
+      })
+      .catch(() => {
+        /* the request may have been cancelled; nothing to do */
+      });
   }
 
   return (

@@ -1056,7 +1056,7 @@
   transform: scale(0.94);
 }
 
-/* --- Composer pickers (model, compression) --- */
+/* --- Composer pickers (model, compression, permissions) --- */
 /* Trigger buttons share the quiet pill treatment; the popover chrome is the
    shared .menu primitive (ui.css) — only its anchoring lives here. */
 .composer-toolbar {
@@ -1094,6 +1094,10 @@
 .picker-btn {
   max-width: 320px;
   border-radius: var(--radius-pill);
+}
+/* Bypass is the one picker state that should never go unnoticed. */
+.composer-toolbar .picker-btn.picker-danger {
+  color: var(--danger);
 }
 .picker-label {
   overflow: hidden;
@@ -1271,46 +1275,7 @@
   }
 }
 
-/* --- Code review (composer picker + live progress card) --- */
-/* The branch row inside the review picker's menu: type a base branch, go. */
-.review-branch-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
-}
-.review-branch-input {
-  flex: 1;
-  min-width: 0;
-  padding: 4px var(--space-2);
-  background: var(--surface-2);
-  color: var(--text);
-  border: 1px solid var(--separator-strong);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-xs);
-}
-.review-branch-input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-.review-branch-go {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  background: var(--accent-tint-strong);
-  color: var(--accent);
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-}
-.review-branch-go:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
+/* --- Code review (live progress card) --- */
 /* The slim status bar shown above the composer while a review pipeline runs. */
 .review-progress {
   max-width: var(--chat-column);

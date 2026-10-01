@@ -47,6 +47,21 @@ impl PermissionMode {
     }
 }
 
+impl std::str::FromStr for PermissionMode {
+    type Err = String;
+
+    /// The inverse of [`PermissionMode::label`], for hosts taking a mode by
+    /// name (a settings page, a picker, a slash command).
+    fn from_str(mode: &str) -> Result<Self, Self::Err> {
+        match mode {
+            "relaxed" => Ok(PermissionMode::Relaxed),
+            "cautious" => Ok(PermissionMode::Cautious),
+            "bypass" => Ok(PermissionMode::Bypass),
+            other => Err(format!("unknown permission mode `{other}`")),
+        }
+    }
+}
+
 /// One `permissions.json` payload (global or per-project).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PermissionsConfig {

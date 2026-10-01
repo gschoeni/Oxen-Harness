@@ -80,7 +80,7 @@ See [`app/README.md`](app/README.md) for the npm-based alternative (`npm install
 | Resume | `--resume <SESSION_ID>` flag (id printed on the death screen), or bare `--resume` for a picker | new session |
 | Web search | `BRAVE_API_KEY` env (or `BRAVE_SEARCH_API_KEY`), or `~/.oxen-harness/.env` | always offered; key enables results |
 | Local model | `--local <MODEL_ID>` flag (runs llama.cpp instead of a remote endpoint) | remote Oxen.ai |
-| Permissions | `/permissions` in the REPL (`relaxed` / `cautious` / `bypass`, persists to `~/.oxen-harness/permissions.json`); `--yolo` starts one run in `bypass` without saving it, and says so under the banner | `relaxed` |
+| Permissions | `/permissions` in the REPL (`relaxed` / `cautious` / `bypass`, persists to `~/.oxen-harness/permissions.json`); `--yolo` starts one run in `bypass` without saving it, and says so under the banner; the desktop composer's permission picker (next to the model picker) does the same per chat, mid-run included | `relaxed` |
 | Theme | `/theme` in the REPL or `oxen-harness theme use <name>` (persists to `~/.oxen-harness/config.toml`) | Oregon Trail |
 
 ### Pointing at a different Oxen host

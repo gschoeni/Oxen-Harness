@@ -3,9 +3,9 @@
 //! `.oxen-harness/permissions.json`).
 //!
 //! Like tool preferences, rule edits are applied when an agent (and its gate)
-//! is built — they reach new and resumed chats. The mode switch also updates
-//! nothing live here; the CLI's `/permissions` flips its live gate because it
-//! holds one, while the desktop treats settings as build-time config.
+//! is built — they reach new and resumed chats, and so does the saved mode.
+//! The live switch is the composer's picker ([`set_chat_permission_mode`]),
+//! which changes one chat's gate and saves nothing.
 
 use harness_permissions::{policy, PermissionMode, PermissionsConfig};
 use serde::Serialize;
@@ -62,19 +62,23 @@ pub(crate) async fn get_permissions(state: State<'_, AppState>) -> Result<Permis
     })
 }
 
-fn parse_mode(mode: &str) -> Result<PermissionMode, String> {
-    match mode {
-        "relaxed" => Ok(PermissionMode::Relaxed),
-        "cautious" => Ok(PermissionMode::Cautious),
-        "bypass" => Ok(PermissionMode::Bypass),
-        other => Err(format!("unknown permission mode `{other}`")),
-    }
-}
-
 /// Set the global default mode. Applies to new and resumed chats.
 #[tauri::command]
 pub(crate) async fn set_permission_mode(mode: String) -> Result<(), String> {
-    policy::persist_global_mode(parse_mode(&mode)?).map_err(|e| e.to_string())
+    policy::persist_global_mode(mode.parse()?).map_err(|e| e.to_string())
+}
+
+/// Switch one chat's live mode from the composer picker, mid-turn included,
+/// without touching the saved default. Returns the mode now in force.
+#[tauri::command]
+pub(crate) async fn set_chat_permission_mode(
+    state: State<'_, AppState>,
+    session: String,
+    mode: String,
+) -> Result<String, String> {
+    let mode: PermissionMode = mode.parse()?;
+    let applied = state.set_session_permission_mode(&session, mode).await?;
+    Ok(applied.label().to_string())
 }
 
 /// Add one rule to a scope ("global" | "project") and kind

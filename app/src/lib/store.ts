@@ -45,6 +45,7 @@ import {
   sessionInfo,
   selectCloudModelForNewChats,
   setActiveProject,
+  setChatPermissionMode,
   setCompressionMode,
   setLocalModel,
   setModel,
@@ -129,6 +130,7 @@ import type {
   CompactedEvent,
   CompressionEvent,
   CompressionMode,
+  PermissionMode,
   DownloadProgress,
   ModelErrorDetail,
   ModelRef,
@@ -720,6 +722,11 @@ interface AppState {
   changeModel: (model: string) => Promise<void>;
   /** Switch context compression for the live chat (persisted for new ones too). */
   changeCompressionMode: (mode: CompressionMode) => Promise<void>;
+  /** Switch the permission mode of the chat in view, live and for that chat
+   *  only — nothing is saved, so new chats keep the Settings default. */
+  changePermissionMode: (mode: PermissionMode) => Promise<void>;
+  /** Record a chat's permission mode after the backend changed it. */
+  notePermissionMode: (session: string, mode: PermissionMode) => void;
   /** Swap the chat in view to a downloaded local model in place — the local
    *  counterpart of `changeModel`. Starts the model's server. */
   changeLocalModel: (id: string) => Promise<void>;
@@ -1681,6 +1688,24 @@ export const useStore = create<AppState>((rawSet, get) => {
         infos: { ...s.infos, [info.session_id]: info },
       }));
     },
+
+    changePermissionMode: async (mode) => {
+      // Named by session for the same reason a model swap is: a tab switch
+      // while the request is out must not retarget it.
+      const session = get().session?.session_id;
+      if (!session) return;
+      get().notePermissionMode(session, await setChatPermissionMode(session, mode));
+    },
+
+    notePermissionMode: (session, mode) =>
+      set((s) => {
+        const info = s.infos[session];
+        return {
+          infos: info ? { ...s.infos, [session]: { ...info, permission_mode: mode } } : s.infos,
+          session:
+            s.session?.session_id === session ? { ...s.session, permission_mode: mode } : s.session,
+        };
+      }),
 
     changeModel: async (model) => {
       // The swap belongs to the tab it was made in: name that chat, so a tab

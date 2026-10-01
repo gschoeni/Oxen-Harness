@@ -164,7 +164,7 @@ describe("store: sessions", () => {
     });
     // Backend reports a mid-turn chat with running=true / empty transcript.
     ipc.resumeSession.mockResolvedValueOnce({
-      info: { model: "", workspace: "", session_id: "bg", tokens_used: 0, context_tokens: 0, context_window: 0, compression_mode: "off" },
+      info: { model: "", workspace: "", session_id: "bg", tokens_used: 0, context_tokens: 0, context_window: 0, compression_mode: "off", permission_mode: "relaxed" },
       messages: [],
       running: true,
     });

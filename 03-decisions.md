@@ -1297,6 +1297,26 @@ The boot notice is unconditional and loud (red, under the banner; on stderr
 for `-p` so stdout stays the model's answer), and the meter reads `bypass` for
 the whole run. Circuit breakers fire in every mode, `--yolo` included.
 
+## The desktop permission picker is `--yolo` per chat (2026-10-01)
+
+**The composer's permission picker switches one chat's live gate and saves
+nothing.** It sits beside the model picker (replacing the Review dropdown;
+code review is still `/code-review`), shows the mode the chat is running under,
+and calls `SessionService::set_session_permission_mode`, which reaches the
+session's gate through its workbench rather than its agent. Three consequences
+follow from that:
+
+- **It works mid-turn.** The gate reads the mode per tool call and a turn holds
+  the agent lock, not the gate, so a run that keeps asking can be let loose (or
+  reined in) without stopping it. Subagent lanes share the policy and follow.
+- **It is per chat and unsaved**, for the reason `--yolo` is: bypass chosen for
+  one trusted task must not become the default for the next chat. The saved
+  default stays in Settings → Permissions, which the picker links to. A chat
+  reopened after an app restart is back on the default.
+- **`SessionInfo.permission_mode` is the readout**, so the picker also follows
+  "Dangerously allow everything" on an approval card and a rejoined running
+  turn. Bypass renders in the danger color; circuit breakers still fire.
+
 ## The study game: keeping the developer in the loop (2026-09-30)
 
 **The Trail of Understanding is a second cabinet on the Oxen Trail's bones, not

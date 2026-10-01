@@ -42,6 +42,7 @@ function seedChat(e: ThreadEntry, running: string[] = []) {
       context_tokens: 0,
       context_window: 200_000,
       compression_mode: "off",
+      permission_mode: "relaxed",
     },
   });
   vi.mocked(ipc.threadsSnapshot).mockResolvedValue(snapshot);

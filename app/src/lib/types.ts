@@ -38,6 +38,10 @@ export interface SessionInfo {
   /** The context-compression mode this session's agent was built with —
    *  drives the TokenMeter's armed indicator. */
   compression_mode: CompressionMode;
+  /** The permission mode this chat's gate is in right now: the saved default
+   *  unless the chat switched its own (the composer's picker, or "Dangerously
+   *  allow everything" on an approval). */
+  permission_mode: PermissionMode;
 }
 
 /** A chat's training-data review status: unreviewed (""), kept, or rejected. */
@@ -485,6 +489,10 @@ export interface PermissionRuleSet {
   allow_exact: string[];
   deny: string[];
 }
+
+/** How eagerly the permission gate asks before a tool runs. `bypass` is the
+ *  CLI's `--yolo`: nothing asks, though circuit breakers still refuse. */
+export type PermissionMode = "relaxed" | "cautious" | "bypass";
 
 /** Everything the Permissions settings page renders. */
 export interface PermissionsView {

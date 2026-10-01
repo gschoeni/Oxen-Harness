@@ -91,7 +91,7 @@ const BASELINE: Record<string, number> = {
   "/src/features/chat/agents.css": 41,
   "/src/features/chat/agentview.css": 3,
   "/src/features/chat/apikey.css": 2,
-  "/src/features/chat/chat.css": 43,
+  "/src/features/chat/chat.css": 42,
   "/src/features/chat/plan.css": 2,
   "/src/features/chat/toolcall.css": 6,
   "/src/features/docks/docks.css": 4,

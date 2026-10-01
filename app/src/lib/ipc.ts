@@ -11,6 +11,7 @@ import type {
   ApprovalEvent,
   ApprovalRequestEvent,
   CatalogModel,
+  PermissionMode,
   PermissionRuleKind,
   PermissionScope,
   PermissionsView,
@@ -534,6 +535,10 @@ export const getPermissions = () => invoke<PermissionsView>("get_permissions");
 
 /** Set the global default mode; applies to new and resumed chats. */
 export const setPermissionMode = (mode: string) => invoke<void>("set_permission_mode", { mode });
+/** Switch one chat's live mode (mid-turn included) without saving it as the
+ *  default. Resolves to the mode now in force. */
+export const setChatPermissionMode = (session: string, mode: PermissionMode) =>
+  invoke<PermissionMode>("set_chat_permission_mode", { session, mode });
 
 export const addPermissionRule = (
   scope: PermissionScope,

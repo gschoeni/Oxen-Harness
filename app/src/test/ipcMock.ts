@@ -9,6 +9,7 @@ import type {
   CloudModel,
   CodeReviewRunResult,
   CompressionMode,
+  PermissionMode,
   ConnectionView,
   HardwareProfile,
   HfHit,
@@ -113,6 +114,7 @@ export const sampleSession: SessionInfo = {
   context_tokens: 0,
   context_window: 128000,
   compression_mode: "off",
+  permission_mode: "relaxed",
 };
 
 export const sampleHardware: HardwareProfile = {
@@ -411,6 +413,7 @@ export const getPermissions = vi.fn(async () => ({
   project_path: "/tmp/proj",
 }));
 export const setPermissionMode = vi.fn(async () => {});
+export const setChatPermissionMode = vi.fn(async (_session: string, mode: PermissionMode) => mode);
 export const addPermissionRule = vi.fn(async () => {});
 export const removePermissionRule = vi.fn(async () => {});
 
@@ -650,6 +653,9 @@ export function resetIpc() {
   answerQuestion.mockReset().mockResolvedValue(undefined);
   answerApproval.mockReset().mockResolvedValue(undefined);
   setPermissionMode.mockReset().mockResolvedValue(undefined);
+  setChatPermissionMode
+    .mockReset()
+    .mockImplementation(async (_session: string, mode: PermissionMode) => mode);
   addPermissionRule.mockReset().mockResolvedValue(undefined);
   removePermissionRule.mockReset().mockResolvedValue(undefined);
   getPermissions.mockReset().mockResolvedValue({

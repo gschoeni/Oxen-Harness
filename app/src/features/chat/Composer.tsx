@@ -2,9 +2,9 @@ import { memo, useEffect, useRef, useState, type DragEvent } from "react";
 import { ArrowUp, FileText, Film, Music, Paperclip, Square } from "lucide-react";
 import { StudyButton } from "./StudyButton";
 import { AttachmentImage } from "./AttachmentImage";
-import { CodeReviewPicker } from "./CodeReviewPicker";
 import { CompressionPicker } from "./CompressionPicker";
 import { ModelPicker } from "./ModelPicker";
+import { PermissionPicker } from "./PermissionPicker";
 import { parseSlashCommand, slashSuggestions } from "./slashCommands";
 import { isAudioPath, isImagePath, isVideoPath } from "../../lib/attachments";
 import { advancedSettingsEnabled } from "../../lib/features";
@@ -73,7 +73,7 @@ export function Composer({
   /** What the empty prompt says, idle and mid-run. The chat's defaults speak
    *  of the agent; a subagent's view speaks of directions and follow-ups. */
   placeholder?: { idle: string; busy: string };
-  /** The model / compression / review pickers under the prompt. Off for a
+  /** The model / compression / permission pickers under the prompt. Off for a
    *  subagent, which runs on the model it was spawned with. */
   toolbar?: boolean;
 }) {
@@ -259,12 +259,14 @@ export function Composer({
 // Draft changes don't affect the pickers; their own store subscriptions still
 // update model/compression labels as sessions change. The compression picker
 // is an advanced control: the mode stays switchable from Settings → Compression.
+// The permission picker stays live mid-turn — switching it is how a run stops
+// (or starts) asking. Code review is the `/code-review` slash command.
 const ComposerToolbar = memo(function ComposerToolbar({ busy }: { busy: boolean }) {
   return (
     <div className="composer-toolbar">
       <ModelPicker disabled={busy} />
       {advancedSettingsEnabled() && <CompressionPicker disabled={busy} />}
-      <CodeReviewPicker disabled={busy} />
+      <PermissionPicker />
       <StudyButton busy={busy} />
     </div>
   );

@@ -313,6 +313,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::turn::answer_approval,
                 commands::permissions::get_permissions,
                 commands::permissions::set_permission_mode,
+                commands::permissions::set_chat_permission_mode,
                 commands::permissions::add_permission_rule,
                 commands::permissions::remove_permission_rule,
                 commands::theme::list_themes,
