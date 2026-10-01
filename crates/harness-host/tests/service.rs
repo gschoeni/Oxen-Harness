@@ -548,6 +548,193 @@ async fn a_fallback_is_announced_and_recorded_when_the_chat_next_runs() {
     assert_eq!(recorded.base_url, server.url());
 }
 
+/// A stand-in local server "serving" `model` — a sleeping process, so who may
+/// replace or shut a server down can be tested without loading weights.
+fn fake_local_server(model: &str) -> harness_local::LocalServer {
+    let child = tokio::process::Command::new("sleep")
+        .arg("60")
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn a stand-in server process");
+    harness_local::LocalServer::fake(child, model)
+}
+
+async fn serving(service: &SessionService) -> Option<String> {
+    let guard = service.local_server.lock().await;
+    guard.as_ref().map(|s| s.model_id().to_string())
+}
+
+/// A session row for a chat on local model `model`.
+fn local_chat(workspace: &std::path::Path, model: &str) -> harness_store::SessionMeta {
+    harness_store::SessionMeta {
+        workspace: workspace.display().to_string(),
+        model: model.into(),
+        provider: "oxen".into(),
+        base_url: "http://127.0.0.1:1/v1".into(),
+        mode: harness_store::MODE_LOCAL.into(),
+        ..Default::default()
+    }
+}
+
+/// New chats default to local model A while another chat is mid-reply on
+/// local model B. Opening a chat can't load A (one local model at a time),
+/// so it starts on the cloud model — and B's server, refused for
+/// replacement, must not be torn down on the way to that fallback.
+#[tokio::test]
+async fn a_new_chat_never_kills_a_local_server_another_chat_is_replying_on() {
+    let server = mockito::Server::new_async().await;
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+    let store = service.store().unwrap();
+
+    // A chat mid-reply on B: its row names B, its turn holds its agent and
+    // has a stop signal registered.
+    let busy = service.new_session().await.unwrap().session_id;
+    let on_b = local_chat(workspace.path(), "model-b");
+    store
+        .set_session_model(
+            &busy,
+            &harness_store::SessionEndpoint {
+                model: &on_b.model,
+                base_url: &on_b.base_url,
+                mode: &on_b.mode,
+                context_window: None,
+            },
+        )
+        .unwrap();
+    let agent = service.agent_for(&busy).await.unwrap();
+    let _turn = agent.lock().await;
+    service
+        .cancels
+        .lock()
+        .await
+        .insert(busy.clone(), tokio_util::sync::CancellationToken::new());
+    *service.local_server.lock().await = Some(fake_local_server("model-b"));
+    *service.local_model.lock().await = Some("model-a".into());
+
+    let fresh = service.new_session().await.unwrap();
+
+    assert_eq!(fresh.model, "claude-opus-4-8");
+    assert_eq!(serving(&service).await.as_deref(), Some("model-b"));
+    // A is still what new chats want: the next one gets it once B is free.
+    assert_eq!(service.local_model.lock().await.as_deref(), Some("model-a"));
+}
+
+/// The server is kept for the model new chats start on — that model, not
+/// just "some local default". A different model nobody is on is dropped.
+#[tokio::test]
+async fn a_local_server_nothing_uses_is_shut_down_even_with_another_local_default() {
+    let server = mockito::Server::new_async().await;
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+    let chat = service.new_session().await.unwrap().session_id;
+    *service.local_model.lock().await = Some("model-a".into());
+
+    // Reopening the chat already in memory builds nothing; it only sweeps.
+    *service.local_server.lock().await = Some(fake_local_server("model-b"));
+    service.resume_session(&chat).await.unwrap();
+    assert_eq!(serving(&service).await, None);
+
+    *service.local_server.lock().await = Some(fake_local_server("model-a"));
+    service.resume_session(&chat).await.unwrap();
+    assert_eq!(serving(&service).await.as_deref(), Some("model-a"));
+}
+
+/// The same model id on a different endpoint is still a different place:
+/// the chat says it moved, and its row follows it to the current connection.
+#[tokio::test]
+async fn an_endpoint_change_under_the_same_model_id_is_announced_and_recorded() {
+    let mut server = mockito::Server::new_async().await;
+    let _reply = sse_mock(&mut server, FINAL_SSE);
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+
+    let store = service.store().unwrap();
+    let moved = store
+        .create_session(&harness_store::SessionMeta {
+            workspace: workspace.path().display().to_string(),
+            model: "claude-opus-4-8".into(),
+            provider: "oxen".into(),
+            base_url: "https://elsewhere.example/api/ai".into(),
+            mode: harness_store::MODE_CLOUD.into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    service.resume_session(&moved).await.unwrap();
+    service
+        .run_turn(&moved, "go".into(), vec![])
+        .await
+        .expect("turn runs on the current connection");
+
+    let notices = notices_for(&sink, &moved);
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].contains("elsewhere.example"), "{notices:?}");
+    let recorded = store.session_meta(&moved).unwrap();
+    assert_eq!(recorded.model, "claude-opus-4-8");
+    assert_eq!(recorded.base_url, server.url());
+
+    // Said once: the row now matches, so the next turn is quiet.
+    let _again = sse_mock(&mut server, FINAL_SSE);
+    service
+        .run_turn(&moved, "more".into(), vec![])
+        .await
+        .unwrap();
+    assert_eq!(notices_for(&sink, &moved).len(), 1);
+}
+
+/// A code review makes model calls on the chat's agent just as a turn does,
+/// so it gets the same preparation — here, the fallback is settled first.
+#[tokio::test]
+async fn a_code_review_prepares_the_chat_like_a_turn_does() {
+    let server = mockito::Server::new_async().await;
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+
+    let store = service.store().unwrap();
+    let foreign = store
+        .create_session(&harness_store::SessionMeta {
+            workspace: workspace.path().display().to_string(),
+            model: "model-from-elsewhere".into(),
+            provider: "oxen".into(),
+            base_url: "https://elsewhere.example/api/ai".into(),
+            mode: harness_store::MODE_CLOUD.into(),
+            ..Default::default()
+        })
+        .unwrap();
+    service.resume_session(&foreign).await.unwrap();
+
+    // Nothing to review in an empty directory; the preparation is the point.
+    let _ = service.run_code_review(&foreign, None).await;
+
+    assert_eq!(notices_for(&sink, &foreign).len(), 1);
+    assert_eq!(
+        store.session_meta(&foreign).unwrap().model,
+        "claude-opus-4-8"
+    );
+    assert!(
+        !service.cancels.lock().await.contains_key(&foreign),
+        "the review's stop signal must not outlive it"
+    );
+}
+
+/// The notices a chat was sent, in order.
+fn notices_for(sink: &CollectingSink, session: &str) -> Vec<String> {
+    sink.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            ProtocolEvent::Notice {
+                session: s, text, ..
+            } if s == session => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A chat started here records how it is reached, so a later resume can tell
 /// a cloud chat from a local one without guessing from its address.
 #[tokio::test]

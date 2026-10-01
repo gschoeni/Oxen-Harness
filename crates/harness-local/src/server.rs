@@ -300,6 +300,24 @@ impl LocalServer {
         Ok(server)
     }
 
+    /// A `LocalServer` wrapped around an arbitrary child process, bypassing
+    /// the spawn/health-check path — a stand-in for tests (here and in the
+    /// host) that exercise who may replace or shut down a running server
+    /// without loading real weights. Nothing listens at its address.
+    #[doc(hidden)]
+    pub fn fake(child: Child, model: &str) -> Self {
+        Self {
+            // 0 never matches a registry entry, so dropping a fake server
+            // can't touch the real registry file.
+            pid: 0,
+            child,
+            base_url: "http://127.0.0.1:1/v1".to_string(),
+            port: 1,
+            context: 512,
+            model: model.to_string(),
+        }
+    }
+
     /// The OpenAI-compatible base URL to point an LLM client at.
     pub fn base_url(&self) -> &str {
         &self.base_url
@@ -616,21 +634,6 @@ mod tests {
         assert!(find_free_port().unwrap() > 0);
     }
 
-    /// A LocalServer wrapped around an arbitrary child process, bypassing the
-    /// spawn/health-check path, to test the liveness/identity accessors.
-    fn fake_server(child: Child, model: &str) -> LocalServer {
-        LocalServer {
-            // 0 never matches a registry entry, so dropping a fake server
-            // can't touch the real registry file.
-            pid: 0,
-            child,
-            base_url: "http://127.0.0.1:1/v1".to_string(),
-            port: 1,
-            context: 512,
-            model: model.to_string(),
-        }
-    }
-
     #[tokio::test]
     async fn is_alive_tracks_the_process_and_model_id_is_kept() {
         let child = Command::new("sleep")
@@ -638,7 +641,7 @@ mod tests {
             .kill_on_drop(true)
             .spawn()
             .unwrap();
-        let mut server = fake_server(child, "muse-glimmer-30b-gguf-q4-k-m");
+        let mut server = LocalServer::fake(child, "muse-glimmer-30b-gguf-q4-k-m");
         assert_eq!(server.model_id(), "muse-glimmer-30b-gguf-q4-k-m");
         assert!(server.is_alive());
 

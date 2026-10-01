@@ -85,7 +85,9 @@ impl SessionService {
         lane: &str,
         text: &str,
     ) -> Result<String, String> {
-        let _agent = self.agent_or_build(session).await?;
+        let agent = self.agent_or_build(session).await?;
+        // The lane answers on the chat's endpoint: have it reachable first.
+        self.ready_if_idle(session, &agent).await?;
         self.fleet_spawner_for(session)
             .ok_or("Agent tools are unavailable in this chat")?
             .follow_up(lane, text)

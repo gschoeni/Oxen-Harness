@@ -530,16 +530,23 @@ impl SessionService {
                 Ok((base_url, ctx)) => {
                     return Ok((OxenClient::new(base_url, "local", &id), id, Some(ctx)));
                 }
-                // The runtime or weights aren't available right now — fall back
-                // to the cloud model rather than failing to open a chat. The
-                // persisted choice is kept, so it retries on the next launch.
+                // The model can't be served right now — fall back to the
+                // cloud model rather than failing to open a chat. The server
+                // slot is `ensure_local_server`'s to manage: it is already
+                // empty if the start failed (runtime or weights gone), and
+                // then this run stops defaulting to the model (the persisted
+                // choice is kept, so it retries on the next launch). A server
+                // still in the slot is a *different* model, mid-reply in
+                // another chat, that was rightly not replaced: it stays, and
+                // so does the default, for the next chat opened once it's free.
                 Err(_) => {
                     self.sink.emit(ProtocolEvent::LocalStatus {
                         model: id,
                         phase: harness_protocol::LocalPhase::Error,
                     });
-                    *self.local_model.lock().await = None;
-                    *self.local_server.lock().await = None;
+                    if self.local_server.lock().await.is_none() {
+                        *self.local_model.lock().await = None;
+                    }
                 }
             }
         }
@@ -628,7 +635,7 @@ impl SessionService {
     /// A cloud model is honored when it was recorded against the endpoint we
     /// are configured for. A local model is honored when it is still
     /// installed; if its server isn't up the agent is built *dormant*, on
-    /// the dead address the row remembers, and [`Self::ready_for_turn`]
+    /// the dead address the row remembers, and [`Self::ready_agent`]
     /// starts the server when the chat is next sent to — opening a chat
     /// never loads a model. Anything else (a transcript imported from
     /// another tool, a chat from a since-changed connection, a local model
@@ -696,17 +703,15 @@ impl SessionService {
         self.drop_idle_local_server().await;
     }
 
-    /// Shut the local server down once nothing needs it: it isn't what new
-    /// chats start on, and no chat held in memory (the one in view, or any
-    /// mid-turn) is recorded on its model. Its weights are gigabytes of
+    /// Shut the local server down once nothing needs it: its model isn't the
+    /// one new chats start on, and no chat held in memory (the one in view,
+    /// or any mid-turn) is recorded on that model. Its weights are gigabytes of
     /// memory, and a chat that comes back to it restarts it on its next turn.
     ///
     /// If a chat's row can't be read the server is kept: wrongly keeping it
     /// costs memory, wrongly killing it fails a reply mid-stream.
     async fn drop_idle_local_server(&self) {
-        if self.local_model.lock().await.is_some() {
-            return;
-        }
+        let default = self.local_model.lock().await.clone();
         let held: Vec<String> = self.agents.lock().await.keys().cloned().collect();
         let Ok(store) = self.store() else {
             return;
@@ -715,6 +720,9 @@ impl SessionService {
         let Some(serving) = guard.as_ref().map(|s| s.model_id().to_string()) else {
             return;
         };
+        if default.as_deref() == Some(serving.as_str()) {
+            return;
+        }
         for id in held {
             match store.session_meta(&id) {
                 Ok(meta) if meta.model == serving => return,
@@ -825,59 +833,90 @@ impl SessionService {
         Ok(())
     }
 
-    /// Bring a chat's agent in line with where its turn must run, right
-    /// before the turn — the things that are deliberately not done when a
-    /// chat is merely opened:
+    /// Bring a chat's agent in line with where its model calls must go, right
+    /// before it makes any (a turn, a code review, a lane follow-up) — the
+    /// things that are deliberately not done when a chat is merely opened:
     ///
     /// - a local-model chat gets its server started (or restarted, if it
     ///   died or was shut down while the chat sat idle);
-    /// - a chat rebuilt on the default because its recorded model can't be
-    ///   reached says so, once, and its row is brought up to date;
+    /// - a chat rebuilt somewhere other than where its row says it ran — a
+    ///   different model, or the same model id on a different endpoint —
+    ///   says so, once, and its row is brought up to date;
     /// - the compression setting, which is global, reaches a chat that was
     ///   already in memory when it changed.
-    async fn ready_for_turn(&self, session: &str, arc: &Arc<Mutex<Agent>>) -> Result<(), String> {
+    async fn ready_agent(&self, session: &str, agent: &mut Agent) -> Result<(), String> {
         let meta = self
             .store()?
             .session_meta(session)
             .map_err(|e| format!("reading session {session}: {e}"))?;
-        let mut agent = arc.lock().await;
         agent.set_compression_mode(harness_runtime::compression::mode());
 
-        // An empty address means the row isn't ours to correct (a transcript
-        // imported from another tool): it keeps the model it was made with.
-        let fell_back = agent.model() != meta.model;
-        if fell_back && !meta.model.is_empty() && !meta.base_url.is_empty() {
-            let model = agent.model().to_string();
-            self.sink.emit(ProtocolEvent::Notice {
-                session: session.to_string(),
-                kind: "model_unreachable".into(),
-                text: format!(
-                    "{} can't be reached from here anymore — this chat continues on {model}.",
-                    meta.model
-                ),
-            });
-            let endpoint = SessionEndpoint {
-                model: &model,
-                base_url: agent.base_url(),
-                mode: self.mode_of(&model).await,
-                context_window: Some(agent.context_window() as i64),
+        let same_model = agent.model() == meta.model;
+        // A local chat's address changes with every server start; that is
+        // this function's job to follow, not a move to announce.
+        if same_model && recorded_local(&meta)? {
+            let on_live_server = match self.live_local_server(&meta.model).await {
+                Some((base_url, _)) => agent.base_url() == base_url,
+                None => false,
             };
-            return self
-                .store()?
-                .set_session_model(session, &endpoint)
-                .map_err(|e| format!("recording {model} on session {session}: {e}"));
+            if !on_live_server {
+                let (base_url, context) = self.ensure_local_server(&meta.model).await?;
+                let client = OxenClient::new(base_url, "local", &meta.model);
+                self.move_agent(agent, client, &meta.model, MODE_LOCAL, Some(context))?;
+            }
+            return Ok(());
         }
 
-        let on_live_server = match self.live_local_server(&meta.model).await {
-            Some((base_url, _)) => agent.base_url() == base_url,
-            None => false,
-        };
-        if !fell_back && !on_live_server && recorded_local(&meta)? {
-            let (base_url, context) = self.ensure_local_server(&meta.model).await?;
-            let client = OxenClient::new(base_url, "local", &meta.model);
-            self.move_agent(&mut agent, client, &meta.model, MODE_LOCAL, Some(context))?;
+        // An empty address means the row isn't ours to correct (a transcript
+        // imported from another tool): it keeps what it was made with.
+        if meta.model.is_empty() || meta.base_url.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        if same_model && agent.base_url() == meta.base_url {
+            return Ok(());
+        }
+        let model = agent.model().to_string();
+        let text = if same_model {
+            format!(
+                "This chat last ran at {}, which isn't the current connection — \
+                 it continues on {model} at {}.",
+                meta.base_url,
+                agent.base_url()
+            )
+        } else {
+            format!(
+                "{} can't be reached from here anymore — this chat continues on {model}.",
+                meta.model
+            )
+        };
+        self.sink.emit(ProtocolEvent::Notice {
+            session: session.to_string(),
+            kind: "model_unreachable".into(),
+            text,
+        });
+        let endpoint = SessionEndpoint {
+            model: &model,
+            base_url: agent.base_url(),
+            mode: self.mode_of(&model).await,
+            context_window: Some(agent.context_window() as i64),
+        };
+        self.store()?
+            .set_session_model(session, &endpoint)
+            .map_err(|e| format!("recording {model} on session {session}: {e}"))
+    }
+
+    /// [`Self::ready_agent`] for a caller that doesn't hold the agent. A chat
+    /// mid-turn was readied when that turn began, so it is left alone rather
+    /// than waited on.
+    pub(crate) async fn ready_if_idle(
+        &self,
+        session: &str,
+        arc: &Arc<Mutex<Agent>>,
+    ) -> Result<(), String> {
+        match arc.try_lock() {
+            Ok(mut agent) => self.ready_agent(session, &mut agent).await,
+            Err(_) => Ok(()),
+        }
     }
 
     // --- Agent assembly ------------------------------------------------------
@@ -1963,7 +2002,11 @@ impl SessionService {
             Ok(arc) => arc,
             Err(e) => return (Err(e), Vec::new()),
         };
-        if let Err(e) = self.ready_for_turn(session, &arc).await {
+        let ready = {
+            let mut agent = arc.lock().await;
+            self.ready_agent(session, &mut agent).await
+        };
+        if let Err(e) = ready {
             return (Err(e), Vec::new());
         }
 
@@ -2211,6 +2254,13 @@ impl SessionService {
 
         let result = {
             let mut agent = arc.lock().await;
+            // The review's model calls go out on this agent, so it needs what
+            // a turn gets — above all a dormant local chat's server started.
+            if let Err(e) = self.ready_agent(session, &mut agent).await {
+                drop(agent);
+                self.cancels.lock().await.remove(session);
+                return Err(e);
+            }
             let runner = harness_review::ReviewRunner::new(
                 harness_review::ReviewConfig::load(),
                 target.clone(),

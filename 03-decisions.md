@@ -1449,12 +1449,15 @@ model). A chat mid-turn refuses the switch instead of blocking until the
 reply ends, and the picker shows the refusal as a notice in that chat.
 
 **Opening a chat loads nothing; sending to it does.** A local-model chat
-whose server isn't up is rebuilt *dormant*, and `ready_for_turn` starts the
-server right before its next turn (also covering a server that crashed).
-One local model runs at a time: replacing a server that is mid-reply in
-another chat is refused, not done.
+whose server isn't up is rebuilt *dormant*, and `ready_agent` starts the
+server right before its next model call (also covering a server that
+crashed). Everything that calls the model on a chat's agent goes through it:
+a turn, a code review, a lane follow-up. One local model runs at a time:
+replacing a server that is mid-reply in another chat is refused, not done —
+and a new chat that wanted a different local model then starts on the cloud
+model, leaving that server (and the local default) in place.
 
-**The local server lives only while something needs it**: it is the
+**The local server lives only while something needs it**: its model is the
 new-chat default, or a chat held in memory (in view, or mid-turn) is recorded
 on its model. `evict_idle` drops it otherwise — the weights are gigabytes,
 and the chat reloads them on its next send. The cost is a reload after
@@ -1464,9 +1467,10 @@ tabbing away from a local chat and back.
 transcript, a chat from a since-changed connection, or a local model since
 deleted reopens on the default. Opening it rewrites nothing; the first turn
 that runs emits a `model_unreachable` notice and updates the row, so the
-history list and the picker agree.
+history list and the picker agree. "Somewhere else" is judged by endpoint as
+well as model id: the same id on a different connection is still a move.
 
-**Compression mode is global and now behaves like it**: `ready_for_turn`
+**Compression mode is global and now behaves like it**: `ready_agent`
 applies the saved mode at every turn, so a chat that was in memory when the
 setting changed no longer keeps the old one.
 
