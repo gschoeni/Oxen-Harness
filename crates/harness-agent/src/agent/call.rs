@@ -433,6 +433,7 @@ pub(super) fn error_kind(e: &AgentError) -> &'static str {
         AgentError::ContextWindowExceeded { .. } => "context_window_exceeded",
         AgentError::RetriesExhausted { .. } => "retries_exhausted",
         AgentError::TimedOut { .. } => "timed_out",
+        AgentError::EmptyReply { .. } => "empty_reply",
     }
 }
 
@@ -1143,6 +1144,45 @@ mod tests {
 
         let out = agent.run_turn("hello", |_| {}).await.unwrap();
         assert_eq!(out, "capped");
+    }
+
+    #[test]
+    fn the_reply_cap_follows_what_is_known_about_the_model() {
+        use crate::config::{KNOWN_MODEL_RESPONSE_RESERVE, UNKNOWN_MODEL_RESPONSE_RESERVE};
+        let config = |response_reserve, max_output_tokens| AgentConfig {
+            response_reserve,
+            max_output_tokens,
+            ..AgentConfig::default()
+        };
+        // Unknown model: the small reserve any endpoint accepts.
+        assert_eq!(
+            config(None, None).effective_response_reserve(),
+            UNKNOWN_MODEL_RESPONSE_RESERVE
+        );
+        // A known large ceiling: room for a whole file in one tool call.
+        assert_eq!(
+            config(None, Some(128_000)).effective_response_reserve(),
+            KNOWN_MODEL_RESPONSE_RESERVE
+        );
+        // A known small ceiling is never exceeded.
+        assert_eq!(
+            config(None, Some(2_000)).effective_response_reserve(),
+            2_000
+        );
+        // A caller's own ceiling wins, still under the model's.
+        assert_eq!(
+            config(Some(8_192), Some(128_000)).effective_response_reserve(),
+            8_192
+        );
+        assert_eq!(
+            config(Some(8_192), Some(2_000)).effective_response_reserve(),
+            2_000
+        );
+        // A catalog that reports 0 knows nothing.
+        assert_eq!(
+            config(None, Some(0)).effective_response_reserve(),
+            UNKNOWN_MODEL_RESPONSE_RESERVE
+        );
     }
 
     #[tokio::test]

@@ -187,12 +187,14 @@ pub struct AgentConfig {
     /// explicitly for locally-served models whose `llama-server` context is
     /// smaller than the model's theoretical maximum.
     pub context_window: Option<usize>,
-    /// Tokens to keep free for the model's reply when budgeting the prompt.
-    pub response_reserve: usize,
+    /// Tokens to keep free for the model's reply when budgeting the prompt,
+    /// and the `max_tokens` each request asks for. `None` picks it from what
+    /// is known about the model (see [`Self::effective_response_reserve`]);
+    /// set it for a caller that wants a specific reply ceiling.
+    pub response_reserve: Option<usize>,
     /// The model's maximum reply size in tokens, when known (reported by the
     /// endpoint's model catalog). Caps the per-request `max_tokens` so the
     /// harness never asks a model for more output than it can produce.
-    /// `None` leaves `response_reserve` as the cap.
     pub max_output_tokens: Option<usize>,
     /// Whether the model accepts image input, when the endpoint's catalog
     /// has said. `Some(false)` (a known text-only model) makes the agent
@@ -358,13 +360,29 @@ impl AgentConfig {
     /// the configured reserve, clamped down to the model's reported maximum
     /// output when the catalog knows it (a cap above what the model can
     /// produce would either error or silently mislead the budget).
+    ///
+    /// With no configured reserve, a model whose ceiling is known gets room
+    /// for a whole file in one tool call; an unknown model keeps the small
+    /// reserve every endpoint accepts.
     pub fn effective_response_reserve(&self) -> usize {
-        match self.max_output_tokens {
-            Some(max) if max > 0 => self.response_reserve.min(max),
-            _ => self.response_reserve,
-        }
+        let ceiling = self.max_output_tokens.filter(|&max| max > 0);
+        let wanted = self.response_reserve.unwrap_or(match ceiling {
+            Some(_) => KNOWN_MODEL_RESPONSE_RESERVE,
+            None => UNKNOWN_MODEL_RESPONSE_RESERVE,
+        });
+        ceiling.map_or(wanted, |max| wanted.min(max))
     }
 }
+
+/// The reply ceiling for a model the catalog knows nothing about: small
+/// enough that no endpoint rejects it as more than the model can produce.
+pub const UNKNOWN_MODEL_RESPONSE_RESERVE: usize = 4096;
+
+/// The reply ceiling for a model whose maximum output is known (and at least
+/// this large). A reply is one tool call's whole arguments, so this is the
+/// largest file `write_file` can carry in one go; 4096 tokens could not hold
+/// a single HTML page, and a reply cut off there arrives with nothing in it.
+pub const KNOWN_MODEL_RESPONSE_RESERVE: usize = 32_000;
 
 impl Default for AgentConfig {
     fn default() -> Self {
@@ -374,7 +392,7 @@ impl Default for AgentConfig {
             // tool should advertise it (see `default_system_prompt`).
             system_prompt: Some(default_system_prompt(false)),
             context_window: None,
-            response_reserve: 4096,
+            response_reserve: None,
             max_output_tokens: None,
             accepts_images: None,
             max_resident_context_chars: 1_000_000,

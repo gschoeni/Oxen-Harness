@@ -357,7 +357,7 @@ mod tests {
             model: "claude-opus-4-8".into(),
             system_prompt: None,
             context_window: Some(1),
-            response_reserve: 0,
+            response_reserve: Some(0),
             ..AgentConfig::default()
         };
         let client = OxenClient::new("http://127.0.0.1:1/api/ai", "key", "claude-opus-4-8");
@@ -422,7 +422,7 @@ mod tests {
             model: "qwen3-8b".into(),
             system_prompt: None,
             context_window: Some(7000),
-            response_reserve: 0,
+            response_reserve: Some(0),
             ..AgentConfig::default()
         };
         let mut agent =
@@ -496,7 +496,7 @@ mod tests {
             system_prompt: None,
             // Fits two of the three big tool results, not all three.
             context_window: Some(4500),
-            response_reserve: 0,
+            response_reserve: Some(0),
             ..AgentConfig::default()
         };
         let mut agent =

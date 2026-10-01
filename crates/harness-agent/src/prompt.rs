@@ -374,6 +374,21 @@ pub(crate) const LOOP_NUDGE: &str =
      new information. Change your approach: use different arguments, a different tool, or \
      explain to the user what you're blocked on.";
 
+/// The one-shot corrective sent after a reply that spent its whole output
+/// allowance and delivered nothing — a tool call too large to finish, which a
+/// gateway that buffers tool calls drops whole. Re-asking unchanged would
+/// produce the same oversized call.
+pub(crate) fn output_cap_nudge(cap: usize) -> String {
+    format!(
+        "<system-reminder>An automatic check, not a message from the user: your previous \
+         reply was cut off at the {cap}-token output limit before any text or tool call \
+         finished, so nothing was received and nothing was done. Do not attempt the same \
+         reply again. Produce less output per reply: write a large file in parts (a \
+         `write_file` with the first portion, then `edit_file` calls to extend it), and \
+         keep any explanation short.</system-reminder>"
+    )
+}
+
 /// The most of an interjection that reaches the transcript — a paste-bomb
 /// mid-turn must not blow the context budget the turn was working within.
 const INTERJECTION_MAX_CHARS: usize = 25_000;

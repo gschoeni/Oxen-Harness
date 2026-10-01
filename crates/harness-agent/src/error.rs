@@ -46,6 +46,25 @@ pub enum AgentError {
         endpoint: String,
         source: Box<LlmError>,
     },
+    #[error("{}", empty_reply_message(model, *attempts, *output_cap))]
+    EmptyReply {
+        attempts: u32,
+        model: String,
+        /// The request's `max_tokens`, when the empty replies spent all of it
+        /// — the reply was cut off rather than never written.
+        output_cap: Option<usize>,
+    },
+}
+
+fn empty_reply_message(model: &str, attempts: u32, output_cap: Option<usize>) -> String {
+    match output_cap {
+        Some(cap) => format!(
+            "{model} hit its {cap}-token output limit {attempts} times in a row before any              text or tool call arrived, so nothing was written; ask for the work in smaller              pieces, or switch to a model with a larger output limit"
+        ),
+        None => format!(
+            "{model} returned an empty reply {attempts} times in a row (no text, no tool              call); try again, or switch models"
+        ),
+    }
 }
 
 impl AgentError {

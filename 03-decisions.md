@@ -1385,3 +1385,25 @@ the run, so a work context whose current view is `study` is treated like a
 pinned one for agent opens (the chat notes what was held back). A user's own
 open still navigates away — that is a choice, not an interruption.
 
+
+## The reply cap follows the model, and an empty reply is an error (2026-09-30)
+
+A session asked for an HTML page and got a blank reply: the `write_file`
+call needed more than the fixed 4096-token `max_tokens`, the hub buffers a
+tool call until it closes and so dropped the partial one, and it still
+reported `finish_reason: "stop"`. The harness saw "a provider anomaly",
+re-sent the identical request twice, and ended the turn on an empty message.
+
+**The cap is derived, not fixed.** With no configured `response_reserve`, a
+model whose `max_output_tokens` the catalog knows asks for up to 32k tokens
+(clamped to that ceiling); an unknown model keeps 4096, which no endpoint
+rejects. 32k rather than the model's full ceiling because the same number is
+reserved out of the prompt budget, and a reply is one tool call's worth.
+
+**Spending the whole cap is evidence of a cut-off, whatever the finish
+reason says.** An empty round whose completion tokens reached the cap is
+re-asked with a corrective (write the file in parts), not re-sampled as is.
+
+**An empty turn fails.** Past the re-sample bound the turn returns
+`AgentError::EmptyReply` naming the limit, and stores no blank assistant
+message. A silent empty reply read as "done" in both front ends.

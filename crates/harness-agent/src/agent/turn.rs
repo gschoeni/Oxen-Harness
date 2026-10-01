@@ -409,8 +409,8 @@ impl Agent {
 
             // A round that produced neither prose nor a tool call is
             // re-sampled (nothing is persisted, so re-asking is safe); past
-            // the bound it falls through and ends the turn empty as before.
-            if self.resample_empty_round(&assembled, &mut turn) {
+            // the bound the turn fails, so the user learns nothing was done.
+            if self.resample_empty_round(&assembled, &mut turn)? {
                 continue;
             }
 
@@ -751,15 +751,41 @@ impl Agent {
     }
 
     /// Whether to re-sample a round that produced neither prose nor a tool
-    /// call — a provider anomaly, since the stream completed but carried
-    /// nothing. Bounded, so a provider stuck returning nothing can't spin.
-    fn resample_empty_round(&self, assembled: &AssembledMessage, turn: &mut TurnState) -> bool {
+    /// call. Bounded, so a provider stuck returning nothing can't spin; past
+    /// the bound the turn fails rather than ending on a blank reply.
+    ///
+    /// Two causes look alike here. A stream that completed carrying nothing
+    /// is a provider anomaly, and asking again is the cure. A reply that
+    /// spent its whole output allowance is a tool call too large to finish
+    /// (a gateway that buffers tool calls drops the partial one, and may
+    /// still report `stop`), so the re-sample carries a corrective — the
+    /// same request would be cut off at the same place.
+    fn resample_empty_round(
+        &self,
+        assembled: &AssembledMessage,
+        turn: &mut TurnState,
+    ) -> Result<bool, AgentError> {
         if !assembled.content.is_empty() || !assembled.tool_calls.is_empty() {
             turn.empty_rounds = 0;
-            return false;
+            return Ok(false);
         }
+        let cap = self.config.effective_response_reserve();
+        let spent_the_cap = assembled
+            .usage
+            .as_ref()
+            .is_some_and(|usage| cap > 0 && usage.completion_tokens as usize >= cap);
+        let output_cap = (spent_the_cap
+            || matches!(
+                assembled.finish_reason.as_deref(),
+                Some("length" | "max_tokens")
+            ))
+        .then_some(cap);
         if turn.empty_rounds >= MAX_EMPTY_RESAMPLES {
-            return false;
+            return Err(AgentError::EmptyReply {
+                attempts: turn.empty_rounds + 1,
+                model: self.config.model.clone(),
+                output_cap,
+            });
         }
         turn.empty_rounds += 1;
         crate::errlog::record(
@@ -770,9 +796,16 @@ impl Agent {
                 "model": self.config.model,
                 "attempt": turn.empty_rounds,
                 "max_attempts": MAX_EMPTY_RESAMPLES,
+                "output_cap_hit": output_cap,
             }),
         );
-        true
+        if let Some(cap) = output_cap {
+            turn.set_nudge(
+                prompt::output_cap_nudge(cap),
+                "the reply hit its output-token limit before anything arrived",
+            );
+        }
+        Ok(true)
     }
 
     /// The model answered in prose with no tool call. Arm a one-shot corrective
@@ -2228,10 +2261,116 @@ mod tests {
             .await;
 
         let mut agent = retry_test_agent(server.url(), fast_retry(2));
-        let out = agent.run_turn("hello", |_| {}).await.unwrap();
+        let err = agent.run_turn("hello", |_| {}).await.unwrap_err();
 
-        assert_eq!(out, "");
+        // The user is told nothing came back, instead of a blank reply that
+        // reads as a finished turn.
+        assert!(
+            matches!(
+                err,
+                AgentError::EmptyReply {
+                    attempts: 3,
+                    output_cap: None,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("empty reply 3 times"), "{err}");
+        // Nothing blank was left in the transcript for a resume to trip on.
+        assert!(agent.messages().iter().all(|m| m.role != "assistant"));
         empty.assert_async().await;
+    }
+
+    /// SSE for a reply cut off mid tool call as the hub delivers it: the
+    /// partial call is dropped, the finish reason still says `stop`, and
+    /// only the usage shows the whole allowance was spent.
+    fn sse_cut_off_at(completion_tokens: usize) -> String {
+        let empty = serde_json::json!({
+            "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+        });
+        let usage = serde_json::json!({
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": completion_tokens,
+                "total_tokens": 100 + completion_tokens
+            }
+        });
+        format!("data: {empty}\n\ndata: {usage}\n\ndata: [DONE]\n\n")
+    }
+
+    #[tokio::test]
+    async fn a_reply_cut_off_at_the_output_cap_is_retried_with_a_corrective() {
+        let mut server = mockito::Server::new_async().await;
+        let cap = AgentConfig::default().effective_response_reserve();
+        let cut_off = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_cut_off_at(cap))
+            .expect(1)
+            .create_async()
+            .await;
+        // The second request must carry the corrective: re-sending the same
+        // prompt would be cut off at the same place.
+        let corrected = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("token output limit".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("wrote it in parts"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(2));
+        let mut nudged = Vec::new();
+        let out = agent
+            .run_turn("build the page", |e| {
+                if let AgentEvent::Nudged { reason } = e {
+                    nudged.push(reason.clone());
+                }
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(out, "wrote it in parts");
+        assert_eq!(nudged.len(), 1, "{nudged:?}");
+        // The corrective is one-shot and never stored.
+        assert!(agent.messages().iter().all(|m| !m
+            .content_text()
+            .is_some_and(|t| t.contains("token output limit"))));
+        cut_off.assert_async().await;
+        corrected.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn replies_that_keep_hitting_the_output_cap_fail_the_turn_naming_the_limit() {
+        let mut server = mockito::Server::new_async().await;
+        let cap = AgentConfig::default().effective_response_reserve();
+        let cut_off = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_cut_off_at(cap))
+            .expect(3)
+            .create_async()
+            .await;
+
+        let mut agent = retry_test_agent(server.url(), fast_retry(2));
+        let err = agent.run_turn("build the page", |_| {}).await.unwrap_err();
+
+        assert!(
+            matches!(err, AgentError::EmptyReply { output_cap: Some(c), .. } if c == cap),
+            "{err:?}"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains(&format!("{cap}-token output limit")),
+            "{message}"
+        );
+        cut_off.assert_async().await;
     }
 
     #[tokio::test]

@@ -59,7 +59,9 @@ impl FailureKind {
             })
             | AgentError::Llm(LlmError::Auth(_)) => FailureKind::Auth,
             AgentError::Llm(LlmError::Api { status: 429, .. }) => FailureKind::RateLimit,
-            AgentError::Llm(_) | AgentError::RetriesExhausted { .. } => FailureKind::Provider,
+            AgentError::Llm(_)
+            | AgentError::RetriesExhausted { .. }
+            | AgentError::EmptyReply { .. } => FailureKind::Provider,
             AgentError::ContextWindowExceeded { .. } => FailureKind::Context,
             AgentError::Tool(_) => FailureKind::Tool,
             AgentError::TimedOut { .. } => FailureKind::Timeout,
