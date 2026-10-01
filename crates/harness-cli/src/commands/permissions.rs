@@ -61,17 +61,13 @@ pub(crate) fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> R
         }
     };
 
-    let mode = match choice.trim().to_ascii_lowercase().as_str() {
-        "relaxed" => PermissionMode::Relaxed,
-        "cautious" => PermissionMode::Cautious,
-        "bypass" => PermissionMode::Bypass,
-        other => {
+    let mode: PermissionMode = match choice.trim().to_ascii_lowercase().parse() {
+        Ok(mode) => mode,
+        Err(error) => {
             println!(
                 "  {} {}",
                 ui.red("✗"),
-                ui.dim(&format!(
-                    "unknown mode `{other}` — expected relaxed, cautious, or bypass"
-                )),
+                ui.dim(&format!("{error} — expected relaxed, cautious, or bypass")),
             );
             return Ok(());
         }
