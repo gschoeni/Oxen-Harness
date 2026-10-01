@@ -40,6 +40,21 @@ describe("MediaToolCall", () => {
     expect(container.querySelector(".media-tile.skeleton")).toHaveStyle({ aspectRatio: "16 / 9" });
   });
 
+  it("cancels the generations its call is waiting on", async () => {
+    const queued = { id: "g7", session: "s1", call_id: "call_7", kind: "image", status: "processing" };
+    useStore.setState({
+      media: { "/w": [queued, { ...queued, id: "g0", call_id: "call_other" }] as never },
+    });
+    const { rerender } = render(<ToolCall item={tool({ callId: "call_7" })} />);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel image generation" }));
+    expect(ipc.cancelMedia).toHaveBeenCalledTimes(1);
+    expect(ipc.cancelMedia).toHaveBeenCalledWith("g7");
+
+    // Nothing to cancel once the call has returned.
+    rerender(<ToolCall item={tool({ callId: "call_7", running: false, result: "tool error: cancelled" })} />);
+    expect(screen.queryByRole("button", { name: "Cancel image generation" })).toBeNull();
+  });
+
   it("shows reference upload bars instead of the skeleton while uploads are in flight", () => {
     useStore.setState({
       mediaUploads: {

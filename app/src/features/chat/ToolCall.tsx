@@ -19,6 +19,7 @@ import {
   Search,
   SquareTerminal,
   Wrench,
+  X,
 } from "lucide-react";
 import { Button } from "../../components/ui";
 import { configureBraveKey } from "../../lib/ipc";
@@ -32,7 +33,7 @@ import {
   aspectFor,
   generatedFiles,
   generationArgs,
-  isGenerateTool, isActiveUpload, uploadPercent } from "../../lib/media";
+  isGenerateTool, isActiveUpload, isInFlight, uploadPercent } from "../../lib/media";
 import { fleetsFor, useStore } from "../../lib/store";
 import { agentRows, isActive } from "./agentRows";
 import { AgentRowList, StopFleets, agentIdsInResult } from "./AgentRowList";
@@ -260,6 +261,7 @@ function MediaToolCall({ item, a }: { item: ToolItem; a: Record<string, unknown>
   const sessionId = useStore((s) => s.session?.session_id);
   const uploads = useStore((s) => (s.session?.workspace ? s.mediaUploads[s.session.workspace] : undefined));
   const openGallery = useStore((s) => s.openGallery);
+  const cancelMedia = useStore((s) => s.cancelMedia);
   const openInViewer = useStore((s) => s.openInViewer);
   const openSettings = useStore((s) => s.openSettings);
   const mediaPrefs = useStore((s) => s.mediaPrefs);
@@ -296,6 +298,9 @@ function MediaToolCall({ item, a }: { item: ToolItem; a: Record<string, unknown>
   const overallPercent = mine.length
     ? Math.round(mine.reduce((sum, u) => sum + uploadPercent(u), 0) / mine.length)
     : 0;
+  // The hub jobs this call queued and is waiting on — what Cancel stops.
+  const rendering =
+    item.running && item.callId ? (library ?? []).filter((m) => m.call_id === item.callId && isInFlight(m)) : [];
   // Match saved files back to library items (for the Gallery's focus and
   // real dimensions); the result text alone still renders the pictures.
   const itemFor = (path: string) => library?.find((m) => m.path === path) ?? null;
@@ -315,6 +320,17 @@ function MediaToolCall({ item, a }: { item: ToolItem; a: Record<string, unknown>
           )}
         </span>
         <span className="toolcall-meta">
+          {rendering.length > 0 && (
+            <button
+              type="button"
+              className="media-cancel"
+              onClick={() => rendering.forEach((m) => cancelMedia(m.id))}
+              title="Cancel this generation"
+              aria-label={`Cancel ${noun} generation`}
+            >
+              <X size={13} />
+            </button>
+          )}
           {duration && <span className="toolcall-time">{duration}</span>}
           {item.running ? (
             <span className="toolcall-spinner" aria-label="running" />

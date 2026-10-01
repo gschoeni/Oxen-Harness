@@ -5,14 +5,36 @@
 // Appears only while something is in flight, fed by the project's
 // `media://changed` feed (the whole library plus live uploads, filtered to
 // this chat).
+//
+// It is for what the thread isn't already showing. A generation whose tool
+// call is still running has a card in the chat with its upload bars, its
+// rendering tile and its cancel, so the strip leaves it out; what remains is
+// work that outlived its call — a video rendering in the background after
+// the agent moved on — which has no other live sign in the chat.
 
 import { useEffect, useState } from "react";
 import { Film, Image as ImageIcon, Music, Sparkles, X } from "lucide-react";
 import { useStore } from "../../lib/store";
-import { elapsedSince, fmtBytes, isActiveUpload, isInFlight, uploadPercent } from "../../lib/media";
+import { elapsedSince, fmtBytes, isActiveUpload, isGenerateTool, isInFlight, uploadPercent } from "../../lib/media";
 import type { MediaUpload } from "../../lib/types";
+import type { Item } from "./thread";
 
 const NONE: never[] = [];
+
+/** The call ids (newline-joined, so the selector's value is stable) of the
+ *  generation cards still running in a thread. Running calls belong to the
+ *  current turn, so the scan stops at the last user message. */
+export function runningGenerationCalls(thread: Item[] | undefined): string {
+  const ids: string[] = [];
+  for (let i = (thread?.length ?? 0) - 1; i >= 0; i--) {
+    const item = thread![i];
+    if (item.kind === "user") break;
+    if (item.kind === "tool" && item.running && isGenerateTool(item.name)) {
+      ids.push(item.callId ?? "");
+    }
+  }
+  return ids.join("\n");
+}
 
 export function MediaPanel() {
   const sessionId = useStore((s) => s.session?.session_id);
@@ -25,8 +47,13 @@ export function MediaPanel() {
   useEffect(() => {
     if (workspace) void refreshMedia(workspace);
   }, [workspace, refreshMedia]);
-  const inFlight = items.filter((i) => i.session === sessionId && isInFlight(i));
-  const active = uploads.filter((u) => u.session === sessionId && isActiveUpload(u));
+  const liveCards = useStore((s) => runningGenerationCalls(sessionId ? s.threads[sessionId] : undefined));
+  const carded = new Set(liveCards === "" ? [] : liveCards.split("\n"));
+  const inFlight = items.filter(
+    (i) => i.session === sessionId && isInFlight(i) && !(i.call_id && carded.has(i.call_id)),
+  );
+  // References upload before a generation is queued, i.e. while its card runs.
+  const active = carded.size > 0 ? NONE : uploads.filter((u) => u.session === sessionId && isActiveUpload(u));
   const uploading = active.filter((u) => u.status !== "failed").length;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
