@@ -183,22 +183,20 @@ pub fn banner(
     out
 }
 
-/// Format a US-dollar amount for the banner's spend readout. Sub-cent totals
-/// show extra precision (e.g. `$0.0042`) so early usage isn't shown as `$0.00`;
-/// larger amounts use standard two-decimal currency (mirrors the desktop UI).
-/// The "Total dollars spent" value: the priced figure — `$0.00` for a ledger
-/// with nothing in it — with any unpriced models named beside it, or "—"
-/// when there is nothing to price with yet.
+/// The "Total dollars spent" value: just the dollar figure — `$0.00` for a
+/// ledger with nothing in it. Models the catalog has no rate for are left out
+/// of the sum without comment (the per-turn trailer is where they are named);
+/// "—" when no dollar figure exists at all.
 fn spend_value(spend: Option<&Price>) -> String {
     match spend {
-        Some(price) => price.label().unwrap_or_else(|| match price {
-            Price::Priced(usd) => format_usd(*usd),
-            _ => "—".into(),
-        }),
-        None => "—".into(),
+        Some(Price::Priced(usd) | Price::Partial { usd, .. }) => format_usd(*usd),
+        Some(Price::Pending | Price::Unpriced(_)) | None => "—".into(),
     }
 }
 
+/// Format a US-dollar amount for the banner's spend readout. Sub-cent totals
+/// show extra precision (e.g. `$0.0042`) so early usage isn't shown as `$0.00`;
+/// larger amounts use standard two-decimal currency (mirrors the desktop UI).
 pub(crate) fn format_usd(amount: f64) -> String {
     if amount > 0.0 && amount < 0.01 {
         format!("${amount:.4}")
@@ -471,10 +469,10 @@ mod tests {
     }
 
     #[test]
-    fn banner_names_what_it_could_not_price() {
+    fn banner_spend_is_a_bare_dollar_figure() {
         let ui = Ui::plain();
-        // Usage on a model with no catalog rate is a floor, not a total: the
-        // row says so, instead of a bare number that reads as the whole bill.
+        // The intro screen shows the total only: unpriced models are named in
+        // the per-turn trailer, not here.
         let partial = BannerFacts {
             spend: Some(Price::Partial {
                 usd: 12.5,
@@ -483,7 +481,14 @@ mod tests {
             ..BannerFacts::default()
         };
         let b = banner(&ui, "u", "m", "w", "s", &partial);
-        assert!(b.contains("$12.50 + no rate for gpt-6-1-sol"), "{b}");
+        assert!(b.contains("$12.50"), "{b}");
+        assert!(!b.contains("no rate for"), "{b}");
+        let unpriced = BannerFacts {
+            spend: Some(Price::Unpriced(vec!["gpt-6-1-sol".into()])),
+            ..BannerFacts::default()
+        };
+        let b = banner(&ui, "u", "m", "w", "s", &unpriced);
+        assert!(!b.contains("no rate for"), "{b}");
         // An empty ledger is a real, priced zero — not "unavailable".
         let empty = banner(&ui, "u", "m", "w", "s", &facts(0, Some(0.0)));
         assert!(empty.contains("$0.00"), "{empty}");
