@@ -18,7 +18,7 @@
   align-items: flex-end;
   gap: var(--space-1);
   flex-shrink: 0;
-  min-height: 40px;
+  min-height: var(--pane-strip-h);
   padding: 6px var(--space-2) 0;
   background: var(--surface);
   /* The rule under the strip is painted inside it, so the active tab (which

@@ -1675,7 +1675,11 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  flex-shrink: 0;
+  /* A fixed row, with or without its button, level with the work panel's
+     header (see --pane-head-h). */
+  height: var(--pane-head-h);
+  padding: 0 var(--space-3);
   border-bottom: 1px solid var(--separator);
 }
 .chat-status-text {

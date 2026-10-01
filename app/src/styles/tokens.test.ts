@@ -52,7 +52,7 @@ const BASELINE: Record<string, number> = {
   "/src/components/ui/markdown.css": 1,
   "/src/components/ui/ui.css": 5,
   "/src/features/approvals/approvals.css": 3,
-  "/src/features/canvas/canvas.css": 4,
+  "/src/features/canvas/canvas.css": 3,
   "/src/features/chat/agents.css": 41,
   "/src/features/chat/agentview.css": 3,
   "/src/features/chat/apikey.css": 2,

@@ -54,6 +54,13 @@
   --control-h: 32px;
   --control-h-lg: 34px;
 
+  /* Pane header rows — the chat column and the work panel each open with a
+     strip (chat tabs / work-view bar) and then a header (chat status / the
+     view's own head). Both columns read these, so the rules under each row
+     run straight across the window. */
+  --pane-strip-h: 40px;
+  --pane-head-h: 44px;
+
   /* Button sizes — every text button in the app is one of three sizes, and
      each size is a (height, side padding, type, icon gap) tuple read from
      these tokens by `.btn` (components/ui). Feature CSS never sets a button's

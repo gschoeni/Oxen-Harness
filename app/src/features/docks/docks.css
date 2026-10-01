@@ -166,6 +166,14 @@
 .dock-column.right:not(:has(.dock-tabs)):has(.editor-tabs) .dock-toggle.right {
   top: 4px;
 }
+/* The work panel's view bar is the first row: center the toggle in it, and
+   keep the bar's own buttons out from under it. */
+.dock-column.right:not(:has(.dock-tabs)):has(.workbench-head) .dock-toggle.right {
+  top: calc((var(--pane-strip-h) - var(--control-h-sm)) / 2);
+}
+.dock-column.right:not(:has(.dock-tabs)) .workbench-head {
+  padding-left: calc(var(--space-2) + var(--control-h-sm) + var(--space-1));
+}
 
 /* A collapsed column: a rail of icons. Clicking one brings its dock back. */
 .dock-rail {
