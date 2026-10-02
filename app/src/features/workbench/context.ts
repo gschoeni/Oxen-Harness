@@ -18,3 +18,10 @@ export function travel(previous: WorkContext, offset: number): WorkContext {
   const cursor = Math.max(0, Math.min(previous.history.length - 1, previous.cursor + offset));
   return { ...previous, cursor, current: previous.history[cursor] };
 }
+/** Swap the entry on screen for `target` without growing the history: moving
+ *  between siblings (the gallery's prev/next) is one visit, not one per step. */
+export function replace(previous: WorkContext, target: ViewTarget): WorkContext {
+  const history = [...previous.history];
+  history[previous.cursor] = target;
+  return { ...previous, current: target, history };
+}

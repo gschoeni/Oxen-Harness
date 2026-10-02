@@ -148,6 +148,42 @@ describe("GalleryPanel", () => {
     expect(screen.getByText("2 generations")).toBeInTheDocument();
   });
 
+  it("keeps one history entry per visit: stepping replaces it, and the way back is the grid", async () => {
+    useStore.setState({
+      media: {
+        "/w": [
+          item({ id: "g3", prompt: "third", created_at: 3 }),
+          item({ id: "g2", prompt: "second", created_at: 2 }),
+          item({ id: "g1", prompt: "first", created_at: 1 }),
+        ],
+      },
+    });
+    useStore.getState().openWorkView("s1", { view: "gallery" });
+    render(<GalleryPanel />);
+    await userEvent.click(await screen.findByTitle("third"));
+    await userEvent.click(screen.getByRole("button", { name: "Next generation" }));
+    await userEvent.keyboard("{ArrowRight}");
+    expect(screen.getByText("3 of 3")).toBeInTheDocument();
+    // Grid, then the generation on screen — not one entry per step.
+    expect(useStore.getState().workContexts.s1.history).toEqual([
+      { view: "gallery" },
+      { view: "gallery", id: "g1" },
+    ]);
+
+    // The pane's Back lands on the grid, with the last-viewed tile marked.
+    act(() => useStore.getState().travelWorkView(-1));
+    expect(screen.queryByLabelText("Generation details")).toBeNull();
+    expect(screen.getByTitle("first")).toHaveClass("selected");
+
+    // "All" from a generation returns to that same grid entry instead of
+    // stacking another one on top.
+    await userEvent.click(screen.getByTitle("second"));
+    await userEvent.click(screen.getByRole("button", { name: "Back to all generations" }));
+    const context = useStore.getState().workContexts.s1;
+    expect(context.cursor).toBe(0);
+    expect(context.current).toEqual({ view: "gallery" });
+  });
+
   it("lays out the metadata and switches to the raw manifest row", async () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

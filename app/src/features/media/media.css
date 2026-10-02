@@ -236,16 +236,61 @@
 }
 
 /* --- header while one generation is open --- */
+/* The stepper reads as one control: the count sits between its arrows. */
 .gallery-position {
-  flex: 1;
   min-width: 0;
+  padding: 0 var(--space-1);
   font-size: var(--text-sm);
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .gallery-nav {
   display: inline-flex;
+  align-items: center;
   gap: var(--space-1);
+}
+
+/* --- the way in, at the top of the file column --- */
+.gallery-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--separator);
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.gallery-link:hover {
+  background: var(--surface-hover);
+}
+.gallery-link.on {
+  color: var(--accent);
+}
+.gallery-link-title {
+  flex: 1;
+  min-width: 0;
+}
+.gallery-link-busy {
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.gallery-link-count {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
 }
 
 /* --- one generation in full --- */

@@ -3,14 +3,18 @@
 // `media://changed` events (the whole library each time) plus a cold load,
 // and re-read when the watcher sees the output folder change (a file edited
 // or deleted outside the app). The dock shows one thing at a time: the grid,
-// or one generation in full (`GenerationDetail`) with the header turned into
-// a back button and a prev/next stepper over the filtered feed. Arrow keys
-// step, Escape returns to the grid, and the tile last looked at stays
-// highlighted so the way back lands where you left.
+// or one generation in full (`GenerationDetail`). The grid is the parent and
+// a generation its child, and the header says so: a labelled "All" button
+// leads up, and a ‹ n of N › stepper moves between siblings in the filtered
+// feed. The pane's history agrees — opening a generation is one entry,
+// stepping swaps it in place, so the pane's Back is the grid rather than a
+// replay of every picture passed. Arrow keys step, Escape returns to the
+// grid, and the tile last looked at stays highlighted so the way back lands
+// where you left.
 
 import { useCallback, useEffect, useMemo, useState, type PointerEvent } from "react";
-import { IconButton } from "../../components/ui";
-import { ChevronLeft, ChevronRight, Images } from "lucide-react";
+import { Button, IconButton } from "../../components/ui";
+import { ChevronLeft, ChevronRight, Images, LayoutGrid } from "lucide-react";
 import { useStore } from "../../lib/store";
 import type { MediaItem } from "../../lib/types";
 import { isInFlight } from "../../lib/media";
@@ -92,15 +96,24 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
   );
   const back = useCallback(() => {
     setViewing(false);
-    if (sessionId) useStore.getState().openWorkView(sessionId, { view: "gallery" });
+    if (!sessionId) return;
+    const store = useStore.getState();
+    const context = store.workContexts[sessionId];
+    const previous = context?.history[context.cursor - 1];
+    // Opened from the grid: go back to that entry. Opened straight from a
+    // chat card, there is no grid behind this one yet, so it goes on top.
+    if (previous?.view === "gallery" && !previous.id) store.travelWorkView(-1);
+    else store.openWorkView(sessionId, { view: "gallery" });
   }, [sessionId]);
   const step = useCallback(
     (delta: number) => {
       if (position < 0) return;
       const next = shown[position + delta];
-      if (next) open(next.id);
+      if (!next) return;
+      setSelected(next.id);
+      if (sessionId) useStore.getState().replaceWorkView(sessionId, { view: "gallery", id: next.id });
     },
-    [position, shown, open],
+    [position, shown, sessionId],
   );
 
   // Keys work anywhere in the window while a generation is open, except in
@@ -132,18 +145,17 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
       <aside className="canvas gallery" aria-label="Gallery">
         {onResizeStart && <div className="canvas-resizer" onPointerDown={onResizeStart} />}
         <header className="canvas-head gallery-head">
-          <IconButton
+          <Button
             type="button"
-            className="sm"
+            size="sm"
+            variant="outline"
             onClick={back}
             aria-label="Back to all generations"
-            title="Back (Esc)"
+            title="All generations (Esc)"
           >
-            <ChevronLeft size={15} />
-          </IconButton>
-          <span className="gallery-position">
-            {position >= 0 ? `${position + 1} of ${shown.length}` : "1 generation"}
-          </span>
+            <LayoutGrid size={13} aria-hidden="true" />
+            All
+          </Button>
           <div className="gallery-nav">
             <IconButton
               type="button"
@@ -155,6 +167,9 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
             >
               <ChevronLeft size={15} />
             </IconButton>
+            <span className="gallery-position">
+              {position >= 0 ? `${position + 1} of ${shown.length}` : "1 generation"}
+            </span>
             <IconButton
               type="button"
               className="sm"

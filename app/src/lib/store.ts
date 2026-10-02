@@ -1,4 +1,4 @@
-import { navigate, travel, type WorkContext } from "../features/workbench/context";
+import { navigate, replace, travel, type WorkContext } from "../features/workbench/context";
 import { availableTarget, resolveView } from "../features/workbench/registry";
 import { loadKeyStatus, type KeyStatus } from "./apiKey";
 import { CHAT_MIN_FIT, FILES_DEFAULT_WIDTH, RAIL_W, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "../features/docks/layout";
@@ -483,6 +483,9 @@ interface AppState {
   workContexts: Record<string, WorkContext>;
   openWorkView: (session: string, target: ViewTarget, agent?: boolean) => void;
   travelWorkView: (offset: number) => void;
+  /** Point the entry on screen at a sibling target (same view) in place,
+   *  so Back leaves the view instead of retracing every step inside it. */
+  replaceWorkView: (session: string, target: ViewTarget) => void;
   mode: Mode;
   theme: Theme | null;
   /** Which empty-state hero game the player has chosen (persisted). Null falls
@@ -1408,6 +1411,15 @@ export const useStore = create<AppState>((rawSet, get) => {
       const context = travel(s.workContexts[id], offset);
       s.openWorkView(id, context.current);
       const workContexts = { ...get().workContexts, [id]: context }; setUi("workContexts", workContexts); set({workContexts});
+    },
+    replaceWorkView: (session, target) => {
+      set((s) => {
+        const previous = s.workContexts[session];
+        if (!previous || previous.current.view !== target.view) return {};
+        const workContexts = { ...s.workContexts, [session]: replace(previous, target) };
+        setUi("workContexts", workContexts);
+        return { workContexts };
+      });
     },
     browserUrl: null,
     leftTab: null,

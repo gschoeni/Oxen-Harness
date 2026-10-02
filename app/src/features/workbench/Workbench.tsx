@@ -63,6 +63,7 @@ function WorkbenchContent({
         <button
           className="icon-btn sm"
           aria-label="Previous work view"
+          title="Back"
           disabled={!context || context.cursor === 0}
           onClick={() => useStore.getState().travelWorkView(-1)}
         >
@@ -71,6 +72,7 @@ function WorkbenchContent({
         <button
           className="icon-btn sm"
           aria-label="Next work view"
+          title="Forward"
           disabled={!context || context.cursor >= context.history.length - 1}
           onClick={() => useStore.getState().travelWorkView(1)}
         >

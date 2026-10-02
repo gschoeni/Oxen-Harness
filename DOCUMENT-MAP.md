@@ -154,7 +154,8 @@ When adding a new file to the project, update this document map.
 ## Media provenance and the gallery's single view (2026-09-18)
 
 - `crates/harness-media/src/library.rs` — `MediaSource` / `SourceOrigin`: each reference traced to the chat attachment, earlier generation, or project file it came from; `agent_prompt` and the hub's `provider` record on every manifest row.
-- `app/src/features/media/GalleryPanel.tsx` — the Gallery dock shows the grid or one generation, never both; back button, prev/next stepper, arrow keys.
+- `app/src/features/media/GalleryPanel.tsx` — the Gallery dock shows the grid or one generation, never both; a labelled "All" button leads up to the grid, a ‹ n of N › stepper moves between siblings (replacing the pane-history entry, so the pane's Back is the grid), arrow keys.
+- `app/src/features/media/GalleryLink.tsx` — the standing way into the Gallery: a row at the top of the Files column whenever the project has generations.
 - `app/src/features/files/FileMenu.tsx` — the file tree's right-click menu (open, add to chat, download, reveal, copy path, rename, duplicate, move to Trash); built on the shared `ContextMenu` in `components/ui/Menu.tsx`, backed by `fs_*` commands in `app/src-tauri/src/commands/files.rs`.
 - `app/src/features/media/GenerationDetail.tsx` — one generation in full: prompt, request, output, the lineage trail (inputs above, outputs below, library items open in place), identity, and the raw manifest row.
 - `app/src/features/media/CompareView.tsx` — A/B comparison in the gallery detail: a draggable divider between two of a generation's inputs/output, pick-a-side-then-a-picture selection, clips kept in step.
