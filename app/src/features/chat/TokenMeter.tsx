@@ -4,6 +4,7 @@
 // surfacing this session's live token count and how full the context window is.
 
 import { useEffect, useState } from "react";
+import { advancedSettingsEnabled } from "../../lib/features";
 import { compactTokens, formatUsd } from "../../lib/format";
 import { sessionCost } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
@@ -28,9 +29,9 @@ export function TokenMeter() {
   // What context compression saved this session (audit mode: would have saved).
   const saved = useStore((s) => (s.session ? s.compression[s.session.session_id] : undefined));
   // The live agent's actual mode — shown even before any savings exist, so
-  // "armed but nothing eligible yet" is visible. The control for changing it
-  // lives next to the model name in the composer, where it's reachable before
-  // the first message too.
+  // "armed but nothing eligible yet" is visible. The readout shares the
+  // `advanced_settings` flag with the composer's compression picker: without
+  // that quick switch it is a number the user can't act on from the chat.
   const mode = useStore((s) => s.session?.compression_mode ?? "off");
   const model = useStore((s) => s.session?.model ?? "");
   const sessionId = useStore((s) => s.session?.session_id ?? "");
@@ -73,7 +74,7 @@ export function TokenMeter() {
           {tps >= 10 ? Math.round(tps) : tps.toFixed(1)} tok/s
         </span>
       )}
-      {mode !== "off" && (
+      {advancedSettingsEnabled() && mode !== "off" && (
         <span className="token-meter-saved" title={MODE_HINT[mode]}>
           {mode === "audit" ? "would save" : "saved"} ~{compactTokens(saved?.tokensSaved ?? 0)}
         </span>

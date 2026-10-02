@@ -16,7 +16,7 @@ pub struct FeatureFlags {
     pub workflows: bool,
     /// `OXEN_ADVANCED_SETTINGS`: desktop controls most users never need —
     /// the custom HTTP tool editor, the code-review step prompts, and the
-    /// composer's compression picker.
+    /// composer's compression picker with its savings readout.
     pub advanced_settings: bool,
     /// `OXEN_CLI_CANVAS`: the `canvas` tool in the terminal, where it can
     /// only write a file and open a browser.

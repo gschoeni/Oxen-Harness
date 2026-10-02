@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -6,11 +6,14 @@ vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 import { TokenMeter } from "./TokenMeter";
 import { useStore } from "../../lib/store";
 import * as ipc from "../../test/ipcMock";
-import { resetAll } from "../../test/utils";
+import { resetAll, setFeatureFlags } from "../../test/utils";
 
-beforeEach(() => {
+beforeEach(async () => {
   resetAll();
+  await setFeatureFlags({ advanced_settings: true });
 });
+
+afterEach(() => setFeatureFlags());
 
 const session = (compression_mode: "off" | "audit" | "on") =>
   useStore.setState({
@@ -68,6 +71,15 @@ describe("TokenMeter compression indicator", () => {
 
   it("shows nothing about compression when the session's mode is off", () => {
     session("off");
+    render(<TokenMeter />);
+    expect(screen.queryByText(/would save|saved ~/)).not.toBeInTheDocument();
+  });
+
+  it("hides the savings readout without the advanced-settings flag", async () => {
+    // The composer's picker is the quick way to switch modes; without it the
+    // readout is a number the user can't act on from the chat.
+    await setFeatureFlags();
+    session("audit");
     render(<TokenMeter />);
     expect(screen.queryByText(/would save|saved ~/)).not.toBeInTheDocument();
   });
