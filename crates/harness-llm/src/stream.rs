@@ -82,6 +82,36 @@ pub struct StreamAssembler {
     tool_fragments: BTreeMap<u64, ToolFragment>,
     usage: Option<Usage>,
     done: bool,
+    failure: Option<StreamFailure>,
+}
+
+/// A failure the server reported inside the stream — an `{"error": …}` frame,
+/// sent because the `200` was already on the wire when the provider failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamFailure {
+    /// The HTTP status the frame carried (`error.code`), or 502 when it
+    /// carried none: the reply failed upstream of us either way.
+    pub status: u16,
+    /// The raw frame, in the same shape as an error response body.
+    pub body: String,
+}
+
+impl StreamFailure {
+    /// Read a payload as an error frame, if it is one.
+    fn parse(payload: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+        let error = value.get("error").filter(|e| !e.is_null())?;
+        let status = error
+            .get("code")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|code| u16::try_from(code).ok())
+            .filter(|code| (400..=599).contains(code))
+            .unwrap_or(502);
+        Some(Self {
+            status,
+            body: payload.to_string(),
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -115,6 +145,13 @@ impl StreamAssembler {
         self.done || self.finish_reason.is_some()
     }
 
+    /// The failure the server reported mid-stream, if any. It outranks
+    /// [`Self::is_complete`]: the `[DONE]` after an error frame only closes
+    /// the stream.
+    pub fn failure(&self) -> Option<&StreamFailure> {
+        self.failure.as_ref()
+    }
+
     /// Process one decoded `data:` payload, returning the events it surfaces.
     ///
     /// A single chunk can yield more than one event — e.g. the chunk that first
@@ -127,6 +164,15 @@ impl StreamAssembler {
             return vec![StreamEvent::Done {
                 finish_reason: self.finish_reason.clone(),
             }];
+        }
+
+        // Checked before the chunk parse: every chunk field is optional, so an
+        // error frame would otherwise decode as an empty chunk and vanish.
+        if self.failure.is_none() && payload.contains("\"error\"") {
+            self.failure = StreamFailure::parse(payload);
+            if self.failure.is_some() {
+                return Vec::new();
+            }
         }
 
         let chunk: ChatChunk = match serde_json::from_str(payload) {
@@ -238,6 +284,36 @@ impl StreamAssembler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_error_frame_is_kept_as_the_stream_failure() {
+        let mut asm = StreamAssembler::new();
+        asm.accept(r#"{"choices":[{"index":0,"delta":{"content":"partial"}}]}"#);
+        let frame = r#"{"error":{"type":"model_response_error","detail":":timeout","code":504}}"#;
+        assert!(asm.accept(frame).is_empty());
+        asm.accept("[DONE]");
+
+        let failure = asm.failure().expect("the error frame is a failure");
+        assert_eq!(failure.status, 504);
+        assert_eq!(failure.body, frame);
+    }
+
+    #[test]
+    fn an_error_frame_without_a_status_reads_as_a_bad_gateway() {
+        let mut asm = StreamAssembler::new();
+        asm.accept(r#"{"error":{"message":"overloaded","code":"overloaded_error"}}"#);
+        assert_eq!(asm.failure().map(|f| f.status), Some(502));
+    }
+
+    #[test]
+    fn reply_text_that_mentions_an_error_is_not_a_failure() {
+        let mut asm = StreamAssembler::new();
+        let events = asm.accept(
+            r#"{"choices":[{"index":0,"delta":{"content":"the \"error\" key"}}],"error":null}"#,
+        );
+        assert_eq!(events.len(), 1);
+        assert!(asm.failure().is_none());
+    }
 
     #[test]
     fn decoder_extracts_data_payloads_across_boundaries() {

@@ -161,14 +161,26 @@ impl OxenClient {
             }
         }
 
+        // A user stop returns whatever assembled, never an error.
+        if cancelled {
+            return Ok(assembler.finish());
+        }
+
+        // A failure after the 200 was committed can't change the status, so
+        // the server reports it in-band and then closes the stream normally.
+        // The `[DONE]` that follows says the stream ended, not that the reply
+        // did — the error decides, with the status it carried.
+        if let Some(failure) = assembler.failure() {
+            return Err(LlmError::api(failure.status, &failure.body));
+        }
+
         // A stream that ends without `[DONE]` or a finish reason was cut off —
         // typically an upstream timeout dropping the connection mid-reply.
         // Treating the fragment as a finished answer would end the turn on a
         // truncated reply (the agent would persist "I'll do X…" and stop), so
         // surface it as the transient failure it is and let the caller's retry
-        // policy re-send the request. A user stop is different: return whatever
-        // assembled, never an error.
-        if !cancelled && !assembler.is_complete() {
+        // policy re-send the request.
+        if !assembler.is_complete() {
             return Err(LlmError::Stream(
                 "the connection closed before the reply finished".into(),
             ));
@@ -420,6 +432,78 @@ mod tests {
 
         assert_eq!(assembled.content, "Hello ox");
         assert_eq!(assembled.finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[tokio::test]
+    async fn stream_chat_errors_when_the_server_reports_a_failure_mid_stream() {
+        // The hub can't change the status once the 200 is on the wire, so a
+        // provider failure mid-reply arrives as an error frame followed by a
+        // normal `[DONE]`. Reading that as a finished answer ended a turn on
+        // "I'm writing the file now." with the write never made.
+        let mut server = mockito::Server::new_async().await;
+        let sse = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Writing it now.\"}}]}\n\n",
+            "data: {\"error\":{\"type\":\"model_response_error\",",
+            "\"title\":\"The model provider returned an error.\",",
+            "\"detail\":\":timeout\",\"code\":502}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            .create_async()
+            .await;
+
+        let client = OxenClient::new(server.url(), "sk-test", "claude-opus-4-8");
+        let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
+        let err = client
+            .stream_chat(&req, &CancellationToken::new(), |_| {})
+            .await
+            .unwrap_err();
+
+        match &err {
+            LlmError::Api {
+                status, message, ..
+            } => {
+                assert_eq!(*status, 502);
+                assert_eq!(message, ":timeout");
+            }
+            other => panic!("expected an API error, got: {other:?}"),
+        }
+        assert!(err.is_transient(), "an upstream timeout must be retryable");
+    }
+
+    #[tokio::test]
+    async fn a_mid_stream_error_keeps_its_own_status() {
+        // The frame's status decides whether a retry can help: a 400 relayed
+        // mid-stream must fail the call, not be re-sent four times.
+        let mut server = mockito::Server::new_async().await;
+        let sse = concat!(
+            "data: {\"error\":{\"detail\":\"prompt is too long\",\"code\":400}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            .create_async()
+            .await;
+
+        let client = OxenClient::new(server.url(), "sk-test", "claude-opus-4-8");
+        let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
+        let err = client
+            .stream_chat(&req, &CancellationToken::new(), |_| {})
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, LlmError::Api { status: 400, .. }),
+            "got: {err:?}"
+        );
+        assert!(!err.is_transient());
     }
 
     #[tokio::test]
