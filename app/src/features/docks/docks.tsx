@@ -1,10 +1,10 @@
 // The two layout columns. Workbench owns view registration and navigation.
-import type { ComponentType, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { FILES_DEFAULT_WIDTH, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "./layout";
 import { FolderTree, NotebookPen } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { Workbench } from "../workbench/Workbench";
-import { availableTarget, viewById } from "../workbench/registry";
+import { availableTarget } from "../workbench/registry";
 import { FilesPanel } from "../files/FilesPanel";
 import { ProjectsNav } from "../projects/ProjectsNav";
 
@@ -67,17 +67,9 @@ export function openEmptyWorkView() {
   s.openWorkView(session, saved && availableTarget(saved).view !== "welcome" ? saved : { view: "welcome" });
 }
 
-/** The rail's icon says what is behind it: the view this chat has open, or
- *  the generic notebook before it has one. */
-function WorkViewIcon() {
-  const view = useStore((s) => (s.session ? s.workContexts[s.session.session_id]?.current.view : undefined));
-  const Icon: ComponentType<{ size?: number }> = (view && viewById(view)?.icon) || NotebookPen;
-  return <Icon size={16} />;
-}
-
 export const DOCKS: DockSpec[] = [
-  { id: "files", side: "left", title: "Files", icon: <FolderTree size={16}/>, defaultWidth: FILES_DEFAULT_WIDTH, minWidth: 216, useAvailable: () => true, render: ({onResizeStart}) => <FilesPanel onResizeStart={onResizeStart}/> },
-  { id: "workbench", side: "right", title: "Work view", icon: <WorkViewIcon />, defaultWidth: WORK_VIEW_DEFAULT_WIDTH, minWidth: WORK_VIEW_MIN_WIDTH, useAvailable: () => useStore((s) => !!s.session), render: ({onResizeStart}) => <Workbench onResizeStart={onResizeStart}/> },
+  { id: "files", side: "left", title: "Files", icon: <FolderTree size={15}/>, defaultWidth: FILES_DEFAULT_WIDTH, minWidth: 216, useAvailable: () => true, render: ({onResizeStart}) => <FilesPanel onResizeStart={onResizeStart}/> },
+  { id: "workbench", side: "right", title: "Work view", icon: <NotebookPen size={15}/>, defaultWidth: WORK_VIEW_DEFAULT_WIDTH, minWidth: WORK_VIEW_MIN_WIDTH, useAvailable: () => useStore((s) => !!s.session), render: ({onResizeStart}) => <Workbench onResizeStart={onResizeStart}/> },
 ];
 
 export const docksOnSide = (side: DockSide) => DOCKS.filter((d) => d.side === side);

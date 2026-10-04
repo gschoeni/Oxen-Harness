@@ -583,7 +583,7 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
             aria-label="New file"
             onClick={() => startCreate(false)}
           >
-            <FilePlus2 size={14} />
+            <FilePlus2 size={15} />
           </button>
           <button
             className="icon-btn sm"
@@ -591,10 +591,10 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
             aria-label="New folder"
             onClick={() => startCreate(true)}
           >
-            <FolderPlus size={14} />
+            <FolderPlus size={15} />
           </button>
           <button className="icon-btn sm" title="Refresh" aria-label="Refresh files" onClick={refresh}>
-            <RotateCw size={13} />
+            <RotateCw size={15} />
           </button>
         </div>
         {/* The column's collapse control lives here, by the project name,

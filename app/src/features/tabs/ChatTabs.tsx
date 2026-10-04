@@ -230,7 +230,7 @@ export function ChatTabs() {
         title="New chat (⌘T)"
         aria-label="New chat"
       >
-        <Plus size={16} />
+        <Plus size={15} />
       </button>
       <div className="chat-tabs-actions">
         <button

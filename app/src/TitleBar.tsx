@@ -68,7 +68,7 @@ export function TitleBar() {
           title={`${runningCount} running — go Home`}
           aria-label={`${runningCount} running — go Home`}
         >
-          <Activity size={14} />
+          <Activity size={15} />
           <span>{runningCount}</span>
           <span className="titlebar-running-label">running</span>
         </button>

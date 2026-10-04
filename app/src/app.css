@@ -99,6 +99,10 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease);
 }
+.dev-view-btn > svg {
+  width: var(--nav-icon);
+  height: var(--nav-icon);
+}
 .dev-view-btn:hover:not(:disabled) {
   background: var(--surface-2);
   color: var(--text);

@@ -1,8 +1,8 @@
 // One side's dock column: the active dock's content, a drag handle, and (when
 // more than one dock on that side has content) a tab strip to switch between
-// them. Collapsed, the column becomes a thin rail — one button when the side
-// has one dock (the usual case: Files, the work view), an expand button plus
-// one per dock when it has several. The right column is always there for a
+// them. Collapsed, the column becomes a thin rail — the panel-open glyph
+// alone when the side has one dock (the usual case: Files, the work view),
+// plus one button per dock when it has several. The right column is always there for a
 // chat, as a rail until the chat puts something in the work view.
 //
 // Nothing here knows what a preview or a canvas is: it renders whatever the
@@ -109,6 +109,7 @@ export function DockColumn({
 
   if (collapsed) {
     const shortcut = side === "left" ? "⌘B" : "⌘⌥B";
+    const open = side === "left" ? <PanelLeftOpen size={15} /> : <PanelRightOpen size={15} />;
     if (available.length === 1) {
       const [dock] = available;
       return (
@@ -119,7 +120,7 @@ export function DockColumn({
             title={`Open ${dock.title} (${shortcut})`}
             aria-label={`Open ${dock.title}`}
           >
-            {dock.icon}
+            {open}
           </button>
         </nav>
       );
@@ -132,7 +133,7 @@ export function DockColumn({
           title={`Expand (${shortcut})`}
           aria-label={`Expand ${side} panel`}
         >
-          {side === "left" ? <PanelLeftOpen size={17} /> : <PanelRightOpen size={17} />}
+          {open}
         </button>
         <div className="dock-rail-sep" />
         {available.map((dock) => (

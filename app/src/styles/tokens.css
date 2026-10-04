@@ -53,6 +53,11 @@
   --control-h-sm: 26px;
   --control-h: 32px;
   --control-h-lg: 34px;
+  /* Navigation chrome — the title bar's utilities, the chat-tab strip's
+     buttons, dock toggles and rails, pane-header icon buttons — is one
+     control size (`--control-h-sm`) holding one glyph size, so every bar
+     and rail in the frame lines up and reads at one weight. */
+  --nav-icon: 15px;
 
   /* Pane header rows — every column opens with a strip (Home / chat tabs /
      work-view bar) and then a header (Files head / chat status / the view's

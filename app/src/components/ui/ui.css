@@ -119,6 +119,10 @@
   width: var(--control-h-sm);
   height: var(--control-h-sm);
 }
+.icon-btn.sm > svg {
+  width: var(--nav-icon);
+  height: var(--nav-icon);
+}
 .icon-btn.lg {
   width: var(--control-h-lg);
   height: var(--control-h-lg);

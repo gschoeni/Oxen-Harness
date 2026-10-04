@@ -68,7 +68,7 @@ function WorkbenchContent({
           disabled={!context || context.cursor === 0}
           onClick={() => useStore.getState().travelWorkView(-1)}
         >
-          <ArrowLeft size={14} />
+          <ArrowLeft size={15} />
         </button>
         <button
           className="icon-btn sm"
@@ -77,7 +77,7 @@ function WorkbenchContent({
           disabled={!context || context.cursor >= context.history.length - 1}
           onClick={() => useStore.getState().travelWorkView(1)}
         >
-          <ArrowRight size={14} />
+          <ArrowRight size={15} />
         </button>
         {customizable ? (
           <Select

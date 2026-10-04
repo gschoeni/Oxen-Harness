@@ -380,6 +380,10 @@
     color var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease);
 }
+.chat-tabs-btn > svg {
+  width: var(--nav-icon);
+  height: var(--nav-icon);
+}
 .chat-tabs-btn:hover {
   background: var(--surface-2);
   color: var(--text);

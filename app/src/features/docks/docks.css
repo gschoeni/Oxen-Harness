@@ -26,6 +26,10 @@
 
 /* The left column's top-level nav: back to the Projects page. Column chrome,
    above the tab strip, so it's reachable from Chats and Files alike. */
+.projects-nav > svg {
+  width: var(--nav-icon);
+  height: var(--nav-icon);
+}
 .projects-nav {
   display: flex;
   align-items: center;
@@ -127,6 +131,10 @@
     color var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease);
 }
+.dock-toggle > svg {
+  width: var(--nav-icon);
+  height: var(--nav-icon);
+}
 .dock-toggle:hover {
   color: var(--text);
   border-color: var(--accent);
@@ -170,16 +178,17 @@
   top: 4px;
 }
 
-/* A collapsed column: a rail of icons. Clicking one brings its dock back. */
+/* A collapsed column: a rail of icons. Clicking one brings its dock back.
+   Its first button is centered in the strip row, exactly where the column's
+   toggle sits when it is open — collapsing swaps one glyph for the other
+   without the control moving. */
 .dock-rail {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  /* Same top inset as the expanded sidebar, so the logo below sits on exactly
-     the same line in both states — collapsing must not make the app lurch. */
-  padding: var(--space-3) 0 var(--space-2);
+  gap: var(--space-2);
+  padding: calc((var(--pane-strip-h) - var(--control-h-sm)) / 2) 0 var(--space-2);
   background: var(--surface);
   min-height: 0;
   overflow: hidden;
@@ -188,8 +197,8 @@
 .dock-rail-btn {
   display: grid;
   place-items: center;
-  width: var(--control-h-lg);
-  height: var(--control-h-lg);
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   padding: 0;
   background: transparent;
   border: 1px solid transparent;
@@ -199,6 +208,10 @@
   transition:
     color var(--dur-fast) var(--ease),
     background var(--dur-fast) var(--ease);
+}
+.dock-rail-btn > svg {
+  width: var(--nav-icon);
+  height: var(--nav-icon);
 }
 .dock-rail-btn:hover {
   color: var(--text);
