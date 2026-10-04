@@ -227,4 +227,5 @@ When adding a new file to the project, update this document map.
 - `app/src/components/ui/Select.test.tsx` — selection, accessible descriptions, dismissal, disabled options and keyboard behavior.
 - `app/src/components/ui/select.css` — theme-aware selector trigger and menu styling.
 - `app/src/features/workbench/Workbench.test.tsx` — module presentation and compatible resource preservation when selecting a view.
+- `app/src/features/workbench/WorkEmpty.tsx` — the work view before a chat has opened anything: ask-the-agent starter chips (sent verbatim) plus Open a file / Gallery links.
 - `plans/shared-select.md` — implementation, dedicated review and verification record.

@@ -96,6 +96,32 @@
   font-size: var(--text-xs);
   line-height: 1.5;
 }
+/* The empty pane: a question to the agent first, the manual ways in after. */
+.work-empty h2 {
+  font-size: var(--text-lg);
+  margin: 0 0 var(--space-2);
+}
+.work-starters {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.work-starters .btn {
+  border-radius: var(--radius-pill);
+  font-weight: 500;
+}
+.work-empty-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-5);
+  color: var(--text-tertiary);
+}
 .workbench-error,
 .workbench-conflict {
   padding: var(--space-3);

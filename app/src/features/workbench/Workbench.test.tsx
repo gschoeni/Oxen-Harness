@@ -100,7 +100,7 @@ it("drops a resource that does not belong to the chosen view", async () => {
 it("keeps file-type rendering without the picker or customization cards", () => {
   const { rerender } = render(<Workbench />);
   expect(screen.queryByRole("combobox", { name: "Work view" })).not.toBeInTheDocument();
-  expect(screen.getByText("Open a file to get started. This space follows your conversation.")).toBeInTheDocument();
+  expect(screen.getByText("Nothing open yet.")).toBeInTheDocument();
   expect(document.querySelector(".workbench-choices")).toBeNull();
   expect(refreshPackages).not.toHaveBeenCalled();
   act(() => useStore.getState().openWorkView(sampleSession.session_id, {
@@ -124,7 +124,7 @@ it.each(["view-studio", "view-manager", "package:demo"])(
     } });
     render(<Workbench />);
     expect(screen.queryByText("Customization mounted")).not.toBeInTheDocument();
-    expect(screen.getByText("Open a file to get started. This space follows your conversation.")).toBeInTheDocument();
+    expect(screen.getByText("Nothing open yet.")).toBeInTheDocument();
     expect(views().some((module) => module.id === view)).toBe(false);
     expect(resolveView("studio.graph.json")).toBe("graph");
   },

@@ -6,6 +6,7 @@ import { workbenchCustomizationEnabled, workflowsEnabled } from "../../lib/featu
 import { views, viewById, useViewRegistry, availableTarget } from "./registry";
 import { useWorkbenchAPI } from "./api";
 import type { ViewTarget } from "../../workbench-sdk";
+import { WorkEmpty } from "./WorkEmpty";
 import "../../modules";
 import "./workbench.css";
 
@@ -113,31 +114,24 @@ function WorkbenchContent({
             <Suspense fallback={<p className="workbench-welcome">Loading view…</p>}>
               <Module api={api} />
             </Suspense>
-          ) : (
+          ) : customizable ? (
             <div className="workbench-welcome">
               <Workflow size={30} />
-              <h2>{customizable ? "Your work, your view" : "Your work"}</h2>
+              <h2>Your work, your view</h2>
               <p>
-                {customizable
-                  ? `${workflowsEnabled() ? "Build a workflow, preview" : "Preview"} an app, or open a file. This space follows your conversation.`
-                  : "Open a file to get started. This space follows your conversation."}
+                {`${workflowsEnabled() ? "Build a workflow, preview" : "Preview"} an app, or open a file. This space follows your conversation.`}
               </p>
-              {customizable && (
-                <div className="workbench-choices">
-                  {views().map((view) => (
-                    <button key={view.id} onClick={() => api.open({ view: view.id })}>
-                      <strong>{view.title}</strong>
-                      <span>{view.description}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              {target.view !== "welcome" && (
-                <p role="alert">
-                  The view “{target.view}” is unavailable. Your files are still on disk.
-                </p>
-              )}
+              <div className="workbench-choices">
+                {views().map((view) => (
+                  <button key={view.id} onClick={() => api.open({ view: view.id })}>
+                    <strong>{view.title}</strong>
+                    <span>{view.description}</span>
+                  </button>
+                ))}
+              </div>
             </div>
+          ) : (
+            <WorkEmpty workspace={workspace} />
           )}
         </ViewBoundary>
       </div>
