@@ -3,7 +3,7 @@ import { Bot } from "lucide-react";
 import { TitleBar } from "./TitleBar";
 import { Chat } from "./features/chat/Chat";
 import { DockColumn, useActiveDock, useDockShortcuts } from "./features/docks/DockColumn";
-import { docksOnSide, useAvailableDocks } from "./features/docks/docks";
+import { docksOnSide, useAvailableDocks, useDockCollapsed } from "./features/docks/docks";
 import { planColumns, type ColumnPlan, type LayoutPlan } from "./features/docks/layout";
 import { Settings } from "./features/settings/Settings";
 import { HomePage } from "./features/home/HomePage";
@@ -124,7 +124,7 @@ function useLayoutPlan(): LayoutPlan {
 function useSideInput(side: "left" | "right") {
   const available = useAvailableDocks(side).length > 0;
   const active = useActiveDock(side);
-  const collapsed = useStore((s) => !!s.dockCollapsed[side]);
+  const collapsed = useDockCollapsed(side);
   const width = useStore((s) => s.dockWidths[side]);
   // Fall back to the widest default among this side's docks, so a new dock
   // gets a sensible size before the user ever drags it.

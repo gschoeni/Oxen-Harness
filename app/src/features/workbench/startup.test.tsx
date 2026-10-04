@@ -21,9 +21,11 @@ it("restores history without opening the panel and registers views for the agent
   const { container } = render(<App />);
   await waitFor(() => expect(useStore.getState().session?.session_id).toBe("s1"));
   expect(useStore.getState().workContexts.s1.current.path).toBe("saved.txt");
+  // Saved history alone does not open the panel: the column is a rail the
+  // user can expand, and the layout reserves only the rail's width for it.
   expect(container.querySelector(".workbench")).not.toBeInTheDocument();
-  expect(container.querySelector(".dock-rail.right")).not.toBeInTheDocument();
-  expect(container.querySelector(".app")).toHaveStyle({ "--dock-right-w": "0px" });
+  expect(container.querySelector(".dock-rail.right")).toBeInTheDocument();
+  expect(container.querySelector(".app")).toHaveStyle({ "--dock-right-w": "52px" });
   await waitFor(() => expect(workbenchRequest).toHaveBeenCalledWith(
     "s1", "register_views", expect.objectContaining({ views: expect.arrayContaining([expect.objectContaining({ id: "editor" })]) }),
   ));

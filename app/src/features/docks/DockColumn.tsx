@@ -1,7 +1,9 @@
 // One side's dock column: the active dock's content, a drag handle, and (when
 // more than one dock on that side has content) a tab strip to switch between
-// them. Collapsed, the column becomes a thin rail of icons — click one to
-// bring it back.
+// them. Collapsed, the column becomes a thin rail — one button when the side
+// has one dock (the usual case: Files, the work view), an expand button plus
+// one per dock when it has several. The right column is always there for a
+// chat, as a rail until the chat puts something in the work view.
 //
 // Nothing here knows what a preview or a canvas is: it renders whatever the
 // registry (`docks.tsx`) says is available on this side.
@@ -10,7 +12,7 @@ import { useCallback, useEffect, type PointerEvent } from "react";
 import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import { useStore, type RightTabId } from "../../lib/store";
 import { DockToggle } from "./DockToggle";
-import { ColumnNav, useAvailableDocks, type DockSide, type DockSpec } from "./docks";
+import { ColumnNav, openEmptyWorkView, useAvailableDocks, useDockCollapsed, type DockSide, type DockSpec } from "./docks";
 import { CHAT_MIN_FIT, RAIL_W } from "./layout";
 import "./docks.css";
 
@@ -45,7 +47,7 @@ export function DockColumn({
   const otherSide: DockSide = side === "left" ? "right" : "left";
   const otherAvailable = useAvailableDocks(otherSide);
   const active = useActiveDock(side);
-  const collapsed = useStore((s) => !!s.dockCollapsed[side]) || forceRail;
+  const collapsed = useDockCollapsed(side) || forceRail;
   const setDockWidth = useStore((s) => s.setDockWidth);
   const setDockCollapsed = useStore((s) => s.setDockCollapsed);
   const setRightTab = useStore((s) => s.setRightTab);
@@ -58,6 +60,7 @@ export function DockColumn({
   // solver would fold it right back) — so make room honestly: take only the
   // active dock's minimum and fold the other side to a rail.
   const expand = () => {
+    if (side === "right") openEmptyWorkView();
     const s = useStore.getState();
     const want = s.dockWidths[side] ?? active?.defaultWidth ?? minWidth;
     const otherWidth = !otherAvailable.length
@@ -105,12 +108,28 @@ export function DockColumn({
   if (!available.length) return null;
 
   if (collapsed) {
+    const shortcut = side === "left" ? "⌘B" : "⌘⌥B";
+    if (available.length === 1) {
+      const [dock] = available;
+      return (
+        <nav className={`dock-rail ${side}`} aria-label={`Collapsed ${side} panel`}>
+          <button
+            className="dock-rail-btn"
+            onClick={expand}
+            title={`Open ${dock.title} (${shortcut})`}
+            aria-label={`Open ${dock.title}`}
+          >
+            {dock.icon}
+          </button>
+        </nav>
+      );
+    }
     return (
       <nav className={`dock-rail ${side}`} aria-label={`Collapsed ${side} panel`}>
         <button
           className="dock-rail-btn"
           onClick={expand}
-          title={`Expand (${side === "left" ? "⌘B" : "⌘⌥B"})`}
+          title={`Expand (${shortcut})`}
           aria-label={`Expand ${side} panel`}
         >
           {side === "left" ? <PanelLeftOpen size={17} /> : <PanelRightOpen size={17} />}

@@ -1,10 +1,10 @@
 // The two layout columns. Workbench owns view registration and navigation.
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { FILES_DEFAULT_WIDTH, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "./layout";
 import { FolderTree, NotebookPen } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { Workbench } from "../workbench/Workbench";
-import { availableTarget } from "../workbench/registry";
+import { availableTarget, viewById } from "../workbench/registry";
 import { FilesPanel } from "../files/FilesPanel";
 import { ProjectsNav } from "../projects/ProjectsNav";
 
@@ -36,18 +36,48 @@ export interface DockSpec {
   alwaysOpen?: boolean;
 }
 
-function useWorkViewAvailable() {
-  return useStore((s) => {
-    const session = s.session?.session_id;
-    if (!session || !s.rightTab[session]) return false;
-    const target = s.workContexts[session]?.current;
-    return !!target && availableTarget(target).view !== "welcome";
-  });
+/** Has this chat put something in the work view — a file, the gallery, a
+ *  preview — or explicitly opened the empty pane from its rail? Until then
+ *  the right column stays a rail: present, never an empty panel. */
+type StoreState = ReturnType<typeof useStore.getState>;
+function workViewOpened(s: Pick<StoreState, "session" | "rightTab" | "workContexts">): boolean {
+  const session = s.session?.session_id;
+  if (!session || !s.rightTab[session]) return false;
+  if (s.rightTab[session] === "welcome") return true;
+  const target = s.workContexts[session]?.current;
+  return !!target && availableTarget(target).view !== "welcome";
+}
+
+/** Folded to its rail: by the user, or (on the right) because this chat has
+ *  nothing in the work view yet. The layout solver and the column agree on
+ *  this one answer, so the chat is never laid out against a width the column
+ *  isn't using. */
+export function useDockCollapsed(side: DockSide): boolean {
+  return useStore((s) => !!s.dockCollapsed[side] || (side === "right" && !workViewOpened(s)));
+}
+
+/** Expand the right column for a chat that has not opened it: saved history
+ *  (a file from a previous run) comes back where it was; otherwise the empty
+ *  pane itself becomes what this chat opened. */
+export function openEmptyWorkView() {
+  const s = useStore.getState();
+  if (!s.session || workViewOpened(s)) return;
+  const session = s.session.session_id;
+  const saved = s.workContexts[session]?.current;
+  s.openWorkView(session, saved && availableTarget(saved).view !== "welcome" ? saved : { view: "welcome" });
+}
+
+/** The rail's icon says what is behind it: the view this chat has open, or
+ *  the generic notebook before it has one. */
+function WorkViewIcon() {
+  const view = useStore((s) => (s.session ? s.workContexts[s.session.session_id]?.current.view : undefined));
+  const Icon: ComponentType<{ size?: number }> = (view && viewById(view)?.icon) || NotebookPen;
+  return <Icon size={16} />;
 }
 
 export const DOCKS: DockSpec[] = [
   { id: "files", side: "left", title: "Files", icon: <FolderTree size={16}/>, defaultWidth: FILES_DEFAULT_WIDTH, minWidth: 216, useAvailable: () => true, render: ({onResizeStart}) => <FilesPanel onResizeStart={onResizeStart}/> },
-  { id: "workbench", side: "right", title: "Work view", icon: <NotebookPen size={16}/>, defaultWidth: WORK_VIEW_DEFAULT_WIDTH, minWidth: WORK_VIEW_MIN_WIDTH, useAvailable: useWorkViewAvailable, render: ({onResizeStart}) => <Workbench onResizeStart={onResizeStart}/> },
+  { id: "workbench", side: "right", title: "Work view", icon: <WorkViewIcon />, defaultWidth: WORK_VIEW_DEFAULT_WIDTH, minWidth: WORK_VIEW_MIN_WIDTH, useAvailable: () => useStore((s) => !!s.session), render: ({onResizeStart}) => <Workbench onResizeStart={onResizeStart}/> },
 ];
 
 export const docksOnSide = (side: DockSide) => DOCKS.filter((d) => d.side === side);
