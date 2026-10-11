@@ -47,7 +47,10 @@ impl AssembledMessage {
 /// Incremental decoder turning raw SSE bytes into `data:` payload strings.
 #[derive(Debug, Default)]
 pub struct SseDecoder {
-    buf: String,
+    // Bytes, not a `String`: a chunk boundary can fall inside a multi-byte
+    // character, so only complete lines are decoded. `\n` never occurs inside
+    // a UTF-8 sequence, which makes it a safe place to split.
+    buf: Vec<u8>,
 }
 
 impl SseDecoder {
@@ -59,12 +62,13 @@ impl SseDecoder {
     ///
     /// Lines that are not `data:` lines (comments, `event:` lines, blanks) are
     /// ignored. The `data: ` prefix is stripped from returned payloads.
-    pub fn push(&mut self, bytes: &str) -> Vec<String> {
-        self.buf.push_str(bytes);
+    pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+        self.buf.extend_from_slice(bytes);
         let mut payloads = Vec::new();
 
-        while let Some(newline) = self.buf.find('\n') {
-            let line: String = self.buf.drain(..=newline).collect();
+        while let Some(newline) = self.buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.buf.drain(..=newline).collect();
+            let line = String::from_utf8_lossy(&line);
             let line = line.trim_end_matches(['\r', '\n']);
             if let Some(rest) = line.strip_prefix("data:") {
                 payloads.push(rest.trim().to_string());
@@ -318,9 +322,20 @@ mod tests {
     #[test]
     fn decoder_extracts_data_payloads_across_boundaries() {
         let mut dec = SseDecoder::new();
-        assert!(dec.push("data: hel").is_empty());
-        let out = dec.push("lo\n\ndata: [DONE]\n");
+        assert!(dec.push(b"data: hel").is_empty());
+        let out = dec.push(b"lo\n\ndata: [DONE]\n");
         assert_eq!(out, vec!["hello".to_string(), "[DONE]".to_string()]);
+    }
+
+    #[test]
+    fn decoder_keeps_a_character_split_across_chunks() {
+        // The network splits bytes, not characters: "é" is two bytes, and a
+        // chunk boundary between them must not turn it into U+FFFD.
+        let line = "data: café 🐂\n".as_bytes();
+        let split = line.iter().position(|&b| b == 0xC3).unwrap() + 1;
+        let mut dec = SseDecoder::new();
+        assert!(dec.push(&line[..split]).is_empty());
+        assert_eq!(dec.push(&line[split..]), vec!["café 🐂".to_string()]);
     }
 
     #[test]

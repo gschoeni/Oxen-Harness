@@ -135,7 +135,7 @@ impl OxenClient {
         let mut stream = resp.bytes_stream();
 
         let mut cancelled = false;
-        loop {
+        'read: loop {
             // The long wait lives here — a local server processing a large prompt
             // may not emit a byte for many seconds. `select!` lets a stop break
             // out of that pending read immediately instead of hanging on it.
@@ -150,13 +150,14 @@ impl OxenClient {
                     None => break,
                 },
             };
-            let text = String::from_utf8_lossy(&bytes);
-            for payload in decoder.push(&text) {
+            for payload in decoder.push(&bytes) {
                 for event in assembler.accept(&payload) {
                     on_event(&event);
                 }
+                // `[DONE]` ends the reply; a keep-alive server may hold the
+                // connection open after it, so stop reading rather than wait.
                 if assembler.is_done() {
-                    break;
+                    break 'read;
                 }
             }
         }
@@ -380,6 +381,42 @@ mod tests {
         assert_eq!(assembled.content, "Hello ox");
         assert_eq!(assembled.finish_reason.as_deref(), Some("stop"));
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn stream_chat_returns_at_done_without_waiting_for_the_connection_to_close() {
+        // A keep-alive server may hold the connection open after `[DONE]`.
+        // The sentinel ends the reply, so the client must stop reading there.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 64 * 1024];
+            let _ = sock.read(&mut buf).await.unwrap();
+            let body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ox\"}}]}\n\n\
+                        data: [DONE]\n\n";
+            let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+                        transfer-encoding: chunked\r\n\r\n";
+            let chunk = format!("{:x}\r\n{body}\r\n", body.len());
+            sock.write_all(head.as_bytes()).await.unwrap();
+            sock.write_all(chunk.as_bytes()).await.unwrap();
+            // Never send the terminating chunk: hold the socket open.
+            std::future::pending::<()>().await;
+        });
+
+        let client = OxenClient::new(url, "sk-test", "claude-opus-4-8");
+        let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
+        let assembled = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.stream_chat(&req, &CancellationToken::new(), |_| {}),
+        )
+        .await
+        .expect("stream_chat kept reading after [DONE]")
+        .unwrap();
+        server.abort();
+
+        assert_eq!(assembled.content, "ox");
     }
 
     #[tokio::test]
