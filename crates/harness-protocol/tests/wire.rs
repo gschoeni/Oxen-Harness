@@ -859,3 +859,69 @@ fn json_schema_generates() {
     assert!(text.contains("agent.token"));
     assert!(schemars::schema_for!(SessionInfo).as_value().is_object());
 }
+
+/// `kind()` spells every wire tag a second time, by hand. Build the smallest
+/// valid instance of each variant from the JSON Schema — so a new variant is
+/// covered without anyone listing it here — and check that `kind()` names the
+/// same tag serde writes.
+#[test]
+fn kind_matches_the_serialized_tag_for_every_variant() {
+    use serde_json::Value;
+
+    fn minimal(schema: &Value, defs: &Value) -> Value {
+        if let Some(name) = schema["$ref"].as_str() {
+            let name = name.trim_start_matches("#/$defs/");
+            return minimal(&defs[name], defs);
+        }
+        if let Some(value) = schema.get("const") {
+            return value.clone();
+        }
+        if let Some(first) = schema["enum"].as_array().and_then(|e| e.first()) {
+            return first.clone();
+        }
+        for key in ["oneOf", "anyOf"] {
+            if let Some(first) = schema[key].as_array().and_then(|b| b.first()) {
+                return minimal(first, defs);
+            }
+        }
+        let ty = match &schema["type"] {
+            Value::Array(types) => types.first().and_then(Value::as_str),
+            other => other.as_str(),
+        };
+        match ty {
+            Some("object") => {
+                let mut object = serde_json::Map::new();
+                for field in schema["required"].as_array().into_iter().flatten() {
+                    let field = field.as_str().expect("required names are strings");
+                    object.insert(field.into(), minimal(&schema["properties"][field], defs));
+                }
+                Value::Object(object)
+            }
+            Some("array") => Value::Array(Vec::new()),
+            Some("string") => Value::String(String::new()),
+            Some("integer") | Some("number") => Value::from(0),
+            Some("boolean") => Value::Bool(false),
+            _ => Value::Null,
+        }
+    }
+
+    let schema = schemars::schema_for!(ProtocolEvent).to_value();
+    let variants = schema["oneOf"]
+        .as_array()
+        .expect("a tagged enum is a oneOf");
+    assert!(
+        variants.len() > 30,
+        "found only {} variants",
+        variants.len()
+    );
+    for variant in variants {
+        let tag = variant["properties"]["type"]["const"]
+            .as_str()
+            .expect("each variant pins its tag");
+        let instance = minimal(variant, &schema["$defs"]);
+        let event: ProtocolEvent = serde_json::from_value(instance)
+            .unwrap_or_else(|e| panic!("minimal `{tag}` must deserialize: {e}"));
+        assert_eq!(event.kind(), tag, "kind() disagrees with the serde tag");
+        assert_eq!(json(&event)["type"], tag);
+    }
+}
