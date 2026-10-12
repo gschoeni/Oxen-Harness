@@ -9,6 +9,10 @@ use crate::types::{ChatRequest, ChatResponse};
 use crate::{chat_completions_url, LlmError};
 use harness_core::DEFAULT_MODEL;
 
+/// How long a stream is read past `[DONE]` for the server to end the
+/// response (see [`OxenClient::stream_chat`]).
+const DONE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// A client for one Oxen.ai inference endpoint and model.
 #[derive(Debug, Clone)]
 pub struct OxenClient {
@@ -155,11 +159,37 @@ impl OxenClient {
                     on_event(&event);
                 }
                 // `[DONE]` ends the reply; a keep-alive server may hold the
-                // connection open after it, so stop reading rather than wait.
+                // connection open after it, so stop parsing rather than wait.
                 if assembler.is_done() {
                     break 'read;
                 }
             }
+        }
+
+        // The reply is complete at `[DONE]`, but the server's work may not be:
+        // a server that settles the request (billing, logging) after sending
+        // the sentinel loses that work if the client hangs up on it. Read on
+        // until the server ends the response, as the OpenAI SDKs do — bounded,
+        // so a server that holds the connection open costs at most the grace.
+        if assembler.is_done() && !cancelled {
+            // Running out the grace is not a failure: the reply is whole, and
+            // a server holding the connection open is owed no more than this.
+            tokio::time::timeout(DONE_GRACE, async {
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => return,
+                        next = stream.next() => match next {
+                            Some(Ok(_)) => {}
+                            // The end of the body, or the server dropping the
+                            // connection after the reply: either way, done.
+                            Some(Err(_)) | None => return,
+                        },
+                    }
+                }
+            })
+            .await
+            .unwrap_or(());
         }
 
         // A user stop returns whatever assembled, never an error.
@@ -408,15 +438,68 @@ mod tests {
         let client = OxenClient::new(url, "sk-test", "claude-opus-4-8");
         let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
         let assembled = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+            DONE_GRACE + std::time::Duration::from_secs(2),
             client.stream_chat(&req, &CancellationToken::new(), |_| {}),
         )
         .await
-        .expect("stream_chat kept reading after [DONE]")
+        .expect("stream_chat waited past the grace for a held-open connection")
         .unwrap();
         server.abort();
 
         assert_eq!(assembled.content, "ox");
+    }
+
+    #[tokio::test]
+    async fn stream_chat_stays_until_the_server_ends_the_response_after_done() {
+        // The hub settles a request (bills it) after sending `[DONE]`; a client
+        // that hangs up at the sentinel cancels that. The client must keep the
+        // connection until the server finishes the response.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 64 * 1024];
+            let _ = sock.read(&mut buf).await.unwrap();
+            let body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ox\"},\"finish_reason\":\"stop\"}]}\n\n\
+                        data: [DONE]\n\n";
+            let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+                        transfer-encoding: chunked\r\n\r\n";
+            sock.write_all(head.as_bytes()).await.unwrap();
+            sock.write_all(format!("{:x}\r\n{body}\r\n", body.len()).as_bytes())
+                .await
+                .unwrap();
+            // The server's post-reply work, then the end of the response.
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let sent = sock.write_all(b"0\r\n\r\n").await.is_ok();
+            let _ = finished_tx.send(sent);
+            std::future::pending::<()>().await;
+        });
+
+        let client = OxenClient::new(url, "sk-test", "claude-opus-4-8");
+        let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
+        let started = std::time::Instant::now();
+        let assembled = client
+            .stream_chat(&req, &CancellationToken::new(), |_| {})
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+
+        assert_eq!(assembled.content, "ox");
+        assert!(
+            finished_rx.await.unwrap(),
+            "the server finished its response"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_millis(300),
+            "returned before the server ended the response: {elapsed:?}"
+        );
+        assert!(
+            elapsed < DONE_GRACE,
+            "waited out the grace instead: {elapsed:?}"
+        );
+        server.abort();
     }
 
     #[tokio::test]
