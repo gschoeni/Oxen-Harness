@@ -57,4 +57,13 @@ describe("StartProjectModal", () => {
     await waitFor(() => expect(ipc.pickFolder).toHaveBeenCalledTimes(2));
     expect(screen.getByLabelText("Project name")).toHaveValue("Site");
   });
+
+  it("keeps macOS text services out of the goal box, as in the chat composer", () => {
+    open();
+    const goal = screen.getByLabelText(/Goal/);
+    expect(goal).toHaveAttribute("spellcheck", "false");
+    expect(goal).toHaveAttribute("autocorrect", "off");
+    expect(goal).toHaveAttribute("autocapitalize", "off");
+    expect(goal).toHaveAttribute("writingsuggestions", "false");
+  });
 });

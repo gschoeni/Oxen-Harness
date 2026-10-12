@@ -8,6 +8,7 @@ import {
   setDefaultProjectLocation,
   startProject,
 } from "../../lib/ipc";
+import { PROMPT_INPUT_PROPS } from "../../lib/promptInput";
 import type { Project } from "../../lib/types";
 
 export function StartProjectModal({
@@ -163,7 +164,7 @@ export function StartProjectModal({
         </label>
         <label className="project-field">
           <span>Goal <small>optional</small></span>
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What are you trying to achieve?" rows={3} />
+          <textarea {...PROMPT_INPUT_PROPS} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What are you trying to achieve?" rows={3} />
         </label>
 
         {error && <div className="project-form-error" role="alert">{error}</div>}
