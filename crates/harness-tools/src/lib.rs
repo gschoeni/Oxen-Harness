@@ -396,6 +396,11 @@ fn strip_meta(value: &mut serde_json::Value) {
                     }
                 }
             }
+            // …and `Option<Enum>` also appends `null` to the value list, which
+            // breaks chat templates that `join` the values (gpt-oss's does).
+            if let Some(values) = map.get_mut("enum").and_then(|e| e.as_array_mut()) {
+                values.retain(|v| !v.is_null());
+            }
             if let Some((values, docs)) = documented_enum(map.get("oneOf")) {
                 map.remove("oneOf");
                 map.insert("type".into(), "string".into());
@@ -1140,5 +1145,76 @@ mod tests {
             chars < 13_000,
             "default tool definitions grew to {chars} chars (budget 13000)"
         );
+    }
+
+    /// Every `enum` value list under `value`, with its JSON path.
+    fn enum_lists(
+        value: &serde_json::Value,
+        path: String,
+        out: &mut Vec<(String, Vec<serde_json::Value>)>,
+    ) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (k, v) in map {
+                    if k == "enum" {
+                        if let Some(values) = v.as_array() {
+                            out.push((path.clone(), values.clone()));
+                        }
+                    }
+                    enum_lists(v, format!("{path}.{k}"), out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (i, v) in items.iter().enumerate() {
+                    enum_lists(v, format!("{path}[{i}]"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn optional_enum_args_list_only_their_values() {
+        // Local chat templates render enums with `enum|join(...)` — gpt-oss's
+        // does — and a `null` in the list aborts every request with a template
+        // error. `Option<Enum>` derives that `null`; absence from `required`
+        // already says the argument is optional.
+        #[derive(Deserialize, schemars::JsonSchema)]
+        #[serde(rename_all = "snake_case")]
+        #[allow(dead_code)]
+        enum Speed {
+            Slow,
+            Fast,
+        }
+        #[derive(Deserialize, schemars::JsonSchema)]
+        #[allow(dead_code)]
+        struct Args {
+            speed: Option<Speed>,
+        }
+        let schema = schema_for::<Args>();
+        assert_eq!(
+            schema["properties"]["speed"]["enum"],
+            serde_json::json!(["slow", "fast"])
+        );
+    }
+
+    #[test]
+    fn default_tool_enums_are_all_strings() {
+        let workspace = Workspace::new(".").unwrap();
+        let registry = ToolRegistry::default_for_workspace(workspace);
+        let mut lists = Vec::new();
+        for def in registry.definitions() {
+            let name = def["function"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            enum_lists(&def["function"]["parameters"], name, &mut lists);
+        }
+        for (path, values) in lists {
+            assert!(
+                values.iter().all(serde_json::Value::is_string),
+                "{path} has a non-string enum value: {values:?}"
+            );
+        }
     }
 }
