@@ -17,7 +17,7 @@ const KNOWN_QUANTS: &[&str] = &[
     "IQ2_XXS", "IQ3_XXS", "Q4_K_XL", "Q2_G64", "PQ2_0", "IQ4_XS", "IQ4_NL", "IQ2_XS", "IQ3_XS",
     "IQ3_M", "IQ3_S", "IQ2_M", "Q3_K_L", "Q3_K_M", "Q3_K_S", "Q4_K_M", "Q4_K_S", "Q5_K_M",
     "Q5_K_S", "Q1_0", "Q2_0", "Q2_K", "Q6_K", "Q4_0", "Q4_1", "Q5_0", "Q5_1", "Q8_0", "BF16",
-    "F16", "F32",
+    "F16", "F32", "MXFP4",
 ];
 
 /// Published filename spellings that normalize to a canonical quant name.
@@ -343,6 +343,7 @@ fn is_auxiliary_gguf(path: &str) -> bool {
         || name.contains("-dspark-")
         || name.starts_with("dflash")
         || name.contains("-dflash-")
+        || name.starts_with("mtp-")
 }
 
 /// The GGUF filename length for an HF ref (for picking the canonical/shortest
@@ -1036,6 +1037,9 @@ mod tests {
         assert!(is_auxiliary_gguf("some/path/dflash-kquant.gguf"));
         assert!(is_auxiliary_gguf("Muse-Glimmer-30B-dflash-Q4_K_M.gguf"));
         assert!(!is_auxiliary_gguf("Qwythos-9B-Q4_K_M.gguf"));
+        // Multi-token-prediction drafters ship beside the base model.
+        assert!(is_auxiliary_gguf("mtp-Qwen3.8-27B-Q4_0.gguf"));
+        assert!(!is_auxiliary_gguf("Qwen3.8-27B-UD-Q4_K_M.gguf"));
         assert!(!is_auxiliary_gguf(
             "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf"
         ));
