@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, FolderOpen, FolderPlus, Pin } from "lucide-react";
+import { Check, FolderOpen, FolderPlus } from "lucide-react";
 import { Button, Modal } from "../../components/ui";
 import {
   getDefaultProjectLocation,
@@ -100,65 +100,57 @@ export function StartProjectModal({
   return (
     <Modal title="Start a project" onClose={onClose} wide>
       <div className="start-project-form">
-        <section className="project-location">
-          <div className="project-mode-switch" role="radiogroup" aria-label="Project folder type">
-            <button role="radio" aria-checked={mode === "new"} className={mode === "new" ? "active" : ""} onClick={() => selectMode("new")}>
-              <FolderPlus size={15} /> New folder
-            </button>
-            <button role="radio" aria-checked={mode === "existing"} className={mode === "existing" ? "active" : ""} onClick={() => selectMode("existing")}>
-              <FolderOpen size={15} /> Existing folder
-            </button>
+        <div className="project-field project-location">
+          <div className="project-location-head">
+            <span>Location</span>
+            <div className="project-mode-switch" role="radiogroup" aria-label="Project folder type">
+              <button role="radio" aria-checked={mode === "new"} className={mode === "new" ? "active" : ""} onClick={() => selectMode("new")}>
+                New folder
+              </button>
+              <button role="radio" aria-checked={mode === "existing"} className={mode === "existing" ? "active" : ""} onClick={() => selectMode("existing")}>
+                Existing folder
+              </button>
+            </div>
           </div>
 
-          <button
-            className={`project-location-picker${directory ? "" : " unset"}`}
-            onClick={() => void chooseDirectory()}
-            aria-label="Choose project folder"
-          >
-            <span className="project-location-icon">
-              {mode === "new" ? <FolderPlus size={20} /> : <FolderOpen size={20} />}
-            </span>
-            <span className="project-location-text">
-              <small>{mode === "new" ? "We’ll create" : "Project folder"}</small>
-              {directory ? (
-                <span className="project-location-path" title={mode === "new" ? joinPath(directory, trimmedName) : directory}>
-                  {mode === "new" ? (
-                    <>
-                      <span className="project-location-parent"><bdi>{withSlash(shortenHome(directory))}</bdi></span>
-                      <span className={`project-location-leaf${trimmedName ? "" : " placeholder"}`}>
-                        {trimmedName || "project-name"}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="project-location-parent"><bdi>{withSlash(shortenHome(parentOf(directory)))}</bdi></span>
-                      <span className="project-location-leaf">{baseName(directory)}</span>
-                    </>
-                  )}
-                </span>
-              ) : (
-                <span className="project-location-prompt">
-                  {mode === "new" ? "Choose where to create it…" : "Choose a folder on your computer…"}
-                </span>
-              )}
-            </span>
+          <button className="project-location-picker" onClick={() => void chooseDirectory()} aria-label="Choose project folder">
+            {mode === "new" ? <FolderPlus size={16} /> : <FolderOpen size={16} />}
+            {directory ? (
+              <span className="project-location-path" title={mode === "new" ? joinPath(directory, trimmedName) : directory}>
+                {mode === "new" ? (
+                  <>
+                    <span className="project-location-parent"><bdi>{withSlash(shortenHome(directory))}</bdi></span>
+                    <span className={`project-location-leaf${trimmedName ? "" : " placeholder"}`}>
+                      {trimmedName || "project-name"}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="project-location-parent"><bdi>{withSlash(shortenHome(parentOf(directory)))}</bdi></span>
+                    <span className="project-location-leaf">{baseName(directory)}</span>
+                  </>
+                )}
+              </span>
+            ) : (
+              <span className="project-location-prompt">
+                {mode === "new" ? "Choose where to create it…" : "Choose a folder on your computer…"}
+              </span>
+            )}
             <span className="project-location-change">{directory ? "Change" : "Browse"}</span>
           </button>
 
-          <div className="project-location-footer">
-            {mode === "existing" ? (
-              <small>Turn a codebase already on your computer into a project.</small>
-            ) : isDefault ? (
-              <span className="project-location-default"><Check size={13} /> Default location</span>
-            ) : directory ? (
-              <Button size="sm" variant="outline" disabled={savingDefault} onClick={() => void makeDefault()}>
-                <Pin size={13} /> {savingDefault ? "Saving…" : "Use as default"}
-              </Button>
-            ) : (
-              <small>Pick a parent folder; you can save it as the default for next time.</small>
-            )}
-          </div>
-        </section>
+          {mode === "new" && directory && (
+            <div className="project-field-hint project-location-default">
+              {isDefault ? (
+                <><Check size={12} /> Default location</>
+              ) : (
+                <button disabled={savingDefault} onClick={() => void makeDefault()}>
+                  {savingDefault ? "Saving…" : "Make this the default location"}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
 
         <label className="project-field">
           <span>Project name</span>
