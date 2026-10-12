@@ -19,8 +19,6 @@ export interface UiState {
   heroGame?: string;
   /** Dock layout: per-side widths + collapsed sides. */
   docks?: { widths: Record<string, number>; collapsed: Record<string, boolean> };
-  /** Home's lens: "cards" | "media". */
-  homeView?: string;
   /** Project-cards ordering: "recent" | "name". */
   projectsSort?: string;
   /** Whether the code editor + diff viewer wrap long lines. */
@@ -44,7 +42,6 @@ const LEGACY_KEYS: Record<keyof UiState, string> = {
   mode: "oxen-ui-mode",
   heroGame: "oxen-hero-game",
   docks: "oxen-docks",
-  homeView: "oxen-harness.home-view",
   projectsSort: "oxen-harness.projects-sort",
   // Never lived in localStorage (born after the ui.json move).
   editorWrap: "oxen-editor-wrap",

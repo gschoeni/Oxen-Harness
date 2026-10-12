@@ -6,7 +6,6 @@ vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { HomePage } from "./HomePage";
 import { useStore } from "../../lib/store";
-import { getUi, setUi } from "../../lib/uiState";
 import * as ipc from "../../lib/ipc";
 import { resetAll } from "../../test/utils";
 import type { Project, ThreadEntry, ThreadSnapshot } from "../../lib/types";
@@ -60,7 +59,6 @@ beforeEach(() => {
 
 describe("Home", () => {
   it("opens on the cards, one per project, wearing its vital signs", () => {
-    setUi("homeView", undefined); // a fresh install has no lens habit yet
     seed(
       {
         entries: [
@@ -132,55 +130,18 @@ describe("Home", () => {
     expect(useStore.getState().homeOpen).toBe(false);
   });
 
+  it("shows only the project cards, with no media lens toggle", () => {
+    seed({ entries: [entry()] }, [project("/work/app", "App")]);
+    render(<HomePage />);
+    expect(screen.getByText("App")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Home view" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /media/i })).toBeNull();
+  });
+
   it("offers the first project when there is nothing at all", () => {
     seed({ entries: [] });
     render(<HomePage />);
     expect(screen.getByText("Start your first project")).toBeTruthy();
-  });
-
-  it("has a media lens that lists projects' generations and sticks", async () => {
-    const app = project("/work/app", "app");
-    seed({ entries: [entry()] }, [app]);
-    vi.mocked(ipc.listMedia).mockResolvedValue([
-      {
-        id: "g1",
-        session: "s1",
-        turn_seq: null,
-        call_id: null,
-        batch: "b",
-        index: 1,
-        kind: "image",
-        model: "flux",
-        prompt: "an ox",
-        params: {},
-        refs: [],
-        path: "generations/a.png",
-        poster: null,
-        bytes: 1,
-        width: 4,
-        height: 2,
-        duration_secs: null,
-        cost_usd: 0.01,
-        status: "succeeded",
-        error: null,
-        created_at: NOW,
-        completed_at: null,
-        parent: null,
-        seed: null,
-        sources: [],
-        agent_prompt: null,
-        provider: null,
-      },
-    ]);
-    render(<HomePage />);
-    await userEvent.click(await screen.findByRole("button", { name: /media/i }));
-    expect(getUi("homeView")).toBe("media");
-    expect(await screen.findByTitle("an ox")).toBeInTheDocument();
-    expect(screen.getByText("1 generation")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: /cards/i }));
-    expect(getUi("homeView")).toBe("cards");
-    expect(screen.getByText("app")).toBeTruthy();
   });
 
   it("follows store navigation while mounted — the titlebar buttons are never dead", async () => {

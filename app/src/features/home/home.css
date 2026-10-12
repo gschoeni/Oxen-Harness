@@ -1,4 +1,4 @@
-/* Home — the app's front door: the project cards (or the media lens) under
+/* Home — the app's front door: the project cards under
  * one header. Every color, face, and corner comes from the theme tokens. */
 
 .home-overlay {
@@ -13,7 +13,6 @@
 }
 
 .home-page {
-  /* One width for both lenses — the page doesn't breathe when you switch. */
   width: min(960px, calc(100% - 48px));
   margin: 0 auto;
   padding: var(--space-6) 0 var(--space-8);
@@ -51,8 +50,7 @@
   gap: var(--space-2);
 }
 
-/* The lens toggle and the cards' sort share one pill treatment. */
-.home-view-toggle,
+/* The cards' sort pill. */
 .projects-sort {
   display: inline-flex;
   padding: var(--space-half);
@@ -61,7 +59,6 @@
   border-radius: var(--radius-pill);
 }
 
-.home-view-option,
 .projects-sort-option {
   display: inline-flex;
   align-items: center;
@@ -80,12 +77,10 @@
   letter-spacing: var(--label-spacing);
 }
 
-.home-view-option:hover,
 .projects-sort-option:hover {
   color: var(--text);
 }
 
-.home-view-option.selected,
 .projects-sort-option.selected {
   color: var(--text);
   background: var(--surface-hover);

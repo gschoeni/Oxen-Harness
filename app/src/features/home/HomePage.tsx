@@ -1,14 +1,11 @@
 // Home — the app's front door: one card per project (wearing its vital
-// signs), the media lens across projects, and the way into any project's
-// page. Which project page is open is the store's decision.
+// signs) and the way into any project's page. Which project page is open is the store's decision.
 
 import { useEffect, useState } from "react";
-import { FolderPlus, Images, LayoutGrid, Settings2 } from "lucide-react";
+import { FolderPlus, Settings2 } from "lucide-react";
 import { Button } from "../../components/ui";
 import { useStore } from "../../lib/store";
 import type { Project } from "../../lib/types";
-import { getUi, setUi } from "../../lib/uiState";
-import { MediaLens } from "../media/MediaLens";
 import { ProjectCards } from "../projects/ProjectCards";
 import { ProjectHome } from "../projects/ProjectHome";
 import { StartProjectModal } from "../projects/StartProjectModal";
@@ -86,14 +83,6 @@ export function HomePage() {
   );
 }
 
-/** Home's two lenses: the project cards (the default) and media (every
- *  project's generated images and clips). Persisted — a lens is a habit. */
-type HomeView = "cards" | "media";
-
-function savedView(): HomeView {
-  return getUi("homeView") === "media" ? "media" : "cards";
-}
-
 function Overview({
   onOpenProject,
   onStartProject,
@@ -102,13 +91,6 @@ function Overview({
   onStartProject: () => void;
 }) {
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
-  const projects = useStore((s) => s.projects);
-  const [view, setView] = useState<HomeView>(savedView);
-
-  function changeView(next: HomeView) {
-    setView(next);
-    setUi("homeView", next);
-  }
 
   return (
     <main className="home-page">
@@ -118,24 +100,6 @@ function Overview({
           <h1 className="home-title">Home</h1>
         </div>
         <div className="home-header-actions">
-          <div className="home-view-toggle" role="group" aria-label="Home view">
-            <button
-              className={`home-view-option ${view === "cards" ? "selected" : ""}`}
-              aria-pressed={view === "cards"}
-              title="Cards — one card per project"
-              onClick={() => changeView("cards")}
-            >
-              <LayoutGrid size={13} /> cards
-            </button>
-            <button
-              className={`home-view-option ${view === "media" ? "selected" : ""}`}
-              aria-pressed={view === "media"}
-              title="Media — generated images and clips across projects"
-              onClick={() => changeView("media")}
-            >
-              <Images size={13} /> media
-            </button>
-          </div>
           <Button variant="ghost" onClick={() => setSettingsOpen(true)}>
             <Settings2 size={16} /> Settings
           </Button>
@@ -145,11 +109,7 @@ function Overview({
         </div>
       </header>
 
-      {view === "media" ? (
-        <MediaLens projects={projects} />
-      ) : (
-        <ProjectCards onOpenProject={onOpenProject} />
-      )}
+      <ProjectCards onOpenProject={onOpenProject} />
     </main>
   );
 }
