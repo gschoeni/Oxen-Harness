@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Check, FolderOpen, FolderPlus } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Check, FolderOpen, FolderPlus, Info } from "lucide-react";
 import { Button, Modal } from "../../components/ui";
 import {
   getDefaultProjectLocation,
@@ -29,6 +29,8 @@ export function StartProjectModal({
   const [error, setError] = useState("");
   // An existing folder names the project until the user types their own name.
   const nameEdited = useRef(false);
+  const goalId = useId();
+  const [goalInfoOpen, setGoalInfoOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -162,10 +164,44 @@ export function StartProjectModal({
             placeholder="Demo App"
           />
         </label>
-        <label className="project-field">
-          <span>Goal <small>optional</small></span>
-          <textarea {...PROMPT_INPUT_PROPS} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What are you trying to achieve?" rows={3} />
-        </label>
+        {/* A div, not a label: the info button would otherwise become the
+            label's control and steal the textarea's name. */}
+        <div className="project-field">
+          <span className="project-goal-label">
+            <label htmlFor={goalId}>Goal</label>
+            <small>optional</small>
+            <button
+              type="button"
+              className={`project-goal-info${goalInfoOpen ? " open" : ""}`}
+              aria-label="What is the goal for?"
+              aria-expanded={goalInfoOpen}
+              aria-controls={`${goalId}-info`}
+              onClick={() => setGoalInfoOpen((open) => !open)}
+            >
+              <Info size={14} />
+            </button>
+          </span>
+          <small id={`${goalId}-hint`} className="project-field-hint">
+            A sentence or two on what you’re building. The agent reads it in every chat.
+          </small>
+          {goalInfoOpen && (
+            <div id={`${goalId}-info`} className="project-goal-note">
+              Your goal is saved with the project and added to the agent’s instructions at the
+              start of every chat, so it knows what you’re working toward without being told each
+              time. It also shows on the project’s card, and you can change it later on the
+              project page.
+            </div>
+          )}
+          <textarea
+            id={goalId}
+            aria-describedby={`${goalId}-hint`}
+            {...PROMPT_INPUT_PROPS}
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder="e.g. A habit tracker that syncs between my phone and laptop"
+            rows={3}
+          />
+        </div>
 
         {error && <div className="project-form-error" role="alert">{error}</div>}
         <div className="project-form-actions">

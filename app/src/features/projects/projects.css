@@ -86,6 +86,31 @@
 .project-field input:focus,
 .project-field textarea:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .project-field-hint { color: var(--text-tertiary); font-size: var(--text-xs); line-height: 1.45; }
+.project-goal-label { display: flex; align-items: center; gap: var(--space-2); }
+.project-goal-label > label { color: var(--text); font-size: var(--text-sm); font-weight: 600; }
+.project-goal-label > small { margin: 0; color: var(--text-tertiary); font-size: var(--text-xs); font-weight: 400; }
+.project-goal-info {
+  display: grid;
+  place-items: center;
+  padding: var(--space-half);
+  color: var(--text-tertiary);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+.project-goal-info:hover,
+.project-goal-info.open { color: var(--accent); }
+.project-goal-note {
+  padding: var(--space-3);
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
 .project-form-error { color: var(--danger); background: var(--danger-soft); border-radius: var(--radius-sm); padding: var(--space-3); font-size: var(--text-sm); }
 .project-form-actions { display: flex; justify-content: flex-end; gap: var(--space-3); padding-top: var(--space-2); }
 

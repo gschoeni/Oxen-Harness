@@ -66,4 +66,20 @@ describe("StartProjectModal", () => {
     expect(goal).toHaveAttribute("autocapitalize", "off");
     expect(goal).toHaveAttribute("writingsuggestions", "false");
   });
+
+  it("explains what the goal is for, with more behind the info button", async () => {
+    open();
+    const goal = screen.getByRole("textbox", { name: /Goal/ });
+    expect(goal).toHaveAccessibleDescription(/agent reads it in every chat/);
+
+    const info = screen.getByRole("button", { name: "What is the goal for?" });
+    expect(info).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/added to the agent’s instructions/)).toBeNull();
+    await userEvent.click(info);
+    expect(info).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/added to the agent’s instructions/)).toBeTruthy();
+    await userEvent.click(info);
+    expect(screen.queryByText(/added to the agent’s instructions/)).toBeNull();
+  });
 });
+
