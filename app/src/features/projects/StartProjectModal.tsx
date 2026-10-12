@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Folder, FolderOpen, Pin } from "lucide-react";
+import { Check, FolderOpen, FolderPlus, Pin } from "lucide-react";
 import { Button, Modal } from "../../components/ui";
 import {
   getDefaultProjectLocation,
@@ -26,6 +26,8 @@ export function StartProjectModal({
   const [saving, setSaving] = useState(false);
   const [savingDefault, setSavingDefault] = useState(false);
   const [error, setError] = useState("");
+  // An existing folder names the project until the user types their own name.
+  const nameEdited = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -50,7 +52,9 @@ export function StartProjectModal({
 
   async function chooseDirectory() {
     const selected = mode === "new" ? await pickProjectParent() : await pickFolder();
-    if (selected) setDirectory(selected);
+    if (!selected) return;
+    setDirectory(selected);
+    if (mode === "existing" && !nameEdited.current) setName(baseName(selected));
   }
 
   async function makeDefault() {
@@ -90,61 +94,118 @@ export function StartProjectModal({
     }
   }
 
+  const trimmedName = name.trim();
+  const isDefault = mode === "new" && !!directory && directory === defaultDirectory;
+
   return (
     <Modal title="Start a project" onClose={onClose} wide>
       <div className="start-project-form">
-        <div className="project-mode-grid" role="group" aria-label="Project folder type">
-          <button className={mode === "new" ? "selected" : ""} onClick={() => selectMode("new")}>
-            <Folder size={20} />
-            <span><strong>Create a new folder</strong><small>Choose a location and we’ll create it from the project name.</small></span>
+        <section className="project-location">
+          <div className="project-mode-switch" role="radiogroup" aria-label="Project folder type">
+            <button role="radio" aria-checked={mode === "new"} className={mode === "new" ? "active" : ""} onClick={() => selectMode("new")}>
+              <FolderPlus size={15} /> New folder
+            </button>
+            <button role="radio" aria-checked={mode === "existing"} className={mode === "existing" ? "active" : ""} onClick={() => selectMode("existing")}>
+              <FolderOpen size={15} /> Existing folder
+            </button>
+          </div>
+
+          <button
+            className={`project-location-picker${directory ? "" : " unset"}`}
+            onClick={() => void chooseDirectory()}
+            aria-label="Choose project folder"
+          >
+            <span className="project-location-icon">
+              {mode === "new" ? <FolderPlus size={20} /> : <FolderOpen size={20} />}
+            </span>
+            <span className="project-location-text">
+              <small>{mode === "new" ? "We’ll create" : "Project folder"}</small>
+              {directory ? (
+                <span className="project-location-path" title={mode === "new" ? joinPath(directory, trimmedName) : directory}>
+                  {mode === "new" ? (
+                    <>
+                      <span className="project-location-parent"><bdi>{withSlash(shortenHome(directory))}</bdi></span>
+                      <span className={`project-location-leaf${trimmedName ? "" : " placeholder"}`}>
+                        {trimmedName || "project-name"}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="project-location-parent"><bdi>{withSlash(shortenHome(parentOf(directory)))}</bdi></span>
+                      <span className="project-location-leaf">{baseName(directory)}</span>
+                    </>
+                  )}
+                </span>
+              ) : (
+                <span className="project-location-prompt">
+                  {mode === "new" ? "Choose where to create it…" : "Choose a folder on your computer…"}
+                </span>
+              )}
+            </span>
+            <span className="project-location-change">{directory ? "Change" : "Browse"}</span>
           </button>
-          <button className={mode === "existing" ? "selected" : ""} onClick={() => selectMode("existing")}>
-            <FolderOpen size={20} />
-            <span><strong>Use existing folder</strong><small>Turn a codebase already on your computer into a project.</small></span>
-          </button>
-        </div>
+
+          <div className="project-location-footer">
+            {mode === "existing" ? (
+              <small>Turn a codebase already on your computer into a project.</small>
+            ) : isDefault ? (
+              <span className="project-location-default"><Check size={13} /> Default location</span>
+            ) : directory ? (
+              <Button size="sm" variant="outline" disabled={savingDefault} onClick={() => void makeDefault()}>
+                <Pin size={13} /> {savingDefault ? "Saving…" : "Use as default"}
+              </Button>
+            ) : (
+              <small>Pick a parent folder; you can save it as the default for next time.</small>
+            )}
+          </div>
+        </section>
 
         <label className="project-field">
           <span>Project name</span>
-          <input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Demo App" />
+          <input
+            autoFocus
+            value={name}
+            onChange={(event) => { nameEdited.current = true; setName(event.target.value); }}
+            placeholder="Demo App"
+          />
         </label>
         <label className="project-field">
-          <span>Project goal</span>
+          <span>Goal <small>optional</small></span>
           <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What are you trying to achieve?" rows={3} />
         </label>
-
-        <div className="project-field">
-          <span>{mode === "new" ? "Create inside" : "Project folder"}</span>
-          <button className="project-folder-picker" onClick={() => void chooseDirectory()} aria-label="Choose project folder">
-            <FolderOpen size={17} />
-            <span>{directory || (mode === "new" ? "Choose a parent folder…" : "Choose the project folder…")}</span>
-          </button>
-          {mode === "new" && (
-            <div className="project-location-default">
-              {directory && directory === defaultDirectory ? (
-                <span><Check size={14} /> Default project location</span>
-              ) : directory ? (
-                <Button size="sm" disabled={savingDefault} onClick={() => void makeDefault()}>
-                  <Pin size={14} /> {savingDefault ? "Saving…" : "Use as default"}
-                </Button>
-              ) : (
-                <small>Choose a parent folder, then save it as the default for future projects.</small>
-              )}
-            </div>
-          )}
-          {mode === "new" && directory && name.trim() && (
-            <small className="project-created-path">New folder: {directory}/{name.trim()}</small>
-          )}
-        </div>
 
         {error && <div className="project-form-error" role="alert">{error}</div>}
         <div className="project-form-actions">
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!name.trim() || !directory || saving || savingDefault} onClick={() => void submit()}>
+          <Button variant="primary" disabled={!trimmedName || !directory || saving || savingDefault} onClick={() => void submit()}>
             {saving ? "Creating…" : "Create project"}
           </Button>
         </div>
       </div>
     </Modal>
   );
+}
+
+/** Display-only: `/Users/me/Code` reads as `~/Code`. Paths sent to the backend stay absolute. */
+function shortenHome(path: string): string {
+  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+}
+
+function withSlash(path: string): string {
+  return path.endsWith("/") ? path : `${path}/`;
+}
+
+function joinPath(parent: string, leaf: string): string {
+  return leaf ? `${withSlash(parent)}${leaf}` : parent;
+}
+
+function baseName(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1) || trimmed;
+}
+
+function parentOf(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  const cut = trimmed.lastIndexOf("/");
+  return cut > 0 ? trimmed.slice(0, cut) : "/";
 }
