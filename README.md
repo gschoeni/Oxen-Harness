@@ -9,13 +9,43 @@ An open source, hackable agentic coding harness, built in Rust and powered by [O
   <img src="assets/oxen-trail-cli.png" alt="The Oxen Trail — the oxen-harness CLI welcome screen" width="760">
 </p>
 
+## Install
+
+One command installs both the `oxen-harness` CLI and the desktop app from the
+[latest GitHub releases](https://github.com/gschoeni/Oxen-Harness/releases)
+(macOS and Linux):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gschoeni/Oxen-Harness/main/install.sh | sh
+```
+
+The CLI goes to `~/.local/bin/oxen-harness`. The desktop app goes to
+`/Applications/oxen-harness.app` on macOS, or `~/.local/bin/oxen-harness-app`
+(an AppImage) on Linux x86_64. Want only one of them? Add
+`-s -- --cli-only` or `-s -- --app-only` after `sh`. Re-run the same command to
+upgrade.
+
+**Windows:** download `oxen-harness_<version>_x64-setup.exe` (desktop app) and
+`oxen-harness-<version>-x86_64-pc-windows-msvc.zip` (CLI) from the
+[releases page](https://github.com/gschoeni/Oxen-Harness/releases).
+
 ## Get started
 
-All you need is an [Oxen.ai](https://oxen.ai) API key
+All you need is an [Oxen.ai](https://oxen.ai) API key. Save it once and both
+the CLI and the desktop app will pick it up:
+
 ```bash
-git clone https://github.com/gschoeni/oxen-harness && cd oxen-harness
-export OXEN_API_KEY=...
-cargo run -p harness-cli
+mkdir -p ~/.oxen-harness && echo 'OXEN_API_KEY=...' >> ~/.oxen-harness/.env
+```
+
+(`export OXEN_API_KEY=...` works too. If no key is set, the desktop app asks
+for one.)
+
+Then, from any project folder:
+
+```bash
+oxen-harness          # chat with the agent right here in the terminal
+oxen-harness ui .     # open the desktop app on this folder
 ```
 
 That's it — you're on the trail.
@@ -24,8 +54,19 @@ That's it — you're on the trail.
 (see [Running models locally](#running-models-locally-llamacpp)):
 
 ```bash
+oxen-harness --local qwen3-0.6b
+```
+
+### Building from source
+
+```bash
+git clone https://github.com/gschoeni/oxen-harness && cd oxen-harness
+export OXEN_API_KEY=...
+cargo run -p harness-cli            # the CLI
 cargo run -p harness-cli -- --local qwen3-0.6b
 ```
+
+To run the desktop app from source, see [`app/README.md`](app/README.md).
 
 `oxen-harness` runs an agent loop against any model exposed through the Oxen.ai OpenAI-compatible chat completions API, with first-class tool calling for editing code, running commands, and more. Every turn is persisted so you can later export your sessions and fine-tune a model on your own coding traces.
 

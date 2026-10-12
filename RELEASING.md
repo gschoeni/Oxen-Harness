@@ -121,6 +121,14 @@ that name, and the Linux packages would otherwise collide with it on PATH.
 `oxen-harness ui [dir]` relies on this name (and the `ai.oxen.harness` bundle
 id on macOS) to find and launch the installed app.
 
+The root **`install.sh`** (the README's `curl … | sh`) installs from these
+releases: it picks the newest published `cli-v*` and `app-v*` tags (drafts are
+invisible to it, so an app release reaches users only once you publish it) and
+downloads assets by name — `oxen-harness-<version>-<target>.tar.gz` + `.sha256`,
+`oxen-harness_{aarch64,x64}.app.tar.gz`, and
+`oxen-harness_<version>_amd64.AppImage`. Renaming an asset in either workflow
+means updating the script too.
+
 ## Code signing (optional, macOS)
 
 Without secrets configured, macOS bundles are ad-hoc signed — users must

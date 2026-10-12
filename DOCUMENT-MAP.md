@@ -19,6 +19,7 @@ oxen-harness/
   CONTRIBUTING.md            — Contributor front door: orientation, build/verify, what a good change looks like.
   README.md                  — Public-facing repo README.
   LICENSE                    — Apache-2.0.
+  install.sh                 — `curl … | sh` installer: latest CLI + desktop app from GitHub releases.
   Cargo.toml                 — Cargo workspace manifest.
   rust-toolchain.toml        — Pinned toolchain + components.
   crates/
