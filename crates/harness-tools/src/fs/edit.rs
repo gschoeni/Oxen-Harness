@@ -106,6 +106,19 @@ impl EditFileArgs {
     /// combined work is a guess. Pinned by the model-dialects corpus test.
     pub fn replacements(self) -> Result<Vec<Replacement>, ToolError> {
         let edits = self.edits.unwrap_or_default();
+        // A lone `old_string` is a half-sent pair; say which half, or the
+        // model just resends the same call.
+        if edits.is_empty() && self.new_string.is_none() {
+            if let Some(old) = &self.old_string {
+                if !old.is_empty() {
+                    return Err(ToolError::InvalidArguments(
+                        "`new_string` is missing: send the replacement text as `new_string` \
+                         alongside `old_string` (an empty `new_string` deletes the match)"
+                            .into(),
+                    ));
+                }
+            }
+        }
         let pair = match (self.old_string, self.new_string) {
             // A both-empty pair is the unused half of the schema, not a
             // request to replace nothing with nothing.

@@ -67,3 +67,20 @@ fn edit_file_two_populated_forms_is_a_teaching_error() {
     };
     assert!(err.contains("put every change in `edits`"), "{err}");
 }
+
+/// Oct 12, 2026 — gpt-oss-20b (local, MXFP4) sent a lone `old_string` six
+/// times in a row. The generic "needs either `edits` or both …" error never
+/// told it which half was missing, so it repeated the same call until the
+/// loop guard stopped it.
+#[test]
+fn edit_file_pair_missing_new_string_names_the_missing_field() {
+    let args: EditFileArgs = serde_json::from_str(
+        r#"{"path":"calc.py","old_string":"return sum(price for price, qty in items)","replace_all":false}"#,
+    )
+    .unwrap();
+    let err = match args.replacements() {
+        Ok(_) => panic!("a pair without `new_string` has no replacement text"),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("`new_string` is missing"), "{err}");
+}
