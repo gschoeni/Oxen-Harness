@@ -115,6 +115,10 @@ struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 enum TopCommand {
+    /// Save an API key for an Oxen host (default hub.oxen.ai) to the oxen CLI's
+    /// auth config, and point the harness at that host. Prompts for the key
+    /// when --api-key is left out; keeps an existing key unless --force.
+    Config(commands::config::ConfigArgs),
     /// Manage local models run with llama.cpp (list / pull / remove / path).
     Models {
         #[command(subcommand)]
@@ -207,6 +211,7 @@ async fn main() -> Result<()> {
         Some(TopCommand::Trace { action }) => return commands::trace::run_trace(action, &ui),
         Some(TopCommand::Oxen { action }) => return commands::oxen::run_oxen(action, &ui),
         Some(TopCommand::Project { action }) => return commands::project::run_project(action, &ui),
+        Some(TopCommand::Config(args)) => return commands::config::run_config(args, &ui),
         Some(TopCommand::Ui {
             path,
             gallery,

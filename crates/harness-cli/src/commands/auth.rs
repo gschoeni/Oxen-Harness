@@ -26,6 +26,10 @@ use harness_llm::OxenClient;
 use crate::picker::{card_input, CardInput, CardInputSpec};
 use crate::theme::Ui;
 
+/// Where `/auth` and the startup prompt persist a key (see
+/// `harness_runtime::connection::set_oxen_key`).
+const HARNESS_KEY_FILE: &str = "~/.oxen-harness/.env";
+
 /// The parsed forms of `/auth`'s argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AuthArgs {
@@ -91,7 +95,7 @@ pub(crate) fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> R
                 .as_deref()
                 .map(display_host)
                 .unwrap_or_else(|| current_host.clone());
-            let key = match read_masked_key(ui, &key_host)? {
+            let key = match read_masked_key(ui, &key_host, HARNESS_KEY_FILE)? {
                 CardInput::Cancelled => return cancelled(ui),
                 CardInput::Skipped => None,
                 CardInput::Entered(k) => Some(k),
@@ -219,7 +223,7 @@ pub(crate) fn prompt_for_missing_key(ui: &Ui, base_url: &str) -> Option<String> 
         ui.accent("🔑"),
         ui.cream(&format!("No API key found for {host}."))
     );
-    let key = read_masked_key(ui, &host)
+    let key = read_masked_key(ui, &host, HARNESS_KEY_FILE)
         .ok()
         .and_then(CardInput::entered)?;
     match harness_runtime::connection::set_oxen_key(&key) {
@@ -275,17 +279,18 @@ fn read_base_url(ui: &Ui, current_base: &str) -> io::Result<CardInput> {
 /// Read an API key with masked echo through the shared input card
 /// ([`crate::picker::card_input`]): every character renders as `•`, and the
 /// collapsed echo line reports only the entered length — the key never lands
-/// in the terminal scrollback.
-fn read_masked_key(ui: &Ui, host: &str) -> io::Result<CardInput> {
+/// in the terminal scrollback. `stored_in` names the file the key will be
+/// saved to, for the card's help line.
+pub(crate) fn read_masked_key(ui: &Ui, host: &str, stored_in: &str) -> io::Result<CardInput> {
     let title = format!("Paste your API key for {host}");
     // Only Oxen servers have a /settings page to point at; other providers
     // (OpenRouter, OpenAI, …) just get told where the key is stored.
     let help = [if host.ends_with("oxen.ai") {
-        format!("Get one at https://{host}/settings — stored in ~/.oxen-harness/.env")
+        format!("Get one at https://{host}/settings — stored in {stored_in}")
     } else if host.starts_with("localhost") || host.starts_with("127.0.0.1") {
-        format!("Get one at http://{host}/settings — stored in ~/.oxen-harness/.env")
+        format!("Get one at http://{host}/settings — stored in {stored_in}")
     } else {
-        "Stored in ~/.oxen-harness/.env".to_string()
+        format!("Stored in {stored_in}")
     }];
     card_input(
         ui,

@@ -169,10 +169,199 @@ fn token_from_file(path: &Path, host: &str) -> Result<String, LlmError> {
         })
 }
 
+/// The Oxen auth config file the key lookup reads (and [`save_api_key`]
+/// writes): `$OXEN_CONFIG_DIR/auth_config.toml`, else
+/// `~/.config/oxen/auth_config.toml`.
+pub fn auth_config_path() -> Option<PathBuf> {
+    oxen_config_dir().map(|dir| dir.join(AUTH_CONFIG_FILENAME))
+}
+
+/// The key saved for `host` in the auth config, ignoring `OXEN_API_KEY` —
+/// "is this host configured?", not "which key will a request use?". A missing
+/// file or host entry is `Ok(None)`; an unreadable or malformed file is an
+/// error, so a broken config never reads as "not configured yet".
+pub fn configured_api_key(host: &str) -> Result<Option<String>, LlmError> {
+    let path = auth_config_path().ok_or_else(|| {
+        LlmError::Auth("could not determine the home directory for Oxen config".into())
+    })?;
+    configured_api_key_at(&path, host)
+}
+
+fn configured_api_key_at(path: &Path, host: &str) -> Result<Option<String>, LlmError> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(LlmError::Auth(format!(
+                "could not read {}: {e}",
+                path.display()
+            )))
+        }
+    };
+    let config: AuthConfig = toml::from_str(&contents)
+        .map_err(|e| LlmError::Auth(format!("could not parse {}: {e}", path.display())))?;
+    Ok(config
+        .host_configs
+        .into_iter()
+        .find(|h| h.host == host)
+        .and_then(|h| h.auth_token)
+        .filter(|t| !t.trim().is_empty()))
+}
+
+/// Save `key` as `host`'s token in the auth config — the file the `oxen` CLI
+/// writes on login — replacing that host's entry if there is one and leaving
+/// every other host and setting as it was. Creates the file (and directory)
+/// when missing; the file is written owner-only, since it holds secrets.
+/// Returns the path written.
+pub fn save_api_key(host: &str, key: &str) -> Result<PathBuf, LlmError> {
+    let path = auth_config_path().ok_or_else(|| {
+        LlmError::Auth("could not determine the home directory for Oxen config".into())
+    })?;
+    save_api_key_at(&path, host, key)?;
+    Ok(path)
+}
+
+fn save_api_key_at(path: &Path, host: &str, key: &str) -> Result<(), LlmError> {
+    let (host, key) = (host.trim(), key.trim());
+    if host.is_empty() || key.is_empty() {
+        return Err(LlmError::Auth(
+            "both a host and an API key are needed".into(),
+        ));
+    }
+    let fail = |what: &str, e: &dyn std::fmt::Display| {
+        LlmError::Auth(format!("could not {what} {}: {e}", path.display()))
+    };
+    // A generic table rather than [`AuthConfig`], so fields this crate doesn't
+    // model survive the rewrite.
+    let mut doc: toml::Table = match std::fs::read_to_string(path) {
+        Ok(contents) => toml::from_str(&contents).map_err(|e| fail("parse", &e))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+        Err(e) => return Err(fail("read", &e)),
+    };
+    doc.entry("default_host")
+        .or_insert_with(|| DEFAULT_OXEN_HOST.into());
+    let configs = doc
+        .entry("host_configs")
+        .or_insert_with(|| toml::Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| fail("update", &"`host_configs` is not a list"))?;
+    let existing = configs
+        .iter_mut()
+        .filter_map(toml::Value::as_table_mut)
+        .find(|entry| entry.get("host").and_then(toml::Value::as_str) == Some(host));
+    match existing {
+        Some(entry) => {
+            entry.insert("auth_token".into(), key.into());
+        }
+        None => {
+            let mut entry = toml::Table::new();
+            entry.insert("host".into(), host.into());
+            entry.insert("auth_token".into(), key.into());
+            configs.push(toml::Value::Table(entry));
+        }
+    }
+    let text = toml::to_string(&doc).map_err(|e| fail("write", &e))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| fail("create the directory for", &e))?;
+    }
+    // Write beside the target and rename over it, so an interrupted save
+    // never leaves a half-written config behind.
+    let tmp = path.with_extension("toml.tmp");
+    write_private(&tmp, text.as_bytes()).map_err(|e| fail("write", &e))?;
+    std::fs::rename(&tmp, path).map_err(|e| fail("replace", &e))
+}
+
+/// Write `bytes` to a new file readable only by its owner (on Unix).
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn saving_a_key_adds_or_replaces_one_host_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join(AUTH_CONFIG_FILENAME);
+
+        // A fresh file gets the oxen CLI's shape.
+        save_api_key_at(&path, "hub.oxen.ai", " sk-hub ").unwrap();
+        assert_eq!(token_from_file(&path, "hub.oxen.ai").unwrap(), "sk-hub");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(r#"default_host = "hub.oxen.ai""#), "{text}");
+        assert!(text.contains("[[host_configs]]"), "{text}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        // Another host is added beside it; re-saving one replaces only it.
+        save_api_key_at(&path, "localhost:3001", "sk-local").unwrap();
+        save_api_key_at(&path, "hub.oxen.ai", "sk-hub-2").unwrap();
+        assert_eq!(token_from_file(&path, "hub.oxen.ai").unwrap(), "sk-hub-2");
+        assert_eq!(
+            token_from_file(&path, "localhost:3001").unwrap(),
+            "sk-local"
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("[[host_configs]]").count(), 2, "{text}");
+        assert!(!path.with_extension("toml.tmp").exists());
+    }
+
+    #[test]
+    fn saving_keeps_settings_this_crate_does_not_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(AUTH_CONFIG_FILENAME);
+        std::fs::write(
+            &path,
+            "default_host = \"staging.hub.oxen.ai\"\n\n[[host_configs]]\nhost = \"staging.hub.oxen.ai\"\nauth_token = \"sk-stage\"\nscheme = \"https\"\n",
+        )
+        .unwrap();
+        save_api_key_at(&path, "hub.oxen.ai", "sk-hub").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains(r#"default_host = "staging.hub.oxen.ai""#),
+            "{text}"
+        );
+        assert!(text.contains(r#"scheme = "https""#), "{text}");
+        assert_eq!(
+            token_from_file(&path, "staging.hub.oxen.ai").unwrap(),
+            "sk-stage"
+        );
+    }
+
+    #[test]
+    fn configured_key_tells_missing_from_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(AUTH_CONFIG_FILENAME);
+        assert_eq!(configured_api_key_at(&path, "hub.oxen.ai").unwrap(), None);
+        save_api_key_at(&path, "hub.oxen.ai", "sk-hub").unwrap();
+        assert_eq!(
+            configured_api_key_at(&path, "hub.oxen.ai")
+                .unwrap()
+                .as_deref(),
+            Some("sk-hub")
+        );
+        assert_eq!(
+            configured_api_key_at(&path, "localhost:3001").unwrap(),
+            None
+        );
+        std::fs::write(&path, "host_configs = [[[").unwrap();
+        assert!(configured_api_key_at(&path, "hub.oxen.ai").is_err());
+        assert!(save_api_key_at(&path, "hub.oxen.ai", "sk").is_err());
+    }
 
     fn write_auth_file(token_host: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
