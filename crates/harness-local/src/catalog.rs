@@ -361,6 +361,73 @@ mod tests {
     }
 
     #[test]
+    fn october_2026_agent_models_match_the_published_ggufs() {
+        // (id, repo, file, quant, exact bytes on the hub) — checked against the
+        // Hugging Face tree API; all fit the 32 GB tier at a 16–32K window.
+        let expected = [
+            (
+                "gpt-oss-20b",
+                "ggml-org/gpt-oss-20b-GGUF",
+                "gpt-oss-20b-MXFP4.gguf",
+                "MXFP4",
+                12_109_566_624,
+            ),
+            (
+                "gemma-4-26b-a4b",
+                "bartowski/google_gemma-4-26B-A4B-it-GGUF",
+                "google_gemma-4-26B-A4B-it-Q4_K_M.gguf",
+                "Q4_K_M",
+                17_035_039_872,
+            ),
+            (
+                "qwen3.8-27b",
+                "unsloth/Qwen3.8-27B-GGUF",
+                "Qwen3.8-27B-UD-Q4_K_M.gguf",
+                "Q4_K_M",
+                16_464_440_224,
+            ),
+            (
+                "qwen3.6-35b-a3b",
+                "unsloth/Qwen3.6-35B-A3B-GGUF",
+                "Qwen3.6-35B-A3B-UD-IQ4_XS.gguf",
+                "IQ4_XS",
+                17_730_509_792,
+            ),
+            (
+                "glm-4.7-flash",
+                "unsloth/GLM-4.7-Flash-GGUF",
+                "GLM-4.7-Flash-IQ4_XS.gguf",
+                "IQ4_XS",
+                16_271_360_352,
+            ),
+        ];
+        with_temp_harness_dir(|| {
+            for (id, repo, file, quant, bytes) in expected {
+                let spec = find(id).unwrap_or_else(|| panic!("{id} should be built in"));
+                assert_eq!(spec.repo, repo, "{id}");
+                assert_eq!(spec.file, file, "{id}");
+                assert_eq!(spec.quant, quant, "{id}");
+                assert_eq!(spec.approx_bytes, bytes, "{id}");
+                assert_eq!(
+                    crate::source::parse_quant(file).as_deref(),
+                    Some(quant),
+                    "{id}: HF-search listings must label the file with its quant"
+                );
+                // Unsloth's dynamic (UD-) builds have no regular sibling ladder,
+                // so only the bartowski repos may derive other quants.
+                let refs = quant_refs(&spec);
+                if spec.derive_quants {
+                    assert!(repo.starts_with("bartowski/"), "{id}");
+                    assert!(refs.len() > 1, "{id}");
+                } else {
+                    assert_eq!(refs.len(), 1, "{id}");
+                    assert_eq!(refs[0].size_bytes, bytes, "{id}");
+                }
+            }
+        });
+    }
+
+    #[test]
     fn muse_glimmer_entries_match_the_published_ggufs() {
         with_temp_harness_dir(|| {
             let base = find("muse-glimmer-30b").expect("Muse Glimmer 30B should be built in");

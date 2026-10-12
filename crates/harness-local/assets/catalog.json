@@ -46,6 +46,62 @@
       "note": "Higher-quality dynamic quant of Muse Glimmer; ~19.7 GB download, wants 32 GB."
     },
     {
+      "id": "gpt-oss-20b",
+      "display": "gpt-oss 20B",
+      "params": "21B-A3.6B (MoE)",
+      "repo": "ggml-org/gpt-oss-20b-GGUF",
+      "file": "gpt-oss-20b-MXFP4.gguf",
+      "quant": "MXFP4",
+      "approx_bytes": 12109566624,
+      "context": 131072,
+      "note": "OpenAI's open MoE: reasoning, native tool calls, 128K context. ~12.1 GB download; the safe pick for 24 GB."
+    },
+    {
+      "id": "gemma-4-26b-a4b",
+      "display": "Gemma 4 26B A4B",
+      "params": "26B-A4B (MoE)",
+      "repo": "bartowski/google_gemma-4-26B-A4B-it-GGUF",
+      "file": "google_gemma-4-26B-A4B-it-Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "approx_bytes": 17035039872,
+      "context": 262144,
+      "derive_quants": true,
+      "note": "Google's MoE with native tool calls and a 256K window. ~17 GB download at Q4_K_M; wants 32 GB (Q3_K_M for 24 GB)."
+    },
+    {
+      "id": "qwen3.8-27b",
+      "display": "Qwen3.8 27B",
+      "params": "27B",
+      "repo": "unsloth/Qwen3.8-27B-GGUF",
+      "file": "Qwen3.8-27B-UD-Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "approx_bytes": 16464440224,
+      "context": 262144,
+      "note": "Strongest open 27B for agentic coding (hybrid attention, 256K context). Dense, so slower per token. ~16.5 GB download; wants 32 GB."
+    },
+    {
+      "id": "qwen3.6-35b-a3b",
+      "display": "Qwen3.6 35B A3B",
+      "params": "35B-A3B (MoE)",
+      "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+      "file": "Qwen3.6-35B-A3B-UD-IQ4_XS.gguf",
+      "quant": "IQ4_XS",
+      "approx_bytes": 17730509792,
+      "context": 262144,
+      "note": "Fast MoE (~3B active) with hybrid attention and a 256K window. ~17.7 GB download; wants 32 GB."
+    },
+    {
+      "id": "glm-4.7-flash",
+      "display": "GLM-4.7 Flash",
+      "params": "30B-A3B (MoE)",
+      "repo": "unsloth/GLM-4.7-Flash-GGUF",
+      "file": "GLM-4.7-Flash-IQ4_XS.gguf",
+      "quant": "IQ4_XS",
+      "approx_bytes": 16271360352,
+      "context": 202752,
+      "note": "Z.ai's agentic MoE with a compact (MLA) KV cache and 200K window. ~16.3 GB download; wants 32 GB."
+    },
+    {
       "id": "qwen3-0.6b",
       "display": "Qwen3 0.6B",
       "params": "0.6B",
