@@ -56,7 +56,7 @@ impl Rhythm {
     /// [`FRAMES_PER_PHRASE`] frames.
     pub fn tick(&mut self) {
         self.frame += 1;
-        if self.phrase_count > 0 && self.frame % FRAMES_PER_PHRASE == 0 {
+        if self.phrase_count > 0 && self.frame.is_multiple_of(FRAMES_PER_PHRASE) {
             self.phrase_idx = (self.phrase_idx + 1) % self.phrase_count;
         }
     }

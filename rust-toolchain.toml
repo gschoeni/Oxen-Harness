@@ -1,3 +1,6 @@
 [toolchain]
-channel = "stable"
+# Pinned, not "stable": a floating channel let CI pick up a new release's
+# lints before local checkouts did, so main went red on code that passed
+# locally. Matches the Oxen repo's pin; bump both deliberately.
+channel = "1.99.0"
 components = ["rustfmt", "clippy"]

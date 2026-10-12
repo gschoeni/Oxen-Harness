@@ -503,7 +503,7 @@ impl FleetSpawner {
         if self.live.load(Ordering::SeqCst) >= MAX_LIVE_FLEETS
             || self
                 .reserved
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                     (n < MAX_LIVE_FLEETS).then_some(n + 1)
                 })
                 .is_err()

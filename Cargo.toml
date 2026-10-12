@@ -31,7 +31,7 @@ exclude = ["app"]
 [workspace.package]
 version = "0.0.5"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.99"
 license = "Apache-2.0"
 repository = "https://github.com/gschoeni/oxen-harness"
 authors = ["Greg Schoeninger"]
