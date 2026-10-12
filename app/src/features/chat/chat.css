@@ -1079,6 +1079,12 @@
   min-width: 0;
   max-width: 100%;
 }
+/* Ghost pills carry invisible padding on both sides, so side by side their
+   labels drift ~28px apart. Overlap neighbours' padding so the row reads as
+   one set of controls (labels --space-4 apart); only the hovered pill paints. */
+.composer-toolbar > .picker + .picker {
+  margin-left: calc(var(--space-4) - 2 * var(--btn-px-sm) - var(--space-1));
+}
 .composer-toolbar .picker-btn {
   min-width: 0;
   max-width: min(320px, 100%);
