@@ -949,25 +949,26 @@ impl Agent {
             .await?;
         let raw_prompt = budget::estimate_prompt_tokens(&request.messages, &[]);
         let (prompt, completion) = budget::split_oneshot_usage(&assembled, raw_prompt);
+        let outcome = CallOutcome {
+            model: Some(request.model.clone()),
+            service_tier: request.service_tier.clone(),
+            cached_prompt_tokens: assembled
+                .usage
+                .map(|u| u.cached_prompt_tokens() as usize)
+                .unwrap_or(0),
+            cache_write_tokens: assembled
+                .usage
+                .map(|u| u.cache_write_tokens() as usize)
+                .unwrap_or(0),
+            latency_ms: Some(started.elapsed().as_millis() as u64),
+            retries: 0,
+        };
         self.record_usage_event(
-            &harness_core::billing_key(&request.model, request.service_tier.as_deref()),
+            &outcome.billing_key(&request.model),
             prompt,
             completion,
             kind,
-            &CallOutcome {
-                model: Some(self.config.model.clone()),
-                service_tier: request.service_tier.clone(),
-                cached_prompt_tokens: assembled
-                    .usage
-                    .map(|u| u.cached_prompt_tokens() as usize)
-                    .unwrap_or(0),
-                cache_write_tokens: assembled
-                    .usage
-                    .map(|u| u.cache_write_tokens() as usize)
-                    .unwrap_or(0),
-                latency_ms: Some(started.elapsed().as_millis() as u64),
-                retries: 0,
-            },
+            &outcome,
         );
         Ok((assembled.content, prompt.saturating_add(completion)))
     }

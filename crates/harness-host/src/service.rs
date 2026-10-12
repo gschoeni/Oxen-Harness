@@ -1723,13 +1723,15 @@ impl SessionService {
     /// for it, with the live counters zeroed — a client showing this must
     /// still know which model it is talking to.
     fn mid_turn_info(&self, id: &str) -> SessionInfo {
-        let model = self
-            .store
-            .as_ref()
-            .ok()
+        let store = self.store.as_ref().ok();
+        let model = store
             .and_then(|store| store.session_meta(id).ok())
             .map(|meta| meta.model)
             .unwrap_or_default();
+        // The tier the turn was started on: only a model switch changes it,
+        // and that can't happen mid-turn.
+        let service_tier =
+            store.and_then(|store| saved_service_tier(store, id, &model).ok().flatten());
         let workspace = self.session_workspace(id);
         // The running turn's own gate; the saved default only if the lookup
         // fails, which this best-effort readout tolerates.
@@ -1740,6 +1742,7 @@ impl SessionService {
             .and_then(|workbenches| workbenches.get(id).map(|w| w.gate.mode()))
             .unwrap_or_else(|| harness_permissions::policy::PolicySet::load(&workspace).mode);
         SessionInfo {
+            service_tiers: harness_local::limits::service_tiers(&model),
             model,
             workspace: workspace.display().to_string(),
             session_id: id.to_string(),
@@ -1748,9 +1751,7 @@ impl SessionService {
             context_window: 0,
             compression_mode: harness_runtime::compression::mode().as_str().to_string(),
             permission_mode: permission_mode.label().to_string(),
-            // Unknown mid-turn; the picker is disabled until the turn ends.
-            service_tier: None,
-            service_tiers: Vec::new(),
+            service_tier,
         }
     }
 
