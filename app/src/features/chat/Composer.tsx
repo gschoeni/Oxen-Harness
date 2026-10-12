@@ -5,6 +5,7 @@ import { AttachmentImage } from "./AttachmentImage";
 import { CompressionPicker } from "./CompressionPicker";
 import { ModelPicker } from "./ModelPicker";
 import { PermissionPicker } from "./PermissionPicker";
+import { ServiceTierPicker } from "./ServiceTierPicker";
 import { parseSlashCommand, slashSuggestions } from "./slashCommands";
 import { isAudioPath, isImagePath, isVideoPath } from "../../lib/attachments";
 import { advancedSettingsEnabled } from "../../lib/features";
@@ -259,12 +260,14 @@ export function Composer({
 // Draft changes don't affect the pickers; their own store subscriptions still
 // update model/compression labels as sessions change. The compression picker
 // is an advanced control: the mode stays switchable from Settings → Compression.
+// The speed picker appears only for a model with service tiers.
 // The permission picker stays live mid-turn — switching it is how a run stops
 // (or starts) asking. Code review is the `/code-review` slash command.
 const ComposerToolbar = memo(function ComposerToolbar({ busy }: { busy: boolean }) {
   return (
     <div className="composer-toolbar">
       <ModelPicker disabled={busy} />
+      <ServiceTierPicker disabled={busy} />
       {advancedSettingsEnabled() && <CompressionPicker disabled={busy} />}
       <PermissionPicker />
       <StudyButton busy={busy} />

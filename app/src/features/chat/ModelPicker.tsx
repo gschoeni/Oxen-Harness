@@ -360,7 +360,7 @@ export function ModelPicker({
 /** A model's price beside its name: two right-aligned columns (in, out) so
  *  the figures line up down the list and the eye compares them as a table.
  *  The unit is on the section head, not here. */
-function ModelRate({ rate }: { rate: RateParts }) {
+export function ModelRate({ rate }: { rate: RateParts }) {
   const label = [rate.input && `${rate.input} in`, rate.output && `${rate.output} out`]
     .filter(Boolean)
     .join(", ");

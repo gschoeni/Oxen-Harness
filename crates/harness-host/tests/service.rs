@@ -1455,3 +1455,86 @@ async fn live_local_chat_loads_its_model_on_send_not_on_open() {
         .unwrap();
     assert_eq!(serving().await, None);
 }
+
+/// The composer's speed picker: a chat may run its model on a service tier
+/// the catalog lists for it, the tier rides every call to that model, it
+/// survives the chat being evicted and rebuilt, and a model switch drops it.
+#[tokio::test]
+async fn a_service_tier_is_per_chat_validated_restored_and_cleared_by_a_model_switch() {
+    let mut server = mockito::Server::new_async().await;
+    let fast = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::Regex(
+            r#""model":"gpt-6-1-sol".*"service_tier":"ultrafast""#.into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(FINAL_SSE)
+        .expect(1)
+        .create_async()
+        .await;
+    let sink = Arc::new(CollectingSink::default());
+    let ws = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), ws.path());
+    // What a catalog fetch caches for a model with an ultrafast tier.
+    harness_local::limits::record([(
+        "gpt-6-1-sol".to_string(),
+        harness_local::limits::ModelLimits {
+            service_tiers: vec!["ultrafast".into()],
+            ..Default::default()
+        },
+    )]);
+
+    let chat = service.session_info().await.unwrap().session_id;
+    let err = service
+        .set_session_service_tier(&chat, Some("ultrafast"))
+        .await
+        .unwrap_err();
+    assert!(err.contains("doesn't offer"), "{err}");
+
+    let info = service
+        .set_session_model(&chat, "gpt-6-1-sol")
+        .await
+        .unwrap();
+    assert_eq!(info.service_tiers, vec!["ultrafast".to_string()]);
+    assert_eq!(info.service_tier, None);
+    let err = service
+        .set_session_service_tier(&chat, Some("warp"))
+        .await
+        .unwrap_err();
+    assert!(err.contains("doesn't offer the warp"), "{err}");
+    let info = service
+        .set_session_service_tier(&chat, Some("ultrafast"))
+        .await
+        .unwrap();
+    assert_eq!(info.service_tier.as_deref(), Some("ultrafast"));
+
+    service.run_turn(&chat, "hi".into(), vec![]).await.unwrap();
+    fast.assert_async().await;
+
+    // Another chat takes the foreground; the idle one is evicted and later
+    // rebuilt from the store — on the tier it chose.
+    let other = service.new_session().await.unwrap();
+    assert_eq!(other.service_tier, None);
+    assert!(service.agent_for(&chat).await.is_none(), "evicted");
+    let rebuilt = service.agent_or_build(&chat).await.unwrap();
+    let info = service.info_for(&*rebuilt.lock().await);
+    assert_eq!(info.service_tier.as_deref(), Some("ultrafast"));
+
+    // A model switch starts the next model on its default tier, and coming
+    // back doesn't resurrect the old choice.
+    let info = service
+        .set_session_model(&chat, "claude-opus-4-8")
+        .await
+        .unwrap();
+    assert_eq!((info.service_tier, info.service_tiers.len()), (None, 0));
+    let info = service
+        .set_session_model(&chat, "gpt-6-1-sol")
+        .await
+        .unwrap();
+    assert_eq!(info.service_tier, None);
+
+    // Back to the default explicitly is always allowed.
+    let info = service.set_session_service_tier(&chat, None).await.unwrap();
+    assert_eq!(info.service_tier, None);
+}

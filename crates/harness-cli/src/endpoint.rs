@@ -562,6 +562,7 @@ mod tests {
             context_length: None,
             max_output_tokens: None,
             released_at: None,
+            service_tiers: Vec::new(),
         }
     }
 

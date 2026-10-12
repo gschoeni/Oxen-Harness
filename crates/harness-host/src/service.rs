@@ -21,7 +21,7 @@ use harness_permissions::PermissionMode;
 use harness_protocol::{ProtocolEvent, SessionInfo, SessionView};
 use harness_store::{
     HistoryError, HistoryStore, SessionEndpoint, SessionMeta, SessionSummary, MODE_CLOUD,
-    MODE_LOCAL,
+    MODE_LOCAL, SERVICE_TIER_STATE,
 };
 use harness_tools::{AskUserTool, CanvasTool, ToolRegistry, Workspace};
 use tokio::sync::Mutex;
@@ -306,6 +306,20 @@ fn lock_between_turns(
 ) -> Result<tokio::sync::MutexGuard<'_, Agent>, String> {
     arc.try_lock()
         .map_err(|_| "finish the current turn to switch models".to_string())
+}
+
+/// The service tier a chat recorded for `model`, if the catalog still offers
+/// it there. A tier the model no longer lists (or a chat that fell back to
+/// another model) runs on the default rather than on a tier nobody prices.
+fn saved_service_tier(
+    store: &HistoryStore,
+    session: &str,
+    model: &str,
+) -> Result<Option<String>, String> {
+    let saved: Option<String> = store
+        .session_state(session, SERVICE_TIER_STATE)
+        .map_err(|e| format!("reading the service tier of session {session}: {e}"))?;
+    Ok(saved.filter(|tier| harness_local::limits::service_tiers(model).contains(tier)))
 }
 
 /// Configures and builds a [`SessionService`].
@@ -806,7 +820,15 @@ impl SessionService {
         context_window: Option<usize>,
     ) -> Result<(), String> {
         let session = agent.session_id().to_string();
-        self.store()?
+        let store = self.store()?;
+        // A tier is priced per model: the next model starts on its default.
+        if agent.model() != model {
+            store
+                .clear_session_state(&session, SERVICE_TIER_STATE)
+                .map_err(|e| format!("clearing the service tier of session {session}: {e}"))?;
+            agent.set_service_tier(None);
+        }
+        store
             .set_session_model(
                 &session,
                 &SessionEndpoint {
@@ -1515,8 +1537,10 @@ impl SessionService {
             workspace_root,
             store.clone(),
         );
+        let tier = saved_service_tier(&store, &session_id, model_label)?;
         let mut agent = Agent::resume_from_store(client, tools, store, session_id, config)
             .map_err(|e| e.to_string())?;
+        agent.set_service_tier(tier);
         // A resumed session is held to the same rules as a fresh one.
         agent.set_rules(stream_rules(workspace_root));
         self.install_fork_slot(&mut agent);
@@ -1672,6 +1696,8 @@ impl SessionService {
                 .map_or(PermissionMode::Bypass, |gate| gate.mode())
                 .label()
                 .to_string(),
+            service_tier: agent.service_tier().map(str::to_string),
+            service_tiers: harness_local::limits::service_tiers(agent.model()),
         }
     }
 
@@ -1722,6 +1748,9 @@ impl SessionService {
             context_window: 0,
             compression_mode: harness_runtime::compression::mode().as_str().to_string(),
             permission_mode: permission_mode.label().to_string(),
+            // Unknown mid-turn; the picker is disabled until the turn ends.
+            service_tier: None,
+            service_tiers: Vec::new(),
         }
     }
 
@@ -2444,6 +2473,41 @@ impl SessionService {
         let gate = self.workbench(session).await?.gate.clone();
         gate.set_session_mode(mode);
         Ok(gate.mode())
+    }
+
+    /// Run one chat's model on a provider service tier (e.g. `"ultrafast"`),
+    /// or back on its default with `None`. Only a tier the endpoint's catalog
+    /// lists for the chat's model is accepted — a tier bills at its own rates,
+    /// so a typo must fail loudly rather than quietly run (and be priced) as
+    /// something else. Recorded on the session, so the chat comes back on it;
+    /// a later model switch clears it.
+    pub async fn set_session_service_tier(
+        &self,
+        session: &str,
+        tier: Option<&str>,
+    ) -> Result<SessionInfo, String> {
+        let tier = tier.map(str::trim).filter(|t| !t.is_empty());
+        let arc = self.agent_or_build(session).await?;
+        let mut agent = arc
+            .try_lock()
+            .map_err(|_| "finish the current turn to switch speed".to_string())?;
+        let store = self.store()?;
+        match tier {
+            Some(tier) => {
+                let offered = harness_local::limits::service_tiers(agent.model());
+                if !offered.iter().any(|t| t == tier) {
+                    return Err(format!(
+                        "{} doesn't offer the {tier} service tier",
+                        agent.model()
+                    ));
+                }
+                store.save_session_state(session, SERVICE_TIER_STATE, &tier)
+            }
+            None => store.clear_session_state(session, SERVICE_TIER_STATE),
+        }
+        .map_err(|e| format!("recording the service tier of session {session}: {e}"))?;
+        agent.set_service_tier(tier.map(str::to_string));
+        Ok(self.info_for(&agent))
     }
 
     /// Rebuild a session agent's client for its own model (picking up freshly

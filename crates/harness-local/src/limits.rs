@@ -1,7 +1,8 @@
 //! Cache of API-reported per-model limits.
 //!
 //! The Oxen models catalog reports each model's real `context_length` and
-//! `max_output_tokens`, and which input modalities it accepts. Those are the
+//! `max_output_tokens`, which input modalities it accepts, and which service
+//! tiers (e.g. `ultrafast`) it can run on. Those are the
 //! authoritative numbers for context budgeting, reply caps, and whether an
 //! image may ride in a request at all — the name-derived table in
 //! `harness-agent` is only a fallback for models the catalog hasn't described.
@@ -23,7 +24,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 
 /// One model's API-reported limits. Either field may be absent — the catalog
 /// describes them independently.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelLimits {
     /// Total context window in tokens.
     #[serde(default)]
@@ -37,6 +38,11 @@ pub struct ModelLimits {
     /// stops the agent from sending it a picture it would reject.
     #[serde(default)]
     pub accepts_images: Option<bool>,
+    /// The non-default service tiers the catalog prices for this model
+    /// (`pricing.token_cost_by_service_tier`), e.g. `["ultrafast"]`. Empty
+    /// when the model only runs on the provider's default tier.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_tiers: Vec<String>,
 }
 
 impl ModelLimits {
@@ -45,6 +51,7 @@ impl ModelLimits {
         self.context_length.is_none()
             && self.max_output_tokens.is_none()
             && self.accepts_images.is_none()
+            && self.service_tiers.is_empty()
     }
 }
 
@@ -63,7 +70,7 @@ fn load() -> LimitsFile {
 
 /// The cached limits for `model`, if any catalog fetch has reported them.
 pub fn get(model: &str) -> Option<ModelLimits> {
-    load().models.get(model).copied()
+    load().models.remove(model)
 }
 
 /// The cached context window for `model`, in tokens.
@@ -81,6 +88,12 @@ pub fn max_output_tokens(model: &str) -> Option<usize> {
 /// describe); callers should keep attaching images in that case.
 pub fn accepts_images(model: &str) -> Option<bool> {
     get(model)?.accepts_images
+}
+
+/// The non-default service tiers `model` can run on, as last reported by
+/// the catalog. Empty when unknown or when it has none.
+pub fn service_tiers(model: &str) -> Vec<String> {
+    get(model).map(|l| l.service_tiers).unwrap_or_default()
 }
 
 /// Merge freshly fetched limits into the cache. Best-effort (a cache write
@@ -122,6 +135,7 @@ mod tests {
                     context_length: Some(1_000_000),
                     max_output_tokens: Some(64_000),
                     accepts_images: Some(true),
+                    service_tiers: Vec::new(),
                 },
             ),
             // Reported nothing → skipped, not stored.
@@ -141,6 +155,7 @@ mod tests {
                 context_length: Some(2_000_000),
                 max_output_tokens: Some(64_000),
                 accepts_images: Some(true),
+                service_tiers: Vec::new(),
             },
         )]);
         assert_eq!(context_window("claude-opus-4-8"), Some(2_000_000));
@@ -153,6 +168,7 @@ mod tests {
                 context_length: Some(1_048_576),
                 max_output_tokens: Some(384_000),
                 accepts_images: Some(false),
+                service_tiers: Vec::new(),
             },
         )]);
         assert_eq!(accepts_images("deepseek-v4-pro"), Some(false));

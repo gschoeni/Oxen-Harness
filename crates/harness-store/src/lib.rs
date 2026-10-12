@@ -19,7 +19,7 @@ pub use store::{
     CacheUsageTotals, DailyUsage, HistoryError, HistoryStore, LaneSummary, ModelUsage,
     SessionEndpoint, SessionMeta, SessionSummary, SessionUsage, ThreadRow, UsageDetail,
     FINISHED_STATE, IMPORT_BATCH, LANE_STATE, MAP_MEMO_STATE, MODE_CLOUD, MODE_LOCAL,
-    PREVIEW_CHARS, RULE_HISTORY_STATE, SEEN_STATE, TITLE_CHARS, TITLE_STATE,
+    PREVIEW_CHARS, RULE_HISTORY_STATE, SEEN_STATE, SERVICE_TIER_STATE, TITLE_CHARS, TITLE_STATE,
 };
 
 use serde::Serialize;

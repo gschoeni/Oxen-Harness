@@ -202,6 +202,11 @@ pub struct AgentConfig {
     /// letting the provider reject the whole request. `None` = unknown:
     /// images are sent as-is.
     pub accepts_images: Option<bool>,
+    /// The provider service tier the session model runs on (e.g.
+    /// `"ultrafast"`), when the chat opted into one. Sent only on calls to
+    /// [`Self::model`] itself: a fallback or summary model may not offer the
+    /// tier, and it bills at its own (higher) rates.
+    pub service_tier: Option<String>,
     /// Maximum approximate text retained in the active model context. Verbatim
     /// history remains on disk; older turns are compacted before this grows
     /// without bound even when the provider advertises a very large window.
@@ -331,6 +336,9 @@ impl AgentConfig {
             config.max_output_tokens = None;
             config.accepts_images = None;
         }
+        // A tier is the chat's own opt-in to pricier calls; a fleet of lanes
+        // would multiply it without anyone having chosen that.
+        config.service_tier = None;
         config.initial_attachments.clear();
         config.permissions = config.permissions.map(|gate| Arc::new(gate.for_subagent()));
         config.round_budget = Some(RoundBudget::SUBAGENT);
@@ -395,6 +403,7 @@ impl Default for AgentConfig {
             response_reserve: None,
             max_output_tokens: None,
             accepts_images: None,
+            service_tier: None,
             max_resident_context_chars: 1_000_000,
             attachment_root: None,
             initial_attachments: Vec::new(),

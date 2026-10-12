@@ -298,6 +298,10 @@ pub struct ChatRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<StreamOptions>,
+    /// The provider service tier to run on (e.g. `"ultrafast"`), for models
+    /// whose catalog entry prices one. `None` leaves the provider's default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
     /// Message indices to mark with an Anthropic-style
     /// `cache_control: {"type": "ephemeral"}` breakpoint when the body is
     /// built (see [`ChatRequest::to_bytes`]). Not part of the wire struct
@@ -319,6 +323,7 @@ impl ChatRequest {
             max_tokens: None,
             stream: false,
             stream_options: None,
+            service_tier: None,
             cache_anchors: Vec::new(),
         }
     }
@@ -338,6 +343,13 @@ impl ChatRequest {
 
     pub fn max_tokens(mut self, max_tokens: usize) -> Self {
         self.max_tokens = Some(max_tokens.min(u32::MAX as usize) as u32);
+        self
+    }
+
+    /// Run on `tier` (see [`ChatRequest::service_tier`]); `None` keeps the
+    /// provider's default.
+    pub fn with_service_tier(mut self, tier: Option<String>) -> Self {
+        self.service_tier = tier;
         self
     }
 
@@ -448,7 +460,8 @@ impl Serialize for WireRequest<'_> {
             + usize::from(req.tool_choice.is_some())
             + usize::from(req.temperature.is_some())
             + usize::from(req.max_tokens.is_some())
-            + usize::from(req.stream_options.is_some());
+            + usize::from(req.stream_options.is_some())
+            + usize::from(req.service_tier.is_some());
         let mut s = serializer.serialize_struct("ChatRequest", len)?;
         s.serialize_field("model", &req.model)?;
         s.serialize_field(
@@ -476,6 +489,9 @@ impl Serialize for WireRequest<'_> {
         s.serialize_field("stream", &req.stream)?;
         if let Some(options) = &req.stream_options {
             s.serialize_field("stream_options", options)?;
+        }
+        if let Some(tier) = &req.service_tier {
+            s.serialize_field("service_tier", tier)?;
         }
         s.end()
     }
@@ -903,6 +919,19 @@ mod tests {
         let anchored =
             ChatRequest::new("m", vec![ChatMessage::user("hi")]).with_cache_anchors(vec![0]);
         assert!(anchored.to_body().unwrap().get("cache_anchors").is_none());
+    }
+
+    #[test]
+    fn service_tier_rides_the_wire_only_when_set() {
+        let plain = ChatRequest::new("m", vec![ChatMessage::user("hi")]);
+        assert!(plain.to_body().unwrap().get("service_tier").is_none());
+
+        let fast = ChatRequest::new("gpt-6-1-sol", vec![ChatMessage::user("hi")])
+            .streaming(true)
+            .with_service_tier(Some("ultrafast".into()));
+        let body = fast.to_body().unwrap();
+        assert_eq!(body["service_tier"], "ultrafast");
+        assert_eq!(body, serde_json::to_value(&fast).unwrap());
     }
 
     /// Whether this build's `serde_json` keeps map insertion order. Every

@@ -1476,3 +1476,38 @@ setting changed no longer keeps the old one.
 
 `crates/harness-host/tests/service.rs` has an opt-in live test of the local
 lifecycle (`OXEN_HARNESS_LIVE_LOCAL=<model id>`, `--run-ignored only`).
+
+## A chat can run its model on a service tier (2026-10-12)
+
+The Oxen models API prices some models on more than the default tier:
+`pricing.token_cost_by_service_tier` (e.g. `gpt-6-1-sol` and `gpt-6-astra`
+offer `ultrafast` at 6× the default rate), and chat completions take a
+`service_tier` field. The harness follows the catalog: nothing about tiers
+is hard-coded.
+
+**The catalog is the source of truth.** Every catalog fetch records each
+model's tier ids in the limits cache (`ModelLimits.service_tiers`) and
+`OxenModelHit.service_tiers` carries each tier's rates. `SessionInfo`
+reports `service_tiers` (what the chat's model offers) and `service_tier`
+(what it runs on); the desktop's speed picker beside the model picker only
+appears when the list is non-empty. The host refuses a tier the catalog
+doesn't list for the model rather than letting it run, unpriced, as
+something else (the hub itself 400s an unknown tier, and quietly ignores a
+valid tier on a model that doesn't offer one).
+
+**A tier is the chat's, and belongs to its model.** It is stored in
+`session_state` (`SERVICE_TIER_STATE`, no migration; forks carry it), and a
+resume re-applies it only if the model still offers it. Any model switch
+clears it: the next model starts on its default, and switching back doesn't
+resurrect a 6× price. Subagent lanes never inherit it (a fleet would
+multiply an opt-in nobody made for it), and a fallback model is called
+without it.
+
+**Spend is ledgered under a billing key.** A tiered call's usage row records
+`{model}@{tier}` (`harness_core::billing_key`), and every pricing catalog
+carries a `{model}@{tier}` entry with the tier's rates — so the session
+meter, Settings usage, and the CLI trailer price ultrafast calls correctly
+without knowing tiers exist. Usage breakdowns show the tier as its own row.
+
+Transports: Tauri `set_service_tier(session, tier)`, `POST /v1/service_tier
+{session, tier?}`. The CLI has no tier switch yet.

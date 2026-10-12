@@ -823,6 +823,12 @@ export const searchOxenModels = (query: string) =>
 export const setModel = (model: string, session?: string) =>
   invoke<SessionInfo>("set_model", { model, session });
 
+/** Run one chat's model on a provider service tier (e.g. `ultrafast`), or on
+ *  its default with null. Only a tier the catalog lists for that model is
+ *  accepted; a model switch resets it. Resolves with that chat's info. */
+export const setServiceTier = (session: string, tier: string | null) =>
+  invoke<SessionInfo>("set_service_tier", { session, tier });
+
 /** Switch one chat to a downloaded local model in place, starting its server.
  *  Unlike `useLocalModel` it opens no new chat and leaves the new-chat default
  *  alone. Resolves with that chat's info. */

@@ -42,6 +42,13 @@ export interface SessionInfo {
    *  unless the chat switched its own (the composer's picker, or "Dangerously
    *  allow everything" on an approval). */
   permission_mode: PermissionMode;
+  /** The provider service tier this chat's model runs on (e.g. `ultrafast`);
+   *  null/absent on the default tier. */
+  service_tier?: string | null;
+  /** The non-default tiers the chat's model offers, per the endpoint's
+   *  catalog — the composer shows a speed picker only when there are some.
+   *  Absent from hosts that predate tiers. */
+  service_tiers?: string[];
 }
 
 /** A chat's training-data review status: unreviewed (""), kept, or rejected. */
@@ -244,6 +251,14 @@ export interface OxenModelHit {
   max_output_tokens: number | null;
   /** The model's release date (`YYYY-MM-DD`), when the catalog reports it. */
   released_at: string | null;
+  /** Non-default service tiers (e.g. `ultrafast`), each with its own rates. */
+  service_tiers?: ServiceTierHit[];
+}
+
+/** A service tier a cloud model offers beyond the provider's default. */
+export interface ServiceTierHit {
+  id: string;
+  pricing: ModelPricing | null;
 }
 
 // ---- local models ----------------------------------------------------------

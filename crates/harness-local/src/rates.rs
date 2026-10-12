@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::source::ModelPricing;
 
+pub use harness_core::billing_key;
+
 /// Schema version for `model-rates.json`.
 pub const SCHEMA_VERSION: u32 = 1;
 

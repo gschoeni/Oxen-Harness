@@ -6,7 +6,7 @@
 //! persists a `ModelRef` sidecar next to each download so arbitrary models keep
 //! their identity across restarts.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -445,6 +445,19 @@ pub struct OxenModelHit {
     /// The model's release date (`YYYY-MM-DD`), when the catalog reports it —
     /// what lets a picker lead with the newest models.
     pub released_at: Option<String>,
+    /// The non-default service tiers the model can run on (e.g. `ultrafast`),
+    /// each with its own per-token rates. Empty for most models.
+    pub service_tiers: Vec<ServiceTierHit>,
+}
+
+/// A service tier a cloud model offers beyond the provider's default — sent
+/// as the request's `service_tier`, billed at its own rates.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ServiceTierHit {
+    /// The tier id sent on the wire, e.g. `ultrafast`.
+    pub id: String,
+    /// The tier's per-token rates, when the catalog gives both or either.
+    pub pricing: Option<ModelPricing>,
 }
 
 #[derive(Deserialize)]
@@ -480,15 +493,42 @@ struct OxenModelEntry {
 
 /// Per-token pricing for a token-billed model, as reported by the Oxen models
 /// API. Costs are in US dollars *per token* (not per million).
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct OxenPricing {
+    #[serde(flatten)]
+    rates: OxenTokenRates,
+    /// Rates for each non-default service tier the model offers, keyed by the
+    /// tier id the request's `service_tier` names (e.g. `ultrafast`).
+    #[serde(default)]
+    token_cost_by_service_tier: BTreeMap<String, OxenTokenRates>,
+}
+
+impl OxenPricing {
+    fn rates(&self) -> Option<ModelPricing> {
+        self.rates.rates()
+    }
+
+    fn service_tiers(&self) -> Vec<ServiceTierHit> {
+        self.token_cost_by_service_tier
+            .iter()
+            .map(|(id, rates)| ServiceTierHit {
+                id: id.clone(),
+                pricing: rates.rates(),
+            })
+            .collect()
+    }
+}
+
+/// One set of per-token rates: the model's default, or one service tier's.
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct OxenTokenRates {
     #[serde(default)]
     input_cost_per_token: Option<f64>,
     #[serde(default)]
     output_cost_per_token: Option<f64>,
 }
 
-impl OxenPricing {
+impl OxenTokenRates {
     /// Usable per-token rates, when at least one is present; missing rates count
     /// as 0 so a model priced only on output still yields a real number.
     fn rates(self) -> Option<ModelPricing> {
@@ -557,6 +597,11 @@ async fn fetch_oxen_models(
                     .capabilities
                     .as_ref()
                     .map(|c| c.input.iter().any(|i| i == "image")),
+                service_tiers: e
+                    .pricing
+                    .as_ref()
+                    .map(|p| p.token_cost_by_service_tier.keys().cloned().collect())
+                    .unwrap_or_default(),
             },
         )
     }));
@@ -593,7 +638,12 @@ pub async fn oxen_search_models(
                 summary: e.summary.unwrap_or_default(),
                 description: e.description.unwrap_or_default(),
                 endpoint: e.endpoint.unwrap_or_default(),
-                pricing: e.pricing.and_then(OxenPricing::rates),
+                pricing: e.pricing.as_ref().and_then(OxenPricing::rates),
+                service_tiers: e
+                    .pricing
+                    .as_ref()
+                    .map(OxenPricing::service_tiers)
+                    .unwrap_or_default(),
                 inputs,
                 outputs,
                 context_length: e.context_length,
@@ -666,14 +716,25 @@ pub async fn oxen_model_pricing_catalog_at(
     base_url: &str,
     token: Option<&str>,
 ) -> Result<HashMap<String, ModelPricing>, LocalError> {
+    // Each priced service tier gets its own entry under its billing key, so
+    // usage recorded on a tier (see `rates::billing_key`) prices at its rate.
     let catalog: HashMap<String, ModelPricing> = fetch_oxen_models(base_url, token)
         .await?
         .into_iter()
-        .filter_map(|entry| {
-            entry
-                .pricing
-                .and_then(OxenPricing::rates)
-                .map(|rates| (entry.id, rates))
+        .flat_map(|entry| {
+            let Some(pricing) = entry.pricing else {
+                return Vec::new();
+            };
+            let mut rows: Vec<(String, ModelPricing)> = pricing
+                .service_tiers()
+                .into_iter()
+                .filter_map(|tier| {
+                    let key = crate::rates::billing_key(&entry.id, Some(&tier.id));
+                    tier.pricing.map(|rates| (key, rates))
+                })
+                .collect();
+            rows.extend(pricing.rates().map(|rates| (entry.id, rates)));
+            rows
         })
         .collect();
     // Remember the rates on disk so the next startup can price all-time
@@ -729,6 +790,56 @@ mod tests {
 
         assert_eq!(pricing["muse-spark-1-1"].cost_of(1_000, 500), 0.002);
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn service_tiers_are_listed_cached_and_priced_under_their_billing_key() {
+        let _home = crate::temp_harness_dir();
+        let mut server = mockito::Server::new_async().await;
+        // The shape the Oxen models API serves for a model with an
+        // `ultrafast` tier (gpt-6-1-sol, October 2026).
+        server
+            .mock("GET", "/api/ai/models")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"data":[{"id":"gpt-6-1-sol","endpoint":"/chat/completions",
+                    "pricing":{"input_cost_per_token":0.0000026,"method":"token",
+                      "output_cost_per_token":0.000013,
+                      "token_cost_by_service_tier":{"ultrafast":{
+                        "input_cost_per_token":0.0000156,"output_cost_per_token":0.000078}}}},
+                   {"id":"claude-sonnet-5-5","endpoint":"/chat/completions",
+                    "pricing":{"input_cost_per_token":0.0000022,"output_cost_per_token":0.000011}}
+                ]}"#,
+            )
+            .expect(2)
+            .create_async()
+            .await;
+        let base = format!("{}/api/ai", server.url());
+
+        let hits = oxen_search_models(&base, "", None).await.unwrap();
+        let sol = hits.iter().find(|h| h.id == "gpt-6-1-sol").unwrap();
+        assert_eq!(sol.service_tiers.len(), 1);
+        assert_eq!(sol.service_tiers[0].id, "ultrafast");
+        let fast = sol.service_tiers[0].pricing.unwrap();
+        assert_eq!(fast.output_cost_per_token, 0.000078);
+        // The default rates are still the model's own.
+        assert_eq!(sol.pricing.unwrap().output_cost_per_token, 0.000013);
+        let sonnet = hits.iter().find(|h| h.id == "claude-sonnet-5-5").unwrap();
+        assert!(sonnet.service_tiers.is_empty());
+
+        // The fetch cached which tiers each model offers.
+        assert_eq!(
+            crate::limits::service_tiers("gpt-6-1-sol"),
+            vec!["ultrafast"]
+        );
+        assert!(crate::limits::service_tiers("claude-sonnet-5-5").is_empty());
+
+        let pricing = oxen_model_pricing_catalog_at(&base, None).await.unwrap();
+        let key = crate::rates::billing_key("gpt-6-1-sol", Some("ultrafast"));
+        assert_eq!(key, "gpt-6-1-sol@ultrafast");
+        assert_eq!(pricing[&key].output_cost_per_token, 0.000078);
+        assert_eq!(pricing["gpt-6-1-sol"].output_cost_per_token, 0.000013);
     }
 
     #[tokio::test]

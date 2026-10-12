@@ -49,6 +49,7 @@ import {
   setCompressionMode,
   setLocalModel,
   setModel,
+  setServiceTier,
   setReviewStatus as setReviewStatusIpc,
   setReviewStatusMany as setReviewStatusManyIpc,
   previewStatus,
@@ -723,6 +724,9 @@ interface AppState {
    *  conversation (keeps the thread; only the model changes). Other tabs keep
    *  their own models, and the default for new chats is untouched. */
   changeModel: (model: string) => Promise<void>;
+  /** Run the chat in view on a service tier (e.g. `ultrafast`), or back on
+   *  its model's default with null. Its own; other tabs are untouched. */
+  changeServiceTier: (tier: string | null) => Promise<void>;
   /** Switch context compression for the live chat (persisted for new ones too). */
   changeCompressionMode: (mode: CompressionMode) => Promise<void>;
   /** Switch the permission mode of the chat in view, live and for that chat
@@ -1724,6 +1728,16 @@ export const useStore = create<AppState>((rawSet, get) => {
       // switch while the request is out can neither retarget it nor have the
       // answer overwrite the chat now in view.
       applyModelSwap(await setModel(model, get().session?.session_id));
+    },
+
+    changeServiceTier: async (tier) => {
+      const session = get().session?.session_id;
+      if (!session) return;
+      const info = await setServiceTier(session, tier);
+      set((s) => ({
+        session: s.session?.session_id === info.session_id ? info : s.session,
+        infos: { ...s.infos, [info.session_id]: info },
+      }));
     },
 
     changeLocalModel: async (id) => {

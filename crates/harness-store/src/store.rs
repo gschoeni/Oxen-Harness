@@ -242,6 +242,12 @@ pub const SEEN_STATE: &str = "seen";
 /// [`HistoryStore::thread_rows`]). Written by [`HistoryStore::rename_session`].
 pub const TITLE_STATE: &str = "title";
 
+/// `session_state` key for the provider service tier a chat runs its model on
+/// (a JSON string, e.g. `"ultrafast"`). Absent means the default tier. It
+/// belongs to the model it was picked for, so the host clears it whenever the
+/// chat moves to another model.
+pub const SERVICE_TIER_STATE: &str = "service_tier";
+
 /// The user's name for a chat from its raw [`TITLE_STATE`] payload, or `None`
 /// when there is none worth showing (absent, malformed, or blank).
 fn custom_title(raw: Option<String>) -> Option<String> {

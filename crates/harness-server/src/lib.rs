@@ -192,6 +192,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/v1/questions/{id}/answer", post(answer_question))
         .route("/v1/approvals/{id}/answer", post(answer_approval))
         .route("/v1/model", post(set_model))
+        .route("/v1/service_tier", post(set_service_tier))
         .route("/v1/models", get(list_models))
         .route("/v1/connection", get(get_connection).put(put_connection))
         .route("/v1/attachments", post(upload_attachment))
@@ -806,6 +807,27 @@ async fn set_model(
         }
         None => state.service.set_model(&request.model).await?,
     };
+    Ok(Json(info))
+}
+
+#[derive(Deserialize)]
+struct SetServiceTierRequest {
+    session: String,
+    /// The tier to run on (e.g. `ultrafast`); absent or null for the default.
+    #[serde(default)]
+    tier: Option<String>,
+}
+
+async fn set_service_tier(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SetServiceTierRequest>,
+) -> ApiResult<Json<harness_protocol::SessionInfo>> {
+    authorize(&state, &headers, None)?;
+    let info = state
+        .service
+        .set_session_service_tier(&request.session, request.tier.as_deref())
+        .await?;
     Ok(Json(info))
 }
 

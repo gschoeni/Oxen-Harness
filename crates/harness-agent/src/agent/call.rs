@@ -115,6 +115,7 @@ impl Agent {
             .with_tools(tool_defs.to_vec())
             .max_tokens(self.config.effective_response_reserve())
             .streaming(true)
+            .with_service_tier(self.config.service_tier.clone())
             .with_cache_anchors(anchors);
 
         let retry = self.config.retry.clone();
@@ -189,6 +190,7 @@ impl Agent {
                 Ok(assembled) => {
                     let outcome = CallOutcome {
                         model: Some(request.model.clone()),
+                        service_tier: request.service_tier.clone(),
                         latency_ms: Some(started.elapsed().as_millis() as u64),
                         retries: attempt - 1,
                         ..CallOutcome::default()
@@ -250,6 +252,9 @@ impl Agent {
                             .prompt_cache
                             .anchors_for(&next, &request.messages);
                         request.model = next;
+                        // The tier was the session model's; the fallback may
+                        // not offer it.
+                        request.service_tier = None;
                         attempt = 1;
                         budget = None;
                         continue;
@@ -347,9 +352,9 @@ impl Agent {
         self.tokens_used += prompt_delta + completion_delta;
         self.cached_prompt_tokens_used += outcome.cached_prompt_tokens;
         self.cache_write_tokens_used += outcome.cache_write_tokens;
-        let answered_by = outcome.model_or(&self.config.model);
+        let answered_by = outcome.billing_key(&self.config.model);
         self.record_usage_event(
-            answered_by,
+            &answered_by,
             prompt_delta,
             completion_delta,
             "turn",
@@ -618,6 +623,110 @@ mod tests {
         assert_eq!(logged["model"], "backup-model");
         down.assert_async().await;
         healthy.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_service_tier_rides_session_model_calls_and_is_ledgered_under_its_key() {
+        let mut server = mockito::Server::new_async().await;
+        // The session model (asked for ultrafast) is down; the fallback must
+        // be asked without the tier, which it may not offer.
+        let down = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("gpt-6-1-sol".into()),
+                mockito::Matcher::Regex(r#""service_tier":"ultrafast""#.into()),
+            ]))
+            .with_status(503)
+            .with_body(r#"{"error":{"title":"provider down"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let fallback = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("backup-model".into()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("backup answer"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "gpt-6-1-sol");
+        let client = OxenClient::new(server.url(), "key", "gpt-6-1-sol");
+        let mut agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store.clone(),
+            session,
+            AgentConfig {
+                model: "gpt-6-1-sol".into(),
+                system_prompt: None,
+                retry: RetryPolicy {
+                    fallback_models: vec!["backup-model".into()],
+                    ..fast_retry(1)
+                },
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+        agent.set_service_tier(Some("ultrafast".into()));
+        assert_eq!(
+            agent.run_turn("hello", |_| {}).await.unwrap(),
+            "backup answer"
+        );
+        down.assert_async().await;
+        fallback.assert_async().await;
+        let usage = store.model_usage_breakdown().unwrap();
+        assert_eq!(usage[0].model, "backup-model", "the fallback ran untiered");
+
+        // A healthy session model answers on the tier, and its spend is
+        // recorded under `model@tier` so it prices at the tier's rate.
+        server.reset();
+        let fast = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                r#""service_tier":"ultrafast""#.into(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("fast answer"))
+            .expect(1)
+            .create_async()
+            .await;
+        assert_eq!(
+            agent.run_turn("again", |_| {}).await.unwrap(),
+            "fast answer"
+        );
+        fast.assert_async().await;
+        let usage = store.model_usage_breakdown().unwrap();
+        assert!(
+            usage.iter().any(|u| u.model == "gpt-6-1-sol@ultrafast"),
+            "{usage:?}"
+        );
+
+        // Back on the default tier the field is simply absent.
+        server.reset();
+        let default_tier = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex("service_tier".into()))
+            .expect(0)
+            .create_async()
+            .await;
+        let plain = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_prose("plain answer"))
+            .create_async()
+            .await;
+        agent.set_service_tier(None);
+        assert_eq!(
+            agent.run_turn("once more", |_| {}).await.unwrap(),
+            "plain answer"
+        );
+        default_tier.assert_async().await;
+        plain.assert_async().await;
     }
 
     #[tokio::test]

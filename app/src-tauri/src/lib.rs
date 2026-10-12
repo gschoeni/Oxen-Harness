@@ -308,6 +308,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::models::add_cloud_model,
                 commands::models::remove_cloud_model,
                 commands::models::set_model,
+                commands::models::set_service_tier,
                 commands::models::select_cloud_model_for_new_chats,
                 commands::turn::answer_question,
                 commands::turn::answer_approval,

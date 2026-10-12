@@ -1099,6 +1099,10 @@
 .composer-toolbar .picker-btn.picker-danger {
   color: var(--danger);
 }
+/* A paid-up speed tier stays visible: every call bills at its rate. */
+.composer-toolbar .picker-btn.picker-accent {
+  color: var(--accent);
+}
 .picker-label {
   overflow: hidden;
   text-overflow: ellipsis;

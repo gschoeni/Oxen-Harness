@@ -184,6 +184,8 @@ pub(crate) struct CallOutcome {
     /// The request model that produced the accepted answer. Usually the
     /// session model; different after a successful per-call fallback.
     pub(crate) model: Option<String>,
+    /// The service tier that answer ran on, when the request named one.
+    pub(crate) service_tier: Option<String>,
     pub(crate) cached_prompt_tokens: usize,
     pub(crate) cache_write_tokens: usize,
     pub(crate) latency_ms: Option<u64>,
@@ -195,6 +197,12 @@ impl CallOutcome {
     /// estimate-only paths that never issued a request.
     fn model_or<'a>(&'a self, configured: &'a str) -> &'a str {
         self.model.as_deref().unwrap_or(configured)
+    }
+
+    /// The key this outcome's spend is ledgered and priced under: the
+    /// answering model, tagged with its service tier when it ran on one.
+    fn billing_key(&self, configured: &str) -> String {
+        harness_core::billing_key(self.model_or(configured), self.service_tier.as_deref())
     }
 }
 
@@ -608,6 +616,19 @@ impl Agent {
         self.config.accepts_images = accepts;
     }
 
+    /// The service tier calls to the session model run on, if any.
+    pub fn service_tier(&self) -> Option<&str> {
+        self.config.service_tier.as_deref()
+    }
+
+    /// Run later calls to the session model on `tier` (e.g. `"ultrafast"`),
+    /// or on the provider's default with `None`. A model swap does not carry
+    /// it over by itself — hosts clear or re-apply it alongside
+    /// [`Self::set_model`].
+    pub fn set_service_tier(&mut self, tier: Option<String>) {
+        self.config.service_tier = tier.filter(|t| !t.is_empty());
+    }
+
     /// Install the stop signal for the next turn. The host keeps a clone so it
     /// can cancel a running turn (`token.cancel()`) without taking the agent's
     /// lock — set a fresh token before each turn so a prior cancellation doesn't
@@ -913,7 +934,9 @@ impl Agent {
             ChatMessage::system(system.to_string()),
             ChatMessage::user(user.to_string()),
         ];
-        let mut request = ChatRequest::new(&self.config.model, messages).streaming(true);
+        let mut request = ChatRequest::new(&self.config.model, messages)
+            .streaming(true)
+            .with_service_tier(self.config.service_tier.clone());
         if let Some(max_tokens) = max_tokens {
             request = request.max_tokens(max_tokens);
         }
@@ -927,12 +950,13 @@ impl Agent {
         let raw_prompt = budget::estimate_prompt_tokens(&request.messages, &[]);
         let (prompt, completion) = budget::split_oneshot_usage(&assembled, raw_prompt);
         self.record_usage_event(
-            &self.config.model,
+            &harness_core::billing_key(&request.model, request.service_tier.as_deref()),
             prompt,
             completion,
             kind,
             &CallOutcome {
                 model: Some(self.config.model.clone()),
+                service_tier: request.service_tier.clone(),
                 cached_prompt_tokens: assembled
                     .usage
                     .map(|u| u.cached_prompt_tokens() as usize)

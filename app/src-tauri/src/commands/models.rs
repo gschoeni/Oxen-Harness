@@ -436,6 +436,20 @@ pub(crate) async fn set_model(
     }
 }
 
+/// Run one chat's model on a provider service tier (e.g. `ultrafast`), or back
+/// on its default with `None` — the composer's speed picker. Only a tier the
+/// catalog lists for the chat's model is accepted.
+#[tauri::command]
+pub(crate) async fn set_service_tier(
+    state: State<'_, AppState>,
+    session: String,
+    tier: Option<String>,
+) -> Result<SessionInfo, String> {
+    state
+        .set_session_service_tier(&session, tier.as_deref())
+        .await
+}
+
 /// Select the cloud model used by future chats without changing any live chat.
 #[tauri::command]
 pub(crate) async fn select_cloud_model_for_new_chats(

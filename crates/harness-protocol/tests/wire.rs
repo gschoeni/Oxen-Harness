@@ -796,6 +796,8 @@ fn dto_wire_shapes() {
         context_window: 200_000,
         compression_mode: "off".into(),
         permission_mode: "relaxed".into(),
+        service_tier: Some("ultrafast".into()),
+        service_tiers: vec!["ultrafast".into()],
     };
     let value = serde_json::to_value(&info).unwrap();
     assert_eq!(value["session_id"], "s1");

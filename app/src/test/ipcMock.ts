@@ -531,6 +531,14 @@ const swapModel = async (model: string, session?: string) => ({
 });
 export const setModel = vi.fn(swapModel);
 export const setLocalModel = vi.fn(async (session: string, id: string) => swapModel(id, session));
+/** Like the backend: the named chat comes back on the tier. */
+const swapTier = async (session: string, tier: string | null) => ({
+  ...sampleSession,
+  session_id: session,
+  service_tier: tier,
+  service_tiers: ["ultrafast"],
+});
+export const setServiceTier = vi.fn(swapTier);
 
 // The study game + the model roles it shares a settings section with.
 export const sampleStudyProfile: StudyProfile = {
@@ -718,6 +726,7 @@ export function resetIpc() {
   searchOxenModels.mockReset().mockResolvedValue(sampleOxenHits);
   setModel.mockReset().mockImplementation(swapModel);
   setLocalModel.mockReset().mockImplementation(async (session: string, id: string) => swapModel(id, session));
+  setServiceTier.mockReset().mockImplementation(swapTier);
   listThemes.mockReset().mockResolvedValue(sampleThemes);
   activeTheme.mockReset().mockResolvedValue(sampleTheme);
   useTheme.mockReset().mockResolvedValue(sampleTheme);

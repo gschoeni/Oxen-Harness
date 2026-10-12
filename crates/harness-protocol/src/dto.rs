@@ -68,6 +68,14 @@ pub struct SessionInfo {
     /// ("relaxed"/"cautious"/"bypass") — the saved default unless the chat
     /// switched its own.
     pub permission_mode: String,
+    /// The provider service tier this chat's model runs on (e.g.
+    /// `"ultrafast"`); absent on the default tier.
+    #[serde(default)]
+    pub service_tier: Option<String>,
+    /// The non-default tiers the chat's model offers, per the endpoint's
+    /// catalog — what a client may offer to switch to. Empty for most models.
+    #[serde(default)]
+    pub service_tiers: Vec<String>,
 }
 
 /// A resumed session: its info plus the verbatim transcript to re-render.
