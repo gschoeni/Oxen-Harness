@@ -165,7 +165,8 @@ enum TopCommand {
         /// Resume a chat by session id (as printed on the death screen).
         #[arg(long, value_name = "ID")]
         session: Option<String>,
-        /// Start a new chat in the app and send this prompt.
+        /// Send this prompt in the app: in a new chat, or in the `--session`
+        /// chat when one is given.
         #[arg(long, value_name = "TEXT")]
         prompt: Option<String>,
         /// Start the new chat on this local model (see `models list`); works
@@ -249,10 +250,11 @@ async fn main() -> Result<()> {
             } else if let Some(page) = settings {
                 Some(format!("settings:{page}"))
             } else if prompt.is_some() || local.is_some() {
-                // A new chat: on a local model, with a first prompt, or both.
+                // A chat: new (on a local model, with a first prompt) or the
+                // resumed `--session`, sent the prompt.
                 Some(format!(
                     "chat:{}",
-                    serde_json::json!({ "local": local, "prompt": prompt })
+                    serde_json::json!({ "local": local, "prompt": prompt, "session": session })
                 ))
             } else {
                 session.map(|id| format!("session:{id}"))
@@ -350,8 +352,18 @@ async fn main() -> Result<()> {
         client,
         model,
         context_window,
-        local_server: _local_server,
+        local_server,
     } = resolve_endpoint(&args, resume_meta.as_ref(), interactive, &ui).await;
+    // A local session records itself as one, so a resume (here or in the
+    // desktop) starts the local server instead of asking the hub.
+    let session_mode = if local_server.is_some() {
+        harness_store::MODE_LOCAL
+    } else {
+        ""
+    };
+    if let Some(server) = local_server {
+        local::hold(server);
+    }
 
     // Everything that needs the network gets kicked off here, the moment the
     // model is known, and is *never* awaited on the way to the first prompt:
@@ -416,6 +428,22 @@ async fn main() -> Result<()> {
     // Resume an existing transcript, or strike out on a fresh session.
     let (mut agent, session, resumed_entries) = match &args.resume {
         Some(id) => {
+            // A chat resumed onto a local server now lives there: record it,
+            // so the next resume (or the desktop) starts the server too.
+            if session_mode == harness_store::MODE_LOCAL {
+                let recorded = store.set_session_model(
+                    id,
+                    &harness_store::SessionEndpoint {
+                        model: &model,
+                        base_url: &base_url,
+                        mode: harness_store::MODE_LOCAL,
+                        context_window: context_window.map(|w| w as i64),
+                    },
+                );
+                if let Err(e) = recorded {
+                    eprintln!("note: couldn't record the local model on session {id}: {e}");
+                }
+            }
             let mut agent =
                 Agent::resume_from_store(client, tools, store.clone(), id.clone(), config)?;
             agent.set_rules(endpoint::stream_rules(workspace.root()));
@@ -428,6 +456,7 @@ async fn main() -> Result<()> {
                 model: model.clone(),
                 provider: "oxen".into(),
                 base_url: base_url.clone(),
+                mode: session_mode.into(),
                 context_window: context_window.map(|w| w as i64),
                 ..Default::default()
             })?;
@@ -464,6 +493,8 @@ async fn main() -> Result<()> {
         }
         let code = commands::print::run(&mut agent, &ui, prompt).await;
         preview::shutdown().await;
+        // `exit` runs no destructors: stop the local model now.
+        local::release();
         std::process::exit(code);
     }
 
@@ -535,6 +566,7 @@ async fn main() -> Result<()> {
     // Dev servers live in a process-wide manager (nothing drops it): stop them
     // explicitly so an `npm run dev` never outlives the expedition.
     preview::shutdown().await;
+    local::release();
     result
 }
 

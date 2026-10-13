@@ -313,3 +313,42 @@ pub async fn start_for(id: &str, ui: &Ui) -> Result<(LocalServer, String)> {
     );
     Ok((server, id.to_string()))
 }
+
+/// The store id of the installed local model `id` names (its store id or
+/// its catalog id), or `None` when `id` isn't a model on this disk. Only an
+/// *installed* model counts: a catalog id that is also a hosted model's
+/// name (gpt-oss) must not be pulled out from under a cloud session.
+pub(crate) fn installed_local(id: &str) -> Option<String> {
+    let store = ModelStore::open().ok()?;
+    match resolve_runnable(&store, id.trim()) {
+        Ok(Runnable::Installed { model, .. }) => Some(model.id),
+        _ => None,
+    }
+}
+
+/// The session's running local model server. One at a time: a second model
+/// would double the memory, so swapping drops (and stops) the old one first.
+static ACTIVE: std::sync::Mutex<Option<LocalServer>> = std::sync::Mutex::new(None);
+
+/// Keep `server` running for the session, stopping any previous one.
+pub(crate) fn hold(server: LocalServer) {
+    match ACTIVE.lock() {
+        Ok(mut slot) => *slot = Some(server),
+        // A panic mid-swap poisoned the slot: the old server's state is
+        // unknown, so take the slot back and keep the new one running.
+        Err(poisoned) => {
+            eprintln!("note: the local model slot was poisoned; replacing it");
+            *poisoned.into_inner() = Some(server);
+        }
+    }
+}
+
+/// Stop the session's local model server, if one runs (before starting
+/// another, and at exit).
+pub(crate) fn release() {
+    let old = match ACTIVE.lock() {
+        Ok(mut slot) => slot.take(),
+        Err(poisoned) => poisoned.into_inner().take(),
+    };
+    drop(old);
+}

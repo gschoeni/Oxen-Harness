@@ -97,11 +97,19 @@ pub(crate) async fn resolve_endpoint(
         }
     };
 
-    // A local model runs only on an explicit `--local <id>`. The persisted
-    // `active_local` (what `/model` last picked) is never auto-started: a
-    // cold launch must not commit a model's worth of memory the user didn't
-    // ask for this time.
-    let Some(local_id) = args.local.clone() else {
+    // A local model runs on an explicit `--local <id>`, or when `--model`
+    // or the resumed chat names a model installed on this disk (sending its
+    // name to the hub only earns a 404). The persisted `active_local` (what
+    // `/model` last picked) is never auto-started: a cold launch must not
+    // commit a model's worth of memory the user didn't ask for this time.
+    let named_local = || {
+        let named = args
+            .model
+            .clone()
+            .or_else(|| resume_meta.map(|m| m.model.clone()))?;
+        crate::local::installed_local(&named)
+    };
+    let Some(local_id) = args.local.clone().or_else(named_local) else {
         return first_run_pick(cloud(ui), args, interactive, ui).await;
     };
 

@@ -286,16 +286,14 @@ enum TurnKind {
 /// loopback `llama-server`), its weights are on disk, and the runtime is
 /// installed.
 fn recorded_local(meta: &SessionMeta) -> Result<bool, String> {
-    let local = match meta.mode.as_str() {
-        MODE_LOCAL => true,
-        "" => meta.base_url.starts_with("http://127.0.0.1:"),
-        _ => false,
-    };
-    if !local || llama_server_path().is_none() {
+    if llama_server_path().is_none() {
         return Ok(false);
     }
-    let store = ModelStore::open().map_err(|e| format!("opening the local model store: {e}"))?;
-    Ok(store.is_installed(&meta.model))
+    // A chat on a model installed here runs locally however it was
+    // recorded: CLI sessions record the catalog id and no mode, and one
+    // started with `--model <local>` recorded the hub's URL — where the
+    // name only earns a 404. Cloud ids never resolve as installed models.
+    Ok(installed_local_id(&meta.model).is_ok())
 }
 
 /// Lock a chat's agent for a settings change. A turn holds the agent for its
@@ -593,6 +591,8 @@ impl SessionService {
     /// freeing its memory before the new load — and replaced, streaming
     /// `local.status` load phases.
     pub async fn ensure_local_server(&self, id: &str) -> Result<(String, usize), String> {
+        // Chats record either id form; the running server answers to one.
+        let id = &installed_local_id(id)?;
         let mut guard = self.local_server.lock().await;
         if let Some(s) = guard.as_mut() {
             if s.model_id() == id && s.is_alive() {
@@ -698,14 +698,17 @@ impl SessionService {
         if meta.model.is_empty() {
             return self.client_for().await;
         }
-        if meta.mode != MODE_LOCAL {
+        // Installed-here wins over how the row was recorded (see
+        // `recorded_local`): a local model's name sent to the hub 404s.
+        let local = recorded_local(&meta)?;
+        if !local && meta.mode != MODE_LOCAL {
             let client = (self.client_factory)(&meta.model)?;
             if client.base_url() == meta.base_url {
                 let context_window = harness_local::limits::context_window(&meta.model);
                 return Ok((client, meta.model, context_window));
             }
         }
-        if recorded_local(&meta)? {
+        if local {
             let (base_url, context_window) = match self.live_local_server(&meta.model).await {
                 Some((base_url, ctx)) => (base_url, Some(ctx)),
                 None => (
@@ -722,6 +725,8 @@ impl SessionService {
     /// The running local server's base URL and context size, if it is alive
     /// and serving `id`.
     async fn live_local_server(&self, id: &str) -> Option<(String, usize)> {
+        // Rows may hold the catalog id; the server answers to the store id.
+        let id = &installed_local_id(id).ok()?;
         let mut guard = self.local_server.lock().await;
         let server = guard.as_mut()?;
         (server.model_id() == id && server.is_alive()).then(|| {

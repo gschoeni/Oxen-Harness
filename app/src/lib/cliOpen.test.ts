@@ -68,6 +68,14 @@ describe("cli open bridge", () => {
     stop();
   });
 
+  it("resumes a chat and sends the prompt there", async () => {
+    const stop = startCliOpenBridge();
+    emit("projectOpen", { path: "/work/demo", surface: `chat:${JSON.stringify({ session: "abc123", prompt: "go on" })}` });
+    await vi.waitFor(() => expect(resumeSession).toHaveBeenCalledWith("abc123"));
+    await vi.waitFor(() => expect(runTurn).toHaveBeenCalledWith(expect.anything(), "go on", []));
+    stop();
+  });
+
   it("says why in the chat when the named local model can't start", async () => {
     useLocalModel.mockRejectedValueOnce("gemma-x isn't downloaded yet");
     const stop = startCliOpenBridge();

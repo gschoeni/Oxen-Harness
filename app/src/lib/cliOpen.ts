@@ -32,7 +32,7 @@ export async function applyLaunchSurface(surface: string | null | undefined): Pr
   // `oxen-harness ui [--local <id>] [--prompt "…"]`: a fresh chat on the
   // project — on that local model when one is named — sent at once.
   if (surface.startsWith("chat:")) {
-    let ask: { local?: string | null; prompt?: string | null };
+    let ask: { local?: string | null; prompt?: string | null; session?: string | null };
     try {
       ask = JSON.parse(surface.slice("chat:".length));
     } catch {
@@ -40,7 +40,9 @@ export async function applyLaunchSurface(surface: string | null | undefined): Pr
       useStore.getState().addNotice("The launch asked for a chat but its details didn't parse.");
       return;
     }
-    if (ask.local) {
+    if (ask.session) {
+      await s.resume(ask.session);
+    } else if (ask.local) {
       try {
         await s.switchToLocalModel(ask.local);
       } catch (e) {

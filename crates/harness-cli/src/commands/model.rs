@@ -177,30 +177,13 @@ pub(crate) async fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui
         return Ok(());
     }
 
-    // A local model can't be swapped into a live cloud session (it needs its
-    // own llama-server, started at launch). Remember it as the user's local
-    // pick and say how to ride it; no launch ever starts a local model on
-    // its own, so the explicit `--local` flag is the way.
-    if rows.iter().any(|r| r.local && r.id == id) {
-        match harness_runtime::models::set_active_local(id) {
-            Ok(()) => {
-                println!(
-                    "  {} {}",
-                    ui.brown("🐂 local oxen picked:"),
-                    ui.cream(&format!("{id} — remembered as your local model")),
-                );
-                println!(
-                    "  {}",
-                    ui.dim(&format!(
-                        "ride it next time with: oxen-harness --local {id}"
-                    )),
-                );
-            }
-            Err(e) => println!("  {} {e}", ui.dim("couldn't save the local selection:")),
-        }
-        return Ok(());
+    // A local model (named by its store or catalog id) switches the chat in
+    // place: stop the running local model, start this one, and point the
+    // agent at its server. Sending a local model's name to the hub instead
+    // only earns a 404.
+    if let Some(local_id) = crate::local::installed_local(id) {
+        return switch_to_local(agent, &local_id, ui).await;
     }
-
     agent.set_model(id);
     // The new model's catalog-reported limits, when cached; `None` falls back
     // to the name-derived window and the configured reply reserve.
@@ -667,6 +650,66 @@ fn assign(role: Role, chosen: Vec<String>, ui: &Ui) -> Result<()> {
             "{} · applies to new and resumed chats",
             role.blurb()
         ))
+    );
+    Ok(())
+}
+
+/// Move the live chat onto the installed local model `id`: one local model
+/// at a time (the old one stops first, so two never share memory), the
+/// memory check and load progress from [`crate::local::start_for`], then
+/// the agent, the fleet spawner, and the session row all follow.
+async fn switch_to_local(agent: &mut Agent, id: &str, ui: &Ui) -> Result<()> {
+    crate::local::release();
+    let (server, alias) = match crate::local::start_for(id, ui).await {
+        Ok(started) => started,
+        Err(e) => {
+            println!("  {} {e:#}", ui.red("couldn't start it:"));
+            println!(
+                "  {}",
+                ui.dim("this chat's model is unchanged; /model to pick another")
+            );
+            return Ok(());
+        }
+    };
+    let client = harness_llm::OxenClient::new(server.base_url(), "local", &alias);
+    let context = server.context_size() as usize;
+    agent.set_client(client.clone());
+    agent.set_model(&alias);
+    agent.set_context_window(Some(context));
+    agent.set_max_output_tokens(None);
+    // llama-server runs without a vision projector.
+    agent.set_accepts_images(Some(false));
+    crate::endpoint::update_fleet_endpoint(Some(&client), Some(&alias));
+    let base_url = server.base_url().to_string();
+    crate::local::hold(server);
+    let _ = harness_runtime::models::set_active_local(&alias);
+    let recorded = agent
+        .usage_store()
+        .session_meta(agent.session_id())
+        .and_then(|_| {
+            agent.usage_store().set_session_model(
+                agent.session_id(),
+                &harness_store::SessionEndpoint {
+                    model: &alias,
+                    base_url: &base_url,
+                    mode: harness_store::MODE_LOCAL,
+                    context_window: Some(context as i64),
+                },
+            )
+        });
+    if let Err(e) = recorded {
+        println!(
+            "  {} {e}",
+            ui.dim("couldn't record the model on this session (a resume will use the old one):")
+        );
+    }
+    println!(
+        "  {} {}",
+        ui.brown("local oxen yoked:"),
+        ui.accent(&format!(
+            "{alias} · {}K context · runs offline",
+            context / 1024
+        )),
     );
     Ok(())
 }
