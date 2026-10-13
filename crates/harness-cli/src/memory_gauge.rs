@@ -104,8 +104,13 @@ pub(crate) fn segment(ui: &Ui) -> Option<(String, String)> {
         plain.push_str(&format!(" · local {} GB", gb(local)));
     }
     let mut styled = paint(ui, system.pressure, &plain);
-    if let Some((word, alarm)) = marker(system.pressure, r.notice.as_ref()) {
-        let text = format!(" · ⚠ {word}");
+    if let Some(label) = pressure_label(system.pressure) {
+        let text = format!(" · {label}");
+        plain.push_str(&text);
+        styled.push_str(&paint(ui, system.pressure, &text));
+    }
+    if let Some((label, alarm)) = r.notice.as_ref().map(notice_label) {
+        let text = format!(" · ⚠ {label}");
         plain.push_str(&text);
         styled.push_str(&if alarm {
             ui.red(&text)
@@ -133,25 +138,29 @@ pub(crate) fn media_line(ui: &Ui) -> Option<String> {
         gb(system.used_bytes),
         total_gb(system.total_bytes)
     );
-    if let Some((word, _)) = marker(system.pressure, None) {
-        text.push_str(&format!(" · ⚠ {word}"));
+    if let Some(label) = pressure_label(system.pressure) {
+        text.push_str(&format!(" · {label}"));
     }
     Some(paint(ui, system.pressure, &text))
 }
 
-/// The one short warning the readout carries, and whether it is an alarm
-/// (red) rather than a caution: a fresh notice outranks the pressure level.
-/// The full reason lives in the notice itself; the meter only points at it.
-fn marker(pressure: MemoryPressure, notice: Option<&MemoryNotice>) -> Option<(&'static str, bool)> {
-    match notice.map(|n| n.level) {
-        Some(NoticeLevel::Stopped) => Some(("model stopped", true)),
-        Some(NoticeLevel::Refused) => Some(("load refused", true)),
-        Some(NoticeLevel::Warn) => Some(("tight", false)),
-        None => match pressure {
-            MemoryPressure::Critical => Some(("critical", true)),
-            MemoryPressure::Warn => Some(("high", false)),
-            MemoryPressure::Normal | MemoryPressure::Unknown => None,
-        },
+/// The pressure reading, when it isn't normal: `pressure high`.
+fn pressure_label(pressure: MemoryPressure) -> Option<&'static str> {
+    match pressure {
+        MemoryPressure::Critical => Some("pressure critical"),
+        MemoryPressure::Warn => Some("pressure high"),
+        MemoryPressure::Normal | MemoryPressure::Unknown => None,
+    }
+}
+
+/// A fresh notice in a few words — what happened, never which model (the
+/// meter line already names it) — and whether it is an alarm (red) rather
+/// than a caution. The full reason lives in the notice itself.
+fn notice_label(notice: &MemoryNotice) -> (&'static str, bool) {
+    match notice.level {
+        NoticeLevel::Stopped => ("model stopped to free memory", true),
+        NoticeLevel::Refused => ("load refused: low memory", true),
+        NoticeLevel::Warn => ("memory tight", false),
     }
 }
 
@@ -178,27 +187,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_meter_carries_one_short_warning() {
+    fn the_meter_says_what_happened_but_not_to_which_model() {
         let notice = |level| MemoryNotice {
             level,
             model: "gemma-4-26b-a4b-it-gguf-q3-k-m".into(),
             message: "long reason".into(),
             at: 0,
         };
-        // A fresh notice outranks the pressure level, and never names the model.
         assert_eq!(
-            marker(MemoryPressure::Warn, Some(&notice(NoticeLevel::Warn))),
-            Some(("tight", false))
+            notice_label(&notice(NoticeLevel::Warn)),
+            ("memory tight", false)
         );
         assert_eq!(
-            marker(MemoryPressure::Normal, Some(&notice(NoticeLevel::Stopped))),
-            Some(("model stopped", true))
+            notice_label(&notice(NoticeLevel::Stopped)),
+            ("model stopped to free memory", true)
         );
-        assert_eq!(
-            marker(MemoryPressure::Critical, None),
-            Some(("critical", true))
-        );
-        assert_eq!(marker(MemoryPressure::Normal, None), None);
+        assert_eq!(pressure_label(MemoryPressure::Warn), Some("pressure high"));
+        assert_eq!(pressure_label(MemoryPressure::Normal), None);
         assert_eq!(total_gb(36 * (1u64 << 30)), "36");
         assert_eq!(total_gb(17 * (1u64 << 30) / 2), "8.5");
     }
