@@ -13,10 +13,8 @@ import { useCallback, useEffect, type PointerEvent } from "react";
 import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import { useStore, type RightTabId } from "../../lib/store";
 import { ColumnNav, setPanelShown, togglePanel, useAvailableDocks, useDockCollapsed, type DockSide, type DockSpec } from "./docks";
-import { RAIL_W } from "./layout";
 import "./docks.css";
 
-export { RAIL_W };
 
 /** Smallest the chat column may be squeezed to by a dock drag. */
 const CHAT_MIN = 380;

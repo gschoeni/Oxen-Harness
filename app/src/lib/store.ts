@@ -949,10 +949,9 @@ interface AppState {
   removeSnippet: (index: number) => void;
   /** Resize a dock column (persisted). */
   setDockWidth: (side: string, width: number) => void;
-  /** Collapse/expand a dock column to a rail (persisted). */
+  /** Hide/show a panel — "left", "right", or "chat" (persisted). Hosts go
+   *  through `setPanelShown` in docks.tsx, which keeps one panel showing. */
   setDockCollapsed: (side: string, collapsed: boolean) => void;
-  /** Toggle a dock column's collapsed state (the ⌘B / ⌘⌥B shortcuts). */
-  toggleDock: (side: string) => void;
   setSettingsOpen: (open: boolean) => void;
   /** Open the Settings surface, optionally jumping straight to a subpage. */
   openSettings: (page?: SettingsPage) => void;
@@ -2597,8 +2596,6 @@ export const useStore = create<AppState>((rawSet, get) => {
         saveDockLayout({ widths: s.dockWidths, collapsed: dockCollapsed });
         return { dockCollapsed };
       }),
-
-    toggleDock: (side) => get().setDockCollapsed(side, !get().dockCollapsed[side]),
 
     setRightTab: (tab) => {
       const s=get(), id=s.session?.session_id; if(!id)return;
