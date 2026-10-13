@@ -51,7 +51,20 @@ pub fn context_window_for(model: &str) -> usize {
         128_000
     } else if m.contains("qwen") {
         32_768
-    } else if m.contains("llama") || m.contains("mistral") || m.contains("gemma") {
+    } else if m.contains("gemma") {
+        // Gemma 1 and 2 had 8K; Gemma 3 is 128K and Gemma 4 256K. Guessing
+        // 8K for a new Gemma refuses every turn before it starts (the
+        // harness's own prompt and tools are ~15K tokens).
+        if m.contains("gemma-2")
+            || m.contains("gemma2")
+            || m.contains("gemma-7b")
+            || m.contains("gemma-2b")
+        {
+            8_192
+        } else {
+            131_072
+        }
+    } else if m.contains("llama") || m.contains("mistral") {
         8_192
     } else {
         DEFAULT_CONTEXT_WINDOW
@@ -230,6 +243,9 @@ mod tests {
         assert_eq!(context_window_for("gpt-5-mini"), 128_000);
         assert_eq!(context_window_for("qwen3-8b"), 32_768);
         assert_eq!(context_window_for("llama-3-8b"), 8_192);
+        assert_eq!(context_window_for("gemma-4-26b-a4b-q3"), 131_072);
+        assert_eq!(context_window_for("google/gemma-3-27b-it"), 131_072);
+        assert_eq!(context_window_for("gemma-2-9b-it"), 8_192);
         // Unknown -> default.
         assert_eq!(context_window_for("some-new-model"), DEFAULT_CONTEXT_WINDOW);
     }
