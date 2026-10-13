@@ -233,17 +233,14 @@ mod tests {
             ledger: None,
             prior: crate::spend::Tokens::default(),
             last_speed: None,
+            savings: None,
         };
         let lines = facts.lines(&ui);
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines[0].contains("cold-cache-model"), "{lines:?}");
         assert!(
-            !lines[0].contains("/M"),
-            "no rate on a cold cache: {lines:?}"
-        );
-        assert!(
             !lines[1].contains('$'),
-            "no cost on a cold cache: {lines:?}"
+            "no rate or cost on a cold cache: {lines:?}"
         );
 
         // Once the rate lands (the background warm-up, or the next turn's
@@ -256,7 +253,7 @@ mod tests {
             }),
         );
         let warm = facts.lines(&ui);
-        assert!(warm[0].contains("$3/M in · $15/M out"), "{warm:?}");
+        assert!(warm[1].contains("$3/M in · $15/M out"), "{warm:?}");
         assert!(is_warm(), "a seeded cache reads as warm");
     }
 

@@ -154,11 +154,11 @@ impl Live {
                     self.request_paint();
                 }
             }
-            // The savings are chrome, not conversation: update the pinned line
-            // (above the context meter) in place — never scroll a line into
-            // the transcript between tool output and the spinner.
-            Cue::Compression { pinned_line, .. } => {
-                self.compression_line = Some(pinned_line);
+            // The savings are chrome, not conversation: they ride the spend
+            // meter in place — never a line scrolled into the transcript
+            // between tool output and the spinner.
+            Cue::Compression { savings, .. } => {
+                self.update_savings(savings);
                 self.request_paint();
             }
             Cue::ToolProgress { call_id, chunk } => self.on_tool_progress(&call_id, &chunk),

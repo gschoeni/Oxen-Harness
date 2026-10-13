@@ -105,7 +105,7 @@ impl Live {
 
     /// Build the pinned area's layout for this paint: every section with its
     /// exact lines, in top-to-bottom order (blank spacer · fleet lanes ·
-    /// compression savings · context meters · divider rule · queue table ·
+    /// media jobs · tool card · context meters · divider rule · queue table ·
     /// composer box). The reserved height and the paint walk both derive from
     /// the returned plan, so they cannot disagree.
     pub(super) fn pinned_plan(&self) -> PinnedPlan {
@@ -123,7 +123,6 @@ impl Live {
             }
             queue_lines.push(self.queue_footer(box_w));
         }
-        let compression_lines: Vec<String> = self.compression_line.iter().cloned().collect();
         let meter_lines = self.meter_lines();
         let divider = vec![self.ui.dim(&"─".repeat(self.cols as usize)); DIVIDER_ROWS];
 
@@ -142,7 +141,6 @@ impl Live {
         composer_lines.extend(self.notice.iter().cloned());
         let composer = Section::new(SectionKind::Composer, composer_lines);
         let fixed = (SPACER_ROWS
-            + compression_lines.len()
             + meter_lines.len()
             + divider.len()
             + queue_lines.len()
@@ -167,7 +165,6 @@ impl Live {
         sections.push(Section::new(SectionKind::Fleet, fleet_lines));
         sections.push(Section::new(SectionKind::Media, media_lines));
         sections.push(Section::new(SectionKind::ToolCard, card_lines));
-        sections.push(Section::new(SectionKind::Compression, compression_lines));
         sections.push(Section::new(SectionKind::Status, meter_lines));
         sections.push(Section::new(SectionKind::Divider, divider));
         sections.push(Section::new(SectionKind::Queue, queue_lines));
@@ -601,11 +598,10 @@ mod tests {
     fn pinned_plan_orders_sections_and_reserves_exactly_what_it_paints() {
         let mut l = plain_live(60, 24);
         l.sync_queue(&["a".into(), "b".into(), "c".into()]);
-        l.status_lines = vec!["ctx".into(), "used".into()];
-        l.compression_line = Some("comp".into());
+        l.status_lines = vec!["ctx".into(), "used".into(), "speed".into()];
 
         let plan = l.pinned_plan();
-        // spacer(0) + fleet(0) + compression(1) + status(2) + divider(1) +
+        // spacer(0) + fleet(0) + status(3) + divider(1) +
         // queue(3 items + 2 frame) + composer(1) = 10 reserved rows.
         assert_eq!(plan.rows(), 10);
         assert_eq!(plan.region_bottom(24), 14);
@@ -619,7 +615,6 @@ mod tests {
                 SectionKind::Fleet,
                 SectionKind::Media,
                 SectionKind::ToolCard,
-                SectionKind::Compression,
                 SectionKind::Status,
                 SectionKind::Divider,
                 SectionKind::Queue,

@@ -239,10 +239,6 @@ struct Live {
     /// call landing bumps the hub's, and the next fleet tick re-prices the
     /// meter.
     spend_epoch: u64,
-    /// The compression-savings line (`⊙ compression …`), pinned directly above
-    /// [`Live::status_lines`]. Updated in place on every `Compression` event
-    /// instead of scrolling a new line into the conversation.
-    compression_line: Option<String>,
     /// Slash-command / argument completion for the current composer text,
     /// shown as a picker above the box. Refreshed on every compose edit;
     /// `None` when there's nothing to suggest. One value bundles the
@@ -348,7 +344,6 @@ impl Live {
             status_extra: Vec::new(),
             speed: crate::speed::SpeedGauge::default(),
             spend_epoch: fleet.spend_epoch(),
-            compression_line: None,
             completion: None,
             model_items: None,
             composer_target,
@@ -576,6 +571,14 @@ impl Live {
             facts.context_tokens = context_tokens;
             facts.prompt_tokens = prompt_tokens;
             facts.completion_tokens = completion_tokens;
+        }
+        self.refresh_meters();
+    }
+
+    /// A compression event: carry the running savings onto the spend line.
+    pub(super) fn update_savings(&mut self, savings: crate::turn::Savings) {
+        if let Some(facts) = self.meters.as_mut() {
+            facts.savings = Some(savings);
         }
         self.refresh_meters();
     }
@@ -1137,6 +1140,7 @@ mod tests {
             ledger: Some(crate::spend::Ledger::new(store.clone(), root.clone())),
             prior: crate::spend::Tokens::default(),
             last_speed: None,
+            savings: None,
         });
         assert!(
             l.status_lines[1].contains("100.0k tokens used"),

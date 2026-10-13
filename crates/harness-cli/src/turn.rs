@@ -312,11 +312,19 @@ fn print_context_usage(agent: &Agent, ui: &Ui) {
 /// busy: mid-turn `Usage` events update the fill and the root's own counters,
 /// and lane spend landing in the ledger re-prices the total.
 ///
-/// Two stacked lines come out of it: the live context-window fill (what's in
-/// the model's head *right now*, which shrinks on compaction), and the
-/// session's cumulative spend — total tokens with an input/output breakdown
-/// so it's auditable — with the running price. The two are deliberately
-/// distinct: context fill ≠ total tokens used.
+/// Up to three stacked lines come out of it, read top to bottom as *what the
+/// model holds → what the session cost → how fast it is going*:
+///
+/// 1. the live context-window fill (what's in the model's head *right now*,
+///    which shrinks on compaction), with the model, branch and permission
+///    mode that frame it;
+/// 2. the session's cumulative spend — total tokens with an input/output
+///    breakdown so it's auditable — with the price, the model's rate, and
+///    what compression saved;
+/// 3. generation speed, and the machine's memory while a local model runs
+///    (absent until there is something to report).
+///
+/// Fill and spend are deliberately distinct: context fill ≠ total tokens used.
 #[derive(Clone)]
 pub(crate) struct MeterFacts {
     pub(crate) model: String,
@@ -341,6 +349,34 @@ pub(crate) struct MeterFacts {
     /// The agent's last call's final speed reading: the readout's figure at
     /// an idle prompt, where no live gauge has seen a call yet.
     pub(crate) last_speed: Option<harness_agent::Throughput>,
+    /// Compression's running savings, while compression is on or auditing.
+    pub(crate) savings: Option<Savings>,
+}
+
+/// What context compression has saved this session (`on`), or would have
+/// saved (`audit`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Savings {
+    pub(crate) audit: bool,
+    pub(crate) tokens: usize,
+}
+
+impl Savings {
+    /// The agent's savings so far, or `None` with compression off.
+    pub(crate) fn of(agent: &Agent) -> Option<Self> {
+        let mode = agent.compression_mode();
+        (mode != harness_compress::CompressionMode::Off).then(|| Savings {
+            audit: mode == harness_compress::CompressionMode::Audit,
+            tokens: agent.tokens_saved(),
+        })
+    }
+
+    /// The spend-line segment, once there is something saved to report: a
+    /// `~0` reading is noise, and `/compression` already says the mode.
+    fn segment(&self) -> Option<String> {
+        let verb = if self.audit { "would save" } else { "saved" };
+        (self.tokens > 0).then(|| format!("⊙ compression {verb} ~{}", human_tokens(self.tokens)))
+    }
 }
 
 impl MeterFacts {
@@ -370,10 +406,11 @@ impl MeterFacts {
             ledger,
             prior,
             last_speed: agent.last_throughput().cloned(),
+            savings: Savings::of(agent),
         }
     }
 
-    /// The two trailer lines, themed and indented, fitted to the terminal.
+    /// The trailer lines, themed and indented, fitted to the terminal.
     /// The workspace's git branch and the permission mode are read from the
     /// process (see [`git_branch`] and [`permission_mode`]).
     pub(crate) fn lines(&self, ui: &Ui) -> Vec<String> {
@@ -397,6 +434,7 @@ impl MeterFacts {
                 }),
                 memory: crate::memory_gauge::segment(ui),
                 local: crate::local::is_local(&self.model),
+                savings: self.savings.as_ref().and_then(Savings::segment),
             },
             meter_budget(),
         )
@@ -426,7 +464,7 @@ impl MeterFacts {
     }
 }
 
-/// Everything the two meter lines report about the session right now.
+/// Everything the meter lines report about the session right now.
 struct Meters<'a> {
     model: &'a str,
     used: usize,
@@ -443,6 +481,8 @@ struct Meters<'a> {
     memory: Option<(String, String)>,
     /// The model runs on this machine (so it is free).
     local: bool,
+    /// The compression-savings segment, once compression saved anything.
+    savings: Option<String>,
 }
 
 /// One `· `-joined piece of a meter line, with the width it costs and how
@@ -478,8 +518,8 @@ fn fit(mut segs: Vec<Seg>, budget: Option<usize>) -> String {
                 + 3 * segs.len().saturating_sub(1)
         };
         while width(&segs) > budget {
-            // The price gives way first, then the mode, branch, and model —
-            // the context fill itself is never dropped.
+            // The most expendable segment goes first; a line's core figure
+            // (expendable 0) is never dropped.
             let Some(worst) = segs
                 .iter()
                 .enumerate()
@@ -496,10 +536,12 @@ fn fit(mut segs: Vec<Seg>, budget: Option<usize>) -> String {
     format!("  {}", joined.join(" · "))
 }
 
-/// The two meter lines for a set of figures, fitted to `budget` columns.
+/// The meter lines for a set of figures, fitted to `budget` columns: context,
+/// then spend, then speed — the third only once there is a reading for it.
 fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
-    // Line 1 — the context window fill, with the branch, permission mode, the
-    // model, and its per-token rate.
+    // Line 1 — what the model holds: the context window fill, then the model
+    // it belongs to (whose window is the denominator), the branch, and the
+    // permission mode.
     let pct = (m.used * 100)
         .checked_div(m.window)
         .map_or(0, |p| p.min(100));
@@ -509,61 +551,70 @@ fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
         human_tokens(m.window),
     );
     let pct_text = format!("({pct}%)");
-    let mut line1 = vec![Seg::new(
+    let mut context = vec![Seg::new(
         format!("{fill} {pct_text}"),
         format!("{} {}", ui.dim(&fill), paint_pct(ui, pct, &pct_text)),
         0,
     )];
+    context.push(Seg::new(m.model, ui.accent(m.model), 1));
     if let Some(branch) = &m.branch {
         let text = format!("⎇ {branch}");
-        line1.push(Seg::new(text.clone(), ui.dim(&text), 2));
+        context.push(Seg::new(text.clone(), ui.dim(&text), 2));
     }
     if let Some(mode) = m.mode {
-        line1.push(Seg::new(mode, ui.dim(mode), 3));
-    }
-    line1.push(Seg::new(m.model, ui.accent(m.model), 1));
-    if let Some(rate) = crate::pricing::session_rate(m.model)
-        .as_ref()
-        .and_then(crate::pricing::format_rate)
-    {
-        line1.push(Seg::new(rate.clone(), ui.dim(&rate), 4));
+        context.push(Seg::new(mode, ui.dim(mode), 3));
     }
 
-    // Line 2 — the session's cumulative spend, subagents included: total
-    // tokens = input + output, spelled out so the figure is auditable, plus
-    // the running dollar cost — or, when a model has no published rate, its
-    // name, so a missing price is never mistaken for a free one.
+    // Line 2 — what the session cost, subagents included: total tokens =
+    // input + output, spelled out so the figure is auditable, then the
+    // running dollar cost and the per-token rate behind it, then what
+    // compression took off the bill. A model with no published rate adds no
+    // price, so a missing price is never mistaken for a free one.
     let totals = format!(
         "📊 {} tokens used · {} in · {} out",
         human_tokens(m.spend.total_tokens()),
         human_tokens(m.spend.prompt_tokens),
         human_tokens(m.spend.completion_tokens),
     );
-    let mut line2 = vec![Seg::new(totals.clone(), ui.dim(&totals), 0)];
+    let mut spend = vec![Seg::new(totals.clone(), ui.dim(&totals), 0)];
     if let Some(price) = m.spend.price.label() {
         let styled = if m.spend.price.is_complete() {
             ui.accent(&price)
         } else {
             ui.brown(&price)
         };
-        line2.push(Seg::new(price, styled, 4));
+        spend.push(Seg::new(price, styled, 1));
     } else if m.local {
         // A local model has no rate because it costs nothing: say so.
         let free = "free · local";
-        line2.push(Seg::new(free, ui.green(free), 4));
+        spend.push(Seg::new(free, ui.green(free), 1));
     }
-    // Speed gives way just after the price: what the session cost outranks
-    // how fast it is going, but both outrank nothing.
-    if let Some((plain, styled)) = &m.speed {
-        line2.push(Seg::new(plain.clone(), styled.clone(), 3));
+    if let Some(rate) = crate::pricing::session_rate(m.model)
+        .as_ref()
+        .and_then(crate::pricing::format_rate)
+    {
+        spend.push(Seg::new(rate.clone(), ui.dim(&rate), 2));
     }
-    // Memory outlasts both on a narrow terminal: a local model squeezing
-    // the machine is the one figure here that needs acting on.
-    if let Some((plain, styled)) = &m.memory {
-        line2.push(Seg::new(plain.clone(), styled.clone(), 2));
+    if let Some(saved) = &m.savings {
+        spend.push(Seg::new(saved.clone(), ui.dim(saved), 3));
     }
 
-    vec![fit(line1, budget), fit(line2, budget)]
+    // Line 3 — how fast it is going, and, while a local model runs, what it
+    // costs the machine. Memory outlasts speed on a narrow terminal: a local
+    // model squeezing the machine is the one figure here that needs acting on.
+    let mut pace = Vec::new();
+    if let Some((plain, styled)) = &m.speed {
+        pace.push(Seg::new(plain.clone(), styled.clone(), 2));
+    }
+    if let Some((plain, styled)) = &m.memory {
+        pace.push(Seg::new(plain.clone(), styled.clone(), 1));
+    }
+
+    let mut lines = vec![fit(context, budget), fit(spend, budget)];
+    if !pace.is_empty() {
+        lines.push(fit(pace, budget));
+    }
+    lines
 }
 
 /// The context percentage, colored by how much room is left: normal below 60%,
@@ -719,23 +770,29 @@ mod tests {
             ledger: None,
             prior: Tokens::default(),
             last_speed: None,
+            savings: None,
         };
         let lines = facts.lines(&ui);
-        assert_eq!(lines.len(), 2, "two stacked lines: {lines:?}");
+        assert_eq!(
+            lines.len(),
+            2,
+            "no speed line before a call is timed: {lines:?}"
+        );
         let (ctx, usage) = (&lines[0], &lines[1]);
 
-        // Line 1 — the context-window fill, model, and per-token rate.
+        // Line 1 — the context-window fill and the model it belongs to.
         assert!(ctx.contains("50.0k / 200.0k"), "context: {ctx}");
         assert!(ctx.contains("(25%)"), "percent: {ctx}");
         assert!(ctx.contains("live-meter-model"), "model: {ctx}");
-        assert!(ctx.contains("$3/M in · $15/M out"), "rate: {ctx}");
 
-        // Line 2 — auditable totals: total = in + out (50k = 40k + 10k), + cost.
+        // Line 2 — auditable totals: total = in + out (50k = 40k + 10k), the
+        // cost, and the rate behind it.
         assert!(usage.contains("50.0k tokens used"), "total: {usage}");
         assert!(usage.contains("40.0k in"), "input: {usage}");
         assert!(usage.contains("10.0k out"), "output: {usage}");
         // 40k * 3e-6 + 10k * 15e-6 = 0.12 + 0.15 = 0.27
         assert!(usage.contains("$0.27"), "cost: {usage}");
+        assert!(usage.contains("$3/M in · $15/M out"), "rate: {usage}");
         // The context fill and the total are distinct figures, not conflated.
         assert!(
             !ctx.contains("tokens used"),
@@ -768,6 +825,7 @@ mod tests {
             speed: None,
             memory: None,
             local: false,
+            savings: None,
         }
     }
 
@@ -792,13 +850,13 @@ mod tests {
         ));
         let wide = meter_lines(&ui, &m, None);
         assert!(
-            wide[1].contains("🧠 30.1/36.0 GB") && wide[1].contains("45 tok/s"),
+            wide[2].contains("🧠 30.1/36.0 GB") && wide[2].contains("45 tok/s"),
             "{wide:?}"
         );
-        let narrow = meter_lines(&ui, &m, Some(80));
-        assert!(narrow[1].contains("🧠"), "memory stays: {narrow:?}");
+        let narrow = meter_lines(&ui, &m, Some(36));
+        assert!(narrow[2].contains("🧠"), "memory stays: {narrow:?}");
         assert!(
-            !narrow[1].contains("tok/s"),
+            !narrow[2].contains("tok/s"),
             "speed gives way first: {narrow:?}"
         );
     }
@@ -823,47 +881,56 @@ mod tests {
             ledger: None,
             prior: Tokens::default(),
             last_speed: Some(reading(446, true)),
+            savings: None,
         };
         let idle = facts.lines(&ui);
         assert!(
-            idle[1].ends_with("⚡ 44.6 tok/s · 1.2s to first token"),
+            idle[2].ends_with("⚡ 44.6 tok/s · 1.2s to first token"),
             "settled speed at idle: {idle:?}"
         );
         let mut live = crate::speed::SpeedGauge::default();
         live.record(&reading(120, false));
         let streaming = facts.lines_with(&ui, &live);
         assert!(
-            streaming[1].contains("⚡ 12.0 tok/s"),
+            streaming[2].contains("⚡ 12.0 tok/s"),
             "live wins: {streaming:?}"
         );
     }
 
     #[test]
-    fn the_spend_line_carries_the_speed_and_sheds_it_after_the_price() {
+    fn the_lines_read_context_then_spend_then_speed() {
         let ui = Ui::plain();
         let speed = "⚡ 44.6 tok/s · 0.8s to first token".to_string();
         let timed = Meters {
             speed: Some((speed.clone(), speed.clone())),
             ..meters(50_000, "claude-opus-4-8")
         };
-        let wide = meter_lines(&ui, &timed, None);
+        let lines = meter_lines(&ui, &timed, None);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[0].contains("🧭 context"), "context first: {lines:?}");
+        assert!(lines[1].contains("tokens used"), "spend second: {lines:?}");
+        assert_eq!(lines[2], format!("  {speed}"), "speed third: {lines:?}");
+    }
+
+    #[test]
+    fn compression_savings_ride_the_spend_line_once_there_are_any() {
+        let ui = plain_ui();
+        let with = |audit, tokens| Meters {
+            savings: super::Savings { audit, tokens }.segment(),
+            ..meters(50_000, "meter-savings-model")
+        };
+        let saved = meter_lines(&ui, &with(false, 12_300), None);
         assert!(
-            wide[1].ends_with(&speed),
-            "speed on the spend line: {wide:?}"
+            saved[1].ends_with("⊙ compression saved ~12.3k"),
+            "{saved:?}"
         );
-        // Just wide enough for the totals and the speed: the price went first.
-        let totals = meter_lines(&ui, &meters(50_000, "claude-opus-4-8"), None)[1]
-            .split(" · $")
-            .next()
-            .unwrap()
-            .to_string();
-        let budget = crate::width::str_width(&totals) + 3 + crate::width::str_width(&speed);
-        let narrow = meter_lines(&ui, &timed, Some(budget));
-        assert!(narrow[1].ends_with(&speed), "speed kept: {narrow:?}");
-        assert!(!narrow[1].contains('$'), "price shed first: {narrow:?}");
-        // Narrower still, the speed goes too and the totals stand.
-        let tight = meter_lines(&ui, &timed, Some(budget - 1));
-        assert!(!tight[1].contains('⚡'), "speed shed: {tight:?}");
+        let audit = meter_lines(&ui, &with(true, 900), None);
+        assert!(
+            audit[1].ends_with("⊙ compression would save ~900"),
+            "{audit:?}"
+        );
+        let nothing = meter_lines(&ui, &with(true, 0), None);
+        assert!(!nothing.concat().contains('⊙'), "no ~0 noise: {nothing:?}");
     }
 
     #[test]
@@ -888,10 +955,7 @@ mod tests {
             "an unpriced model adds no price segment: {lines:?}"
         );
         assert!(!lines[1].contains('$'), "no phantom dollars: {lines:?}");
-        assert!(
-            !lines[0].contains("/M"),
-            "no rate on line 1 either: {lines:?}"
-        );
+        assert!(!lines.concat().contains("/M"), "no phantom rate: {lines:?}");
     }
 
     #[test]
@@ -948,6 +1012,7 @@ mod tests {
             ledger: Some(Ledger::new(store.clone(), root.clone())),
             prior: Tokens::default(),
             last_speed: None,
+            savings: None,
         };
 
         // Before the first call lands in the ledger, the root's own counters
@@ -1040,7 +1105,7 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_terminal_drops_the_price_before_anything_else() {
+    fn a_narrow_terminal_sheds_the_rate_then_the_price() {
         use harness_local::source::ModelPricing;
         crate::pricing::seed_for_test(
             "meter-width-model",
@@ -1061,20 +1126,24 @@ mod tests {
 
         // Wide enough for everything.
         let full = meter_lines(&ui, &m, Some(200));
-        assert!(full[0].contains("$3/M in"), "rate: {full:?}");
+        assert!(full[1].contains("$3/M in"), "rate: {full:?}");
         assert!(full[1].contains("$0.27"), "cost: {full:?}");
 
-        // Squeezed: both lines stay inside the width, and what gives way first
-        // is the price — the rate off line 1, the running cost off line 2.
+        // Squeezed: both lines stay inside the width, and the rate gives way
+        // before the running cost it explains.
         let tight = meter_lines(&ui, &m, Some(60));
         assert!(width(&tight) <= 60, "over width: {tight:?}");
         assert!(
-            !tight[0].contains("$3/M in"),
+            !tight[1].contains("$3/M in"),
             "rate must go first: {tight:?}"
         );
         assert!(
+            tight[1].contains("$0.27"),
+            "cost outlives the rate: {tight:?}"
+        );
+        assert!(
             tight[0].contains("meter-width-model"),
-            "the model outlives the price: {tight:?}"
+            "the model stays: {tight:?}"
         );
         let tighter = meter_lines(&ui, &m, Some(45));
         assert!(width(&tighter) <= 45, "over width: {tighter:?}");

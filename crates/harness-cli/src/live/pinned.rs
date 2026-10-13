@@ -21,9 +21,7 @@ pub(super) enum SectionKind {
     Media,
     /// The running command's live output tail (only while one streams).
     ToolCard,
-    /// The in-place compression-savings line.
-    Compression,
-    /// The context-usage meters.
+    /// The meters: context fill, session spend, generation speed.
     Status,
     /// The faint full-width rule above the input area.
     Divider,

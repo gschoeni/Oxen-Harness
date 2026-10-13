@@ -562,15 +562,18 @@ fn dropping_a_suspended_live_unsticks_the_input_thread() {
 }
 
 /// Ending a live session must erase every piece of its chrome — the meters,
-/// compression line, divider, completion hint, and composer — leaving only
+/// divider, completion hint, and composer — leaving only
 /// conversation in the scrollback, with the cursor parked just below it so
 /// the next cooked-mode print (the echoed submission) continues seamlessly.
 /// Guards the "stale meters stack up after /model and after every turn" bug.
 #[test]
 fn teardown_erases_all_chrome_from_the_screen() {
     let (mut live, handle) = capture_live(60, 20);
-    live.status_lines = vec!["compass context meter".into(), "usage meter line".into()];
-    live.compression_line = Some("compression savings line".into());
+    live.status_lines = vec![
+        "compass context meter".into(),
+        "usage meter line".into(),
+        "speed meter line".into(),
+    ];
     live.render();
     // An idle composer with the completion hint showing (the worst case: the
     // hint rows sit above the box and used to leak on submit).
@@ -581,7 +584,7 @@ fn teardown_erases_all_chrome_from_the_screen() {
     let mut parser = screen(&handle, 60, 20, "\x1b[12;1Hlast reply line\r\n");
     let before = rows_text(&parser).join("\n");
     assert!(
-        before.contains("usage meter line") && before.contains("compression savings line"),
+        before.contains("usage meter line") && before.contains("speed meter line"),
         "chrome must be on screen before teardown:\n{before}"
     );
 
@@ -593,7 +596,7 @@ fn teardown_erases_all_chrome_from_the_screen() {
         "conversation must survive teardown:\n{all}"
     );
     for chrome in [
-        "compression savings line",
+        "speed meter line",
         "compass context meter",
         "usage meter line",
         "──",     // the divider rule

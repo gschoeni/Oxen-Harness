@@ -65,10 +65,10 @@ pub(crate) enum Cue {
     /// A generation-speed reading: live shows it on the meter; classic
     /// ignores it.
     Throughput(harness_agent::Throughput),
-    /// Compression savings: live updates `pinned_line` in place, classic
-    /// scrolls `scroll_line` into the transcript.
+    /// Compression savings: live carries `savings` on the spend meter,
+    /// classic scrolls `scroll_line` into the transcript.
     Compression {
-        pinned_line: String,
+        savings: crate::turn::Savings,
         scroll_line: String,
     },
     /// Nothing to show on this surface.
@@ -225,15 +225,10 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
                 "saved"
             };
             Cue::Compression {
-                pinned_line: format!(
-                    "  {} {} {} {}",
-                    ui.brown("⊙"),
-                    ui.dim("compression:"),
-                    ui.accent(mode),
-                    ui.dim(&format!(
-                        "· {verb} ~{saved_tokens} tokens this call ({total_saved_tokens} total) · /compression to switch"
-                    )),
-                ),
+                savings: crate::turn::Savings {
+                    audit: mode == "audit",
+                    tokens: *total_saved_tokens,
+                },
                 scroll_line: format!(
                     "  {} {}",
                     ui.brown("⊙"),
@@ -498,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn compression_builds_both_the_pinned_and_scroll_variants() {
+    fn compression_carries_the_running_savings_and_a_scroll_line() {
         let cue = cue_for(
             &ui(),
             &AgentEvent::Compression {
@@ -509,15 +504,19 @@ mod tests {
             },
         );
         let Cue::Compression {
-            pinned_line,
+            savings,
             scroll_line,
         } = cue
         else {
-            panic!("compression should carry both lines");
+            panic!("compression should carry the savings and a scroll line");
         };
-        assert!(pinned_line.contains("would save ~120"));
-        assert!(pinned_line.contains("/compression to switch"));
+        assert_eq!(
+            savings,
+            crate::turn::Savings {
+                audit: true,
+                tokens: 450
+            }
+        );
         assert!(scroll_line.contains("would save ~120"));
-        assert!(!scroll_line.contains("/compression to switch"));
     }
 }

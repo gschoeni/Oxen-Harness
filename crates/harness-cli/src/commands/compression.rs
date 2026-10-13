@@ -1,4 +1,4 @@
-//! The `/compression` command and the pinned compression-savings meter.
+//! The `/compression` command.
 
 use anyhow::Result;
 use harness_agent::Agent;
@@ -6,7 +6,6 @@ use harness_compress::CompressionMode;
 
 use crate::picker::{self, Choice};
 use crate::theme::Ui;
-use crate::turn::human_tokens;
 
 /// `/compression [off|audit|on]` — show or switch context compression. With no
 /// argument, opens the interactive picker (current mode marked). Applies to
@@ -85,32 +84,4 @@ pub(crate) fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> R
         ui.cream(&format!("{} — {scope}", mode.as_str())),
     );
     Ok(())
-}
-
-/// The compression-savings trailer, pinned directly above the context meter:
-/// the current mode leads (accented), then what compression saved (`on`) or
-/// would have saved (`audit`) so far this session, then the `/compression`
-/// hint so switching is discoverable from the meter itself. `None` with
-/// compression off, so the row disappears entirely rather than showing a dead
-/// `off` line.
-pub(crate) fn status_line(agent: &Agent, ui: &Ui) -> Option<String> {
-    let mode = agent.compression_mode();
-    if mode == CompressionMode::Off {
-        return None;
-    }
-    let verb = if mode == CompressionMode::Audit {
-        "would save"
-    } else {
-        "saved"
-    };
-    Some(format!(
-        "  {} {} {} {}",
-        ui.brown("⊙"),
-        ui.dim("compression:"),
-        ui.accent(mode.as_str()),
-        ui.dim(&format!(
-            "· {verb} ~{} tokens this session · /compression to switch",
-            human_tokens(agent.tokens_saved()),
-        )),
-    ))
 }

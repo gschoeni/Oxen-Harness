@@ -72,7 +72,6 @@ pub(crate) async fn run_prompt(
         // Arm the meters with the ledger so mid-turn `Usage` events and lane
         // spend can rebuild the context trailer live, agent or no agent.
         s.set_meters(MeterFacts::of(agent));
-        s.compression_line = crate::commands::compression::status_line(agent, ui);
     }
 
     let mut next = Some(first);
@@ -114,7 +113,6 @@ pub(crate) async fn run_prompt(
                     // Refresh the pinned meters (they sit above the divider,
                     // not in the scrollback) with the turn's totals.
                     s.set_meters(MeterFacts::of(agent));
-                    s.compression_line = crate::commands::compression::status_line(agent, ui);
                     s.render();
                 }
                 // Auto-drain: send the next stacked message (more may still be
@@ -183,10 +181,9 @@ pub(crate) enum Idle {
 /// tear the terminal down so the caller can run a turn or a command in cooked
 /// mode. `seed` pre-fills the input (e.g. a draft carried over from a turn);
 /// `history` is loaded for Up/Down recall and updated with the submission;
-/// `meters` feeds the context-usage trailer (its two lines) pinned just above
-/// the divider — armed rather than pre-rendered, so a fleet the last turn
-/// left running keeps re-pricing it — and `compression` is the savings line
-/// pinned just above that.
+/// `meters` feeds the context-usage trailer pinned just above the divider —
+/// armed rather than pre-rendered, so a fleet the last turn left running
+/// keeps re-pricing it.
 ///
 /// Returns [`Idle::Submit`] with the trimmed text, or [`Idle::Exit`] to quit.
 pub(crate) async fn read_idle(
@@ -195,7 +192,6 @@ pub(crate) async fn read_idle(
     history: &mut Vec<String>,
     seed: &str,
     meters: MeterFacts,
-    compression: Option<String>,
 ) -> Result<Idle> {
     let term = LiveTerminal::new(ui.decorates())?;
     let (rows, cols) = (term.rows, term.cols);
@@ -219,7 +215,6 @@ pub(crate) async fn read_idle(
         }
         s.status_extra = background.into_iter().collect();
         s.set_meters(meters);
-        s.compression_line = compression;
         s.sync_queue(queue.items());
         s.set_title(TitleState::Idle);
         s.render();

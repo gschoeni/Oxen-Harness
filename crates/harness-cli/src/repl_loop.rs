@@ -224,9 +224,7 @@ pub(crate) async fn run_box_repl(
             );
         }
         let meters = crate::turn::MeterFacts::of(agent);
-        let compression = commands::compression::status_line(agent, ui);
-        let idle =
-            live::read_idle(ui, &mut queue, &mut history, &seed, meters, compression).await?;
+        let idle = live::read_idle(ui, &mut queue, &mut history, &seed, meters).await?;
         match idle {
             live::Idle::Exit => {
                 print!("{}", theme::death_screen(ui, &ctx.session()));
