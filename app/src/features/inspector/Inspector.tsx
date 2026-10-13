@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { IconButton } from "../../components/ui";
+import { JsonTree } from "../../components/ui/JsonTree";
 import {
   Ban,
   Braces,
@@ -72,6 +73,10 @@ function estTokens(m: ChatMessage): number {
 function estJsonTokens(value: unknown): number {
   return Math.floor(JSON.stringify(value).length / 4);
 }
+
+/** The raw tree opens to where the structure reads: each tool's name and
+ *  description (its schema folded), each message's role and content. */
+const rawDepth = (level: number) => level < 4;
 
 /** Pretty-print a JSON-string argument blob; fall back to the raw string. */
 function prettyJson(s: string): string {
@@ -310,9 +315,10 @@ export function Inspector({ sessionId }: { sessionId: string }) {
   // multi-megabyte string (every tool result, every canvas doc, indented), so
   // it is only built while the Raw tab is showing — the Chat and Readable
   // views never pay for it, and it is released when the tab changes.
+  const rawRequest = useMemo(() => ({ tools, messages: messages ?? [] }), [tools, messages]);
   const rawJson = useMemo(
-    () => (mode === "raw" ? JSON.stringify({ tools, messages: messages ?? [] }, null, 2) : ""),
-    [mode, tools, messages],
+    () => (mode === "raw" ? JSON.stringify(rawRequest, null, 2) : ""),
+    [mode, rawRequest],
   );
 
   const ctxPct =
@@ -417,7 +423,7 @@ export function Inspector({ sessionId }: { sessionId: string }) {
               </div>
             </div>
           ) : mode === "raw" ? (
-            <pre className="dev-rawjson">{rawJson}</pre>
+            <JsonTree data={rawRequest} shouldExpand={rawDepth} label="Raw request JSON" />
           ) : (
             <div className="dev-messages">
               {tools.length > 0 && <ToolsPanel tools={tools} />}

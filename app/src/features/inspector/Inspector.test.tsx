@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -86,10 +86,26 @@ describe("Inspector", () => {
     expect(screen.getByText(/"glob"/)).toBeInTheDocument();
   });
 
-  it("toggles to raw JSON view", async () => {
+  it("shows the raw request as a collapsible tree", async () => {
+    ipc.toolDefinitions.mockResolvedValue([
+      {
+        type: "function",
+        function: { name: "find_files", description: "Locate files", parameters: { type: "object", required: ["glob"] } },
+      },
+    ] as unknown[]);
     render(<Inspector sessionId="s1" />);
     await userEvent.click(screen.getByRole("tab", { name: /raw json/i }));
-    // The raw dump contains the verbatim tool_call_id
-    expect(await screen.findByText(/"tool_call_id": "call_1"/)).toBeInTheDocument();
+    const tree = await screen.findByRole("tree", { name: "Raw request JSON" });
+    // The structure reads at the default depth: each tool's name, each
+    // message's fields (the verbatim tool_call_id among them)…
+    expect(within(tree).getByText('"find_files"')).toBeInTheDocument();
+    expect(within(tree).getByText('"call_1"', { selector: ".json-tree-string" })).toBeInTheDocument();
+    // …while a tool's schema stays folded until asked for.
+    expect(within(tree).queryByText('"glob"')).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Expand all" }));
+    expect(within(screen.getByRole("tree")).getByText('"glob"')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Collapse all" }));
+    expect(within(screen.getByRole("tree")).queryByText('"find_files"')).toBeNull();
   });
 });

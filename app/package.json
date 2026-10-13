@@ -30,6 +30,7 @@
     "lucide-react": "^0.460.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-json-view-lite": "2.5.0",
     "react-markdown": "^9.0.1",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",

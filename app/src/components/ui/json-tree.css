@@ -1,0 +1,88 @@
+/* The JSON tree's look, on the highlight palette (hljs.css): keys secondary,
+   strings green, numbers the link colour, literals the accent. */
+.json-tree-frame {
+  position: relative;
+  flex-shrink: 0;
+  background: var(--code-bg);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+.json-tree-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+.json-tree {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.json-tree-row {
+  margin: 0;
+  padding: 0;
+}
+/* Each level indents one step, with a faint guide line so siblings line up. */
+.json-tree-children {
+  margin: 0 0 0 var(--space-2);
+  padding: 0 0 0 var(--space-3);
+  border-left: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+}
+.json-tree-key {
+  margin-right: var(--space-1);
+  color: var(--text-secondary);
+}
+.json-tree-key.clickable {
+  cursor: pointer;
+}
+.json-tree-key.clickable:hover {
+  color: var(--text);
+}
+.json-tree-string {
+  color: var(--green);
+}
+.json-tree-number {
+  color: var(--link);
+}
+.json-tree-boolean,
+.json-tree-null {
+  color: var(--accent);
+}
+.json-tree-other {
+  color: var(--text-secondary);
+}
+.json-tree-punct {
+  color: var(--text-tertiary);
+}
+.json-tree-toggle {
+  display: inline-block;
+  width: 1em;
+  margin-right: var(--space-1);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  user-select: none;
+}
+.json-tree-toggle:hover {
+  color: var(--text);
+}
+.json-tree-toggle.expand::after {
+  content: "\25B8";
+}
+.json-tree-toggle.collapse::after {
+  content: "\25BE";
+}
+.json-tree-collapsed {
+  margin: 0 var(--space-1);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.json-tree-collapsed::after {
+  content: "…";
+}

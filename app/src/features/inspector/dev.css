@@ -280,25 +280,7 @@
   overflow: auto;
 }
 
-/* ---- raw json ------------------------------------------------------------ */
-
-.dev-rawjson {
-  margin: 0;
-  background: var(--code-bg);
-  border: 1px solid var(--separator);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: 1.5;
-  /* One scroll for the whole drawer: the JSON grows to its full height and
-     long strings (tool descriptions, prompts) wrap in place, so the block
-     never opens scrollbars of its own inside the drawer's. */
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  flex-shrink: 0;
-  color: var(--text);
-}
+/* The raw view is the shared JsonTree (components/ui/json-tree.css). */
 
 .dev-error {
   color: var(--danger);
