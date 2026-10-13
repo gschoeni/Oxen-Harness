@@ -39,30 +39,20 @@ impl SpeedGauge {
 
     /// Fold in one reading from the agent.
     pub(crate) fn record(&mut self, reading: &Throughput) {
-        if let Some(prev) = self
+        if let Some(rate) = self
             .latest
             .as_ref()
-            .filter(|p| !p.done && p.model == reading.model)
+            .and_then(|prev| moment_rate(prev, reading))
         {
-            // Only the live, estimated readings of one call difference
-            // cleanly: the final one swaps in the endpoint's exact count.
-            let dt = reading.decode_ms.saturating_sub(prev.decode_ms);
-            if !reading.done && dt > 0 && reading.output_tokens >= prev.output_tokens {
-                let rate = (reading.output_tokens - prev.output_tokens) as f64 * 1000.0 / dt as f64;
-                if self.samples.len() == SPARK_SAMPLES {
-                    self.samples.pop_front();
-                }
-                self.samples.push_back(rate);
+            if self.samples.len() == SPARK_SAMPLES {
+                self.samples.pop_front();
             }
+            self.samples.push_back(rate);
         }
-        // A reading with no rate yet (the call's first token) keeps the last
-        // known rate on screen rather than blanking it.
-        let keep_previous = reading.tokens_per_sec().is_none()
-            && self
-                .latest
-                .as_ref()
-                .is_some_and(|p| p.tokens_per_sec().is_some());
-        if !keep_previous || reading.done {
+        // A new call's first token has no rate yet: keep the last figure on
+        // screen rather than blanking the readout between calls.
+        let blank = reading.tokens_per_sec().is_none() && !reading.done;
+        if !blank || self.latest.is_none() {
             self.latest = Some(reading.clone());
         }
     }
@@ -97,6 +87,19 @@ impl SpeedGauge {
         );
         Some((plain, styled))
     }
+}
+
+/// Tokens/sec between two live readings of the same call. The final
+/// reading swaps in the endpoint's exact count, so it never differences
+/// cleanly against an estimate.
+fn moment_rate(prev: &Throughput, next: &Throughput) -> Option<f64> {
+    let same_call = !prev.done && !next.done && prev.model == next.model;
+    let dt = next
+        .decode_ms
+        .checked_sub(prev.decode_ms)
+        .filter(|dt| *dt > 0)?;
+    let tokens = next.output_tokens.checked_sub(prev.output_tokens)?;
+    same_call.then(|| tokens as f64 * 1000.0 / dt as f64)
 }
 
 /// A rate at the precision a glance needs: one decimal below 100, whole

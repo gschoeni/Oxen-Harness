@@ -48,6 +48,7 @@ oxen-harness/
                                  rules.rs (stream rules: regex corrections that watch the reply and fire only on a match, plus DRAFT_SYSTEM/DraftedRule — model-written rules, self-verified). agent/ splits the loop: turn (the cycle),
                                  call (one model call), tools (gate → waves: shared calls together, exclusive alone; live ToolProgress), repair (heal cut-off JSON, coerce args to the schema), fork (session forks), compaction.
                                  Background tasks that finish are delivered to the model as messages (never polled); every re-call with a corrective emits Nudged; side agents run under a RoundBudget.
+                                 throughput.rs (ThroughputMeter: per-call time-to-first-token + decode tok/s, live readings then the exact final one, learned chars-per-token).
     harness-protocol/        — The transport-neutral wire types every UI speaks: the tagged ProtocolEvent enum + command DTOs (serde + JSON Schema); tests/wire.rs is the spec.
     harness-host/            — The transport-agnostic host layer: SessionService (multi-session agent cache, turn driving, question/approval round-trips, model swaps, review/loop runners), generic over an EventSink; the Tauri app and HTTP server are both thin adapters over it.
     harness-server/          — The agent backend as a standalone HTTP server (axum): REST commands + an SSE protocol-event stream with Last-Event-ID replay; bearer-token auth; see PROTOCOL.md.
@@ -61,7 +62,7 @@ oxen-harness/
                                  service.rs (StudyService: profile, batch, answer; the model behind a Completer trait), tool.rs (the `understanding` tool). Files live in ~/.oxen-harness/study/<project-key>/.
     harness-cli/             — The `oxen-harness` interactive REPL binary. Slash-command handlers live in commands/ (auth, compression, location, loops, model [+ /model roles], oxen, permissions, plan [/plan read-only mode], preview, queue, resume, rewind [/fork, /rewind], review, rules, theme, trace, ui, usage, print [-p headless]);
                                  custom_commands.rs holds the workspace's Markdown commands; graphics.rs draws inline images (kitty / iTerm2, env-detected) and OSC 8 links; the live sticky-bottom composer in live/ (card.rs: the streaming command-output card + Ctrl+O results;
-                                 keys: Esc cancels, Ctrl+Q/Ctrl+Enter queue, Alt+↑ un-queue, Ctrl+O expand); the meters (branch, mode, timer) in turn.rs, priced from the session tree's usage ledger by spend.rs; the fleet lanes display in fleet_ui.rs/fleet_sink.rs.
+                                 keys: Esc cancels, Ctrl+Q/Ctrl+Enter queue, Alt+↑ un-queue, Ctrl+O expand); the meters (branch, mode, timer) in turn.rs, priced from the session tree's usage ledger by spend.rs, with the ⚡ tok/s gauge + sparkline from speed.rs; the fleet lanes display in fleet_ui.rs/fleet_sink.rs.
                                  Top-level subcommands: theme, loop, trace, oxen.
   app/                       — Tauri v2 desktop app (separate project, excluded
                                from the core workspace). See app/README.md.
@@ -139,6 +140,7 @@ When adding a new file to the project, update this document map.
 
 ## Chat scroll following (2026-09-13)
 
+- `app/src/features/chat/SpeedMeter.tsx` — live tok/s readout in the usage row (rate, fixed-width sparkline track, settled rate + first-token wait); state folded from `agent://throughput` by `lib/speed.ts`.
 - `app/src/features/chat/useChatScroll.ts` — scroll intent, layout observation, and return-to-latest behavior; integration tests in `Chat.test.tsx`.
 - `plans/chat-scroll.md` — auto-scroll diagnosis, behavior, regression coverage, and review record.
 
