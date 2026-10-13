@@ -345,6 +345,11 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
       3/3 at ~29, Qwen3.8 IQ3 5/5 but ~8 tok/s, gpt-oss 2/3 at ~37. The
       ~16 GB Q4 builds (GLM-4.7 Flash Q4 tried) swapped ~7 GB of apps out on
       that machine, so treat Q4 as "32 GB with little else running".
+- [x] LFM2.5 24B A2B (Liquid AI, released 2026-10-13): official QAD-Q4_0 GGUF
+      (13.6 GB, `lfm2moe`, pythonic `<|tool_call_start|>` tool calls) loads on
+      the pinned `b10353` runtime with no harness changes. Same eval: 4/4 at
+      22–33 s, 139 tok/s decode, 1449 tok/s prompt, free memory never below
+      22% — the new best local pick.
 
 ---
 

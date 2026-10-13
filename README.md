@@ -271,7 +271,8 @@ the download size at or below **total RAM minus what your apps use, minus
 | Your machine | Pick | Download | Why |
 |---|---|---|---|
 | 8–16 GB | `qwen3-4b` / `qwen3-8b`, or `bonsai-27b` | 2.5–5 GB / ~3.8 GB | Bonsai's 1-bit 27B does reasoning + tool calls in a small footprint |
-| 24 GB, or 32–36 GB with a dev stack open | **`gemma-4-26b-a4b-q3-k-m`** | ~12.7 GB | Fastest tested, passed every agent run |
+| 24 GB, or 32–36 GB with a dev stack open | **`lfm2.5-24b-a2b`** | ~13.6 GB | Fastest tested by far, passed every agent run |
+| ″ | `gemma-4-26b-a4b-q3` | ~12.7 GB | Passed every agent run; a third the speed of LFM2.5 |
 | ″ | `qwen3.6-35b-a3b-iq3` | ~13.2 GB | Close second: fast and consistent |
 | ″ | `glm-4.7-flash-iq3` | ~12.9 GB | Reliable, a bit slower |
 | ″ | `gpt-oss-20b` | ~12.1 GB | Fast, but its file edits are clumsy |
@@ -285,6 +286,7 @@ edit the file, run the tests) plus `llama-bench`:
 
 | Model | Agent runs passed | Time per run | Generation | Prompt |
 |---|---|---|---|---|
+| `lfm2.5-24b-a2b` | 4/4 | 22–33 s | 139 tok/s | 1449 tok/s |
 | `gemma-4-26b-a4b-q3` | 3/3 | 35–40 s | 45 tok/s | 960 tok/s |
 | `qwen3.6-35b-a3b-iq3` | 3/3 | 39–42 s | 34 tok/s | 585 tok/s |
 | `glm-4.7-flash-iq3` | 3/3 | 66–116 s | 29 tok/s | 524 tok/s |
@@ -297,8 +299,8 @@ in the picker table assume the model has the machine mostly to itself.
 
 **Tips:**
 
-- **Prefer mixture-of-experts (MoE) models on a laptop.** Gemma 4 A4B,
-  Qwen3.6 A3B, GLM-4.7 Flash, and gpt-oss have only 3–4B parameters active per
+- **Prefer mixture-of-experts (MoE) models on a laptop.** LFM2.5 A2B, Gemma 4 A4B,
+  Qwen3.6 A3B, GLM-4.7 Flash, and gpt-oss have only 2–4B parameters active per
   token. That makes them 4–5× faster than a dense 27B like Qwen3.8 at the same
   file size, and kinder to the battery.
 - **Going offline?** Run `oxen-harness models pull <id>` while you still have

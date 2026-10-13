@@ -394,6 +394,13 @@ mod tests {
                 17_730_509_792,
             ),
             (
+                "lfm2.5-24b-a2b",
+                "LiquidAI/LFM2.5-24B-A2B-GGUF",
+                "LFM2.5-24B-A2B-QAD-Q4_0.gguf",
+                "Q4_0",
+                13_578_190_880,
+            ),
+            (
                 "glm-4.7-flash-iq3",
                 "unsloth/GLM-4.7-Flash-GGUF",
                 "GLM-4.7-Flash-UD-IQ3_XXS.gguf",

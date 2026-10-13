@@ -110,7 +110,7 @@
       "quant": "Q3_K_M",
       "approx_bytes": 12728497888,
       "context": 262144,
-      "note": "Best all-round pick for 24-36 GB Macs: the fastest model tested (~45 tok/s on an M4 Max) and it passed every agent run. ~12.7 GB."
+      "note": "Strong pick for 24-36 GB Macs: ~45 tok/s on an M4 Max and it passed every agent run. ~12.7 GB."
     },
     {
       "id": "qwen3.8-27b-iq3",
@@ -144,6 +144,17 @@
       "approx_bytes": 12907368800,
       "context": 202752,
       "note": "24 GB build of GLM-4.7 Flash: passed every agent run, ~29 tok/s on an M4 Max. ~12.9 GB."
+    },
+    {
+      "id": "lfm2.5-24b-a2b",
+      "display": "LFM2.5 24B A2B",
+      "params": "24B-A2B (MoE)",
+      "repo": "LiquidAI/LFM2.5-24B-A2B-GGUF",
+      "file": "LFM2.5-24B-A2B-QAD-Q4_0.gguf",
+      "quant": "Q4_0",
+      "approx_bytes": 13578190880,
+      "context": 131072,
+      "note": "Best local pick for 24-36 GB Macs: fastest tested (~139 tok/s on an M4 Max) and it passed every agent run. Liquid AI's 2B-active MoE, reasoning + native tool calls, 128K context. ~13.6 GB."
     },
     {
       "id": "qwen3-0.6b",
