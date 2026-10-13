@@ -86,6 +86,15 @@ pub(crate) fn turn_failure_lines(
     retry_seeded: bool,
 ) -> Vec<String> {
     let mut lines = vec![format!("  {}", ui.red(&ui.death()))];
+    // A local model the memory guard just stopped is why its endpoint
+    // stopped answering: say that first, and how to get it back.
+    if let Some(stop) = crate::memory_gauge::recent_stop() {
+        lines.push(format!("  {}", ui.brown(&format!("⚠ {}", stop.message))));
+        lines.push(format!(
+            "  {}",
+            ui.dim("Close a few apps (browsers, Docker) and start the model again, or switch to a smaller or cloud model with /model.")
+        ));
+    }
     // Retries exhausted is the "endpoint is down" case: break the report into
     // what failed, the last error, and where — a headline the eye can't skip,
     // instead of one long dim line.

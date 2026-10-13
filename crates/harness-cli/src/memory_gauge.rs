@@ -64,6 +64,12 @@ fn sample() -> Reading {
     }
 }
 
+/// The guard's most recent stop of a local model, if it was in the last
+/// few minutes — what a failed turn should be explained by.
+pub(crate) fn recent_stop() -> Option<MemoryNotice> {
+    memory::last_notice().filter(|n| n.level == NoticeLevel::Stopped && age_secs(n.at) < 180)
+}
+
 fn age_secs(at: i64) -> i64 {
     harness_media::library::now_unix() - at
 }
@@ -75,8 +81,9 @@ pub(crate) fn active() -> bool {
     !r.processes.is_empty() || r.notice.is_some()
 }
 
+/// Memory in gigabytes as Apple counts them (2^30), so a 36 GB Mac reads 36.0.
 fn gb(bytes: u64) -> String {
-    format!("{:.1}", bytes as f64 / 1e9)
+    format!("{:.1}", bytes as f64 / (1u64 << 30) as f64)
 }
 
 /// `🧠 30.1/36.0 GB · local 13.2 GB` (`plain`, `styled`), colored by the

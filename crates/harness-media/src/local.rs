@@ -107,7 +107,9 @@ pub struct LocalOutput {
 pub enum LocalMediaError {
     #[error("{0} is not installed: {1}")]
     NotInstalled(String, String),
-    #[error("not enough free memory to load {model}: {detail}")]
+    /// The memory guard refused or stopped `model`; `detail` is the full,
+    /// user-facing reason.
+    #[error("{detail}")]
     Memory { model: String, detail: String },
     #[error("cancelled")]
     Cancelled,

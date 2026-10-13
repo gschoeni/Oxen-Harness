@@ -83,11 +83,26 @@ pub fn max_output_tokens(model: &str) -> Option<usize> {
     get(model)?.max_output_tokens.map(|v| v as usize)
 }
 
-/// Whether `model` accepts image input, when a catalog fetch has said either
-/// way. `None` = unknown (never fetched, or a local model the catalog doesn't
-/// describe); callers should keep attaching images in that case.
+/// Whether `model` accepts image input: `Some(false)` for a local model
+/// (llama-server runs it without a vision projector, so an image part is a
+/// rejected request), else what the last catalog fetch said. `None` =
+/// unknown (never fetched); callers should keep attaching images then.
 pub fn accepts_images(model: &str) -> Option<bool> {
+    if is_local_model(model) {
+        return Some(false);
+    }
     get(model)?.accepts_images
+}
+
+/// Whether `id` names a local model: one installed in the store, or a
+/// catalog spec. Cloud ids never collide with these.
+fn is_local_model(id: &str) -> bool {
+    if crate::catalog::find(id).is_some() {
+        return true;
+    }
+    crate::ModelStore::open()
+        .ok()
+        .is_some_and(|store| store.installed_ref(id).is_some())
 }
 
 /// The non-default service tiers `model` can run on, as last reported by
@@ -147,6 +162,8 @@ mod tests {
         assert_eq!(accepts_images("claude-opus-4-8"), Some(true));
         assert_eq!(get("flux-2-klein"), None);
         assert_eq!(accepts_images("flux-2-klein"), None);
+        // A local model runs without a vision projector: never send it images.
+        assert_eq!(accepts_images("gemma-4-26b-a4b-q3"), Some(false));
 
         // A later fetch updates in place…
         record(vec![(

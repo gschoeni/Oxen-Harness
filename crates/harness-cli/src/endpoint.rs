@@ -459,6 +459,10 @@ pub(crate) fn agent_config(
         // The catalog-reported reply ceiling, when a fetch has cached it
         // (misses for local aliases — they fall back to the reserve).
         max_output_tokens: harness_local::limits::max_output_tokens(model),
+        // Whether the model takes pictures at all (a text-only model — any
+        // local one — gets notes in place of images, never a rejected
+        // request).
+        accepts_images: harness_local::limits::accepts_images(model),
         system_prompt: Some(system_prompt),
         attachment_root: Some(workspace.root().to_path_buf()),
         initial_attachments: harness_runtime::project::binary_context_paths(workspace.root()),

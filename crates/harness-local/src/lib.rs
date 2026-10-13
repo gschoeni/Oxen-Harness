@@ -44,7 +44,8 @@ pub use resolve::{resolve_runnable, Runnable};
 pub use runtime::{RuntimeInstallEvent, RuntimeSource, RuntimeStatus};
 pub use server::{
     can_auto_install, install_hint, install_llama_server, llama_server_path, reap_stale,
-    reap_stale_servers, register_spawned, unregister_spawned, LoadPhase, LocalServer, SD_PIDS,
+    reap_stale_servers, register_spawned, spawn_lifeline, unregister_spawned, LoadPhase,
+    LocalServer, SD_PIDS,
 };
 pub use source::{HfHit, ModelRef, Origin};
 pub use store::{disk_space, DownloadProgress, ModelStore};

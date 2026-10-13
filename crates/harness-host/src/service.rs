@@ -507,6 +507,21 @@ pub struct SessionService {
     crash_announced: StdMutex<HashMap<String, String>>,
 }
 
+/// The store id of an installed local model named by its store id or its
+/// catalog id (`gemma-4-26b-a4b-q3` → `gemma-4-26b-a4b-it-gguf-q3-k-m`), the
+/// same offline-first resolution the CLI's `--local` uses; a model that
+/// isn't on disk says so instead of failing deeper in.
+fn installed_local_id(id: &str) -> Result<String, String> {
+    let store = ModelStore::open().map_err(|e| e.to_string())?;
+    match harness_local::resolve_runnable(&store, id) {
+        Ok(harness_local::Runnable::Installed { model, .. }) => Ok(model.id),
+        Ok(harness_local::Runnable::Downloadable { .. }) => Err(format!(
+            "{id} isn't downloaded yet; download it in Settings → Local models"
+        )),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 impl SessionService {
     pub fn builder(sink: Arc<dyn EventSink>) -> SessionServiceBuilder {
         SessionServiceBuilder {
@@ -811,6 +826,7 @@ impl SessionService {
         session: &str,
         id: &str,
     ) -> Result<SessionInfo, String> {
+        let id = &installed_local_id(id)?;
         if llama_server_path().is_none() {
             return Err(format!(
                 "the local runtime isn't installed. {}",
@@ -2463,6 +2479,7 @@ impl SessionService {
     /// dead process) replaces the server, and the old one is dropped *before*
     /// the new load so both never sit in memory together.
     pub async fn use_local_model(&self, id: &str) -> Result<SessionInfo, String> {
+        let id = &installed_local_id(id)?;
         if llama_server_path().is_none() {
             return Err(format!(
                 "the local runtime isn't installed. {}",

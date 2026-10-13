@@ -114,7 +114,7 @@ pub fn assess(
     need_bytes: u64,
     residency: Residency,
 ) -> LoadAdvice {
-    let gb = |b: u64| b as f64 / 1e9;
+    let gb = |b: u64| b as f64 / GIB as f64;
     if snap.pressure == MemoryPressure::Critical {
         return LoadAdvice::Refuse(format!(
             "macOS is at critical memory pressure ({:.1} of {:.1} GB used, {:.1} GB in swap); \
@@ -124,18 +124,28 @@ pub fn assess(
             gb(snap.swap_used_bytes)
         ));
     }
-    // A resident load bigger than everything not already in use cannot fit
-    // without the OS swapping the user's apps out under it.
-    if residency == Residency::Resident
-        && need_bytes > snap.available_bytes + snap.compressed_bytes / 2
-    {
+    // A resident model bigger than most of the machine can never fit, apps
+    // closed or not.
+    if residency == Residency::Resident && need_bytes > snap.total_bytes / 100 * 85 {
         return LoadAdvice::Refuse(format!(
-            "{label} needs about {:.1} GB and only {:.1} GB is free ({:.1} of {:.1} GB used). \
-             Close some apps or pick a smaller model.",
+            "{label} needs about {:.1} GB and this machine has {:.1} GB in all; pick a smaller \
+             model.",
+            gb(need_bytes),
+            gb(snap.total_bytes)
+        ));
+    }
+    // Bigger than what's free: macOS will compress or swap other apps to
+    // make room. That can work (idle apps page out), so it is the user's
+    // call — said plainly — and the watchdog stops the model if it bites.
+    if residency == Residency::Resident && need_bytes > snap.available_bytes {
+        return LoadAdvice::Warn(format!(
+            "memory is tight: {label} needs about {:.1} GB and {:.1} GB is free, so macOS will \
+             push about {:.1} GB of your other apps into compressed memory or swap. Closing \
+             browsers or Docker helps. It is stopped automatically before your computer bogs \
+             down.",
             gb(need_bytes),
             gb(snap.available_bytes),
-            gb(snap.used_bytes),
-            gb(snap.total_bytes)
+            gb(need_bytes - snap.available_bytes)
         ));
     }
     if need_bytes > snap.available_bytes {
@@ -237,19 +247,41 @@ pub fn last_notice() -> Option<MemoryNotice> {
 /// When the watchdog stops a server.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Limits {
-    /// Stop below this kernel "memory free" percentage.
+    /// Stop below this kernel "memory free" percentage. Kept low: the
+    /// kernel counts a model's memory-mapped weights as in use although it
+    /// can drop them, so loading an image model alone moves this a lot.
     pub min_free_percent: u8,
     /// Stop when swap has grown this much since the server started.
     pub max_swap_growth: u64,
+    /// Stop when the kernel reports memory pressure *and* swap has grown
+    /// this much: the machine is paging the user's apps out to keep up.
+    pub warn_swap_growth: u64,
     /// Consecutive bad samples before stopping (one blip is not a trend).
     pub strikes: u32,
 }
 
 impl Default for Limits {
+    /// The shipped limits, adjustable per machine with
+    /// `OXEN_HARNESS_MEMORY_MIN_FREE` (percent) and
+    /// `OXEN_HARNESS_MEMORY_MAX_SWAP_GB`. A value that doesn't parse is
+    /// ignored, never an error: the guard must always be on.
     fn default() -> Self {
+        let env = |key: &str| {
+            std::env::var(key)
+                .ok()
+                .and_then(|v| v.trim().parse::<f64>().ok())
+        };
         Self {
-            min_free_percent: 10,
-            max_swap_growth: 3 * GIB,
+            min_free_percent: env("OXEN_HARNESS_MEMORY_MIN_FREE")
+                .map(|p| p.clamp(0.0, 101.0) as u8)
+                .unwrap_or(5),
+            // Loading a model that is bigger than what's free pushes a few
+            // GB of idle apps out by design (the pre-load warning says so);
+            // growth well past that is the machine starting to thrash.
+            max_swap_growth: env("OXEN_HARNESS_MEMORY_MAX_SWAP_GB")
+                .map(|g| (g.max(0.0) * GIB as f64) as u64)
+                .unwrap_or(6 * GIB),
+            warn_swap_growth: 2 * GIB,
             strikes: 2,
         }
     }
@@ -257,7 +289,7 @@ impl Default for Limits {
 
 /// Why a sample is bad, if it is.
 pub fn breach(snap: &MemorySnapshot, swap_at_start: u64, limits: &Limits) -> Option<String> {
-    let gb = |b: u64| b as f64 / 1e9;
+    let gb = |b: u64| b as f64 / GIB as f64;
     if snap.pressure == MemoryPressure::Critical {
         return Some(format!(
             "macOS hit critical memory pressure ({:.1} of {:.1} GB used)",
@@ -280,7 +312,76 @@ pub fn breach(snap: &MemorySnapshot, swap_at_start: u64, limits: &Limits) -> Opt
             gb(grown)
         ));
     }
+    if snap.pressure == MemoryPressure::Warn && grown > limits.warn_swap_growth {
+        return Some(format!(
+            "macOS is under memory pressure and has pushed {:.1} GB of your apps into swap",
+            gb(grown)
+        ));
+    }
     None
+}
+
+/// The live watchdogs by start order, so a squeeze stops the newest model
+/// (the load that tipped the machine over) rather than all of them.
+fn watchers() -> &'static Mutex<Vec<u64>> {
+    static LIVE: OnceLock<Mutex<Vec<u64>>> = OnceLock::new();
+    LIVE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// When any watchdog last stopped a model; the others give memory a moment
+/// to recover before judging it.
+fn last_stop() -> &'static Mutex<Option<std::time::Instant>> {
+    static LAST: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+    LAST.get_or_init(|| Mutex::new(None))
+}
+
+/// Swap in use when the most recent model started loading (or was last
+/// stopped). Growth is measured from here, so it is charged to the load
+/// that caused it rather than to every model that happens to be running.
+fn swap_baseline() -> &'static Mutex<Option<u64>> {
+    static BASE: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
+    BASE.get_or_init(|| Mutex::new(None))
+}
+
+fn reset_swap_baseline(swap: u64) {
+    if let Ok(mut b) = swap_baseline().lock() {
+        *b = Some(swap);
+    }
+}
+
+/// Extra samples an older model waits for the newest one to be stopped.
+const DEFER_STRIKES: u32 = 6;
+/// How long after any stop the remaining watchdogs hold off.
+const SETTLE: Duration = Duration::from_secs(5);
+
+/// Whether `id` should act on a breach now: the newest live watchdog acts
+/// at once; an older one only once the newest had its chance and memory is
+/// still bad. Nobody acts while memory settles after a stop.
+fn may_stop(id: u64, strikes: u32, limits: &Limits) -> bool {
+    let settling = last_stop()
+        .lock()
+        .ok()
+        .and_then(|l| *l)
+        .is_some_and(|at| at.elapsed() < SETTLE);
+    if settling {
+        return false;
+    }
+    let newest = watchers().lock().ok().and_then(|w| w.last().copied());
+    match newest {
+        Some(n) if n != id => strikes >= limits.strikes + DEFER_STRIKES,
+        _ => strikes >= limits.strikes,
+    }
+}
+
+/// Removes a watchdog from the live list however its task ends.
+struct Live(u64);
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        if let Ok(mut w) = watchers().lock() {
+            w.retain(|x| *x != self.0);
+        }
+    }
 }
 
 /// Watches memory while a model server runs and stops it — SIGTERM, then
@@ -302,8 +403,15 @@ impl Watchdog {
         let tripped = Arc::new(Mutex::new(None));
         let record = tripped.clone();
         let label = label.to_string();
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut w) = watchers().lock() {
+            w.push(id);
+        }
         let task = tokio::spawn(async move {
+            let _live = Live(id);
             let Some(start) = snapshot() else { return };
+            reset_swap_baseline(start.swap_used_bytes);
             let mut strikes = 0;
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -311,21 +419,34 @@ impl Watchdog {
                     return;
                 }
                 let Some(snap) = snapshot() else { continue };
-                match breach(&snap, start.swap_used_bytes, &limits) {
+                let baseline = swap_baseline()
+                    .lock()
+                    .ok()
+                    .and_then(|b| *b)
+                    .unwrap_or(start.swap_used_bytes);
+                match breach(&snap, baseline, &limits) {
                     Some(why) => {
                         strikes += 1;
-                        if strikes < limits.strikes {
+                        if !may_stop(id, strikes, &limits) {
                             continue;
                         }
+                        if let Ok(mut last) = last_stop().lock() {
+                            *last = Some(std::time::Instant::now());
+                        }
+                        // What the survivors are judged by next starts now.
+                        reset_swap_baseline(snap.swap_used_bytes);
                         let reason = format!("Stopped {label} to protect your computer: {why}.");
-                        crate::server::stop_process(pid).await;
-                        // A poisoned slot only loses the reason; the stop
-                        // itself already happened and on_trip still hears it.
+                        // Everything is reported before the signal: whoever
+                        // sees the server die must be able to read why, and
+                        // the owner dropping this watchdog on that death
+                        // aborts this task mid-stop. (A poisoned slot only
+                        // loses the stored reason; the notice still goes.)
                         if let Ok(mut slot) = record.lock() {
                             *slot = Some(reason.clone());
                         }
                         publish(NoticeLevel::Stopped, &label, &reason);
                         on_trip(&reason);
+                        crate::server::stop_process(pid).await;
                         return;
                     }
                     None => strikes = 0,
@@ -555,15 +676,16 @@ mod tests {
 
     #[test]
     fn a_resident_model_that_cannot_fit_is_refused_and_a_tight_one_warned() {
-        // 30 GB used: 6 GB free + 2 GB of compressible slack.
+        // 30 of 36 GB used: 6 GB free.
         let s = snap(30, MemoryPressure::Normal);
         assert!(matches!(
-            assess(&s, "a 30B model", 17 * GIB, Residency::Resident),
-            LoadAdvice::Refuse(m) if m.contains("a 30B model")
+            assess(&s, "a 70B model", 34 * GIB, Residency::Resident),
+            LoadAdvice::Refuse(m) if m.contains("a 70B model")
         ));
+        // Bigger than what's free but able to fit: warned, with the cost.
         assert!(matches!(
-            assess(&s, "gemma", 7 * GIB, Residency::Resident),
-            LoadAdvice::Warn(_)
+            assess(&s, "gemma", 13 * GIB, Residency::Resident),
+            LoadAdvice::Warn(m) if m.contains("7.0 GB of your other apps")
         ));
         // Mapped weights only warn: the OS pages them instead of swapping.
         assert!(matches!(
@@ -591,19 +713,64 @@ mod tests {
         assert_eq!(breach(&ok, 10 * GIB, &limits), None);
         assert!(breach(&snap(20, MemoryPressure::Critical), 10 * GIB, &limits).is_some());
         let low = MemorySnapshot {
-            free_percent: 6,
+            free_percent: 4,
             ..ok.clone()
         };
         assert!(breach(&low, 10 * GIB, &limits)
             .unwrap_or_default()
-            .contains("6%"));
+            .contains("4%"));
+        // Pressure alone is not a breach; pressure while apps page out is.
+        let squeezed = MemorySnapshot {
+            pressure: MemoryPressure::Warn,
+            swap_used_bytes: 13 * GIB,
+            ..ok.clone()
+        };
+        assert!(breach(&squeezed, 10 * GIB, &limits)
+            .unwrap_or_default()
+            .contains("under memory pressure"));
+        let calm_warn = MemorySnapshot {
+            pressure: MemoryPressure::Warn,
+            swap_used_bytes: 11 * GIB,
+            ..ok.clone()
+        };
+        assert_eq!(breach(&calm_warn, 10 * GIB, &limits), None);
         let swapping = MemorySnapshot {
-            swap_used_bytes: 14 * GIB,
+            swap_used_bytes: 17 * GIB,
             ..ok
         };
         assert!(breach(&swapping, 10 * GIB, &limits)
             .unwrap_or_default()
             .contains("swap"));
+    }
+
+    #[test]
+    fn the_newest_model_is_stopped_first_and_older_ones_wait() {
+        let limits = Limits::default();
+        // Ids far from the live counter so this can't collide with a real one.
+        let (older, newer) = (900_001, 900_002);
+        watchers().lock().expect("watchers").extend([older, newer]);
+        assert!(
+            may_stop(newer, limits.strikes, &limits),
+            "the newest acts at once"
+        );
+        assert!(
+            !may_stop(older, limits.strikes, &limits),
+            "an older one waits"
+        );
+        assert!(
+            may_stop(older, limits.strikes + DEFER_STRIKES, &limits),
+            "…but not forever"
+        );
+        *last_stop().lock().expect("last") = Some(std::time::Instant::now());
+        assert!(
+            !may_stop(newer, 99, &limits),
+            "nobody acts while memory settles"
+        );
+        *last_stop().lock().expect("last") = None;
+        watchers()
+            .lock()
+            .expect("watchers")
+            .retain(|x| *x != older && *x != newer);
     }
 
     #[tokio::test]
@@ -626,6 +793,7 @@ mod tests {
             Limits {
                 min_free_percent: 101,
                 max_swap_growth: u64::MAX,
+                warn_swap_growth: u64::MAX,
                 strikes: 1,
             },
             move |why| {

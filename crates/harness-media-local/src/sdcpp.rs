@@ -308,7 +308,9 @@ impl SdCppEngine {
             ))
         })?;
         harness_local::register_spawned(PID_FILE, pid, port, &req.spec.id);
-        spawn_lifeline(pid);
+        // The engine is a never-dropped static, so `kill_on_drop` alone
+        // would leave this server behind after every CLI run.
+        harness_local::spawn_lifeline(pid);
         let mut server = Server {
             child,
             pid,
@@ -472,39 +474,6 @@ fn job_body(req: &EngineRequest<'_>, previews: bool) -> Result<Value, LocalMedia
     }))
 }
 
-/// Stop the server when this host exits, however it exits. The engine
-/// lives in a process-wide static that is never dropped, so `kill_on_drop`
-/// alone would leave a server (and its mapped weights) behind after every
-/// CLI run; macOS has no parent-death signal, so a tiny watcher process
-/// polls both pids and stops the server once the host is gone. It exits on
-/// its own when the server stops first. Best-effort: if it can't start,
-/// the pid registry still reaps the server at the next boot.
-fn spawn_lifeline(server: u32) {
-    if server == 0 || !cfg!(unix) {
-        return;
-    }
-    let host = std::process::id();
-    let watcher = tokio::process::Command::new("/bin/sh")
-        .args([
-            "-c",
-            "while kill -0 \"$1\" 2>/dev/null && kill -0 \"$2\" 2>/dev/null; do sleep 2; done; \
-             kill -0 \"$1\" 2>/dev/null || kill \"$2\" 2>/dev/null",
-            "sd-lifeline",
-        ])
-        .arg(host.to_string())
-        .arg(server.to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    match watcher {
-        // Not waited on (it must outlive this process); tokio reaps it in
-        // the background if it exits while the host still runs.
-        Ok(child) => drop(child),
-        Err(e) => tracing::warn!("could not start the sd-server lifeline: {e}"),
-    }
-}
-
 fn free_port() -> std::io::Result<u16> {
     Ok(std::net::TcpListener::bind("127.0.0.1:0")?
         .local_addr()?
@@ -635,6 +604,8 @@ impl SdCppEngine {
                 _ = tokio::time::sleep(POLL) => {}
             }
             if slot.as_mut().is_some_and(Server::exited) {
+                // A dead server has nothing to cancel.
+                guard.armed = false;
                 let tail = self.log_tail();
                 let Some(dead) = slot.take() else { continue };
                 let err = dead.death("stopped while generating", tail);
@@ -738,8 +709,10 @@ impl Drop for AbandonGuard {
         let request = self.http.post(&self.url).timeout(Duration::from_secs(5));
         let url = self.url.clone();
         rt.spawn(async move {
+            // A server that went away (stopped, crashed) can't be told;
+            // nothing is rendering there anymore.
             if let Err(e) = request.send().await {
-                tracing::warn!("could not cancel sd-server job ({url}): {e}");
+                tracing::debug!("could not cancel sd-server job ({url}): {e}");
             }
         });
     }

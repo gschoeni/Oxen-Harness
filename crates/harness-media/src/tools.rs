@@ -1788,6 +1788,17 @@ async fn wait_local(
         Err(LocalMediaError::Cancelled) => {
             failed(&lib, item, MediaStatus::Cancelled, "cancelled".to_string())
         }
+        // Retrying into the same squeeze fails the same way (or stops the
+        // chat model instead): the user has to free memory first.
+        Err(LocalMediaError::Memory { detail, .. }) => failed(
+            &lib,
+            item,
+            MediaStatus::Failed,
+            format!(
+                "{detail} Don't retry this right away: tell the user, who can close other apps \
+                 or use a smaller (or hosted) model."
+            ),
+        ),
         Err(e) => failed(&lib, item, MediaStatus::Failed, e.to_string()),
     }
 }

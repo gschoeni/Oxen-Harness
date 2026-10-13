@@ -288,6 +288,7 @@ impl LocalServer {
         // still leave a trail to the half-loaded server.
         let pid = child.id().unwrap_or(0);
         registry::register(LLAMA_PIDS, pid, port, alias);
+        spawn_lifeline(pid);
 
         let mut server = Self {
             child,
@@ -452,6 +453,36 @@ pub(crate) fn owned_entries(file: &str) -> Vec<registry::Entry> {
         .into_iter()
         .filter(|e| e.owner == me)
         .collect()
+}
+
+/// Stop a model server when this host exits, however it exits — quit,
+/// crash, or kill. A host killed outright never runs its destructors, so
+/// `kill_on_drop` leaves a server holding gigabytes until the next boot's
+/// reaper; macOS has no parent-death signal, so a tiny watcher process
+/// polls both pids and stops the server once the host is gone. It exits on
+/// its own when the server stops first. Best-effort: if it can't start, the
+/// pid registry still reaps the server at the next boot.
+pub fn spawn_lifeline(server: u32) {
+    if server == 0 || !cfg!(unix) {
+        return;
+    }
+    let watcher = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "while kill -0 \"$1\" 2>/dev/null && kill -0 \"$2\" 2>/dev/null; do sleep 2; done; \
+             kill -0 \"$1\" 2>/dev/null || kill \"$2\" 2>/dev/null",
+            "harness-lifeline",
+        ])
+        .arg(std::process::id().to_string())
+        .arg(server.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    // Not waited on: it must outlive this process (tokio reaps it in the
+    // background if it exits first). Failing to start only loses the
+    // early stop; the registry reaper still covers the server.
+    drop(watcher);
 }
 
 /// Whether `pid` is a live process.

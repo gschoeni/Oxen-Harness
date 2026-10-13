@@ -122,3 +122,56 @@ fn image_size(png: &[u8]) -> (u32, u32) {
     let be = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
     (be(&png[16..20]), be(&png[20..24]))
 }
+
+/// The memory guard end to end: with the free-memory floor raised above
+/// what any machine has, loading a real model trips the watchdog, the
+/// server is stopped, and the job fails with the reason (not a hang, not a
+/// generic error). Needs the floor from the environment:
+///
+///   OXEN_HARNESS_MEMORY_MIN_FREE=101 cargo test -p harness-media-local \
+///     --test real_models the_watchdog -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "runs a real model; needs OXEN_HARNESS_MEMORY_MIN_FREE=101"]
+async fn the_watchdog_stops_a_real_server_and_says_why() {
+    if std::env::var("OXEN_HARNESS_MEMORY_MIN_FREE").as_deref() != Ok("101") {
+        println!("skipped: set OXEN_HARNESS_MEMORY_MIN_FREE=101");
+        return;
+    }
+    let service = harness_media_local::service().expect("service");
+    let mut notices = harness_local::memory::subscribe();
+    let err = service
+        .generate(
+            job(
+                "local-real-guard",
+                "local/iris-3b-turbo",
+                "a fox",
+                json!({"width": 512, "height": 512}),
+            ),
+            Arc::new(|_| {}),
+        )
+        .await
+        .expect_err("the guard stops it");
+    let message = err.to_string();
+    println!("guard: {message}");
+    assert!(message.contains("protect your computer"), "{message}");
+    // A pre-load warning may come first; the stop is the one that matters.
+    let stopped = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match notices.recv().await {
+                Ok(n) if n.level == harness_local::memory::NoticeLevel::Stopped => return Some(n),
+                Ok(_) => continue,
+                Err(_) => return None,
+            }
+        }
+    })
+    .await
+    .expect("a stop notice in time")
+    .expect("notice");
+    assert_eq!(stopped.model, "Iris-3B Turbo");
+    assert!(
+        harness_local::memory::local_processes()
+            .iter()
+            .all(|p| p.kind != "image"),
+        "no image server left running"
+    );
+}

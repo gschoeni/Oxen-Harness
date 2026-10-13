@@ -165,6 +165,13 @@ enum TopCommand {
         /// Resume a chat by session id (as printed on the death screen).
         #[arg(long, value_name = "ID")]
         session: Option<String>,
+        /// Start a new chat in the app and send this prompt.
+        #[arg(long, value_name = "TEXT")]
+        prompt: Option<String>,
+        /// Start the new chat on this local model (see `models list`); works
+        /// offline. Combine with --prompt to send one right away.
+        #[arg(long, value_name = "ID")]
+        local: Option<String>,
     },
 }
 
@@ -233,11 +240,20 @@ async fn main() -> Result<()> {
             gallery,
             settings,
             session,
+            prompt,
+            local,
         }) => {
+            let prompt = prompt.filter(|t| !t.trim().is_empty());
             let surface = if gallery {
                 Some("gallery".to_string())
             } else if let Some(page) = settings {
                 Some(format!("settings:{page}"))
+            } else if prompt.is_some() || local.is_some() {
+                // A new chat: on a local model, with a first prompt, or both.
+                Some(format!(
+                    "chat:{}",
+                    serde_json::json!({ "local": local, "prompt": prompt })
+                ))
             } else {
                 session.map(|id| format!("session:{id}"))
             };
@@ -429,6 +445,16 @@ async fn main() -> Result<()> {
     // `-p/--print`: one turn, straight to stdout, then out — before the banner,
     // the store scans, and the exit review, none of which a script wants.
     if let Some(arg) = args.print.as_deref() {
+        // A headless run has no meter: memory warnings and stops go to
+        // stderr as they happen (stdout stays the reply).
+        let mut notices = harness_local::memory::subscribe();
+        tokio::spawn(async move {
+            while let Ok(n) = notices.recv().await {
+                if n.level != harness_local::memory::NoticeLevel::Warn {
+                    eprintln!("⚠ {}", n.message);
+                }
+            }
+        });
         let Some(prompt) = commands::print::resolve_prompt(arg) else {
             eprintln!("--print needs a prompt: pass one as an argument or pipe it on stdin");
             std::process::exit(2);
