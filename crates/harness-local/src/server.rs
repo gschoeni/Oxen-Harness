@@ -479,10 +479,13 @@ pub fn spawn_lifeline(server: u32) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
-    // Not waited on: it must outlive this process (tokio reaps it in the
-    // background if it exits first). Failing to start only loses the
-    // early stop; the registry reaper still covers the server.
-    drop(watcher);
+    match watcher {
+        // Not waited on: it must outlive this process (tokio reaps it in
+        // the background if it exits first).
+        Ok(child) => drop(child),
+        // Only the early stop is lost; the registry reaper still covers it.
+        Err(e) => tracing::warn!("could not start the lifeline for server {server}: {e}"),
+    }
 }
 
 /// Whether `pid` is a live process.

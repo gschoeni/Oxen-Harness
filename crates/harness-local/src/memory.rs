@@ -226,8 +226,9 @@ fn publish(level: NoticeLevel, model: &str, message: &str) {
             .map(|d| d.as_secs() as i64)
             .unwrap_or_default(),
     };
-    if let Ok(mut last) = last_slot().lock() {
-        *last = Some(notice.clone());
+    match last_slot().lock() {
+        Ok(mut last) => *last = Some(notice.clone()),
+        Err(_) => tracing::warn!("memory notice slot poisoned; the meter misses: {message}"),
     }
     // No subscribers is normal (a host that shows notices another way).
     let _ = notices().send(notice);
@@ -358,20 +359,58 @@ const SETTLE: Duration = Duration::from_secs(5);
 /// at once; an older one only once the newest had its chance and memory is
 /// still bad. Nobody acts while memory settles after a stop.
 fn may_stop(id: u64, strikes: u32, limits: &Limits) -> bool {
-    let settling = last_stop()
-        .lock()
-        .ok()
-        .and_then(|l| *l)
-        .is_some_and(|at| at.elapsed() < SETTLE);
+    // Poisoned coordination state only means a watchdog panicked mid-update;
+    // falling back to acting alone keeps the machine protected.
+    let settling = match last_stop().lock() {
+        Ok(l) => l.is_some_and(|at| at.elapsed() < SETTLE),
+        Err(_) => {
+            tracing::warn!("watchdog stop clock poisoned; acting without settling");
+            false
+        }
+    };
     if settling {
         return false;
     }
-    let newest = watchers().lock().ok().and_then(|w| w.last().copied());
+    let newest = match watchers().lock() {
+        Ok(w) => w.last().copied(),
+        Err(_) => {
+            tracing::warn!("watchdog list poisoned; acting without deferring");
+            None
+        }
+    };
     match newest {
         Some(n) if n != id => strikes >= limits.strikes + DEFER_STRIKES,
         _ => strikes >= limits.strikes,
     }
 }
+
+/// One shared reading for every watchdog: a sample spawns a few probe
+/// processes, so it is taken off the async runtime at most every
+/// [`SAMPLE_EVERY`] however many models are being watched.
+async fn sampled() -> Option<MemorySnapshot> {
+    static CACHE: OnceLock<tokio::sync::Mutex<Option<(std::time::Instant, MemorySnapshot)>>> =
+        OnceLock::new();
+    let mut slot = CACHE
+        .get_or_init(|| tokio::sync::Mutex::new(None))
+        .lock()
+        .await;
+    if let Some((at, snap)) = slot.as_ref() {
+        if at.elapsed() < SAMPLE_EVERY {
+            return Some(snap.clone());
+        }
+    }
+    let fresh = match tokio::task::spawn_blocking(snapshot).await {
+        Ok(s) => s?,
+        Err(e) => {
+            tracing::warn!("memory sample failed: {e}");
+            return None;
+        }
+    };
+    *slot = Some((std::time::Instant::now(), fresh.clone()));
+    Some(fresh)
+}
+
+const SAMPLE_EVERY: Duration = Duration::from_millis(400);
 
 /// Removes a watchdog from the live list however its task ends.
 struct Live(u64);
@@ -408,9 +447,12 @@ impl Watchdog {
         if let Ok(mut w) = watchers().lock() {
             w.push(id);
         }
+        // Built before the task so a watchdog dropped before its first poll
+        // still leaves the live list (else it would count as newest forever).
+        let live = Live(id);
         let task = tokio::spawn(async move {
-            let _live = Live(id);
-            let Some(start) = snapshot() else { return };
+            let _live = live;
+            let Some(start) = sampled().await else { return };
             reset_swap_baseline(start.swap_used_bytes);
             let mut strikes = 0;
             loop {
@@ -418,7 +460,9 @@ impl Watchdog {
                 if !crate::server::process_alive(pid) {
                     return;
                 }
-                let Some(snap) = snapshot() else { continue };
+                let Some(snap) = sampled().await else {
+                    continue;
+                };
                 let baseline = swap_baseline()
                     .lock()
                     .ok()

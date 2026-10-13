@@ -936,7 +936,13 @@ impl Waiter {
                 }
                 // Poisoned only if a progress callback panicked; the
                 // outcomes still stand without the warnings.
-                let warnings = warnings.lock().map(|w| w.clone()).unwrap_or_default();
+                let warnings = match warnings.lock() {
+                    Ok(w) => w.clone(),
+                    Err(_) => {
+                        tracing::warn!("local warnings poisoned; the report omits them");
+                        Vec::new()
+                    }
+                };
                 (outcomes, warnings)
             }
         }
@@ -1741,6 +1747,7 @@ async fn wait_local(
 ) -> Outcome {
     let lib = ctx.library.clone();
     let snapshot = std::sync::Mutex::new(item.clone());
+    let advice = warnings.clone();
     let progress: Arc<dyn Fn(LocalProgress) + Send + Sync> = {
         let lib = lib.clone();
         Arc::new(move |p: LocalProgress| {
@@ -1790,15 +1797,19 @@ async fn wait_local(
         }
         // Retrying into the same squeeze fails the same way (or stops the
         // chat model instead): the user has to free memory first.
-        Err(LocalMediaError::Memory { detail, .. }) => failed(
-            &lib,
-            item,
-            MediaStatus::Failed,
-            format!(
-                "{detail} Don't retry this right away: tell the user, who can close other apps \
-                 or use a smaller (or hosted) model."
-            ),
-        ),
+        Err(LocalMediaError::Memory { detail, .. }) => {
+            // The row keeps the user-facing reason; the agent also hears
+            // what to do about it.
+            if let Ok(mut all) = advice.lock() {
+                let advice = "Don't retry a memory stop right away: tell the user, who can \
+                              close other apps or use a smaller (or hosted) model."
+                    .to_string();
+                if !all.contains(&advice) {
+                    all.push(advice);
+                }
+            }
+            failed(&lib, item, MediaStatus::Failed, detail)
+        }
         Err(e) => failed(&lib, item, MediaStatus::Failed, e.to_string()),
     }
 }

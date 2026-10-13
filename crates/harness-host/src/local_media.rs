@@ -72,23 +72,18 @@ fn notice(n: MemoryNotice) -> harness_protocol::MemoryNotice {
 /// process runs. Each host spawns this once at boot on its own runtime.
 pub async fn forward_memory_notices(sink: Arc<dyn EventSink>) {
     let mut rx = memory::subscribe();
-    {
-        loop {
-            match rx.recv().await {
-                Ok(n) => {
-                    let n = notice(n);
-                    sink.emit(ProtocolEvent::MemoryNotice {
-                        level: n.level,
-                        model: n.model,
-                        message: n.message,
-                        at: n.at,
-                    });
-                }
-                // A burst overflowed the buffer: the newest notices still
-                // come through, which are the ones that matter.
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-            }
+    loop {
+        match rx.recv().await {
+            Ok(n) => sink.emit(ProtocolEvent::MemoryNotice {
+                level: level_name(n.level).to_string(),
+                model: n.model,
+                message: n.message,
+                at: n.at,
+            }),
+            // A burst overflowed the buffer: the newest notices still come
+            // through, which are the ones that matter.
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         }
     }
 }
@@ -167,15 +162,20 @@ impl Drop for PullSlot {
     }
 }
 
-/// Emits progress at most a few times a second, and always the last one.
+/// Emits progress at most a few times a second, and always the first and
+/// last.
+#[derive(Default)]
 struct Throttle {
-    last: Instant,
+    last: Option<Instant>,
 }
 
 impl Throttle {
     fn ready(&mut self, done: u64, total: u64) -> bool {
-        if done >= total || self.last.elapsed() >= Duration::from_millis(150) {
-            self.last = Instant::now();
+        let due = self
+            .last
+            .is_none_or(|at| at.elapsed() >= Duration::from_millis(150));
+        if done >= total || due {
+            self.last = Some(Instant::now());
             return true;
         }
         false
@@ -249,9 +249,7 @@ async fn pull_inner(
     if spec.engine == harness_media_local::sdcpp::ENGINE_ID
         && harness_media_local::sdcpp::binary().is_none()
     {
-        let mut throttle = Throttle {
-            last: Instant::now() - Duration::from_secs(1),
-        };
+        let mut throttle = Throttle::default();
         harness_media_local::sdcpp::install_runtime(cancel, |done, total| {
             let total = total.unwrap_or(0);
             if throttle.ready(done, total) {
@@ -279,23 +277,17 @@ async fn pull_inner(
     // Progress is over the whole model, not file by file.
     let already = spec.total_bytes() - missing;
     let mut finished_files = 0u64;
+    let mut last_total = 0u64;
     let mut current = String::new();
-    let mut throttle = Throttle {
-        last: Instant::now() - Duration::from_secs(1),
-    };
+    let mut throttle = Throttle::default();
     store
         .pull(spec, cancel, |p| {
             if p.file != current {
-                if !current.is_empty() {
-                    finished_files += spec
-                        .files
-                        .values()
-                        .find(|f| format!("{}/{}", f.repo, f.path) == current)
-                        .map(|f| f.bytes)
-                        .unwrap_or(0);
-                }
+                // The file just finished counts in full from here on.
+                finished_files += last_total;
                 current = p.file.clone();
             }
+            last_total = p.total_bytes;
             let done = already + finished_files + p.done_bytes;
             if throttle.ready(done, spec.total_bytes()) {
                 report.emit(
@@ -359,10 +351,9 @@ mod tests {
 
     #[test]
     fn the_throttle_lets_the_last_update_through() {
-        let mut t = Throttle {
-            last: Instant::now(),
-        };
-        assert!(!t.ready(1, 10), "too soon");
+        let mut t = Throttle::default();
+        assert!(t.ready(1, 10), "the first update goes out");
+        assert!(!t.ready(2, 10), "too soon");
         assert!(t.ready(10, 10), "the final update always goes out");
     }
 }

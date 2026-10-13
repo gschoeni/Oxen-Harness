@@ -642,7 +642,10 @@ async fn memory_status(
     headers: HeaderMap,
 ) -> ApiResult<Json<harness_protocol::MemoryStatus>> {
     authorize(&state, &headers, None)?;
-    Ok(Json(harness_host::local_media::memory_status()))
+    let status = tokio::task::spawn_blocking(harness_host::local_media::memory_status)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Json(status))
 }
 
 /// The on-device image models, their engine, and free disk.
@@ -651,7 +654,10 @@ async fn local_media_status(
     headers: HeaderMap,
 ) -> ApiResult<Json<harness_protocol::LocalMediaStatus>> {
     authorize(&state, &headers, None)?;
-    Ok(Json(harness_host::local_media::local_media_status()))
+    let status = tokio::task::spawn_blocking(harness_host::local_media::local_media_status)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Json(status))
 }
 
 /// `{"id": "local/…"}` — the model a local-media action is about. (Ids hold
@@ -691,7 +697,11 @@ async fn remove_local_media(
     Json(body): Json<LocalMediaId>,
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(&state, &headers, None)?;
-    let freed = harness_host::local_media::remove_local_media(&body.id)?;
+    let freed = tokio::task::spawn_blocking(move || {
+        harness_host::local_media::remove_local_media(&body.id)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     Ok(Json(serde_json::json!({ "freed_bytes": freed })))
 }
 

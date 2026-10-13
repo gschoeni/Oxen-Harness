@@ -59,9 +59,6 @@ pub(crate) async fn run(agent: &mut Agent, ui: &Ui, prompt: String) -> i32 {
             0
         }
         Err(e) => {
-            if let Some(stop) = crate::memory_gauge::recent_stop() {
-                eprintln!("{}", stop.message);
-            }
             eprintln!("{e}");
             1
         }

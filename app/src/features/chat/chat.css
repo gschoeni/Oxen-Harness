@@ -1978,15 +1978,6 @@
 }
 .memory-notice-close {
   flex: none;
-  padding: var(--space-half);
-  border: 0;
-  background: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-}
-.memory-notice-close:hover {
-  color: var(--text);
 }
 
 /* A rendering generation's progress: bar, label, and any memory note. */

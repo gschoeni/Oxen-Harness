@@ -88,7 +88,7 @@ pub(crate) fn turn_failure_lines(
     let mut lines = vec![format!("  {}", ui.red(&ui.death()))];
     // A local model the memory guard just stopped is why its endpoint
     // stopped answering: say that first, and how to get it back.
-    if let Some(stop) = crate::memory_gauge::recent_stop() {
+    if let Some(stop) = crate::memory_gauge::recent_stop(agent.model()) {
         lines.push(format!("  {}", ui.brown(&format!("⚠ {}", stop.message))));
         lines.push(format!(
             "  {}",

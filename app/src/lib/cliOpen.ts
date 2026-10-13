@@ -36,6 +36,8 @@ export async function applyLaunchSurface(surface: string | null | undefined): Pr
     try {
       ask = JSON.parse(surface.slice("chat:".length));
     } catch {
+      await s.startNewSession();
+      useStore.getState().addNotice("The launch asked for a chat but its details didn't parse.");
       return;
     }
     if (ask.local) {

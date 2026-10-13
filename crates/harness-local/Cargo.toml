@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+tracing = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
 futures-util = "0.3"
 # .tar.gz extraction for the self-managed llama.cpp runtime (pure-Rust, so it

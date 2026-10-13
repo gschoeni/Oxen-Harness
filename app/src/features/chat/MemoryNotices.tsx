@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { AlertTriangle, OctagonX, X } from "lucide-react";
 import { useMemory } from "../../lib/memory";
 import type { MemoryNotice } from "../../lib/types";
+import { IconButton } from "../../components/ui";
 
 const WARN_FADE_MS = 12_000;
 
@@ -43,14 +44,9 @@ function Notice({ notice }: { notice: MemoryNotice }) {
         <span className="memory-notice-title">{title}</span>
         <span className="memory-notice-body">{notice.message}</span>
       </div>
-      <button
-        type="button"
-        className="memory-notice-close"
-        aria-label="Dismiss"
-        onClick={() => dismiss(notice)}
-      >
-        <X size={13} />
-      </button>
+      <IconButton size="sm" className="memory-notice-close" aria-label="Dismiss" onClick={() => dismiss(notice)}>
+        <X size={14} />
+      </IconButton>
     </div>
   );
 }

@@ -64,10 +64,12 @@ fn sample() -> Reading {
     }
 }
 
-/// The guard's most recent stop of a local model, if it was in the last
-/// few minutes — what a failed turn should be explained by.
-pub(crate) fn recent_stop() -> Option<MemoryNotice> {
-    memory::last_notice().filter(|n| n.level == NoticeLevel::Stopped && age_secs(n.at) < 180)
+/// The guard's stop of `model` in the last few minutes, if there was one —
+/// what a failed turn on it should be explained by. (An image model being
+/// stopped doesn't explain a chat model's failure.)
+pub(crate) fn recent_stop(model: &str) -> Option<MemoryNotice> {
+    memory::last_notice()
+        .filter(|n| n.level == NoticeLevel::Stopped && n.model == model && age_secs(n.at) < 180)
 }
 
 fn age_secs(at: i64) -> i64 {
