@@ -291,8 +291,12 @@
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: 1.5;
-  white-space: pre;
-  overflow: auto;
+  /* One scroll for the whole drawer: the JSON grows to its full height and
+     long strings (tool descriptions, prompts) wrap in place, so the block
+     never opens scrollbars of its own inside the drawer's. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
   color: var(--text);
 }
 
