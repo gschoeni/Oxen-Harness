@@ -77,6 +77,15 @@ pub(crate) fn cancel_local_media_pull(id: String) {
     harness_host::local_media::cancel_local_media_pull(&id);
 }
 
+/// Quit an app a memory notice named, on the user's say-so; returns the
+/// memory it held.
+#[tauri::command]
+pub(crate) async fn quit_memory_hog(name: String) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || harness_host::local_media::quit_memory_hog(&name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Delete an image model's weights; returns the bytes freed.
 #[tauri::command]
 pub(crate) async fn remove_local_media(id: String) -> Result<u64, String> {

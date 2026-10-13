@@ -442,6 +442,9 @@ pub enum ProtocolEvent {
         model: String,
         message: String,
         at: i64,
+        /// The apps holding the most memory, for a "quit this" offer.
+        #[serde(default)]
+        hogs: Vec<crate::MemoryHog>,
     },
     /// Progress pulling an on-device image model (`phase`: `runtime`,
     /// `weights`, `done`, `failed`, `cancelled`).

@@ -952,6 +952,16 @@ export interface MemoryNotice {
   message: string;
   /** Unix seconds. */
   at: number;
+  /** The apps holding the most memory when it was raised, biggest first. */
+  hogs?: MemoryHog[];
+}
+
+/** One of the user's apps holding a lot of memory, offered for quitting. */
+export interface MemoryHog {
+  name: string;
+  bytes: number;
+  /** A macOS app (quit like ⌘Q, may ask to save); else a bare process. */
+  bundle: boolean;
 }
 
 /** The on-device image models and their engine (`local_media_status`). */

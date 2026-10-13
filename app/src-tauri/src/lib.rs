@@ -269,6 +269,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::media::set_media_prefs,
                 commands::media::list_media_models,
                 commands::media::memory_status,
+                commands::media::quit_memory_hog,
                 commands::media::local_media_status,
                 commands::media::pull_local_media,
                 commands::media::cancel_local_media_pull,

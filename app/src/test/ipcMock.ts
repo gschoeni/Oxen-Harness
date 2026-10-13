@@ -457,6 +457,7 @@ export const onMediaChanged = listener("mediaChanged");
 /** No local model running: the memory meter stays hidden. */
 export const idleMemory: MemoryStatus = { system: null, processes: [], notice: null };
 export const memoryStatus = vi.fn(async (): Promise<MemoryStatus> => idleMemory);
+export const quitMemoryHog = vi.fn(async (_name: string): Promise<number> => 0);
 export const sampleLocalMedia: LocalMediaStatus = {
   models: [
     {
@@ -736,6 +737,7 @@ export function resetIpc() {
   setMediaPrefs.mockReset().mockResolvedValue(undefined);
   listMediaModels.mockReset().mockResolvedValue([]);
   memoryStatus.mockReset().mockResolvedValue(idleMemory);
+  quitMemoryHog.mockReset().mockResolvedValue(0);
   localMediaStatus.mockReset().mockResolvedValue(sampleLocalMedia);
   pullLocalMedia.mockReset().mockResolvedValue(undefined);
   cancelLocalMediaPull.mockReset().mockResolvedValue(undefined);

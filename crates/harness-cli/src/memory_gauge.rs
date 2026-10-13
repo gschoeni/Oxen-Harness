@@ -193,6 +193,7 @@ mod tests {
             model: "gemma-4-26b-a4b-it-gguf-q3-k-m".into(),
             message: "long reason".into(),
             at: 0,
+            hogs: Vec::new(),
         };
         assert_eq!(
             notice_label(&notice(NoticeLevel::Warn)),

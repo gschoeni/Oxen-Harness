@@ -84,7 +84,7 @@ describe("MemoryMeter", () => {
     vi.useFakeTimers();
     try {
       useMemory.setState({
-        banners: [{ level: "warn", model: "klein", message: "memory is tight", at: 1 }],
+        banners: [{ level: "warn", model: "klein", message: "memory is tight: klein wants about 3.0 GB and 2.1 GB is free.", at: 1 }],
       });
       render(<MemoryNotices />);
       expect(screen.getByText("Memory is tight")).toBeInTheDocument();
@@ -93,5 +93,56 @@ describe("MemoryMeter", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("offers to quit the apps holding the most memory, after a confirm", async () => {
+    const message =
+      "Stopped gemma to protect your computer: macOS hit critical memory pressure (32.1 of 36.0 GB used). " +
+      "Using the most: Docker (4.0 GB) and claude (2.4 GB).";
+    useMemory.setState({
+      banners: [
+        {
+          level: "stopped",
+          model: "gemma",
+          message,
+          at: 1,
+          hogs: [
+            { name: "Docker", bytes: 4 * GB, bundle: true },
+            { name: "claude", bytes: 2.4 * GB, bundle: false },
+          ],
+        },
+      ],
+    });
+    ipc.quitMemoryHog.mockResolvedValue(4 * GB);
+    render(<MemoryNotices />);
+
+    // The body says why, once — not the title again, not the list the
+    // buttons already show.
+    expect(screen.getByText("macOS hit critical memory pressure (32.1 of 36.0 GB used).")).toBeInTheDocument();
+    // A bare process is stopped, an app quit.
+    expect(screen.getByRole("button", { name: /^Stop claude/ })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Quit Docker/ }));
+    expect(ipc.quitMemoryHog).not.toHaveBeenCalled();
+    expect(screen.getByText(/It can still ask you to save first/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Quit Docker" }));
+
+    expect(ipc.quitMemoryHog).toHaveBeenCalledWith("Docker");
+    expect(await screen.findByText("Quit Docker — about 4.0 GB freed.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Quit Docker/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Stop claude/ })).toBeInTheDocument();
+  });
+
+  it("shows why an app didn't quit", async () => {
+    useMemory.setState({
+      banners: [
+        { level: "refused", model: "gemma", message: "no room", at: 1, hogs: [{ name: "Keynote", bytes: GB, bundle: true }] },
+      ],
+    });
+    ipc.quitMemoryHog.mockRejectedValue("Keynote didn't quit: it may be waiting for you to save something");
+    render(<MemoryNotices />);
+    await userEvent.click(screen.getByRole("button", { name: /^Quit Keynote/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Quit Keynote" }));
+    expect(await screen.findByText(/waiting for you to save/)).toBeInTheDocument();
   });
 });

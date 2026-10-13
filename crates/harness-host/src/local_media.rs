@@ -64,7 +64,25 @@ fn notice(n: MemoryNotice) -> harness_protocol::MemoryNotice {
         model: n.model,
         message: n.message,
         at: n.at,
+        hogs: hogs(n.hogs),
     }
+}
+
+fn hogs(apps: Vec<memory::AppMemory>) -> Vec<harness_protocol::MemoryHog> {
+    apps.into_iter()
+        .map(|a| harness_protocol::MemoryHog {
+            name: a.name,
+            bytes: a.bytes,
+            bundle: a.bundle,
+        })
+        .collect()
+}
+
+/// Quit one of the user's apps to free memory, on their say-so from a
+/// memory notice; returns the memory it held. Blocking (a bundled app gets
+/// a few seconds to quit), so hosts call it off the async workers.
+pub fn quit_memory_hog(name: &str) -> Result<u64, String> {
+    memory::quit_app(name).map_err(|e| e.to_string())
 }
 
 /// Forward every memory notice (a load warned about or refused, a model
@@ -79,6 +97,7 @@ pub async fn forward_memory_notices(sink: Arc<dyn EventSink>) {
                 model: n.model,
                 message: n.message,
                 at: n.at,
+                hogs: hogs(n.hogs),
             }),
             // A burst overflowed the buffer: the newest notices still come
             // through, which are the ones that matter.

@@ -504,6 +504,11 @@ fn remaining_variants_round_trip() {
             model: "Iris-3B Turbo".into(),
             message: "Stopped Iris-3B Turbo to protect your computer.".into(),
             at: 1_789_000_000,
+            hogs: vec![harness_protocol::MemoryHog {
+                name: "Docker".into(),
+                bytes: 4 << 30,
+                bundle: true,
+            }],
         },
         ProtocolEvent::LocalMediaProgress {
             id: "local/iris-3b-turbo".into(),
@@ -839,6 +844,7 @@ fn legacy_channel_names() {
                 model: "m".into(),
                 message: String::new(),
                 at: 0,
+                hogs: Vec::new(),
             },
             "memory://notice",
         ),

@@ -92,7 +92,7 @@ pub(crate) fn turn_failure_lines(
         lines.push(format!("  {}", ui.brown(&format!("⚠ {}", stop.message))));
         lines.push(format!(
             "  {}",
-            ui.dim("Close a few apps (browsers, Docker) and start the model again, or switch to a smaller or cloud model with /model.")
+            ui.dim("Free some memory and start the model again, or switch to a smaller or cloud model with /model.")
         ));
     }
     // Retries exhausted is the "endpoint is down" case: break the report into

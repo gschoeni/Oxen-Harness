@@ -14,6 +14,8 @@
 //!
 //! [`local_processes`] lists this host's model servers (from the spawned-
 //! server registries) with their footprints, for the memory meters.
+//! [`memory_hogs`] names the user's own apps holding the most memory, so a
+//! notice says *what* to close — and [`quit_app`] closes one on request.
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -86,6 +88,227 @@ fn rss(pid: u32) -> Option<u64> {
     Some(kb * 1024)
 }
 
+/// One app's share of memory, summed over its processes (a browser's
+/// renderers, an editor's helpers), for "close this to make room" advice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AppMemory {
+    pub name: String,
+    /// Resident memory across the app's processes.
+    pub bytes: u64,
+    /// A macOS app bundle, quit like ⌘Q (it can still ask to save); else a
+    /// bare process, stopped with SIGTERM.
+    pub bundle: bool,
+}
+
+/// An app as [`rank_hogs`] found it, with the processes to signal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RankedApp {
+    app: AppMemory,
+    pids: Vec<u32>,
+}
+
+/// Apps below this aren't worth naming: closing them frees little.
+const HOG_MIN_BYTES: u64 = 512 * 1024 * 1024;
+
+/// How many apps a memory message names.
+const HOGS_NAMED: usize = 3;
+
+/// The user's apps holding the most memory, biggest first, at most
+/// `limit`. One `ps` call (~30ms); empty where it can't be read.
+pub fn memory_hogs(limit: usize) -> Vec<AppMemory> {
+    ranked_apps(HOG_MIN_BYTES)
+        .into_iter()
+        .take(limit)
+        .map(|r| r.app)
+        .collect()
+}
+
+fn ranked_apps(min_bytes: u64) -> Vec<RankedApp> {
+    // A failed probe only drops the specifics from advice that reads fine
+    // without them, so it is logged rather than surfaced.
+    match std::process::Command::new("ps")
+        .args(["-axo", "pid=,rss=,comm="])
+        .output()
+    {
+        Ok(out) => rank_hogs(&String::from_utf8_lossy(&out.stdout), min_bytes),
+        Err(e) => {
+            tracing::warn!("couldn't list processes for memory advice: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// Group `ps -o pid=,rss=,comm=` lines by app, biggest first. A process
+/// inside an `.app` bundle counts toward the outermost bundle ("Google
+/// Chrome Helper (Renderer)" is Google Chrome); a bare executable by its
+/// file name. macOS itself (`/System`, `/usr/libexec`, …) and this
+/// harness's own processes are left out: neither is the user's to close.
+fn rank_hogs(ps: &str, min_bytes: u64) -> Vec<RankedApp> {
+    const SYSTEM: [&str; 4] = ["/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/"];
+    const OURS: [&str; 4] = [
+        "oxen-harness",
+        "oxen-harness-app",
+        "llama-server",
+        "sd-server",
+    ];
+    let mut apps: Vec<RankedApp> = Vec::new();
+    for line in ps.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(pid), Some(kb)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let (Ok(pid), Ok(kb)) = (pid.parse::<u32>(), kb.parse::<u64>()) else {
+            continue;
+        };
+        let command = fields.collect::<Vec<_>>().join(" ");
+        if command.is_empty() || SYSTEM.iter().any(|p| command.starts_with(p)) {
+            continue;
+        }
+        let (name, bundle) = match command.find(".app/") {
+            Some(end) => (command[..end].rsplit('/').next().unwrap_or(""), true),
+            // `ps` can append arguments to a bare name (`claude bg-spare`).
+            None => {
+                let program = command.split(' ').next().unwrap_or("");
+                (program.rsplit('/').next().unwrap_or(""), false)
+            }
+        };
+        if name.is_empty() || OURS.contains(&name) {
+            continue;
+        }
+        match apps.iter_mut().find(|r| r.app.name == name) {
+            Some(r) => {
+                r.app.bytes += kb * 1024;
+                r.pids.push(pid);
+            }
+            None => apps.push(RankedApp {
+                app: AppMemory {
+                    name: name.to_string(),
+                    bytes: kb * 1024,
+                    bundle,
+                },
+                pids: vec![pid],
+            }),
+        }
+    }
+    apps.retain(|r| r.app.bytes >= min_bytes);
+    apps.sort_by_key(|a| std::cmp::Reverse(a.app.bytes));
+    apps
+}
+
+/// What to close to make room: the named apps when there are any, else a
+/// plain suggestion.
+fn close_advice(hogs: &[AppMemory]) -> String {
+    let gb = |b: u64| b as f64 / GIB as f64;
+    match hogs {
+        [] => "Closing other apps frees memory.".to_string(),
+        [only] => format!(
+            "Quitting {} ({:.1} GB) frees the most.",
+            only.name,
+            gb(only.bytes)
+        ),
+        [rest @ .., last] => {
+            let named: Vec<String> = rest
+                .iter()
+                .map(|a| format!("{} ({:.1} GB)", a.name, gb(a.bytes)))
+                .collect();
+            format!(
+                "Using the most: {} and {} ({:.1} GB).",
+                named.join(", "),
+                last.name,
+                gb(last.bytes)
+            )
+        }
+    }
+}
+
+/// The "what to close" sentence for right now, for a host's own report.
+pub fn close_advice_now() -> String {
+    close_advice(&memory_hogs(HOGS_NAMED))
+}
+
+/// Why [`quit_app`] couldn't close an app.
+#[derive(Debug, thiserror::Error)]
+pub enum QuitError {
+    #[error("{0} isn't running (or isn't one of your apps)")]
+    NotRunning(String),
+    #[error("{name} didn't quit: {detail}")]
+    Refused { name: String, detail: String },
+    #[error("couldn't ask {name} to quit: {source}")]
+    Io {
+        name: String,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+/// How long a bundled app gets to quit before [`quit_app`] reports back
+/// (it may be waiting on the user to save something).
+const QUIT_WAIT: Duration = Duration::from_secs(10);
+
+/// Close one of the user's apps to free memory, on their say-so. The app is
+/// looked up afresh by name — never by a pid that may have been reused since
+/// it was shown — and must be one [`memory_hogs`] would name (never macOS or
+/// this harness). A bundled app is asked to quit like ⌘Q, so it can still
+/// prompt to save; a bare process gets SIGTERM. Returns the memory it held.
+pub fn quit_app(name: &str) -> Result<u64, QuitError> {
+    let Some(target) = ranked_apps(0).into_iter().find(|r| r.app.name == name) else {
+        return Err(QuitError::NotRunning(name.to_string()));
+    };
+    let io = |source| QuitError::Io {
+        name: name.to_string(),
+        source,
+    };
+    if target.app.bundle {
+        let script = format!(
+            "tell application \"{}\" to quit",
+            name.replace('\\', "\\\\").replace('"', "\\\"")
+        );
+        let mut child = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(io)?;
+        let started = std::time::Instant::now();
+        loop {
+            if let Some(status) = child.try_wait().map_err(io)? {
+                if status.success() {
+                    break;
+                }
+                let mut detail = String::new();
+                if let Some(mut err) = child.stderr.take() {
+                    std::io::Read::read_to_string(&mut err, &mut detail).map_err(io)?;
+                }
+                return Err(QuitError::Refused {
+                    name: name.to_string(),
+                    detail: detail.trim().to_string(),
+                });
+            }
+            if started.elapsed() > QUIT_WAIT {
+                return Err(QuitError::Refused {
+                    name: name.to_string(),
+                    detail: "it may be waiting for you to save something".to_string(),
+                });
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    } else {
+        let pids: Vec<String> = target.pids.iter().map(u32::to_string).collect();
+        let out = std::process::Command::new("kill")
+            .arg("-TERM")
+            .args(&pids)
+            .output()
+            .map_err(io)?;
+        if !out.status.success() {
+            return Err(QuitError::Refused {
+                name: name.to_string(),
+                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            });
+        }
+    }
+    Ok(target.app.bytes)
+}
+
 /// What to do about loading a model that needs `need_bytes`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "verdict", content = "message", rename_all = "lowercase")]
@@ -107,21 +330,24 @@ pub enum Residency {
     Mapped,
 }
 
-/// The pure decision behind a pre-load check.
+/// The pure decision behind a pre-load check. `hogs` names what to close
+/// when the advice is to make room.
 pub fn assess(
     snap: &MemorySnapshot,
     label: &str,
     need_bytes: u64,
     residency: Residency,
+    hogs: &[AppMemory],
 ) -> LoadAdvice {
     let gb = |b: u64| b as f64 / GIB as f64;
     if snap.pressure == MemoryPressure::Critical {
         return LoadAdvice::Refuse(format!(
             "macOS is at critical memory pressure ({:.1} of {:.1} GB used, {:.1} GB in swap); \
-             loading {label} would freeze apps. Close something heavy and try again.",
+             loading {label} would freeze apps. {} Then try again.",
             gb(snap.used_bytes),
             gb(snap.total_bytes),
-            gb(snap.swap_used_bytes)
+            gb(snap.swap_used_bytes),
+            close_advice(hogs)
         ));
     }
     // A resident model bigger than most of the machine can never fit, apps
@@ -140,12 +366,12 @@ pub fn assess(
     if residency == Residency::Resident && need_bytes > snap.available_bytes {
         return LoadAdvice::Warn(format!(
             "memory is tight: {label} needs about {:.1} GB and {:.1} GB is free, so macOS will \
-             push about {:.1} GB of your other apps into compressed memory or swap. Closing \
-             browsers or Docker helps. It is stopped automatically before your computer bogs \
-             down.",
+             push about {:.1} GB of your other apps into compressed memory or swap. {} It is \
+             stopped automatically before your computer bogs down.",
             gb(need_bytes),
             gb(snap.available_bytes),
-            gb(need_bytes - snap.available_bytes)
+            gb(need_bytes - snap.available_bytes),
+            close_advice(hogs)
         ));
     }
     if need_bytes > snap.available_bytes {
@@ -172,14 +398,15 @@ pub fn assess(
 /// means no opinion. A warning or refusal is also published as a
 /// [`MemoryNotice`] so hosts can show it however the load was started.
 pub fn preflight(label: &str, need_bytes: u64, residency: Residency) -> LoadAdvice {
+    let hogs = memory_hogs(HOGS_NAMED);
     let advice = match snapshot() {
-        Some(snap) => assess(&snap, label, need_bytes, residency),
+        Some(snap) => assess(&snap, label, need_bytes, residency, &hogs),
         None => LoadAdvice::Go,
     };
     match &advice {
         LoadAdvice::Go => {}
-        LoadAdvice::Warn(m) => publish(NoticeLevel::Warn, label, m),
-        LoadAdvice::Refuse(m) => publish(NoticeLevel::Refused, label, m),
+        LoadAdvice::Warn(m) => publish(NoticeLevel::Warn, label, m, hogs),
+        LoadAdvice::Refuse(m) => publish(NoticeLevel::Refused, label, m, hogs),
     }
     advice
 }
@@ -204,6 +431,9 @@ pub struct MemoryNotice {
     pub message: String,
     /// Unix seconds.
     pub at: i64,
+    /// The apps holding the most memory when it was raised: what a host can
+    /// offer to quit ([`quit_app`]).
+    pub hogs: Vec<AppMemory>,
 }
 
 fn notices() -> &'static tokio::sync::broadcast::Sender<MemoryNotice> {
@@ -216,11 +446,12 @@ fn last_slot() -> &'static Mutex<Option<MemoryNotice>> {
     LAST.get_or_init(|| Mutex::new(None))
 }
 
-fn publish(level: NoticeLevel, model: &str, message: &str) {
+fn publish(level: NoticeLevel, model: &str, message: &str, hogs: Vec<AppMemory>) {
     let notice = MemoryNotice {
         level,
         model: model.to_string(),
         message: message.to_string(),
+        hogs,
         at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -479,7 +710,11 @@ impl Watchdog {
                         }
                         // What the survivors are judged by next starts now.
                         reset_swap_baseline(snap.swap_used_bytes);
-                        let reason = format!("Stopped {label} to protect your computer: {why}.");
+                        let hogs = memory_hogs(HOGS_NAMED);
+                        let reason = format!(
+                            "Stopped {label} to protect your computer: {why}. {}",
+                            close_advice(&hogs)
+                        );
                         // Everything is reported before the signal: whoever
                         // sees the server die must be able to read why, and
                         // the owner dropping this watchdog on that death
@@ -488,7 +723,7 @@ impl Watchdog {
                         if let Ok(mut slot) = record.lock() {
                             *slot = Some(reason.clone());
                         }
-                        publish(NoticeLevel::Stopped, &label, &reason);
+                        publish(NoticeLevel::Stopped, &label, &reason, hogs);
                         on_trip(&reason);
                         crate::server::stop_process(pid).await;
                         return;
@@ -708,12 +943,76 @@ mod tests {
     }
 
     #[test]
+    fn hogs_group_by_app_and_skip_macos_and_our_own_processes() {
+        let ps = "\
+  101 1561440 /Applications/Docker.app/Contents/MacOS/com.docker.backend
+  102  440560 claude
+  103  270944 claude bg-spare
+  104  307648 /Applications/Slack.app/Contents/Frameworks/Slack Helper (Renderer).app/Contents/MacOS/Slack Helper (Renderer)
+  105  700000 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+  106  600000 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+  107 9000000 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+  108  900000 /usr/libexec/syspolicyd
+  109 9000000 /Users/me/.oxen-harness/runtime/llama-server
+garbage line
+";
+        let ranked = rank_hogs(ps, HOG_MIN_BYTES);
+        let names: Vec<&str> = ranked.iter().map(|r| r.app.name.as_str()).collect();
+        // Chrome's renderer counts toward Chrome; Slack (0.3 GB) is too
+        // small to name; macOS and our own model server never show.
+        assert_eq!(names, ["Docker", "Google Chrome", "claude"]);
+        assert_eq!(ranked[1].app.bytes, 1_300_000 * 1024);
+        assert_eq!(ranked[1].pids, [105, 106]);
+        assert!(ranked[1].app.bundle);
+        assert_eq!(ranked[2].app.bytes, (440_560 + 270_944) * 1024);
+        assert_eq!(ranked[2].pids, [102, 103]);
+        assert!(
+            !ranked[2].app.bundle,
+            "a bare process is signalled, not quit"
+        );
+    }
+
+    #[test]
+    fn close_advice_names_the_biggest_apps() {
+        let app = |name: &str, gb: u64| AppMemory {
+            name: name.into(),
+            bytes: gb * GIB,
+            bundle: true,
+        };
+        assert_eq!(close_advice(&[]), "Closing other apps frees memory.");
+        assert_eq!(
+            close_advice(&[app("Docker", 4)]),
+            "Quitting Docker (4.0 GB) frees the most."
+        );
+        assert_eq!(
+            close_advice(&[app("Docker", 4), app("Google Chrome", 3), app("Slack", 1)]),
+            "Using the most: Docker (4.0 GB), Google Chrome (3.0 GB) and Slack (1.0 GB)."
+        );
+        // …and a tight-memory warning carries it.
+        let warn = assess(
+            &snap(30, MemoryPressure::Normal),
+            "gemma",
+            13 * GIB,
+            Residency::Resident,
+            &[app("Docker", 4)],
+        );
+        assert!(matches!(warn, LoadAdvice::Warn(m) if m.contains("Quitting Docker (4.0 GB)")));
+    }
+
+    #[test]
+    fn quitting_an_app_that_is_not_running_says_so() {
+        let err = quit_app("no-such-app-anywhere-0451").expect_err("not running");
+        assert!(matches!(err, QuitError::NotRunning(_)), "{err}");
+    }
+
+    #[test]
     fn critical_pressure_refuses_any_load() {
         let advice = assess(
             &snap(20, MemoryPressure::Critical),
             "gemma",
             GIB,
             Residency::Mapped,
+            &[],
         );
         assert!(matches!(advice, LoadAdvice::Refuse(m) if m.contains("critical")));
     }
@@ -723,21 +1022,21 @@ mod tests {
         // 30 of 36 GB used: 6 GB free.
         let s = snap(30, MemoryPressure::Normal);
         assert!(matches!(
-            assess(&s, "a 70B model", 34 * GIB, Residency::Resident),
+            assess(&s, "a 70B model", 34 * GIB, Residency::Resident, &[]),
             LoadAdvice::Refuse(m) if m.contains("a 70B model")
         ));
         // Bigger than what's free but able to fit: warned, with the cost.
         assert!(matches!(
-            assess(&s, "gemma", 13 * GIB, Residency::Resident),
+            assess(&s, "gemma", 13 * GIB, Residency::Resident, &[]),
             LoadAdvice::Warn(m) if m.contains("7.0 GB of your other apps")
         ));
         // Mapped weights only warn: the OS pages them instead of swapping.
         assert!(matches!(
-            assess(&s, "iris", 9 * GIB, Residency::Mapped),
+            assess(&s, "iris", 9 * GIB, Residency::Mapped, &[]),
             LoadAdvice::Warn(_)
         ));
         assert_eq!(
-            assess(&s, "small", 2 * GIB, Residency::Resident),
+            assess(&s, "small", 2 * GIB, Residency::Resident, &[]),
             LoadAdvice::Go
         );
     }
@@ -745,7 +1044,7 @@ mod tests {
     #[test]
     fn warn_pressure_warns_even_when_it_fits() {
         assert!(matches!(
-            assess(&snap(10, MemoryPressure::Warn), "klein", GIB, Residency::Mapped),
+            assess(&snap(10, MemoryPressure::Warn), "klein", GIB, Residency::Mapped, &[]),
             LoadAdvice::Warn(m) if m.contains("pressure")
         ));
     }

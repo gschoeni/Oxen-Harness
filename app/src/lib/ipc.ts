@@ -654,6 +654,8 @@ export const listMediaModels = (kind?: "image" | "video", refresh = false) =>
 /** System memory, the app's local model servers, and the last memory
  *  notice — what the memory meter shows. */
 export const memoryStatus = () => invoke<MemoryStatus>("memory_status");
+/** Quit an app a memory notice named; resolves to the memory it held. */
+export const quitMemoryHog = (name: string) => invoke<number>("quit_memory_hog", { name });
 
 /** The on-device image models, their engine, and free disk. */
 export const localMediaStatus = () => invoke<LocalMediaStatus>("local_media_status");

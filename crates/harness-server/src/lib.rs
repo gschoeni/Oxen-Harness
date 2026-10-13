@@ -182,6 +182,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/v1/media/prefs", get(media_prefs).put(set_media_prefs))
         .route("/v1/media/models", get(media_models))
         .route("/v1/memory", get(memory_status))
+        .route("/v1/memory/quit", post(quit_memory_hog))
         .route("/v1/local-media", get(local_media_status))
         .route("/v1/local-media/pull", post(pull_local_media))
         .route("/v1/local-media/cancel", post(cancel_local_media_pull))
@@ -646,6 +647,27 @@ async fn memory_status(
         .await
         .map_err(|e| e.to_string())?;
     Ok(Json(status))
+}
+
+/// `{"name": "Docker"}` — one of the apps a memory notice named.
+#[derive(Deserialize)]
+struct MemoryHogName {
+    name: String,
+}
+
+/// Quit an app a memory notice named, to free memory; answers the bytes it
+/// held.
+async fn quit_memory_hog(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<MemoryHogName>,
+) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&state, &headers, None)?;
+    let freed =
+        tokio::task::spawn_blocking(move || harness_host::local_media::quit_memory_hog(&body.name))
+            .await
+            .map_err(|e| e.to_string())??;
+    Ok(Json(serde_json::json!({ "freed_bytes": freed })))
 }
 
 /// The on-device image models, their engine, and free disk.

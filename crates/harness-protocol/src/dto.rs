@@ -314,6 +314,21 @@ pub struct MemoryNotice {
     pub message: String,
     /// Unix seconds.
     pub at: i64,
+    /// The apps holding the most memory when it was raised, biggest first:
+    /// what a client can offer to quit (`quit_memory_hog`).
+    #[serde(default)]
+    pub hogs: Vec<MemoryHog>,
+}
+
+/// One of the user's apps holding a lot of memory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MemoryHog {
+    pub name: String,
+    /// Resident memory across the app's processes.
+    pub bytes: u64,
+    /// A macOS app, quit like ⌘Q (it may ask to save); else a bare process,
+    /// stopped with SIGTERM.
+    pub bundle: bool,
 }
 
 /// The on-device image models and their engine (`local_media_status`).

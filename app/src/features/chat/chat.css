@@ -534,13 +534,17 @@
 .msg.assistant {
   align-self: stretch;
 }
-/* A centered, quiet system note in the thread (e.g. context was compacted). */
+/* A centered, quiet system note in the thread (e.g. context was compacted):
+   quieter than conversation, but still a sentence someone has to read — the
+   chat column's measure, tertiary text, wrapped evenly. */
 .msg.notice {
   align-self: center;
-  max-width: 90%;
+  max-width: min(90%, var(--chat-column));
   text-align: center;
-  font-size: 0.82em;
-  color: var(--text-dim, var(--separator-strong));
+  text-wrap: pretty;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-tertiary);
   font-style: italic;
   padding: var(--space-1) 0;
 }
@@ -1798,6 +1802,38 @@
 }
 .memory-notice-body {
   color: var(--text-secondary);
+  text-wrap: pretty;
+}
+/* The apps holding the most memory, each one click (and a confirm) from
+   quitting. */
+.memory-notice-hogs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  margin-top: var(--space-2);
+}
+.memory-notice-hogs-label {
+  color: var(--text-tertiary);
+}
+.memory-hog-confirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+}
+.memory-hog-size {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+.memory-notice-result {
+  margin-top: var(--space-1);
+  color: var(--text-secondary);
+}
+.memory-notice-result.error {
+  color: var(--danger);
 }
 .memory-notice-close {
   flex: none;
