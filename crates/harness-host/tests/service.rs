@@ -313,10 +313,12 @@ async fn each_chat_keeps_its_own_model_across_tab_switches() {
         "some-other-model"
     );
 
-    // A tab's pick is that tab's alone: a chat opened afterwards still
-    // starts on the default.
+    // A tab's pick moves no other chat — but as the model last chosen, it is
+    // what a chat opened afterwards starts on.
     let third = service.new_session().await.unwrap();
-    assert_eq!(third.model, "claude-opus-4-8");
+    assert_eq!(third.model, "some-other-model");
+    let view = service.resume_session(&first.session_id).await.unwrap();
+    assert_eq!(view.info.model, "claude-opus-4-8");
 }
 
 /// A turn holds its agent until the reply ends; a switch aimed at that chat
@@ -577,9 +579,9 @@ fn local_chat(workspace: &std::path::Path, model: &str) -> harness_store::Sessio
 }
 
 /// New chats default to local model A while another chat is mid-reply on
-/// local model B. Opening a chat can't load A (one local model at a time),
-/// so it starts on the cloud model — and B's server, refused for
-/// replacement, must not be torn down on the way to that fallback.
+/// local model B. Opening a chat loads nothing, so B's server must survive
+/// it — here A isn't even installed, so the chat falls back to the cloud
+/// model without touching B on the way.
 #[tokio::test]
 async fn a_new_chat_never_kills_a_local_server_another_chat_is_replying_on() {
     let server = mockito::Server::new_async().await;
@@ -617,8 +619,6 @@ async fn a_new_chat_never_kills_a_local_server_another_chat_is_replying_on() {
 
     assert_eq!(fresh.model, "claude-opus-4-8");
     assert_eq!(serving(&service).await.as_deref(), Some("model-b"));
-    // A is still what new chats want: the next one gets it once B is free.
-    assert_eq!(service.local_model.lock().await.as_deref(), Some("model-a"));
 }
 
 /// The server is kept for the model new chats start on — that model, not
@@ -1386,6 +1386,17 @@ async fn background_work_that_finishes_while_idle_is_announced_and_delivered() {
 async fn live_local_chat_loads_its_model_on_send_not_on_open() {
     let model = std::env::var("OXEN_HARNESS_LIVE_LOCAL")
         .expect("set OXEN_HARNESS_LIVE_LOCAL to an installed local model id");
+    // The real runtime and weights, under a scratch config home: remembering
+    // the last model writes `models.json`, and a test mustn't move the
+    // user's own default.
+    let real = std::env::var_os("OXEN_HARNESS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| dirs_home().join(".oxen-harness"));
+    let scratch = tempfile::tempdir().unwrap();
+    for shared in ["models", "runtime"] {
+        std::os::unix::fs::symlink(real.join(shared), scratch.path().join(shared)).unwrap();
+    }
+    std::env::set_var("OXEN_HARNESS_DIR", scratch.path());
     let cloud = mockito::Server::new_async().await;
     let sink = Arc::new(CollectingSink::default());
     let workspace = tempfile::tempdir().unwrap();
@@ -1417,26 +1428,36 @@ async fn live_local_chat_loads_its_model_on_send_not_on_open() {
         }
     };
 
-    // Picking a local model swaps it into the chat in place and loads it.
+    // Picking a local model swaps it into the chat in place — and loads
+    // nothing until the chat is sent to.
     let chat = service.new_session().await.unwrap().session_id;
     let info = service
         .set_session_local_model(&chat, &model)
         .await
-        .expect("local model starts");
+        .expect("local model picked");
     assert_eq!(info.session_id, chat);
     assert_eq!(info.model, model);
-    assert_eq!(serving().await.as_deref(), Some(model.as_str()));
+    assert_eq!(serving().await, None);
     let store = service.store().unwrap();
     assert_eq!(
         store.session_meta(&chat).unwrap().mode,
         harness_store::MODE_LOCAL
     );
     say_hi(chat.clone()).await;
+    assert_eq!(serving().await.as_deref(), Some(model.as_str()));
 
-    // The pick was this chat's alone: a new chat is a cloud one, and with
-    // the local chat out of memory nothing needs the server any more.
+    // It is the model last used, so a new chat starts on it, riding the
+    // server that is already up.
     let other = service.new_session().await.unwrap();
-    assert_eq!(other.model, "claude-opus-4-8");
+    assert_eq!(other.model, model);
+    assert_eq!(serving().await.as_deref(), Some(model.as_str()));
+
+    // Moving that chat (and so the default) to cloud lets the server go:
+    // the local chat is out of memory, and nothing else needs it.
+    service
+        .set_session_model(&other.session_id, "claude-opus-4-8")
+        .await
+        .unwrap();
     assert_eq!(serving().await, None);
 
     // Reopening the local chat names its model but loads nothing…
@@ -1454,6 +1475,10 @@ async fn live_local_chat_loads_its_model_on_send_not_on_open() {
         .await
         .unwrap();
     assert_eq!(serving().await, None);
+}
+
+fn dirs_home() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))
 }
 
 /// The composer's speed picker: a chat may run its model on a service tier

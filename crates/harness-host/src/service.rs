@@ -395,12 +395,12 @@ impl SessionServiceBuilder {
             hooks: self.hooks,
             agents: Mutex::new(HashMap::new()),
             current: Mutex::new(None),
-            // Every host boots on the cloud model. A local model — and the
-            // memory its server takes — is only ever loaded when the user
-            // picks one in this run (`use_local_model`); the persisted
-            // `active_local` is a remembered choice, never an auto-start.
+            // New chats start on the model the user last used, local ones
+            // included — but a local model is only a *name* here: no server
+            // starts until a chat on it is sent to (`ready_agent`), so
+            // launching never commits a model's worth of memory.
             local_server: Mutex::new(None),
-            local_model: Mutex::new(None),
+            local_model: Mutex::new(remembered_local_model()),
             pending_questions: PendingQuestions::default(),
             pending_approvals: PendingApprovals::default(),
             cancels: Mutex::new(HashMap::new()),
@@ -520,6 +520,32 @@ fn installed_local_id(id: &str) -> Result<String, String> {
     }
 }
 
+/// The local model the user last used, if it is still installed here — the
+/// launch-time default for new chats. A model since deleted (or a runtime
+/// since removed) is forgotten in favour of the cloud default.
+fn remembered_local_model() -> Option<String> {
+    let id = harness_runtime::models::active_local()?;
+    llama_server_path()?;
+    installed_local_id(&id).ok()
+}
+
+/// The context window a local model's server would be started with on this
+/// machine — what a dormant chat reports before its server is up.
+fn planned_local_context(store: &ModelStore, id: &str) -> u32 {
+    let profile = harness_local::detect_hardware();
+    let weight_bytes = store.installed_size(id).unwrap_or(0);
+    fit::plan_context(
+        profile.usable_budget,
+        weight_bytes,
+        store.native_context(id),
+    )
+}
+
+/// The address a dormant local chat is built on before its server starts.
+/// Nothing listens there: [`SessionService::ready_agent`] swaps in the live
+/// server's address before the chat's first model call.
+const DORMANT_LOCAL_URL: &str = "http://127.0.0.1:0/v1";
+
 impl SessionService {
     pub fn builder(sink: Arc<dyn EventSink>) -> SessionServiceBuilder {
         SessionServiceBuilder {
@@ -545,36 +571,21 @@ impl SessionService {
     // --- Client & model selection -------------------------------------------
 
     /// The client, model label, and context window for a new agent: the
-    /// local model the user picked in this run (its server restarted if it
-    /// died), otherwise the configured cloud client.
+    /// model the user last used (see [`Self::remember_last_model`]), local or
+    /// cloud.
+    ///
+    /// A local default never loads here — opening a chat is not asking for a
+    /// model. The chat rides the running server if it is already serving
+    /// that model, else it is built dormant and its server starts when the
+    /// chat is first sent to.
     pub async fn client_for(&self) -> Result<(OxenClient, String, Option<usize>), String> {
-        // A local model is only ever active because the user picked it since
-        // launch — nothing is restored from a previous run — so re-ensuring
-        // its server here never loads a model the user didn't ask for.
         let local_id = self.local_model.lock().await.clone();
         if let Some(id) = local_id {
-            match self.ensure_local_server(&id).await {
-                Ok((base_url, ctx)) => {
-                    return Ok((OxenClient::new(base_url, "local", &id), id, Some(ctx)));
-                }
-                // The model can't be served right now — fall back to the
-                // cloud model rather than failing to open a chat. The server
-                // slot is `ensure_local_server`'s to manage: it is already
-                // empty if the start failed (runtime or weights gone), and
-                // then this run stops defaulting to the model (the persisted
-                // choice is kept, so it retries on the next launch). A server
-                // still in the slot is a *different* model, mid-reply in
-                // another chat, that was rightly not replaced: it stays, and
-                // so does the default, for the next chat opened once it's free.
-                Err(_) => {
-                    self.sink.emit(ProtocolEvent::LocalStatus {
-                        model: id,
-                        phase: harness_protocol::LocalPhase::Error,
-                    });
-                    if self.local_server.lock().await.is_none() {
-                        *self.local_model.lock().await = None;
-                    }
-                }
+            match self.local_client(&id).await {
+                Ok(found) => return Ok(found),
+                // Deleted since it became the default (or the runtime went):
+                // stop defaulting to it, and fall back to the cloud model.
+                Err(_) => *self.local_model.lock().await = None,
             }
         }
         let model = self.cloud_model.lock().await.clone();
@@ -582,6 +593,93 @@ impl SessionService {
         // `None` falls back to the name-derived table in `harness-agent`.
         let context_window = harness_local::limits::context_window(&model);
         Ok(((self.client_factory)(&model)?, model, context_window))
+    }
+
+    /// [`Self::client_for`], ready to call right now: a one-shot side task
+    /// the user asked for (generating a theme) starts a local default's
+    /// server instead of getting a dormant client.
+    pub async fn ready_default_client(
+        &self,
+    ) -> Result<(OxenClient, String, Option<usize>), String> {
+        let (client, model, context) = self.client_for().await?;
+        if client.base_url() != DORMANT_LOCAL_URL {
+            return Ok((client, model, context));
+        }
+        let (base_url, context) = self.ensure_local_server(&model).await?;
+        Ok((
+            OxenClient::new(base_url, "local", &model),
+            model,
+            Some(context),
+        ))
+    }
+
+    /// A client for local model `id` without loading it: the running server
+    /// when it serves `id`, else a dormant client [`Self::ready_agent`] wakes
+    /// on the chat's first send, reporting the window it will be started with.
+    async fn local_client(&self, id: &str) -> Result<(OxenClient, String, Option<usize>), String> {
+        let id = installed_local_id(id)?;
+        if llama_server_path().is_none() {
+            return Err(format!(
+                "the local runtime isn't installed. {}",
+                harness_local::install_hint()
+            ));
+        }
+        if let Some((base_url, ctx)) = self.live_local_server(&id).await {
+            return Ok((OxenClient::new(base_url, "local", &id), id, Some(ctx)));
+        }
+        let store = ModelStore::open().map_err(|e| e.to_string())?;
+        let context = planned_local_context(&store, &id) as usize;
+        Ok((
+            OxenClient::new(DORMANT_LOCAL_URL, "local", &id),
+            id,
+            Some(context),
+        ))
+    }
+
+    /// Make `model` what new chats start on — the model the user just chose
+    /// or sent a message with — here and in `models.json`, so the next
+    /// launch starts there too. A local model is remembered by name only;
+    /// nothing is loaded. Moving the default off a local model lets its
+    /// server go once no chat in memory needs it.
+    ///
+    /// The choice is persisted only when it changes. A failed write keeps the
+    /// default for this run and says so in the chat rather than failing the
+    /// turn or switch that prompted it.
+    async fn remember_last_model(&self, session: &str, model: &str, local: bool) {
+        let changed = if local {
+            let mut current = self.local_model.lock().await;
+            let changed = current.as_deref() != Some(model);
+            *current = Some(model.to_string());
+            changed
+        } else {
+            let was_local = self.local_model.lock().await.take().is_some();
+            let mut cloud = self.cloud_model.lock().await;
+            let changed = was_local || *cloud != model;
+            *cloud = model.to_string();
+            changed
+        };
+        if !changed {
+            return;
+        }
+        let saved = if local {
+            harness_runtime::models::set_active_local(model)
+        } else {
+            // Selecting a cloud model also clears the remembered local one.
+            harness_runtime::models::set_selected(model)
+        };
+        if let Err(e) = saved {
+            self.sink.emit(ProtocolEvent::Notice {
+                session: session.to_string(),
+                kind: "default_model_unsaved".into(),
+                text: format!(
+                    "New chats will use {model} until the app restarts — saving it as the \
+                     default failed: {e}"
+                ),
+            });
+        }
+        if !local {
+            self.drop_idle_local_server().await;
+        }
     }
 
     /// Ensure a `llama-server` is running for local model `id`, returning its
@@ -628,10 +726,8 @@ impl SessionService {
         if !store.is_installed(id) {
             return Err(format!("{id} isn't downloaded"));
         }
-        let profile = harness_local::detect_hardware();
         let weight_bytes = store.installed_size(id).unwrap_or(0);
-        let native = store.native_context(id);
-        let context = fit::plan_context(profile.usable_budget, weight_bytes, native);
+        let context = planned_local_context(&store, id);
         // Warnings reach the user as `memory.notice`; a refusal is this
         // send's error.
         if let harness_local::memory::LoadAdvice::Refuse(why) = harness_local::memory::preflight(
@@ -796,8 +892,8 @@ impl SessionService {
     /// Switch one chat to a cloud `model`, continuing the same conversation:
     /// the transcript stays, only the model (and, if coming from a local
     /// model, the client) is swapped. The choice is recorded on the session,
-    /// so that chat — and only that chat — comes back on it. Other chats keep
-    /// their own models, and so does the default new chats start on.
+    /// so that chat comes back on it; other chats keep their own models. As
+    /// the model the user last chose, it is also what new chats start on.
     pub async fn set_session_model(
         &self,
         session: &str,
@@ -816,34 +912,33 @@ impl SessionService {
         self.move_agent(&mut agent, client, model, MODE_CLOUD, context_window)?;
         let info = self.info_for(&agent);
         drop(agent);
+        self.remember_last_model(session, model, false).await;
         // This chat may have been the last one on the local server.
         self.drop_idle_local_server().await;
         Ok(info)
     }
 
     /// Switch one chat to a downloaded local model, continuing the same
-    /// conversation — the local counterpart of [`Self::set_session_model`].
-    /// Starts the model's server now (the user just picked it), reusing a
-    /// running one. Unlike [`Self::use_local_model`] it opens no new chat and
-    /// leaves the default for new chats alone.
+    /// conversation — the local counterpart of [`Self::set_session_model`],
+    /// and likewise the model new chats now start on. Nothing loads yet: the
+    /// chat rides the running server if it already serves this model, else
+    /// its server starts when the chat is next sent to. Unlike
+    /// [`Self::use_local_model`] it opens no new chat.
     pub async fn set_session_local_model(
         &self,
         session: &str,
         id: &str,
     ) -> Result<SessionInfo, String> {
-        let id = &installed_local_id(id)?;
-        if llama_server_path().is_none() {
-            return Err(format!(
-                "the local runtime isn't installed. {}",
-                harness_local::install_hint()
-            ));
-        }
+        let (client, id, context) = self.local_client(id).await?;
         let arc = self.agent_or_build(session).await?;
         let mut agent = lock_between_turns(&arc)?;
-        let (base_url, context) = self.ensure_local_server(id).await?;
-        let client = OxenClient::new(base_url, "local", id);
-        self.move_agent(&mut agent, client, id, MODE_LOCAL, Some(context))?;
-        Ok(self.info_for(&agent))
+        self.move_agent(&mut agent, client, &id, MODE_LOCAL, context)?;
+        let info = self.info_for(&agent);
+        drop(agent);
+        self.remember_last_model(session, &id, true).await;
+        // This chat may have been the last one on another local model.
+        self.drop_idle_local_server().await;
+        Ok(info)
     }
 
     /// Point a chat's agent at `model` on `client`, recording the move on its
@@ -898,7 +993,8 @@ impl SessionService {
     /// things that are deliberately not done when a chat is merely opened:
     ///
     /// - a local-model chat gets its server started (or restarted, if it
-    ///   died or was shut down while the chat sat idle);
+    ///   died or was shut down while the chat sat idle) — including one
+    ///   built dormant on a local default, which loads nothing until here;
     /// - a chat rebuilt somewhere other than where its row says it ran — a
     ///   different model, or the same model id on a different endpoint —
     ///   says so, once, and its row is brought up to date;
@@ -910,6 +1006,15 @@ impl SessionService {
             .session_meta(session)
             .map_err(|e| format!("reading session {session}: {e}"))?;
         agent.set_compression_mode(harness_runtime::compression::mode());
+
+        // Built dormant on a local default (a new chat, or one that fell
+        // back to the default): this is the send that loads the model.
+        if agent.base_url() == DORMANT_LOCAL_URL {
+            let model = agent.model().to_string();
+            let (base_url, context) = self.ensure_local_server(&model).await?;
+            let client = OxenClient::new(base_url, "local", &model);
+            self.move_agent(agent, client, &model, MODE_LOCAL, Some(context))?;
+        }
 
         let same_model = agent.model() == meta.model;
         // A local chat's address changes with every server start; that is
@@ -2125,11 +2230,18 @@ impl SessionService {
         };
         let ready = {
             let mut agent = arc.lock().await;
-            self.ready_agent(session, &mut agent).await
+            self.ready_agent(session, &mut agent)
+                .await
+                .map(|()| agent.model().to_string())
         };
-        if let Err(e) = ready {
-            return (Err(e), Vec::new());
-        }
+        let model = match ready {
+            Ok(model) => model,
+            Err(e) => return (Err(e), Vec::new()),
+        };
+        // Sending a message is using the model: new chats (and the next
+        // launch) start on it.
+        let local = installed_local_id(&model).is_ok();
+        self.remember_last_model(session, &model, local).await;
 
         let sid = session.to_string();
         // The context window is fixed for the turn; capture it once so live
@@ -2500,43 +2612,20 @@ impl SessionService {
     // --- Live settings swaps -----------------------------------------------------
 
     /// Start a fresh chat on a downloaded local model and make that model
-    /// what new chats start on: ensure a `llama-server` is running for it
-    /// (with a context window sized to this machine) and build an agent
-    /// against it. The model must already be downloaded. To move an existing
-    /// chat onto a local model instead, see [`Self::set_session_local_model`].
-    ///
-    /// If the running server is already serving `id` (e.g. "Use model" clicked
-    /// again), it is reused as-is — starting a second copy would double the
-    /// resident weights and, on slot replacement, kill the old server under
-    /// any turn still streaming from it. Only an actual model change (or a
-    /// dead process) replaces the server, and the old one is dropped *before*
-    /// the new load so both never sit in memory together.
+    /// what new chats start on. The model must already be downloaded; like
+    /// any chat it loads when first sent to (a running server already
+    /// serving it is reused as-is). To move an existing chat onto a local
+    /// model instead, see [`Self::set_session_local_model`].
     pub async fn use_local_model(&self, id: &str) -> Result<SessionInfo, String> {
-        let id = &installed_local_id(id)?;
-        if llama_server_path().is_none() {
-            return Err(format!(
-                "the local runtime isn't installed. {}",
-                harness_local::install_hint()
-            ));
-        }
-        // `ensure_local_server` holds the server slot's lock across the start,
-        // so two rapid switches serialize instead of racing two model loads.
-        let (base_url, context) = self.ensure_local_server(id).await?;
+        let (client, id, context) = self.local_client(id).await?;
         let root = self.active_root().await;
-        let agent = self.new_agent(
-            OxenClient::new(&base_url, "local", id),
-            id,
-            Some(context),
-            MODE_LOCAL,
-            &root,
-        )?;
-
-        // Remember the local model so new sessions reuse the server, persist
-        // the choice so it survives a restart, then install the agent as the
-        // current chat.
-        *self.local_model.lock().await = Some(id.to_string());
-        let _ = harness_runtime::models::set_active_local(id);
-        Ok(self.install_agent(agent).await)
+        let agent = self.new_agent(client, &id, context, MODE_LOCAL, &root)?;
+        let session = agent.session_id().to_string();
+        let info = self.install_agent(agent).await;
+        self.remember_last_model(&session, &id, true).await;
+        // The previous default's server, if nothing else holds it.
+        self.drop_idle_local_server().await;
+        Ok(info)
     }
 
     /// Set the context-compression mode: persist it for new chats AND apply

@@ -1570,3 +1570,24 @@ breaks every later request in the chat.
 
 **No server outlives its host.** A shell lifeline polls host and server pids
 and stops the server within ~2 s of the host exiting by any means.
+
+## New chats start on the model last used (2026-10-13)
+
+Amends "A chat owns its model": the default new chats start on was only the
+Settings star, so every new chat (and every launch) reverted to it no matter
+what the user had been chatting with.
+
+**The last model used is the default.** Sending a message in a chat, or picking
+a model in a chat's picker, makes that model what new chats start on — here
+(`remember_last_model` in the host) and in `models.json` (`selected` for
+cloud, `active_local` for local), so the next launch starts there too. A
+chat's switch still moves no *other* chat. The Settings star now simply
+shows the current default.
+
+**A remembered local model is a name, not a load.** Launch restores
+`active_local` (if still installed) as the default, but nothing starts: a new
+chat on it is built dormant (`DORMANT_LOCAL_URL`, reporting the window it will
+get) unless the server already serves that model, and `ready_agent` loads it
+on the chat's first send. Picking a local model in the picker, and "Use model"
+in Settings, are dormant too. One-shot side tasks the user starts (theme
+generation, the study game) use `ready_default_client`, which does load.

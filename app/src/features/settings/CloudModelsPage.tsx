@@ -190,8 +190,8 @@ export function CloudModelsPage() {
         {error && <span className="save-status err">{error}</span>}
         {cloudModels.length > 0 && (
           <p className="hint">
-            Switch between models anytime from the picker beneath the chat box — the star
-            marks the default for new chats.
+            Switch between models anytime from the picker beneath the chat box. New chats
+            start on the model you used last; the star marks it.
           </p>
         )}
       </section>

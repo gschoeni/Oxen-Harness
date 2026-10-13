@@ -32,7 +32,7 @@ fn theme_store() -> Result<harness_theme::Store, String> {
 /// Used for side tasks (theme generation) so they never block — or wait on — a
 /// chat's agent, which may be mid-turn.
 async fn complete_oneshot(state: &AppState, system: &str, user: &str) -> Result<String, String> {
-    let (client, model, _) = state.client_for().await?;
+    let (client, model, _) = state.ready_default_client().await?;
     let request = ChatRequest::new(
         &model,
         vec![

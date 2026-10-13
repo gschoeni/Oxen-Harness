@@ -727,7 +727,7 @@ interface AppState {
   loadCloudModels: () => Promise<void>;
   /** Swap the chat in view to a cloud model in place, continuing the same
    *  conversation (keeps the thread; only the model changes). Other tabs keep
-   *  their own models, and the default for new chats is untouched. */
+   *  their own models; new chats start on the model last chosen or used. */
   changeModel: (model: string) => Promise<void>;
   /** Run the chat in view on a service tier (e.g. `ultrafast`), or back on
    *  its model's default with null. Its own; other tabs are untouched. */

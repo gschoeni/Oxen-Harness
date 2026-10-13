@@ -853,8 +853,9 @@ export const searchOxenModels = (query: string) =>
   invoke<OxenModelHit[]>("search_oxen_models", { query });
 /** Switch one chat to a cloud model, continuing the same conversation.
  *  `session` names the chat — each tab owns its model — and defaults to the
- *  backend's current one. The default for new chats is not touched (that is
- *  `selectCloudModelForNewChats`). Resolves with that chat's info. */
+ *  backend's current one. Other chats keep their models; as the model last
+ *  chosen, it becomes what new chats (and the next launch) start on.
+ *  Resolves with that chat's info. */
 export const setModel = (model: string, session?: string) =>
   invoke<SessionInfo>("set_model", { model, session });
 
@@ -864,9 +865,10 @@ export const setModel = (model: string, session?: string) =>
 export const setServiceTier = (session: string, tier: string | null) =>
   invoke<SessionInfo>("set_service_tier", { session, tier });
 
-/** Switch one chat to a downloaded local model in place, starting its server.
- *  Unlike `useLocalModel` it opens no new chat and leaves the new-chat default
- *  alone. Resolves with that chat's info. */
+/** Switch one chat to a downloaded local model in place. Nothing loads until
+ *  the chat is sent to. Unlike `useLocalModel` it opens no new chat; like any
+ *  model choice it becomes what new chats start on. Resolves with that
+ *  chat's info. */
 export const setLocalModel = (session: string, id: string) =>
   invoke<SessionInfo>("set_local_model", { session, id });
 

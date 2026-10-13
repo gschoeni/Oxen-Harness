@@ -142,7 +142,7 @@ impl SessionService {
 
     /// A detached one-shot agent on the study role, billed to `session`.
     async fn study_agent(&self, session: &str) -> Result<Agent, String> {
-        let (client, session_model, _) = self.client_for().await?;
+        let (client, session_model, _) = self.ready_default_client().await?;
         let limits = harness_runtime::limits::load();
         let roles = ModelRoles {
             smol: limits.smol_model,

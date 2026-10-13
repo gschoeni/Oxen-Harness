@@ -365,9 +365,8 @@ pub(crate) async fn remove_model(id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Switch the session to a downloaded local model: start `llama-server` (with a
-/// context window sized to this machine) and rebuild the agent against it. The
-/// model must already be downloaded.
+/// Open a fresh chat on a downloaded local model and make it what new chats
+/// start on. Its server starts when the chat is first sent to.
 #[tauri::command]
 pub(crate) async fn use_local_model(
     state: State<'_, AppState>,
@@ -377,8 +376,9 @@ pub(crate) async fn use_local_model(
 }
 
 /// Switch one chat to a downloaded local model in place, continuing the same
-/// conversation: the model picker's choice for the tab it sits in. Starts the
-/// model's server; opens no new chat and leaves the new-chat default alone.
+/// conversation: the model picker's choice for the tab it sits in. Loads
+/// nothing until that chat is sent to; opens no new chat; becomes what new
+/// chats start on.
 #[tauri::command]
 pub(crate) async fn set_local_model(
     state: State<'_, AppState>,
@@ -422,8 +422,7 @@ pub(crate) async fn remove_cloud_model(
 /// transcript stays, only the model (and, if coming from a local model, the
 /// client) is swapped. `session` names the chat — the tab the picker was used
 /// in — so a tab switch mid-request can't retarget it; other chats keep their
-/// own models, and the default for new chats is untouched (that is the
-/// Settings star, [`select_cloud_model_for_new_chats`]).
+/// own models. As the model last chosen it becomes what new chats start on.
 #[tauri::command]
 pub(crate) async fn set_model(
     state: State<'_, AppState>,
