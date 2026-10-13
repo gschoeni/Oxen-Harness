@@ -20,6 +20,8 @@ pub struct OxenClient {
     base_url: String,
     api_key: String,
     model: String,
+    /// How long to read past `[DONE]`; [`DONE_GRACE`] outside tests.
+    done_grace: std::time::Duration,
 }
 
 impl OxenClient {
@@ -34,7 +36,15 @@ impl OxenClient {
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),
+            done_grace: DONE_GRACE,
         }
+    }
+
+    /// Shorten the post-`[DONE]` grace so a test of it doesn't sleep 2s.
+    #[cfg(test)]
+    fn with_done_grace(mut self, grace: std::time::Duration) -> Self {
+        self.done_grace = grace;
+        self
     }
 
     /// Build a client from configuration: the base URL is resolved from
@@ -174,7 +184,7 @@ impl OxenClient {
         if assembler.is_done() && !cancelled {
             // Running out the grace is not a failure: the reply is whole, and
             // a server holding the connection open is owed no more than this.
-            tokio::time::timeout(DONE_GRACE, async {
+            tokio::time::timeout(self.done_grace, async {
                 loop {
                     tokio::select! {
                         biased;
@@ -435,10 +445,11 @@ mod tests {
             std::future::pending::<()>().await;
         });
 
-        let client = OxenClient::new(url, "sk-test", "claude-opus-4-8");
+        let grace = std::time::Duration::from_millis(100);
+        let client = OxenClient::new(url, "sk-test", "claude-opus-4-8").with_done_grace(grace);
         let req = ChatRequest::new("claude-opus-4-8", vec![ChatMessage::user("hi")]);
         let assembled = tokio::time::timeout(
-            DONE_GRACE + std::time::Duration::from_secs(2),
+            grace + std::time::Duration::from_secs(2),
             client.stream_chat(&req, &CancellationToken::new(), |_| {}),
         )
         .await

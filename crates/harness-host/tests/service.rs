@@ -1303,7 +1303,7 @@ async fn view_authoring_is_workspace_scoped_and_keeps_drafts_per_conversation() 
 
 /// A scripted `run_shell` call that starts a background task.
 const BACKGROUND_SHELL_SSE: &str = concat!(
-    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_bg\",\"type\":\"function\",\"function\":{\"name\":\"run_shell\",\"arguments\":\"{\\\"command\\\":\\\"sleep 1; echo render-finished\\\",\\\"is_background\\\":true}\"}}]}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_bg\",\"type\":\"function\",\"function\":{\"name\":\"run_shell\",\"arguments\":\"{\\\"command\\\":\\\"until [ -e release ]; do sleep 0.01; done; echo render-finished\\\",\\\"is_background\\\":true}\"}}]}}]}\n\n",
     "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
     "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":5,\"total_tokens\":105}}\n\n",
     "data: [DONE]\n\n"
@@ -1343,6 +1343,8 @@ async fn background_work_that_finishes_while_idle_is_announced_and_delivered() {
         .events()
         .iter()
         .any(|e| { matches!(e, ProtocolEvent::Notice { kind, .. } if kind == "background_task") }));
+    // The task waits on this gate, so it finishes only now — after the turn.
+    std::fs::write(workspace.path().join("release"), "").unwrap();
     wait_for(&sink, || {
         sink.events()
             .iter()

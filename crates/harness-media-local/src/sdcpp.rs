@@ -50,7 +50,12 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
 /// slow model at a large size on a busy machine can take minutes.
 const JOB_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
-const POLL: Duration = Duration::from_millis(400);
+const POLL: Duration = if cfg!(test) {
+    // Unit tests drive a mock server; real-time pacing only slows them.
+    Duration::from_millis(10)
+} else {
+    Duration::from_millis(400)
+};
 
 /// How long the server may fail to answer polls before the job fails.
 const UNANSWERED_LIMIT: Duration = Duration::from_secs(30);
@@ -893,8 +898,10 @@ mod tests {
             .with_body(r#"{"id":"job_2"}"#)
             .create_async()
             .await;
-        mock.mock("GET", "/sdcpp/v1/jobs/job_2")
+        let polled = mock
+            .mock("GET", "/sdcpp/v1/jobs/job_2")
             .with_body(r#"{"id":"job_2","status":"generating"}"#)
+            .expect_at_least(1)
             .create_async()
             .await;
         let cancel_call = mock
@@ -921,8 +928,11 @@ mod tests {
         });
         let cancel = CancellationToken::new();
         let trigger = cancel.clone();
+        // Cancel once the job is in flight (submitted and being polled).
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(900)).await;
+            while !polled.matched_async().await {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
             trigger.cancel();
         });
         let req = EngineRequest {
@@ -954,8 +964,10 @@ mod tests {
             .with_body(r#"{"id":"job_3"}"#)
             .create_async()
             .await;
-        mock.mock("GET", "/sdcpp/v1/jobs/job_3")
+        let polled = mock
+            .mock("GET", "/sdcpp/v1/jobs/job_3")
             .with_body(r#"{"id":"job_3","status":"generating"}"#)
+            .expect_at_least(1)
             .create_async()
             .await;
         let cancel_call = mock
@@ -989,8 +1001,16 @@ mod tests {
         };
         let never = CancellationToken::new();
         let job = engine.run_job(&mut slot, &req, &|_| {}, &never);
-        let timed_out = tokio::time::timeout(Duration::from_millis(900), job).await;
-        assert!(timed_out.is_err(), "the job was still running when dropped");
+        let in_flight = async {
+            while !polled.matched_async().await {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        // Drop the job once it's in flight (submitted and being polled).
+        tokio::select! {
+            result = job => panic!("the job settled before it was dropped: {result:?}"),
+            _ = in_flight => {}
+        }
         // The guard's cancel rides a spawned task; give it a moment.
         for _ in 0..50 {
             if cancel_call.matched_async().await {

@@ -1039,8 +1039,13 @@ impl FleetSpawner {
 
 /// How long a lane that failed on the provider waits before its one
 /// automatic retry: past the burst that rate-limited it, short enough that
-/// the fleet doesn't idle.
-const LANE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+/// the fleet doesn't idle. Unit tests retry against a mock that has no burst
+/// to outlast.
+const LANE_RETRY_DELAY: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_millis(10)
+} else {
+    std::time::Duration::from_secs(3)
+};
 
 impl FleetSpawner {
     /// A lane that failed on the provider — a rate limit, or its retries

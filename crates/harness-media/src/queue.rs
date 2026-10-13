@@ -103,12 +103,20 @@ pub fn deadline_for(kind: MediaKind) -> Duration {
 /// Poll pacing: images finish in 5–30 s, videos in minutes. Starts fast and
 /// backs off so a slow job isn't hammered.
 fn poll_interval(kind: MediaKind, polls: u32) -> Duration {
-    let (start, max) = match kind {
+    let (start, max): (u32, u32) = match kind {
         MediaKind::Image => (2, 6),
         MediaKind::Video => (5, 20),
     };
-    Duration::from_secs((start + polls as u64).min(max))
+    POLL_UNIT * start.saturating_add(polls).min(max)
 }
+
+/// The poll schedule's unit. This crate's unit tests run the same schedule in
+/// milliseconds, so a mocked job settles without multi-second naps.
+const POLL_UNIT: Duration = if cfg!(test) {
+    Duration::from_millis(1)
+} else {
+    Duration::from_secs(1)
+};
 
 /// The queue client. `api_root` is the hub's `/api` root (the LLM client's
 /// `/api/ai` base with `/ai` trimmed), so `/api/ai/queue` and `/api/events`
@@ -377,7 +385,7 @@ impl QueueClient {
         request: reqwest::RequestBuilder,
         safe_to_repeat: bool,
     ) -> Result<reqwest::Response, QueueError> {
-        harness_http::send_with_retry(request, &harness_http::Backoff::brief(), safe_to_repeat)
+        harness_http::send_with_retry(request, &crate::hub::backoff(), safe_to_repeat)
             .await
             .map_err(|e| QueueError::Http(e.to_string()))
     }

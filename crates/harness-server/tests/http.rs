@@ -507,6 +507,7 @@ async fn uploads_an_attachment_and_reports_health() {
 async fn filters_events_by_session() {
     let mut llm = mockito::Server::new_async().await;
     let _m1 = sse_mock(&mut llm, FINAL_SSE);
+    let _m2 = sse_mock(&mut llm, FINAL_SSE);
     let workspace = tempfile::tempdir().unwrap();
     let server = boot(llm.url(), workspace.path()).await;
     let base = server.base_url();
@@ -532,47 +533,48 @@ async fn filters_events_by_session() {
     let session_a = a["session_id"].as_str().unwrap().to_string();
     let session_b = b["session_id"].as_str().unwrap().to_string();
 
-    // Subscribe to session B only, then run a turn in session A.
-    let mut events_b = client()
-        .get(format!(
-            "{base}/v1/events?token={TOKEN}&session={session_b}"
-        ))
-        .send()
-        .await
-        .unwrap();
+    // Subscribe to session B only (and to A, to know when its turn is
+    // over), then run a turn in session A.
+    let subscribe = |session: String| {
+        client()
+            .get(format!("{base}/v1/events?token={TOKEN}&session={session}"))
+            .send()
+    };
+    let mut events_a = subscribe(session_a.clone()).await.unwrap();
+    let mut events_b = subscribe(session_b.clone()).await.unwrap();
+    let run_turn = |session: String| {
+        client()
+            .post(format!("{base}/v1/sessions/{session}/turns"))
+            .bearer_auth(TOKEN)
+            .json(&json!({"prompt": "hello"}))
+            .send()
+    };
 
-    client()
-        .post(format!("{base}/v1/sessions/{session_a}/turns"))
-        .bearer_auth(TOKEN)
-        .json(&json!({"prompt": "hello"}))
-        .send()
+    run_turn(session_a.clone())
         .await
         .unwrap()
         .error_for_status()
         .unwrap();
+    next_matching(&mut events_a, |e| e["type"] == "turn.completed").await;
 
-    // B's stream must not carry A's events. Give the broadcast a beat, then
-    // read whatever arrived with a short deadline: only keepalives allowed.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let leaked = tokio::time::timeout(Duration::from_millis(500), async {
-        loop {
-            match events_b.chunk().await {
-                Ok(Some(chunk)) => {
-                    let text = String::from_utf8_lossy(&chunk).to_string();
-                    if text.contains(&format!("\"session\":\"{session_a}\"")) {
-                        return true;
-                    }
-                }
-                _ => return false,
-            }
-        }
+    // Every A event is now behind us on the ordered bus. A turn in B then
+    // marks the point in B's stream by which any leak would have shown up —
+    // no sleeping to prove a negative.
+    run_turn(session_b.clone())
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let completed = next_matching(&mut events_b, |e| {
+        assert_ne!(
+            e["session"],
+            session_a.as_str(),
+            "session A's events leaked into B's filtered stream: {e}"
+        );
+        e["type"] == "turn.completed"
     })
-    .await
-    .unwrap_or(false);
-    assert!(
-        !leaked,
-        "session A's events leaked into B's filtered stream"
-    );
+    .await;
+    assert_eq!(completed["session"], session_b.as_str());
 }
 
 /// The study model's reply: one multiple-choice question about `src/lib.rs`.

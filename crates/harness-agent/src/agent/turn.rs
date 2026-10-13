@@ -1698,6 +1698,9 @@ mod tests {
         let config = AgentConfig {
             system_prompt: None,
             context_window: Some(128_000),
+            // A refused connection is transient; backing off on it is the
+            // retry tests' business, not this one's.
+            retry: crate::test_support::fast_retry(1),
             ..AgentConfig::default()
         };
         let mut agent = Agent::new(dead, ToolRegistry::new(), store, session, config).unwrap();

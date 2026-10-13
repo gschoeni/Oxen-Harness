@@ -5,6 +5,7 @@
 //! This exercises the full loop end to end, including streaming, tool dispatch,
 //! and verbatim history persistence.
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -467,21 +468,27 @@ async fn permission_gate_intercepts_dangerous_shell_calls_in_the_loop() {
 
 /// A tool that takes a fixed time and echoes its `tag` — for observing
 /// whether shared calls in one reply overlap.
-struct SleepTool {
+/// Proves scheduling without timing: the two shared calls meet at a
+/// two-party barrier, which only opens if they run at the same time, and the
+/// exclusive call records whether anything else was in flight beside it.
+struct WaveTool {
     exclusive: bool,
+    barrier: Arc<tokio::sync::Barrier>,
+    in_flight: Arc<AtomicUsize>,
+    exclusive_overlapped: Arc<AtomicBool>,
 }
 
 #[async_trait]
-impl Tool for SleepTool {
+impl Tool for WaveTool {
     fn name(&self) -> &str {
         if self.exclusive {
-            "sleep_exclusive"
+            "wave_exclusive"
         } else {
-            "sleep"
+            "wave"
         }
     }
     fn description(&self) -> &str {
-        "Sleep briefly, then echo the tag."
+        "Join the wave, then echo the tag."
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({ "type": "object", "properties": { "tag": {"type": "string"} } })
@@ -498,12 +505,24 @@ impl Tool for SleepTool {
         args: serde_json::Value,
         _call: &CallContext,
     ) -> Result<String, ToolError> {
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let others = self.in_flight.fetch_add(1, Ordering::SeqCst);
+        if self.exclusive {
+            if others > 0 {
+                self.exclusive_overlapped.store(true, Ordering::SeqCst);
+            }
+            tokio::task::yield_now().await;
+        } else {
+            // Run one at a time, the first call would wait here forever.
+            tokio::time::timeout(std::time::Duration::from_secs(5), self.barrier.wait())
+                .await
+                .map_err(|_| ToolError::Execution("shared calls ran one at a time".into()))?;
+        }
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
         Ok(format!("done:{}", args["tag"].as_str().unwrap_or("")))
     }
 }
 
-/// One reply carrying three calls: two shared sleeps and one exclusive.
+/// One reply carrying three calls: two shared and one exclusive.
 fn three_call_sse() -> String {
     let call = |index: usize, id: &str, name: &str, tag: &str| {
         let args = serde_json::json!({ "tag": tag }).to_string();
@@ -517,9 +536,9 @@ fn three_call_sse() -> String {
     };
     format!(
         "{}{}{}data: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n",
-        call(0, "call_a", "sleep", "a"),
-        call(1, "call_b", "sleep", "b"),
-        call(2, "call_c", "sleep_exclusive", "c"),
+        call(0, "call_a", "wave", "a"),
+        call(1, "call_b", "wave", "b"),
+        call(2, "call_c", "wave_exclusive", "c"),
     )
 }
 
@@ -544,9 +563,18 @@ async fn shared_tool_calls_in_one_reply_overlap_and_results_keep_call_order() {
         .await;
 
     let client = OxenClient::new(server.url(), "sk-test", "claude-opus-4-8");
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let exclusive_overlapped = Arc::new(AtomicBool::new(false));
+    let wave = |exclusive| WaveTool {
+        exclusive,
+        barrier: barrier.clone(),
+        in_flight: in_flight.clone(),
+        exclusive_overlapped: exclusive_overlapped.clone(),
+    };
     let tools = ToolRegistry::new()
-        .with(Arc::new(SleepTool { exclusive: false }))
-        .with(Arc::new(SleepTool { exclusive: true }));
+        .with(Arc::new(wave(false)))
+        .with(Arc::new(wave(true)));
     let store = Arc::new(HistoryStore::open_in_memory().unwrap());
     let session = store
         .create_session(&harness_store::SessionMeta {
@@ -562,21 +590,19 @@ async fn shared_tool_calls_in_one_reply_overlap_and_results_keep_call_order() {
     };
     let mut agent = Agent::new(client, tools, store.clone(), session.clone(), config).unwrap();
 
-    let started = std::time::Instant::now();
     let mut events = Vec::new();
     agent
         .run_turn("go", |e| events.push(e.clone()))
         .await
         .unwrap();
-    let elapsed = started.elapsed();
     m1.assert_async().await;
     m2.assert_async().await;
 
-    // Two shared sleeps overlap (one ~250ms wave), the exclusive one runs
-    // alone after them: ~500ms total, not ~750ms sequential.
+    // The shared pair got through the barrier together (else their results
+    // below would be errors), and the exclusive call ran alone.
     assert!(
-        elapsed < std::time::Duration::from_millis(650),
-        "calls ran sequentially: {elapsed:?}"
+        !exclusive_overlapped.load(Ordering::SeqCst),
+        "the exclusive call ran beside the shared ones"
     );
 
     // Every call started before any of the wave ended, and each end is

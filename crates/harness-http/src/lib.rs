@@ -115,6 +115,18 @@ impl Backoff {
         }
     }
 
+    /// This schedule's attempt counts with every wait collapsed to a
+    /// millisecond: for unit tests that drive the real retry path against a
+    /// mock (or dead) server without sleeping through the backoff.
+    pub fn without_waits(self) -> Self {
+        Self {
+            base_delay: Duration::from_millis(1),
+            rate_limit_base_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(1),
+            ..self
+        }
+    }
+
     /// How many attempts (first try included) a failure of this kind gets.
     pub fn attempts_for(&self, kind: Transient) -> u32 {
         match kind {
@@ -465,7 +477,9 @@ mod tests {
             .with_status(429)
             .with_header("retry-after-ms", "1")
             .with_body("slow down")
-            .expect(2)
+            // One is enough: every hinted wait costs the real half-second
+            // floor, and retry counting has its own tests.
+            .expect(1)
             .create_async()
             .await;
         let client = reqwest::Client::new();

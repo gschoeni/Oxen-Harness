@@ -138,6 +138,18 @@ impl HubRepos {
     }
 }
 
+/// The retry schedule for hub calls: [`harness_http::Backoff::brief`], with
+/// its waits collapsed in this crate's unit tests so a mocked outage costs
+/// retries, not seconds of wall-clock.
+pub(crate) fn backoff() -> harness_http::Backoff {
+    let brief = harness_http::Backoff::brief();
+    if cfg!(test) {
+        brief.without_waits()
+    } else {
+        brief
+    }
+}
+
 /// Send a hub request with the brief retry schedule (rate limits and blips
 /// are retried after a jittered wait, honoring `Retry-After`), mapping a
 /// transport failure to [`HubError::Http`]. `safe_to_repeat` is false for a
@@ -146,7 +158,7 @@ pub(crate) async fn send(
     request: reqwest::RequestBuilder,
     safe_to_repeat: bool,
 ) -> Result<reqwest::Response, HubError> {
-    harness_http::send_with_retry(request, &harness_http::Backoff::brief(), safe_to_repeat)
+    harness_http::send_with_retry(request, &backoff(), safe_to_repeat)
         .await
         .map_err(|e| HubError::Http(e.to_string()))
 }
