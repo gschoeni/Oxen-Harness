@@ -599,6 +599,18 @@ impl Live {
         present || changed
     }
 
+    /// When the idle composer should wake to refresh the `🧠` memory
+    /// readout: every couple of seconds while a local model runs.
+    pub(super) fn memory_tick_due(&self) -> Option<std::time::Instant> {
+        crate::memory_gauge::active()
+            .then(|| std::time::Instant::now() + std::time::Duration::from_secs(2))
+    }
+
+    /// Rebuild the meters so the memory readout moves; whether it changed.
+    pub(super) fn tick_memory(&mut self) -> bool {
+        self.refresh_meters()
+    }
+
     /// When the idle composer should wake to advance the generations block:
     /// twice a second while something renders, once more after it settles.
     pub(super) fn media_tick_due(&self) -> Option<std::time::Instant> {

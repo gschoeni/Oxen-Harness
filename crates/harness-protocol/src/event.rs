@@ -430,6 +430,28 @@ pub enum ProtocolEvent {
         total: Option<u64>,
         fraction: Option<f64>,
     },
+    /// A local model and memory: a load warned about, refused, or a running
+    /// model stopped by the memory watchdog.
+    #[serde(rename = "memory.notice")]
+    MemoryNotice {
+        level: String,
+        model: String,
+        message: String,
+        at: i64,
+    },
+    /// Progress pulling an on-device image model (`phase`: `runtime`,
+    /// `weights`, `done`, `failed`, `cancelled`).
+    #[serde(rename = "local_media.progress")]
+    LocalMediaProgress {
+        id: String,
+        phase: String,
+        #[serde(default)]
+        file: Option<String>,
+        done_bytes: u64,
+        total_bytes: u64,
+        #[serde(default)]
+        error: Option<String>,
+    },
 }
 
 impl ProtocolEvent {
@@ -472,6 +494,8 @@ impl ProtocolEvent {
             Self::PreviewStatus { .. } => "preview.status",
             Self::PreviewConsole { .. } => "preview.console",
             Self::LocalStatus { .. } => "local.status",
+            Self::MemoryNotice { .. } => "memory.notice",
+            Self::LocalMediaProgress { .. } => "local_media.progress",
             Self::DownloadProgress { .. } => "models.progress",
         }
     }
@@ -522,7 +546,10 @@ impl ProtocolEvent {
             | Self::ReviewTool { session, .. }
             | Self::PreviewStatus { session, .. }
             | Self::PreviewConsole { session, .. } => Some(session),
-            Self::LocalStatus { .. } | Self::DownloadProgress { .. } => None,
+            Self::LocalStatus { .. }
+            | Self::DownloadProgress { .. }
+            | Self::MemoryNotice { .. }
+            | Self::LocalMediaProgress { .. } => None,
         }
     }
 }

@@ -56,7 +56,12 @@ const POLL: Duration = Duration::from_millis(400);
 const UNANSWERED_LIMIT: Duration = Duration::from_secs(30);
 
 /// The pid registry file `sd-server`s are recorded in.
-pub const PID_FILE: &str = "sd-server.pids";
+pub const PID_FILE: &str = harness_local::SD_PIDS;
+
+/// What an image job adds to memory: compute buffers plus the slice of the
+/// memory-mapped weights in use (measured: 0.6–1.0 GB of footprint at
+/// 1024²; the rest of the weights are file pages the OS can drop).
+const WORKING_SET: u64 = 3 * 1024 * 1024 * 1024;
 
 /// Where managed runtimes live: `~/.oxen-harness/runtime/stable-diffusion.cpp/`.
 fn runtime_root() -> Option<PathBuf> {
@@ -159,6 +164,8 @@ struct Server {
     /// Whether the server offers cheap latent previews, which is how it
     /// reports step progress.
     previews: bool,
+    /// Stops the server if memory runs out while it loads or renders.
+    watchdog: Option<harness_local::memory::Watchdog>,
 }
 
 impl Server {
@@ -177,6 +184,23 @@ impl Server {
 
     fn exited(&mut self) -> bool {
         !matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Why the memory guard stopped it, if it did.
+    fn memory_trip(&self) -> Option<String> {
+        self.watchdog.as_ref().and_then(|w| w.tripped())
+    }
+
+    /// The error for a server that died: the guard's reason when it was
+    /// the guard, else what the log says.
+    fn death(&self, what: &str, tail: String) -> LocalMediaError {
+        match self.memory_trip() {
+            Some(reason) => LocalMediaError::Memory {
+                model: self.model.clone(),
+                detail: reason,
+            },
+            None => LocalMediaError::Failed(format!("sd-server {what}{tail}")),
+        }
     }
 }
 
@@ -212,6 +236,7 @@ impl SdCppEngine {
         &self,
         slot: &'a mut Option<Server>,
         req: &EngineRequest<'_>,
+        progress: &(dyn Fn(LocalProgress) + Send + Sync),
         cancel: &CancellationToken,
     ) -> Result<&'a Server, LocalMediaError> {
         if let Some(s) = slot.as_mut() {
@@ -222,7 +247,7 @@ impl SdCppEngine {
             }
         }
         if slot.is_none() {
-            *slot = Some(self.spawn(req, cancel).await?);
+            *slot = Some(self.spawn(req, progress, cancel).await?);
         }
         slot.as_ref()
             .ok_or_else(|| LocalMediaError::Failed("sd-server did not start".into()))
@@ -231,6 +256,7 @@ impl SdCppEngine {
     async fn spawn(
         &self,
         req: &EngineRequest<'_>,
+        progress: &(dyn Fn(LocalProgress) + Send + Sync),
         cancel: &CancellationToken,
     ) -> Result<Server, LocalMediaError> {
         let bin = binary().ok_or_else(|| {
@@ -239,13 +265,16 @@ impl SdCppEngine {
                 format!("run `oxen-harness media pull {}`", req.spec.id),
             )
         })?;
-        if harness_local::memory_pressure() == harness_local::MemoryPressure::Critical {
-            return Err(LocalMediaError::Memory {
-                model: req.spec.id.clone(),
-                detail: "macOS reports critical memory pressure; close some apps (or stop \
-                         a local chat model) and try again"
-                    .into(),
-            });
+        use harness_local::memory::{preflight, LoadAdvice, Residency};
+        match preflight(&req.spec.display_name, WORKING_SET, Residency::Mapped) {
+            LoadAdvice::Go => {}
+            LoadAdvice::Warn(message) => progress(LocalProgress::Warning(message)),
+            LoadAdvice::Refuse(detail) => {
+                return Err(LocalMediaError::Memory {
+                    model: req.spec.id.clone(),
+                    detail,
+                })
+            }
         }
         let port = free_port().map_err(|e| LocalMediaError::Failed(e.to_string()))?;
         let mut cmd = tokio::process::Command::new(&bin);
@@ -278,7 +307,7 @@ impl SdCppEngine {
                 self.log_tail()
             ))
         })?;
-        harness_local::register_spawned(PID_FILE, pid, port);
+        harness_local::register_spawned(PID_FILE, pid, port, &req.spec.id);
         spawn_lifeline(pid);
         let mut server = Server {
             child,
@@ -286,6 +315,12 @@ impl SdCppEngine {
             base: format!("http://127.0.0.1:{port}"),
             model: req.spec.id.clone(),
             previews: false,
+            watchdog: Some(harness_local::memory::Watchdog::spawn(
+                pid,
+                &req.spec.display_name,
+                harness_local::memory::Limits::default(),
+                |_| {},
+            )),
         };
         let started = Instant::now();
         loop {
@@ -294,12 +329,12 @@ impl SdCppEngine {
                 return Err(LocalMediaError::Cancelled);
             }
             if server.exited() {
-                let tail = self.log_tail();
+                let err = server.death(
+                    &format!("exited while loading {}", req.spec.id),
+                    self.log_tail(),
+                );
                 server.stop().await;
-                return Err(LocalMediaError::Failed(format!(
-                    "sd-server exited while loading {}{tail}",
-                    req.spec.id
-                )));
+                return Err(err);
             }
             if let Ok(caps) = self.get(&server.base, "/sdcpp/v1/capabilities").await {
                 let modes = caps.get("preview_modes").and_then(Value::as_array);
@@ -556,7 +591,7 @@ impl SdCppEngine {
         progress: &(dyn Fn(LocalProgress) + Send + Sync),
         cancel: &CancellationToken,
     ) -> Result<(Vec<u8>, String), LocalMediaError> {
-        let server = self.ensure_server(slot, req, cancel).await?;
+        let server = self.ensure_server(slot, req, progress, cancel).await?;
         let base = server.base.clone();
         let body = job_body(req, server.previews)?;
         let res = self
@@ -601,12 +636,10 @@ impl SdCppEngine {
             }
             if slot.as_mut().is_some_and(Server::exited) {
                 let tail = self.log_tail();
-                if let Some(dead) = slot.take() {
-                    dead.stop().await;
-                }
-                return Err(LocalMediaError::Failed(format!(
-                    "sd-server stopped while generating{tail}"
-                )));
+                let Some(dead) = slot.take() else { continue };
+                let err = dead.death("stopped while generating", tail);
+                dead.stop().await;
+                return Err(err);
             }
             let job = match self.get(&base, &format!("/sdcpp/v1/jobs/{id}")).await {
                 Ok(job) => {
@@ -849,6 +882,7 @@ mod tests {
             base: mock.url(),
             model: spec.id.clone(),
             previews: true,
+            watchdog: None,
         });
         let heard = std::sync::Mutex::new(Vec::new());
         let req = EngineRequest {
@@ -910,6 +944,7 @@ mod tests {
             base: mock.url(),
             model: spec.id.clone(),
             previews: false,
+            watchdog: None,
         });
         let cancel = CancellationToken::new();
         let trigger = cancel.clone();
@@ -970,6 +1005,7 @@ mod tests {
             base: mock.url(),
             model: spec.id.clone(),
             previews: false,
+            watchdog: None,
         });
         let req = EngineRequest {
             spec: &spec,

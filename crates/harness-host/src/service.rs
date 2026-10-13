@@ -583,6 +583,14 @@ impl SessionService {
             if s.model_id() == id && s.is_alive() {
                 return Ok((s.base_url().to_string(), s.context_size() as usize));
             }
+            // The memory guard stopped it: say why once instead of quietly
+            // reloading into the same squeeze. Sending again retries.
+            if s.model_id() == id {
+                if let Some(reason) = s.memory_trip() {
+                    *guard = None;
+                    return Err(reason);
+                }
+            }
             // Replacing a live server kills it under whatever is streaming
             // from it, so a model that is mid-reply in some chat keeps it.
             if s.is_alive() {
@@ -609,6 +617,15 @@ impl SessionService {
         let weight_bytes = store.installed_size(id).unwrap_or(0);
         let native = store.native_context(id);
         let context = fit::plan_context(profile.usable_budget, weight_bytes, native);
+        // Warnings reach the user as `memory.notice`; a refusal is this
+        // send's error.
+        if let harness_local::memory::LoadAdvice::Refuse(why) = harness_local::memory::preflight(
+            id,
+            fit::footprint(weight_bytes, context),
+            harness_local::memory::Residency::Resident,
+        ) {
+            return Err(why);
+        }
         let sink = self.sink.clone();
         let model = id.to_string();
         let server =
@@ -1127,10 +1144,18 @@ impl SessionService {
     /// Cancel an in-flight generation from the client (no agent turn
     /// involved) and mark it cancelled in whichever library holds it.
     pub async fn cancel_media(&self, id: &str) -> Result<(), String> {
-        let api =
-            harness_runtime::media::api().ok_or_else(|| harness_media::MEDIA_NO_KEY.to_string())?;
-        let queue = harness_media::QueueClient::new(&api.base_url, api.api_key);
-        queue.cancel(id).await.map_err(|e| e.to_string())?;
+        if harness_media::local::is_local_job_id(id) {
+            // A running local job stops through the provider; a queued one
+            // is skipped once its row reads cancelled (below).
+            if let Some(local) = harness_media::local::installed() {
+                local.cancel(id).await;
+            }
+        } else {
+            let api = harness_runtime::media::api()
+                .ok_or_else(|| harness_media::MEDIA_NO_KEY.to_string())?;
+            let queue = harness_media::QueueClient::new(&api.base_url, api.api_key);
+            queue.cancel(id).await.map_err(|e| e.to_string())?;
+        }
         let libraries: Vec<Arc<harness_media::MediaLibrary>> = self
             .media_libraries
             .lock()
@@ -1142,13 +1167,19 @@ impl SessionService {
             if let Some(mut item) = library.in_flight(None).into_iter().find(|i| i.id == id) {
                 item.status = harness_media::MediaStatus::Cancelled;
                 item.completed_at = Some(harness_media::library::now_unix());
-                let _ = library.record(item);
+                item.progress = None;
+                if let Err(e) = library.record(item.clone()) {
+                    tracing::warn!("could not record the cancel of {id}: {e}");
+                    library.upsert(item);
+                }
             }
         }
         Ok(())
     }
 
-    /// The hub's image/video models for pickers, optionally one kind.
+    /// Image/video models for pickers, optionally one kind: the hub's plus
+    /// the on-device ones (which are all that's listed when the hub is
+    /// unreachable, e.g. offline).
     pub async fn media_models(
         &self,
         kind: Option<&str>,
@@ -1162,10 +1193,21 @@ impl SessionService {
         let http = reqwest::Client::new();
         let cache = harness_media::catalog_cache_path(&base);
         let key = api.as_ref().map(|a| a.api_key.as_str());
-        let catalog = if refresh {
-            harness_media::Catalog::refresh(&http, &base, key, cache.as_deref()).await?
+        let hub = if refresh {
+            harness_media::Catalog::refresh(&http, &base, key, cache.as_deref()).await
         } else {
-            harness_media::Catalog::load(&http, &base, key, cache.as_deref()).await?
+            harness_media::Catalog::load(&http, &base, key, cache.as_deref()).await
+        };
+        let local = harness_media::local::installed()
+            .map(|l| l.models())
+            .unwrap_or_default();
+        let catalog = match hub {
+            Ok(hub) => hub.merged(local),
+            Err(e) if !local.is_empty() => {
+                tracing::warn!("{e}; listing only on-device media models");
+                harness_media::Catalog::from_models(local)
+            }
+            Err(e) => return Err(e),
         };
         let kind = kind.and_then(|k| match k {
             "image" => Some(harness_media::MediaKind::Image),

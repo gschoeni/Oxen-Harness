@@ -17,8 +17,9 @@ mod dto;
 mod event;
 
 pub use dto::{
-    AgentSummary, ApprovalAnswer, Choice, InterjectRequest, InterjectResponse, MediaItem,
-    MediaModelSummary, MediaSource, MediaUpload, Question, QuestionAnswer, RenameRequest,
+    AgentSummary, ApprovalAnswer, Choice, InterjectRequest, InterjectResponse, LocalMediaModel,
+    LocalMediaStatus, LocalModelProcess, MediaItem, MediaModelSummary, MediaProgress, MediaSource,
+    MediaUpload, MemoryNotice, MemoryStatus, MemorySystem, Question, QuestionAnswer, RenameRequest,
     ReviewResult, SessionInfo, SessionView, StudyAnswerRequest, StudyAnswerResult, StudyBatch,
     StudyBatchRequest, StudyFlagRequest, StudyGrade, StudyProfile, StudyQuestion, StudyTerritory,
     TaskSummary, ThreadEntry, ThreadSnapshot, TurnRequest, TurnResponse,

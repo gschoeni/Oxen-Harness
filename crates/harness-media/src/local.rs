@@ -76,7 +76,7 @@ pub struct LocalJob {
 }
 
 /// Where a running job is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalProgress {
     /// Waiting behind another job for the GPU.
     Queued,
@@ -86,6 +86,8 @@ pub enum LocalProgress {
     Step { step: u32, total: u32 },
     /// Sampling is done; decoding and encoding the output.
     Finishing,
+    /// Something the user should know while it runs (memory is tight).
+    Warning(String),
 }
 
 /// A finished output.

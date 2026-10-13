@@ -23,7 +23,8 @@ use serde_json::{Map, Value};
 use crate::budget::{fmt_usd, BudgetVerdict, SpendEstimate};
 use crate::catalog::{estimate_cost, Catalog, MediaModel};
 use crate::library::{
-    now_unix, slugify, MediaItem, MediaLibrary, MediaSource, MediaStatus, SourceOrigin, StoredRef,
+    now_unix, slugify, MediaItem, MediaLibrary, MediaProgress, MediaSource, MediaStatus,
+    SourceOrigin, StoredRef,
 };
 use crate::local::{LocalJob, LocalMedia, LocalMediaError, LocalProgress};
 use crate::queue::{deadline_for, QueueClient, QueueError};
@@ -868,6 +869,7 @@ fn record_batch(
             sources: sources.clone(),
             agent_prompt: (req.prompt != prompt).then(|| req.prompt.clone()),
             provider: None,
+            progress: None,
         })
         .collect();
     for item in &items {
@@ -895,16 +897,22 @@ enum Waiter {
 }
 
 impl Waiter {
+    /// The batch's outcomes, plus any warnings an engine raised on the way
+    /// (memory was tight) for the report.
     async fn wait(
         &self,
         ctx: &Arc<MediaContext>,
         items: Vec<MediaItem>,
         slug: &str,
-    ) -> Vec<Outcome> {
+    ) -> (Vec<Outcome>, Vec<String>) {
         match self {
-            Self::Hub { queue, feed } => wait_all(ctx, queue, items, slug, feed.clone()).await,
+            Self::Hub { queue, feed } => (
+                wait_all(ctx, queue, items, slug, feed.clone()).await,
+                Vec::new(),
+            ),
             // The GPU runs one job at a time, so outputs go in order.
             Self::Local { provider, jobs } => {
+                let warnings = Arc::new(std::sync::Mutex::new(Vec::new()));
                 let mut outcomes = Vec::new();
                 for (item, job) in items.into_iter().zip(jobs.iter().cloned()) {
                     // A later output cancelled (media_status) while an
@@ -923,10 +931,13 @@ impl Waiter {
                             error: Some("cancelled".into()),
                         }
                     } else {
-                        wait_local(ctx, provider.as_ref(), item, job, slug).await
+                        wait_local(ctx, provider.as_ref(), item, job, slug, warnings.clone()).await
                     });
                 }
-                outcomes
+                // Poisoned only if a progress callback panicked; the
+                // outcomes still stand without the warnings.
+                let warnings = warnings.lock().map(|w| w.clone()).unwrap_or_default();
+                (outcomes, warnings)
             }
         }
     }
@@ -953,14 +964,14 @@ async fn finish_batch(
             let slug2 = slug.clone();
             let model2 = model_id.clone();
             tokio::spawn(async move {
-                let outcomes = waiter.wait(&ctx2, items, &slug2).await;
+                let (outcomes, warnings) = waiter.wait(&ctx2, items, &slug2).await;
                 commit_outputs(&ctx2, &outcomes, &slug2).await;
                 let body = report(
                     kind,
                     &model2,
                     &outcomes,
                     started.elapsed(),
-                    &[],
+                    &warnings,
                     false,
                     ctx2.library.root(),
                 );
@@ -997,14 +1008,16 @@ async fn finish_batch(
         }
     }
 
-    let outcomes = waiter.wait(ctx, items, &slug).await;
+    let (outcomes, warnings) = waiter.wait(ctx, items, &slug).await;
     commit_outputs(ctx, &outcomes, &slug).await;
+    let mut notes = prepared.notes.clone();
+    notes.extend(warnings);
     Ok(report(
         req.kind,
         &model_id,
         &outcomes,
         started.elapsed(),
-        &prepared.notes,
+        &notes,
         true,
         ctx.library.root(),
     ))
@@ -1648,6 +1661,7 @@ async fn wait_one(
 fn settle(lib: &MediaLibrary, item: &mut MediaItem, status: MediaStatus, error: Option<String>) {
     item.status = status;
     item.error = error;
+    item.progress = None;
     item.completed_at = Some(now_unix());
     if let Err(e) = lib.record(item.clone()) {
         tracing::warn!("could not record generation {}: {e}", item.id);
@@ -1723,20 +1737,44 @@ async fn wait_local(
     mut item: MediaItem,
     job: LocalJob,
     slug: &str,
+    warnings: Arc<std::sync::Mutex<Vec<String>>>,
 ) -> Outcome {
     let lib = ctx.library.clone();
     let snapshot = std::sync::Mutex::new(item.clone());
     let progress: Arc<dyn Fn(LocalProgress) + Send + Sync> = {
         let lib = lib.clone();
         Arc::new(move |p: LocalProgress| {
-            if p == LocalProgress::Queued {
-                return;
-            }
             // A poisoned snapshot only means an earlier callback panicked;
             // the feed update is cosmetic, so skip it rather than guess.
             let Ok(mut row) = snapshot.lock() else { return };
-            if row.status != MediaStatus::Processing {
+            let previous = row.progress.clone();
+            let note = previous.as_ref().and_then(|p| p.note.clone());
+            let next = match p {
+                LocalProgress::Queued => progress_at("queued", None, note),
+                LocalProgress::Loading => progress_at("loading", None, note),
+                LocalProgress::Step { step, total } => {
+                    progress_at("sampling", Some((step, total)), note)
+                }
+                LocalProgress::Finishing => progress_at("finishing", None, note),
+                LocalProgress::Warning(message) => {
+                    if let Ok(mut all) = warnings.lock() {
+                        if !all.contains(&message) {
+                            all.push(message.clone());
+                        }
+                    }
+                    MediaProgress {
+                        note: Some(message),
+                        ..previous
+                            .clone()
+                            .unwrap_or_else(|| progress_at("loading", None, None))
+                    }
+                }
+            };
+            if next.phase != "queued" {
                 row.status = MediaStatus::Processing;
+            }
+            if Some(&next) != previous.as_ref() {
+                row.progress = Some(next);
                 lib.upsert(row.clone());
             }
         })
@@ -1751,6 +1789,15 @@ async fn wait_local(
             failed(&lib, item, MediaStatus::Cancelled, "cancelled".to_string())
         }
         Err(e) => failed(&lib, item, MediaStatus::Failed, e.to_string()),
+    }
+}
+
+fn progress_at(phase: &str, steps: Option<(u32, u32)>, note: Option<String>) -> MediaProgress {
+    MediaProgress {
+        phase: phase.to_string(),
+        step: steps.map(|(s, _)| s),
+        total: steps.map(|(_, t)| t),
+        note,
     }
 }
 
@@ -2706,6 +2753,10 @@ mod tests {
     struct FakeLocal {
         jobs: Mutex<Vec<LocalJob>>,
         cancelled: Mutex<Vec<String>>,
+        /// When set, `generate` reports a memory warning and records what
+        /// the library row showed mid-render.
+        watch: Mutex<Option<Arc<MediaLibrary>>>,
+        mid_render: Mutex<Vec<Option<MediaProgress>>>,
     }
 
     fn local_model(id: &str, installed: bool) -> MediaModel {
@@ -2747,7 +2798,19 @@ mod tests {
             job: LocalJob,
             progress: Arc<dyn Fn(LocalProgress) + Send + Sync>,
         ) -> Result<crate::LocalOutput, LocalMediaError> {
-            progress(LocalProgress::Step { step: 1, total: 4 });
+            let watched = self.watch.lock().unwrap().clone();
+            if let Some(lib) = watched {
+                progress(LocalProgress::Loading);
+                progress(LocalProgress::Warning("memory is tight".into()));
+                progress(LocalProgress::Step { step: 1, total: 4 });
+                let row = lib.items().into_iter().find(|i| i.id == job.id);
+                self.mid_render
+                    .lock()
+                    .unwrap()
+                    .push(row.and_then(|r| r.progress));
+            } else {
+                progress(LocalProgress::Step { step: 1, total: 4 });
+            }
             let seed = job.params.get("seed").cloned();
             self.jobs.lock().unwrap().push(job);
             Ok(crate::LocalOutput {
@@ -2839,6 +2902,32 @@ mod tests {
             );
             assert!(dir.path().join(item.path.as_ref().unwrap()).exists());
         }
+    }
+
+    #[tokio::test]
+    async fn local_rows_show_progress_and_warnings_reach_the_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = Arc::new(FakeLocal::default());
+        let ctx = local_ctx(dir.path(), local.clone(), Arc::new(NoConfirmSink));
+        *local.watch.lock().unwrap() = Some(ctx.library.clone());
+        let out = GenerateImageTool { ctx: ctx.clone() }
+            .invoke(json!({"prompt": "x", "model": "local/fake"}))
+            .await
+            .unwrap();
+        assert!(out.contains("Note: memory is tight"), "{out}");
+        let seen = local.mid_render.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec![Some(MediaProgress {
+                phase: "sampling".into(),
+                step: Some(1),
+                total: Some(4),
+                note: Some("memory is tight".into()),
+            })]
+        );
+        let done = &ctx.library.items()[0];
+        assert_eq!(done.status, MediaStatus::Succeeded);
+        assert_eq!(done.progress, None, "a settled row drops its progress");
     }
 
     #[tokio::test]

@@ -121,6 +121,12 @@ pub fn build_router(config: ServerConfig) -> Router {
         builder = configure(builder);
     }
     let service = Arc::new(builder.build());
+    // Memory warnings and watchdog stops ride the event stream as
+    // `memory.notice`. A router built outside a runtime (embedding) skips it.
+    if let Ok(rt) = tokio::runtime::Handle::try_current() {
+        let notices: Arc<dyn harness_host::EventSink> = sink.clone();
+        rt.spawn(harness_host::local_media::forward_memory_notices(notices));
+    }
     let uploads_dir = harness_config::paths::base_dir()
         .map(|d| d.join("uploads"))
         .unwrap_or_else(|_| std::env::temp_dir().join("oxen-harness-uploads"));
@@ -175,6 +181,11 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/v1/media/{generation}/cancel", post(cancel_media))
         .route("/v1/media/prefs", get(media_prefs).put(set_media_prefs))
         .route("/v1/media/models", get(media_models))
+        .route("/v1/memory", get(memory_status))
+        .route("/v1/local-media", get(local_media_status))
+        .route("/v1/local-media/pull", post(pull_local_media))
+        .route("/v1/local-media/cancel", post(cancel_local_media_pull))
+        .route("/v1/local-media/remove", post(remove_local_media))
         .route(
             "/v1/sessions/{id}/agents/{agent}/cancel",
             post(cancel_agent),
@@ -623,6 +634,65 @@ async fn media_models(
             .media_models(query.kind.as_deref(), query.refresh)
             .await?,
     ))
+}
+
+/// System memory, this host's local model servers, the last memory notice.
+async fn memory_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<harness_protocol::MemoryStatus>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(harness_host::local_media::memory_status()))
+}
+
+/// The on-device image models, their engine, and free disk.
+async fn local_media_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<harness_protocol::LocalMediaStatus>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(harness_host::local_media::local_media_status()))
+}
+
+/// `{"id": "local/…"}` — the model a local-media action is about. (Ids hold
+/// a slash, so they travel in the body rather than the path.)
+#[derive(Deserialize)]
+struct LocalMediaId {
+    id: String,
+}
+
+/// Download an image model; progress streams as `local_media.progress`.
+/// Answers when the download ends.
+async fn pull_local_media(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<LocalMediaId>,
+) -> ApiResult<StatusCode> {
+    authorize(&state, &headers, None)?;
+    let sink: Arc<dyn harness_host::EventSink> = state.sink.clone();
+    harness_host::local_media::pull_local_media(sink, &body.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn cancel_local_media_pull(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<LocalMediaId>,
+) -> ApiResult<StatusCode> {
+    authorize(&state, &headers, None)?;
+    harness_host::local_media::cancel_local_media_pull(&body.id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete an image model's weights; answers the bytes freed.
+async fn remove_local_media(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<LocalMediaId>,
+) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&state, &headers, None)?;
+    let freed = harness_host::local_media::remove_local_media(&body.id)?;
+    Ok(Json(serde_json::json!({ "freed_bytes": freed })))
 }
 
 /// Kill one background task (its whole process group); 404 when unknown.

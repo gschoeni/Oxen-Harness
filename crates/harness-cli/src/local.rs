@@ -290,6 +290,19 @@ pub async fn start_for(id: &str, ui: &Ui) -> Result<(LocalServer, String)> {
     let weight_bytes = store.installed_size(&model.id).unwrap_or(0);
     let native = store.native_context(&model.id);
     let context = fit::plan_context(profile.usable_budget, weight_bytes, native);
+    // Say so before loading when memory is tight, and don't load into a
+    // machine that is already at its limit.
+    match harness_local::memory::preflight(
+        id,
+        fit::footprint(weight_bytes, context),
+        harness_local::memory::Residency::Resident,
+    ) {
+        harness_local::memory::LoadAdvice::Go => {}
+        harness_local::memory::LoadAdvice::Warn(why) => {
+            say!("  {} {}", ui.brown("⚠ Heads up:"), ui.dim(&why));
+        }
+        harness_local::memory::LoadAdvice::Refuse(why) => bail!("{why}"),
+    }
     let server = LocalServer::start_with_context(&path, id, context, |_| {})
         .await
         .with_context(|| format!("starting llama-server for {id}"))?;

@@ -18,6 +18,7 @@
 
 mod agents;
 mod bridges;
+pub mod local_media;
 mod service;
 mod study;
 mod threads;

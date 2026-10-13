@@ -56,8 +56,8 @@ pub use catalog::{Catalog, MediaModel};
 pub use events::{Completion, CompletionFeed};
 pub use hub::{repo_web_url, HubRepos, NewRepo};
 pub use library::{
-    MediaItem, MediaLibrary, MediaSource, MediaStatus, MediaTick, MediaUpload, SourceOrigin,
-    StoredRef, UploadStatus,
+    MediaItem, MediaLibrary, MediaProgress, MediaSource, MediaStatus, MediaTick, MediaUpload,
+    SourceOrigin, StoredRef, UploadStatus,
 };
 pub use local::{LocalInfo, LocalJob, LocalMedia, LocalMediaError, LocalOutput, LocalProgress};
 pub use queue::{GenerationRecord, QueueClient, QueueError};

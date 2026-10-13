@@ -27,6 +27,7 @@ mod live;
 mod local;
 mod markdown;
 mod media;
+mod memory_gauge;
 mod picker;
 mod plan;
 mod preview;

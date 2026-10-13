@@ -336,6 +336,12 @@ fn fleet_event_wire_shapes() {
             }],
             agent_prompt: Some("an ox at dawn like [Image #1]".into()),
             provider: Some(serde_json::json!({"status": "succeeded"})),
+            progress: Some(harness_protocol::MediaProgress {
+                phase: "sampling".into(),
+                step: Some(2),
+                total: Some(4),
+                note: Some("memory is tight".into()),
+            }),
         }],
         uploads: vec![harness_protocol::MediaUpload {
             id: "u1".into(),
@@ -491,9 +497,51 @@ fn remaining_variants_round_trip() {
             total: Some(100),
             fraction: Some(0.1),
         },
+        ProtocolEvent::MemoryNotice {
+            level: "stopped".into(),
+            model: "Iris-3B Turbo".into(),
+            message: "Stopped Iris-3B Turbo to protect your computer.".into(),
+            at: 1_789_000_000,
+        },
+        ProtocolEvent::LocalMediaProgress {
+            id: "local/iris-3b-turbo".into(),
+            phase: "weights".into(),
+            file: Some("turbo/model.safetensors".into()),
+            done_bytes: 10,
+            total_bytes: 100,
+            error: None,
+        },
     ] {
         round_trips(event);
     }
+}
+
+/// The memory meter's payload: system memory, this host's model servers,
+/// and the last notice.
+#[test]
+fn memory_status_round_trips() {
+    let status = harness_protocol::MemoryStatus {
+        system: Some(harness_protocol::MemorySystem {
+            total_bytes: 38_654_705_664,
+            used_bytes: 30_000_000_000,
+            available_bytes: 8_654_705_664,
+            compressed_bytes: 5_000_000_000,
+            swap_used_bytes: 20_000_000_000,
+            free_percent: 47,
+            pressure: "warn".into(),
+        }),
+        processes: vec![harness_protocol::LocalModelProcess {
+            kind: "chat".into(),
+            model: "gemma-4-26b-a4b-q3".into(),
+            pid: 4242,
+            footprint_bytes: 13_000_000_000,
+        }],
+        notice: None,
+    };
+    let back: harness_protocol::MemoryStatus =
+        serde_json::from_value(serde_json::to_value(&status).expect("serializes"))
+            .expect("round trip");
+    assert_eq!(back, status);
 }
 
 /// Every event maps onto the channel name the desktop webview already listens
@@ -782,6 +830,26 @@ fn legacy_channel_names() {
                 fraction: None,
             },
             "models://progress",
+        ),
+        (
+            ProtocolEvent::MemoryNotice {
+                level: "warn".into(),
+                model: "m".into(),
+                message: String::new(),
+                at: 0,
+            },
+            "memory://notice",
+        ),
+        (
+            ProtocolEvent::LocalMediaProgress {
+                id: "m".into(),
+                phase: "done".into(),
+                file: None,
+                done_bytes: 0,
+                total_bytes: 0,
+                error: None,
+            },
+            "local-media://progress",
         ),
     ];
     for (event, channel) in cases {

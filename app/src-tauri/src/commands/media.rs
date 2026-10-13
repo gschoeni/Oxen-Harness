@@ -45,3 +45,34 @@ pub(crate) async fn list_media_models(
         .media_models(kind.as_deref(), refresh.unwrap_or(false))
         .await
 }
+
+/// System memory, this app's local model servers, and the last memory
+/// notice — the memory meter polls it while a local model is in use.
+#[tauri::command]
+pub(crate) fn memory_status() -> harness_protocol::MemoryStatus {
+    harness_host::local_media::memory_status()
+}
+
+/// The on-device image models, their engine, and free disk.
+#[tauri::command]
+pub(crate) fn local_media_status() -> harness_protocol::LocalMediaStatus {
+    harness_host::local_media::local_media_status()
+}
+
+/// Download an on-device image model, streaming `local-media://progress`.
+#[tauri::command]
+pub(crate) async fn pull_local_media(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    harness_host::local_media::pull_local_media(state.sink.clone(), &id).await
+}
+
+/// Stop an image model download; the partial file is removed.
+#[tauri::command]
+pub(crate) fn cancel_local_media_pull(id: String) {
+    harness_host::local_media::cancel_local_media_pull(&id);
+}
+
+/// Delete an image model's weights; returns the bytes freed.
+#[tauri::command]
+pub(crate) fn remove_local_media(id: String) -> Result<u64, String> {
+    harness_host::local_media::remove_local_media(&id)
+}

@@ -875,3 +875,59 @@ async fn a_model_switch_names_its_chat_over_http() {
         assert_eq!(view["info"]["model"], model);
     }
 }
+
+/// The memory meter and the local image models page read these; a
+/// local-media action about an unknown model is a 400 with a reason.
+#[tokio::test]
+async fn memory_and_local_media_status_answer() {
+    let llm = mockito::Server::new_async().await;
+    let workspace = tempfile::tempdir().unwrap();
+    let server = boot(llm.url(), workspace.path()).await;
+    let base = server.base_url();
+
+    let memory: Value = client()
+        .get(format!("{base}/v1/memory"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(memory["processes"].is_array(), "{memory}");
+    if cfg!(target_os = "macos") {
+        assert!(
+            memory["system"]["total_bytes"].as_u64().unwrap_or(0) > 0,
+            "{memory}"
+        );
+    }
+
+    let local: Value = client()
+        .get(format!("{base}/v1/local-media"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ids: Vec<&str> = local["models"]
+        .as_array()
+        .map(|m| m.iter().filter_map(|x| x["id"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(ids.contains(&"local/iris-3b-turbo"), "{local}");
+
+    let response = client()
+        .post(format!("{base}/v1/local-media/pull"))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({"id": "local/no-such-model"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert!(response
+        .text()
+        .await
+        .unwrap()
+        .contains("no local image model"));
+}

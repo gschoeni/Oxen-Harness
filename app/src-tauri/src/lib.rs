@@ -164,6 +164,10 @@ pub fn run() -> Result<(), tauri::Error> {
                     .expect("launch surface poisoned") = Some(surface);
             }
             app.manage(commands::watch::FsWatchState::default());
+            // Memory warnings and watchdog stops reach the window as
+            // `memory://notice`, whichever model raised them.
+            let sink = app.state::<AppState>().sink.clone();
+            tauri::async_runtime::spawn(harness_host::local_media::forward_memory_notices(sink));
             Ok(())
         })
         .register_uri_scheme_protocol("viewasset", view_packages::protocol)
@@ -264,6 +268,11 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::media::get_media_prefs,
                 commands::media::set_media_prefs,
                 commands::media::list_media_models,
+                commands::media::memory_status,
+                commands::media::local_media_status,
+                commands::media::pull_local_media,
+                commands::media::cancel_local_media_pull,
+                commands::media::remove_local_media,
                 commands::files::fs_list_dir,
                 commands::files::fs_read_file,
                 commands::files::fs_create_entry,

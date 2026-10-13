@@ -134,6 +134,35 @@ pub struct MediaItem {
     /// back to the exact request the provider served.
     #[serde(default)]
     pub provider: Option<Value>,
+    /// Where an in-flight generation is (local engines report steps); live
+    /// feed only — a settled row drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<MediaProgress>,
+}
+
+/// An in-flight generation's progress, for progress bars.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MediaProgress {
+    /// `queued`, `loading` (starting the engine / reading weights),
+    /// `sampling`, or `finishing` (decoding and saving).
+    pub phase: String,
+    #[serde(default)]
+    pub step: Option<u32>,
+    #[serde(default)]
+    pub total: Option<u32>,
+    /// A warning worth showing beside the bar (memory is tight).
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl MediaProgress {
+    /// `step / total` when sampling, for a determinate bar.
+    pub fn fraction(&self) -> Option<f64> {
+        match (self.step, self.total) {
+            (Some(s), Some(t)) if t > 0 => Some((s as f64 / t as f64).min(1.0)),
+            _ => None,
+        }
+    }
 }
 
 fn one() -> u32 {
@@ -580,6 +609,7 @@ mod tests {
             sources: vec![],
             agent_prompt: None,
             provider: None,
+            progress: None,
         }
     }
 

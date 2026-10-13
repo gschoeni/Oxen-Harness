@@ -412,6 +412,12 @@ pub fn media_item(item: harness_media::MediaItem) -> harness_protocol::MediaItem
         sources: item.sources.into_iter().map(media_source).collect(),
         agent_prompt: item.agent_prompt,
         provider: item.provider,
+        progress: item.progress.map(|p| harness_protocol::MediaProgress {
+            phase: p.phase,
+            step: p.step,
+            total: p.total,
+            note: p.note,
+        }),
     }
 }
 

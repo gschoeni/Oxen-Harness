@@ -231,6 +231,8 @@ pub struct LocalServer {
     /// The model id/alias this server is serving (`-a`), so callers can tell
     /// whether a running server is the one they need or a leftover.
     model: String,
+    /// Stops the server if memory runs out while it loads or serves.
+    watchdog: Option<crate::memory::Watchdog>,
 }
 
 impl LocalServer {
@@ -285,7 +287,7 @@ impl LocalServer {
         // Register before waiting on health: a host killed mid-load must
         // still leave a trail to the half-loaded server.
         let pid = child.id().unwrap_or(0);
-        registry::register(LLAMA_PIDS, pid, port);
+        registry::register(LLAMA_PIDS, pid, port, alias);
 
         let mut server = Self {
             child,
@@ -294,8 +296,21 @@ impl LocalServer {
             port,
             context,
             model: alias.to_string(),
+            // Watching starts with the load: reading weights is when a model
+            // that doesn't fit drags the machine into swap.
+            watchdog: Some(crate::memory::Watchdog::spawn(
+                pid,
+                alias,
+                crate::memory::Limits::default(),
+                |_| {},
+            )),
         };
-        server.await_healthy(rx, &mut on_status).await?;
+        if let Err(e) = server.await_healthy(rx, &mut on_status).await {
+            return Err(match server.memory_trip() {
+                Some(reason) => LocalError::Memory(reason),
+                None => e,
+            });
+        }
         on_status(LoadPhase::Ready);
         Ok(server)
     }
@@ -315,7 +330,13 @@ impl LocalServer {
             port: 1,
             context: 512,
             model: model.to_string(),
+            watchdog: None,
         }
+    }
+
+    /// Why the memory guard stopped this server, if it did.
+    pub fn memory_trip(&self) -> Option<String> {
+        self.watchdog.as_ref().and_then(|w| w.tripped())
     }
 
     /// The OpenAI-compatible base URL to point an LLM client at.
@@ -409,13 +430,46 @@ pub fn reap_stale_servers() -> Vec<u32> {
 }
 
 /// The registry file `llama-server`s are recorded in.
-const LLAMA_PIDS: &str = "llama-server.pids";
+pub(crate) const LLAMA_PIDS: &str = "llama-server.pids";
+
+/// The registry file image servers (`sd-server`) are recorded in.
+pub const SD_PIDS: &str = "sd-server.pids";
 
 /// Record a helper server this process spawned in the registry `file`
-/// (under `~/.oxen-harness/runtime/`), so that if this host dies without
-/// stopping it a later boot's [`reap_stale`] can. Best-effort.
-pub fn register_spawned(file: &str, pid: u32, port: u16) {
-    registry::register(file, pid, port);
+/// (under `~/.oxen-harness/runtime/`) with the model it serves, so that if
+/// this host dies without stopping it a later boot's [`reap_stale`] can,
+/// and the memory meters can name it. Best-effort.
+pub fn register_spawned(file: &str, pid: u32, port: u16, model: &str) {
+    registry::register(file, pid, port, model);
+}
+
+/// The registry entries this process owns.
+pub(crate) fn owned_entries(file: &str) -> Vec<registry::Entry> {
+    let me = std::process::id();
+    registry::path(file)
+        .map(|p| registry::read(&p))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e.owner == me)
+        .collect()
+}
+
+/// Whether `pid` is a live process.
+pub(crate) fn process_alive(pid: u32) -> bool {
+    process::is_alive(pid)
+}
+
+/// Stop `pid`: SIGTERM, then SIGKILL if it hasn't exited within 3 s (a
+/// model server mid-load can ignore the polite ask).
+pub(crate) async fn stop_process(pid: u32) {
+    process::terminate(pid);
+    for _ in 0..30 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if !process::is_alive(pid) {
+            return;
+        }
+    }
+    process::kill_hard(pid);
 }
 
 /// Strike a stopped helper server from the registry `file`. Best-effort.
@@ -452,11 +506,14 @@ mod registry {
         )
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(super) struct Entry {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct Entry {
         pub pid: u32,
         pub owner: u32,
         pub port: u16,
+        /// The model it serves (empty in entries written before names were
+        /// recorded); for the memory meters.
+        pub name: String,
     }
 
     pub(super) fn parse(contents: &str) -> Vec<Entry> {
@@ -468,12 +525,13 @@ mod registry {
                     pid: parts.next()?.parse().ok()?,
                     owner: parts.next()?.parse().ok()?,
                     port: parts.next()?.parse().ok()?,
+                    name: parts.collect::<Vec<_>>().join(" "),
                 })
             })
             .collect()
     }
 
-    fn read(path: &Path) -> Vec<Entry> {
+    pub(super) fn read(path: &Path) -> Vec<Entry> {
         std::fs::read_to_string(path)
             .map(|s| parse(&s))
             .unwrap_or_default()
@@ -485,12 +543,12 @@ mod registry {
         }
         let body: String = entries
             .iter()
-            .map(|e| format!("{} {} {}\n", e.pid, e.owner, e.port))
+            .map(|e| format!("{} {} {} {}\n", e.pid, e.owner, e.port, e.name))
             .collect();
         let _ = std::fs::write(path, body);
     }
 
-    pub(super) fn register(file: &str, pid: u32, port: u16) {
+    pub(super) fn register(file: &str, pid: u32, port: u16, name: &str) {
         let Some(path) = path(file) else { return };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -500,14 +558,14 @@ mod registry {
             .append(true)
             .open(&path)
         {
-            let _ = writeln!(f, "{pid} {} {port}", std::process::id());
+            let _ = writeln!(f, "{pid} {} {port} {name}", std::process::id());
         }
     }
 
     pub(super) fn unregister(file: &str, pid: u32) {
         let Some(path) = path(file) else { return };
         let entries = read(&path);
-        let kept: Vec<Entry> = entries.iter().copied().filter(|e| e.pid != pid).collect();
+        let kept: Vec<Entry> = entries.iter().filter(|e| e.pid != pid).cloned().collect();
         if kept.len() != entries.len() {
             write(&path, &kept);
         }
@@ -593,6 +651,15 @@ mod process {
 
     #[cfg(not(unix))]
     pub(super) fn terminate(_pid: u32) {}
+
+    /// SIGKILL, for a server that ignored SIGTERM.
+    #[cfg(unix)]
+    pub(super) fn kill_hard(pid: u32) {
+        let _ = kill(pid, "-KILL");
+    }
+
+    #[cfg(not(unix))]
+    pub(super) fn kill_hard(_pid: u32) {}
 }
 
 fn find_free_port() -> Result<u16, LocalError> {

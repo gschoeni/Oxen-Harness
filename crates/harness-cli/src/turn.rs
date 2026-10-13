@@ -386,6 +386,7 @@ impl MeterFacts {
                     let last = self.last_speed.as_ref()?;
                     crate::speed::SpeedGauge::settled(last).segment(ui)
                 }),
+                memory: crate::memory_gauge::segment(ui),
             },
             meter_budget(),
         )
@@ -428,6 +429,8 @@ struct Meters<'a> {
     mode: Option<&'static str>,
     /// The generation-speed segment `(plain, styled)`, once a call was timed.
     speed: Option<(String, String)>,
+    /// The `🧠` memory segment, while a local model runs.
+    memory: Option<(String, String)>,
 }
 
 /// One `· `-joined piece of a meter line, with the width it costs and how
@@ -537,6 +540,11 @@ fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
     // how fast it is going, but both outrank nothing.
     if let Some((plain, styled)) = &m.speed {
         line2.push(Seg::new(plain.clone(), styled.clone(), 3));
+    }
+    // Memory outlasts both on a narrow terminal: a local model squeezing
+    // the machine is the one figure here that needs acting on.
+    if let Some((plain, styled)) = &m.memory {
+        line2.push(Seg::new(plain.clone(), styled.clone(), 2));
     }
 
     vec![fit(line1, budget), fit(line2, budget)]
@@ -742,7 +750,30 @@ mod tests {
             branch: Some("wagon-trail".to_string()),
             mode: Some("cautious"),
             speed: None,
+            memory: None,
         }
+    }
+
+    #[test]
+    fn the_memory_readout_outlasts_price_and_speed_on_a_narrow_terminal() {
+        let ui = plain_ui();
+        let mut m = meters(1_000, "local-model");
+        m.speed = Some(("⚡ 45 tok/s".into(), "⚡ 45 tok/s".into()));
+        m.memory = Some((
+            "🧠 30.1/36.0 GB · local 13.2 GB".into(),
+            "🧠 30.1/36.0 GB · local 13.2 GB".into(),
+        ));
+        let wide = meter_lines(&ui, &m, None);
+        assert!(
+            wide[1].contains("🧠 30.1/36.0 GB") && wide[1].contains("45 tok/s"),
+            "{wide:?}"
+        );
+        let narrow = meter_lines(&ui, &m, Some(80));
+        assert!(narrow[1].contains("🧠"), "memory stays: {narrow:?}");
+        assert!(
+            !narrow[1].contains("tok/s"),
+            "speed gives way first: {narrow:?}"
+        );
     }
 
     #[test]

@@ -246,6 +246,114 @@ pub struct MediaItem {
     /// The hub's completed generation record, verbatim.
     #[serde(default)]
     pub provider: Option<serde_json::Value>,
+    /// Where an in-flight generation is (local engines report steps).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<MediaProgress>,
+}
+
+/// An in-flight generation's progress, for progress bars.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MediaProgress {
+    /// `queued`, `loading`, `sampling`, or `finishing`.
+    pub phase: String,
+    #[serde(default)]
+    pub step: Option<u32>,
+    #[serde(default)]
+    pub total: Option<u32>,
+    /// A warning to show beside the bar (memory is tight).
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// What local models cost the machine's memory (`memory_status`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MemoryStatus {
+    /// `None` where the platform gives no reading.
+    #[serde(default)]
+    pub system: Option<MemorySystem>,
+    /// This host's running model servers.
+    #[serde(default)]
+    pub processes: Vec<LocalModelProcess>,
+    /// The most recent memory warning, refusal, or stop.
+    #[serde(default)]
+    pub notice: Option<MemoryNotice>,
+}
+
+/// System memory as Activity Monitor counts it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MemorySystem {
+    pub total_bytes: u64,
+    /// App memory + wired + compressed.
+    pub used_bytes: u64,
+    pub available_bytes: u64,
+    pub compressed_bytes: u64,
+    pub swap_used_bytes: u64,
+    /// The kernel's "memory free" percentage.
+    pub free_percent: u8,
+    /// `normal`, `warn`, `critical`, or `unknown`.
+    pub pressure: String,
+}
+
+/// One running local model server.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalModelProcess {
+    /// `chat` or `image`.
+    pub kind: String,
+    pub model: String,
+    pub pid: u32,
+    /// What it holds in memory now (memory-mapped weights not counted).
+    pub footprint_bytes: u64,
+}
+
+/// A memory warning, a refused load, or a model the watchdog stopped.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MemoryNotice {
+    /// `warn`, `refused`, or `stopped`.
+    pub level: String,
+    pub model: String,
+    pub message: String,
+    /// Unix seconds.
+    pub at: i64,
+}
+
+/// The on-device image models and their engine (`local_media_status`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalMediaStatus {
+    pub models: Vec<LocalMediaModel>,
+    /// The engine runtime's version when installed.
+    #[serde(default)]
+    pub engine_version: Option<String>,
+    /// Where weights are stored.
+    pub store_path: String,
+    /// Free space on that disk, when known.
+    #[serde(default)]
+    pub disk_available_bytes: Option<u64>,
+    /// Why local image models are unavailable in this host, if they are.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// One on-device image model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalMediaModel {
+    /// `local/…`
+    pub id: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub developer: Option<String>,
+    pub license: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// All its weight files.
+    pub total_bytes: u64,
+    /// Still to download (0 = installed).
+    pub missing_bytes: u64,
+    pub installed: bool,
+    /// Seconds per 1024² image as measured on an M4 Max.
+    #[serde(default)]
+    pub typical_secs: Option<f64>,
+    /// It edits or combines reference images.
+    pub takes_references: bool,
 }
 
 /// One reference's provenance on a `MediaItem`: the stored copy, the file

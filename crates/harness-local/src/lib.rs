@@ -26,6 +26,7 @@ pub mod fit;
 pub mod gguf;
 pub mod hardware;
 pub mod limits;
+pub mod memory;
 pub mod rates;
 pub mod resolve;
 pub mod runtime;
@@ -43,7 +44,7 @@ pub use resolve::{resolve_runnable, Runnable};
 pub use runtime::{RuntimeInstallEvent, RuntimeSource, RuntimeStatus};
 pub use server::{
     can_auto_install, install_hint, install_llama_server, llama_server_path, reap_stale,
-    reap_stale_servers, register_spawned, unregister_spawned, LoadPhase, LocalServer,
+    reap_stale_servers, register_spawned, unregister_spawned, LoadPhase, LocalServer, SD_PIDS,
 };
 pub use source::{HfHit, ModelRef, Origin};
 pub use store::{disk_space, DownloadProgress, ModelStore};
@@ -65,6 +66,9 @@ pub enum LocalError {
     Server(String),
     #[error("install failed: {0}")]
     Install(String),
+    /// The memory guard refused or stopped the model; the message says why.
+    #[error("{0}")]
+    Memory(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

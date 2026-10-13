@@ -240,10 +240,15 @@ pub(crate) async fn read_idle(
         // across the whole match.)
         let due = {
             let s = state.borrow();
-            [s.media_check_due(), s.fleet_tick_due(), s.media_tick_due()]
-                .into_iter()
-                .flatten()
-                .min()
+            [
+                s.media_check_due(),
+                s.fleet_tick_due(),
+                s.media_tick_due(),
+                s.memory_tick_due(),
+            ]
+            .into_iter()
+            .flatten()
+            .min()
         };
         let event = match due {
             Some(due) => tokio::select! {
@@ -257,6 +262,9 @@ pub(crate) async fn read_idle(
                         s.request_paint();
                     }
                     if s.tick_media_jobs() {
+                        s.request_paint();
+                    }
+                    if s.tick_memory() {
                         s.request_paint();
                     }
                     s.flush_paint();
@@ -694,6 +702,10 @@ async fn run_one_turn(
                 }
                 // So does the block of generations rendering on the hub.
                 if s.tick_media_jobs() {
+                    s.request_paint();
+                }
+                // The memory readout samples on its own clock (cached).
+                if s.tick_memory() {
                     s.request_paint();
                 }
                 // A settled key-event-burst drop collapses to a media chip here.

@@ -191,8 +191,63 @@ pub(crate) fn pinned_lines(ui: &crate::theme::Ui, cols: usize, frame: usize) -> 
             1,
         );
         lines.push(ui.dim(&colored));
+        if let Some(p) = &job.progress {
+            lines.push(progress_line(ui, p, frame, cols));
+            if let Some(note) = &p.note {
+                let text: String = format!("    ⚠ {note}").chars().take(cols.max(20)).collect();
+                lines.push(ui.brown(&text));
+            }
+        }
+    }
+    // A local render shows what it costs the machine.
+    if jobs
+        .iter()
+        .any(|j| harness_media::local::is_local_id(&j.model))
+    {
+        if let Some(line) = crate::memory_gauge::media_line(ui) {
+            lines.push(line);
+        }
     }
     lines
+}
+
+const BAR_CELLS: usize = 20;
+
+/// `    ▰▰▰▰▰▱▱▱▱▱ step 2 of 4 · sampling` — determinate while sampling, a
+/// sweeping block while the engine loads or decodes.
+fn progress_line(
+    ui: &crate::theme::Ui,
+    p: &harness_media::MediaProgress,
+    frame: usize,
+    cols: usize,
+) -> String {
+    let (bar, label) = match p.fraction() {
+        Some(f) => {
+            let filled = ((f * BAR_CELLS as f64).round() as usize).min(BAR_CELLS);
+            (
+                format!("{}{}", "▰".repeat(filled), "▱".repeat(BAR_CELLS - filled)),
+                format!("step {} of {}", p.step.unwrap_or(0), p.total.unwrap_or(0)),
+            )
+        }
+        None => {
+            let at = frame % BAR_CELLS;
+            let cells: String = (0..BAR_CELLS)
+                .map(|i| if i.abs_diff(at) <= 1 { '▰' } else { '▱' })
+                .collect();
+            let label = match p.phase.as_str() {
+                "queued" => "waiting for the GPU",
+                "loading" => "loading the model",
+                "finishing" => "decoding the image",
+                other => other,
+            };
+            (cells, label.to_string())
+        }
+    };
+    let plain: String = format!("    {bar} {label}")
+        .chars()
+        .take(cols.max(20))
+        .collect();
+    plain.replacen(&bar, &ui.accent(&bar), 1)
 }
 
 /// Render an inline block for a `generate_image` / `generate_video` call from
@@ -467,6 +522,31 @@ mod tests {
             .write_all(&[1, 2, 3])
             .unwrap();
         path
+    }
+
+    #[test]
+    fn progress_lines_fill_by_step_and_sweep_while_loading() {
+        let ui =
+            crate::theme::Ui::with(false, std::sync::Arc::new(harness_theme::Theme::default()));
+        let p = |phase: &str, step: Option<u32>| harness_media::MediaProgress {
+            phase: phase.into(),
+            step,
+            total: step.map(|_| 4),
+            note: None,
+        };
+        let half = progress_line(&ui, &p("sampling", Some(2)), 0, 120);
+        assert!(
+            half.contains(&format!("{}{}", "▰".repeat(10), "▱".repeat(10))),
+            "{half}"
+        );
+        assert!(half.contains("step 2 of 4"), "{half}");
+        let loading = progress_line(&ui, &p("loading", None), 5, 120);
+        assert!(loading.contains("loading the model"), "{loading}");
+        assert_eq!(
+            loading.matches('▰').count(),
+            3,
+            "a three-cell sweep: {loading}"
+        );
     }
 
     #[test]
