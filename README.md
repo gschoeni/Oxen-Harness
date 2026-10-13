@@ -271,7 +271,7 @@ the download size at or below **total RAM minus what your apps use, minus
 | Your machine | Pick | Download | Why |
 |---|---|---|---|
 | 8–16 GB | `qwen3-4b` / `qwen3-8b`, or `bonsai-27b` | 2.5–5 GB / ~3.8 GB | Bonsai's 1-bit 27B does reasoning + tool calls in a small footprint |
-| 24 GB, or 32–36 GB with a dev stack open | **`gemma-4-26b-a4b-q3`** | ~12.7 GB | Fastest tested, passed every agent run |
+| 24 GB, or 32–36 GB with a dev stack open | **`gemma-4-26b-a4b-q3-k-m`** | ~12.7 GB | Fastest tested, passed every agent run |
 | ″ | `qwen3.6-35b-a3b-iq3` | ~13.2 GB | Close second: fast and consistent |
 | ″ | `glm-4.7-flash-iq3` | ~12.9 GB | Reliable, a bit slower |
 | ″ | `gpt-oss-20b` | ~12.1 GB | Fast, but its file edits are clumsy |
