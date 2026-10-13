@@ -75,6 +75,45 @@ fn fallback() -> HardwareProfile {
     }
 }
 
+/// How hard the OS is squeezing memory right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryPressure {
+    Normal,
+    /// The OS is compressing and swapping; loading a model makes it worse.
+    Warn,
+    /// The OS is about to kill apps; loading a model would hurt the user.
+    Critical,
+    /// The platform gives no reading.
+    Unknown,
+}
+
+impl MemoryPressure {
+    /// The macOS `kern.memorystatus_vm_pressure_level` value (1/2/4).
+    fn from_level(level: u64) -> Self {
+        match level {
+            1 => Self::Normal,
+            2 => Self::Warn,
+            4 => Self::Critical,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// The OS's current memory-pressure verdict.
+pub fn memory_pressure() -> MemoryPressure {
+    #[cfg(target_os = "macos")]
+    {
+        macos::sysctl_u64("kern.memorystatus_vm_pressure_level")
+            .map(MemoryPressure::from_level)
+            .unwrap_or(MemoryPressure::Unknown)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        MemoryPressure::Unknown
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use super::*;
@@ -111,7 +150,7 @@ mod macos {
         (!s.is_empty()).then_some(s)
     }
 
-    fn sysctl_u64(key: &str) -> Option<u64> {
+    pub(super) fn sysctl_u64(key: &str) -> Option<u64> {
         sysctl_string(key)?.parse().ok()
     }
 }
@@ -128,6 +167,14 @@ mod tests {
         assert_eq!(budget_from_pool(8 * GIB), 5 * GIB);
         // Never underflows.
         assert_eq!(budget_from_pool(GIB), 0);
+    }
+
+    #[test]
+    fn pressure_levels_map_from_the_kernel_values() {
+        assert_eq!(MemoryPressure::from_level(1), MemoryPressure::Normal);
+        assert_eq!(MemoryPressure::from_level(2), MemoryPressure::Warn);
+        assert_eq!(MemoryPressure::from_level(4), MemoryPressure::Critical);
+        assert_eq!(MemoryPressure::from_level(0), MemoryPressure::Unknown);
     }
 
     #[test]

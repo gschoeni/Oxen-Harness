@@ -17,7 +17,7 @@ use crate::LocalError;
 
 /// Edge options for [`fetch_to_file`]. All default to "off".
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct FetchOpts<'a> {
+pub struct FetchOpts<'a> {
     /// Bearer token to authorize the request (blank/whitespace is ignored).
     pub token: Option<&'a str>,
     /// `User-Agent` header to send, if any.
@@ -36,7 +36,7 @@ pub(crate) struct FetchOpts<'a> {
 ///
 /// `dest` is written directly; callers wanting atomic replacement pass a
 /// temporary path and rename it on success.
-pub(crate) async fn fetch_to_file<F>(
+pub async fn fetch_to_file<F>(
     client: &reqwest::Client,
     url: &str,
     dest: &Path,

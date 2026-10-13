@@ -285,7 +285,7 @@ impl LocalServer {
         // Register before waiting on health: a host killed mid-load must
         // still leave a trail to the half-loaded server.
         let pid = child.id().unwrap_or(0);
-        registry::register(pid, port);
+        registry::register(LLAMA_PIDS, pid, port);
 
         let mut server = Self {
             child,
@@ -395,7 +395,7 @@ impl Drop for LocalServer {
         // Best-effort: stop the background server when the session ends, and
         // strike it from the registry so a later boot doesn't chase its pid.
         let _ = self.child.start_kill();
-        registry::unregister(self.pid);
+        registry::unregister(LLAMA_PIDS, self.pid);
     }
 }
 
@@ -405,12 +405,34 @@ impl Drop for LocalServer {
 /// host sharing the machine — are left alone. Never fails: a missing or
 /// unreadable registry just means there is nothing to reap.
 pub fn reap_stale_servers() -> Vec<u32> {
-    let Some(path) = registry::path() else {
+    reap_stale(LLAMA_PIDS, "llama-server")
+}
+
+/// The registry file `llama-server`s are recorded in.
+const LLAMA_PIDS: &str = "llama-server.pids";
+
+/// Record a helper server this process spawned in the registry `file`
+/// (under `~/.oxen-harness/runtime/`), so that if this host dies without
+/// stopping it a later boot's [`reap_stale`] can. Best-effort.
+pub fn register_spawned(file: &str, pid: u32, port: u16) {
+    registry::register(file, pid, port);
+}
+
+/// Strike a stopped helper server from the registry `file`. Best-effort.
+pub fn unregister_spawned(file: &str, pid: u32) {
+    registry::unregister(file, pid);
+}
+
+/// Kill the servers in registry `file` whose owning host has died, when
+/// the pid is still alive and its executable name contains `exe` (pids get
+/// reused). Returns the pids killed; never fails.
+pub fn reap_stale(file: &str, exe: &str) -> Vec<u32> {
+    let Some(path) = registry::path(file) else {
         return Vec::new();
     };
     registry::reap_at(&path, std::process::id(), process::is_alive, |pid| {
         process::command_name(pid)
-            .map(|name| name.contains("llama-server"))
+            .map(|name| name.contains(exe))
             .unwrap_or(false)
     })
 }
@@ -422,11 +444,11 @@ mod registry {
     use std::io::Write;
     use std::path::{Path, PathBuf};
 
-    pub(super) fn path() -> Option<PathBuf> {
+    pub(super) fn path(file: &str) -> Option<PathBuf> {
         Some(
             harness_config::paths::base_dir_unchecked()?
                 .join("runtime")
-                .join("llama-server.pids"),
+                .join(file),
         )
     }
 
@@ -468,8 +490,8 @@ mod registry {
         let _ = std::fs::write(path, body);
     }
 
-    pub(super) fn register(pid: u32, port: u16) {
-        let Some(path) = path() else { return };
+    pub(super) fn register(file: &str, pid: u32, port: u16) {
+        let Some(path) = path(file) else { return };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -482,8 +504,8 @@ mod registry {
         }
     }
 
-    pub(super) fn unregister(pid: u32) {
-        let Some(path) = path() else { return };
+    pub(super) fn unregister(file: &str, pid: u32) {
+        let Some(path) = path(file) else { return };
         let entries = read(&path);
         let kept: Vec<Entry> = entries.iter().copied().filter(|e| e.pid != pid).collect();
         if kept.len() != entries.len() {
@@ -562,7 +584,8 @@ mod process {
         (!name.is_empty()).then_some(name)
     }
 
-    /// Plain SIGTERM to a pid the caller has just verified is a llama-server.
+    /// Plain SIGTERM to a pid the caller has just verified is the server it
+    /// expected.
     #[cfg(unix)]
     pub(super) fn terminate(pid: u32) {
         let _ = kill(pid, "-TERM");
