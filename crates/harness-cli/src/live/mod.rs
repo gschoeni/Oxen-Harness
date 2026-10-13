@@ -1127,7 +1127,7 @@ mod tests {
         };
         record(&root, 100_000);
 
-        let mut l = live(120, 24);
+        let mut l = super::test_support::plain_live(120, 24);
         let hub = std::sync::Arc::new(FleetHub::default());
         l.fleet = hub.clone();
         hub.install("t", FleetState::new(&["scan".into()], None));

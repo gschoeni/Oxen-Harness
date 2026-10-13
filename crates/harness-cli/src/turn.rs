@@ -321,8 +321,12 @@ fn print_context_usage(agent: &Agent, ui: &Ui) {
 /// 2. the session's cumulative spend — total tokens with an input/output
 ///    breakdown so it's auditable — with the price, the model's rate, and
 ///    what compression saved;
-/// 3. generation speed, and the machine's memory while a local model runs
-///    (absent until there is something to report).
+/// 3. generation speed (a dim `—` until a call has been timed, so the
+///    block never changes height), and the machine's memory while a local
+///    model runs.
+///
+/// Each line leads with its icon and headline figure in the bright cream
+/// slot, the details dim behind it, so the three read as one set.
 ///
 /// Fill and spend are deliberately distinct: context fill ≠ total tokens used.
 #[derive(Clone)]
@@ -536,8 +540,8 @@ fn fit(mut segs: Vec<Seg>, budget: Option<usize>) -> String {
     format!("  {}", joined.join(" · "))
 }
 
-/// The meter lines for a set of figures, fitted to `budget` columns: context,
-/// then spend, then speed — the third only once there is a reading for it.
+/// The three meter lines for a set of figures, fitted to `budget` columns:
+/// context, then spend, then speed.
 fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
     // Line 1 — what the model holds: the context window fill, then the model
     // it belongs to (whose window is the denominator), the branch, and the
@@ -545,15 +549,17 @@ fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
     let pct = (m.used * 100)
         .checked_div(m.window)
         .map_or(0, |p| p.min(100));
-    let fill = format!(
-        "🧭 context {} / {} tokens",
-        human_tokens(m.used),
-        human_tokens(m.window),
-    );
+    let figure = format!("{} / {}", human_tokens(m.used), human_tokens(m.window));
     let pct_text = format!("({pct}%)");
     let mut context = vec![Seg::new(
-        format!("{fill} {pct_text}"),
-        format!("{} {}", ui.dim(&fill), paint_pct(ui, pct, &pct_text)),
+        format!("🧭 context {figure} tokens {pct_text}"),
+        format!(
+            "{} {} {} {}",
+            ui.dim("🧭 context"),
+            ui.cream(&figure),
+            ui.dim("tokens"),
+            paint_pct(ui, pct, &pct_text)
+        ),
         0,
     )];
     context.push(Seg::new(m.model, ui.accent(m.model), 1));
@@ -570,13 +576,17 @@ fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
     // running dollar cost and the per-token rate behind it, then what
     // compression took off the bill. A model with no published rate adds no
     // price, so a missing price is never mistaken for a free one.
-    let totals = format!(
-        "📊 {} tokens used · {} in · {} out",
-        human_tokens(m.spend.total_tokens()),
+    let total = human_tokens(m.spend.total_tokens());
+    let split = format!(
+        "tokens used · {} in · {} out",
         human_tokens(m.spend.prompt_tokens),
         human_tokens(m.spend.completion_tokens),
     );
-    let mut spend = vec![Seg::new(totals.clone(), ui.dim(&totals), 0)];
+    let mut spend = vec![Seg::new(
+        format!("📊 {total} {split}"),
+        format!("{} {} {}", ui.dim("📊"), ui.cream(&total), ui.dim(&split)),
+        0,
+    )];
     if let Some(price) = m.spend.price.label() {
         let styled = if m.spend.price.is_complete() {
             ui.accent(&price)
@@ -602,19 +612,18 @@ fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
     // Line 3 — how fast it is going, and, while a local model runs, what it
     // costs the machine. Memory outlasts speed on a narrow terminal: a local
     // model squeezing the machine is the one figure here that needs acting on.
-    let mut pace = Vec::new();
-    if let Some((plain, styled)) = &m.speed {
-        pace.push(Seg::new(plain.clone(), styled.clone(), 2));
-    }
+    let mut pace = vec![match &m.speed {
+        Some((plain, styled)) => Seg::new(plain.clone(), styled.clone(), 2),
+        None => {
+            let waiting = "⚡ — tok/s";
+            Seg::new(waiting, ui.dim(waiting), 2)
+        }
+    }];
     if let Some((plain, styled)) = &m.memory {
         pace.push(Seg::new(plain.clone(), styled.clone(), 1));
     }
 
-    let mut lines = vec![fit(context, budget), fit(spend, budget)];
-    if !pace.is_empty() {
-        lines.push(fit(pace, budget));
-    }
-    lines
+    vec![fit(context, budget), fit(spend, budget), fit(pace, budget)]
 }
 
 /// The context percentage, colored by how much room is left: normal below 60%,
@@ -773,11 +782,8 @@ mod tests {
             savings: None,
         };
         let lines = facts.lines(&ui);
-        assert_eq!(
-            lines.len(),
-            2,
-            "no speed line before a call is timed: {lines:?}"
-        );
+        assert_eq!(lines.len(), 3, "context, spend, speed: {lines:?}");
+        assert_eq!(lines[2], "  ⚡ — tok/s", "untimed speed: {lines:?}");
         let (ctx, usage) = (&lines[0], &lines[1]);
 
         // Line 1 — the context-window fill and the model it belongs to.

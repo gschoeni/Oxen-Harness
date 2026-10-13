@@ -236,7 +236,7 @@ mod tests {
             savings: None,
         };
         let lines = facts.lines(&ui);
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(lines[0].contains("cold-cache-model"), "{lines:?}");
         assert!(
             !lines[1].contains('$'),

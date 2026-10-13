@@ -98,7 +98,7 @@ pub struct Agent {
     attachments: Option<AttachmentStore>,
     /// Cumulative estimated tokens sent + generated this run (see [`budget`]).
     tokens_used: usize,
-    /// The last model call's final speed reading, for idle readouts.
+    /// The last timed model call's final speed reading, for idle readouts.
     last_throughput: Option<crate::throughput::Throughput>,
     /// `(model, characters per output token)` from the last exact count,
     /// so live speed estimates match what the endpoint will report.
@@ -729,7 +729,8 @@ impl Agent {
         self.calibrated(budget::estimate_prompt_tokens(&self.messages, tool_defs)) <= budget
     }
 
-    /// How fast the last model call generated: its final speed reading.
+    /// How fast the last timed model call generated: its final speed
+    /// reading. Calls too short to time leave it alone.
     pub fn last_throughput(&self) -> Option<&crate::throughput::Throughput> {
         self.last_throughput.as_ref()
     }

@@ -388,7 +388,11 @@ impl Agent {
             {
                 self.output_chars_per_token = Some((reading.model.clone(), ratio));
             }
-            self.last_throughput = Some(reading.clone());
+            // A call too short to time (a quick tool call, a one-line
+            // answer) would blank the idle readout; the last timed one stands.
+            if reading.tokens_per_sec().is_some() {
+                self.last_throughput = Some(reading.clone());
+            }
         }
         self.cached_prompt_tokens_used += outcome.cached_prompt_tokens;
         self.cache_write_tokens_used += outcome.cache_write_tokens;
@@ -1286,9 +1290,10 @@ mod tests {
         assert_eq!(last.output_tokens, 20);
         assert_eq!(last.model, "local-model");
         assert_eq!(readings.iter().filter(|r| r.done).count(), 1);
-        // The agent remembers it, so an idle prompt can still say how fast
-        // the last call ran.
-        assert_eq!(agent.last_throughput(), Some(last));
+        // A mock reply lands in one burst, too short to time, so the agent
+        // keeps no reading for the idle prompt rather than a rateless one.
+        assert!(last.tokens_per_sec().is_none());
+        assert_eq!(agent.last_throughput(), None);
     }
 
     #[tokio::test]

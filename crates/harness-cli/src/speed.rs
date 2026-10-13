@@ -49,10 +49,10 @@ impl SpeedGauge {
             }
             self.samples.push_back(rate);
         }
-        // A new call's first token has no rate yet: keep the last figure on
-        // screen rather than blanking the readout between calls.
-        let blank = reading.tokens_per_sec().is_none() && !reading.done;
-        if !blank || self.latest.is_none() {
+        // A reading with no rate — a new call's first token, or a whole call
+        // too short to time — keeps the last figure on screen rather than
+        // blanking the readout.
+        if reading.tokens_per_sec().is_some() || self.latest.is_none() {
             self.latest = Some(reading.clone());
         }
     }
@@ -176,6 +176,18 @@ mod tests {
         );
         // The next call's first token (no rate yet) keeps the last figure up.
         gauge.record(&reading(1, 0, false));
+        assert_eq!(
+            plain(&gauge).as_deref(),
+            Some("⚡ 44.6 tok/s · 0.8s to first token")
+        );
+    }
+
+    #[test]
+    fn a_call_too_short_to_time_keeps_the_last_figure_up() {
+        let mut gauge = SpeedGauge::default();
+        gauge.record(&reading(446, 10_000, true));
+        // A quick tool call: done in 200ms, below the rate window.
+        gauge.record(&reading(12, 200, true));
         assert_eq!(
             plain(&gauge).as_deref(),
             Some("⚡ 44.6 tok/s · 0.8s to first token")
