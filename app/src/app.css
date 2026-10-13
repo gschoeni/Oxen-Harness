@@ -21,7 +21,7 @@
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-1);
-  padding: 0 var(--space-2) 0 84px;
+  padding: 0 var(--space-3) 0 84px;
   background: var(--surface);
   border-bottom: var(--frame-border-w) solid var(--separator-strong);
 }
@@ -44,7 +44,7 @@
 .app-titlebar-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-3);
 }
 
 /* Global in-flight work: persisted running sessions plus live fleet lanes.
@@ -53,15 +53,18 @@
 .titlebar-running {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  height: var(--control-h-sm);
-  padding: 0 var(--space-2);
+  gap: var(--space-2);
+  /* The switch's height (its segments plus the track's padding), so the two
+     sit on one line. */
+  height: calc(var(--control-h-sm) + 2 * var(--space-1));
+  padding: 0 var(--space-3);
   background: transparent;
   color: var(--text-tertiary);
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
-  font-size: var(--text-2xs);
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease);
@@ -85,45 +88,60 @@
 }
 
 /* Files | Agent | Work | </>: one icon-only segmented switch, each segment
-   showing or hiding its panel (or the inspector). Lit segments are on screen. */
+   showing or hiding its panel (or the inspector). Quiet by design: a faint
+   track, no border; the panels on screen lift out of it, the rest recede. A
+   hairline sets the inspector apart — it's a drawer, not a panel. */
 .panel-switch {
   display: inline-flex;
   align-items: center;
-  height: var(--control-h-sm);
-  padding: var(--space-half);
   gap: var(--space-half);
-  background: var(--surface-2);
-  border: 1px solid var(--separator);
-  border-radius: var(--frame-radius);
+  padding: var(--space-1);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border-radius: calc(var(--frame-radius) + var(--space-1));
 }
 .panel-switch-seg {
   display: inline-grid;
   place-items: center;
-  height: 100%;
-  aspect-ratio: 1;
+  width: var(--control-h);
+  height: var(--control-h-sm);
   padding: 0;
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: calc(var(--frame-radius) - var(--space-half));
+  border: 0;
+  border-radius: var(--frame-radius);
   color: var(--text-tertiary);
-  font-size: var(--text-xs);
   cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.panel-switch-seg > svg {
+  width: var(--nav-icon);
+  height: var(--nav-icon);
 }
 .panel-switch-seg:hover:not(:disabled) {
-  color: var(--text);
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 .panel-switch-seg.on {
-  background: var(--bg);
-  border-color: var(--separator);
   color: var(--text);
-  box-shadow: var(--shadow-1);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+.panel-switch-seg.on:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+.panel-switch-seg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .panel-switch-seg:disabled {
   cursor: default;
 }
-.panel-switch-seg:disabled:not(.on) {
-  opacity: 0.35;
+.panel-switch-sep {
+  width: 1px;
+  height: var(--nav-icon);
+  margin: 0 var(--space-1);
+  background: var(--separator);
 }
+
 /* The chat's terminal squeeze: a bar with one button that brings the agent
    back (see App.tsx `ChatRail`). */
 .chat-collapsed {

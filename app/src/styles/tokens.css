@@ -96,7 +96,7 @@
 
   /* macOS overlay-titlebar clearance (the traffic-light strip). The value is a
      platform constraint; the token exists so it's named, not magic. */
-  --titlebar-h: 38px;
+  --titlebar-h: 46px;
 
   /* Stacking — one scale, ordered by how "in front" a layer semantically is.
      Full-window takeovers < centered modals < the inspector drawer (which can

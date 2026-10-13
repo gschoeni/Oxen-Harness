@@ -11,9 +11,9 @@ import { useStore } from "../../lib/store";
 import { PANELS, togglePanel, usePanelShown, type Panel } from "./docks";
 
 const SEGMENTS: Record<Panel, { label: string; icon: ReactNode; shortcut?: string }> = {
-  left: { label: "Files", icon: <FolderTree size={15} />, shortcut: "⌘B" },
-  chat: { label: "Agent", icon: <Bot size={15} /> },
-  right: { label: "Work", icon: <NotebookPen size={15} />, shortcut: "⌘⌥B" },
+  left: { label: "Files", icon: <FolderTree strokeWidth={1.75} />, shortcut: "⌘B" },
+  chat: { label: "Agent", icon: <Bot strokeWidth={1.75} /> },
+  right: { label: "Work", icon: <NotebookPen strokeWidth={1.75} />, shortcut: "⌘⌥B" },
 };
 
 export function PanelSwitch() {
@@ -48,6 +48,7 @@ export function PanelSwitch() {
           </button>
         );
       })}
+      <span className="panel-switch-sep" aria-hidden="true" />
       <button
         type="button"
         className={`panel-switch-seg${inspecting ? " on" : ""}`}
@@ -57,7 +58,7 @@ export function PanelSwitch() {
         title="Inspect this chat — the raw LLM inputs and outputs for this session"
         onClick={toggleInspector}
       >
-        <Code2 size={15} />
+        <Code2 strokeWidth={1.75} />
       </button>
     </div>
   );
