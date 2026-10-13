@@ -396,6 +396,7 @@ impl MeterFacts {
                     crate::speed::SpeedGauge::settled(last).segment(ui)
                 }),
                 memory: crate::memory_gauge::segment(ui),
+                local: crate::local::is_local(&self.model),
             },
             meter_budget(),
         )
@@ -440,6 +441,8 @@ struct Meters<'a> {
     speed: Option<(String, String)>,
     /// The `🧠` memory segment, while a local model runs.
     memory: Option<(String, String)>,
+    /// The model runs on this machine (so it is free).
+    local: bool,
 }
 
 /// One `· `-joined piece of a meter line, with the width it costs and how
@@ -544,6 +547,10 @@ fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
             ui.brown(&price)
         };
         line2.push(Seg::new(price, styled, 4));
+    } else if m.local {
+        // A local model has no rate because it costs nothing: say so.
+        let free = "free · local";
+        line2.push(Seg::new(free, ui.green(free), 4));
     }
     // Speed gives way just after the price: what the session cost outranks
     // how fast it is going, but both outrank nothing.
@@ -760,7 +767,18 @@ mod tests {
             mode: Some("cautious"),
             speed: None,
             memory: None,
+            local: false,
         }
+    }
+
+    #[test]
+    fn a_local_model_reads_as_free() {
+        let ui = plain_ui();
+        let mut m = meters(1_000, "gemma-4-26b-a4b-it-gguf-q3-k-m");
+        m.local = true;
+        let lines = meter_lines(&ui, &m, None);
+        assert!(lines[1].contains("free · local"), "{lines:?}");
+        assert!(!lines[1].contains("no rate"), "{lines:?}");
     }
 
     #[test]
@@ -866,8 +884,8 @@ mod tests {
         let lines = meter_lines(&ui, &meters(50_000, "gpt-6-1-sol"), None);
         assert!(lines[1].contains("50.0k tokens used"), "totals: {lines:?}");
         assert!(
-            lines[1].contains("no rate for gpt-6-1-sol"),
-            "the missing rate is explained: {lines:?}"
+            !lines[1].contains("no rate"),
+            "an unpriced model adds no price segment: {lines:?}"
         );
         assert!(!lines[1].contains('$'), "no phantom dollars: {lines:?}");
         assert!(

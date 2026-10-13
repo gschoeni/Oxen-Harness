@@ -352,3 +352,21 @@ pub(crate) fn release() {
     };
     drop(old);
 }
+
+/// [`installed_local`] as a yes/no, remembered per id: the pinned meter
+/// asks on every repaint and the answer doesn't change mid-session.
+pub(crate) fn is_local(id: &str) -> bool {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, bool>>> =
+        std::sync::OnceLock::new();
+    let seen = SEEN.get_or_init(Default::default);
+    if let Ok(cache) = seen.lock() {
+        if let Some(&known) = cache.get(id) {
+            return known;
+        }
+    }
+    let local = installed_local(id).is_some();
+    if let Ok(mut cache) = seen.lock() {
+        cache.insert(id.to_string(), local);
+    }
+    local
+}

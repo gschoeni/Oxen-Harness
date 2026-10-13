@@ -161,9 +161,11 @@ impl Price {
         matches!(self, Price::Priced(_))
     }
 
-    /// The trailer's price segment: `$1.23`, `$1.23 + no rate for m`, or
-    /// `no rate for m`. `None` when there is nothing honest to show — no
-    /// catalog yet, or a spend that rounds to nothing.
+    /// The trailer's price segment: `$1.23`, or `$1.23+` when some calls ran
+    /// on a model the catalog has no rate for (a local model, an unlisted
+    /// one), so the figure reads as a floor. `None` when there is nothing to
+    /// show — no catalog yet, nothing priced (all-local is free), or a spend
+    /// that rounds to nothing.
     pub(crate) fn label(&self) -> Option<String> {
         // A figure that formats as all zeros ("$0.0000") would read as free.
         let usd = |usd: f64| {
@@ -173,31 +175,9 @@ impl Price {
         match self {
             Price::Pending => None,
             Price::Priced(cost) => usd(*cost),
-            Price::Partial {
-                usd: cost,
-                unpriced,
-            } => Some(match usd(*cost) {
-                Some(cost) => format!("{cost} + no rate for {}", name_models(unpriced)),
-                None => format!("no rate for {}", name_models(unpriced)),
-            }),
-            Price::Unpriced(models) => Some(format!("no rate for {}", name_models(models))),
+            Price::Partial { usd: cost, .. } => usd(*cost).map(|c| format!("{c}+")),
+            Price::Unpriced(_) => None,
         }
-    }
-}
-
-/// The first few unpriced models by name, the rest counted — an all-time
-/// figure can span a dozen models the catalog never listed.
-fn name_models(models: &[String]) -> String {
-    const NAMED: usize = 2;
-    let named = models
-        .iter()
-        .take(NAMED)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
-    match models.len().saturating_sub(NAMED) {
-        0 => named,
-        more => format!("{named} +{more} more"),
     }
 }
 
@@ -305,22 +285,19 @@ mod tests {
     }
 
     #[test]
-    fn an_unlisted_model_is_named_instead_of_silently_priced_at_zero() {
-        // Every token on a model the catalog doesn't list: the trailer says
-        // so, and never prints a dollar figure that would read as free.
+    fn an_unlisted_model_shows_no_price_rather_than_a_phantom_one() {
+        // Every token on a model the catalog doesn't list (any local model):
+        // no dollar figure at all, never one that would read as a real cost.
         let spend = price_rows_with(&[row("gpt-6-1-sol", 773_600, 2_900)], true, rates);
         assert_eq!(
             spend.price,
             Price::Unpriced(vec!["gpt-6-1-sol".to_string()])
         );
-        assert_eq!(
-            spend.price.label().as_deref(),
-            Some("no rate for gpt-6-1-sol")
-        );
+        assert_eq!(spend.price.label(), None);
     }
 
     #[test]
-    fn a_partly_priced_tree_shows_the_floor_and_names_the_rest() {
+    fn a_partly_priced_tree_shows_the_floor() {
         // A priced lane under an unpriced root (or the reverse): the dollars
         // that are known, plus which model is missing from them. Two rows on
         // the same unlisted model name it once.
@@ -338,28 +315,7 @@ mod tests {
         };
         assert!((usd - 0.11).abs() < 1e-9, "{usd}");
         assert_eq!(unpriced, &["mystery".to_string()]);
-        assert_eq!(
-            spend.price.label().as_deref(),
-            Some("$0.11 + no rate for mystery")
-        );
-    }
-
-    #[test]
-    fn a_long_list_of_unpriced_models_is_named_two_at_a_time() {
-        let spend = price_rows_with(
-            &[
-                row("a", 10, 1),
-                row("b", 10, 1),
-                row("c", 10, 1),
-                row("d", 10, 1),
-            ],
-            true,
-            rates,
-        );
-        assert_eq!(
-            spend.price.label().as_deref(),
-            Some("no rate for a, b +2 more")
-        );
+        assert_eq!(spend.price.label().as_deref(), Some("$0.11+"));
     }
 
     #[test]
