@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // The model's `open_file` tool → `agent://open-file` → ingestOpenFile: the
 // session's Editor/viewer dock shows the file and its tab comes to the front,
 // without any cross-session side effects.

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 import { useStore } from "../../lib/store";

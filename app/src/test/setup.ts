@@ -5,56 +5,60 @@ import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
 import { cleanup } from "@testing-library/react";
 
-// jsdom lacks matchMedia; the store reads it to pick an initial mode.
-if (!window.matchMedia) {
-  window.matchMedia = ((query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    addListener: () => {},
-    removeListener: () => {},
-    dispatchEvent: () => false,
-  })) as unknown as typeof window.matchMedia;
-}
+// Pure-logic `*.test.ts` files run in the node environment (no jsdom to
+// build), so the DOM polyfills apply only where there is a DOM.
+if (typeof window !== "undefined") {
+  // jsdom lacks matchMedia; the store reads it to pick an initial mode.
+  if (!window.matchMedia) {
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+  }
 
-// jsdom lacks scrollIntoView; LocalSetup's HF search scrolls itself into view on focus.
-if (!Element.prototype.scrollIntoView) {
-  Element.prototype.scrollIntoView = () => {};
-}
+  // jsdom lacks scrollIntoView; LocalSetup's HF search scrolls itself into view on focus.
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
 
-// Keep requestAnimationFrame-driven UI deterministic enough for component tests.
-if (!window.requestAnimationFrame) {
-  window.requestAnimationFrame = (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16);
-  window.cancelAnimationFrame = (id: number) => window.clearTimeout(id);
-}
+  // Keep requestAnimationFrame-driven UI deterministic enough for component tests.
+  if (!window.requestAnimationFrame) {
+    window.requestAnimationFrame = (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16);
+    window.cancelAnimationFrame = (id: number) => window.clearTimeout(id);
+  }
 
-// jsdom lacks ResizeObserver; the preview pane observes its placeholder to keep
-// the native webview glued to it.
-if (!window.ResizeObserver) {
-  window.ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  } as unknown as typeof ResizeObserver;
-}
+  // jsdom lacks ResizeObserver; the preview pane observes its placeholder to keep
+  // the native webview glued to it.
+  if (!window.ResizeObserver) {
+    window.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+  }
 
-// jsdom lacks the Tauri bridge; the markdown preview resolves local images
-// through `convertFileSrc`, which delegates to it.
-type TauriInternals = { __TAURI_INTERNALS__?: { convertFileSrc: (p: string, protocol?: string) => string } };
-if (!(window as TauriInternals).__TAURI_INTERNALS__) {
-  (window as TauriInternals).__TAURI_INTERNALS__ = {
-    convertFileSrc: (p: string, protocol = "asset") => `${protocol}://localhost/${p}`,
-  };
-}
+  // jsdom lacks the Tauri bridge; the markdown preview resolves local images
+  // through `convertFileSrc`, which delegates to it.
+  type TauriInternals = { __TAURI_INTERNALS__?: { convertFileSrc: (p: string, protocol?: string) => string } };
+  if (!(window as TauriInternals).__TAURI_INTERNALS__) {
+    (window as TauriInternals).__TAURI_INTERNALS__ = {
+      convertFileSrc: (p: string, protocol = "asset") => `${protocol}://localhost/${p}`,
+    };
+  }
 
-// ThemesModal's "Export" copies to the clipboard.
-if (!navigator.clipboard) {
-  Object.defineProperty(navigator, "clipboard", {
-    value: { writeText: async () => {} },
-    configurable: true,
-  });
+  // ThemesModal's "Export" copies to the clipboard.
+  if (!navigator.clipboard) {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: async () => {} },
+      configurable: true,
+    });
+  }
 }
 
 afterEach(() => cleanup());

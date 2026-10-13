@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterAll, describe, expect, it, vi } from "vitest";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 import { initFeatureFlags } from "../../lib/features";

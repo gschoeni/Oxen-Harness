@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 import { loadPref, seedRng } from "./gameKit";
 import { OxenTrailGame as G } from "./oregonTrail";

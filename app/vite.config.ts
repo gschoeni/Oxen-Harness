@@ -32,7 +32,13 @@ export default defineConfig(async () => ({
 
   // Headless UI tests (Vitest + Testing Library + mocked Tauri IPC).
   test: {
+    // Building a jsdom per file is the suite's biggest cost, so pure-logic
+    // `*.test.ts` files run in plain node; one that needs a DOM (localStorage,
+    // the store, React hooks) opts back in with `// @vitest-environment jsdom`.
     environment: "jsdom",
+    environmentMatchGlobs: [["src/**/*.test.ts", "node"]],
+    // Worker threads start faster than the default forked processes.
+    pool: "threads",
     globals: true,
     setupFiles: "./src/test/setup.ts",
     // Styles are irrelevant headless, but `?raw` reads of a stylesheet are
