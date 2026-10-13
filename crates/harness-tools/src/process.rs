@@ -17,6 +17,9 @@ pub struct CapturedOutput {
 }
 
 /// Run a command while retaining at most `max_chars` from each output stream.
+/// On timeout the command's whole process group is killed, so a `sh -c`
+/// wrapper can't leave its children running (and holding the output pipes
+/// open) after the shell itself dies.
 pub async fn run_bounded(
     command: &mut Command,
     timeout: Duration,
@@ -26,7 +29,11 @@ pub async fn run_bounded(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = command.spawn()?;
+    #[cfg(unix)]
+    let group = child.id().and_then(|pid| i32::try_from(pid).ok());
     let stdout = child
         .stdout
         .take()
@@ -39,6 +46,13 @@ pub async fn run_bounded(
     let (status, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(status) => (status?, false),
         Err(_) => {
+            // Best-effort by design: the group is our own child's, so a
+            // failed signal means it is already gone, and the direct-child
+            // kill below runs either way.
+            #[cfg(unix)]
+            if let Some(group) = group {
+                let _ = crate::tasks::kill_process_group(group);
+            }
             let _ = child.start_kill();
             let status = child.wait().await?;
             (status, true)

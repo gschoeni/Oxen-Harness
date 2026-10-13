@@ -483,11 +483,19 @@ mod tests {
     async fn times_out_long_commands() {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path()).unwrap();
+        let started = std::time::Instant::now();
         let out = ShellTool::new(ws)
-            .invoke(serde_json::json!({"command": "sleep 5", "timeout_ms": 100}))
+            .invoke(serde_json::json!({"command": "sleep 30", "timeout_ms": 100}))
             .await
             .unwrap();
         assert!(out.contains("exit_code: timeout"));
+        // The whole tree dies with the shell: a surviving `sleep` would hold
+        // the output pipes open until the drain gives up seconds later.
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "timed-out command lingered for {:?}",
+            started.elapsed()
+        );
     }
 
     #[tokio::test]

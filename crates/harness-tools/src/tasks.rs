@@ -647,7 +647,7 @@ impl BackgroundTasks {
 /// Returns false when the group has already exited. Never signal group zero
 /// (our own process group) or let a negative identifier broaden the target.
 #[cfg(unix)]
-fn kill_process_group(pid: i32) -> std::io::Result<bool> {
+pub(crate) fn kill_process_group(pid: i32) -> std::io::Result<bool> {
     if pid <= 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
