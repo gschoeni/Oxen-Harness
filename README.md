@@ -206,11 +206,9 @@ native 1-bit and ternary formats, plus Meta's
 [Muse Glimmer 30B](https://huggingface.co/collections/meta-models/muse-glimmer)
 (reasoning, native tool calling, 128K context) at `Q4_K_M` and `Q4_K_XL`, and
 the October 2026 agent models: gpt-oss 20B, Gemma 4 26B A4B, Qwen3.8 27B,
-Qwen3.6 35B A3B, and GLM-4.7 Flash. Each of the last four ships twice: a ~17 GB
-`Q4` build for a 32 GB Mac with little else running, and a ~12–13 GB `Q3`/`IQ3`
-build (`-q3` / `-iq3` ids) for 24 GB, or 32–36 GB alongside a dev stack.
-`gemma-4-26b-a4b-q3` is the best all-round pick in that tier. Your own
-additions live in `~/.oxen-harness/local-models.json`:
+Qwen3.6 35B A3B, and GLM-4.7 Flash (see
+[Picking a local model for your hardware](#picking-a-local-model-for-your-hardware)).
+Your own additions live in `~/.oxen-harness/local-models.json`:
 
 ```bash
 oxen-harness models list            # catalog + everything downloaded, sizes, disk used
@@ -258,11 +256,56 @@ Anything already downloaded — a catalog model at any quant, a model installed
 from the desktop app's Hugging Face search, or a GGUF you dropped into the
 models directory yourself — starts **fully offline**: `--local <id>` resolves
 weights on disk first and only reaches for the network when there's nothing to
-serve. Weights live in `~/.oxen-harness/models/`. Match the model to your
-hardware (roughly: 0.6B–4B on a CPU/small GPU, 8B–14B on an 8–12 GB machine;
-the 1-bit Bonsai 27B also fits there despite its parameter count; conventional
-32B or 30B-A3B Q4 builds want a 24 GB card). The desktop app exposes the same catalog under
-**🐂 Local models**.
+serve. Weights live in `~/.oxen-harness/models/`. The desktop app exposes the
+same catalog under **🐂 Local models**.
+
+### Picking a local model for your hardware
+
+What matters is how much memory is free *while you work*, not the total on the
+box. On a Mac the model shares unified memory with everything else, and the
+weights take most of the model's footprint. The context window (KV cache) adds
+only ~0.5–2 GB at the 16–32K windows the harness plans. A good rule is to keep
+the download size at or below **total RAM minus what your apps use, minus
+~6 GB**. Past that, macOS starts swapping your apps out to make room.
+
+| Your machine | Pick | Download | Why |
+|---|---|---|---|
+| 8–16 GB | `qwen3-4b` / `qwen3-8b`, or `bonsai-27b` | 2.5–5 GB / ~3.8 GB | Bonsai's 1-bit 27B does reasoning + tool calls in a small footprint |
+| 24 GB, or 32–36 GB with a dev stack open | **`gemma-4-26b-a4b-q3`** | ~12.7 GB | Fastest tested, passed every agent run |
+| ″ | `qwen3.6-35b-a3b-iq3` | ~13.2 GB | Close second: fast and consistent |
+| ″ | `glm-4.7-flash-iq3` | ~12.9 GB | Reliable, a bit slower |
+| ″ | `gpt-oss-20b` | ~12.1 GB | Fast, but its file edits are clumsy |
+| 32 GB+ with little else running (e.g. on a plane) | `gemma-4-26b-a4b`, `qwen3.6-35b-a3b`, `glm-4.7-flash` | ~16–18 GB | Q4 builds: same models at higher quality |
+| ″ | `qwen3.8-27b` | ~16.5 GB | Strongest 27B on agentic-coding benchmarks, but dense, so slow |
+
+**Measured results.** Each of the 12–13 GB builds above was run end to end on a
+36 GB M4 Max with Docker, a terminal, browsers, and a debugger open. Each did
+three headless bug-fix turns (`oxen-harness -p … --local <id>`: find the bug,
+edit the file, run the tests) plus `llama-bench`:
+
+| Model | Agent runs passed | Time per run | Generation | Prompt |
+|---|---|---|---|---|
+| `gemma-4-26b-a4b-q3` | 3/3 | 35–40 s | 45 tok/s | 960 tok/s |
+| `qwen3.6-35b-a3b-iq3` | 3/3 | 39–42 s | 34 tok/s | 585 tok/s |
+| `glm-4.7-flash-iq3` | 3/3 | 66–116 s | 29 tok/s | 524 tok/s |
+| `gpt-oss-20b` | 2/3 | 44–51 s | 37 tok/s | 906 tok/s |
+| `qwen3.8-27b-iq3` | 5/5 | 149–230 s | 8 tok/s | 89 tok/s |
+
+On that machine the ~16 GB Q4 builds did not fit beside the open apps. Loading
+`glm-4.7-flash` pushed ~7 GB of them into swap within seconds. So the Q4 rows
+in the picker table assume the model has the machine mostly to itself.
+
+**Tips:**
+
+- **Prefer mixture-of-experts (MoE) models on a laptop.** Gemma 4 A4B,
+  Qwen3.6 A3B, GLM-4.7 Flash, and gpt-oss have only 3–4B parameters active per
+  token. That makes them 4–5× faster than a dense 27B like Qwen3.8 at the same
+  file size, and kinder to the battery.
+- **Going offline?** Run `oxen-harness models pull <id>` while you still have
+  good Wi-Fi: the downloads are 12–18 GB and an interrupted one restarts from
+  zero. Anything already downloaded starts with no network at all.
+- **Seeing heavy swapping or a sluggish machine?** Drop to the `-q3` / `-iq3`
+  build of the same model before switching to a smaller model.
 
 ## Theming — make it yours
 
