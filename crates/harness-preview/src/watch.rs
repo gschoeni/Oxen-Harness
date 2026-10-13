@@ -125,6 +125,46 @@ enum Backend {
     Poll(#[allow(dead_code)] notify::PollWatcher),
 }
 
+/// Whether a watcher event is an edit worth reloading for.
+fn triggers_reload(root: &Path, event: &notify::Event) -> bool {
+    use notify::event::{EventKind, ModifyKind};
+    let meaningful = match event.kind {
+        EventKind::Create(_) | EventKind::Remove(_) => true,
+        // A metadata change on a DIRECTORY is noise — and worse: writing
+        // inside an IGNORED tree (dist/, node_modules/) bumps its parent
+        // directory's mtime, which the polling backend reports as a WriteTime
+        // change on a path that passes the relevance filter — the exact
+        // reload loop the ignore list exists to prevent. On a FILE the same
+        // kind is how the polling backend reports an ordinary edit, so it
+        // must count.
+        EventKind::Modify(ModifyKind::Metadata(_)) => event.paths.iter().any(|p| p.is_file()),
+        EventKind::Modify(_) => true,
+        _ => false,
+    };
+    // The canary lives under `.oxen-harness/`, which `relevant` already
+    // ignores — proving liveness never triggers a reload.
+    meaningful && event.paths.iter().any(|p| relevant(root, p))
+}
+
+/// After any change, absorb further ones until `quiet` passes with none, then
+/// call `on_change` once. Ends when every sender (the watcher) drops.
+async fn debounce(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+    quiet: Duration,
+    on_change: impl Fn(),
+) {
+    while rx.recv().await.is_some() {
+        loop {
+            match tokio::time::timeout(quiet, rx.recv()).await {
+                Ok(Some(())) => continue, // still changing — keep absorbing
+                Ok(None) => return,       // watcher dropped mid-burst
+                Err(_) => break,          // quiet period reached
+            }
+        }
+        on_change();
+    }
+}
+
 /// Watch `root` recursively and call `on_change` (debounced) for relevant
 /// changes.
 ///
@@ -141,7 +181,7 @@ pub(crate) fn spawn(
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<()>();
     // macOS FSEvents reports canonical paths (`/private/tmp/…`), so a
     // symlinked root would fail to strip — and then an absolute path with a
     // component named `build`/`dist` would filter out the whole workspace.
@@ -153,30 +193,9 @@ pub(crate) fn spawn(
     let handler = {
         let heard = heard.clone();
         move |event: notify::Result<notify::Event>| {
-            use notify::event::{EventKind, ModifyKind};
             let Ok(event) = event else { return };
             heard.store(true, Ordering::SeqCst);
-            let meaningful = match event.kind {
-                EventKind::Create(_) | EventKind::Remove(_) => true,
-                // A metadata change on a DIRECTORY is noise — and worse:
-                // writing inside an IGNORED tree (dist/, node_modules/) bumps
-                // its parent directory's mtime, which the polling backend
-                // reports as a WriteTime change on a path that passes the
-                // relevance filter — the exact reload loop the ignore list
-                // exists to prevent. On a FILE the same kind is how the
-                // polling backend reports an ordinary edit, so it must count.
-                EventKind::Modify(ModifyKind::Metadata(_)) => {
-                    event.paths.iter().any(|p| p.is_file())
-                }
-                EventKind::Modify(_) => true,
-                _ => false,
-            };
-            if !meaningful {
-                return;
-            }
-            // The canary lives under `.oxen-harness/`, which `relevant`
-            // already ignores — proving liveness never triggers a reload.
-            if event.paths.iter().any(|p| relevant(&filter_root, p)) {
+            if triggers_reload(&filter_root, &event) {
                 let _ = tx.send(());
             }
         }
@@ -187,20 +206,7 @@ pub(crate) fn spawn(
     watcher.watch(root, RecursiveMode::Recursive)?;
     let backend = Arc::new(Mutex::new(Backend::Native(watcher)));
 
-    // Debounce: after any change, absorb further ones until DEBOUNCE of quiet,
-    // then reload once. The task ends when every sender (the watcher) drops.
-    tokio::spawn(async move {
-        while rx.recv().await.is_some() {
-            loop {
-                match tokio::time::timeout(DEBOUNCE, rx.recv()).await {
-                    Ok(Some(())) => continue, // still changing — keep absorbing
-                    Ok(None) => return,       // watcher dropped mid-burst
-                    Err(_) => break,          // quiet period reached
-                }
-            }
-            on_change();
-        }
-    });
+    tokio::spawn(debounce(rx, DEBOUNCE, on_change));
 
     // The canary: poke the watched tree until the backend speaks, and swap in
     // the polling fallback if it never does. Holds only a weak handle — if
@@ -292,14 +298,89 @@ mod tests {
         ));
     }
 
+    fn event(kind: notify::EventKind, path: &Path) -> notify::Event {
+        notify::Event::new(kind).add_path(path.to_path_buf())
+    }
+
+    #[test]
+    fn only_relevant_edits_trigger_a_reload() {
+        use notify::event::{AccessKind, CreateKind, EventKind, MetadataKind, ModifyKind};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file = root.join("index.html");
+        std::fs::write(&file, "<p>hi</p>").unwrap();
+        let metadata = EventKind::Modify(ModifyKind::Metadata(MetadataKind::WriteTime));
+
+        assert!(triggers_reload(
+            root,
+            &event(EventKind::Create(CreateKind::File), &file)
+        ));
+        // The polling backend reports a file edit as a metadata change…
+        assert!(triggers_reload(root, &event(metadata, &file)));
+        // …but on a directory it's the mtime bump from a write inside it,
+        // which would loop on ignored trees.
+        assert!(!triggers_reload(root, &event(metadata, root)));
+        assert!(!triggers_reload(
+            root,
+            &event(EventKind::Access(AccessKind::Any), &file)
+        ));
+        // Ignored trees, including the canary's `.oxen-harness/`, never reload.
+        let canary = root.join(".oxen-harness/.watch-canary");
+        assert!(!triggers_reload(
+            root,
+            &event(EventKind::Create(CreateKind::File), &canary)
+        ));
+        let dep = root.join("node_modules/dep.js");
+        assert!(!triggers_reload(
+            root,
+            &event(EventKind::Create(CreateKind::File), &dep)
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn one_edit_batch_becomes_one_reload() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let task = tokio::spawn(debounce(rx, DEBOUNCE, move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        // A burst of writes (an agent edit batch), each inside the quiet
+        // window of the last, is one reload once the burst goes quiet.
+        for _ in 0..5 {
+            tx.send(()).unwrap();
+            tokio::time::sleep(DEBOUNCE / 2).await;
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "reloaded mid-burst");
+        tokio::time::sleep(DEBOUNCE).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        // A later, separate edit is its own reload.
+        tx.send(()).unwrap();
+        tokio::time::sleep(DEBOUNCE * 2).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+        // Dropping the watcher mid-burst ends the task without a reload.
+        tx.send(()).unwrap();
+        drop(tx);
+        task.await.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
     /// The long waits here are not superstition: the watch may be riding the
     /// polling fallback (macOS FSEvents delivers nothing on some releases —
     /// the reason the fallback exists), so every settle must outlast
     /// POLL_INTERVAL + DEBOUNCE, not just the debounce.
     const SETTLE: Duration = Duration::from_millis(1_800);
 
+    /// End to end against the real platform watcher (and, where FSEvents is
+    /// silent, the polling fallback). Takes seconds of wall-clock settling, so
+    /// it stays out of the default run; the logic it exercises is covered by
+    /// the fast tests above.
     #[tokio::test]
-    async fn one_edit_batch_becomes_one_reload() {
+    #[ignore = "real filesystem watcher, seconds of settling; run with --ignored"]
+    async fn a_real_workspace_edit_batch_becomes_one_reload() {
         let dir = tempfile::tempdir().unwrap();
         let hits = Arc::new(AtomicUsize::new(0));
         let counter = hits.clone();

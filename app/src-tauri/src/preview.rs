@@ -74,6 +74,10 @@ impl PreviewSink for TauriPreviewSink {
         );
     }
 
+    fn wants_reloads(&self) -> bool {
+        true
+    }
+
     fn reload_needed(&self) {
         reload(&self.app, &self.session);
     }

@@ -16,6 +16,13 @@ use crate::{sniff, PreviewError};
 pub const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(90);
 /// How often the readiness loop retries the port / drains output.
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
+/// How often the watchdog checks whether the server died on its own. Unit
+/// tests crash servers on purpose and shouldn't wait a second to notice.
+const WATCHDOG_INTERVAL: Duration = if cfg!(test) {
+    Duration::from_millis(50)
+} else {
+    Duration::from_secs(1)
+};
 /// Retained log lines (ring buffer) and per-line cap, so a chatty server
 /// can't grow memory or blow up the model's context via `dev_server_logs`.
 const MAX_LOG_LINES: usize = 400;
@@ -58,9 +65,19 @@ pub trait PreviewSink: Send + Sync {
     fn status(&self, status: &PreviewStatus);
 
     /// Project files changed under a server with no hot reload of its own —
-    /// the host should refresh its preview surface. Default: nothing (the CLI
-    /// has no embedded view; the user's browser owns refresh).
+    /// the host should refresh its preview surface. Only called when
+    /// [`PreviewSink::wants_reloads`] says so. Default: nothing (the CLI has
+    /// no embedded view; the user's browser owns refresh).
     fn reload_needed(&self) {}
+
+    /// Whether this host acts on [`PreviewSink::reload_needed`]. Reload
+    /// detection costs a recursive workspace watch per server (and on macOS
+    /// FSEvents setup is serialized system-wide), so hosts that would ignore
+    /// the signal opt out of paying for it. A sink that implements
+    /// `reload_needed` must also return `true` here.
+    fn wants_reloads(&self) -> bool {
+        false
+    }
 }
 
 /// What to run and where it should listen.
@@ -273,8 +290,11 @@ impl DevServer {
                     spawn_watchdog(Arc::downgrade(&server));
                     // HMR frameworks refresh the browser themselves; anything
                     // else gets a workspace watch that reloads the preview
-                    // after each edit batch.
-                    if !crate::watch::hmr_capable(&server.root, &server.spec.command) {
+                    // after each edit batch — when the host has a preview to
+                    // reload.
+                    if server.current_sink().wants_reloads()
+                        && !crate::watch::hmr_capable(&server.root, &server.spec.command)
+                    {
                         // Resolve the sink at fire time (not capture time) so
                         // reloads reach whichever session owns the server now.
                         let weak = Arc::downgrade(&server);
@@ -437,7 +457,7 @@ impl Drop for DevServer {
 fn spawn_watchdog(server: Weak<DevServer>) {
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(WATCHDOG_INTERVAL).await;
             let Some(server) = server.upgrade() else {
                 return;
             };
@@ -786,7 +806,7 @@ pub(crate) mod tests {
             spec("sleep 60"),
             dir.path(),
             sink.clone(),
-            Duration::from_millis(700),
+            Duration::from_millis(250),
         )
         .await
         .unwrap_err();
@@ -801,7 +821,7 @@ pub(crate) mod tests {
         // Serve, then die shortly after readiness.
         let server = DevServer::start(
             spec(&format!(
-                "{py} -m http.server \"$PORT\" --bind 127.0.0.1 & pid=$!; sleep 1; kill $pid; wait"
+                "{py} -m http.server \"$PORT\" --bind 127.0.0.1 & pid=$!; sleep 0.5; kill $pid; wait"
             )),
             dir.path(),
             sink.clone(),
