@@ -289,7 +289,7 @@ edit the file, run the tests) plus `llama-bench`:
 | `qwen3.6-35b-a3b-iq3` | 3/3 | 39–42 s | 34 tok/s | 585 tok/s |
 | `glm-4.7-flash-iq3` | 3/3 | 66–116 s | 29 tok/s | 524 tok/s |
 | `gpt-oss-20b` | 2/3 | 44–51 s | 37 tok/s | 906 tok/s |
-| `qwen3.8-27b-iq3` | 5/5 | 149–230 s | 8 tok/s | 89 tok/s |
+| `qwen3.8-27b-iq3` | 3/3 | 149–230 s | 8 tok/s | 89 tok/s |
 
 On that machine the ~16 GB Q4 builds did not fit beside the open apps. Loading
 `glm-4.7-flash` pushed ~7 GB of them into swap within seconds. So the Q4 rows
