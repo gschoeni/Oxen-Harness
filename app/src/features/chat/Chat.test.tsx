@@ -7,6 +7,7 @@ vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 import { Chat } from "./Chat";
 import { TitleBar } from "../../TitleBar";
 import { Workbench } from "../workbench/Workbench";
+import { toggleStudyView } from "./studyPanel";
 import { useStore } from "../../lib/store";
 import { startTurn, transcriptToItems } from "./thread";
 import * as ipc from "../../test/ipcMock";
@@ -45,9 +46,24 @@ describe("Chat", () => {
       </>,
     );
     const panels = screen.getByRole("group", { name: "Panels" });
-    expect(panels).toHaveTextContent("FilesAgentWork");
+    // Icons only: the names are labels, not text.
+    expect(panels).toHaveTextContent("");
     expect(screen.getByRole("button", { name: "Agent" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("button", { name: "Project files and settings" })).toBeNull();
+    // Running sits left of the switch; the game and Settings left the bar.
+    const running = screen.getByRole("button", { name: /running — go Home/ });
+    expect(running.compareDocumentPosition(panels) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Open Settings|Toggle the study game/ })).toBeNull();
+  });
+
+  it("opens and closes the chat's inspector from the switch", async () => {
+    render(<TitleBar />);
+    const inspector = screen.getByRole("button", { name: "Inspector" });
+    await userEvent.click(inspector);
+    expect(useStore.getState().inspector?.sessionId).toBe(useStore.getState().session?.session_id);
+    expect(inspector).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(inspector);
+    expect(useStore.getState().inspector).toBeNull();
   });
 
   it("lists desktop slash commands on slash and omits exit", async () => {
@@ -180,30 +196,27 @@ describe("Chat", () => {
     expect(useStore.getState().heroGame).toBe("oregon");
   });
 
-  it("puts the game in the work panel during a run, from the title bar", async () => {
+  it("puts the game in the work panel during a run, from ⌘J", async () => {
     ipc.runTurn.mockImplementationOnce(() => new Promise(() => {})); // stays in flight
     render(
       <>
-        <TitleBar />
         <Chat />
         <Workbench />
       </>,
     );
     await userEvent.type(screen.getByPlaceholderText(/ask the agent/i), "go");
     await userEvent.keyboard("{Enter}");
-    // With a turn in flight the title bar offers the game.
-    const toggle = screen.getByLabelText(/Toggle the study game/i);
-    await userEvent.click(toggle);
+    act(() => toggleStudyView());
     // It is a view of the right-hand panel, not something floating over the chat…
     const panel = screen.getByRole("region", { name: "Current work" });
     expect(within(panel).getAllByLabelText(/Trail of Understanding/).length).toBeGreaterThan(0);
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(useStore.getState().rightTab.s1).toBe("study");
     // …already started; MENU is the way back to the other cabinets.
     await userEvent.click(within(panel).getByRole("button", { name: /back to arcade menu/i }));
     expect(within(panel).getByRole("tab", { name: "Trail" })).toBeInTheDocument();
-    // The same button folds the panel away.
-    await userEvent.click(toggle);
+    // The same shortcut folds the panel away.
+    act(() => toggleStudyView());
     expect(useStore.getState().dockCollapsed.right).toBe(true);
   });
 

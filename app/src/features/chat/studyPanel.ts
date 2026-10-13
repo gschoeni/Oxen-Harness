@@ -1,6 +1,6 @@
 // Getting to the game while an agent runs. The cabinet lives in the right-hand
-// work panel as the "study" view; the titlebar button, the composer's button,
-// the shortcut, and the nudge all go through here so they can't disagree
+// work panel as the "study" view; the composer's button, the shortcut, and
+// the nudge all go through here so they can't disagree
 // about what opening or hiding it means.
 
 import { STUDY_VIEW, useStore } from "../../lib/store";

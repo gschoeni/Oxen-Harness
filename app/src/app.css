@@ -84,25 +84,24 @@
   .titlebar-running-label { display: none; }
 }
 
-/* Files | Agent | Work: one segmented switch, each segment showing or hiding
-   its panel. Lit segments are the panels on screen. */
+/* Files | Agent | Work | </>: one icon-only segmented switch, each segment
+   showing or hiding its panel (or the inspector). Lit segments are on screen. */
 .panel-switch {
   display: inline-flex;
   align-items: center;
   height: var(--control-h-sm);
   padding: var(--space-half);
   gap: var(--space-half);
-  margin-right: var(--space-1);
   background: var(--surface-2);
   border: 1px solid var(--separator);
   border-radius: var(--frame-radius);
 }
 .panel-switch-seg {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
+  display: inline-grid;
+  place-items: center;
   height: 100%;
-  padding: 0 var(--space-2);
+  aspect-ratio: 1;
+  padding: 0;
   background: transparent;
   border: 1px solid transparent;
   border-radius: calc(var(--frame-radius) - var(--space-half));
@@ -122,39 +121,9 @@
 .panel-switch-seg:disabled {
   cursor: default;
 }
-@media (max-width: 760px) {
-  .panel-switch-seg span { display: none; }
-}
-
-/* Utility buttons in the title bar (arcade, inspector, settings). */
-.dev-view-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--control-h-sm);
-  height: var(--control-h-sm);
-  background: transparent;
-  color: var(--text-tertiary);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease);
-}
-.dev-view-btn > svg {
-  width: var(--nav-icon);
-  height: var(--nav-icon);
-}
-.dev-view-btn:hover:not(:disabled) {
-  background: var(--surface-2);
-  color: var(--text);
-  border-color: var(--separator);
-}
-.dev-view-btn:disabled {
+.panel-switch-seg:disabled:not(.on) {
   opacity: 0.35;
-  cursor: default;
 }
-
 /* The chat's terminal squeeze: a bar with one button that brings the agent
    back (see App.tsx `ChatRail`). */
 .chat-collapsed {

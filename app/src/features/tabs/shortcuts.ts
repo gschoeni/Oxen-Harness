@@ -1,7 +1,8 @@
 // The strip's keyboard, installed once at the app root (like the dock
 // shortcuts): ⌘T new chat · ⌘W close · ⌃Tab / ⌃⇧Tab and ⌘⌥→ / ⌘⌥← cycle ·
-// ⌘1–8 jump, ⌘9 last · ⌘K the history · ⌘J the study game. The chat ones stand down while Home, Settings,
-// or the history covers the chat; ⌘K works anywhere but Settings.
+// ⌘1–8 jump, ⌘9 last · ⌘K the history · ⌘J the study game · ⌘, Settings.
+// The chat ones stand down while Home, Settings, or the history covers the
+// chat; ⌘K works anywhere but Settings, ⌘, anywhere.
 
 import { useEffect } from "react";
 import { useStore } from "../../lib/store";
@@ -23,6 +24,11 @@ export function useChatTabShortcuts() {
           : mod && e.altKey && !e.shiftKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")
             ? (e.key === "ArrowRight" ? 1 : -1)
             : 0;
+      if (plainMod && e.key === ",") {
+        e.preventDefault();
+        if (!s.settingsOpen) s.openSettings();
+        return;
+      }
       if (plainMod && key === "k" && !s.settingsOpen) {
         e.preventDefault();
         s.setHistoryOpen(!s.historyOpen);

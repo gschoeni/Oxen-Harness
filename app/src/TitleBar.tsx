@@ -1,23 +1,17 @@
 // The application title bar: one persistent strip across the very top of the
 // window, above every column and overlay. It is the window's drag handle and
 // double-clicks to zoom — exactly like a native title bar — so no pane below
-// ever has to fake its own. The active project names the window; the chat's
-// panel switch (Files | Agent | Work) and utility buttons (arcade, inspector,
-// settings) sit at its right edge, clear of the macOS traffic lights.
+// ever has to fake its own. The active project names the window; the running
+// count and the panel switch (Files | Agent | Work | </>) sit at its right
+// edge, clear of the macOS traffic lights. Settings is ⌘, (or Home); the
+// study game is ⌘J (or the composer's button while a turn runs).
 
-import { STUDY_SHORTCUT, toggleStudyView, useStudyViewShowing } from "./features/chat/studyPanel";
-import { Activity, Code2, Gamepad2, Settings } from "lucide-react";
+import { Activity } from "lucide-react";
 import { useActiveProject, useStore } from "./lib/store";
 import { PanelSwitch } from "./features/docks/PanelSwitch";
 
 export function TitleBar() {
-  const sessionId = useStore((s) => s.session?.session_id);
-  const hasThread = useStore(
-    (s) => !!s.session && (s.threads[s.session.session_id]?.length ?? 0) > 0,
-  );
   const project = useActiveProject();
-  const studyShowing = useStudyViewShowing();
-  const openInspector = useStore((s) => s.openInspector);
   const runningCount = useStore((s) => {
     const sessions = new Set(s.threadsSnapshot?.running ?? []);
     for (const [id, status] of Object.entries(s.runStatus)) {
@@ -46,7 +40,6 @@ export function TitleBar() {
   });
   const setHomeOpen = useStore((s) => s.setHomeOpen);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
-  const openSettings = useStore((s) => s.openSettings);
 
   function openHome() {
     setSettingsOpen(false);
@@ -58,7 +51,6 @@ export function TitleBar() {
       {/* pointer-events: none, so the name never blocks the drag region */}
       <span className="app-titlebar-name">{project?.name ?? "oxen-harness"}</span>
       <div className="app-titlebar-actions">
-        <PanelSwitch />
         <button
           className={`titlebar-running ${runningCount > 0 ? "active" : ""}`}
           onClick={openHome}
@@ -69,34 +61,7 @@ export function TitleBar() {
           <span>{runningCount}</span>
           <span className="titlebar-running-label">running</span>
         </button>
-        {hasThread && (
-          <button
-            className="dev-view-btn"
-            onClick={toggleStudyView}
-            aria-pressed={studyShowing}
-            title={`Study or play while your agent works (${STUDY_SHORTCUT})`}
-            aria-label="Toggle the study game"
-          >
-            <Gamepad2 size={15} />
-          </button>
-        )}
-        <button
-          className="dev-view-btn"
-          onClick={() => sessionId && openInspector(sessionId)}
-          disabled={!sessionId}
-          title="Inspect this chat — the raw LLM inputs and outputs for this session"
-          aria-label="Inspect this chat's transcript"
-        >
-          <Code2 size={15} />
-        </button>
-        <button
-          className="dev-view-btn"
-          onClick={() => openSettings()}
-          title="Settings"
-          aria-label="Open Settings"
-        >
-          <Settings size={15} />
-        </button>
+        <PanelSwitch />
       </div>
     </header>
   );

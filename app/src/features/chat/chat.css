@@ -9,9 +9,6 @@
   position: relative;
 }
 
-/* The chat's utility buttons (project home / arcade / inspector) live in the
-   app title bar now — see app.css `.dev-view-btn`. */
-
 /* Positioning context for the floating jump-to-bottom button so it sits just
    above the composer (not over it) and tracks the messages region's height. */
 .messages-wrap {
