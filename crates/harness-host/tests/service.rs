@@ -1538,3 +1538,38 @@ async fn a_service_tier_is_per_chat_validated_restored_and_cleared_by_a_model_sw
     let info = service.set_session_service_tier(&chat, None).await.unwrap();
     assert_eq!(info.service_tier, None);
 }
+
+#[tokio::test]
+async fn cancelling_a_generation_no_process_is_running_settles_it() {
+    let server = mockito::Server::new_async().await;
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink, workspace.path());
+
+    // A row a process that has since exited left mid-job: in the manifest,
+    // running nowhere.
+    let orphan: harness_media::MediaItem = serde_json::from_value(serde_json::json!({
+        "id": "local-ghost",
+        "session": "s1",
+        "kind": "image",
+        "model": "m",
+        "prompt": "an ox",
+        "status": "queued",
+        "created_at": harness_media::library::now_unix(),
+    }))
+    .unwrap();
+    harness_media::MediaLibrary::new(workspace.path(), "generations")
+        .record(orphan)
+        .unwrap();
+    let status = |service: &SessionService| {
+        service
+            .list_media(workspace.path())
+            .into_iter()
+            .find(|i| i.id == "local-ghost")
+            .map(|i| i.status)
+    };
+    assert_eq!(status(&service).as_deref(), Some("queued"));
+
+    service.cancel_media("local-ghost").await.unwrap();
+    assert_eq!(status(&service).as_deref(), Some("cancelled"));
+}

@@ -61,6 +61,17 @@ impl MediaStatus {
     }
 }
 
+/// A queued or processing row this old that no process here is running was
+/// left behind by one that exited mid-job (crash, quit, dev reload). Nothing
+/// will ever settle it, so it reads as timed out instead of rendering
+/// forever. Generous: well past the queue's own deadlines, and long enough
+/// that another live process (the CLI beside the desktop app) still owns
+/// anything younger.
+const ABANDONED_AFTER_SECS: i64 = 2 * 60 * 60;
+
+/// The error an abandoned row reads with.
+pub const ABANDONED: &str = "abandoned: the process running it exited before it finished";
+
 /// One generation: a manifest row and a feed item.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MediaItem {
@@ -419,8 +430,21 @@ impl MediaLibrary {
                 }
             }
         }
-        for item in self.live.lock().expect("media live poisoned").iter() {
+        let live = self.live.lock().expect("media live poisoned").clone();
+        for item in &live {
             fold(item.clone());
+        }
+        let now = now_unix();
+        for item in folded.iter_mut() {
+            let running_here = live.iter().any(|l| l.id == item.id);
+            if !item.status.is_terminal()
+                && !running_here
+                && now - item.created_at > ABANDONED_AFTER_SECS
+            {
+                item.status = MediaStatus::TimedOut;
+                item.error = Some(ABANDONED.into());
+                item.progress = None;
+            }
         }
         folded.sort_by(|a, b| {
             b.created_at
@@ -634,6 +658,31 @@ mod tests {
         let again = MediaLibrary::new(dir.path(), "generations");
         assert_eq!(again.items().len(), 2);
         assert_eq!(lib.in_flight(Some("s1")).len(), 1);
+    }
+
+    #[test]
+    fn an_old_row_no_process_is_running_reads_abandoned() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = MediaLibrary::new(dir.path(), "generations");
+        let old = now_unix() - ABANDONED_AFTER_SECS - 60;
+        lib.record(item("ghost", MediaStatus::Queued, old)).unwrap();
+        lib.record(item("fresh", MediaStatus::Processing, now_unix()))
+            .unwrap();
+
+        // Another process (the one that wrote the manifest) is gone.
+        let reader = MediaLibrary::new(dir.path(), "generations");
+        let items = reader.items();
+        let ghost = items.iter().find(|i| i.id == "ghost").unwrap();
+        assert_eq!(ghost.status, MediaStatus::TimedOut);
+        assert_eq!(ghost.error.as_deref(), Some(ABANDONED));
+        // Young rows may belong to a process still running them.
+        let fresh = items.iter().find(|i| i.id == "fresh").unwrap();
+        assert_eq!(fresh.status, MediaStatus::Processing);
+
+        // The process running a job never sees its own job as abandoned.
+        let mine = lib.items();
+        let ghost = mine.iter().find(|i| i.id == "ghost").unwrap();
+        assert_eq!(ghost.status, MediaStatus::Queued);
     }
 
     #[test]

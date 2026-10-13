@@ -1163,20 +1163,11 @@ impl SessionService {
     }
 
     /// Cancel an in-flight generation from the client (no agent turn
-    /// involved) and mark it cancelled in whichever library holds it.
+    /// involved) and mark it cancelled in whichever library holds it. A row
+    /// no process here is running (one left behind by a process that exited)
+    /// settles even when the provider no longer knows the job, so its cancel
+    /// is never a dead click.
     pub async fn cancel_media(&self, id: &str) -> Result<(), String> {
-        if harness_media::local::is_local_job_id(id) {
-            // A running local job stops through the provider; a queued one
-            // is skipped once its row reads cancelled (below).
-            if let Some(local) = harness_media::local::installed() {
-                local.cancel(id).await;
-            }
-        } else {
-            let api = harness_runtime::media::api()
-                .ok_or_else(|| harness_media::MEDIA_NO_KEY.to_string())?;
-            let queue = harness_media::QueueClient::new(&api.base_url, api.api_key);
-            queue.cancel(id).await.map_err(|e| e.to_string())?;
-        }
         let libraries: Vec<Arc<harness_media::MediaLibrary>> = self
             .media_libraries
             .lock()
@@ -1184,8 +1175,37 @@ impl SessionService {
             .values()
             .cloned()
             .collect();
+        let running_here = libraries
+            .iter()
+            .any(|l| l.in_flight(None).iter().any(|i| i.id == id));
+        let remote = if harness_media::local::is_local_job_id(id) {
+            // A running local job stops through the provider; a queued one
+            // is skipped once its row reads cancelled (below).
+            if let Some(local) = harness_media::local::installed() {
+                local.cancel(id).await;
+            }
+            Ok(())
+        } else {
+            match harness_runtime::media::api() {
+                Some(api) => harness_media::QueueClient::new(&api.base_url, api.api_key)
+                    .cancel(id)
+                    .await
+                    .map_err(|e| e.to_string()),
+                None => Err(harness_media::MEDIA_NO_KEY.to_string()),
+            }
+        };
+        if let Err(e) = remote {
+            if running_here {
+                return Err(e);
+            }
+            tracing::info!("settling orphaned generation {id} as cancelled (provider: {e})");
+        }
         for library in libraries {
-            if let Some(mut item) = library.in_flight(None).into_iter().find(|i| i.id == id) {
+            let held = library
+                .items()
+                .into_iter()
+                .find(|i| i.id == id && !i.status.is_terminal());
+            if let Some(mut item) = held {
                 item.status = harness_media::MediaStatus::Cancelled;
                 item.completed_at = Some(harness_media::library::now_unix());
                 item.progress = None;
