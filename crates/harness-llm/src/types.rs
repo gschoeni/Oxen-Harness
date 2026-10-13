@@ -759,6 +759,12 @@ pub struct Delta {
     pub role: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
+    /// A thinking model's reasoning, as llama-server streams it.
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
+    /// The same, as OpenRouter-style endpoints name it.
+    #[serde(default)]
+    pub reasoning: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<serde_json::Value>>,
 }

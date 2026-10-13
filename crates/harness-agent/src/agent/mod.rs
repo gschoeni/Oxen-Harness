@@ -98,6 +98,11 @@ pub struct Agent {
     attachments: Option<AttachmentStore>,
     /// Cumulative estimated tokens sent + generated this run (see [`budget`]).
     tokens_used: usize,
+    /// The last model call's final speed reading, for idle readouts.
+    last_throughput: Option<crate::throughput::Throughput>,
+    /// `(model, characters per output token)` from the last exact count,
+    /// so live speed estimates match what the endpoint will report.
+    output_chars_per_token: Option<(String, f64)>,
     /// Cumulative prompt (input) tokens this run, tracked separately from
     /// completion tokens so cost can be priced at the model's distinct
     /// input/output rates. Sums to `tokens_used` with `completion_tokens_used`.
@@ -190,6 +195,10 @@ pub(crate) struct CallOutcome {
     pub(crate) cache_write_tokens: usize,
     pub(crate) latency_ms: Option<u64>,
     pub(crate) retries: u32,
+    /// The call's final generation-speed reading, when it generated anything.
+    pub(crate) throughput: Option<crate::throughput::Throughput>,
+    /// Characters the call generated, for learning the model's token ratio.
+    pub(crate) generated_chars: usize,
 }
 
 impl CallOutcome {
@@ -299,6 +308,8 @@ impl Agent {
             completion_tokens_used: 0,
             cached_prompt_tokens_used: 0,
             cache_write_tokens_used: 0,
+            last_throughput: None,
+            output_chars_per_token: None,
             prev_request_hashes: Vec::new(),
             prev_tools_hash: None,
             tool_def_chars: OnceLock::new(),
@@ -379,6 +390,8 @@ impl Agent {
             completion_tokens_used: 0,
             cached_prompt_tokens_used: 0,
             cache_write_tokens_used: 0,
+            last_throughput: None,
+            output_chars_per_token: None,
             prev_request_hashes: Vec::new(),
             prev_tools_hash: None,
             tool_def_chars: OnceLock::new(),
@@ -716,6 +729,11 @@ impl Agent {
         self.calibrated(budget::estimate_prompt_tokens(&self.messages, tool_defs)) <= budget
     }
 
+    /// How fast the last model call generated: its final speed reading.
+    pub fn last_throughput(&self) -> Option<&crate::throughput::Throughput> {
+        self.last_throughput.as_ref()
+    }
+
     /// Cumulative estimated tokens sent + generated this run.
     pub fn tokens_used(&self) -> usize {
         self.tokens_used
@@ -962,6 +980,8 @@ impl Agent {
                 .unwrap_or(0),
             latency_ms: Some(started.elapsed().as_millis() as u64),
             retries: 0,
+            throughput: None,
+            generated_chars: 0,
         };
         self.record_usage_event(
             &outcome.billing_key(&request.model),

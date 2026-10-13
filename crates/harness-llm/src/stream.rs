@@ -15,6 +15,10 @@ use crate::types::{ChatChunk, FunctionCall, ToolCall, Usage};
 pub enum StreamEvent {
     /// An incremental piece of assistant text.
     Token(String),
+    /// An incremental piece of a thinking model's reasoning. Never part of
+    /// the assembled reply; surfaced so callers can see the model working
+    /// (and count what it generates) while no visible text streams.
+    Reasoning(String),
     /// The model began emitting a tool call — surfaced as soon as the tool's
     /// name is known, before its (possibly long) arguments finish streaming, so
     /// the UI can react while a tool like `canvas` is still being written.
@@ -194,6 +198,10 @@ impl StreamAssembler {
         for choice in chunk.choices {
             if let Some(reason) = choice.finish_reason {
                 self.finish_reason = Some(reason);
+            }
+            let reasoning = choice.delta.reasoning_content.or(choice.delta.reasoning);
+            if let Some(text) = reasoning.filter(|t| !t.is_empty()) {
+                events.push(StreamEvent::Reasoning(text));
             }
             if let Some(text) = choice.delta.content {
                 if !text.is_empty() {
@@ -441,6 +449,22 @@ mod tests {
         let usage = msg.usage.expect("usage captured");
         assert_eq!(usage.prompt_tokens, 1234);
         assert_eq!(usage.completion_tokens, 56);
+    }
+
+    #[test]
+    fn surfaces_reasoning_deltas_without_folding_them_into_the_reply() {
+        // llama-server (`reasoning_content`) and OpenRouter-style hubs
+        // (`reasoning`) stream a thinking model's reasoning beside the reply.
+        // It is generated output — a speed meter must see it — but never
+        // part of the assistant message.
+        let mut asm = StreamAssembler::new();
+        let a =
+            asm.accept(r#"{"choices":[{"index":0,"delta":{"reasoning_content":"let me think"}}]}"#);
+        let b = asm.accept(r#"{"choices":[{"index":0,"delta":{"reasoning":" more"}}]}"#);
+        asm.accept(r#"{"choices":[{"index":0,"delta":{"content":"hi"}}]}"#);
+        assert_eq!(a, vec![StreamEvent::Reasoning("let me think".into())]);
+        assert_eq!(b, vec![StreamEvent::Reasoning(" more".into())]);
+        assert_eq!(asm.finish().content, "hi");
     }
 
     #[test]

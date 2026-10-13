@@ -1239,8 +1239,59 @@
   opacity: 0.6;
   color: var(--text-tertiary);
 }
-.token-meter-tps {
+/* Generation speed: a quiet figure at rest, the accent while a reply streams. */
+.speed-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+.speed-meter-bolt {
+  align-self: center;
+  color: var(--text-tertiary);
+  transition: color 200ms ease;
+}
+.speed-meter-rate {
+  color: var(--text-secondary);
+  transition: color 200ms ease;
+}
+.speed-meter-unit,
+.speed-meter-ttft {
+  opacity: 0.75;
+}
+.speed-meter-ttft::before {
+  content: "·";
+  margin: 0 var(--space-1) 0 var(--space-half);
+  opacity: 0.6;
+}
+.speed-meter[data-live] .speed-meter-bolt {
   color: var(--accent);
+  animation: speed-meter-pulse 1.1s ease-in-out infinite;
+}
+.speed-meter[data-live] .speed-meter-rate {
+  color: var(--accent);
+}
+.speed-meter-spark {
+  align-self: center;
+  margin-left: var(--space-half);
+  fill: var(--accent);
+  opacity: 0.65;
+}
+.speed-meter-spark .speed-meter-bar-now {
+  opacity: 1;
+}
+.speed-meter-spark .speed-meter-bar-empty {
+  opacity: 0.3;
+}
+.speed-meter-spark rect {
+  transition: y 180ms ease-out, height 180ms ease-out;
+}
+@keyframes speed-meter-pulse {
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .speed-meter[data-live] .speed-meter-bolt { animation: none; }
+  .speed-meter-spark rect { transition: none; }
 }
 /* Compression savings — informational, quieter than the counts around it. */
 .token-meter-saved {

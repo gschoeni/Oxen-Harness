@@ -62,6 +62,9 @@ pub(crate) enum Cue {
         prompt_tokens_used: usize,
         completion_tokens_used: usize,
     },
+    /// A generation-speed reading: live shows it on the meter; classic
+    /// ignores it.
+    Throughput(harness_agent::Throughput),
     /// Compression savings: live updates `pinned_line` in place, classic
     /// scrolls `scroll_line` into the transcript.
     Compression {
@@ -149,6 +152,7 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
             prompt_tokens_used: *prompt_tokens_used,
             completion_tokens_used: *completion_tokens_used,
         },
+        AgentEvent::Throughput(reading) => Cue::Throughput(reading.clone()),
         // The context filled and was compacted to keep the session going;
         // surface a quiet notice so the trimming isn't invisible.
         // Another round is starting because of a corrective: say why, and

@@ -85,6 +85,27 @@ fn tool_delta_and_usage_wire_shapes() {
 }
 
 #[test]
+fn throughput_wire_shape() {
+    let reading = ProtocolEvent::Throughput {
+        session: "s1".into(),
+        model: "gemma-4-26b-a4b-q3".into(),
+        output_tokens: 446,
+        tokens_per_sec: Some(44.6),
+        decode_ms: 10_000,
+        ttft_ms: 820,
+        exact: true,
+        done: true,
+    };
+    let value = json(&reading);
+    assert_eq!(value["type"], "agent.throughput");
+    assert_eq!(value["tokens_per_sec"], 44.6);
+    assert_eq!(value["ttft_ms"], 820);
+    assert_eq!(reading.channel(), "agent://throughput");
+    assert_eq!(reading.session(), Some("s1"));
+    round_trips(reading);
+}
+
+#[test]
 fn turn_lifecycle_wire_shapes() {
     let started = ProtocolEvent::TurnStarted {
         session: "s1".into(),

@@ -82,6 +82,7 @@ import {
 } from "../features/chat/thread";
 import { openThreadIds, threadsFromState } from "../features/threads/threads";
 import { partialCanvasDoc } from "./streamingArgs";
+import { nextSpeed, type SpeedState } from "./speed";
 import { withSnippetContext } from "./snippets";
 import { getUi, setUi } from "./uiState";
 import {
@@ -127,6 +128,7 @@ import type {
   TurnEndedEvent,
   NoticeEvent,
   ToolDeltaEvent,
+  ThroughputEvent,
   UsageEvent,
   CompactedEvent,
   CompressionEvent,
@@ -399,7 +401,7 @@ function sweepCached(s: AppState, threads: Record<string, Item[]>): Partial<AppS
     liveTokens: keep(s.liveTokens),
     sessionUsage: keep(s.sessionUsage),
     treeUsage: keep(s.treeUsage),
-    tokensPerSecond: keep(s.tokensPerSecond),
+    speed: keep(s.speed),
     compression: keep(s.compression),
     snippets: keep(s.snippets),
     previewErrors: keep(s.previewErrors),
@@ -426,7 +428,7 @@ const TREE_USAGE_DEBOUNCE_MS = 1500;
 const treeUsageTimers = new Map<string, number>();
 
 const TOKEN_FLUSH_MS = 50;
-const pendingTokens = new Map<string, { text: string; est: number; tps: number | null }>();
+const pendingTokens = new Map<string, { text: string; est: number }>();
 let tokenFlushTimer: number | null = null;
 
 /** Keep only the newest `MAX_CANVASES` docs. The just-touched doc is appended
@@ -539,9 +541,9 @@ interface AppState {
   treeUsage: Record<string, TreeUsage>;
   /** Re-read a chat's tree spend; coalesces bursts of lane activity. */
   refreshTreeUsage: (session: string) => void;
-  /** Generation speed (tokens/sec) per session, measured over the current
-   *  streaming burst. Persists the last rate when idle. */
-  tokensPerSecond: Record<string, number>;
+  /** Generation speed per session from `agent://throughput`: the call in
+   *  flight's live rate and sparkline, or the last call's settled figures. */
+  speed: Record<string, SpeedState>;
   /** Per-session context-compression readout: the mode that ran and the
    *  session's cumulative tokens saved (or, in audit mode, would-be saved),
    *  updated per model call from `agent://compression`. Absent = no savings. */
@@ -847,6 +849,8 @@ interface AppState {
   /** Update a session's live usage (per-session count + context fill) as it
    *  accrues within a turn. */
   ingestUsage: (e: UsageEvent) => void;
+  /** Fold a generation-speed reading into the session's readout. */
+  ingestThroughput: (e: ThroughputEvent) => void;
   /** Add a notice to a session's thread when its context was compacted. */
   ingestCompacted: (e: CompactedEvent) => void;
   /** A one-line notice about something the agent did on its own (a
@@ -1042,7 +1046,6 @@ export const useStore = create<AppState>((rawSet, get) => {
     rawSet((s) => {
       const threads = { ...s.threads };
       const liveTokens = { ...s.liveTokens };
-      const tokensPerSecond = { ...s.tokensPerSecond };
       let touched = false;
       for (const [id, p] of batch) {
         // A session with no cached thread (evicted, or never viewed) drops its
@@ -1054,9 +1057,8 @@ export const useStore = create<AppState>((rawSet, get) => {
         // Tick the usage meter up live as the reply streams, matching the
         // backend's ~4-chars-per-token estimate; snapped exact at turn end.
         liveTokens[id] = (liveTokens[id] ?? 0) + p.est;
-        if (p.tps !== null) tokensPerSecond[id] = p.tps;
       }
-      return touched ? { threads, liveTokens, tokensPerSecond } : {};
+      return touched ? { threads, liveTokens } : {};
     });
   }
 
@@ -1066,12 +1068,6 @@ export const useStore = create<AppState>((rawSet, get) => {
    *  viewing the chat rebuilds the whole thread from it. */
   const withThread = (s: AppState, id: string, fn: (items: Item[]) => Item[]): Partial<AppState> =>
     s.threads[id] === undefined ? {} : { threads: { ...s.threads, [id]: fn(s.threads[id]) } };
-
-  // Non-reactive per-session sample for the tokens/sec readout: the start of the
-  // current streaming burst and tokens seen in it. A burst resets after a gap
-  // (tool calls), so the rate reflects active decoding, not idle time.
-  const genSamples = new Map<string, { start: number; tokens: number; last: number }>();
-  const BURST_GAP_MS = 1200;
 
   // A turn (or review) just ended with nothing queued: read if the chat is in
   // view, unread if it finished offscreen. Viewing counts as seeing — the
@@ -1241,7 +1237,6 @@ export const useStore = create<AppState>((rawSet, get) => {
   const awaitingDelivery = new Set<string>();
 
   function driveTurn(id: string, text: string, paths: string[], how: "fresh" | "retry" | "deliver") {
-    genSamples.delete(id); // each turn starts a fresh speed measurement
     lastActive.set(id, Date.now());
     set((s) => ({
       runStatus: { ...s.runStatus, [id]: "running" },
@@ -1361,7 +1356,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     liveTokens: {},
     sessionUsage: {},
     treeUsage: {},
-    tokensPerSecond: {},
+    speed: {},
     compression: {},
     runStatus: {},
     codeReview: {},
@@ -1529,7 +1524,6 @@ export const useStore = create<AppState>((rawSet, get) => {
       // history+threads refresh.
       await Promise.all(ids.map((id) => deleteSession(id)));
       for (const id of ids) {
-        genSamples.delete(id);
         lastActive.delete(id);
         pendingTokens.delete(id);
       }
@@ -1569,7 +1563,7 @@ export const useStore = create<AppState>((rawSet, get) => {
           liveTokens: drop(s.liveTokens),
           sessionUsage: drop(s.sessionUsage),
           treeUsage: drop(s.treeUsage),
-          tokensPerSecond: drop(s.tokensPerSecond),
+          speed: drop(s.speed),
           compression: drop(s.compression),
           // The backend stops the deleted chat's dev server and closes its
           // webview; drop the mirrored state so no stopped server lingers in
@@ -2241,25 +2235,12 @@ export const useStore = create<AppState>((rawSet, get) => {
     ingestToken: (session, token) => {
       if (get().threads[session] === undefined) return;
       const est = token.length / CHARS_PER_TOKEN;
-      // Measure decode speed over the current streaming burst: start a fresh
-      // sample after a gap (e.g. a tool call), so the rate isn't dragged down by
-      // idle time between model calls.
-      const now = Date.now();
-      let smp = genSamples.get(session);
-      if (!smp || now - smp.last > BURST_GAP_MS) smp = { start: now, tokens: 0, last: now };
-      smp.tokens += est;
-      smp.last = now;
-      genSamples.set(session, smp);
-      const secs = (now - smp.start) / 1000;
-      // Need a small window before the rate is meaningful; otherwise keep the last.
-      const tps = secs >= 0.3 ? smp.tokens / secs : null;
-      lastActive.set(session, now);
+      lastActive.set(session, Date.now());
       // Buffer, don't set: the flush (on the timer, or ahead of the next store
       // mutation, whichever comes first) lands the whole burst in one copy.
-      const p = pendingTokens.get(session) ?? { text: "", est: 0, tps: null };
+      const p = pendingTokens.get(session) ?? { text: "", est: 0 };
       p.text += token;
       p.est += est;
-      if (tps !== null) p.tps = tps;
       pendingTokens.set(session, p);
       if (tokenFlushTimer == null) tokenFlushTimer = window.setTimeout(flushTokens, TOKEN_FLUSH_MS);
     },
@@ -2330,6 +2311,13 @@ export const useStore = create<AppState>((rawSet, get) => {
         };
       });
     },
+
+    // ~4 readings a second per streaming chat; a session with no cached
+    // thread (evicted) keeps no readout, like its tokens.
+    ingestThroughput: (e) =>
+      set((s) =>
+        s.threads[e.session] === undefined ? {} : { speed: { ...s.speed, [e.session]: nextSpeed(s.speed[e.session], e) } },
+      ),
 
     ingestCompression: (e) =>
       set((s) => ({

@@ -39,6 +39,10 @@ pub enum AgentEvent {
         name: String,
         result: String,
     },
+    /// How fast the current model call is generating: live readings about
+    /// every quarter second while it streams, then one final (`done`) reading
+    /// with the endpoint's exact count. See [`crate::throughput`].
+    Throughput(crate::throughput::Throughput),
     /// The session's cumulative token usage and current context fill, surfaced
     /// around each model call so a UI can track usage live *within* a turn (each
     /// tool-loop iteration re-sends the growing context, which this captures)

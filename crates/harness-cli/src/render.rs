@@ -121,7 +121,7 @@ impl TurnRenderer {
                 self.begin_thinking();
             }
             // Usage is surfaced in the banner/status, not inline during a turn.
-            Cue::Usage { .. } => {}
+            Cue::Usage { .. } | Cue::Throughput(_) => {}
             Cue::Compression { scroll_line, .. } => {
                 self.stop_spinner();
                 println!("{scroll_line}");

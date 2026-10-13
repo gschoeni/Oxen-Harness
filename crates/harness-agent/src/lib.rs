@@ -50,6 +50,7 @@ mod lane_profile;
 pub mod lane_tools;
 pub mod loopguard;
 pub mod map_tool;
+pub mod throughput;
 pub mod tree;
 
 #[cfg(test)]
@@ -73,4 +74,5 @@ pub use prompt::{
     default_system_prompt, environment_section, plan_approved_prompt, system_prompt_with,
     system_prompt_with_env, OptionalTools, PLAN_MODE_ENTER, PLAN_MODE_EXIT,
 };
+pub use throughput::Throughput;
 pub use tree::{TreeBudget, TreeLimits, TreeUsage};

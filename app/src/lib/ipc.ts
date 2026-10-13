@@ -51,6 +51,7 @@ import type {
   ToolEvent,
   ToolProgressEvent,
   ToolDeltaEvent,
+  ThroughputEvent,
   UsageEvent,
   UsageBreakdown,
   DailyUsageRow,
@@ -468,6 +469,10 @@ export const onToolDelta = (handler: (e: ToolDeltaEvent) => void) =>
 /** Fires at the end of each turn with the session's cumulative token count. */
 export const onUsage = (handler: (e: UsageEvent) => void) =>
   listen<UsageEvent>("agent://usage", (e) => handler(e.payload));
+
+/** Generation-speed readings for the model call in flight (~4×/s, then final). */
+export const onThroughput = (handler: (e: ThroughputEvent) => void) =>
+  listen<ThroughputEvent>("agent://throughput", (e) => handler(e.payload));
 
 /** Fires when the agent did something on its own worth a line in the thread
  *  (a background task finished and its output went to the model). */

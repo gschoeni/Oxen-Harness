@@ -233,6 +233,8 @@ struct Live {
     /// Lines pinned beneath the meters that aren't the meters' own (the idle
     /// prompt's background-commands hint), kept across meter refreshes.
     status_extra: Vec<String>,
+    /// The `⚡ tok/s` readout's state; outlives a turn's meter snapshot.
+    speed: crate::speed::SpeedGauge,
     /// The fleet hub's spend epoch as of the last meter refresh; a lane's
     /// call landing bumps the hub's, and the next fleet tick re-prices the
     /// meter.
@@ -344,6 +346,7 @@ impl Live {
             status_lines: Vec::new(),
             meters: None,
             status_extra: Vec::new(),
+            speed: crate::speed::SpeedGauge::default(),
             spend_epoch: fleet.spend_epoch(),
             compression_line: None,
             completion: None,
@@ -551,7 +554,7 @@ impl Live {
         let Some(facts) = &self.meters else {
             return false;
         };
-        let mut lines = facts.lines(&self.ui);
+        let mut lines = facts.lines_with(&self.ui, &self.speed);
         lines.extend(self.status_extra.iter().cloned());
         if lines == self.status_lines {
             return false;
@@ -1121,6 +1124,7 @@ mod tests {
             completion_tokens: 0,
             ledger: Some(crate::spend::Ledger::new(store.clone(), root.clone())),
             prior: crate::spend::Tokens::default(),
+            last_speed: None,
         });
         assert!(
             l.status_lines[1].contains("100.0k tokens used"),

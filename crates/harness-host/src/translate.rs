@@ -81,6 +81,16 @@ pub fn agent_event(
             prompt_tokens_used: *prompt_tokens_used,
             completion_tokens_used: *completion_tokens_used,
         },
+        AgentEvent::Throughput(reading) => ProtocolEvent::Throughput {
+            session,
+            model: reading.model.clone(),
+            output_tokens: reading.output_tokens,
+            tokens_per_sec: reading.tokens_per_sec(),
+            decode_ms: reading.decode_ms,
+            ttft_ms: reading.ttft_ms,
+            exact: reading.exact,
+            done: reading.done,
+        },
         AgentEvent::Nudged { reason } => ProtocolEvent::Notice {
             session,
             kind: "nudge".into(),

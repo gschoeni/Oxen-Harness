@@ -9,6 +9,7 @@ import { compactTokens, formatUsd } from "../../lib/format";
 import { sessionCost } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import type { CompressionMode } from "../../lib/types";
+import { SpeedMeter } from "./SpeedMeter";
 
 const MODE_HINT: Record<CompressionMode, string> = {
   off: "Compression is off: requests are sent exactly as recorded.",
@@ -24,8 +25,6 @@ export function TokenMeter() {
   // Tokens streamed so far in the in-flight turn (reset to 0 at turn end), so the
   // meter climbs live instead of jumping only when the message finishes.
   const live = useStore((s) => Math.floor(s.session ? s.liveTokens[s.session.session_id] ?? 0 : 0));
-  // Generation speed for the active/last turn in this session (tokens/sec).
-  const tps = useStore((s) => (s.session ? s.tokensPerSecond[s.session.session_id] ?? 0 : 0));
   // What context compression saved this session (audit mode: would have saved).
   const saved = useStore((s) => (s.session ? s.compression[s.session.session_id] : undefined));
   // The live agent's actual mode — shown even before any savings exist, so
@@ -69,11 +68,7 @@ export function TokenMeter() {
       {contextWindow > 0 && (
         <span className="token-meter-ctx">{pct < 1 ? "<1" : Math.round(pct)}% of context</span>
       )}
-      {tps > 0 && (
-        <span className="token-meter-tps" title="Generation speed">
-          {tps >= 10 ? Math.round(tps) : tps.toFixed(1)} tok/s
-        </span>
-      )}
+      <SpeedMeter />
       {advancedSettingsEnabled() && mode !== "off" && (
         <span className="token-meter-saved" title={MODE_HINT[mode]}>
           {mode === "audit" ? "would save" : "saved"} ~{compactTokens(saved?.tokensSaved ?? 0)}

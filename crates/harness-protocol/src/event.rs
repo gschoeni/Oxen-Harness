@@ -146,6 +146,22 @@ pub enum ProtocolEvent {
         prompt_tokens_used: usize,
         completion_tokens_used: usize,
     },
+    /// How fast the model call in flight is generating: live readings about
+    /// four times a second, then one `done` reading per call (with the
+    /// endpoint's exact count when `exact`). `tokens_per_sec` is the decode
+    /// rate — the wait before the first token is `ttft_ms`, reported apart —
+    /// and is absent until the call has decoded long enough to time.
+    #[serde(rename = "agent.throughput")]
+    Throughput {
+        session: String,
+        model: String,
+        output_tokens: usize,
+        tokens_per_sec: Option<f64>,
+        decode_ms: u64,
+        ttft_ms: u64,
+        exact: bool,
+        done: bool,
+    },
     /// A one-line notice about something the agent did on its own that a
     /// transcript never shows — for now, a background task's output being
     /// delivered to the model (`kind = "background_task"`).
@@ -427,6 +443,7 @@ impl ProtocolEvent {
             Self::ToolDelta { .. } => "agent.tool_delta",
             Self::ToolProgress { .. } => "agent.tool_progress",
             Self::Usage { .. } => "agent.usage",
+            Self::Throughput { .. } => "agent.throughput",
             Self::Compacted { .. } => "agent.compacted",
             Self::Retry { .. } => "agent.retry",
             Self::Compression { .. } => "agent.compression",
@@ -477,6 +494,7 @@ impl ProtocolEvent {
             | Self::ToolProgress { session, .. }
             | Self::Notice { session, .. }
             | Self::Usage { session, .. }
+            | Self::Throughput { session, .. }
             | Self::Compacted { session, .. }
             | Self::Retry { session, .. }
             | Self::Compression { session, .. }

@@ -232,6 +232,7 @@ mod tests {
             completion_tokens: 2,
             ledger: None,
             prior: crate::spend::Tokens::default(),
+            last_speed: None,
         };
         let lines = facts.lines(&ui);
         assert_eq!(lines.len(), 2, "{lines:?}");

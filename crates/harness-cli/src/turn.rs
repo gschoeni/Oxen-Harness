@@ -329,6 +329,9 @@ pub(crate) struct MeterFacts {
     /// what its rows held beyond the live counters when the meters were
     /// armed, so the call in flight can be told apart from history.
     pub(crate) prior: Tokens,
+    /// The agent's last call's final speed reading: the readout's figure at
+    /// an idle prompt, where no live gauge has seen a call yet.
+    pub(crate) last_speed: Option<harness_agent::Throughput>,
 }
 
 impl MeterFacts {
@@ -357,6 +360,7 @@ impl MeterFacts {
             completion_tokens: live.completion,
             ledger,
             prior,
+            last_speed: agent.last_throughput().cloned(),
         }
     }
 
@@ -364,6 +368,11 @@ impl MeterFacts {
     /// The workspace's git branch and the permission mode are read from the
     /// process (see [`git_branch`] and [`permission_mode`]).
     pub(crate) fn lines(&self, ui: &Ui) -> Vec<String> {
+        self.lines_with(ui, &crate::speed::SpeedGauge::default())
+    }
+
+    /// [`Self::lines`] with the live `⚡ tok/s` readout on the spend line.
+    pub(crate) fn lines_with(&self, ui: &Ui, speed: &crate::speed::SpeedGauge) -> Vec<String> {
         meter_lines(
             ui,
             &Meters {
@@ -373,6 +382,10 @@ impl MeterFacts {
                 spend: self.spend(),
                 branch: git_branch(),
                 mode: permission_mode(),
+                speed: speed.segment(ui).or_else(|| {
+                    let last = self.last_speed.as_ref()?;
+                    crate::speed::SpeedGauge::settled(last).segment(ui)
+                }),
             },
             meter_budget(),
         )
@@ -413,6 +426,8 @@ struct Meters<'a> {
     branch: Option<String>,
     /// The permission mode in force (`relaxed` / `cautious` / `bypass`).
     mode: Option<&'static str>,
+    /// The generation-speed segment `(plain, styled)`, once a call was timed.
+    speed: Option<(String, String)>,
 }
 
 /// One `· `-joined piece of a meter line, with the width it costs and how
@@ -517,6 +532,11 @@ fn meter_lines(ui: &Ui, m: &Meters, budget: Option<usize>) -> Vec<String> {
             ui.brown(&price)
         };
         line2.push(Seg::new(price, styled, 4));
+    }
+    // Speed gives way just after the price: what the session cost outranks
+    // how fast it is going, but both outrank nothing.
+    if let Some((plain, styled)) = &m.speed {
+        line2.push(Seg::new(plain.clone(), styled.clone(), 3));
     }
 
     vec![fit(line1, budget), fit(line2, budget)]
@@ -674,6 +694,7 @@ mod tests {
             completion_tokens: 10_000,
             ledger: None,
             prior: Tokens::default(),
+            last_speed: None,
         };
         let lines = facts.lines(&ui);
         assert_eq!(lines.len(), 2, "two stacked lines: {lines:?}");
@@ -720,7 +741,71 @@ mod tests {
             spend: Spend::live(model, Tokens::new(40_000, 10_000)),
             branch: Some("wagon-trail".to_string()),
             mode: Some("cautious"),
+            speed: None,
         }
+    }
+
+    #[test]
+    fn an_idle_meter_shows_the_last_calls_speed_and_a_live_gauge_outranks_it() {
+        let ui = plain_ui();
+        let reading = |tokens, done| harness_agent::Throughput {
+            model: "m".into(),
+            output_tokens: tokens,
+            decode_ms: 10_000,
+            ttft_ms: 1_200,
+            exact: done,
+            done,
+        };
+        let facts = MeterFacts {
+            model: "m".to_string(),
+            window: 200_000,
+            context_tokens: 1_000,
+            prompt_tokens: 1_000,
+            completion_tokens: 446,
+            ledger: None,
+            prior: Tokens::default(),
+            last_speed: Some(reading(446, true)),
+        };
+        let idle = facts.lines(&ui);
+        assert!(
+            idle[1].ends_with("⚡ 44.6 tok/s · 1.2s to first token"),
+            "settled speed at idle: {idle:?}"
+        );
+        let mut live = crate::speed::SpeedGauge::default();
+        live.record(&reading(120, false));
+        let streaming = facts.lines_with(&ui, &live);
+        assert!(
+            streaming[1].contains("⚡ 12.0 tok/s"),
+            "live wins: {streaming:?}"
+        );
+    }
+
+    #[test]
+    fn the_spend_line_carries_the_speed_and_sheds_it_after_the_price() {
+        let ui = Ui::plain();
+        let speed = "⚡ 44.6 tok/s · 0.8s to first token".to_string();
+        let timed = Meters {
+            speed: Some((speed.clone(), speed.clone())),
+            ..meters(50_000, "claude-opus-4-8")
+        };
+        let wide = meter_lines(&ui, &timed, None);
+        assert!(
+            wide[1].ends_with(&speed),
+            "speed on the spend line: {wide:?}"
+        );
+        // Just wide enough for the totals and the speed: the price went first.
+        let totals = meter_lines(&ui, &meters(50_000, "claude-opus-4-8"), None)[1]
+            .split(" · $")
+            .next()
+            .unwrap()
+            .to_string();
+        let budget = crate::width::str_width(&totals) + 3 + crate::width::str_width(&speed);
+        let narrow = meter_lines(&ui, &timed, Some(budget));
+        assert!(narrow[1].ends_with(&speed), "speed kept: {narrow:?}");
+        assert!(!narrow[1].contains('$'), "price shed first: {narrow:?}");
+        // Narrower still, the speed goes too and the totals stand.
+        let tight = meter_lines(&ui, &timed, Some(budget - 1));
+        assert!(!tight[1].contains('⚡'), "speed shed: {tight:?}");
     }
 
     #[test]
@@ -804,6 +889,7 @@ mod tests {
             completion_tokens: 10_000,
             ledger: Some(Ledger::new(store.clone(), root.clone())),
             prior: Tokens::default(),
+            last_speed: None,
         };
 
         // Before the first call lands in the ledger, the root's own counters
@@ -843,6 +929,7 @@ mod tests {
             prompt_tokens: 0,
             completion_tokens: 0,
             prior: Tokens::new(40_000, 10_000),
+            last_speed: None,
             ..facts.clone()
         };
         let lines = resumed.lines(&ui);

@@ -147,6 +147,13 @@ impl Live {
                 prompt_tokens_used,
                 completion_tokens_used,
             } => self.on_usage(context_tokens, prompt_tokens_used, completion_tokens_used),
+            // Chrome like the usage figures: the meter updates in place.
+            Cue::Throughput(reading) => {
+                self.speed.record(&reading);
+                if self.refresh_meters() {
+                    self.request_paint();
+                }
+            }
             // The savings are chrome, not conversation: update the pinned line
             // (above the context meter) in place — never scroll a line into
             // the transcript between tool output and the spinner.

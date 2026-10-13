@@ -11,10 +11,12 @@
 use harness_llm::stream::{AssembledMessage, StreamEvent};
 use harness_llm::types::ChatMessage;
 use harness_llm::ChatRequest;
+use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::AgentError;
 use crate::event::AgentEvent;
+use crate::throughput::ThroughputMeter;
 use crate::{budget, cache};
 
 use super::{Agent, CallOutcome};
@@ -137,33 +139,61 @@ impl Agent {
             // prose/tool preview is simply never emitted; every host therefore
             // sees only the corrected round without needing a rewind protocol.
             let mut buffered_events = watcher.can_interrupt().then(Vec::new);
+            // Speed readings are chrome, not content: they go out live even
+            // while a rule holds the content back.
+            let chars_per_token = crate::throughput::learned_chars_per_token(
+                self.output_chars_per_token.as_ref(),
+                &request.model,
+            );
+            let mut meter = ThroughputMeter::start(&request.model, chars_per_token, Instant::now());
             let result = self
                 .client
-                .stream_chat(&request, &rule_stop, |event| match event {
-                    StreamEvent::Token(t) => {
-                        if watcher.observe(crate::rules::Scope::Text, t) {
-                            rule_stop.cancel();
+                .stream_chat(&request, &rule_stop, |event| {
+                    let generated = match event {
+                        StreamEvent::Token(t) | StreamEvent::Reasoning(t) => t.as_str(),
+                        StreamEvent::ToolCallDelta { arguments, .. } => arguments.as_str(),
+                        StreamEvent::ToolCallStart { .. } | StreamEvent::Done { .. } => "",
+                    };
+                    if let Some(reading) = meter.observe(generated, Instant::now()) {
+                        on_event(&AgentEvent::Throughput(reading));
+                    }
+                    match event {
+                        StreamEvent::Token(t) => {
+                            if watcher.observe(crate::rules::Scope::Text, t) {
+                                rule_stop.cancel();
+                            }
+                            let event = AgentEvent::Token(t.clone());
+                            emit_stream_event(&mut buffered_events, event, on_event);
                         }
-                        let event = AgentEvent::Token(t.clone());
-                        emit_stream_event(&mut buffered_events, event, on_event);
-                    }
-                    StreamEvent::ToolCallStart { name } => {
-                        let event = AgentEvent::ToolPending { name: name.clone() };
-                        emit_stream_event(&mut buffered_events, event, on_event);
-                    }
-                    StreamEvent::ToolCallDelta { name, arguments } => {
-                        if watcher.observe(crate::rules::Scope::ToolArguments, arguments) {
-                            rule_stop.cancel();
+                        StreamEvent::ToolCallStart { name } => {
+                            let event = AgentEvent::ToolPending { name: name.clone() };
+                            emit_stream_event(&mut buffered_events, event, on_event);
                         }
-                        let event = AgentEvent::ToolDelta {
-                            name: name.clone(),
-                            delta: arguments.clone(),
-                        };
-                        emit_stream_event(&mut buffered_events, event, on_event);
+                        StreamEvent::ToolCallDelta { name, arguments } => {
+                            if watcher.observe(crate::rules::Scope::ToolArguments, arguments) {
+                                rule_stop.cancel();
+                            }
+                            let event = AgentEvent::ToolDelta {
+                                name: name.clone(),
+                                delta: arguments.clone(),
+                            };
+                            emit_stream_event(&mut buffered_events, event, on_event);
+                        }
+                        StreamEvent::Reasoning(_) | StreamEvent::Done { .. } => {}
                     }
-                    StreamEvent::Done { .. } => {}
                 })
                 .await;
+            // Every attempt that generated something gets its final reading
+            // — a retried one too, so a live readout never freezes mid-climb.
+            let reported = result
+                .as_ref()
+                .ok()
+                .and_then(|a| a.usage.as_ref())
+                .map(|u| u.completion_tokens as usize);
+            let final_reading = meter.finish(reported);
+            if let Some(reading) = &final_reading {
+                on_event(&AgentEvent::Throughput(reading.clone()));
+            }
             let hits = watcher.hits();
             let interrupted = hits.iter().any(|hit| hit.interrupt);
             if let Some(events) = buffered_events.filter(|_| !interrupted) {
@@ -193,6 +223,8 @@ impl Agent {
                         service_tier: request.service_tier.clone(),
                         latency_ms: Some(started.elapsed().as_millis() as u64),
                         retries: attempt - 1,
+                        throughput: final_reading,
+                        generated_chars: meter.generated_chars(),
                         ..CallOutcome::default()
                     };
                     return Ok((assembled, outcome, hits));
@@ -350,6 +382,14 @@ impl Agent {
         self.prompt_tokens_used += prompt_delta;
         self.completion_tokens_used += completion_delta;
         self.tokens_used += prompt_delta + completion_delta;
+        if let Some(reading) = &outcome.throughput {
+            if let Some(ratio) =
+                crate::throughput::measured_chars_per_token(reading, outcome.generated_chars)
+            {
+                self.output_chars_per_token = Some((reading.model.clone(), ratio));
+            }
+            self.last_throughput = Some(reading.clone());
+        }
         self.cached_prompt_tokens_used += outcome.cached_prompt_tokens;
         self.cache_write_tokens_used += outcome.cache_write_tokens;
         let answered_by = outcome.billing_key(&self.config.model);
@@ -1194,6 +1234,61 @@ mod tests {
         let totals = store.cache_usage_totals().unwrap();
         assert_eq!(totals.cached_prompt_tokens, 900);
         assert_eq!(totals.cache_write_tokens, 80);
+    }
+
+    #[tokio::test]
+    async fn a_call_ends_with_an_exact_speed_reading_for_the_answering_model() {
+        let mut server = mockito::Server::new_async().await;
+        let reasoning = serde_json::json!({
+            "choices": [{ "index": 0, "delta": { "reasoning_content": "thinking it over" } }]
+        });
+        let body = format!(
+            "data: {reasoning}\n\n{}",
+            sse_prose_with_cached_usage("done")
+        );
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create_async()
+            .await;
+        let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+        let session = test_session(&store, "local-model");
+        let client = OxenClient::new(server.url(), "key", "local-model");
+        let mut agent = Agent::new(
+            client,
+            ToolRegistry::new(),
+            store,
+            session,
+            AgentConfig {
+                model: "local-model".into(),
+                ..AgentConfig::default()
+            },
+        )
+        .unwrap();
+
+        let mut readings = Vec::new();
+        agent
+            .run_turn("hello", |e| {
+                if let AgentEvent::Throughput(r) = e {
+                    readings.push(r.clone());
+                }
+            })
+            .await
+            .unwrap();
+        // Reasoning starts the clock (a thinking model is generating before
+        // any visible text), and the call closes on the endpoint's count.
+        let first = readings.first().expect("a live reading");
+        assert!(!first.done);
+        let last = readings.last().expect("a final reading");
+        assert!(last.done && last.exact);
+        assert_eq!(last.output_tokens, 20);
+        assert_eq!(last.model, "local-model");
+        assert_eq!(readings.iter().filter(|r| r.done).count(), 1);
+        // The agent remembers it, so an idle prompt can still say how fast
+        // the last call ran.
+        assert_eq!(agent.last_throughput(), Some(last));
     }
 
     #[tokio::test]

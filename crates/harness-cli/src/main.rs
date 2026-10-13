@@ -35,6 +35,7 @@ mod queue;
 mod render;
 mod repl;
 mod repl_loop;
+mod speed;
 mod spend;
 mod theme;
 mod training;

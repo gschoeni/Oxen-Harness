@@ -28,6 +28,7 @@ export function resetAll() {
     downloads: {},
     downloadsRev: 0,
     sessionUsage: {},
+    speed: {},
     compression: {},
     runStatus: {},
     fleets: {},
