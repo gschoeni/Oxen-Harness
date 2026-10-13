@@ -1546,3 +1546,27 @@ never dropped, so `kill_on_drop` alone leaked a server after every CLI run.
 **Local is free and needs no key.** No spend prompt, no upload (references are
 read from disk), no hub. With no API key an installed local model stands in
 for a hosted default, with a note in the result.
+
+## Local models are guarded by memory, not trusted to fit (2026-10-13)
+
+A model that doesn't fit doesn't fail on a Mac — it swaps the user's apps out
+and the machine stutters. So every local load is checked first and watched
+while it runs (`harness_local::memory`), for chat and image models alike.
+
+**Warn, don't refuse, a tight load.** A model bigger than what's free can
+still run (idle apps page out); the user hears the cost in GB. Refusal is for
+critical pressure or a model larger than ~85% of the machine.
+
+**Stop the newest model, with a reason.** The watchdog's signals are critical
+pressure, warn pressure while swap grows (>2 GB), large swap growth (>6 GB),
+or <5% kernel-free (kept low: memory-mapped weights read as used). When it
+trips, the newest load is stopped first and the others re-measure from there,
+so an image render that doesn't fit beside a chat model loses, not the chat.
+The reason is recorded and published *before* the signal.
+
+**Local chat models are text-only.** We never start llama-server with a vision
+projector, so image parts are replaced by notes; otherwise one generated image
+breaks every later request in the chat.
+
+**No server outlives its host.** A shell lifeline polls host and server pids
+and stops the server within ~2 s of the host exiting by any means.

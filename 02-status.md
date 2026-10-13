@@ -926,3 +926,15 @@ list | pull | remove | path`. Verified: unit + mock-server tests, real renders
 of all three models and a klein reference edit (`tests/real_models.rs`,
 ignored by default), and real agent turns through `oxen-harness -p`.
 Benchmarks and what's left: `plans/local-media-generation.md`.
+
+## Memory guard, progress, and offline local models (2026-10-13)
+
+Every local model load is checked and watched (`harness_local::memory`):
+warnings before a tight load, a watchdog that stops the newest model before
+macOS thrashes, `memory.notice` to every host, and a lifeline so no server
+outlives its host. Memory is visible: the CLI meter's `🧠` segment, the
+desktop meter + breakdown + banner. Local renders report step progress (CLI
+bars, desktop tile bars); Settings → Media lists on-device models with
+download progress. `oxen-harness ui --local <id> --prompt …` opens a desktop
+chat. Verified offline with real models in the CLI and desktop (see
+`plans/local-media-generation.md`); 1516 Rust + 835 frontend tests green.

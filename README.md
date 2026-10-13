@@ -307,6 +307,55 @@ in the picker table assume the model has the machine mostly to itself.
 - **Seeing heavy swapping or a sluggish machine?** Drop to the `-q3` / `-iq3`
   build of the same model before switching to a smaller model.
 
+### On-device image models
+
+Image generation runs locally too, with no key, no network, and no cost:
+ask the agent for an image with a `local/` model. The engine is
+[stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) on
+Metal (no Python), and only commercially licensed (Apache-2.0) models ship
+built in. Times are per 1024² image on a 36 GB M4 Max, with the model loaded:
+
+| Model | Time | Disk | Good for |
+|---|---|---|---|
+| `local/iris-3b-turbo` | ~21 s | 8.5 GB | Fastest; sharp detail and legible text |
+| `local/flux-2-klein-4b` | ~37 s | 5.1 GB | Editing and combining up to 4 reference images |
+| `local/z-image-turbo` | ~110 s | 6.7 GB | Photoreal finals (shares klein's text encoder) |
+
+```bash
+oxen-harness media list                       # installed, sizes, licenses, speed
+oxen-harness media pull local/iris-3b-turbo   # weights + the engine, checksummed
+oxen-harness media remove local/z-image-turbo # files another model shares stay
+```
+
+The desktop app does the same in **Settings → Media → On-device models**,
+and its chat cards show each render's progress step by step.
+
+### Memory: what local models cost your machine
+
+Local models share memory with everything else on the Mac, so the harness
+watches it for you:
+
+- **Before loading** a model it checks free memory and macOS's pressure
+  level. It warns when the load will push other apps into swap, and refuses
+  only when the machine is already at critical pressure or the model can't
+  fit at all.
+- **While a model loads and runs** a watchdog samples memory twice a second.
+  If macOS reaches critical pressure, or starts paging your apps out under
+  pressure, it stops the newest model (the one that tipped it over), tells
+  you why, and leaves the rest running. Tune it with
+  `OXEN_HARNESS_MEMORY_MIN_FREE` (percent) and `OXEN_HARNESS_MEMORY_MAX_SWAP_GB`.
+- **You can see it.** The terminal meter shows `🧠 used/total GB · local
+  models` while one runs, and the desktop shows a memory meter beside the
+  token count (click it for the breakdown) plus a banner when a model is
+  stopped.
+- **Nothing is left behind.** A model server stops within seconds of the
+  app or CLI exiting, however it exits.
+
+A chat model and an image model together need room: Gemma 4 26B (~17 GB with
+its context) plus an image model fits a 36 GB Mac with heavy apps (Docker,
+browsers) closed. With everything open, pair the image models with a small
+chat model such as `qwen3.5-4b`.
+
 ## Theming — make it yours
 
 The whole personality of the harness is a **theme**: a *palette* (named semantic
@@ -460,7 +509,8 @@ a stronger model, and saves everything under `generations/` in the project
 - **From the terminal to the desktop.** `oxen-harness ui <dir> --gallery`
   opens the desktop app straight on that project's gallery (also
   `--settings media` and `--session <id>`), and `/gallery`'s "desktop" action
-  does the same for the current project.
+  does the same for the current project. `--local <id>` and `--prompt "…"`
+  open a new chat on a local model and send it a first message.
 - **Models.** `media_models` browses the catalog (39 image and 80 video
   models at the time of writing) and returns any model's exact parameters, so
   the agent can fill `extra` with seedance's shot lists or gpt-image's quality

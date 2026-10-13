@@ -64,14 +64,42 @@ Takeaways that are now code:
   (reaped at the next boot if a host dies), and has a lifeline watcher that
   stops it within ~2 s of its host exiting.
 
+## Memory guard and offline (2026-10-13)
+
+Every local model load (chat via llama-server, images via sd-server) is
+checked and watched — `harness_local::memory`:
+
+- **Before:** refuse at critical pressure or when a model can't fit at all;
+  warn, with the cost in GB pushed to swap, when it's bigger than what's free.
+- **While running:** a watchdog per server, twice a second. Stops on critical
+  pressure, <5% kernel-free, 6 GB of swap growth, or warn-level pressure with
+  2 GB of growth. The newest model is stopped first; the others wait and
+  re-measure from that point. Reasons go out as `memory.notice`.
+- **After:** a lifeline watcher stops a server within ~2 s of its host exiting
+  (verified with `kill -9`), on top of the boot-time pid reaper.
+
+Offline rehearsals (all network blocked by dead-port proxies, 36 GB M4 Max
+with ~20 GB of apps open):
+
+| Combo | Result |
+|---|---|
+| Gemma 4 26B Q3 alone (CLI + desktop) | ✅ edits files, answers; loads in ~15 s |
+| Qwen3.5 4B + Iris Turbo (CLI + desktop) | ✅ image in 27–37 s, reply after |
+| Qwen3.5 4B + FLUX.2 klein edit | ✅ 1m54s |
+| Gemma 4 26B + Iris or klein, apps open | ⚠ guard stops the image job (critical pressure); Gemma survives and explains |
+
+Bugs found by these runs and fixed: both models stopped at once; free-% misread
+mapped weights; the stop reason lost to two races; local chat models sent
+images they can't read (llama-server has no vision projector → every later
+request rejected); the desktop host rejected catalog ids.
+
 ## Left to do
 
-- **Settings → Media → Local** in the desktop app (pull/remove with
-  progress); today installs go through `oxen-harness media pull`.
-- **Step progress in the UI**: the engine reports `step n/total`, but
-  `MediaItem` has no progress field yet, so feeds show "processing".
 - **Faster sampling**: sd.cpp reaches ~5 effective TFLOPS here. Worth
   trying: klein bf16 weights (Iris bf16 ran faster per parameter than the
   quantized models), and an MLX-backed engine behind `MediaEngine`.
+- **Chat + image on one 36 GB machine with apps open**: let the image job
+  borrow memory from an idle chat model (unload it for the render, reload
+  after) instead of the guard stopping the render.
 - **Video**: a `video` kind entry plus an engine; `generate_video` already
   routes `local/` ids the same way.
