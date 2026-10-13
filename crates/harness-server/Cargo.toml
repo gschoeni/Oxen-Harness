@@ -21,6 +21,7 @@ harness-store = { workspace = true }
 harness-config = { workspace = true }
 harness-crash = { workspace = true }
 harness-agent = { workspace = true }
+harness-media-local = { workspace = true }
 axum = { version = "0.8", features = ["json", "query", "tokio", "http1"], default-features = false }
 tokio = { workspace = true }
 tokio-stream = { version = "0.1", features = ["sync"] }

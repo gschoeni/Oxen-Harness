@@ -879,6 +879,7 @@ dependencies = [
  "harness-llm",
  "harness-local",
  "harness-media",
+ "harness-media-local",
  "harness-oxen",
  "harness-permissions",
  "harness-preview",
@@ -1049,6 +1050,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-media-local"
+version = "0.0.5"
+dependencies = [
+ "async-trait",
+ "base64",
+ "harness-config",
+ "harness-local",
+ "harness-media",
+ "mockito",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "harness-oxen"
 version = "0.0.5"
 dependencies = [
@@ -1156,6 +1178,7 @@ dependencies = [
  "harness-crash",
  "harness-host",
  "harness-llm",
+ "harness-media-local",
  "harness-protocol",
  "harness-runtime",
  "harness-store",

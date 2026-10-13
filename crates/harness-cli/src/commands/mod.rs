@@ -27,6 +27,7 @@ pub(crate) mod compression;
 pub(crate) mod config;
 pub(crate) mod gallery;
 pub(crate) mod location;
+pub(crate) mod media;
 pub(crate) mod model;
 pub(crate) mod oxen;
 pub(crate) mod permissions;

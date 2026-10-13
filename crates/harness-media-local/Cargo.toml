@@ -1,0 +1,31 @@
+[package]
+name = "harness-media-local"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "On-device image generation for harness-media: a model catalog, a weight store, and pluggable engines (stable-diffusion.cpp today)"
+
+[dependencies]
+harness-config = { workspace = true }
+harness-local = { workspace = true }
+harness-media = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+base64 = { workspace = true }
+reqwest = { workspace = true }
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+mockito = "1"
+
+[lints]
+workspace = true

@@ -125,6 +125,11 @@ enum TopCommand {
         #[command(subcommand)]
         action: local::ModelsAction,
     },
+    /// Manage on-device image models (list / pull / remove / path).
+    Media {
+        #[command(subcommand)]
+        action: commands::media::MediaAction,
+    },
     /// Manage themes (list / use / export / import / new).
     Theme {
         #[command(subcommand)]
@@ -198,6 +203,12 @@ async fn main() -> Result<()> {
     // behind, still holding a model's worth of memory. Reap any such orphan
     // before this run could add to it.
     let _ = harness_local::reap_stale_servers();
+    // Local image models (`local/…` ids) run through this provider; nothing
+    // loads until the first such generation. A broken catalog overlay only
+    // costs local models, so it is reported rather than fatal.
+    if let Err(e) = harness_media_local::install() {
+        eprintln!("note: local image models are unavailable: {e}");
+    }
 
     let theme = harness_theme::Store::open()
         .map(|s| s.load_active())
@@ -208,6 +219,9 @@ async fn main() -> Result<()> {
     // Subcommands that manage state and exit before the REPL.
     match args.command.take() {
         Some(TopCommand::Models { action }) => return local::run_models(action, &ui).await,
+        Some(TopCommand::Media { action }) => {
+            return commands::media::handle_cli(action, &ui).await
+        }
         Some(TopCommand::Theme { action }) => return commands::theme::run_theme(action, &ui).await,
         Some(TopCommand::Trace { action }) => return commands::trace::run_trace(action, &ui),
         Some(TopCommand::Oxen { action }) => return commands::oxen::run_oxen(action, &ui),

@@ -21,6 +21,7 @@ members = [
     "crates/harness-review",
     "crates/harness-preview",
     "crates/harness-media",
+    "crates/harness-media-local",
     "crates/harness-study",
     "crates/harness-cli",
 ]
@@ -57,6 +58,7 @@ harness-host = { path = "crates/harness-host" }
 harness-review = { path = "crates/harness-review" }
 harness-preview = { path = "crates/harness-preview" }
 harness-media = { path = "crates/harness-media" }
+harness-media-local = { path = "crates/harness-media-local" }
 harness-study = { path = "crates/harness-study" }
 
 anyhow = "1.0"

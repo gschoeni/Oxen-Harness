@@ -96,6 +96,12 @@ async fn main() {
         }
     }
 
+    // On-device image models (`local/…` ids) for the media tools; nothing
+    // loads until the first such generation.
+    if let Err(e) = harness_media_local::install() {
+        eprintln!("note: local image models are unavailable: {e}");
+    }
+
     let token = args.token.clone().unwrap_or_else(random_token);
     let addr = SocketAddr::new(args.host, args.port);
     let project = args.project.clone();

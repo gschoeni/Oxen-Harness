@@ -102,6 +102,11 @@ pub fn run() -> Result<(), tauri::Error> {
     // could add to it. Ours from this run is not started yet, so this only
     // ever touches servers whose owning host is gone.
     let _ = harness_local::reap_stale_servers();
+    // On-device image models (`local/…` ids) for the media tools. Like local
+    // chat models, nothing loads until the first such generation.
+    if let Err(e) = harness_media_local::install() {
+        eprintln!("local image models are unavailable: {e}");
+    }
     let builder = tauri::Builder::default()
         // First, so no other plugin runs in a doomed second instance: when the
         // app is already open, a new launch (`oxen-harness ui <dir>`) forwards

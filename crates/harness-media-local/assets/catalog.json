@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "id": "local/iris-3b-turbo",
+      "kind": "image",
+      "engine": "sd.cpp",
+      "display_name": "Iris-3B Turbo",
+      "developer": "Sperid Labs",
+      "license": "Apache-2.0",
+      "summary": "Fastest local model: 4-step pixel-space text-to-image with sharp detail and legible text. Prompts up to ~300 tokens; no reference images.",
+      "files": {
+        "diffusion_model": {
+          "repo": "speridlabs/iris-3b",
+          "path": "turbo/model.safetensors",
+          "bytes": 5975089200,
+          "sha256": "7148dbba3117567e34c86fadaae6e10325feb2c0ff3f43fe4938c15c75b356e1"
+        },
+        "llm": {
+          "repo": "Qwen/Qwen3-VL-4B-Instruct-GGUF",
+          "path": "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+          "bytes": 2497281664,
+          "sha256": "66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a"
+        }
+      },
+      "sampling": { "steps": 4, "max_steps": 8, "cfg_scale": 1.0, "sampler": "euler" },
+      "size": { "width": 1024, "height": 1024 },
+      "max_refs": 0,
+      "typical_secs": 21
+    },
+    {
+      "id": "local/flux-2-klein-4b",
+      "kind": "image",
+      "engine": "sd.cpp",
+      "display_name": "FLUX.2 [klein] 4B",
+      "developer": "Black Forest Labs",
+      "license": "Apache-2.0",
+      "summary": "4-step text-to-image that also edits and combines reference images (up to 4); strong prompt adherence and text.",
+      "files": {
+        "diffusion_model": {
+          "repo": "leejet/FLUX.2-klein-4B-GGUF",
+          "path": "flux-2-klein-4b-Q4_0.gguf",
+          "bytes": 2460378560,
+          "sha256": "d1023499ef3f2f82ff7c50e6778495195c1b6cc34835741778868428111f9ff4"
+        },
+        "vae": {
+          "repo": "black-forest-labs/FLUX.2-klein-4B",
+          "path": "vae/diffusion_pytorch_model.safetensors",
+          "bytes": 168120878,
+          "sha256": "ca70d2202afe6415bdbcb8793ba8cd99fd159cfe6192381504d6c4d3036e0f04"
+        },
+        "llm": {
+          "repo": "unsloth/Qwen3-4B-GGUF",
+          "path": "Qwen3-4B-Q4_K_M.gguf",
+          "bytes": 2497281312,
+          "sha256": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a"
+        }
+      },
+      "sampling": { "steps": 4, "max_steps": 12, "cfg_scale": 1.0, "sampler": "euler" },
+      "size": { "width": 1024, "height": 1024 },
+      "max_refs": 4,
+      "typical_secs": 37
+    },
+    {
+      "id": "local/z-image-turbo",
+      "kind": "image",
+      "engine": "sd.cpp",
+      "display_name": "Z-Image-Turbo",
+      "developer": "Tongyi-MAI (Alibaba)",
+      "license": "Apache-2.0",
+      "summary": "8-step photoreal text-to-image with excellent text rendering; the slowest local model, for finals rather than drafts. No reference images.",
+      "files": {
+        "diffusion_model": {
+          "repo": "leejet/Z-Image-Turbo-GGUF",
+          "path": "z_image_turbo-Q4_K.gguf",
+          "bytes": 3864250304,
+          "sha256": "14b375ab4f226bc5378f68f37e899ef3c2242b8541e61e2bc1aff40976086fbd"
+        },
+        "vae": {
+          "repo": "Comfy-Org/z_image_turbo",
+          "path": "split_files/vae/ae.safetensors",
+          "bytes": 335304388,
+          "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+        },
+        "llm": {
+          "repo": "unsloth/Qwen3-4B-GGUF",
+          "path": "Qwen3-4B-Q4_K_M.gguf",
+          "bytes": 2497281312,
+          "sha256": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a"
+        }
+      },
+      "sampling": { "steps": 8, "max_steps": 16, "cfg_scale": 1.0, "sampler": "euler" },
+      "size": { "width": 1024, "height": 1024 },
+      "max_refs": 0,
+      "typical_secs": 110
+    }
+  ]
+}
