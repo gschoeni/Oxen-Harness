@@ -571,7 +571,7 @@ impl SessionService {
     // --- Client & model selection -------------------------------------------
 
     /// The client, model label, and context window for a new agent: the
-    /// model the user last used (see [`Self::remember_last_model`]), local or
+    /// model the user last used (see `remember_last_model`), local or
     /// cloud.
     ///
     /// A local default never loads here — opening a chat is not asking for a
