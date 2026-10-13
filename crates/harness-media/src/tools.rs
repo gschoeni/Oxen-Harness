@@ -25,6 +25,7 @@ use crate::catalog::{estimate_cost, Catalog, MediaModel};
 use crate::library::{
     now_unix, slugify, MediaItem, MediaLibrary, MediaSource, MediaStatus, SourceOrigin, StoredRef,
 };
+use crate::local::{LocalJob, LocalMedia, LocalMediaError, LocalProgress};
 use crate::queue::{deadline_for, QueueClient, QueueError};
 use crate::refs::{self, MediaRefs, RefKind, ResolvedRef};
 use crate::{
@@ -49,8 +50,10 @@ pub struct MediaContext {
     /// Where a background video's report goes; without it `wait: false`
     /// falls back to waiting inline.
     pub asides: Option<Asides>,
+    /// On-device models; `None` when the host installed no provider.
+    pub local: Option<Arc<dyn LocalMedia>>,
     batch_prefix: Option<String>,
-    catalog: tokio::sync::OnceCell<Arc<Catalog>>,
+    hub_catalog: tokio::sync::OnceCell<Arc<Catalog>>,
     feed: std::sync::OnceLock<Arc<crate::events::CompletionFeed>>,
     uploader: std::sync::OnceLock<Arc<crate::upload::HubUploader>>,
     http: reqwest::Client,
@@ -75,8 +78,9 @@ impl MediaContext {
             library,
             sink,
             asides: None,
+            local: crate::local::installed(),
             batch_prefix: None,
-            catalog: tokio::sync::OnceCell::new(),
+            hub_catalog: tokio::sync::OnceCell::new(),
             feed: std::sync::OnceLock::new(),
             uploader: std::sync::OnceLock::new(),
             // The hub reads a User-Agent containing "oxen" as the Oxen CLI
@@ -145,9 +149,15 @@ impl MediaContext {
         self
     }
 
-    /// Point the catalog at a fixed copy (tests, offline).
+    /// Point the hosted catalog at a fixed copy (tests, offline).
     pub fn with_catalog(self, catalog: Catalog) -> Self {
-        let _ = self.catalog.set(Arc::new(catalog));
+        let _ = self.hub_catalog.set(Arc::new(catalog));
+        self
+    }
+
+    /// Use `local` for on-device models instead of the process-wide one.
+    pub fn with_local(mut self, local: Option<Arc<dyn LocalMedia>>) -> Self {
+        self.local = local;
         self
     }
 
@@ -155,8 +165,24 @@ impl MediaContext {
         self.api.as_ref().filter(|a| !a.api_key.trim().is_empty())
     }
 
+    /// Hosted models plus local ones. The local half is read fresh every
+    /// time (a model the user just pulled is usable at once); when the hub
+    /// is unreachable the local models still answer.
     pub async fn catalog(&self) -> Result<Arc<Catalog>, ToolError> {
-        self.catalog
+        let local = self.local.as_ref().map(|l| l.models()).unwrap_or_default();
+        match self.hub_catalog().await {
+            Ok(hub) if local.is_empty() => Ok(hub),
+            Ok(hub) => Ok(Arc::new(hub.merged(local))),
+            Err(e) if !local.is_empty() => {
+                tracing::warn!("{e}; offering only local media models");
+                Ok(Arc::new(Catalog::from_models(local)))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn hub_catalog(&self) -> Result<Arc<Catalog>, ToolError> {
+        self.hub_catalog
             .get_or_try_init(|| async {
                 let base = self
                     .api
@@ -255,7 +281,8 @@ impl TypedTool for MediaModelsTool {
     type Args = MediaModelsArgs;
 
     fn description(&self) -> &str {
-        "Look up image and video generation models on Oxen.ai. With `query`/`kind`, \
+        "Look up image and video generation models: hosted on Oxen.ai, plus \
+         `local/` models that run free on this machine. With `query`/`kind`, \
          lists matching models with price and inputs; with `id`, returns that \
          model's exact request parameters (choices, ranges, defaults) so you can \
          fill `extra` correctly in generate_image/generate_video. Read a model's \
@@ -487,8 +514,9 @@ impl TypedTool for GenerateImageTool {
     fn description(&self) -> &str {
         "Generate images with an Oxen.ai image model and save them into the \
          project's media library; you receive the images and can look at them. \
-         Costs money per image (the tool checks the user's budget and asks them \
-         when a call is over it). Use `refs` for reference/edit inputs the user \
+         Hosted models cost money per image (the tool checks the user's budget and \
+         asks them when a call is over it); `local/` models run free on this \
+         machine but slower. Use `refs` for reference/edit inputs the user \
          attached ([Image #N]) or earlier generations by path. Draft cheaply \
          (the default model, count 1–2), then render the chosen direction with \
          a stronger model. Read media_models with `id` before using unfamiliar \
@@ -610,9 +638,9 @@ async fn run_generation(
     req: GenerateRequest,
     call: &CallContext,
 ) -> Result<String, ToolError> {
-    let Some(queue) = ctx.queue() else {
+    if ctx.queue().is_none() && ctx.local.is_none() {
         return Ok(no_key_result());
-    };
+    }
     if req.prompt.trim().is_empty() {
         return Err(ToolError::InvalidArguments(
             "missing non-empty `prompt`".into(),
@@ -626,6 +654,12 @@ async fn run_generation(
     }
     let catalog = ctx.catalog().await?;
     let prepared = prepare(ctx, &catalog, &req)?;
+    if prepared.model.is_local() {
+        return run_local(ctx, req, prepared, call).await;
+    }
+    let Some(queue) = ctx.queue() else {
+        return Ok(no_key_result());
+    };
     let count = req.count;
 
     // Budget: under the limits it runs; over (or unpriced) the user decides.
@@ -666,7 +700,6 @@ async fn run_generation(
     // References go to the hub first (progress rows in the media feed),
     // then land in the model's fields as URLs.
     let (urls, sources) = upload_refs(ctx, &prepared.resolved).await?;
-    let ref_paths: Vec<String> = sources.iter().map(|s| s.path.clone()).collect();
     let mut body = prepared.body.clone();
     let prompt = place_refs(
         &prepared.model,
@@ -697,8 +730,98 @@ async fn run_generation(
         .enqueue(&Value::Object(body))
         .await
         .map_err(queue_error)?;
+    let items = record_batch(ctx, &req, &prepared, call, &ids, &prompt, sources);
+    finish_batch(
+        ctx,
+        &req,
+        &prepared,
+        items,
+        Waiter::Hub { queue, feed },
+        started,
+        total,
+    )
+    .await
+}
+
+/// Run a generation on this machine: no key, no upload, no spend — the
+/// references are read straight from disk and each output queues for the GPU.
+async fn run_local(
+    ctx: &Arc<MediaContext>,
+    req: GenerateRequest,
+    prepared: Prepared,
+    call: &CallContext,
+) -> Result<String, ToolError> {
+    let provider = ctx.local.clone().ok_or_else(|| {
+        ToolError::Execution(format!(
+            "{} runs on this machine, and this host has no local media engine",
+            prepared.model.id
+        ))
+    })?;
+    if let Some(info) = prepared.model.local.as_ref().filter(|l| !l.installed) {
+        return Err(ToolError::Execution(format!(
+            "{} isn't installed yet ({:.1} GB to download). Ask the user to run \
+             `oxen-harness media pull {}`, or pick an installed model from media_models.",
+            prepared.model.id,
+            info.download_bytes as f64 / 1e9,
+            prepared.model.id
+        )));
+    }
+    let sources = store_sources(ctx, &prepared.resolved);
+    let prompt = local_prompt(&prepared.resolved, &req.prompt);
+    let started = Instant::now();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let ids: Vec<String> = (1..=req.count)
+        .map(|i| format!("local-{stamp:x}-{i}"))
+        .collect();
+    let refs: Vec<PathBuf> = prepared.resolved.iter().map(|r| r.path.clone()).collect();
+    let jobs = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| {
+            let mut params = prepared.params.clone();
+            // A fixed seed makes variations: each output steps it by one.
+            if let Some(seed) = params.get("seed").and_then(Value::as_u64) {
+                params.insert("seed".into(), Value::from(seed + i as u64));
+            }
+            LocalJob {
+                id: id.clone(),
+                model: prepared.model.id.clone(),
+                kind: req.kind,
+                prompt: prompt.clone(),
+                params,
+                refs: refs.clone(),
+            }
+        })
+        .collect();
+    let items = record_batch(ctx, &req, &prepared, call, &ids, &prompt, sources);
+    finish_batch(
+        ctx,
+        &req,
+        &prepared,
+        items,
+        Waiter::Local { provider, jobs },
+        started,
+        None,
+    )
+    .await
+}
+
+/// Write the batch's rows (queued) into the library and return them.
+fn record_batch(
+    ctx: &MediaContext,
+    req: &GenerateRequest,
+    prepared: &Prepared,
+    call: &CallContext,
+    ids: &[String],
+    prompt: &str,
+    sources: Vec<MediaSource>,
+) -> Vec<MediaItem> {
     let created_at = now_unix();
-    let batch = format!("{created_at:x}-{}", &ids[0][..ids[0].len().min(8)]);
+    let first = ids.first().map(String::as_str).unwrap_or("batch");
+    let batch = format!("{created_at:x}-{}", &first[..first.len().min(8)]);
     let batch = match &ctx.batch_prefix {
         Some(prefix) => format!("{prefix}:{batch}"),
         None => batch,
@@ -708,6 +831,7 @@ async fn run_generation(
     } else {
         None
     };
+    let ref_paths: Vec<String> = sources.iter().map(|s| s.path.clone()).collect();
     let items: Vec<MediaItem> = ids
         .iter()
         .enumerate()
@@ -722,7 +846,7 @@ async fn run_generation(
             index: i as u32 + 1,
             kind: req.kind,
             model: prepared.model.id.clone(),
-            prompt: prompt.clone(),
+            prompt: prompt.to_string(),
             params: Value::Object(prepared.params.clone()),
             refs: ref_paths.clone(),
             path: None,
@@ -750,24 +874,70 @@ async fn run_generation(
         }
     }
     ctx.library.clear_uploads(&ctx.session, false);
+    items
+}
 
+/// Who a recorded batch is waiting on.
+#[derive(Clone)]
+enum Waiter {
+    Hub {
+        queue: QueueClient,
+        feed: Option<Arc<crate::events::CompletionFeed>>,
+    },
+    /// One job per item, in item order.
+    Local {
+        provider: Arc<dyn LocalMedia>,
+        jobs: Vec<LocalJob>,
+    },
+}
+
+impl Waiter {
+    async fn wait(
+        &self,
+        ctx: &Arc<MediaContext>,
+        items: Vec<MediaItem>,
+        slug: &str,
+    ) -> Vec<Outcome> {
+        match self {
+            Self::Hub { queue, feed } => wait_all(ctx, queue, items, slug, feed.clone()).await,
+            // The GPU runs one job at a time, so outputs go in order.
+            Self::Local { provider, jobs } => {
+                let mut outcomes = Vec::new();
+                for (item, job) in items.into_iter().zip(jobs.iter().cloned()) {
+                    outcomes.push(wait_local(ctx, provider.as_ref(), item, job, slug).await);
+                }
+                outcomes
+            }
+        }
+    }
+}
+
+/// Wait for a recorded batch — inline, or in the background with the
+/// report delivered as an aside — and report it.
+async fn finish_batch(
+    ctx: &Arc<MediaContext>,
+    req: &GenerateRequest,
+    prepared: &Prepared,
+    items: Vec<MediaItem>,
+    waiter: Waiter,
+    started: Instant,
+    total: Option<f64>,
+) -> Result<String, ToolError> {
     let slug = prepared.slug.clone();
-    let notes = prepared.notes.clone();
     let model_id = prepared.model.id.clone();
     if !req.wait {
         if let Some(asides) = ctx.asides.clone() {
+            let ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
             let ctx2 = ctx.clone();
-            let queue2 = queue.clone();
-            let items2 = items.clone();
             let kind = req.kind;
             let slug2 = slug.clone();
-            let feed2 = feed.clone();
+            let model2 = model_id.clone();
             tokio::spawn(async move {
-                let outcomes = wait_all(&ctx2, &queue2, items2, &slug2, feed2).await;
+                let outcomes = waiter.wait(&ctx2, items, &slug2).await;
                 commit_outputs(&ctx2, &outcomes, &slug2).await;
                 let body = report(
                     kind,
-                    &model_id,
+                    &model2,
                     &outcomes,
                     started.elapsed(),
                     &[],
@@ -791,29 +961,30 @@ async fn run_generation(
                 .map(|t| format!(", est. {}", fmt_usd(t)))
                 .unwrap_or_default();
             let mut msg = format!(
-                "Queued {count} {} generation(s) with {} (ids {}{est}). The result will be \
+                "Queued {} {} generation(s) with {} (ids {}{est}). The result will be \
                  delivered to you automatically when it finishes — keep working on other \
                  things and do not poll. media_status shows progress; the user sees the \
                  job in their media feed.",
+                req.count,
                 req.kind,
-                prepared.model.id,
+                model_id,
                 ids.join(", ")
             );
-            for n in &notes {
+            for n in &prepared.notes {
                 msg.push_str(&format!("\nNote: {n}"));
             }
             return Ok(msg);
         }
     }
 
-    let outcomes = wait_all(ctx, &queue, items, &slug, feed).await;
+    let outcomes = waiter.wait(ctx, items, &slug).await;
     commit_outputs(ctx, &outcomes, &slug).await;
     Ok(report(
         req.kind,
-        &prepared.model.id,
+        &model_id,
         &outcomes,
         started.elapsed(),
-        &notes,
+        &prepared.notes,
         true,
         ctx.library.root(),
     ))
@@ -825,16 +996,17 @@ fn prepare(
     catalog: &Catalog,
     req: &GenerateRequest,
 ) -> Result<Prepared, ToolError> {
-    let default_model = match req.kind {
-        MediaKind::Image => &ctx.prefs.default_image_model,
-        MediaKind::Video => &ctx.prefs.default_video_model,
-    };
-    let model_id = req
+    let mut notes = Vec::new();
+    let named = req
         .model
         .as_deref()
         .map(str::trim)
-        .filter(|m| !m.is_empty())
-        .unwrap_or(default_model);
+        .filter(|m| !m.is_empty());
+    let model_id = match named {
+        Some(id) => id.to_string(),
+        None => default_model(ctx, catalog, req.kind, &mut notes),
+    };
+    let model_id = model_id.as_str();
     let model = catalog.get(model_id).cloned().ok_or_else(|| {
         let near = catalog
             .search(Some(req.kind), Some(model_id))
@@ -869,7 +1041,6 @@ fn prepare(
 
     let mut body = Map::new();
     let mut params = Map::new();
-    let mut notes = Vec::new();
 
     // Typed params: only the ones this model has; the rest are noted.
     for (name, value) in &req.typed {
@@ -936,6 +1107,40 @@ fn prepare(
     })
 }
 
+/// The user's default model for `kind` — unless it is hosted and there is
+/// no key to reach the hub, when an installed local model stands in (and a
+/// note says so) rather than failing a call that could have run here.
+fn default_model(
+    ctx: &MediaContext,
+    catalog: &Catalog,
+    kind: MediaKind,
+    notes: &mut Vec<String>,
+) -> String {
+    let preferred = match kind {
+        MediaKind::Image => &ctx.prefs.default_image_model,
+        MediaKind::Video => &ctx.prefs.default_video_model,
+    };
+    if crate::local::is_local_id(preferred) || ctx.api().is_some() {
+        return preferred.clone();
+    }
+    let installed = catalog
+        .models()
+        .iter()
+        .filter(|m| m.kind == kind)
+        .find(|m| m.local.as_ref().is_some_and(|l| l.installed));
+    match installed {
+        Some(m) => {
+            notes.push(format!(
+                "no Oxen API key is set, so the on-device model {} stood in for the \
+                 default {preferred}",
+                m.id
+            ));
+            m.id.clone()
+        }
+        None => preferred.clone(),
+    }
+}
+
 /// Refuse early when the model has no field for a kind of reference the
 /// call gave it, naming models that do.
 fn validate_slots(
@@ -985,6 +1190,33 @@ fn validate_slots(
         }
     }
     Ok(())
+}
+
+/// Copy each reference into the library for provenance, with no upload —
+/// a local engine reads the originals from disk.
+fn store_sources(ctx: &MediaContext, resolved: &[ResolvedRef]) -> Vec<MediaSource> {
+    resolved
+        .iter()
+        .filter_map(|r| match ctx.library.store_ref(&r.path) {
+            Ok(stored) => Some(source_of(ctx, r, stored)),
+            Err(e) => {
+                tracing::warn!("could not copy reference {}: {e}", r.path.display());
+                None
+            }
+        })
+        .collect()
+}
+
+/// `[Image #2]` in the prompt → `reference image 1` (its position among the
+/// references the engine gets).
+fn local_prompt(resolved: &[ResolvedRef], prompt: &str) -> String {
+    let mut prompt = prompt.to_string();
+    for (i, r) in resolved.iter().enumerate() {
+        if let Some(label) = &r.label {
+            prompt = prompt.replace(label, &format!("reference image {}", i + 1));
+        }
+    }
+    prompt
 }
 
 /// Upload every reference to the hub (progress rows in the media feed) and
@@ -1333,41 +1565,15 @@ async fn wait_one(
     let result = queue
         .wait_with_feed(&id, kind, deadline_for(kind), feed, &mut on_status)
         .await;
-    let finish = |item: &mut MediaItem, status: MediaStatus, error: Option<String>| {
-        item.status = status;
-        item.error = error;
-        item.completed_at = Some(now_unix());
-        if let Err(e) = lib.record(item.clone()) {
-            tracing::warn!("could not record generation {}: {e}", item.id);
-            lib.upsert(item.clone());
-        }
-    };
     let record = match result {
         Ok(record) => record,
         Err(QueueError::Timeout {
             elapsed, status, ..
         }) => {
             let msg = format!("still {status} after {elapsed}s; cancelled");
-            finish(&mut item, MediaStatus::TimedOut, Some(msg.clone()));
-            return Outcome {
-                item,
-                status: MediaStatus::TimedOut,
-                rel: None,
-                poster: None,
-                error: Some(msg),
-            };
+            return failed(&lib, item, MediaStatus::TimedOut, msg);
         }
-        Err(e) => {
-            let msg = e.to_string();
-            finish(&mut item, MediaStatus::Failed, Some(msg.clone()));
-            return Outcome {
-                item,
-                status: MediaStatus::Failed,
-                rel: None,
-                poster: None,
-                error: Some(msg),
-            };
-        }
+        Err(e) => return failed(&lib, item, MediaStatus::Failed, e.to_string()),
     };
     item.seed = record.seed.clone().or(item.seed.take());
     item.provider = match serde_json::to_value(&record) {
@@ -1383,53 +1589,70 @@ async fn wait_one(
             .error_message
             .clone()
             .unwrap_or_else(|| format!("generation {}", record.status));
-        finish(&mut item, status, Some(msg.clone()));
-        return Outcome {
-            item,
-            status,
-            rel: None,
-            poster: None,
-            error: Some(msg),
-        };
+        return failed(&lib, item, status, msg);
     }
     let Some(url) = record.result_url.clone() else {
         let msg = "succeeded but the hub returned no result URL".to_string();
-        finish(&mut item, MediaStatus::Failed, Some(msg.clone()));
-        return Outcome {
-            item,
-            status: MediaStatus::Failed,
-            rel: None,
-            poster: None,
-            error: Some(msg),
-        };
+        return failed(&lib, item, MediaStatus::Failed, msg);
     };
     let bytes = match queue.download(&url).await {
         Ok(b) => b,
         Err(e) => {
-            let msg = format!("download failed: {e}");
-            finish(&mut item, MediaStatus::Failed, Some(msg.clone()));
-            return Outcome {
+            return failed(
+                &lib,
                 item,
-                status: MediaStatus::Failed,
-                rel: None,
-                poster: None,
-                error: Some(msg),
-            };
+                MediaStatus::Failed,
+                format!("download failed: {e}"),
+            )
         }
     };
-    let ext = output_extension(kind, &url, &bytes, &item.params);
-    let rel = match lib.save_output(&bytes, slug, item.index, &ext, item.created_at) {
+    save_output(ctx, item, &bytes, &url, slug).await
+}
+
+/// Write a row's terminal state to the manifest (and the live feed).
+fn settle(lib: &MediaLibrary, item: &mut MediaItem, status: MediaStatus, error: Option<String>) {
+    item.status = status;
+    item.error = error;
+    item.completed_at = Some(now_unix());
+    if let Err(e) = lib.record(item.clone()) {
+        tracing::warn!("could not record generation {}: {e}", item.id);
+        lib.upsert(item.clone());
+    }
+}
+
+/// A row that ended without an output.
+fn failed(lib: &MediaLibrary, mut item: MediaItem, status: MediaStatus, msg: String) -> Outcome {
+    settle(lib, &mut item, status, Some(msg.clone()));
+    Outcome {
+        item,
+        status,
+        rel: None,
+        poster: None,
+        error: Some(msg),
+    }
+}
+
+/// Save a finished output into the library, measure it, and settle its row.
+/// `url` is only a hint for the file extension (empty for local outputs).
+async fn save_output(
+    ctx: &MediaContext,
+    mut item: MediaItem,
+    bytes: &[u8],
+    url: &str,
+    slug: &str,
+) -> Outcome {
+    let lib = &ctx.library;
+    let kind = item.kind;
+    let ext = output_extension(kind, url, bytes, &item.params);
+    let rel = match lib.save_output(bytes, slug, item.index, &ext, item.created_at) {
         Ok(rel) => rel,
         Err(e) => {
-            let msg = format!("could not save the result: {e}");
-            finish(&mut item, MediaStatus::Failed, Some(msg.clone()));
-            return Outcome {
+            return failed(
+                lib,
                 item,
-                status: MediaStatus::Failed,
-                rel: None,
-                poster: None,
-                error: Some(msg),
-            };
+                MediaStatus::Failed,
+                format!("could not save the result: {e}"),
+            )
         }
     };
     item.bytes = bytes.len() as u64;
@@ -1447,13 +1670,52 @@ async fn wait_one(
         }
     }
     let poster = item.poster.clone();
-    finish(&mut item, MediaStatus::Succeeded, None);
+    settle(lib, &mut item, MediaStatus::Succeeded, None);
     Outcome {
         item,
         status: MediaStatus::Succeeded,
         rel: Some(rel),
         poster,
         error: None,
+    }
+}
+
+/// Run one local job for a recorded row: the row turns `processing` once
+/// the engine starts on it, and settles with the engine's record attached.
+async fn wait_local(
+    ctx: &MediaContext,
+    provider: &dyn LocalMedia,
+    mut item: MediaItem,
+    job: LocalJob,
+    slug: &str,
+) -> Outcome {
+    let lib = ctx.library.clone();
+    let snapshot = std::sync::Mutex::new(item.clone());
+    let progress: Arc<dyn Fn(LocalProgress) + Send + Sync> = {
+        let lib = lib.clone();
+        Arc::new(move |p: LocalProgress| {
+            if p == LocalProgress::Queued {
+                return;
+            }
+            // A poisoned snapshot only means an earlier callback panicked;
+            // the feed update is cosmetic, so skip it rather than guess.
+            let Ok(mut row) = snapshot.lock() else { return };
+            if row.status != MediaStatus::Processing {
+                row.status = MediaStatus::Processing;
+                lib.upsert(row.clone());
+            }
+        })
+    };
+    match provider.generate(job, progress).await {
+        Ok(output) => {
+            item.seed = output.seed.or(item.seed.take());
+            item.provider = Some(output.record);
+            save_output(ctx, item, &output.bytes, "", slug).await
+        }
+        Err(LocalMediaError::Cancelled) => {
+            failed(&lib, item, MediaStatus::Cancelled, "cancelled".to_string())
+        }
+        Err(e) => failed(&lib, item, MediaStatus::Failed, e.to_string()),
     }
 }
 
@@ -1729,10 +1991,22 @@ impl TypedTool for MediaStatusTool {
                 .ok_or_else(|| {
                     ToolError::InvalidArguments("`cancel` needs the generation `id`".into())
                 })?;
-            let Some(queue) = self.ctx.queue() else {
-                return Ok(no_key_result());
-            };
-            queue.cancel(id).await.map_err(queue_error)?;
+            if id.starts_with("local-") {
+                let found = match &self.ctx.local {
+                    Some(local) => local.cancel(id).await,
+                    None => false,
+                };
+                if !found {
+                    return Err(ToolError::InvalidArguments(format!(
+                        "no local generation `{id}` is queued or running"
+                    )));
+                }
+            } else {
+                let Some(queue) = self.ctx.queue() else {
+                    return Ok(no_key_result());
+                };
+                queue.cancel(id).await.map_err(queue_error)?;
+            }
             if let Some(mut item) = self
                 .ctx
                 .library
@@ -2375,6 +2649,199 @@ mod tests {
         assert_eq!(item.status, MediaStatus::Succeeded);
         assert_eq!(item.duration_secs, Some(4.0));
         assert!((item.cost_usd.unwrap() - 0.4).abs() < 1e-9);
+    }
+
+    /// A local provider with one installed model (which takes references)
+    /// and one that isn't installed; records every job it runs.
+    #[derive(Default)]
+    struct FakeLocal {
+        jobs: Mutex<Vec<LocalJob>>,
+        cancelled: Mutex<Vec<String>>,
+    }
+
+    fn local_model(id: &str, installed: bool) -> MediaModel {
+        MediaModel {
+            id: id.into(),
+            kind: MediaKind::Image,
+            display_name: None,
+            developer: None,
+            summary: None,
+            description: None,
+            inputs: vec!["text".into(), "image".into()],
+            pricing: Value::Null,
+            request_schema: json!({"required": ["prompt"], "properties": {
+                "prompt": {"type": "string"},
+                "aspect_ratio": {"type": "string", "enum": ["1:1", "16:9"]},
+                "seed": {"type": "integer"},
+                "steps": {"type": "integer", "minimum": 1, "maximum": 8},
+                "input_images": {"type": "array", "items": {"type": "string"}}}}),
+            local: Some(crate::LocalInfo {
+                installed,
+                engine: "fake".into(),
+                license: "Apache-2.0".into(),
+                download_bytes: if installed { 0 } else { 5_000_000_000 },
+                typical_secs: Some(20.0),
+            }),
+        }
+    }
+
+    #[async_trait]
+    impl LocalMedia for FakeLocal {
+        fn models(&self) -> Vec<MediaModel> {
+            vec![
+                local_model("local/fake", true),
+                local_model("local/missing", false),
+            ]
+        }
+        async fn generate(
+            &self,
+            job: LocalJob,
+            progress: Arc<dyn Fn(LocalProgress) + Send + Sync>,
+        ) -> Result<crate::LocalOutput, LocalMediaError> {
+            progress(LocalProgress::Step { step: 1, total: 4 });
+            let seed = job.params.get("seed").cloned();
+            self.jobs.lock().unwrap().push(job);
+            Ok(crate::LocalOutput {
+                bytes: png(),
+                seed,
+                record: json!({"engine": "fake", "elapsed_ms": 5}),
+            })
+        }
+        async fn cancel(&self, id: &str) -> bool {
+            self.cancelled.lock().unwrap().push(id.to_string());
+            true
+        }
+    }
+
+    fn local_ctx(
+        root: &std::path::Path,
+        local: Arc<FakeLocal>,
+        sink: Arc<dyn MediaSink>,
+    ) -> Arc<MediaContext> {
+        Arc::new(
+            MediaContext::new(
+                "s1",
+                root,
+                MediaPrefs::default(),
+                None,
+                Arc::new(MediaRefs::new()),
+                Arc::new(MediaLibrary::new(root, "generations")),
+                sink,
+            )
+            .with_catalog(catalog())
+            .with_local(Some(local)),
+        )
+    }
+
+    #[tokio::test]
+    async fn local_models_run_without_a_key_upload_or_spend_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("sketch.png"), png()).unwrap();
+        let local = Arc::new(FakeLocal::default());
+        let asker = Arc::new(RecordingAsker(Mutex::new(vec![]), false));
+        let ctx = local_ctx(
+            dir.path(),
+            local.clone(),
+            Arc::new(AskerSpendConfirm(asker.clone())),
+        );
+        ctx.refs
+            .stage_as("[Image #1]", dir.path().join("sketch.png"));
+        let out = GenerateImageTool { ctx: ctx.clone() }
+            .invoke(json!({
+                "prompt": "ink [Image #1] in watercolor",
+                "model": "local/fake",
+                "seed": 5,
+                "count": 2,
+                "extra": {"steps": 2}
+            }))
+            .await
+            .unwrap();
+        assert!(
+            out.starts_with("Generated 2 images with local/fake"),
+            "{out}"
+        );
+        assert!(
+            asker.0.lock().unwrap().is_empty(),
+            "local generation never asks to spend"
+        );
+        let jobs = local.jobs.lock().unwrap().clone();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].prompt, "ink reference image 1 in watercolor");
+        assert_eq!(jobs[0].refs, vec![dir.path().join("sketch.png")]);
+        assert_eq!(jobs[0].params.get("steps"), Some(&json!(2)));
+        // Variations step a fixed seed.
+        assert_eq!(jobs[0].params.get("seed"), Some(&json!(5)));
+        assert_eq!(jobs[1].params.get("seed"), Some(&json!(6)));
+        let items = ctx.library.items();
+        assert_eq!(items.len(), 2);
+        for item in &items {
+            assert_eq!(item.status, MediaStatus::Succeeded);
+            assert!(item.id.starts_with("local-"), "{}", item.id);
+            assert_eq!(item.cost_usd, None);
+            assert_eq!(
+                item.provider,
+                Some(json!({"engine": "fake", "elapsed_ms": 5}))
+            );
+            assert_eq!(
+                item.sources.len(),
+                1,
+                "the reference is kept for provenance"
+            );
+            assert!(dir.path().join(item.path.as_ref().unwrap()).exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn without_a_key_the_default_falls_back_to_an_installed_local_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = Arc::new(FakeLocal::default());
+        let ctx = local_ctx(dir.path(), local.clone(), Arc::new(NoConfirmSink));
+        let out = GenerateImageTool { ctx }
+            .invoke(json!({"prompt": "a fox"}))
+            .await
+            .unwrap();
+        assert!(out.contains("with local/fake"), "{out}");
+        assert!(out.contains("no Oxen API key is set"), "{out}");
+        assert_eq!(local.jobs.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_uninstalled_local_model_says_how_to_install_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = Arc::new(FakeLocal::default());
+        let ctx = local_ctx(dir.path(), local.clone(), Arc::new(NoConfirmSink));
+        let err = GenerateImageTool { ctx }
+            .invoke(json!({"prompt": "a fox", "model": "local/missing"}))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("oxen-harness media pull local/missing"),
+            "{err}"
+        );
+        assert!(local.jobs.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn local_generations_cancel_through_the_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = Arc::new(FakeLocal::default());
+        let ctx = local_ctx(dir.path(), local.clone(), Arc::new(NoConfirmSink));
+        let out = MediaStatusTool { ctx: ctx.clone() }
+            .invoke(json!({"id": "local-abc-1", "cancel": true}))
+            .await
+            .unwrap();
+        assert!(out.contains("Cancelled"), "{out}");
+        assert_eq!(local.cancelled.lock().unwrap().clone(), vec!["local-abc-1"]);
+        let listed = MediaModelsTool { ctx }
+            .invoke(json!({"query": "local"}))
+            .await
+            .unwrap();
+        assert!(
+            listed.contains("local/fake — free, runs on this machine"),
+            "{listed}"
+        );
+        assert!(listed.contains("not installed"), "{listed}");
     }
 
     #[tokio::test]

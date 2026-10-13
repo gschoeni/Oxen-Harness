@@ -25,6 +25,9 @@
 //! - [`budget`] — the per-generation / per-run spend limits; anything under
 //!   them runs, anything over asks the user through the host's
 //!   [`MediaSink`].
+//! - [`local`] — the seam to on-device models (`local/…` ids): the tools
+//!   run them through whichever [`local::LocalMedia`] the host installed,
+//!   with no key, no upload, and no spend.
 //! - [`tools`] — the `TypedTool`s.
 //!
 //! Hosts build one [`MediaContext`] per session with [`session_tools`] and
@@ -36,6 +39,7 @@ pub mod catalog;
 pub mod events;
 pub mod hub;
 pub mod library;
+pub mod local;
 pub mod queue;
 pub mod refs;
 pub mod tools;
@@ -55,6 +59,7 @@ pub use library::{
     MediaItem, MediaLibrary, MediaSource, MediaStatus, MediaTick, MediaUpload, SourceOrigin,
     StoredRef, UploadStatus,
 };
+pub use local::{LocalInfo, LocalJob, LocalMedia, LocalMediaError, LocalOutput, LocalProgress};
 pub use queue::{GenerationRecord, QueueClient, QueueError};
 pub use refs::{MediaRefs, RefKind, ResolvedRef};
 pub use tools::{

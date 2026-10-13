@@ -14,6 +14,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::local::LocalInfo;
 use crate::refs::RefKind;
 use crate::MediaKind;
 
@@ -40,6 +41,9 @@ pub struct MediaModel {
     pub pricing: Value,
     #[serde(default)]
     pub request_schema: Value,
+    /// Set for a model that runs on this machine; `None` for a hosted one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<LocalInfo>,
 }
 
 /// A request field that takes reference media.
@@ -162,6 +166,9 @@ impl MediaModel {
 
     /// `$0.01/image`, `$0.08–0.17/s`, `priced per image (quality × size)`.
     pub fn price_label(&self) -> String {
+        if self.local.is_some() {
+            return "free, runs on this machine".to_string();
+        }
         let p = &self.pricing;
         match self.kind {
             MediaKind::Image => {
@@ -224,7 +231,25 @@ impl MediaModel {
                 }
             })
             .unwrap_or_default();
-        format!("{} — {}{inputs}{blurb}", self.id, self.price_label())
+        let local = match &self.local {
+            Some(l) if !l.installed => format!(
+                " — not installed ({} to download; the user installs it with \
+                 `oxen-harness media pull {}`)",
+                fmt_gb(l.download_bytes),
+                self.id
+            ),
+            Some(l) => l
+                .typical_secs
+                .map(|s| format!(" — ~{}s per image", s.round()))
+                .unwrap_or_default(),
+            None => String::new(),
+        };
+        format!("{} — {}{local}{inputs}{blurb}", self.id, self.price_label())
+    }
+
+    /// Whether this model runs on this machine rather than on the hub.
+    pub fn is_local(&self) -> bool {
+        self.local.is_some()
     }
 
     /// A compact, model-readable rendering of the request schema: one line
@@ -427,6 +452,10 @@ pub fn duration_secs(model: &MediaModel, params: &Map<String, Value>) -> Option<
     })
 }
 
+fn fmt_gb(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / 1e9)
+}
+
 fn lookup_ci<'a>(m: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
     m.get(key).or_else(|| {
         m.iter()
@@ -464,6 +493,23 @@ impl Catalog {
         let mut models: Vec<MediaModel> = raw.iter().filter_map(parse_model).collect();
         models.sort_by(|a, b| a.id.cmp(&b.id));
         Self { models }
+    }
+
+    /// A catalog of exactly these models (local rows, tests).
+    pub fn from_models(mut models: Vec<MediaModel>) -> Self {
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        Self { models }
+    }
+
+    /// This catalog plus `more`; an id already present keeps its first row.
+    pub fn merged(&self, more: Vec<MediaModel>) -> Self {
+        let mut models = self.models.clone();
+        for m in more {
+            if !models.iter().any(|have| have.id == m.id) {
+                models.push(m);
+            }
+        }
+        Self::from_models(models)
     }
 
     pub fn models(&self) -> &[MediaModel] {
@@ -632,6 +678,7 @@ fn parse_model(v: &Value) -> Option<MediaModel> {
         inputs,
         pricing: v.get("pricing").cloned().unwrap_or(Value::Null),
         request_schema: v.get("request_schema").cloned().unwrap_or(Value::Null),
+        local: None,
     })
 }
 
