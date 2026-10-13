@@ -76,6 +76,73 @@ It asks cargo which artifacts the clippy and test commands above actually use
 caches idle for a week. Everything it removes is rebuildable, so the only cost
 of running it too often is a rebuild; the cost of never running it is the disk.
 
+## Keeping tests fast
+
+The Rust suite (~1,500 tests) runs in about 3 seconds and the frontend suite
+(~850) in about 7, and that only holds if every test stays light. A test
+should finish in tens of milliseconds and run safely in parallel with all the
+others. A test that waits on the wall clock is slow, and it tends to flake
+under load. Check the slowest tests after adding some:
+
+```bash
+cargo nextest run --workspace --status-level all 2>&1 | sort -t'[' -k2 -rn | head
+```
+
+- **Wait for events, not for time.** Don't `sleep` to let something happen
+  or to prove that it didn't. Wait on the signal itself: a channel, a
+  `Notify`, a `Barrier`, a mock's `matched_async()`, or a stream event (see
+  `wait_for` and `next_matching` in the host and server tests). To prove
+  something *didn't* happen, make something later happen and check the
+  ordered stream up to that point (`filters_events_by_session`). To prove
+  calls overlap, use a barrier they can only pass together. Don't time them
+  (`shared_tool_calls_in_one_reply_overlap…`).
+- **Test timing logic in paused time.** Pull debounce, backoff, and poll loops
+  into a function and drive it with `#[tokio::test(start_paused = true)]`
+  (tokio's `test-util` feature as a dev-dependency), which advances virtual time
+  instantly (`watch::tests::one_edit_batch_becomes_one_reload`). Don't use
+  paused time around real sockets or processes, because their timeouts would
+  fire early.
+- **Shrink production delays in tests through a seam, never by deleting the
+  wait.** In order of preference:
+  - an injected value: `RetryPolicy`/`fast_retry`, `Backoff::instant`,
+    `Backoff::without_waits`, `OxenClient::with_done_grace`;
+  - a crate-local `if cfg!(test)` constant with the same shape and a shorter
+    unit: `LANE_RETRY_DELAY`, `POLL_UNIT` in harness-media, the preview
+    `WATCHDOG_INTERVAL`, sd-server `POLL`.
+
+  Keep the attempt counts and code paths the same. Only the waits shrink.
+- **Use the smallest input that exercises the behavior.** An image one pixel
+  over the edge limit proves the resize as well as a 4000×2000 one does, and
+  costs a fraction of the encode time. Image codecs, `sha2`, and `base64` are
+  built with `opt-level = 3` even in dev/test (`[profile.dev.package]` in
+  `Cargo.toml`). Add a crate there if a number-crunching dependency shows up
+  in the slow list.
+- **Don't spin up heavy OS machinery the test doesn't check.** File watchers
+  (macOS serializes FSEvents setup across the whole system, so each one costs
+  0.5–1.5s under parallel tests), real servers, and model processes. Let the
+  caller opt in (`PreviewSink::wants_reloads`), or stand in a mock.
+- **Kill whole process trees.** A `sh -c` child that times out must take its
+  grandchildren with it (process group + `kill_process_group`). Otherwise
+  they hold the output pipes open, and both the test and the user wait for
+  the drain to give up.
+- **Heavy or real-world tests are `#[ignore = "why; how to run"]`.** That
+  covers real filesystem watchers, live network, real models, and multi-second
+  settling. Before ignoring a test, cover the logic it guards with a fast
+  test, and run the ignored one with `--run-ignored all` when you touch that
+  code. Real processes and real `git` are fine when they're what's under test
+  (preview servers, worktrees), as long as each test stays well under a
+  second.
+- **Frontend:** `*.test.ts` files run in plain node (no jsdom to build). A
+  `.test.ts` file that needs a DOM (localStorage, the store, React hooks)
+  starts with `// @vitest-environment jsdom`, and component tests are
+  `.test.tsx`. Use fake timers (`vi.useFakeTimers`) instead of real waits.
+  For bulk text entry where keystroke behavior isn't under test, prefer
+  `user.paste`/`fireEvent.change` over per-character `userEvent.type`.
+
+When you speed up a test, prove it still catches the bug: break the code it
+guards (drop the group kill, disarm the cancel guard, let the filter pass
+everything) and check that the test fails. Then restore the code.
+
 ## Project conventions
 
 - **Provider:** Oxen.ai only. Base URL `https://hub.oxen.ai/api/ai`, default model
