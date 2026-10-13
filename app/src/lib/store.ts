@@ -46,6 +46,7 @@ import {
   selectCloudModelForNewChats,
   setActiveProject,
   setChatPermissionMode,
+  setPermissionMode,
   setCompressionMode,
   setLocalModel,
   setModel,
@@ -734,8 +735,8 @@ interface AppState {
   changeServiceTier: (tier: string | null) => Promise<void>;
   /** Switch context compression for the live chat (persisted for new ones too). */
   changeCompressionMode: (mode: CompressionMode) => Promise<void>;
-  /** Switch the permission mode of the chat in view, live and for that chat
-   *  only — nothing is saved, so new chats keep the Settings default. */
+  /** Switch the permission mode of the chat in view, live, and remember it
+   *  as the default new chats start in. */
   changePermissionMode: (mode: PermissionMode) => Promise<void>;
   /** Record a chat's permission mode after the backend changed it. */
   notePermissionMode: (session: string, mode: PermissionMode) => void;
@@ -1709,7 +1710,15 @@ export const useStore = create<AppState>((rawSet, get) => {
       // while the request is out must not retarget it.
       const session = get().session?.session_id;
       if (!session) return;
-      get().notePermissionMode(session, await setChatPermissionMode(session, mode));
+      const applied = await setChatPermissionMode(session, mode);
+      get().notePermissionMode(session, applied);
+      // Remembered: the pick is also the default new chats start in. The
+      // chat already switched, so a failed save is reported, not hidden.
+      try {
+        await setPermissionMode(applied);
+      } catch (e) {
+        throw new Error(`switched this chat, but couldn't save it as the default: ${String(e)}`);
+      }
     },
 
     notePermissionMode: (session, mode) =>

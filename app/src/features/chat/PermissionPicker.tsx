@@ -9,7 +9,7 @@ import type { PermissionMode } from "../../lib/types";
 const MODES: { value: PermissionMode; name: string; hint: string }[] = [
   { value: "cautious", name: "Cautious", hint: "asks before edits, commits & most commands" },
   { value: "relaxed", name: "Relaxed", hint: "asks before dangerous commands" },
-  { value: "bypass", name: "Bypass", hint: "yolo — never asks; circuit breakers still refuse" },
+  { value: "bypass", name: "Yolo", hint: "bypasses every prompt; circuit breakers still refuse" },
 ];
 
 const ICON: Record<PermissionMode, typeof ShieldCheck> = {
@@ -19,11 +19,12 @@ const ICON: Record<PermissionMode, typeof ShieldCheck> = {
 };
 
 /** A compact dropdown in the composer, next to the model picker, showing the
- *  permission mode this chat is running under and switching it — the desktop
- *  form of the CLI's `--yolo`. The switch is this chat's alone and is never
- *  saved (the default lives in Settings → Permissions), and unlike the other
- *  pickers it works mid-turn: the gate reads the mode per tool call, so a run
- *  that keeps asking can be let loose, or reined in, without stopping it. */
+ *  permission mode this chat is running under and switching it. A pick is
+ *  remembered: it switches this chat and becomes the default new chats start
+ *  in (the same default Settings → Permissions edits, and the CLI's
+ *  `/permissions` saves). Unlike the other pickers it works mid-turn: the
+ *  gate reads the mode per tool call, so a run that keeps asking can be let
+ *  loose, or reined in, without stopping it. */
 export function PermissionPicker() {
   const session = useStore((s) => s.session?.session_id);
   const mode = useStore((s) => s.session?.permission_mode ?? "relaxed");
@@ -45,7 +46,7 @@ export function PermissionPicker() {
       await changePermissionMode(next);
       setOpen(false);
     } catch (e) {
-      // Keep the menu open on the failure: a chat believed to be in bypass
+      // Keep the menu open on the failure: a chat believed to be in yolo
       // (or out of it) when it isn't is the one thing this must not hide.
       setError(`Couldn't switch permissions: ${String(e)}`);
     } finally {
@@ -65,7 +66,7 @@ export function PermissionPicker() {
         className={`picker-btn ${mode === "bypass" ? "picker-danger" : ""}`}
         onClick={() => setOpen((o) => !o)}
         disabled={!session || busy}
-        title={`Permissions for this chat: ${current.hint}`}
+        title={`Permissions: ${current.hint}`}
         aria-haspopup="listbox"
         aria-expanded={open}
       >
@@ -76,7 +77,7 @@ export function PermissionPicker() {
 
       {open && (
         <Menu className="picker-menu">
-          <MenuHead>Permissions for this chat</MenuHead>
+          <MenuHead>Permissions · remembered for new chats</MenuHead>
           {MODES.map((m) => (
             <MenuItem
               key={m.value}

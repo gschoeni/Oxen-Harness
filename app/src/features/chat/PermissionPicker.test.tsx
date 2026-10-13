@@ -23,18 +23,20 @@ describe("PermissionPicker", () => {
     expect(screen.getByText("Relaxed")).toBeInTheDocument();
   });
 
-  it("switches this chat to bypass and leaves other chats alone", async () => {
+  it("switches this chat to yolo, remembers it for new chats, and leaves other chats alone", async () => {
     render(<PermissionPicker />);
     await userEvent.click(screen.getByText("Relaxed"));
-    await userEvent.click(screen.getByText("Bypass"));
+    await userEvent.click(screen.getByText("Yolo"));
 
     expect(ipc.setChatPermissionMode).toHaveBeenCalledWith("s1", "bypass");
+    // Remembered: the saved default follows the pick (the id stays `bypass`).
+    expect(ipc.setPermissionMode).toHaveBeenCalledWith("bypass");
     const state = useStore.getState();
     expect(state.session?.permission_mode).toBe("bypass");
     expect(state.infos.s1.permission_mode).toBe("bypass");
     expect(state.infos.s2.permission_mode).toBe("relaxed");
     // The menu closed; the trigger now reads (and flags) the new mode.
-    expect(screen.getByText("Bypass").closest("button")).toHaveClass("picker-danger");
+    expect(screen.getByText("Yolo").closest("button")).toHaveClass("picker-danger");
   });
 
   it("re-picking the current mode is a no-op", async () => {
@@ -48,10 +50,20 @@ describe("PermissionPicker", () => {
     ipc.setChatPermissionMode.mockRejectedValueOnce("unknown work context s1");
     render(<PermissionPicker />);
     await userEvent.click(screen.getByText("Relaxed"));
-    await userEvent.click(screen.getByText("Bypass"));
+    await userEvent.click(screen.getByText("Yolo"));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("unknown work context s1");
     expect(useStore.getState().session?.permission_mode).toBe("relaxed");
+  });
+
+  it("says so when the chat switched but the default couldn't be saved", async () => {
+    ipc.setPermissionMode.mockRejectedValueOnce("disk full");
+    render(<PermissionPicker />);
+    await userEvent.click(screen.getByText("Relaxed"));
+    await userEvent.click(screen.getByText("Cautious"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("couldn't save it as the default: disk full");
+    expect(useStore.getState().session?.permission_mode).toBe("cautious");
   });
 
   it("opens the Permissions settings page for the saved default", async () => {

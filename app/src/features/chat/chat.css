@@ -1102,7 +1102,7 @@
   max-width: 320px;
   border-radius: var(--radius-pill);
 }
-/* Bypass is the one picker state that should never go unnoticed. */
+/* Yolo is the one picker state that should never go unnoticed. */
 .composer-toolbar .picker-btn.picker-danger {
   color: var(--danger);
 }

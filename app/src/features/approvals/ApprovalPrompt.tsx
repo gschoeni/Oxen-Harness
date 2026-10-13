@@ -96,7 +96,7 @@ function ApprovalCard({ request }: { request: ApprovalRequestEvent }) {
             type="button"
             variant="outline"
             className="aprompt-bypass"
-            title="Switch this session to bypass mode — nothing asks again (hard limits like rm -rf / still refuse). Session-only; new chats return to your configured mode."
+            title="Switch this session to yolo mode — bypasses every prompt from here on (hard limits like rm -rf / still refuse). Session-only; new chats return to your configured mode."
             onClick={() => decide("bypass")}
           >
             Dangerously allow everything

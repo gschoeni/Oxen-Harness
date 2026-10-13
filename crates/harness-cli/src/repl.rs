@@ -51,7 +51,7 @@ pub enum Command {
     /// `/compression off|audit|on` switches directly.
     Compression(Option<String>),
     /// Show or switch the permission mode: `/permissions` prints the rules in
-    /// force and opens a picker; `/permissions relaxed|cautious|bypass`
+    /// force and opens a picker; `/permissions relaxed|cautious|yolo`
     /// switches directly.
     Permissions(Option<String>),
     /// Plan mode: `/plan` (or `/plan on`) holds the tree read-only while the
@@ -254,12 +254,15 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
     SlashSpec {
         name: "/permissions",
         aliases: &["/permission", "/perms"],
-        description: "when the agent asks first (relaxed/cautious/bypass)",
+        description: "when the agent asks first (relaxed/cautious/yolo)",
         build: Command::Permissions,
         completer: ArgCompleter::Static(&[
             ("relaxed", "only dangerous commands ask first"),
             ("cautious", "only read-only commands run unprompted"),
-            ("bypass", "never ask (circuit breakers still refuse)"),
+            (
+                "yolo",
+                "bypasses every prompt (circuit breakers still refuse)",
+            ),
         ]),
     },
     SlashSpec {

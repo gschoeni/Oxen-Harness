@@ -7,7 +7,7 @@ use harness_permissions::{policy, PermissionMode};
 use crate::picker::{self, Choice};
 use crate::theme::Ui;
 
-/// `/permissions [relaxed|cautious|bypass]` — show or switch the permission
+/// `/permissions [relaxed|cautious|yolo]` — show or switch the permission
 /// mode. With no argument, prints the rules in force and opens the mode
 /// picker (current mode marked). A switch applies to the live session
 /// immediately (`PermissionGate::set_mode`) and persists as the global
@@ -40,9 +40,9 @@ pub(crate) fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> R
                     ),
                 ),
                 Choice::new(
-                    "bypass",
+                    "yolo",
                     format!(
-                        "never ask — circuit breakers still refuse{}",
+                        "bypasses every prompt — circuit breakers still refuse{}",
                         mark(PermissionMode::Bypass)
                     ),
                 ),
@@ -50,7 +50,10 @@ pub(crate) fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> R
             match picker::select(
                 ui,
                 "Permissions",
-                &format!("Permission mode is `{}` — switch it?", current.label()),
+                &format!(
+                    "Permission mode is `{}` — switch it?",
+                    current.display_name()
+                ),
                 &options,
                 false,
             )? {
@@ -67,7 +70,7 @@ pub(crate) fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> R
             println!(
                 "  {} {}",
                 ui.red("✗"),
-                ui.dim(&format!("{error} — expected relaxed, cautious, or bypass")),
+                ui.dim(&format!("{error} — expected relaxed, cautious, or yolo")),
             );
             return Ok(());
         }
@@ -87,13 +90,13 @@ pub(crate) fn handle_repl(rest: Option<String>, agent: &mut Agent, ui: &Ui) -> R
     println!(
         "  {} {}",
         ui.brown("🛡 permissions:"),
-        ui.cream(&format!("{} — {scope}", mode.label())),
+        ui.cream(&format!("{} — {scope}", mode.display_name())),
     );
     Ok(())
 }
 
 /// The boot-time warning for `--yolo`: the one line that tells the user the
-/// gate is off before the first prompt. Loud on purpose — bypass is the
+/// gate is off before the first prompt. Loud on purpose — yolo is the
 /// mode that turns a mistaken `rm` into a real one.
 ///
 /// A headless `-p` run has no REPL to switch back in, so it is not told about
@@ -123,9 +126,9 @@ fn print_summary(
     println!(
         "  {} {}",
         ui.brown("🛡 permissions:"),
-        ui.cream(current.label()),
+        ui.cream(current.display_name()),
     );
-    // Plan mode outranks the mode while it is on, so saying only "bypass"
+    // Plan mode outranks the mode while it is on, so saying only "yolo"
     // here would be a lie about what the agent can currently do.
     if gate.is_some_and(|g| g.plan_mode()) {
         println!(

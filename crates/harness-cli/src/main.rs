@@ -104,10 +104,11 @@ struct Args {
     #[arg(long, value_name = "MODEL_ID")]
     local: Option<String>,
 
-    /// Start in bypass permission mode: every edit, shell command, and git
-    /// action runs without asking (circuit breakers still refuse). Applies to
-    /// this run only — the saved default is untouched. Handy for `-p` runs,
-    /// which cannot prompt and would otherwise decline anything gated.
+    /// Start in yolo permission mode, which bypasses every prompt: each
+    /// edit, shell command, and git action runs without asking (circuit
+    /// breakers still refuse). Applies to this run only — the saved default
+    /// is untouched. Handy for `-p` runs, which cannot prompt and would
+    /// otherwise decline anything gated.
     #[arg(long)]
     yolo: bool,
 

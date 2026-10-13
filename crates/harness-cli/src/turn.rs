@@ -477,7 +477,7 @@ struct Meters<'a> {
     spend: Spend,
     /// The workspace's git branch, when it is a git work tree.
     branch: Option<String>,
-    /// The permission mode in force (`relaxed` / `cautious` / `bypass`).
+    /// The permission mode in force (`relaxed` / `cautious` / `yolo`).
     mode: Option<&'static str>,
     /// The generation-speed segment `(plain, styled)`, once a call was timed.
     speed: Option<(String, String)>,
@@ -726,7 +726,7 @@ fn remember_permission_mode(agent: &Agent) {
                     .mode
                     .unwrap_or_default()
             })
-            .label()
+            .display_name()
     };
     *MODE.lock().expect("permission mode poisoned") = Some(mode);
 }

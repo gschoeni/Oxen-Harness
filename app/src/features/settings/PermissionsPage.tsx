@@ -45,9 +45,9 @@ const MODES: { value: string; label: string; blurb: string }[] = [
   },
   {
     value: "bypass",
-    label: "Bypass",
+    label: "Yolo",
     blurb:
-      "Nothing asks — except circuit breakers (rm -rf /, home deletion, .git and shell-rc writes), which always refuse.",
+      "Bypasses every permission prompt — except circuit breakers (rm -rf /, home deletion, .git and shell-rc writes), which always refuse.",
   },
 ];
 

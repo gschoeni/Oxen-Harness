@@ -73,8 +73,8 @@ fn prompt(ui: &Ui, request: &ApprovalRequest) -> Result<Option<ApprovalDecision>
     }
     options.push(Choice::new(
         ALLOW_ALL,
-        "Switch this session to bypass mode — nothing asks again (hard limits \
-         like `rm -rf /` still refuse). /permissions switches back.",
+        "Switch this session to yolo mode — bypasses every prompt from here on \
+         (hard limits like `rm -rf /` still refuse). /permissions switches back.",
     ));
     options.push(Choice::new(
         DENY,

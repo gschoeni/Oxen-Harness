@@ -38,11 +38,22 @@ pub enum PermissionMode {
 }
 
 impl PermissionMode {
+    /// The stable id: what config files, the wire, and telemetry carry.
     pub fn label(self) -> &'static str {
         match self {
             PermissionMode::Relaxed => "relaxed",
             PermissionMode::Cautious => "cautious",
             PermissionMode::Bypass => "bypass",
+        }
+    }
+
+    /// What a person sees: `bypass` reads as `yolo` (the `--yolo` flag's
+    /// name), while the saved id stays `bypass` so existing configs keep
+    /// working.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            PermissionMode::Bypass => "yolo",
+            other => other.label(),
         }
     }
 }
@@ -56,7 +67,7 @@ impl std::str::FromStr for PermissionMode {
         match mode {
             "relaxed" => Ok(PermissionMode::Relaxed),
             "cautious" => Ok(PermissionMode::Cautious),
-            "bypass" => Ok(PermissionMode::Bypass),
+            "bypass" | "yolo" => Ok(PermissionMode::Bypass),
             other => Err(format!("unknown permission mode `{other}`")),
         }
     }
@@ -229,6 +240,16 @@ pub fn persist_project_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bypass_is_shown_as_yolo_and_either_name_parses() {
+        assert_eq!(PermissionMode::Bypass.display_name(), "yolo");
+        // The saved id is unchanged, so existing configs keep loading.
+        assert_eq!(PermissionMode::Bypass.label(), "bypass");
+        assert_eq!("yolo".parse(), Ok(PermissionMode::Bypass));
+        assert_eq!("bypass".parse(), Ok(PermissionMode::Bypass));
+        assert_eq!(PermissionMode::Relaxed.display_name(), "relaxed");
+    }
 
     #[test]
     fn prefix_rules_match_on_word_boundaries() {
