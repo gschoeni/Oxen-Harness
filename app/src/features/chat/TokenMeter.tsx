@@ -10,7 +10,6 @@ import { compactTokens, formatUsd } from "../../lib/format";
 import { sessionCost } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import type { CompressionMode } from "../../lib/types";
-import { MemoryMeter } from "./MemoryMeter";
 import { SpeedMeter } from "./SpeedMeter";
 
 const MODE_HINT: Record<CompressionMode, string> = {
@@ -75,7 +74,6 @@ export function TokenMeter() {
         </span>
       )}
       <SpeedMeter />
-      <MemoryMeter />
       {advancedSettingsEnabled() && mode !== "off" && (
         <span className="token-meter-saved" title={MODE_HINT[mode]}>
           {mode === "audit" ? "would save" : "saved"} ~{compactTokens(saved?.tokensSaved ?? 0)}

@@ -1,5 +1,5 @@
-// The memory readout in the usage meter row, shown while a local model
-// (chat or image) runs and for a few minutes after a memory notice: how much
+// The memory readout in the title bar, beside the running count, shown while
+// a local model (chat or image) runs and for a few minutes after a memory notice: how much
 // of the machine is in use, how much of that the local models hold, and how
 // hard macOS is squeezing — so a laptop that is about to swap says so before
 // it stutters. Click for the breakdown.

@@ -2,15 +2,21 @@
 // window, above every column and overlay. It is the window's drag handle and
 // double-clicks to zoom — exactly like a native title bar — so no pane below
 // ever has to fake its own. The active project names the window; the running
-// count and, inside a project, the panel switch (Files | Agent | Work | </>)
-// sit at its right edge, clear of the macOS traffic lights. Settings is ⌘, (or Home); the
+// count (with machine memory beside it while a local model runs) and, inside
+// a project, the panel switch (Files | Agent | Work | </>) sit at its right
+// edge, clear of the macOS traffic lights. Settings is ⌘, (or Home); the
 // study game is ⌘J (or the composer's button while a turn runs).
 
 import { Activity } from "lucide-react";
+import { useMemoryPolling } from "./lib/memory";
 import { useActiveProject, useStore } from "./lib/store";
+import { MemoryMeter } from "./features/chat/MemoryMeter";
 import { PanelSwitch } from "./features/docks/PanelSwitch";
 
 export function TitleBar() {
+  // Polled here, not by the chat: the readout stays live on Home and in
+  // Settings, where a local model can still be squeezing the machine.
+  useMemoryPolling();
   const project = useActiveProject();
   const runningCount = useStore((s) => {
     const sessions = new Set(s.threadsSnapshot?.running ?? []);
@@ -54,6 +60,7 @@ export function TitleBar() {
       {/* pointer-events: none, so the name never blocks the drag region */}
       <span className="app-titlebar-name">{project?.name ?? "oxen-harness"}</span>
       <div className="app-titlebar-actions">
+        <MemoryMeter />
         <button
           className={`titlebar-running ${runningCount > 0 ? "active" : ""}`}
           onClick={openHome}

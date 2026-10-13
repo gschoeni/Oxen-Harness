@@ -7,6 +7,8 @@ vi.mock("./lib/ipc", () => import("./test/ipcMock"));
 import { TitleBar } from "./TitleBar";
 import { useStore } from "./lib/store";
 import { resetAll } from "./test/utils";
+import * as ipc from "./test/ipcMock";
+import { useMemory } from "./lib/memory";
 
 beforeEach(() => {
   resetAll();
@@ -64,5 +66,32 @@ describe("TitleBar running work indicator", () => {
     expect(useStore.getState().homeOpen).toBe(true);
     expect(useStore.getState().settingsOpen).toBe(false);
     expect(useStore.getState().projectHomePath).toBeNull();
+  });
+});
+
+describe("TitleBar memory readout", () => {
+  const GB = 2 ** 30;
+
+  it("sits beside the running count while a local model runs", async () => {
+    useMemory.setState({ status: null, banners: [] });
+    ipc.memoryStatus.mockResolvedValue({
+      system: {
+        total_bytes: 36 * GB,
+        used_bytes: 30.1 * GB,
+        available_bytes: 5.9 * GB,
+        compressed_bytes: 0,
+        swap_used_bytes: 0,
+        free_percent: 47,
+        pressure: "normal",
+      },
+      processes: [{ kind: "chat", model: "gemma-4-26b-a4b-q3", pid: 42, footprint_bytes: 13.2 * GB }],
+      notice: null,
+    });
+    const { container } = render(<TitleBar />);
+
+    const memory = await screen.findByRole("button", { name: /^Memory: 30\.1 of 36\.0 GB used/ });
+    const running = screen.getByRole("button", { name: "0 running — go Home" });
+    expect(memory.closest(".app-titlebar-actions")).toBe(container.querySelector(".app-titlebar-actions"));
+    expect(memory.compareDocumentPosition(running) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
