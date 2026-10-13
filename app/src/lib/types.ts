@@ -901,6 +901,87 @@ export interface MediaItem {
   agent_prompt: string | null;
   /** The hub's completed generation record, verbatim. */
   provider: unknown;
+  /** Where an in-flight generation is (local engines report steps). */
+  progress?: MediaProgress | null;
+}
+
+/** An in-flight generation's progress, for progress bars. */
+export interface MediaProgress {
+  phase: "queued" | "loading" | "sampling" | "finishing" | string;
+  step: number | null;
+  total: number | null;
+  /** A warning to show beside the bar (memory is tight). */
+  note: string | null;
+}
+
+/** What local models cost the machine's memory (`memory_status`). */
+export interface MemoryStatus {
+  system: MemorySystem | null;
+  processes: LocalModelProcess[];
+  notice: MemoryNotice | null;
+}
+
+/** System memory as Activity Monitor counts it. */
+export interface MemorySystem {
+  total_bytes: number;
+  /** App memory + wired + compressed. */
+  used_bytes: number;
+  available_bytes: number;
+  compressed_bytes: number;
+  swap_used_bytes: number;
+  free_percent: number;
+  pressure: "normal" | "warn" | "critical" | "unknown";
+}
+
+/** One running local model server. */
+export interface LocalModelProcess {
+  kind: "chat" | "image";
+  model: string;
+  pid: number;
+  footprint_bytes: number;
+}
+
+/** A memory warning, a refused load, or a model the watchdog stopped
+ *  (`memory://notice`, and the last one in `MemoryStatus`). */
+export interface MemoryNotice {
+  level: "warn" | "refused" | "stopped";
+  model: string;
+  message: string;
+  /** Unix seconds. */
+  at: number;
+}
+
+/** The on-device image models and their engine (`local_media_status`). */
+export interface LocalMediaStatus {
+  models: LocalMediaModel[];
+  engine_version: string | null;
+  store_path: string;
+  disk_available_bytes: number | null;
+  /** Why local image models are unavailable, if they are. */
+  error: string | null;
+}
+
+export interface LocalMediaModel {
+  id: string;
+  display_name: string;
+  developer: string | null;
+  license: string;
+  summary: string | null;
+  total_bytes: number;
+  missing_bytes: number;
+  installed: boolean;
+  typical_secs: number | null;
+  takes_references: boolean;
+}
+
+/** Progress pulling an on-device image model (`local-media://progress`). */
+export interface LocalMediaProgressEvent {
+  id: string;
+  phase: "runtime" | "weights" | "done" | "failed" | "cancelled";
+  file: string | null;
+  done_bytes: number;
+  total_bytes: number;
+  error: string | null;
 }
 
 /** One reference's provenance: the stored copy, the file it was made from,

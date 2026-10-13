@@ -17,6 +17,8 @@ import { Composer } from "./Composer";
 import { Queue } from "./Queue";
 import { Hero } from "./Hero";
 import { TokenMeter } from "./TokenMeter";
+import { MemoryNotices } from "./MemoryNotices";
+import { useMemoryPolling } from "../../lib/memory";
 import { StreamingWrite } from "./StreamingWrite";
 import { isMediaPath } from "../../lib/attachments";
 import { QuestionPrompt } from "../questions/QuestionPrompt";
@@ -55,6 +57,7 @@ function readBytes(file: File): Promise<ArrayBuffer> {
 }
 
 export function Chat() {
+  useMemoryPolling();
   const sessionId = useStore((s) => s.session?.session_id);
   // Read the current chat's thread / queue / run state straight from the store —
   // it owns them so they persist while this chat streams in the background.
@@ -302,6 +305,7 @@ export function Chat() {
           ))}
         </div>
       )}
+      <MemoryNotices />
       <QuestionPrompt />
       <ApprovalPrompt />
       {started && <TokenMeter />}

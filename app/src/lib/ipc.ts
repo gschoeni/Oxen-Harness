@@ -35,8 +35,12 @@ import type {
   CanvasEvent,
   FsChangedEvent,
   MediaChangedEvent,
+  LocalMediaProgressEvent,
+  LocalMediaStatus,
   MediaItem,
   MediaModelSummary,
+  MemoryNotice,
+  MemoryStatus,
   MediaPrefs,
   GitFileDiff,
   GitFileState,
@@ -646,6 +650,30 @@ export const setMediaPrefs = (prefs: MediaPrefs) => invoke<void>("set_media_pref
  *  catalog is cached for a day; `refresh` refetches it from the hub. */
 export const listMediaModels = (kind?: "image" | "video", refresh = false) =>
   invoke<MediaModelSummary[]>("list_media_models", { kind: kind ?? null, refresh });
+
+/** System memory, the app's local model servers, and the last memory
+ *  notice — what the memory meter shows. */
+export const memoryStatus = () => invoke<MemoryStatus>("memory_status");
+
+/** The on-device image models, their engine, and free disk. */
+export const localMediaStatus = () => invoke<LocalMediaStatus>("local_media_status");
+
+/** Download an on-device image model; progress arrives on
+ *  `local-media://progress`, and the promise settles when it ends. */
+export const pullLocalMedia = (id: string) => invoke<void>("pull_local_media", { id });
+
+export const cancelLocalMediaPull = (id: string) => invoke<void>("cancel_local_media_pull", { id });
+
+/** Delete an image model's weights; resolves to the bytes freed. */
+export const removeLocalMedia = (id: string) => invoke<number>("remove_local_media", { id });
+
+export const onLocalMediaProgress = (handler: (e: LocalMediaProgressEvent) => void) =>
+  listen<LocalMediaProgressEvent>("local-media://progress", (e) => handler(e.payload));
+
+/** A local model and memory: a load warned about or refused, or a running
+ *  model the watchdog stopped to protect the machine. */
+export const onMemoryNotice = (handler: (e: MemoryNotice) => void) =>
+  listen<MemoryNotice>("memory://notice", (e) => handler(e.payload));
 
 /** The project's media library changed (a generation queued, progressed,
  *  finished, or failed). Carries the whole list. */

@@ -29,8 +29,10 @@ import type {
   ThemeSummary,
   AgentSummary,
   TaskSummary,
+  LocalMediaStatus,
   MediaItem,
   MediaModelSummary,
+  MemoryStatus,
   MediaPrefs, UsageBreakdown,
   ModelRole,
   ModelRoles,
@@ -451,6 +453,49 @@ export const setMediaPrefs = vi.fn(async (_prefs: MediaPrefs) => {});
 export const listMediaModels = vi.fn(async (_kind?: string, _refresh?: boolean): Promise<MediaModelSummary[]> => []);
 export const onMediaChanged = listener("mediaChanged");
 
+// ---- local models and memory -------------------------------------------------
+/** No local model running: the memory meter stays hidden. */
+export const idleMemory: MemoryStatus = { system: null, processes: [], notice: null };
+export const memoryStatus = vi.fn(async (): Promise<MemoryStatus> => idleMemory);
+export const sampleLocalMedia: LocalMediaStatus = {
+  models: [
+    {
+      id: "local/iris-3b-turbo",
+      display_name: "Iris-3B Turbo",
+      developer: "Sperid Labs",
+      license: "Apache-2.0",
+      summary: "Fastest local model.",
+      total_bytes: 8_472_370_864,
+      missing_bytes: 0,
+      installed: true,
+      typical_secs: 21,
+      takes_references: false,
+    },
+    {
+      id: "local/flux-2-klein-4b",
+      display_name: "FLUX.2 [klein] 4B",
+      developer: "Black Forest Labs",
+      license: "Apache-2.0",
+      summary: "Edits reference images.",
+      total_bytes: 5_125_780_750,
+      missing_bytes: 5_125_780_750,
+      installed: false,
+      typical_secs: 37,
+      takes_references: true,
+    },
+  ],
+  engine_version: "master-959-d637cfb",
+  store_path: "/Users/me/.oxen-harness/media/weights",
+  disk_available_bytes: 20_000_000_000,
+  error: null,
+};
+export const localMediaStatus = vi.fn(async (): Promise<LocalMediaStatus> => sampleLocalMedia);
+export const pullLocalMedia = vi.fn(async (_id: string) => {});
+export const cancelLocalMediaPull = vi.fn(async (_id: string) => {});
+export const removeLocalMedia = vi.fn(async (_id: string) => 0);
+export const onLocalMediaProgress = listener("localMediaProgress");
+export const onMemoryNotice = listener("memoryNotice");
+
 // ---- workspace files (Files tree + Editor dock) -------------------------------
 export const fsListDir = vi.fn(
   async (_root: string, _path: string) => [] as { name: string; path: string; is_dir: boolean }[],
@@ -690,6 +735,11 @@ export function resetIpc() {
   getMediaPrefs.mockReset().mockResolvedValue({ ...sampleMediaPrefs });
   setMediaPrefs.mockReset().mockResolvedValue(undefined);
   listMediaModels.mockReset().mockResolvedValue([]);
+  memoryStatus.mockReset().mockResolvedValue(idleMemory);
+  localMediaStatus.mockReset().mockResolvedValue(sampleLocalMedia);
+  pullLocalMedia.mockReset().mockResolvedValue(undefined);
+  cancelLocalMediaPull.mockReset().mockResolvedValue(undefined);
+  removeLocalMedia.mockReset().mockResolvedValue(0);
   fsListDir.mockReset().mockResolvedValue([]);
   fsReadFile.mockReset().mockResolvedValue({ content: "", truncated: false, size: 0 });
   fsCreateEntry.mockReset().mockResolvedValue(undefined);
@@ -794,6 +844,8 @@ export function resetIpc() {
     onModelProgress,
     onRuntimeInstall,
     onLocalStatus,
+    onLocalMediaProgress,
+    onMemoryNotice,
     onPreviewStatus,
     onPreviewConsole,
     onBrowserOpen,

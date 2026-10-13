@@ -40,6 +40,7 @@ import { AgentRowList, StopFleets, agentIdsInResult } from "./AgentRowList";
 import { compactTokens, formatUsd } from "../../lib/format";
 import { setDragPaths } from "../files/dnd";
 import { UploadRow } from "./MediaPanel";
+import { GenerationProgress } from "../media/GenerationProgress";
 import { useAssetSrc } from "../files/useAssetSrc";
 import type { Item } from "./thread";
 import { PlanChecklist } from "./Plan";
@@ -371,14 +372,23 @@ function MediaToolCall({ item, a }: { item: ToolItem; a: Record<string, unknown>
         )}
         {item.running && pending.length === 0 && (
           <div className={`media-tiles count-${g.count}`}>
-            {Array.from({ length: g.count }, (_, i) => (
-              <div
-                key={i}
-                className="media-tile skeleton"
-                style={{ aspectRatio: aspectFor(null, g.aspectRatio ?? (g.kind === "video" ? "16:9" : undefined)) }}
-                aria-label="rendering"
-              />
-            ))}
+            {Array.from({ length: g.count }, (_, i) => {
+              const job = rendering.find((m) => m.index === i + 1);
+              return (
+                <div
+                  key={i}
+                  className="media-tile skeleton"
+                  style={{ aspectRatio: aspectFor(null, g.aspectRatio ?? (g.kind === "video" ? "16:9" : undefined)) }}
+                  aria-label="rendering"
+                >
+                  {job && (
+                    <div className="media-tile-progress">
+                      <GenerationProgress item={job} compact />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         {!item.running && files.length > 0 && workspace && (

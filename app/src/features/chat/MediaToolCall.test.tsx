@@ -40,7 +40,26 @@ describe("MediaToolCall", () => {
     expect(container.querySelector(".media-tile.skeleton")).toHaveStyle({ aspectRatio: "16 / 9" });
   });
 
-  it("cancels the generations its call is waiting on", async () => {
+  it("shows a local model's live progress on each rendering tile", () => {
+    const job = {
+      id: "local-1",
+      session: "s1",
+      call_id: "call_9",
+      kind: "image",
+      index: 1,
+      status: "processing",
+      progress: { phase: "sampling", step: 2, total: 4, note: "memory is tight" },
+    };
+    useStore.setState({
+      media: { "/w": [job, { ...job, id: "local-2", index: 2, status: "queued", progress: { phase: "queued", step: null, total: null, note: null } }] as never },
+    });
+    render(<ToolCall item={tool({ callId: "call_9" })} />);
+    expect(screen.getByRole("progressbar", { name: "Step 2 of 4" })).toHaveAttribute("aria-valuenow", "50");
+    expect(screen.getByText("memory is tight")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Waiting for the GPU" })).toBeInTheDocument();
+  });
+
+    it("cancels the generations its call is waiting on", async () => {
     const queued = { id: "g7", session: "s1", call_id: "call_7", kind: "image", status: "processing" };
     useStore.setState({
       media: { "/w": [queued, { ...queued, id: "g0", call_id: "call_other" }] as never },

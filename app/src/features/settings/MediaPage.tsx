@@ -15,6 +15,7 @@ import { IconButton } from "../../components/ui";
 import { Select } from "../../components/ui/Select";
 import type { SelectOption } from "../../components/ui/Select";
 import { ToolSwitch } from "../tools/ToolSwitch";
+import { LocalMediaSection } from "./LocalMediaSection";
 
 export function MediaPage() {
   const [prefs, setPrefs] = useState<MediaPrefs | null>(null);
@@ -69,8 +70,17 @@ export function MediaPage() {
 
   if (!prefs) return <div className="settings-page">{error ? <p className="hint">{error}</p> : null}</div>;
 
+  // A model installed or removed changes what the default picker offers.
+  const reloadImageModels = () => {
+    listMediaModels("image")
+      .then(setImageModels)
+      .catch(() => {});
+  };
+
   return (
     <div className="settings-page media-page">
+      <LocalMediaSection onChanged={reloadImageModels} />
+
       <section className="settings-section">
         <div className="settings-label">Budgets</div>
         <p className="hint">

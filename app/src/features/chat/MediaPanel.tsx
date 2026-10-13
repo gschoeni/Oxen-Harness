@@ -18,6 +18,7 @@ import { useStore } from "../../lib/store";
 import { elapsedSince, fmtBytes, isActiveUpload, isGenerateTool, isInFlight, uploadPercent } from "../../lib/media";
 import type { MediaUpload } from "../../lib/types";
 import type { Item } from "./thread";
+import { GenerationProgress } from "../media/GenerationProgress";
 
 const NONE: never[] = [];
 
@@ -93,6 +94,11 @@ export function MediaPanel() {
               <span className="fleet-lane-activity">{item.prompt}</span>
               <span className="fleet-lane-tokens">{elapsedSince(item.created_at, now)}</span>
             </div>
+            {item.progress && (
+              <div className="media-panel-progress">
+                <GenerationProgress item={item} compact />
+              </div>
+            )}
             <button
               type="button"
               className="fleet-lane-stop"

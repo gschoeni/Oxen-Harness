@@ -446,3 +446,17 @@
 .media-error {
   color: var(--danger);
 }
+/* A rendering tile's progress, pinned to its foot over the shimmer. */
+.media-tile.skeleton {
+  position: relative;
+}
+.media-tile-progress {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--surface) 92%, transparent),
+    color-mix(in srgb, var(--surface) 0%, transparent)
+  );
+}
