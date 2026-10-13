@@ -91,6 +91,7 @@ fn throughput_wire_shape() {
         model: "gemma-4-26b-a4b-q3".into(),
         output_tokens: 446,
         tokens_per_sec: Some(44.6),
+        overall: false,
         decode_ms: 10_000,
         ttft_ms: 820,
         exact: true,
@@ -99,6 +100,7 @@ fn throughput_wire_shape() {
     let value = json(&reading);
     assert_eq!(value["type"], "agent.throughput");
     assert_eq!(value["tokens_per_sec"], 44.6);
+    assert_eq!(value["overall"], false);
     assert_eq!(value["ttft_ms"], 820);
     assert_eq!(reading.channel(), "agent://throughput");
     assert_eq!(reading.session(), Some("s1"));

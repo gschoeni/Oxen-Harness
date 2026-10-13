@@ -43,6 +43,14 @@ describe("nextSpeed", () => {
     expect(s).toMatchObject({ tokensPerSec: 44.6, done: true, outputTokens: 446 });
   });
 
+  it("shows a burst reply's overall rate, but never over a decode rate", () => {
+    const burst = reading({ output_tokens: 106, decode_ms: 20, ttft_ms: 53_000, tokens_per_sec: 2, overall: true, done: true });
+    expect(nextSpeed(undefined, burst)).toMatchObject({ tokensPerSec: 2, overall: true });
+    const decoded = nextSpeed(undefined, reading({ output_tokens: 446, decode_ms: 10_000, tokens_per_sec: 44.6, done: true }));
+    expect(nextSpeed(decoded, burst)).toBe(decoded);
+    expect(nextSpeed(decoded, { ...burst, model: "other" })).toMatchObject({ tokensPerSec: 2, overall: true });
+  });
+
   it("caps the sparkline window", () => {
     let s = nextSpeed(undefined, reading({ tokens_per_sec: 1 }));
     for (let i = 1; i <= SPARK_SAMPLES + 5; i++) {

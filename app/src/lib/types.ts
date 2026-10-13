@@ -569,12 +569,15 @@ export interface UsageEvent {
 /** `agent://throughput` payload — how fast the model call in flight is
  *  generating: live readings ~4×/s, then one `done` reading per call (exact
  *  when `exact`). `tokens_per_sec` is the decode rate (null until timeable);
- *  the wait before the first token is `ttft_ms`, reported apart. */
+ *  the wait before the first token is `ttft_ms`, reported apart. A finished
+ *  call whose reply arrived in one burst reports its rate over the whole
+ *  call instead, with `overall` set. */
 export interface ThroughputEvent {
   session: string;
   model: string;
   output_tokens: number;
   tokens_per_sec: number | null;
+  overall?: boolean;
   decode_ms: number;
   ttft_ms: number;
   exact: boolean;

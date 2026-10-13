@@ -16,6 +16,8 @@ export interface SpeedState {
   model: string;
   /** Decode rate of the call in flight, or of the last finished one. */
   tokensPerSec: number | null;
+  /** The rate is over the whole call: the reply arrived in one burst. */
+  overall: boolean;
   /** Wait from request to first generated token, in ms. */
   ttftMs: number;
   outputTokens: number;
@@ -42,11 +44,17 @@ export function nextSpeed(prev: SpeedState | undefined, e: ThroughputEvent): Spe
   // A reading with no rate — a new call's first tokens, or a whole call too
   // short to time (a quick tool call, a one-line answer) — never replaces a
   // timed one: the readout would otherwise blank at the end of most agentic
-  // turns. Mirrors the CLI's `SpeedGauge::record`.
-  if (e.tokens_per_sec === null && prev && prev.tokensPerSec !== null) return prev;
+  // turns. Nor does an overall rate replace the same model's decode rate, or
+  // a streaming model's quick call would swap a true decode speed for a
+  // figure dominated by the wait. Mirrors `Throughput::supersedes`.
+  if (prev && prev.tokensPerSec !== null) {
+    if (e.tokens_per_sec === null) return prev;
+    if (e.overall && !prev.overall && prev.model === e.model) return prev;
+  }
   return {
     model: e.model,
     tokensPerSec: e.tokens_per_sec,
+    overall: e.overall ?? false,
     ttftMs: e.ttft_ms,
     outputTokens: e.output_tokens,
     done: e.done,

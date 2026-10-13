@@ -150,13 +150,17 @@ pub enum ProtocolEvent {
     /// four times a second, then one `done` reading per call (with the
     /// endpoint's exact count when `exact`). `tokens_per_sec` is the decode
     /// rate — the wait before the first token is `ttft_ms`, reported apart —
-    /// and is absent until the call has decoded long enough to time.
+    /// and is absent until the call has decoded long enough to time. A
+    /// finished call whose reply arrived in one burst reports its rate over
+    /// the whole call instead, with `overall` set.
     #[serde(rename = "agent.throughput")]
     Throughput {
         session: String,
         model: String,
         output_tokens: usize,
         tokens_per_sec: Option<f64>,
+        #[serde(default)]
+        overall: bool,
         decode_ms: u64,
         ttft_ms: u64,
         exact: bool,

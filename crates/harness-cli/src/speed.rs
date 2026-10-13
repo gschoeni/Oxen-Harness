@@ -51,8 +51,8 @@ impl SpeedGauge {
         }
         // A reading with no rate — a new call's first token, or a whole call
         // too short to time — keeps the last figure on screen rather than
-        // blanking the readout.
-        if reading.tokens_per_sec().is_some() || self.latest.is_none() {
+        // blanking the readout (see `Throughput::supersedes`).
+        if reading.supersedes(self.latest.as_ref()) {
             self.latest = Some(reading.clone());
         }
     }
@@ -63,12 +63,20 @@ impl SpeedGauge {
         let latest = self.latest.as_ref()?;
         let rate = format_rate(latest.tokens_per_sec()?);
         if latest.done {
+            // A reply that arrived in one burst is timed over the whole call;
+            // say so, so it isn't read as decode speed.
+            let overall = if latest.rate_is_overall() {
+                " overall"
+            } else {
+                ""
+            };
             let ttft = format!("{:.1}s to first token", latest.ttft_ms as f64 / 1000.0);
-            let plain = format!("⚡ {rate} tok/s · {ttft}");
+            let plain = format!("⚡ {rate} tok/s{overall} · {ttft}");
             let styled = format!(
-                "{} {} {}",
+                "{} {}{} {}",
                 ui.dim("⚡"),
                 ui.cream(&format!("{rate} tok/s")),
+                ui.dim(overall),
                 ui.dim(&format!("· {ttft}"))
             );
             return Some((plain, styled));
@@ -191,6 +199,20 @@ mod tests {
         assert_eq!(
             plain(&gauge).as_deref(),
             Some("⚡ 44.6 tok/s · 0.8s to first token")
+        );
+    }
+
+    #[test]
+    fn a_burst_reply_reads_as_an_overall_rate() {
+        let mut gauge = SpeedGauge::default();
+        let burst = Throughput {
+            ttft_ms: 53_000,
+            ..reading(106, 0, true)
+        };
+        gauge.record(&burst);
+        assert_eq!(
+            plain(&gauge).as_deref(),
+            Some("⚡ 2.0 tok/s overall · 53.0s to first token")
         );
     }
 

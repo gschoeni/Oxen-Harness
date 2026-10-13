@@ -86,6 +86,7 @@ pub fn agent_event(
             model: reading.model.clone(),
             output_tokens: reading.output_tokens,
             tokens_per_sec: reading.tokens_per_sec(),
+            overall: reading.rate_is_overall(),
             decode_ms: reading.decode_ms,
             ttft_ms: reading.ttft_ms,
             exact: reading.exact,

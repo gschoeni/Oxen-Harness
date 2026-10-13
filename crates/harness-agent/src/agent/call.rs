@@ -390,7 +390,9 @@ impl Agent {
             }
             // A call too short to time (a quick tool call, a one-line
             // answer) would blank the idle readout; the last timed one stands.
-            if reading.tokens_per_sec().is_some() {
+            if reading.tokens_per_sec().is_some()
+                && reading.supersedes(self.last_throughput.as_ref())
+            {
                 self.last_throughput = Some(reading.clone());
             }
         }

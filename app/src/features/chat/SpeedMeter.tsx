@@ -32,7 +32,7 @@ export function SpeedMeter() {
     <span className="speed-meter" data-live={live || undefined} title={tooltip(speed)} aria-label={`${formatRate(speed.tokensPerSec)} tokens per second`}>
       <Zap className="speed-meter-bolt" size={12} strokeWidth={2.25} aria-hidden />
       <span className="speed-meter-rate">{formatRate(speed.tokensPerSec)}</span>
-      <span className="speed-meter-unit">tok/s</span>
+      <span className="speed-meter-unit">tok/s{speed.overall && " overall"}</span>
       {live ? <Sparkline samples={speed.samples} /> : <span className="speed-meter-ttft">{(speed.ttftMs / 1000).toFixed(1)}s first token</span>}
     </span>
   );
@@ -62,7 +62,9 @@ function Sparkline({ samples }: { samples: number[] }) {
 function tooltip(s: SpeedState): string {
   const parts = [
     s.model,
-    `${s.tokensPerSec === null ? "—" : formatRate(s.tokensPerSec)} tokens/sec`,
+    `${s.tokensPerSec === null ? "—" : formatRate(s.tokensPerSec)} tokens/sec${
+      s.overall ? " over the whole call (the reply arrived in one burst, so decoding couldn't be timed)" : ""
+    }`,
     `${(s.ttftMs / 1000).toFixed(1)}s to first token`,
   ];
   if (s.done) parts.push(`${s.outputTokens.toLocaleString()} tokens in ${(s.decodeMs / 1000).toFixed(1)}s`);

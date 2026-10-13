@@ -15,6 +15,13 @@
 //! wait before the first token (queueing, prompt processing) is reported
 //! separately as time-to-first-token, so a long prompt doesn't read as a slow
 //! model and a cloud model's network hop doesn't hide how fast it decodes.
+//!
+//! Some calls can't be timed that way: a model that reasons without
+//! streaming it, or an endpoint that buffers the reply, delivers the whole
+//! output in one burst at the end. A finished call whose decode window is too
+//! short falls back to the *overall* rate — tokens over the whole call,
+//! request to last token — flagged by [`Throughput::rate_is_overall`] so a
+//! readout can say so rather than pass it off as decode speed.
 
 use std::time::{Duration, Instant};
 
@@ -49,13 +56,52 @@ pub struct Throughput {
 }
 
 impl Throughput {
-    /// Output tokens per second of decoding, once the window is long enough
-    /// to mean something.
+    /// Output tokens per second: the decode rate once its window is long
+    /// enough to mean something, else — for a finished call that arrived in
+    /// a burst — the overall rate (see [`Self::rate_is_overall`]).
     pub fn tokens_per_sec(&self) -> Option<f64> {
-        let window = Duration::from_millis(self.decode_ms);
-        (window >= MIN_RATE_WINDOW && self.output_tokens > 0)
-            .then(|| self.output_tokens as f64 / window.as_secs_f64())
+        self.decode_rate().or_else(|| self.overall_rate())
     }
+
+    /// Whether [`Self::tokens_per_sec`] is the whole call's rate (the reply
+    /// came in one burst) rather than the decode rate.
+    pub fn rate_is_overall(&self) -> bool {
+        self.decode_rate().is_none() && self.overall_rate().is_some()
+    }
+
+    /// Whether a readout showing `shown` should switch to this reading. A
+    /// reading with no rate never replaces one that has a rate, and an overall rate
+    /// never replaces the same model's decode rate: a streaming model's
+    /// quick tool call would otherwise swap a true decode speed for a low
+    /// figure dominated by the wait for the first token.
+    pub fn supersedes(&self, shown: Option<&Throughput>) -> bool {
+        let Some(shown) = shown else {
+            return true;
+        };
+        if self.decode_rate().is_some() {
+            return true;
+        }
+        self.overall_rate().is_some()
+            && (shown.decode_rate().is_none() || shown.model != self.model)
+    }
+
+    fn decode_rate(&self) -> Option<f64> {
+        rate(self.output_tokens, self.decode_ms)
+    }
+
+    /// Only a finished call has an overall rate: mid-call, the time since
+    /// the request says nothing about tokens still to come.
+    fn overall_rate(&self) -> Option<f64> {
+        self.done
+            .then(|| rate(self.output_tokens, self.ttft_ms + self.decode_ms))
+            .flatten()
+    }
+}
+
+/// `tokens` over `ms`, when the window is long enough to mean something.
+fn rate(tokens: usize, ms: u64) -> Option<f64> {
+    let window = Duration::from_millis(ms);
+    (window >= MIN_RATE_WINDOW && tokens > 0).then(|| tokens as f64 / window.as_secs_f64())
 }
 
 /// Times one model call; see the module docs.
@@ -187,6 +233,28 @@ mod tests {
         assert_eq!(r.decode_ms, 500);
         assert_eq!(r.tokens_per_sec(), Some(20.0));
         assert!(!r.done && !r.exact);
+    }
+
+    #[test]
+    fn a_reply_that_arrives_in_one_burst_reports_its_overall_rate() {
+        let t0 = Instant::now();
+        let mut meter = ThroughputMeter::start("m", 4.0, t0);
+        // 53s of silence (hidden reasoning, a buffering endpoint), then the
+        // whole reply inside 20ms: no decode window to time.
+        let first = meter.observe("abcd", at(t0, 53_000)).expect("first");
+        meter.observe(&"x".repeat(400), at(t0, 53_020));
+        assert_eq!(first.tokens_per_sec(), None, "never mid-call");
+        let done = meter.finish(Some(106)).expect("generated");
+        let rate = done.tokens_per_sec().expect("an overall rate");
+        assert!((rate - 2.0).abs() < 0.01, "106 tokens over ~53s: {rate}");
+        assert!(done.rate_is_overall());
+        // A call that streamed normally keeps its decode rate.
+        let mut steady = ThroughputMeter::start("m", 4.0, t0);
+        steady.observe("abcd", at(t0, 1_000));
+        steady.observe("abcd", at(t0, 2_000));
+        let done = steady.finish(Some(50)).expect("generated");
+        assert_eq!(done.tokens_per_sec(), Some(50.0));
+        assert!(!done.rate_is_overall());
     }
 
     #[test]
