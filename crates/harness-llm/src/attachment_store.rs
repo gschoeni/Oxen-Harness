@@ -271,8 +271,11 @@ mod tests {
         }
     }
 
-    fn opaque_png(width: u32, height: u32) -> Vec<u8> {
-        let img = image::RgbImage::from_pixel(width, height, image::Rgb([10, 20, 30]));
+    /// An opaque PNG just past the edge limit, so it gets downscaled and
+    /// re-encoded as JPEG.
+    fn oversized_png() -> Vec<u8> {
+        let edge = crate::attachment::MAX_IMAGE_EDGE + 32;
+        let img = image::RgbImage::from_pixel(edge, edge * 9 / 16, image::Rgb([10, 20, 30]));
         let mut out = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgb8(img)
             .write_to(&mut out, image::ImageFormat::Png)
@@ -294,11 +297,12 @@ mod tests {
 
     #[test]
     fn a_downscaled_png_is_stored_and_hydrated_as_the_jpeg_it_became() {
-        // A generated 2560×1440 PNG is shrunk and re-encoded as JPEG before it
-        // is stored; labelling it image/png made the provider 400 the turn.
+        // A generated PNG past the edge limit is shrunk and re-encoded as JPEG
+        // before it is stored; labelling it image/png made the provider 400
+        // the turn.
         let dir = tempfile::tempdir().unwrap();
         let store = AttachmentStore::new(dir.path());
-        let att = Attachment::from_bytes("render.png", opaque_png(2560, 1440)).unwrap();
+        let att = Attachment::from_bytes("render.png", oversized_png()).unwrap();
         assert_eq!(att.mime, "image/jpeg");
 
         let rel = match store.store_part(&att).unwrap() {
@@ -314,7 +318,7 @@ mod tests {
         // Files written before the fix above: JPEG bytes under a `.png` name.
         let dir = tempfile::tempdir().unwrap();
         let store = AttachmentStore::new(dir.path());
-        let att = Attachment::from_bytes("render.png", opaque_png(2560, 1440)).unwrap();
+        let att = Attachment::from_bytes("render.png", oversized_png()).unwrap();
         let rel = store.store_bytes("png", &att.bytes).unwrap();
         assert!(hydrated_image_url(rel, dir.path()).starts_with("data:image/jpeg;base64,"));
     }

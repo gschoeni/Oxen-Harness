@@ -406,8 +406,11 @@ mod tests {
 
     #[test]
     fn oversized_images_are_shrunk_to_the_edge_limit() {
-        let a = Attachment::from_bytes("big.png", png(4000, 2000)).unwrap();
-        assert_eq!(a.original_dimensions, Some((4000, 2000)));
+        // Just past the limit is enough to exercise the shrink; a bigger
+        // source only costs encode/decode time.
+        let (width, height) = (MAX_IMAGE_EDGE + 32, (MAX_IMAGE_EDGE + 32) / 2);
+        let a = Attachment::from_bytes("big.png", png(width, height)).unwrap();
+        assert_eq!(a.original_dimensions, Some((width, height)));
         assert_eq!(a.dimensions, Some((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE / 2)));
         // Opaque pixels: re-encoded as JPEG, far smaller than the source.
         assert_eq!(a.mime, "image/jpeg");

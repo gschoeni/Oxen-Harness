@@ -93,3 +93,21 @@ todo = "warn"
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+# Image codecs, hashing, and base64 are pure number-crunching that runs
+# 10-50x slower unoptimized, which made a single resize test take seconds and
+# dev-build attachments sluggish. Optimizing just these leaf crates keeps our
+# own code debuggable and costs only a one-time rebuild of them. (`test`
+# inherits from `dev`.)
+[profile.dev.package]
+sha2 = { opt-level = 3 }
+base64 = { opt-level = 3 }
+image = { opt-level = 3 }
+png = { opt-level = 3 }
+zune-jpeg = { opt-level = 3 }
+image-webp = { opt-level = 3 }
+fdeflate = { opt-level = 3 }
+miniz_oxide = { opt-level = 3 }
+crc32fast = { opt-level = 3 }
+simd-adler32 = { opt-level = 3 }
+adler2 = { opt-level = 3 }
