@@ -373,6 +373,24 @@ function MediaToolCall({ item, a }: { item: ToolItem; a: Record<string, unknown>
         {item.running && pending.length === 0 && (
           <div className={`media-tiles count-${g.count}`}>
             {Array.from({ length: g.count }, (_, i) => {
+              // An output that finished while its siblings still render
+              // shows at once rather than waiting for the whole batch.
+              const done = item.callId
+                ? library?.find((m) => m.call_id === item.callId && m.index === i + 1 && m.status === "succeeded" && m.path)
+                : undefined;
+              if (done?.path && workspace) {
+                return (
+                  <WorkspaceMedia
+                    key={i}
+                    workspace={workspace}
+                    path={done.path}
+                    poster={done.poster ?? undefined}
+                    kind={done.kind}
+                    aspect={aspectFor(done, g.aspectRatio)}
+                    onOpen={() => openGallery(done.id)}
+                  />
+                );
+              }
               const job = rendering.find((m) => m.index === i + 1);
               return (
                 <div

@@ -1629,6 +1629,7 @@ dependencies = [
  "harness-llm",
  "harness-local",
  "harness-media",
+ "harness-media-local",
  "harness-permissions",
  "harness-preview",
  "harness-protocol",
@@ -1641,6 +1642,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]

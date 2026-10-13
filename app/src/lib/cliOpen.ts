@@ -27,6 +27,31 @@ export async function applyLaunchSurface(surface: string | null | undefined): Pr
   }
   if (surface.startsWith("session:")) {
     await s.resume(surface.slice("session:".length));
+    return;
+  }
+  // `oxen-harness ui [--local <id>] [--prompt "…"]`: a fresh chat on the
+  // project — on that local model when one is named — sent at once.
+  if (surface.startsWith("chat:")) {
+    let ask: { local?: string | null; prompt?: string | null };
+    try {
+      ask = JSON.parse(surface.slice("chat:".length));
+    } catch {
+      return;
+    }
+    if (ask.local) {
+      try {
+        await s.switchToLocalModel(ask.local);
+      } catch (e) {
+        // Say why in a fresh chat rather than silently dropping the launch.
+        await s.startNewSession();
+        useStore.getState().addNotice(`Couldn't start ${ask.local}: ${e}`);
+        return;
+      }
+    } else {
+      await s.startNewSession();
+    }
+    const text = ask.prompt?.trim();
+    if (text) useStore.getState().send(text);
   }
 }
 

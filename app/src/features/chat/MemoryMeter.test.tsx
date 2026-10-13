@@ -11,7 +11,7 @@ import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
 import type { MemoryNotice, MemoryStatus } from "../../lib/types";
 
-const GB = 1e9;
+const GB = 2 ** 30;
 const status = (over: Partial<MemoryStatus> = {}, pressure: "normal" | "warn" | "critical" = "normal"): MemoryStatus => ({
   system: {
     total_bytes: 36 * GB,

@@ -13,7 +13,7 @@ import {
   pullLocalMedia,
   removeLocalMedia,
 } from "../../lib/ipc";
-import { gb } from "../../lib/memory";
+import { diskGb as gb } from "../../lib/memory";
 import type { LocalMediaModel, LocalMediaProgressEvent, LocalMediaStatus } from "../../lib/types";
 
 export function LocalMediaSection({ onChanged }: { onChanged?: () => void }) {

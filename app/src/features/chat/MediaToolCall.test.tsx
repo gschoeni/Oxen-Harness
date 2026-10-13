@@ -53,10 +53,23 @@ describe("MediaToolCall", () => {
     useStore.setState({
       media: { "/w": [job, { ...job, id: "local-2", index: 2, status: "queued", progress: { phase: "queued", step: null, total: null, note: null } }] as never },
     });
-    render(<ToolCall item={tool({ callId: "call_9" })} />);
+    const { rerender, container } = render(<ToolCall item={tool({ callId: "call_9" })} />);
     expect(screen.getByRole("progressbar", { name: "Step 2 of 4" })).toHaveAttribute("aria-valuenow", "50");
     expect(screen.getByText("memory is tight")).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "Waiting for the GPU" })).toBeInTheDocument();
+
+    // The first output lands while the second still renders: it shows now.
+    useStore.setState({
+      media: {
+        "/w": [
+          { ...job, status: "succeeded", progress: null, path: "generations/a-1.png", poster: null, width: 1024, height: 1024 },
+          { ...job, id: "local-2", index: 2, progress: { phase: "sampling", step: 1, total: 4, note: null } },
+        ] as never,
+      },
+    });
+    rerender(<ToolCall item={tool({ callId: "call_9" })} />);
+    expect(container.querySelectorAll(".media-tile.skeleton")).toHaveLength(1);
+    expect(screen.getByRole("progressbar", { name: "Step 1 of 4" })).toBeInTheDocument();
   });
 
     it("cancels the generations its call is waiting on", async () => {

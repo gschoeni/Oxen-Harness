@@ -75,8 +75,14 @@ export function useMemoryPolling() {
   }, [noticed]);
 }
 
-/** `30.1` — bytes as decimal gigabytes, one place. */
+/** `30.1` — memory in gigabytes as Apple counts them (2^30 bytes), so a
+ *  36 GB Mac reads 36.0. Disk and download sizes use decimal (`diskGb`). */
 export function gb(bytes: number): string {
+  return (bytes / 2 ** 30).toFixed(1);
+}
+
+/** `8.5` — a file or disk size in decimal gigabytes, as Finder shows them. */
+export function diskGb(bytes: number): string {
   return (bytes / 1e9).toFixed(1);
 }
 
