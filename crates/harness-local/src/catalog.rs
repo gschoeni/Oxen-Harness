@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn october_2026_agent_models_match_the_published_ggufs() {
         // (id, repo, file, quant, exact bytes on the hub) — checked against the
-        // Hugging Face tree API; all fit the 32 GB tier at a 16–32K window.
+        // Hugging Face tree API. The Q3/IQ3 builds are the 24 GB tier.
         let expected = [
             (
                 "gpt-oss-20b",
@@ -392,6 +392,34 @@ mod tests {
                 "Qwen3.6-35B-A3B-UD-IQ4_XS.gguf",
                 "IQ4_XS",
                 17_730_509_792,
+            ),
+            (
+                "glm-4.7-flash-iq3",
+                "unsloth/GLM-4.7-Flash-GGUF",
+                "GLM-4.7-Flash-UD-IQ3_XXS.gguf",
+                "IQ3_XXS",
+                12_907_368_800,
+            ),
+            (
+                "gemma-4-26b-a4b-q3",
+                "unsloth/gemma-4-26B-A4B-it-GGUF",
+                "gemma-4-26B-A4B-it-UD-Q3_K_M.gguf",
+                "Q3_K_M",
+                12_728_497_888,
+            ),
+            (
+                "qwen3.8-27b-iq3",
+                "unsloth/Qwen3.8-27B-GGUF",
+                "Qwen3.8-27B-UD-IQ3_S.gguf",
+                "IQ3_S",
+                12_040_883_104,
+            ),
+            (
+                "qwen3.6-35b-a3b-iq3",
+                "unsloth/Qwen3.6-35B-A3B-GGUF",
+                "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf",
+                "IQ3_XXS",
+                13_211_155_424,
             ),
             (
                 "glm-4.7-flash",

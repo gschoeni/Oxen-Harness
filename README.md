@@ -204,8 +204,13 @@ not code: Qwen3 at `Q4_K_M` (0.6B through 32B and 30B-A3B),
 [Bonsai 27B](https://huggingface.co/collections/prism-ml/bonsai-27b) at its
 native 1-bit and ternary formats, plus Meta's
 [Muse Glimmer 30B](https://huggingface.co/collections/meta-models/muse-glimmer)
-(reasoning, native tool calling, 128K context) at `Q4_K_M` and `Q4_K_XL`. Your
-own additions live in `~/.oxen-harness/local-models.json`:
+(reasoning, native tool calling, 128K context) at `Q4_K_M` and `Q4_K_XL`, and
+the October 2026 agent models: gpt-oss 20B, Gemma 4 26B A4B, Qwen3.8 27B,
+Qwen3.6 35B A3B, and GLM-4.7 Flash. Each of the last four ships twice: a ~17 GB
+`Q4` build for a 32 GB Mac with little else running, and a ~12–13 GB `Q3`/`IQ3`
+build (`-q3` / `-iq3` ids) for 24 GB, or 32–36 GB alongside a dev stack.
+`gemma-4-26b-a4b-q3` is the best all-round pick in that tier. Your own
+additions live in `~/.oxen-harness/local-models.json`:
 
 ```bash
 oxen-harness models list            # catalog + everything downloaded, sizes, disk used

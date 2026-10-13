@@ -54,7 +54,7 @@
       "quant": "MXFP4",
       "approx_bytes": 12109566624,
       "context": 131072,
-      "note": "OpenAI's open MoE: reasoning, native tool calls, 128K context. ~12.1 GB download; the safe pick for 24 GB."
+      "note": "OpenAI's open MoE with reasoning and native tool calls, 128K context. ~12.1 GB; fits 24 GB. Fast, but its file edits are clumsy."
     },
     {
       "id": "gemma-4-26b-a4b",
@@ -66,7 +66,7 @@
       "approx_bytes": 17035039872,
       "context": 262144,
       "derive_quants": true,
-      "note": "Google's MoE with native tool calls and a 256K window. ~17 GB download at Q4_K_M; wants 32 GB (Q3_K_M for 24 GB)."
+      "note": "Google's MoE (~4B active) with native tool calls and a 256K window. ~17 GB at Q4_K_M; wants 32 GB with little else running (the Q3_K_M build fits 24 GB)."
     },
     {
       "id": "qwen3.8-27b",
@@ -77,7 +77,7 @@
       "quant": "Q4_K_M",
       "approx_bytes": 16464440224,
       "context": 262144,
-      "note": "Strongest open 27B for agentic coding (hybrid attention, 256K context). Dense, so slower per token. ~16.5 GB download; wants 32 GB."
+      "note": "Strongest open 27B on agentic-coding benchmarks, 256K context. Dense, so slow on a laptop. ~16.5 GB; wants 32 GB with little else running."
     },
     {
       "id": "qwen3.6-35b-a3b",
@@ -88,7 +88,7 @@
       "quant": "IQ4_XS",
       "approx_bytes": 17730509792,
       "context": 262144,
-      "note": "Fast MoE (~3B active) with hybrid attention and a 256K window. ~17.7 GB download; wants 32 GB."
+      "note": "Fast MoE (~3B active) with hybrid attention and a 256K window. ~17.7 GB; wants 32 GB with little else running."
     },
     {
       "id": "glm-4.7-flash",
@@ -99,7 +99,51 @@
       "quant": "IQ4_XS",
       "approx_bytes": 16271360352,
       "context": 202752,
-      "note": "Z.ai's agentic MoE with a compact (MLA) KV cache and 200K window. ~16.3 GB download; wants 32 GB."
+      "note": "Z.ai's agentic MoE with a compact KV cache and 200K window. ~16.3 GB; wants 32 GB with little else running."
+    },
+    {
+      "id": "gemma-4-26b-a4b-q3",
+      "display": "Gemma 4 26B A4B (Q3_K_M)",
+      "params": "26B-A4B (MoE)",
+      "repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
+      "file": "gemma-4-26B-A4B-it-UD-Q3_K_M.gguf",
+      "quant": "Q3_K_M",
+      "approx_bytes": 12728497888,
+      "context": 262144,
+      "note": "Best all-round pick for 24-36 GB Macs: the fastest model tested (~45 tok/s on an M4 Max) and it passed every agent run. ~12.7 GB."
+    },
+    {
+      "id": "qwen3.8-27b-iq3",
+      "display": "Qwen3.8 27B (IQ3_S)",
+      "params": "27B",
+      "repo": "unsloth/Qwen3.8-27B-GGUF",
+      "file": "Qwen3.8-27B-UD-IQ3_S.gguf",
+      "quant": "IQ3_S",
+      "approx_bytes": 12040883104,
+      "context": 262144,
+      "note": "24 GB build of Qwen3.8 27B: reliable on agent tasks but slow (dense, ~8 tok/s on an M4 Max). ~12 GB."
+    },
+    {
+      "id": "qwen3.6-35b-a3b-iq3",
+      "display": "Qwen3.6 35B A3B (IQ3_XXS)",
+      "params": "35B-A3B (MoE)",
+      "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+      "file": "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf",
+      "quant": "IQ3_XXS",
+      "approx_bytes": 13211155424,
+      "context": 262144,
+      "note": "24 GB build of Qwen3.6 35B A3B: fast (~34 tok/s on an M4 Max) and passed every agent run. ~13.2 GB."
+    },
+    {
+      "id": "glm-4.7-flash-iq3",
+      "display": "GLM-4.7 Flash (IQ3_XXS)",
+      "params": "30B-A3B (MoE)",
+      "repo": "unsloth/GLM-4.7-Flash-GGUF",
+      "file": "GLM-4.7-Flash-UD-IQ3_XXS.gguf",
+      "quant": "IQ3_XXS",
+      "approx_bytes": 12907368800,
+      "context": 202752,
+      "note": "24 GB build of GLM-4.7 Flash: passed every agent run, ~29 tok/s on an M4 Max. ~12.9 GB."
     },
     {
       "id": "qwen3-0.6b",

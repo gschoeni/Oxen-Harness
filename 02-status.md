@@ -337,6 +337,14 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
       (`http://127.0.0.1:<port>/v1`, throwaway key) — no client changes needed
 - [x] Downloads managed in-process (not delegated to `llama-server --hf`) so both
       the CLI and UI can show real progress + disk usage
+- [x] Oct 2026 catalog refresh: gpt-oss 20B, Gemma 4 26B A4B, Qwen3.8 27B,
+      Qwen3.6 35B A3B, GLM-4.7 Flash, each Q4 (~17 GB) plus a 24 GB-tier
+      Q3/IQ3 build (~12–13 GB). The 12–13 GB builds were run end to end on a
+      36 GB M4 Max with a dev stack open (3 `-p` bug-fix turns + llama-bench
+      each): Gemma 4 Q3 3/3 at ~45 tok/s, Qwen3.6 IQ3 3/3 at ~34, GLM IQ3
+      3/3 at ~29, Qwen3.8 IQ3 5/5 but ~8 tok/s, gpt-oss 2/3 at ~37. The
+      ~16 GB Q4 builds (GLM-4.7 Flash Q4 tried) swapped ~7 GB of apps out on
+      that machine, so treat Q4 as "32 GB with little else running".
 
 ---
 
