@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
 import { MemoryMeter } from "./MemoryMeter";
-import { MemoryNotices } from "./MemoryNotices";
+import { MemoryNotices, noticeBody } from "./MemoryNotices";
 import { useMemory, useMemoryPolling } from "../../lib/memory";
 import * as ipc from "../../test/ipcMock";
 import { resetAll } from "../../test/utils";
@@ -120,9 +120,12 @@ describe("MemoryMeter", () => {
     // buttons already show.
     expect(screen.getByText("macOS hit critical memory pressure (32.1 of 36.0 GB used).")).toBeInTheDocument();
     // A bare process is stopped, an app quit.
-    expect(screen.getByRole("button", { name: /^Stop claude/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop claude, 2.4 GB" })).toBeInTheDocument();
+    // One row per app, biggest first.
+    const rows = screen.getAllByRole("listitem");
+    expect(rows.map((r) => r.querySelector(".memory-hog-name")?.textContent)).toEqual(["Docker", "claude"]);
 
-    await userEvent.click(screen.getByRole("button", { name: /^Quit Docker/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Quit Docker, 4.0 GB" }));
     expect(ipc.quitMemoryHog).not.toHaveBeenCalled();
     expect(screen.getByText(/It can still ask you to save first/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Quit Docker" }));
@@ -130,7 +133,7 @@ describe("MemoryMeter", () => {
     expect(ipc.quitMemoryHog).toHaveBeenCalledWith("Docker");
     expect(await screen.findByText("Quit Docker — about 4.0 GB freed.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Quit Docker/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Stop claude/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
   });
 
   it("shows why an app didn't quit", async () => {
@@ -141,8 +144,18 @@ describe("MemoryMeter", () => {
     });
     ipc.quitMemoryHog.mockRejectedValue("Keynote didn't quit: it may be waiting for you to save something");
     render(<MemoryNotices />);
-    await userEvent.click(screen.getByRole("button", { name: /^Quit Keynote/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Quit Keynote, 1.0 GB" }));
     await userEvent.click(screen.getByRole("button", { name: "Quit Keynote" }));
     expect(await screen.findByText(/waiting for you to save/)).toBeInTheDocument();
+  });
+
+  it("keeps a body that opens on the model id in its own case", () => {
+    const body = noticeBody({
+      level: "warn",
+      model: "gemma-4-26b",
+      message: "memory is tight: gemma-4-26b needs about 17.0 GB and 8.4 GB is free.",
+      at: 1,
+    });
+    expect(body).toBe("gemma-4-26b needs about 17.0 GB and 8.4 GB is free.");
   });
 });

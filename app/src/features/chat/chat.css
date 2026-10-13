@@ -1806,27 +1806,92 @@
 }
 /* The apps holding the most memory, each one click (and a confirm) from
    quitting. */
-.memory-notice-hogs {
+/* The apps holding the most memory: a quiet inset list, one row each —
+   name, a bar scaled to the biggest, the size, and its quit action. Asking
+   to quit swaps the bar for the consequence and the action for a confirm. */
+.memory-hogs {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1) var(--space-2);
+  flex-direction: column;
+  gap: var(--space-1);
   margin-top: var(--space-2);
 }
-.memory-notice-hogs-label {
+.memory-hogs-head {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--text-tertiary);
 }
-.memory-hog-confirm {
-  display: inline-flex;
-  flex-wrap: wrap;
+.memory-hogs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  overflow: hidden;
+}
+.memory-hog {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(48px, 120px) 6.5ch auto;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  min-height: calc(var(--btn-h-sm) + 2 * var(--space-1));
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+}
+.memory-hog + .memory-hog {
+  border-top: 1px solid var(--separator);
+}
+.memory-hog[data-confirming] {
+  background: var(--danger-soft);
+}
+.memory-hog-icon {
+  color: var(--text-tertiary);
+}
+.memory-hog-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text);
+  font-weight: 500;
+}
+.memory-hog-bar {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--separator);
+  overflow: hidden;
+}
+.memory-hog-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--warning);
+  opacity: 0.8;
+}
+.memory-notice.stopped .memory-hog-bar > span,
+.memory-notice.refused .memory-hog-bar > span {
+  background: var(--danger);
 }
 .memory-hog-size {
+  text-align: right;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  opacity: 0.75;
+  color: var(--text-secondary);
+}
+/* While confirming, the consequence takes the bar's and the size's columns. */
+.memory-hog-ask {
+  grid-column: 3 / 5;
+  color: var(--text-secondary);
+}
+.memory-hog-actions {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+@media (max-width: 640px) {
+  .memory-hog { grid-template-columns: auto minmax(0, 1fr) 6.5ch auto; }
+  .memory-hog-bar { display: none; }
+  .memory-hog-ask { grid-column: 3 / 4; }
 }
 .memory-notice-result {
   margin-top: var(--space-1);

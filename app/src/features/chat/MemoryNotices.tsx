@@ -5,7 +5,7 @@
 // apps holding the most memory and offers to quit them, one confirm away.
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, OctagonX, X } from "lucide-react";
+import { AlertTriangle, AppWindow, OctagonX, SquareTerminal, X } from "lucide-react";
 import { gb, useMemory } from "../../lib/memory";
 import { quitMemoryHog } from "../../lib/ipc";
 import type { MemoryHog, MemoryNotice } from "../../lib/types";
@@ -70,8 +70,9 @@ export function noticeBody(notice: MemoryNotice): string {
       .replace(/\s*Quitting .+? \(\d+\.\d GB\) frees the most\./, "");
   }
   body = body.trim();
-  // Sentence case, but never "MacOS".
-  return body.startsWith("macOS") ? body : body.charAt(0).toUpperCase() + body.slice(1);
+  // Sentence case, but never "MacOS" or a lowercase model id ("Gemma-4-…").
+  if (body.startsWith("macOS") || body.startsWith(notice.model)) return body;
+  return body.charAt(0).toUpperCase() + body.slice(1);
 }
 
 type Outcome = { kind: "quit" | "error"; text: string };
@@ -99,45 +100,67 @@ function HogOffers({ hogs }: { hogs: MemoryHog[] }) {
     }
   }
 
+  if (offered.length === 0 && !outcome) return null;
+  // Bars are scaled to the biggest app, so the list reads at a glance.
+  const peak = Math.max(1, ...offered.map((h) => h.bytes));
   return (
-    <>
-      {confirming ? (
-        <div className="memory-notice-hogs">
-          <span className="memory-hog-confirm">
-            {confirming.bundle
-              ? `Quit ${confirming.name}? It can still ask you to save first.`
-              : `Stop every ${confirming.name} process? Unsaved work in them is lost.`}
-          </span>
-          <Button size="sm" variant="danger" disabled={busy} onClick={() => confirmQuit(confirming)}>
-            {verb(confirming, false)} {confirming.name}
-          </Button>
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(null)}>
-            Cancel
-          </Button>
-        </div>
-      ) : (
-        offered.length > 0 && (
-          <div className="memory-notice-hogs">
-            <span className="memory-notice-hogs-label">Using the most memory:</span>
-            {offered.map((hog) => (
-              <Button
-                key={hog.name}
-                size="sm"
-                variant="outline"
-                title={`${verb(hog, false)} ${hog.name} to free about ${gb(hog.bytes)} GB`}
-                onClick={() => {
-                  setOutcome(null);
-                  setConfirming(hog);
-                }}
-              >
-                {verb(hog, false)} {hog.name} <span className="memory-hog-size">{gb(hog.bytes)} GB</span>
-              </Button>
-            ))}
-          </div>
-        )
+    <div className="memory-hogs">
+      {offered.length > 0 && (
+        <>
+          <div className="memory-hogs-head">Using the most memory</div>
+          <ul className="memory-hogs-list">
+            {offered.map((hog) => {
+              const asking = confirming?.name === hog.name;
+              const Icon = hog.bundle ? AppWindow : SquareTerminal;
+              return (
+                <li key={hog.name} className="memory-hog" data-confirming={asking || undefined}>
+                  <Icon size={14} strokeWidth={1.75} className="memory-hog-icon" aria-hidden />
+                  <span className="memory-hog-name">{hog.name}</span>
+                  {asking ? (
+                    <span className="memory-hog-ask">
+                      {hog.bundle ? "It can still ask you to save first." : "Unsaved work in it is lost."}
+                    </span>
+                  ) : (
+                    <>
+                      <span className="memory-hog-bar" aria-hidden>
+                        <span style={{ width: `${(hog.bytes / peak) * 100}%` }} />
+                      </span>
+                      <span className="memory-hog-size">{gb(hog.bytes)} GB</span>
+                    </>
+                  )}
+                  <span className="memory-hog-actions">
+                    {asking ? (
+                      <>
+                        <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(null)}>
+                          Cancel
+                        </Button>
+                        <Button size="sm" variant="danger" disabled={busy} onClick={() => confirmQuit(hog)}>
+                          {verb(hog, false)} {hog.name}
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        aria-label={`${verb(hog, false)} ${hog.name}, ${gb(hog.bytes)} GB`}
+                        onClick={() => {
+                          setOutcome(null);
+                          setConfirming(hog);
+                        }}
+                      >
+                        {verb(hog, false)}
+                      </Button>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
       {outcome && <span className={`memory-notice-result ${outcome.kind}`}>{outcome.text}</span>}
-    </>
+    </div>
   );
 }
 
