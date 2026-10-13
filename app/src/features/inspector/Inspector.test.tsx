@@ -33,14 +33,22 @@ beforeEach(() => {
   ] as unknown[]);
 });
 
+/** A summary count by its label: the value it reads. */
+const stat = async (label: string) => {
+  const summary = await screen.findByRole("region", { name: "Session summary" });
+  return within(summary).getByText(label).nextElementSibling?.textContent;
+};
+
 describe("Inspector", () => {
   it("fetches the session transcript and summarizes it", async () => {
     render(<Inspector sessionId="s1" />);
     await waitFor(() => expect(ipc.sessionMessages).toHaveBeenCalledWith("s1"));
-    // Messages count, LLM calls (2 assistant), tool calls (1)
-    expect(await screen.findByText("Messages")).toBeInTheDocument();
-    expect(screen.getByText("5")).toBeInTheDocument(); // message count
-    expect(screen.getByText("1,234")).toBeInTheDocument(); // session tokens
+    await waitFor(async () => expect(await stat("messages")).toBe("5"));
+    expect(await stat("LLM calls")).toBe("2");
+    expect(await stat("tool calls")).toBe("1");
+    expect(await stat("session tokens")).toBe("1,234");
+    // The context meter reads used / window.
+    expect(screen.getByText(/900 \/ 128,000/)).toBeInTheDocument();
     // Tool name shows in the summary chip (and again in the tool-call block)
     expect(screen.getAllByText("find_files").length).toBeGreaterThan(0);
   });
@@ -72,7 +80,7 @@ describe("Inspector", () => {
     await userEvent.click(screen.getByRole("tab", { name: /readable/i }));
     await screen.findByText("Tool definitions");
     // Summary stat shows the count + token estimate, and the panel/rows show tok badges.
-    expect(screen.getByText(/2 · ~\d/)).toBeInTheDocument();
+    expect(await stat("tools available")).toMatch(/^2~\d[\d,]* tok$/);
     expect(screen.getAllByText(/~\d[\d,]* tok/).length).toBeGreaterThan(0);
   });
 

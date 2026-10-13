@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { IconButton } from "../../components/ui";
 import { JsonTree } from "../../components/ui/JsonTree";
 import {
+  AlignLeft,
   Ban,
   Braces,
   Check,
@@ -345,7 +346,7 @@ export function Inspector({ sessionId }: { sessionId: string }) {
                 className={mode === "pretty" ? "active" : ""}
                 onClick={() => setMode("pretty")}
               >
-                Readable
+                <AlignLeft size={13} /> Readable
               </button>
               <button
                 role="tab"
@@ -356,41 +357,55 @@ export function Inspector({ sessionId }: { sessionId: string }) {
                 <Braces size={13} /> Raw JSON
               </button>
             </div>
-            <button
-              className="dev-copy dev-icon-only"
-              onClick={load}
-              title="Reload transcript"
-              aria-label="Refresh"
-            >
-              <RefreshCw size={13} />
-            </button>
-            {mode === "raw" && <CopyButton text={rawJson} label="Copy all" />}
+            <div className="dev-toolbar-actions">
+              {mode === "raw" && <CopyButton text={rawJson} label="Copy all" />}
+              <button
+                className="dev-copy dev-icon-only"
+                onClick={load}
+                title="Reload transcript"
+                aria-label="Refresh"
+              >
+                <RefreshCw size={13} />
+              </button>
+            </div>
           </div>
 
-          {/* Summary header */}
-          <div className="dev-summary">
-            <Stat label="Model" value={model} mono />
-            <Stat label="Messages" value={String(stats.count)} />
-            <Stat label="LLM calls" value={String(stats.byRole.assistant ?? 0)} />
-            {isCurrent && (
-              <Stat
-                label="Tools available"
-                value={tools.length > 0 ? `${tools.length} · ~${toolTokens.toLocaleString()} tok` : "0"}
-              />
-            )}
-            <Stat label="Tool calls" value={String(stats.toolCalls)} />
-            {info && (
-              <>
-                <Stat label="Session tokens" value={info.tokens_used.toLocaleString()} />
+          {/* Summary: the model and how full its context is, then the counts */}
+          <section className="dev-overview" aria-label="Session summary">
+            <div className="dev-overview-head">
+              <span className="dev-overview-model" title={model}>
+                {model}
+              </span>
+              {info && info.context_window > 0 && (
+                <span
+                  className={`dev-context${ctxPct >= 80 ? " high" : ""}`}
+                  title={`${info.context_tokens.toLocaleString()} of ${info.context_window.toLocaleString()} context tokens`}
+                >
+                  <span className="dev-context-label">Context</span>
+                  <span className="dev-context-bar" aria-hidden="true">
+                    <span style={{ width: `${Math.max(ctxPct, 1)}%` }} />
+                  </span>
+                  <span className="dev-context-value">
+                    {info.context_tokens.toLocaleString()} / {info.context_window.toLocaleString()}
+                    <span className="dev-context-pct"> · {ctxPct < 1 ? "<1" : Math.round(ctxPct)}%</span>
+                  </span>
+                </span>
+              )}
+            </div>
+            <dl className="dev-overview-stats">
+              <Stat label="messages" value={stats.count.toLocaleString()} />
+              <Stat label="LLM calls" value={(stats.byRole.assistant ?? 0).toLocaleString()} />
+              <Stat label="tool calls" value={stats.toolCalls.toLocaleString()} />
+              {isCurrent && (
                 <Stat
-                  label="Context"
-                  value={`${info.context_tokens.toLocaleString()} / ${info.context_window.toLocaleString()} · ${
-                    ctxPct < 1 ? "<1" : Math.round(ctxPct)
-                  }%`}
+                  label="tools available"
+                  value={tools.length.toLocaleString()}
+                  hint={tools.length > 0 ? `~${toolTokens.toLocaleString()} tok` : undefined}
                 />
-              </>
-            )}
-          </div>
+              )}
+              {info && <Stat label="session tokens" value={info.tokens_used.toLocaleString()} />}
+            </dl>
+          </section>
 
           {stats.topTools.length > 0 && (
             <div className="dev-tools-row">
@@ -541,11 +556,14 @@ export function InspectorDrawer() {
   );
 }
 
-function Stat({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="dev-stat">
-      <span className="dev-stat-label">{label}</span>
-      <span className={`dev-stat-value ${mono ? "mono" : ""}`}>{value}</span>
+      <dt>{label}</dt>
+      <dd>
+        {value}
+        {hint && <span className="dev-stat-hint">{hint}</span>}
+      </dd>
     </div>
   );
 }

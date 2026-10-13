@@ -97,7 +97,7 @@ const BASELINE: Record<string, number> = {
   "/src/features/docks/docks.css": 3,
   "/src/features/files/files.css": 40,
   "/src/features/history/history.css": 7,
-  "/src/features/inspector/dev.css": 6,
+  "/src/features/inspector/dev.css": 2,
   "/src/features/logs/logs.css": 4,
   "/src/features/media/media.css": 5,
   "/src/features/models/models.css": 4,
