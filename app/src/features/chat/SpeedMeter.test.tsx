@@ -31,10 +31,12 @@ beforeEach(() => {
 });
 
 describe("SpeedMeter", () => {
-  it("stays out of the way until a call has been timed", () => {
+  it("holds a quiet placeholder until a call has been timed", () => {
     const { container } = render(<SpeedMeter />);
+    expect(container.querySelector(".speed-meter")).toHaveAttribute("data-idle");
     act(() => useStore.getState().ingestThroughput(reading({ output_tokens: 1 })));
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(container.querySelector(".speed-meter-spark")).toBeNull();
   });
 
   it("shows the live rate with a sparkline while the reply streams", () => {

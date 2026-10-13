@@ -39,12 +39,14 @@ export function nextSpeed(prev: SpeedState | undefined, e: ThroughputEvent): Spe
       samples = [...samples, (dTokens * 1000) / dt].slice(-SPARK_SAMPLES);
     }
   }
-  // A new call's first token has no rate yet: keep the last figure on screen
-  // rather than blanking the readout between calls.
-  const tokensPerSec = e.tokens_per_sec ?? (e.done ? null : prev?.tokensPerSec ?? null);
+  // A reading with no rate — a new call's first tokens, or a whole call too
+  // short to time (a quick tool call, a one-line answer) — never replaces a
+  // timed one: the readout would otherwise blank at the end of most agentic
+  // turns. Mirrors the CLI's `SpeedGauge::record`.
+  if (e.tokens_per_sec === null && prev && prev.tokensPerSec !== null) return prev;
   return {
     model: e.model,
-    tokensPerSec,
+    tokensPerSec: e.tokens_per_sec,
     ttftMs: e.ttft_ms,
     outputTokens: e.output_tokens,
     done: e.done,

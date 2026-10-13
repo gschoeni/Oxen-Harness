@@ -1,7 +1,8 @@
 // A compact, always-visible usage readout for the active chat, shown just above
 // the composer. The empty-state hero carries the all-time "Total tokens used"
 // stat; this fills the gap during a conversation, where the hero is gone —
-// surfacing this session's live token count and how full the context window is.
+// surfacing, in the TUI meter's reading order, how full the context window is,
+// what the chat has cost, and how fast the model is going.
 
 import { useEffect, useState } from "react";
 import { advancedSettingsEnabled } from "../../lib/features";
@@ -57,7 +58,14 @@ export function TokenMeter() {
 
   return (
     <div className="token-meter" title={`${contextTokens.toLocaleString()} / ${contextWindow.toLocaleString()} context tokens`}>
-      <span className="token-meter-used">{tokensUsed.toLocaleString()} tokens used</span>
+      {contextWindow > 0 && (
+        <span className="token-meter-ctx" data-level={pct >= 86 ? "danger" : pct >= 60 ? "warn" : undefined}>
+          <span className="token-meter-figure">{pct < 1 ? "<1" : Math.round(pct)}%</span> of context
+        </span>
+      )}
+      <span className="token-meter-used">
+        <span className="token-meter-figure">{tokensUsed.toLocaleString()}</span> tokens used
+      </span>
       {cost !== null && (
         <span
           className="token-meter-cost"
@@ -65,9 +73,6 @@ export function TokenMeter() {
         >
           {formatUsd(cost)}
         </span>
-      )}
-      {contextWindow > 0 && (
-        <span className="token-meter-ctx">{pct < 1 ? "<1" : Math.round(pct)}% of context</span>
       )}
       <SpeedMeter />
       <MemoryMeter />

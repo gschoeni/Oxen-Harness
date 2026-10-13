@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
@@ -39,7 +39,7 @@ describe("TokenMeter compression indicator", () => {
     });
     render(<TokenMeter />);
     expect(await screen.findByText("$0.62")).toBeInTheDocument();
-    expect(screen.getByText("250,000 tokens used")).toBeInTheDocument();
+    expect(document.querySelector(".token-meter-used")).toHaveTextContent("250,000 tokens used");
     expect(ipc.sessionCost).not.toHaveBeenCalled();
   });
 
@@ -67,6 +67,20 @@ describe("TokenMeter compression indicator", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reads context, then tokens used and cost, then speed — like the TUI", async () => {
+    useStore.setState({
+      session: { ...ipc.sampleSession, session_id: "s1", tokens_used: 1200, context_tokens: 140_000, context_window: 200_000, compression_mode: "off" },
+      sessionUsage: { s1: { prompt: 1000, completion: 200 } },
+    });
+    const { container } = render(<TokenMeter />);
+    await waitFor(() => expect(container.querySelector(".token-meter-cost")).not.toBeNull());
+    const order = [...container.querySelector(".token-meter")!.children].map((el) => el.className.split(" ")[0]);
+    expect(order).toEqual(["token-meter-ctx", "token-meter-used", "token-meter-cost", "speed-meter"]);
+    // 70% full: the figure warms before compaction.
+    expect(container.querySelector(".token-meter-ctx")).toHaveAttribute("data-level", "warn");
+    expect(container.querySelector(".speed-meter")).toHaveTextContent("—tok/s");
   });
 
   it("shows nothing about compression when the session's mode is off", () => {

@@ -14,7 +14,17 @@ const SPARK_H = 12;
 export function SpeedMeter() {
   const speed = useStore((s) => (s.session ? s.speed[s.session.session_id] : undefined));
   const running = useStore((s) => (s.session ? s.runStatus[s.session.session_id] === "running" : false));
-  if (!speed || speed.tokensPerSec === null) return null;
+  // The slot holds its place before any call is timed, so the meter row
+  // doesn't reflow when the first figure lands.
+  if (!speed || speed.tokensPerSec === null) {
+    return (
+      <span className="speed-meter" data-idle title="Generation speed appears once a reply has been timed">
+        <Zap className="speed-meter-bolt" size={12} strokeWidth={2.25} aria-hidden />
+        <span className="speed-meter-rate">—</span>
+        <span className="speed-meter-unit">tok/s</span>
+      </span>
+    );
+  }
   // Live only while this chat's turn runs: a turn that ended without a final
   // reading (a stop) must not leave a sparkline twitching on an idle chat.
   const live = running && !speed.done;

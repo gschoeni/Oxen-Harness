@@ -30,11 +30,17 @@ describe("nextSpeed", () => {
     expect(s).toMatchObject({ tokensPerSec: 44.6, done: true, outputTokens: 446, samples: [] });
   });
 
-  it("keeps the last rate up while the next call waits for a rate", () => {
+  it("keeps the last settled figure up while the next call waits for a rate", () => {
     let s = nextSpeed(undefined, reading({ output_tokens: 446, decode_ms: 10_000, tokens_per_sec: 44.6, done: true }));
     s = nextSpeed(s, reading({ output_tokens: 1, decode_ms: 0 }));
-    expect(s.tokensPerSec).toBe(44.6);
-    expect(s.done).toBe(false);
+    expect(s).toMatchObject({ tokensPerSec: 44.6, done: true, outputTokens: 446 });
+  });
+
+  it("keeps the last timed rate when a call ends too fast to time", () => {
+    let s = nextSpeed(undefined, reading({ output_tokens: 446, decode_ms: 10_000, tokens_per_sec: 44.6, done: true }));
+    s = nextSpeed(s, reading({ output_tokens: 1, decode_ms: 0 }));
+    s = nextSpeed(s, reading({ output_tokens: 12, decode_ms: 200, exact: true, done: true }));
+    expect(s).toMatchObject({ tokensPerSec: 44.6, done: true, outputTokens: 446 });
   });
 
   it("caps the sparkline window", () => {

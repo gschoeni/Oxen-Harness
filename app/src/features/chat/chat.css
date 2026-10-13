@@ -1239,7 +1239,26 @@
   opacity: 0.6;
   color: var(--text-tertiary);
 }
-/* Generation speed: a quiet figure at rest, the accent while a reply streams. */
+/* Each reading's headline number reads a step brighter than its label. */
+.token-meter-figure {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.token-meter-cost {
+  color: var(--text-secondary);
+}
+/* The context fill warms as it nears compaction, like the TUI's percentage. */
+.token-meter-ctx[data-level="warn"] .token-meter-figure {
+  color: var(--warning);
+}
+.token-meter-ctx[data-level="danger"] .token-meter-figure {
+  color: var(--danger);
+}
+/* Generation speed: a quiet figure at rest, the accent while a reply streams.
+   Before any call is timed, a dimmed placeholder holds the slot. */
+.speed-meter[data-idle] {
+  opacity: 0.6;
+}
 .speed-meter {
   display: inline-flex;
   align-items: center;
