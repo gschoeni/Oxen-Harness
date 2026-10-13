@@ -39,6 +39,7 @@ function dropOsFile(target: HTMLElement, name: string) {
 
 describe("Chat", () => {
   it("puts the panel switch in the titlebar in place of the project-home button", () => {
+    useStore.setState({ homeOpen: false });
     render(
       <>
         <TitleBar />
@@ -56,7 +57,22 @@ describe("Chat", () => {
     expect(screen.queryByRole("button", { name: /Open Settings|Toggle the study game/ })).toBeNull();
   });
 
+  it("shows the panel switch only inside a project's chat view", () => {
+    useStore.setState({ homeOpen: false });
+    render(<TitleBar />);
+    expect(screen.getByRole("group", { name: "Panels" })).toBeInTheDocument();
+    act(() => useStore.setState({ homeOpen: true }));
+    expect(screen.queryByRole("group", { name: "Panels" })).toBeNull();
+    act(() => useStore.setState({ homeOpen: false, settingsOpen: true }));
+    expect(screen.queryByRole("group", { name: "Panels" })).toBeNull();
+    act(() => useStore.setState({ settingsOpen: false, session: null }));
+    expect(screen.queryByRole("group", { name: "Panels" })).toBeNull();
+    // Running stays: it's the way Home from anywhere.
+    expect(screen.getByRole("button", { name: /running — go Home/ })).toBeInTheDocument();
+  });
+
   it("opens and closes the chat's inspector from the switch", async () => {
+    useStore.setState({ homeOpen: false });
     render(<TitleBar />);
     const inspector = screen.getByRole("button", { name: "Inspector" });
     await userEvent.click(inspector);

@@ -59,6 +59,7 @@ it("hides the chat from the titlebar and lets the work view fill the window", as
   const { container } = render(<App />);
   await waitFor(() => expect(useStore.getState().session?.session_id).toBe(sampleSession.session_id));
   await act(async () => useStore.getState().openInViewer(["notes.txt"]));
+  act(() => useStore.setState({ homeOpen: false }));
 
   await userEvent.click(screen.getByRole("button", { name: "Agent" }));
   const columns = container.querySelector(".app-columns") as HTMLElement;

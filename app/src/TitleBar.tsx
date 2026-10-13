@@ -2,8 +2,8 @@
 // window, above every column and overlay. It is the window's drag handle and
 // double-clicks to zoom — exactly like a native title bar — so no pane below
 // ever has to fake its own. The active project names the window; the running
-// count and the panel switch (Files | Agent | Work | </>) sit at its right
-// edge, clear of the macOS traffic lights. Settings is ⌘, (or Home); the
+// count and, inside a project, the panel switch (Files | Agent | Work | </>)
+// sit at its right edge, clear of the macOS traffic lights. Settings is ⌘, (or Home); the
 // study game is ⌘J (or the composer's button while a turn runs).
 
 import { Activity } from "lucide-react";
@@ -38,6 +38,9 @@ export function TitleBar() {
     }
     return count;
   });
+  // The panels only exist inside a project's chat view: over Home or
+  // Settings, or with no project open, the switch would control nothing.
+  const inProject = useStore((s) => !!s.session?.workspace && !s.homeOpen && !s.settingsOpen);
   const setHomeOpen = useStore((s) => s.setHomeOpen);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
 
@@ -61,7 +64,7 @@ export function TitleBar() {
           <span>{runningCount}</span>
           <span className="titlebar-running-label">running</span>
         </button>
-        <PanelSwitch />
+        {inProject && <PanelSwitch />}
       </div>
     </header>
   );
