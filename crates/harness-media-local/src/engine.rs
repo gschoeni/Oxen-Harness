@@ -48,9 +48,10 @@ pub trait MediaEngine: Send + Sync {
     /// Whether the runtime is present.
     fn status(&self) -> EngineStatus;
 
-    /// Render one output. Jobs arrive one at a time (the service queues
-    /// them), but `cancel` can fire at any point and must end the job
-    /// promptly with [`LocalMediaError::Cancelled`].
+    /// Render one output. The service queues jobs, so an engine sees one at
+    /// a time and may rely on that; `cancel` can fire at any point and must
+    /// end the job promptly with [`LocalMediaError::Cancelled`], and a
+    /// dropped future must not leave the runtime rendering.
     async fn render(
         &self,
         req: EngineRequest<'_>,

@@ -766,7 +766,8 @@ async fn run_local(
             prepared.model.id
         )));
     }
-    let sources = store_sources(ctx, &prepared.resolved);
+    let mut prepared = prepared;
+    let sources = store_sources(ctx, &prepared.resolved, &mut prepared.notes);
     let prompt = local_prompt(&prepared.resolved, &req.prompt);
     let started = Instant::now();
     let stamp = std::time::SystemTime::now()
@@ -774,7 +775,7 @@ async fn run_local(
         .map(|d| d.as_nanos())
         .unwrap_or_default();
     let ids: Vec<String> = (1..=req.count)
-        .map(|i| format!("local-{stamp:x}-{i}"))
+        .map(|i| format!("{}{stamp:x}-{i}", crate::local::LOCAL_JOB_PREFIX))
         .collect();
     let refs: Vec<PathBuf> = prepared.resolved.iter().map(|r| r.path.clone()).collect();
     let jobs = ids
@@ -782,9 +783,11 @@ async fn run_local(
         .enumerate()
         .map(|(i, id)| {
             let mut params = prepared.params.clone();
-            // A fixed seed makes variations: each output steps it by one.
+            // A fixed seed makes variations: each output steps it by one,
+            // wrapping within the non-negative int64 range engines accept.
             if let Some(seed) = params.get("seed").and_then(Value::as_u64) {
-                params.insert("seed".into(), Value::from(seed + i as u64));
+                let stepped = seed.wrapping_add(i as u64) & i64::MAX as u64;
+                params.insert("seed".into(), Value::from(stepped));
             }
             LocalJob {
                 id: id.clone(),
@@ -904,7 +907,24 @@ impl Waiter {
             Self::Local { provider, jobs } => {
                 let mut outcomes = Vec::new();
                 for (item, job) in items.into_iter().zip(jobs.iter().cloned()) {
-                    outcomes.push(wait_local(ctx, provider.as_ref(), item, job, slug).await);
+                    // A later output cancelled (media_status) while an
+                    // earlier one rendered never reaches the engine.
+                    let cancelled = ctx
+                        .library
+                        .items()
+                        .iter()
+                        .any(|i| i.id == item.id && i.status == MediaStatus::Cancelled);
+                    outcomes.push(if cancelled {
+                        Outcome {
+                            item,
+                            status: MediaStatus::Cancelled,
+                            rel: None,
+                            poster: None,
+                            error: Some("cancelled".into()),
+                        }
+                    } else {
+                        wait_local(ctx, provider.as_ref(), item, job, slug).await
+                    });
                 }
                 outcomes
             }
@@ -1123,11 +1143,17 @@ fn default_model(
     if crate::local::is_local_id(preferred) || ctx.api().is_some() {
         return preferred.clone();
     }
+    // The fastest installed one: a stand-in should feel like a draft model.
     let installed = catalog
         .models()
         .iter()
         .filter(|m| m.kind == kind)
-        .find(|m| m.local.as_ref().is_some_and(|l| l.installed));
+        .filter_map(|m| Some((m, m.local.as_ref().filter(|l| l.installed)?)))
+        .min_by(|(_, a), (_, b)| {
+            let secs = |l: &crate::LocalInfo| l.typical_secs.unwrap_or(f64::MAX);
+            secs(a).total_cmp(&secs(b))
+        })
+        .map(|(m, _)| m);
     match installed {
         Some(m) => {
             notes.push(format!(
@@ -1193,14 +1219,23 @@ fn validate_slots(
 }
 
 /// Copy each reference into the library for provenance, with no upload —
-/// a local engine reads the originals from disk.
-fn store_sources(ctx: &MediaContext, resolved: &[ResolvedRef]) -> Vec<MediaSource> {
+/// a local engine reads the originals from disk. A copy that fails doesn't
+/// stop the generation, but the result says the lineage is incomplete.
+fn store_sources(
+    ctx: &MediaContext,
+    resolved: &[ResolvedRef],
+    notes: &mut Vec<String>,
+) -> Vec<MediaSource> {
     resolved
         .iter()
         .filter_map(|r| match ctx.library.store_ref(&r.path) {
             Ok(stored) => Some(source_of(ctx, r, stored)),
             Err(e) => {
-                tracing::warn!("could not copy reference {}: {e}", r.path.display());
+                notes.push(format!(
+                    "{} could not be copied into the library ({e}), so the gallery won't \
+                     show it as this image's source",
+                    r.filename
+                ));
                 None
             }
         })
@@ -1991,12 +2026,21 @@ impl TypedTool for MediaStatusTool {
                 .ok_or_else(|| {
                     ToolError::InvalidArguments("`cancel` needs the generation `id`".into())
                 })?;
-            if id.starts_with("local-") {
-                let found = match &self.ctx.local {
+            if crate::local::is_local_job_id(id) {
+                let running = match &self.ctx.local {
                     Some(local) => local.cancel(id).await,
                     None => false,
                 };
-                if !found {
+                // Outputs of a batch wait their turn without reaching the
+                // provider; marking the row cancelled below is what skips them.
+                let queued = || {
+                    self.ctx
+                        .library
+                        .in_flight(None)
+                        .iter()
+                        .any(|i| i.id == id && i.status == MediaStatus::Queued)
+                };
+                if !running && !queued() {
                     return Err(ToolError::InvalidArguments(format!(
                         "no local generation `{id}` is queued or running"
                     )));
@@ -2016,7 +2060,12 @@ impl TypedTool for MediaStatusTool {
             {
                 item.status = MediaStatus::Cancelled;
                 item.completed_at = Some(now_unix());
-                let _ = self.ctx.library.record(item);
+                // The row is what skips a queued local output, so a failed
+                // manifest write still updates the live feed.
+                if let Err(e) = self.ctx.library.record(item.clone()) {
+                    tracing::warn!("could not record the cancel of {id}: {e}");
+                    self.ctx.library.upsert(item);
+                }
             }
             return Ok(format!("Cancelled generation {id}."));
         }
@@ -2707,9 +2756,10 @@ mod tests {
                 record: json!({"engine": "fake", "elapsed_ms": 5}),
             })
         }
+        /// Knows only ids it is "running" (any without `queued` in them).
         async fn cancel(&self, id: &str) -> bool {
             self.cancelled.lock().unwrap().push(id.to_string());
-            true
+            !id.contains("queued")
         }
     }
 
@@ -2789,6 +2839,59 @@ mod tests {
             );
             assert!(dir.path().join(item.path.as_ref().unwrap()).exists());
         }
+    }
+
+    #[tokio::test]
+    async fn a_queued_local_output_cancels_from_its_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = Arc::new(FakeLocal::default());
+        let ctx = local_ctx(dir.path(), local.clone(), Arc::new(NoConfirmSink));
+        // A batch's second output waits in the library, unknown to the provider.
+        GenerateImageTool { ctx: ctx.clone() }
+            .invoke(json!({"prompt": "x", "model": "local/fake"}))
+            .await
+            .unwrap();
+        let mut queued = ctx.library.items()[0].clone();
+        queued.id = "local-queued-2".into();
+        queued.status = MediaStatus::Queued;
+        ctx.library.record(queued).unwrap();
+        let status = MediaStatusTool { ctx: ctx.clone() };
+        status
+            .invoke(json!({"id": "local-queued-2", "cancel": true}))
+            .await
+            .unwrap();
+        let row = ctx
+            .library
+            .items()
+            .into_iter()
+            .find(|i| i.id == "local-queued-2");
+        assert_eq!(row.map(|i| i.status), Some(MediaStatus::Cancelled));
+        // An id neither running nor queued is an error, not a fake success.
+        let err = status
+            .invoke(json!({"id": "local-queued-9", "cancel": true}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("queued or running"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_seed_at_the_top_of_the_range_wraps_for_variations() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = Arc::new(FakeLocal::default());
+        let ctx = local_ctx(dir.path(), local.clone(), Arc::new(NoConfirmSink));
+        GenerateImageTool { ctx }
+            .invoke(json!({"prompt": "x", "model": "local/fake", "seed": u64::MAX, "count": 2}))
+            .await
+            .unwrap();
+        let seeds: Vec<_> = local
+            .jobs
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|j| j.params.get("seed").cloned())
+            .collect();
+        // The schema check clamps to i64::MAX; the next variation wraps to 0.
+        assert_eq!(seeds, vec![Some(json!(i64::MAX)), Some(json!(0))]);
     }
 
     #[tokio::test]

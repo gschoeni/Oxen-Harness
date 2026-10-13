@@ -52,6 +52,9 @@ const JOB_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 const POLL: Duration = Duration::from_millis(400);
 
+/// How long the server may fail to answer polls before the job fails.
+const UNANSWERED_LIMIT: Duration = Duration::from_secs(30);
+
 /// The pid registry file `sd-server`s are recorded in.
 pub const PID_FILE: &str = "sd-server.pids";
 
@@ -117,22 +120,32 @@ pub async fn install_runtime(
         .await
         .map_err(|e| LocalError::Runtime(format!("downloading {url}: {e}")))?;
     let dest = root.join(format!("sd-{PINNED_VERSION}"));
-    // `ditto` ships with macOS (the only platform with an asset) and keeps
-    // the binaries' executable bits and the dylib next to them.
+    // Unpack beside the destination and rename once complete, so an
+    // interrupted unpack never leaves an `sd-server` without its dylib that
+    // reads as installed. `ditto` ships with macOS (the only platform with
+    // an asset) and keeps the executable bits.
+    let unpacking = root.join(format!("sd-{PINNED_VERSION}.unpacking"));
+    if unpacking.exists() {
+        tokio::fs::remove_dir_all(&unpacking).await?;
+    }
     let status = tokio::process::Command::new("ditto")
         .args(["-x", "-k"])
         .arg(&zip)
-        .arg(&dest)
+        .arg(&unpacking)
         .status()
         .await?;
     if let Err(e) = tokio::fs::remove_file(&zip).await {
         tracing::warn!("could not remove {}: {e}", zip.display());
     }
-    if !status.success() {
+    if !status.success() || !unpacking.join("sd-server").is_file() {
         return Err(LocalError::Runtime(format!(
-            "unpacking {asset} failed ({status})"
+            "unpacking {asset} failed ({status}) or held no sd-server"
         )));
     }
+    if dest.exists() {
+        tokio::fs::remove_dir_all(&dest).await?;
+    }
+    tokio::fs::rename(&unpacking, &dest).await?;
     managed_binary()
         .ok_or_else(|| LocalError::Runtime(format!("{asset} unpacked without an sd-server binary")))
 }
@@ -143,9 +156,9 @@ struct Server {
     pid: u32,
     base: String,
     model: String,
-    /// `proj` when the server offers cheap latent previews (which is how it
-    /// reports step progress), else `none`.
-    preview: &'static str,
+    /// Whether the server offers cheap latent previews, which is how it
+    /// reports step progress.
+    previews: bool,
 }
 
 impl Server {
@@ -259,7 +272,12 @@ impl SdCppEngine {
         let child = cmd.spawn().map_err(|e| {
             LocalMediaError::Failed(format!("could not start {}: {e}", bin.display()))
         })?;
-        let pid = child.id().unwrap_or(0);
+        let pid = child.id().ok_or_else(|| {
+            LocalMediaError::Failed(format!(
+                "sd-server exited as soon as it started{}",
+                self.log_tail()
+            ))
+        })?;
         harness_local::register_spawned(PID_FILE, pid, port);
         spawn_lifeline(pid);
         let mut server = Server {
@@ -267,7 +285,7 @@ impl SdCppEngine {
             pid,
             base: format!("http://127.0.0.1:{port}"),
             model: req.spec.id.clone(),
-            preview: "none",
+            previews: false,
         };
         let started = Instant::now();
         loop {
@@ -285,9 +303,7 @@ impl SdCppEngine {
             }
             if let Ok(caps) = self.get(&server.base, "/sdcpp/v1/capabilities").await {
                 let modes = caps.get("preview_modes").and_then(Value::as_array);
-                if modes.is_some_and(|m| m.iter().any(|v| v == "proj")) {
-                    server.preview = "proj";
-                }
+                server.previews = modes.is_some_and(|m| m.iter().any(|v| v == "proj"));
                 return Ok(server);
             }
             if started.elapsed() > STARTUP_TIMEOUT {
@@ -391,7 +407,7 @@ fn server_args(
 }
 
 /// The job body for `/sdcpp/v1/img_gen`.
-fn job_body(req: &EngineRequest<'_>, preview: &str) -> Result<Value, LocalMediaError> {
+fn job_body(req: &EngineRequest<'_>, previews: bool) -> Result<Value, LocalMediaError> {
     let s = req.settings;
     let mut refs = Vec::new();
     for path in req.refs {
@@ -415,7 +431,7 @@ fn job_body(req: &EngineRequest<'_>, preview: &str) -> Result<Value, LocalMediaE
             "sample_steps": s.steps,
             "guidance": { "txt_cfg": s.cfg_scale },
         },
-        "preview": preview,
+        "preview": if previews { "proj" } else { "none" },
         "preview_interval": 1,
         "output_format": "png",
     }))
@@ -542,7 +558,7 @@ impl SdCppEngine {
     ) -> Result<(Vec<u8>, String), LocalMediaError> {
         let server = self.ensure_server(slot, req, cancel).await?;
         let base = server.base.clone();
-        let body = job_body(req, server.preview)?;
+        let body = job_body(req, server.previews)?;
         let res = self
             .http
             .post(format!("{base}/sdcpp/v1/img_gen"))
@@ -567,17 +583,20 @@ impl SdCppEngine {
             .and_then(Value::as_str)
             .ok_or_else(|| LocalMediaError::Failed("sd-server returned no job id".into()))?
             .to_string();
+        // Until the server settles the job, any exit — cancel, timeout, an
+        // error, or this future being dropped with an interrupted turn —
+        // tells the server to stop rendering it.
+        let mut guard = AbandonGuard {
+            http: self.http.clone(),
+            url: format!("{base}/sdcpp/v1/jobs/{id}/cancel"),
+            armed: true,
+        };
         let started = Instant::now();
         let mut last_step = None;
+        let mut unanswered_since: Option<Instant> = None;
         loop {
             tokio::select! {
-                _ = cancel.cancelled() => {
-                    let url = format!("{base}/sdcpp/v1/jobs/{id}/cancel");
-                    if let Err(e) = self.http.post(&url).timeout(Duration::from_secs(5)).send().await {
-                        tracing::warn!("could not cancel sd-server job {id}: {e}");
-                    }
-                    return Err(LocalMediaError::Cancelled);
-                }
+                _ = cancel.cancelled() => return Err(LocalMediaError::Cancelled),
                 _ = tokio::time::sleep(POLL) => {}
             }
             if slot.as_mut().is_some_and(Server::exited) {
@@ -590,12 +609,30 @@ impl SdCppEngine {
                 )));
             }
             let job = match self.get(&base, &format!("/sdcpp/v1/jobs/{id}")).await {
-                Ok(job) => job,
+                Ok(job) => {
+                    unanswered_since = None;
+                    job
+                }
+                // A busy server can miss a poll; one that stays silent is
+                // wedged, and waiting out the job timeout would hide that.
                 Err(e) => {
-                    tracing::debug!("polling sd-server job {id}: {e}");
+                    let since = *unanswered_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() > UNANSWERED_LIMIT {
+                        return Err(LocalMediaError::Failed(format!(
+                            "sd-server stopped answering ({e}){}",
+                            self.log_tail()
+                        )));
+                    }
                     continue;
                 }
             };
+            let settled = matches!(
+                job.get("status").and_then(Value::as_str),
+                Some("completed" | "failed" | "cancelled")
+            );
+            if settled {
+                guard.armed = false;
+            }
             match job.get("status").and_then(Value::as_str).unwrap_or("") {
                 "completed" => {
                     let b64 = job
@@ -638,16 +675,40 @@ impl SdCppEngine {
                 }
             }
             if started.elapsed() > JOB_TIMEOUT {
-                let url = format!("{base}/sdcpp/v1/jobs/{id}/cancel");
-                if let Err(e) = self.http.post(&url).send().await {
-                    tracing::warn!("could not cancel stalled sd-server job {id}: {e}");
-                }
                 return Err(LocalMediaError::Failed(format!(
                     "gave up after {} minutes",
                     JOB_TIMEOUT.as_secs() / 60
                 )));
             }
         }
+    }
+}
+
+/// Cancels a submitted job on the server unless disarmed — the one place a
+/// job that won't be followed to the end is stopped.
+struct AbandonGuard {
+    http: reqwest::Client,
+    url: String,
+    armed: bool,
+}
+
+impl Drop for AbandonGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // Drop can't await; the cancel rides the runtime the job ran on.
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!("no runtime to cancel {}; the server finishes it", self.url);
+            return;
+        };
+        let request = self.http.post(&self.url).timeout(Duration::from_secs(5));
+        let url = self.url.clone();
+        rt.spawn(async move {
+            if let Err(e) = request.send().await {
+                tracing::warn!("could not cancel sd-server job ({url}): {e}");
+            }
+        });
     }
 }
 
@@ -735,7 +796,7 @@ mod tests {
                 settings: &s,
                 refs: &refs,
             },
-            "proj",
+            true,
         )
         .expect("body");
         assert_eq!(body["width"], 768);
@@ -787,7 +848,7 @@ mod tests {
             child,
             base: mock.url(),
             model: spec.id.clone(),
-            preview: "proj",
+            previews: true,
         });
         let heard = std::sync::Mutex::new(Vec::new());
         let req = EngineRequest {
@@ -848,7 +909,7 @@ mod tests {
             child,
             base: mock.url(),
             model: spec.id.clone(),
-            preview: "none",
+            previews: false,
         });
         let cancel = CancellationToken::new();
         let trigger = cancel.clone();
@@ -865,6 +926,69 @@ mod tests {
         };
         let result = engine.run_job(&mut slot, &req, &|_| {}, &cancel).await;
         assert!(matches!(result, Err(LocalMediaError::Cancelled)));
+        // The cancel request rides a spawned task; give it a moment.
+        for _ in 0..50 {
+            if cancel_call.matched_async().await {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        cancel_call.assert_async().await;
+    }
+
+    /// An interrupted turn drops the job future; the server must hear a
+    /// cancel instead of rendering on for minutes.
+    #[tokio::test]
+    async fn dropping_a_job_cancels_it_on_the_server() {
+        let mut mock = mockito::Server::new_async().await;
+        mock.mock("POST", "/sdcpp/v1/img_gen")
+            .with_status(202)
+            .with_body(r#"{"id":"job_3"}"#)
+            .create_async()
+            .await;
+        mock.mock("GET", "/sdcpp/v1/jobs/job_3")
+            .with_body(r#"{"id":"job_3","status":"generating"}"#)
+            .create_async()
+            .await;
+        let cancel_call = mock
+            .mock("POST", "/sdcpp/v1/jobs/job_3/cancel")
+            .with_body("{}")
+            .create_async()
+            .await;
+        let spec = klein();
+        let w = weights(&spec);
+        let s = settings();
+        let engine = SdCppEngine::new(Duration::from_secs(60));
+        let child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .expect("stand-in child");
+        let mut slot = Some(Server {
+            pid: child.id().unwrap_or(0),
+            child,
+            base: mock.url(),
+            model: spec.id.clone(),
+            previews: false,
+        });
+        let req = EngineRequest {
+            spec: &spec,
+            weights: &w,
+            prompt: "a fox",
+            settings: &s,
+            refs: &[],
+        };
+        let never = CancellationToken::new();
+        let job = engine.run_job(&mut slot, &req, &|_| {}, &never);
+        let timed_out = tokio::time::timeout(Duration::from_millis(900), job).await;
+        assert!(timed_out.is_err(), "the job was still running when dropped");
+        // The guard's cancel rides a spawned task; give it a moment.
+        for _ in 0..50 {
+            if cancel_call.matched_async().await {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         cancel_call.assert_async().await;
     }
 }

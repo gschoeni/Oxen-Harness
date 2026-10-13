@@ -71,6 +71,8 @@ pub fn install() -> Result<Arc<LocalMediaService>, LocalError> {
         tracing::info!("stopped {} orphaned sd-server(s)", reaped.len());
     }
     let service = service()?;
-    harness_media::local::install(service.clone());
+    if !harness_media::local::install(service.clone()) {
+        tracing::warn!("a local media provider was already installed; keeping it");
+    }
     Ok(service)
 }

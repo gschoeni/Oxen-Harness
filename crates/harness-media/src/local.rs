@@ -31,6 +31,15 @@ pub fn is_local_id(id: &str) -> bool {
     id.trim().starts_with(LOCAL_PREFIX)
 }
 
+/// Every local generation id (a library row, and what `cancel` takes)
+/// starts with this.
+pub const LOCAL_JOB_PREFIX: &str = "local-";
+
+/// Whether `id` names a local generation rather than a hub one.
+pub fn is_local_job_id(id: &str) -> bool {
+    id.trim().starts_with(LOCAL_JOB_PREFIX)
+}
+
 /// The local half of a catalog row: what the tools need to say about a
 /// model that runs here instead of a price.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

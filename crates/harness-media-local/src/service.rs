@@ -153,6 +153,29 @@ impl LocalMediaService {
     }
 }
 
+/// A job's entry in the cancel table, removed however the job ends —
+/// including its future being dropped when a turn is interrupted, when the
+/// token also fires so a queued job never starts.
+struct Registered<'a> {
+    jobs: &'a Mutex<HashMap<String, CancellationToken>>,
+    id: String,
+    cancel: CancellationToken,
+}
+
+impl Drop for Registered<'_> {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        // A poisoned table only costs the stale entry; the job's own result
+        // (often a finished image) must not be thrown away for it.
+        match self.jobs.lock() {
+            Ok(mut jobs) => {
+                jobs.remove(&self.id);
+            }
+            Err(_) => tracing::warn!("local job table poisoned; {} stays listed", self.id),
+        }
+    }
+}
+
 /// A seed for a call that fixed none: varied per call, recorded on the row
 /// so the output can be reproduced. Kept under 2^53 so it survives JSON.
 fn random_seed() -> u64 {
@@ -186,9 +209,12 @@ impl LocalMedia for LocalMediaService {
     ) -> Result<LocalOutput, LocalMediaError> {
         let cancel = CancellationToken::new();
         self.jobs()?.insert(job.id.clone(), cancel.clone());
-        let result = self.run(&job, progress.as_ref(), &cancel).await;
-        self.jobs()?.remove(&job.id);
-        result
+        let _registered = Registered {
+            jobs: &self.jobs,
+            id: job.id.clone(),
+            cancel: cancel.clone(),
+        };
+        self.run(&job, progress.as_ref(), &cancel).await
     }
 
     async fn cancel(&self, id: &str) -> bool {
