@@ -1,7 +1,7 @@
 /* The window: one persistent title bar on top, then three tracks —
    left docks | chat | right docks. Each dock column's width is set by the
-   dock system (collapsed → a thin rail, absent → 0), so the chat simply takes
-   what's left. Adding a panel changes no CSS — see `features/docks/docks.tsx`. */
+   dock system (hidden → 0, squeezed → a thin rail), so the chat simply takes
+   what's left; with the chat hidden, a dock fills instead. Adding a panel changes no CSS — see `features/docks/docks.tsx`. */
 .app {
   display: flex;
   flex-direction: column;
@@ -84,7 +84,49 @@
   .titlebar-running-label { display: none; }
 }
 
-/* Utility buttons in the title bar (project home, arcade, inspector). */
+/* Files | Agent | Work: one segmented switch, each segment showing or hiding
+   its panel. Lit segments are the panels on screen. */
+.panel-switch {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-sm);
+  padding: var(--space-half);
+  gap: var(--space-half);
+  margin-right: var(--space-1);
+  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--frame-radius);
+}
+.panel-switch-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 100%;
+  padding: 0 var(--space-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: calc(var(--frame-radius) - var(--space-half));
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.panel-switch-seg:hover:not(:disabled) {
+  color: var(--text);
+}
+.panel-switch-seg.on {
+  background: var(--bg);
+  border-color: var(--separator);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+.panel-switch-seg:disabled {
+  cursor: default;
+}
+@media (max-width: 760px) {
+  .panel-switch-seg span { display: none; }
+}
+
+/* Utility buttons in the title bar (arcade, inspector, settings). */
 .dev-view-btn {
   display: inline-flex;
   align-items: center;
@@ -133,4 +175,18 @@
   display: grid;
   grid-template-columns: var(--dock-left-w, 0px) minmax(0, 1fr) var(--dock-right-w, 0px);
   grid-template-rows: minmax(0, 1fr);
+}
+/* Each column owns its track, so a hidden one (rendered as nothing) never
+   lets its neighbours slide into the wrong slot. */
+.app-columns > .left {
+  grid-column: 1;
+}
+.app-columns > .chat {
+  grid-column: 2;
+}
+.app-columns > .right {
+  grid-column: 3;
+}
+.app-columns.chat-hidden > .chat {
+  display: none;
 }

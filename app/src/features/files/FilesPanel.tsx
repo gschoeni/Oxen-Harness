@@ -28,7 +28,6 @@ import { isImagePath, isVideoPath } from "../../lib/attachments";
 import { setDragPaths } from "./dnd";
 import { diffTab, statusLetter } from "./diff";
 import { useGitStatus } from "./useGitStatus";
-import { DockToggle } from "../docks/DockToggle";
 import { FileMenu, type FileAction } from "./FileMenu";
 import type { MenuAt } from "../../components/ui/Menu";
 import type { FileEntry, GitFileState } from "../../lib/types";
@@ -546,14 +545,13 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
     );
   }
 
-  // No project yet: keep the column's chrome (its collapse toggle lives in
-  // this header band) and say where a project comes from.
+  // No project yet: keep the column's chrome and say where a project comes
+  // from.
   if (!workspace) {
     return (
       <nav className="files-panel" aria-label="Project files">
         <header className="ft-head">
           <span className="ft-title">No project</span>
-          <DockToggle side="left" />
         </header>
         <p className="ft-empty">Pick a project from Home to browse its files here.</p>
       </nav>
@@ -596,9 +594,6 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
             <RotateCw size={15} />
           </button>
         </div>
-        {/* The column's collapse control lives here, by the project name,
-            where the user looks for it — never on the draggable edge. */}
-        <DockToggle side="left" />
       </header>
       {error && <p className="ft-error">{error}</p>}
       {git !== null && git.length > 0 && (

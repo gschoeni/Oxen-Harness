@@ -1,7 +1,7 @@
 import { navigate, replace, travel, type WorkContext } from "../features/workbench/context";
 import { availableTarget, resolveView } from "../features/workbench/registry";
 import { loadKeyStatus, type KeyStatus } from "./apiKey";
-import { CHAT_MIN_FIT, FILES_DEFAULT_WIDTH, RAIL_W, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "../features/docks/layout";
+import { CHAT_MIN_FIT, FILES_DEFAULT_WIDTH, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "../features/docks/layout";
 import type { ViewTarget } from "../workbench-sdk";
 // Global app state. Chats are multi-session: each chat owns a thread, a run
 // status, and a send queue keyed by session id, so a chat keeps streaming in the
@@ -193,17 +193,17 @@ function holdsWorkView(context: { current: ViewTarget } | undefined): context is
   return !!context && context.current.view === STUDY_VIEW;
 }
 
-/** The layout patch that expands the right column out of its rail for an
- *  agent's open — the same arithmetic as a click on the rail: take only the
- *  work view's minimum and fold the left side when the window can't fit
- *  both, so the un-collapse is never a dead one the solver folds right back. */
+/** The layout patch that shows the right column for an agent's open — the
+ *  same arithmetic as the title bar's switch: take only the work view's
+ *  minimum and hide the left side when the window can't fit both beside the
+ *  chat, so the reveal is never a dead one the solver folds right back. */
 function revealRightColumn(s: Pick<AppState, "dockWidths" | "dockCollapsed">): Pick<AppState, "dockWidths" | "dockCollapsed"> {
   const want = s.dockWidths.right ?? WORK_VIEW_DEFAULT_WIDTH;
-  const leftWidth = s.dockCollapsed.left ? RAIL_W : (s.dockWidths.left ?? FILES_DEFAULT_WIDTH);
-  const tight = window.innerWidth - leftWidth - want < CHAT_MIN_FIT;
+  const leftWidth = s.dockCollapsed.left ? 0 : (s.dockWidths.left ?? FILES_DEFAULT_WIDTH);
+  const tight = !s.dockCollapsed.chat && window.innerWidth - leftWidth - want < CHAT_MIN_FIT;
   const foldLeft = tight && window.innerWidth - leftWidth - WORK_VIEW_MIN_WIDTH < CHAT_MIN_FIT;
   const widths = tight ? { ...s.dockWidths, right: WORK_VIEW_MIN_WIDTH } : s.dockWidths;
-  const collapsed = { ...s.dockCollapsed, right: false, ...(foldLeft && leftWidth > RAIL_W ? { left: true } : {}) };
+  const collapsed = { ...s.dockCollapsed, right: false, ...(foldLeft && leftWidth > 0 ? { left: true } : {}) };
   saveDockLayout({ widths, collapsed });
   return { dockWidths: widths, dockCollapsed: collapsed };
 }

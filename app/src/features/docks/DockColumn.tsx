@@ -1,9 +1,10 @@
 // One side's dock column: the active dock's content, a drag handle, and (when
 // more than one dock on that side has content) a tab strip to switch between
-// them. Collapsed, the column becomes a thin rail — the panel-open glyph
-// alone when the side has one dock (the usual case: Files, the work view),
-// plus one button per dock when it has several. The right column is always there for a
-// chat, as a rail until the chat puts something in the work view.
+// them. A column the user hid (the title bar's panel switch) renders nothing;
+// only the layout solver's squeeze (a window too narrow for it) folds it to a
+// thin rail — the panel-open glyph alone when the side has one dock (the
+// usual case: Files, the work view), plus one button per dock when it has
+// several.
 //
 // Nothing here knows what a preview or a canvas is: it renders whatever the
 // registry (`docks.tsx`) says is available on this side.
@@ -11,9 +12,8 @@
 import { useCallback, useEffect, type PointerEvent } from "react";
 import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import { useStore, type RightTabId } from "../../lib/store";
-import { DockToggle } from "./DockToggle";
-import { ColumnNav, openEmptyWorkView, useAvailableDocks, useDockCollapsed, type DockSide, type DockSpec } from "./docks";
-import { CHAT_MIN_FIT, RAIL_W } from "./layout";
+import { ColumnNav, setPanelShown, togglePanel, useAvailableDocks, useDockCollapsed, type DockSide, type DockSpec } from "./docks";
+import { RAIL_W } from "./layout";
 import "./docks.css";
 
 export { RAIL_W };
@@ -44,36 +44,17 @@ export function DockColumn({
   forceRail?: boolean;
 }) {
   const available = useAvailableDocks(side);
-  const otherSide: DockSide = side === "left" ? "right" : "left";
-  const otherAvailable = useAvailableDocks(otherSide);
   const active = useActiveDock(side);
-  const collapsed = useDockCollapsed(side) || forceRail;
+  const hidden = useDockCollapsed(side);
   const setDockWidth = useStore((s) => s.setDockWidth);
-  const setDockCollapsed = useStore((s) => s.setDockCollapsed);
   const setRightTab = useStore((s) => s.setRightTab);
   const setLeftTab = useStore((s) => s.setLeftTab);
   const pickTab = (id: string) =>
     side === "right" ? (id === "workbench" ? undefined : setRightTab(id as RightTabId)) : setLeftTab(id);
 
-  // Expand this column out of its rail. If the window is too small to fit it
-  // at its wanted width, a bare un-collapse would be a dead click (the layout
-  // solver would fold it right back) — so make room honestly: take only the
-  // active dock's minimum and fold the other side to a rail.
-  const expand = () => {
-    if (side === "right") openEmptyWorkView();
-    const s = useStore.getState();
-    const want = s.dockWidths[side] ?? active?.defaultWidth ?? minWidth;
-    const otherWidth = !otherAvailable.length
-      ? 0
-      : s.dockCollapsed[otherSide]
-        ? RAIL_W
-        : (s.dockWidths[otherSide] ?? 0);
-    if (window.innerWidth - otherWidth - want < CHAT_MIN_FIT) {
-      if (active) setDockWidth(side, active.minWidth);
-      if (otherAvailable.length) setDockCollapsed(otherSide, true);
-    }
-    setDockCollapsed(side, false);
-  };
+  // Out of the squeeze's rail: showing it again makes room (the other dock
+  // hides if the window can't fit both beside the chat).
+  const expand = () => setPanelShown(side, true);
 
   const minWidth = active?.minWidth ?? 240;
 
@@ -85,9 +66,7 @@ export function DockColumn({
       document.body.classList.add("dock-resizing");
       const otherSide: DockSide = side === "left" ? "right" : "left";
       const other = useStore.getState();
-      const otherWidth = other.dockCollapsed[otherSide]
-        ? RAIL_W
-        : (other.dockWidths[otherSide] ?? 0);
+      const otherWidth = other.dockCollapsed[otherSide] ? 0 : (other.dockWidths[otherSide] ?? 0);
 
       const move = (ev: globalThis.PointerEvent) => {
         const max = window.innerWidth - otherWidth - CHAT_MIN;
@@ -105,9 +84,9 @@ export function DockColumn({
     [side, minWidth, setDockWidth],
   );
 
-  if (!available.length) return null;
+  if (!available.length || hidden) return null;
 
-  if (collapsed) {
+  if (forceRail) {
     const shortcut = side === "left" ? "⌘B" : "⌘⌥B";
     const open = side === "left" ? <PanelLeftOpen size={15} /> : <PanelRightOpen size={15} />;
     if (available.length === 1) {
@@ -174,25 +153,20 @@ export function DockColumn({
         </div>
       )}
       <div className="dock-body">{active?.render({ onResizeStart: beginResize })}</div>
-      {/* The left dock renders its own toggle inside the Files header (next
-          to the project name); the right column has no shared header of its
-          own, so the toggle is pinned into its panel's header band. */}
-      {side === "right" && <DockToggle side="right" />}
     </div>
   );
 }
 
-/** ⌘B collapses/expands the left column, ⌘⌥B the right — the shortcuts every
+/** ⌘B shows/hides the left column, ⌘⌥B the right — the shortcuts every
  *  editor uses for exactly this. */
 export function useDockShortcuts() {
-  const toggleDock = useStore((s) => s.toggleDock);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== "b" || !(e.metaKey || e.ctrlKey)) return;
       e.preventDefault();
-      toggleDock(e.altKey ? "right" : "left");
+      togglePanel(e.altKey ? "right" : "left");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggleDock]);
+  }, []);
 }

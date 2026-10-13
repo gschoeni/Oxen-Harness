@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 vi.mock("./lib/ipc", () => import("./test/ipcMock"));
 
@@ -11,6 +12,7 @@ import { sampleSession } from "./test/ipcMock";
 beforeEach(() => {
   resetAll();
   useStore.setState({ dockWidths: {}, dockCollapsed: {} });
+  localStorage.clear();
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -50,6 +52,29 @@ it("keeps the file column visible when both panels fit at their minimum widths",
   await act(async () => useStore.getState().openInViewer(["notes.txt"]));
   expect(container.querySelector(".dock-column.right")).toBeInTheDocument();
   expect(container.querySelector(".dock-column.left")).toBeInTheDocument();
+});
+
+it("hides the chat from the titlebar and lets the work view fill the window", async () => {
+  vi.stubGlobal("innerWidth", 1200);
+  const { container } = render(<App />);
+  await waitFor(() => expect(useStore.getState().session?.session_id).toBe(sampleSession.session_id));
+  await act(async () => useStore.getState().openInViewer(["notes.txt"]));
+
+  await userEvent.click(screen.getByRole("button", { name: "Agent" }));
+  const columns = container.querySelector(".app-columns") as HTMLElement;
+  expect(columns).toHaveClass("chat-hidden");
+  expect(columns.style.gridTemplateColumns).toBe("280px 0px minmax(0, 1fr)");
+  // Still mounted, so a draft survives switching it back on.
+  expect(container.querySelector("main.chat")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Files" }));
+  expect(columns.style.gridTemplateColumns).toBe("0px 0px minmax(0, 1fr)");
+  // The work view is all that's left: it can't be switched off.
+  expect(screen.getByRole("button", { name: "Work" })).toBeDisabled();
+
+  await userEvent.click(screen.getByRole("button", { name: "Agent" }));
+  expect(columns).not.toHaveClass("chat-hidden");
+  expect(columns.style.gridTemplateColumns).toBe("");
 });
 
 describe("App overlays", () => {

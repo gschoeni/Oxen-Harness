@@ -23,9 +23,17 @@ describe("planColumns", () => {
     expect(plan.right).toEqual({ width: 400, railed: false });
   });
 
-  it("respects a user-collapsed side (rail width, still railed)", () => {
+  it("gives a side the user hid no width at all", () => {
     const plan = planColumns(2000, column({ collapsed: true }), column());
-    expect(plan.left).toEqual({ width: RAIL_W, railed: true });
+    expect(plan.left).toBeNull();
+    expect(plan.right).toEqual({ width: 400, railed: false });
+  });
+
+  it("squeezes nothing when the chat is hidden", () => {
+    const plan = planColumns(700, column(), column(), true);
+    expect(plan.left).toEqual({ width: 400, railed: false });
+    expect(plan.right).toEqual({ width: 400, railed: false });
+    expect(plan.chatRailed).toBe(false);
   });
 
   it("shrinks the right column toward its minimum before touching the left", () => {

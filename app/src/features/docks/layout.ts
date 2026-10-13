@@ -9,8 +9,11 @@
 //   3. finally the chat itself folds to a bar with one "show the agent"
 //      button — squeezed, never gone.
 //
-// The plan is derived per render from the window width — nothing here writes
-// to the store, so widening the window restores exactly what the user had.
+// A column the user hid (the title bar's panel switch) takes no width at all;
+// rails are only the solver's squeeze. With the chat hidden there is nothing
+// to defend, so nothing yields. The plan is derived per render from the
+// window width — nothing here writes to the store, so widening the window
+// restores exactly what the user had.
 
 /** Width of a collapsed column's icon rail. */
 export const RAIL_W = 52;
@@ -28,7 +31,7 @@ export const WORK_VIEW_MIN_WIDTH = 340;
 export interface ColumnInput {
   /** Does this side have any dock with content? */
   available: boolean;
-  /** Did the user collapse this side to its rail? */
+  /** Did the user hide this side? */
   collapsed: boolean;
   /** The user's chosen (or default) expanded width, px. */
   desired: number;
@@ -38,7 +41,7 @@ export interface ColumnInput {
 
 export interface ColumnPlan {
   width: number;
-  /** Render as an icon rail (user-collapsed or squeezed by the solver). */
+  /** Render as an icon rail (squeezed by the solver). */
   railed: boolean;
 }
 
@@ -53,10 +56,12 @@ export function planColumns(
   windowWidth: number,
   left: ColumnInput,
   right: ColumnInput,
+  chatHidden = false,
 ): LayoutPlan {
   const mk = (c: ColumnInput): ColumnPlan | null =>
-    c.available ? { width: c.collapsed ? RAIL_W : c.desired, railed: c.collapsed } : null;
+    c.available && !c.collapsed ? { width: c.desired, railed: false } : null;
   const plan = { left: mk(left), right: mk(right) };
+  if (chatHidden) return { ...plan, chatRailed: false };
   const chat = () => windowWidth - (plan.left?.width ?? 0) - (plan.right?.width ?? 0);
 
   // The right column yields first: it holds reference material (editor,

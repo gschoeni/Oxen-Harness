@@ -107,81 +107,8 @@
   box-shadow: var(--shadow-1);
 }
 
-/* The collapse control lives in the column's HEADER band, always visible, in
-   the same place every time: beside the project title on the left, at the head
-   of the panel on the right. Never on the draggable edge, never hover-only —
-   the user should never have to hunt for it. */
-/* A bordered square, not a bare glyph: an icon alone is optically inset from
-   its box, so it always reads as "not quite aligned" next to the framed New
-   chat button. Giving it the same framing puts its edge honestly on the
-   column's content edge — and matches the panel's other controls. */
-.dock-toggle {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: var(--control-h-sm);
-  height: var(--control-h-sm);
-  padding: 0;
-  background: var(--bg);
-  border: 1px solid var(--separator);
-  border-radius: var(--frame-radius);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition:
-    color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease);
-}
-.dock-toggle > svg {
-  width: var(--nav-icon);
-  height: var(--nav-icon);
-}
-.dock-toggle:hover {
-  color: var(--text);
-  border-color: var(--accent);
-}
-
-/* Left: at the end of the Files header row, its right edge on the column's
-   content edge — the same line as the header's own controls. */
-.dock-toggle.left {
-  margin-left: auto;
-}
-
-/* Right: the panel owns its header, so the toggle is pinned into that band and
-   the header reserves room for it (below) — same vertical line as the left
-   one, mirrored. */
-.dock-toggle.right {
-  position: absolute;
-  /* Centered in the column's first row, which is always a strip. */
-  top: calc((var(--pane-strip-h) - var(--control-h-sm)) / 2);
-  left: var(--space-2);
-  z-index: var(--z-sticky);
-}
-/* Reserve the toggle's slot in whichever element is the column's first row:
-   the dock tab strip when several docks share the side, else the work
-   panel's view bar, else the editor's file-tab strip when it has one, else
-   the panel's header. The slot is the toggle's inset, its width, and a gap. */
-.dock-column.right {
-  --dock-toggle-slot: calc(var(--space-2) + var(--control-h-sm) + var(--space-1));
-}
-.dock-column.right .dock-tabs,
-.dock-column.right:not(:has(.dock-tabs)) .workbench-head,
-.dock-column.right:not(:has(.dock-tabs, .workbench-head)) .canvas-head,
-.dock-column.right:not(:has(.dock-tabs, .workbench-head)) .editor-pane .editor-tabs {
-  padding-left: var(--dock-toggle-slot);
-}
-/* With the file tabs owning the slot, the header below gets its edge back,
-   and the toggle re-centers against the slimmer tab strip. */
-.dock-column.right:not(:has(.dock-tabs)) .editor-pane:has(.editor-tabs) .canvas-head {
-  padding-left: var(--space-4);
-}
-.dock-column.right:not(:has(.dock-tabs)):has(.editor-tabs) .dock-toggle.right {
-  top: 4px;
-}
-
-/* A collapsed column: a rail of icons. Clicking one brings its dock back.
-   Its first button is centered in the strip row, exactly where the column's
-   toggle sits when it is open — collapsing swaps one glyph for the other
-   without the control moving. */
+/* A column squeezed out by a window too narrow for it: a rail of icons.
+   Clicking one brings its dock back (the other dock makes room). */
 .dock-rail {
   position: relative;
   display: flex;

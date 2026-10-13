@@ -2,24 +2,20 @@
 // window, above every column and overlay. It is the window's drag handle and
 // double-clicks to zoom — exactly like a native title bar — so no pane below
 // ever has to fake its own. The active project names the window; the chat's
-// utility buttons (project home, arcade, inspector, settings) sit at its
-// right edge, clear of the macOS traffic lights on the left.
+// panel switch (Files | Agent | Work) and utility buttons (arcade, inspector,
+// settings) sit at its right edge, clear of the macOS traffic lights.
 
 import { STUDY_SHORTCUT, toggleStudyView, useStudyViewShowing } from "./features/chat/studyPanel";
-import { Activity, Code2, Files, Gamepad2, Settings } from "lucide-react";
+import { Activity, Code2, Gamepad2, Settings } from "lucide-react";
 import { useActiveProject, useStore } from "./lib/store";
+import { PanelSwitch } from "./features/docks/PanelSwitch";
 
 export function TitleBar() {
   const sessionId = useStore((s) => s.session?.session_id);
   const hasThread = useStore(
     (s) => !!s.session && (s.threads[s.session.session_id]?.length ?? 0) > 0,
   );
-  const projectPath = useStore((s) => {
-    const path = s.session?.workspace;
-    return path && s.projects.some((project) => project.path === path) ? path : null;
-  });
   const project = useActiveProject();
-  const openProjectHome = useStore((s) => s.openProjectHome);
   const studyShowing = useStudyViewShowing();
   const openInspector = useStore((s) => s.openInspector);
   const runningCount = useStore((s) => {
@@ -62,6 +58,7 @@ export function TitleBar() {
       {/* pointer-events: none, so the name never blocks the drag region */}
       <span className="app-titlebar-name">{project?.name ?? "oxen-harness"}</span>
       <div className="app-titlebar-actions">
+        <PanelSwitch />
         <button
           className={`titlebar-running ${runningCount > 0 ? "active" : ""}`}
           onClick={openHome}
@@ -72,16 +69,6 @@ export function TitleBar() {
           <span>{runningCount}</span>
           <span className="titlebar-running-label">running</span>
         </button>
-        {projectPath && (
-          <button
-            className="dev-view-btn"
-            onClick={() => openProjectHome(projectPath)}
-            title="Open this project's getting started, instructions, and files"
-            aria-label="Project files and settings"
-          >
-            <Files size={15} />
-          </button>
-        )}
         {hasThread && (
           <button
             className="dev-view-btn"

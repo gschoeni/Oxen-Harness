@@ -1,6 +1,6 @@
 // The two layout columns. Workbench owns view registration and navigation.
 import type { ReactNode } from "react";
-import { FILES_DEFAULT_WIDTH, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "./layout";
+import { CHAT_MIN_FIT, FILES_DEFAULT_WIDTH, WORK_VIEW_DEFAULT_WIDTH, WORK_VIEW_MIN_WIDTH } from "./layout";
 import { FolderTree, NotebookPen } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { Workbench } from "../workbench/Workbench";
@@ -48,12 +48,61 @@ function workViewOpened(s: Pick<StoreState, "session" | "rightTab" | "workContex
   return !!target && availableTarget(target).view !== "welcome";
 }
 
-/** Folded to its rail: by the user, or (on the right) because this chat has
- *  nothing in the work view yet. The layout solver and the column agree on
- *  this one answer, so the chat is never laid out against a width the column
- *  isn't using. */
+/** Hidden: by the user, or (on the right) because this chat has nothing in
+ *  the work view yet. The layout solver and the column agree on this one
+ *  answer, so the chat is never laid out against a width the column isn't
+ *  using. */
 export function useDockCollapsed(side: DockSide): boolean {
-  return useStore((s) => !!s.dockCollapsed[side] || (side === "right" && !workViewOpened(s)));
+  return useStore((s) => !panelShown(s, side));
+}
+
+/** The window's three panels, as the title bar's switch names them. The
+ *  chat's hidden flag rides in `dockCollapsed` beside the docks' so all three
+ *  persist as one layout. */
+export type Panel = DockSide | "chat";
+export const PANELS: Panel[] = ["left", "chat", "right"];
+
+export function panelShown(
+  s: Pick<StoreState, "session" | "rightTab" | "workContexts" | "dockCollapsed">,
+  panel: Panel,
+): boolean {
+  if (s.dockCollapsed[panel]) return false;
+  return panel !== "right" || workViewOpened(s);
+}
+
+export function usePanelShown(panel: Panel): boolean {
+  return useStore((s) => panelShown(s, panel));
+}
+
+/** Show or hide one panel. The last one showing stays: the window is never
+ *  blank. Showing a dock makes room honestly — if the window can't fit it at
+ *  its wanted width beside the chat, it takes only its minimum and the
+ *  other dock hides, so the click is never one the solver folds right back. */
+export function setPanelShown(panel: Panel, shown: boolean) {
+  const s = useStore.getState();
+  if (!shown) {
+    const others = PANELS.filter((p) => p !== panel && panelShown(s, p));
+    if (others.length > 0) s.setDockCollapsed(panel, true);
+    return;
+  }
+  if (panel === "right") openEmptyWorkView();
+  if (panel !== "chat" && panelShown(s, "chat")) {
+    const other: DockSide = panel === "left" ? "right" : "left";
+    const spec = docksOnSide(panel)[0];
+    const want = s.dockWidths[panel] ?? spec?.defaultWidth ?? 0;
+    const otherWidth = panelShown(s, other) ? (s.dockWidths[other] ?? 0) : 0;
+    if (window.innerWidth - otherWidth - want < CHAT_MIN_FIT) {
+      if (spec) s.setDockWidth(panel, spec.minWidth);
+      if (window.innerWidth - otherWidth - (spec?.minWidth ?? 0) < CHAT_MIN_FIT) {
+        s.setDockCollapsed(other, true);
+      }
+    }
+  }
+  s.setDockCollapsed(panel, false);
+}
+
+export function togglePanel(panel: Panel) {
+  setPanelShown(panel, !panelShown(useStore.getState(), panel));
 }
 
 /** Expand the right column for a chat that has not opened it: saved history

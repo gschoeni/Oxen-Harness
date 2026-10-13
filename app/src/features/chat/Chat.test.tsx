@@ -37,32 +37,17 @@ function dropOsFile(target: HTMLElement, name: string) {
 }
 
 describe("Chat", () => {
-  it("opens the active project's files and settings from the titlebar", async () => {
-    useStore.setState({
-      homeOpen: false,
-      projects: [{
-        path: ipc.sampleSession.workspace,
-        name: "Demo",
-        description: "",
-        instructions: "",
-        context: [],
-        remote_repo: null,        session_count: 1,
-        active: true,
-        last_used_at: null,
-      }],
-    });
-    // The project-home button lives in the app title bar, beside the chat.
+  it("puts the panel switch in the titlebar in place of the project-home button", () => {
     render(
       <>
         <TitleBar />
         <Chat />
       </>,
     );
-
-    await userEvent.click(screen.getByRole("button", { name: "Project files and settings" }));
-
-    expect(useStore.getState().homeOpen).toBe(true);
-    expect(useStore.getState().projectHomePath).toBe(ipc.sampleSession.workspace);
+    const panels = screen.getByRole("group", { name: "Panels" });
+    expect(panels).toHaveTextContent("FilesAgentWork");
+    expect(screen.getByRole("button", { name: "Agent" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: "Project files and settings" })).toBeNull();
   });
 
   it("lists desktop slash commands on slash and omits exit", async () => {

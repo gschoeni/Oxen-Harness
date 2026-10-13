@@ -16,6 +16,7 @@ vi.mock("../files/EditorPane", () => ({
 import { workbenchCustomizationEnabled } from "../../lib/features";
 
 import { DockColumn } from "./DockColumn";
+import { PanelSwitch } from "./PanelSwitch";
 import { useStore } from "../../lib/store";
 import { getUi } from "../../lib/uiState";
 import * as ipc from "../../test/ipcMock";
@@ -58,31 +59,52 @@ beforeEach(() => {
   });
 });
 
+/** A column beside the title bar's switch, as the window renders them. */
+const withSwitch = (side: "left" | "right", forceRail = false) => (
+  <>
+    <PanelSwitch />
+    <DockColumn side={side} forceRail={forceRail} />
+  </>
+);
+const workSwitch = () => screen.getByRole("button", { name: "Work" });
+
 describe("Dock columns", () => {
-  it("the left dock collapses to a rail and comes back", async () => {
-    render(<DockColumn side="left" />);
-    // The Files dock is always available, so the column renders.
-    expect(screen.getByRole("button", { name: "Collapse left panel" })).toBeInTheDocument();
+  it("the switch hides the left dock entirely and brings it back", async () => {
+    render(withSwitch("left"));
+    expect(screen.getByRole("navigation", { name: "Project files" })).toBeInTheDocument();
+    const files = screen.getByRole("button", { name: "Files" });
+    expect(files).toHaveAttribute("aria-pressed", "true");
 
-    await userEvent.click(screen.getByRole("button", { name: "Collapse left panel" }));
+    await userEvent.click(files);
     expect(useStore.getState().dockCollapsed.left).toBe(true);
-    // Collapsed: a rail with an expand button, no file tree.
+    // Hidden means gone: no file tree and no rail.
     expect(screen.queryByRole("navigation", { name: "Project files" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Collapsed left panel" })).toBeNull();
 
-    // One dock on this side: the rail is that dock's single button.
-    expect(screen.queryByRole("button", { name: "Expand left panel" })).toBeNull();
+    await userEvent.click(files);
+    expect(useStore.getState().dockCollapsed.left).toBe(false);
+    expect(screen.getByRole("navigation", { name: "Project files" })).toBeInTheDocument();
+  });
+
+  it("folds to a rail only when the window squeezes it, and the rail brings it back", async () => {
+    render(withSwitch("left", true));
+    expect(screen.queryByRole("navigation", { name: "Project files" })).toBeNull();
+    expect(screen.queryByText("🐂")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Open Files" }));
     expect(useStore.getState().dockCollapsed.left).toBe(false);
   });
 
-  it("collapses to a rail without carrying the app mark", () => {
-    // The brand mark left the rail (docks.tsx no longer wires a railHeader
-    // for it); collapsing just yields the dock icons.
-    const { rerender } = render(<DockColumn side="left" />);
-    act(() => useStore.getState().setDockCollapsed("left", true));
-    rerender(<DockColumn side="left" />);
-    expect(screen.queryByText("🐂")).toBeNull();
-    expect(screen.getByRole("button", { name: "Open Files" })).toBeInTheDocument();
+  it("hides the chat and keeps the last panel showing", async () => {
+    render(withSwitch("left"));
+    await userEvent.click(screen.getByRole("button", { name: "Agent" }));
+    expect(useStore.getState().dockCollapsed.chat).toBe(true);
+    // Files is all that's left on screen (the work view has nothing open),
+    // so it can't be switched off.
+    const files = screen.getByRole("button", { name: "Files" });
+    expect(files).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Agent" }));
+    expect(useStore.getState().dockCollapsed.chat).toBe(false);
+    expect(files).toBeEnabled();
   });
 
   it("remembers the collapsed state and width across runs", () => {
@@ -93,30 +115,28 @@ describe("Dock columns", () => {
     expect(saved?.widths.right).toBe(640);
   });
 
-  it("shows an empty conversation a rail, never an empty panel, until the rail is clicked", async () => {
-    render(<DockColumn side="right" />);
-    const rail = screen.getByRole("button", { name: "Open Work view" });
+  it("keeps an empty conversation's work view hidden until the switch shows it", async () => {
+    render(withSwitch("right"));
     expect(screen.queryByRole("region", { name: "Current work" })).toBeNull();
-    // The shortcut alone cannot expand a column with nothing in it.
-    act(() => useStore.getState().toggleDock("right"));
-    expect(screen.queryByRole("region", { name: "Current work" })).toBeNull();
+    expect(workSwitch()).toHaveAttribute("aria-pressed", "false");
 
-    // Clicking the rail opens the pane on its empty state, and that counts
-    // as this chat having opened it: it stays until collapsed again.
-    await userEvent.click(rail);
+    // Switching it on opens the pane on its empty state, and that counts as
+    // this chat having opened it: it stays until switched off again.
+    await userEvent.click(workSwitch());
     expect(screen.getByRole("region", { name: "Current work" })).toBeInTheDocument();
     expect(useStore.getState().rightTab.s1).toBe("welcome");
-    act(() => useStore.getState().setDockCollapsed("right", true));
-    expect(screen.getByRole("button", { name: "Open Work view" })).toBeInTheDocument();
+    await userEvent.click(workSwitch());
+    expect(screen.queryByRole("region", { name: "Current work" })).toBeNull();
+    expect(workSwitch()).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("opens a clicked file and keeps new conversations on the rail", () => {
-    render(<DockColumn side="right" />);
+  it("opens a clicked file and keeps new conversations' work view hidden", () => {
+    render(withSwitch("right"));
     act(() => useStore.getState().openInViewer(["notes.txt"]));
     expect(screen.getByText("Viewing notes.txt")).toBeInTheDocument();
     act(() => useStore.setState({ session: { ...ipc.sampleSession, session_id: "new-chat" } }));
     expect(screen.queryByText("Viewing notes.txt")).toBeNull();
-    expect(screen.getByRole("button", { name: "Open Work view" })).toBeInTheDocument();
+    expect(workSwitch()).toHaveAttribute("aria-pressed", "false");
     act(() => useStore.setState({ session: { ...ipc.sampleSession, session_id: "s1" } }));
     expect(screen.getByText("Viewing notes.txt")).toBeInTheDocument();
   });
@@ -134,10 +154,10 @@ describe("Dock columns", () => {
   });
 
   it("keeps a background agent's open out of the visible conversation", () => {
-    render(<DockColumn side="right" />);
+    render(withSwitch("right"));
     act(() => useStore.getState().ingestOpenFile({ session: "background", paths: ["result.txt"] }));
     expect(screen.queryByText("Viewing result.txt")).toBeNull();
-    expect(screen.getByRole("button", { name: "Open Work view" })).toBeInTheDocument();
+    expect(workSwitch()).toHaveAttribute("aria-pressed", "false");
     act(() => useStore.setState({ session: { ...ipc.sampleSession, session_id: "background" } }));
     expect(screen.getByText("Viewing result.txt")).toBeInTheDocument();
   });
@@ -145,20 +165,20 @@ describe("Dock columns", () => {
   it("does not open for saved history, filesystem changes or a preview status sync", async () => {
     const target = { view: "editor", path: "saved.txt" };
     useStore.setState({ workContexts: { s1: { current: target, history: [target], cursor: 0 } } });
-    render(<DockColumn side="right" />);
+    render(withSwitch("right"));
     await act(async () => {
       useStore.getState().ingestFsChange({ root: ipc.sampleSession.workspace, paths: ["saved.txt"] });
       await useStore.getState().syncPreview("s1");
     });
     expect(screen.queryByText("Viewing saved.txt")).toBeNull();
-    expect(screen.getByRole("button", { name: "Open Work view" })).toBeInTheDocument();
+    expect(workSwitch()).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("brings saved history back from the rail instead of an empty pane", async () => {
+  it("brings saved history back when shown instead of an empty pane", async () => {
     const target = { view: "editor", path: "saved.txt" };
     useStore.setState({ workContexts: { s1: { current: target, history: [target], cursor: 0 } } });
-    render(<DockColumn side="right" />);
-    await userEvent.click(screen.getByRole("button", { name: "Open Work view" }));
+    render(withSwitch("right"));
+    await userEvent.click(workSwitch());
     expect(screen.getByText("Viewing saved.txt")).toBeInTheDocument();
     expect(useStore.getState().workContexts.s1.history).toEqual([target]);
   });
@@ -169,9 +189,9 @@ describe("Dock columns", () => {
       workContexts: { s1: { current: target, history: [target], cursor: 0 } },
       rightTab: { s1: "view-studio" },
     });
-    render(<DockColumn side="right" />);
+    render(withSwitch("right"));
     expect(screen.queryByRole("region", { name: "Current work" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Open Work view" })).toBeInTheDocument();
+    expect(workSwitch()).toHaveAttribute("aria-pressed", "false");
   });
 
   it("uses one view picker without a second tab strip", async () => {
@@ -226,13 +246,13 @@ describe("Dock columns", () => {
     expect(screen.getByText("Viewing other.txt")).toBeInTheDocument();
   });
 
-  it("clicking a dock's icon in a collapsed rail expands the column onto it", async () => {
+  it("showing a hidden work view brings back what it had open", async () => {
     previewReady();
     openCanvas();
     act(() => useStore.getState().setDockCollapsed("right", true));
-    render(<DockColumn side="right" />);
+    render(withSwitch("right"));
 
-    await userEvent.click(screen.getByRole("button", { name: "Open Work view" }));
+    await userEvent.click(workSwitch());
     expect(useStore.getState().dockCollapsed.right).toBe(false);
     expect(useStore.getState().rightTab.s1).toBe("canvas");
   });

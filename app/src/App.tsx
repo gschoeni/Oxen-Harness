@@ -34,7 +34,8 @@ export default function App() {
   // however many docks currently have content (tabbed), independently sized
   // and collapsible. Adding a panel is a registry entry — see docks.tsx.
   // The solver keeps every column on screen when the window shrinks.
-  const layout = useLayoutPlan();
+  const chatHidden = useStore((s) => !!s.dockCollapsed.chat);
+  const layout = useLayoutPlan(chatHidden);
   useDockShortcuts();
   useChatTabShortcuts();
   useWorkbenchRegistration();
@@ -89,8 +90,13 @@ export default function App() {
       }
     >
       <TitleBar />
-      <div className="app-columns">
+      <div
+        className={`app-columns${chatHidden ? " chat-hidden" : ""}`}
+        style={chatHidden ? { gridTemplateColumns: hiddenChatTracks(layout) } : undefined}
+      >
         <DockColumn side="left" forceRail={!!layout.left?.railed} />
+        {/* Hidden, the chat stays mounted (display: none) so its draft and
+            scroll position survive being switched back on. */}
         {layout.chatRailed ? <ChatRail /> : <Chat />}
         <DockColumn side="right" forceRail={!!layout.right?.railed} />
       </div>
@@ -108,17 +114,25 @@ export default function App() {
 
 const columnPx = (column: ColumnPlan | null) => (column ? `${column.width}px` : "0px");
 
+/** With the chat hidden the right column fills the window (or the left,
+ *  when it's the only one showing). */
+function hiddenChatTracks(layout: LayoutPlan): string {
+  const fill = "minmax(0, 1fr)";
+  if (layout.right) return `${columnPx(layout.left)} 0px ${fill}`;
+  return `${layout.left ? fill : "0px"} 0px 0px`;
+}
+
 /** The fitted layout for the current window: each side's effective width and
  *  whether it (or, in the terminal squeeze, the chat itself) renders as a
  *  rail. Derived, never persisted — widening the window restores what the
  *  user had. */
-function useLayoutPlan(): LayoutPlan {
+function useLayoutPlan(chatHidden: boolean): LayoutPlan {
   const windowWidth = useWindowWidth();
   const state = {
     left: useSideInput("left"),
     right: useSideInput("right"),
   };
-  return planColumns(windowWidth, state.left, state.right);
+  return planColumns(windowWidth, state.left, state.right, chatHidden);
 }
 
 function useSideInput(side: "left" | "right") {
@@ -148,7 +162,7 @@ function useWindowWidth(): number {
 }
 
 /** The chat squeezed to its bar: one button that reclaims the space by
- *  folding both dock columns to their rails. The agent is never lost. */
+ *  hiding both dock columns. The agent is never lost. */
 function ChatRail() {
   const setDockCollapsed = useStore((s) => s.setDockCollapsed);
   return (
