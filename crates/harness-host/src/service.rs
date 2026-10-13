@@ -1178,6 +1178,18 @@ impl SessionService {
         let running_here = libraries
             .iter()
             .any(|l| l.in_flight(None).iter().any(|i| i.id == id));
+        // Each library's unsettled row for this id, read once: what a cancel
+        // settles, and what makes a provider's refusal safe to look past.
+        let held: Vec<(Arc<harness_media::MediaLibrary>, harness_media::MediaItem)> = libraries
+            .into_iter()
+            .filter_map(|library| {
+                let item = library
+                    .items()
+                    .into_iter()
+                    .find(|i| i.id == id && !i.status.is_terminal())?;
+                Some((library, item))
+            })
+            .collect();
         let remote = if harness_media::local::is_local_job_id(id) {
             // A running local job stops through the provider; a queued one
             // is skipped once its row reads cancelled (below).
@@ -1195,24 +1207,20 @@ impl SessionService {
             }
         };
         if let Err(e) = remote {
-            if running_here {
+            // Only an orphan (a row nothing here runs) settles past a
+            // refusal; a live job, or an id no library knows, reports it.
+            if running_here || held.is_empty() {
                 return Err(e);
             }
             tracing::info!("settling orphaned generation {id} as cancelled (provider: {e})");
         }
-        for library in libraries {
-            let held = library
-                .items()
-                .into_iter()
-                .find(|i| i.id == id && !i.status.is_terminal());
-            if let Some(mut item) = held {
-                item.status = harness_media::MediaStatus::Cancelled;
-                item.completed_at = Some(harness_media::library::now_unix());
-                item.progress = None;
-                if let Err(e) = library.record(item.clone()) {
-                    tracing::warn!("could not record the cancel of {id}: {e}");
-                    library.upsert(item);
-                }
+        for (library, mut item) in held {
+            item.status = harness_media::MediaStatus::Cancelled;
+            item.completed_at = Some(harness_media::library::now_unix());
+            item.progress = None;
+            if let Err(e) = library.record(item.clone()) {
+                tracing::warn!("could not record the cancel of {id}: {e}");
+                library.upsert(item);
             }
         }
         Ok(())
