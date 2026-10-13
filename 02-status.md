@@ -912,3 +912,17 @@ registered in `modules/builtins`). ⌘J, the titlebar button, the composer's
 (`features/chat/studyPanel.ts`). While it is the work view, agent-driven
 opens are held back with a notice, as for a pinned view. 754 frontend tests.
 
+
+## On-device image generation (2026-10-12)
+
+`local/` image models run on the machine through stable-diffusion.cpp:
+Iris-3B Turbo (~21 s per 1024² image on a 36 GB M4 Max), FLUX.2 klein 4B
+(~37 s, edits references), Z-Image-Turbo (~110 s). New crate
+`harness-media-local` (catalog, checksummed weight store, `MediaEngine`
+trait, managed `sd-server`, GPU queue); `harness-media` routes `local/` ids
+through the `LocalMedia` seam with no key, upload, or spend prompt. All three
+hosts install it at boot (nothing loads until used). `oxen-harness media
+list | pull | remove | path`. Verified: unit + mock-server tests, real renders
+of all three models and a klein reference edit (`tests/real_models.rs`,
+ignored by default), and real agent turns through `oxen-harness -p`.
+Benchmarks and what's left: `plans/local-media-generation.md`.

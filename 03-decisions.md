@@ -1511,3 +1511,38 @@ without knowing tiers exist. Usage breakdowns show the tier as its own row.
 
 Transports: Tauri `set_service_tier(session, tier)`, `POST /v1/service_tier
 {session, tier?}`. The CLI has no tier switch yet.
+
+## Local image generation runs on stable-diffusion.cpp behind an engine seam (2026-10-12)
+
+**Runtime: stable-diffusion.cpp's `sd-server`, not mflux/diffusers/ComfyUI.**
+It is a single prebuilt Metal binary (no Python — a hard preference), its
+native API has async jobs with step progress and real cancel, it supports all
+three shipped models (Iris-3B only runs on a Mac through it), and it manages
+like `llama-server` does. The cost is speed: ~5 effective TFLOPS on an M4 Max,
+probably ~2× slower than MLX. Accepted for now; the engine seam is where a
+faster runtime goes.
+
+**Two seams, not one.** `harness-media` sees only `LocalMedia` (models +
+generate + cancel), installed once per process by the host because the GPU is
+a machine-wide resource. Inside `harness-media-local`, runtimes implement
+`MediaEngine` and catalog entries pick one by id, so a from-scratch engine or
+a video engine never touches the tools, the gallery, or the manifest.
+
+**Memory-mapped weights, always.** Measured on a loaded 36 GB laptop: resident
+weights hit critical memory pressure at ~7.9 GB; `--mmap` held the footprint at
+~0.7 GB at the same speed, because file-backed pages are evicted instead of
+the user's apps being swapped. A load is refused under critical pressure.
+
+**Only commercially licensed weights ship built in** (all Apache-2.0); others
+can go in the user's `local-media-models.json` overlay. Weight files are
+addressed by repo + path and shared between models, sized and sha256-checked.
+
+**Never loaded at boot; never outlives the host.** The server starts on the
+first local generation, unloads after 5 idle minutes, is in the pid registry
+(`runtime/sd-server.pids`, reaped at boot), and a lifeline watcher stops it
+within ~2 s of its host exiting — the service is a process-wide static that is
+never dropped, so `kill_on_drop` alone leaked a server after every CLI run.
+
+**Local is free and needs no key.** No spend prompt, no upload (references are
+read from disk), no hub. With no API key an installed local model stands in
+for a hosted default, with a note in the result.

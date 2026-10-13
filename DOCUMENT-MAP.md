@@ -232,3 +232,11 @@ When adding a new file to the project, update this document map.
 - `app/src/features/workbench/Workbench.test.tsx` — module presentation and compatible resource preservation when selecting a view.
 - `app/src/features/workbench/WorkEmpty.tsx` — the work view before a chat has opened anything: ask-the-agent starter chips (sent verbatim) plus Open a file / Gallery links.
 - `plans/shared-select.md` — implementation, dedicated review and verification record.
+
+## On-device image generation (2026-10-12)
+
+- `crates/harness-media/src/local.rs` — the `LocalMedia` seam: `local/` ids, `LocalInfo` on catalog rows, `LocalJob`/`LocalOutput`/`LocalProgress`, and the process-wide provider hosts `install` at boot. `tools.rs` routes local models around the key, upload, spend, and queue steps through the same batch/report tail as hosted ones.
+- `crates/harness-media-local/` — the provider: `catalog.rs` (embedded `assets/catalog.json` + user overlay → hub-shaped rows and resolved `Settings`), `store.rs` (shared, checksummed weight files under `~/.oxen-harness/media/weights/`), `engine.rs` (the `MediaEngine` trait a runtime implements), `sdcpp.rs` (managed stable-diffusion.cpp `sd-server`: pinned runtime, mmap'd weights, idle unload, pid registry + exit lifeline), `service.rs` (`LocalMediaService`: GPU queue, cancel tokens). `tests/real_models.rs` renders with real weights (ignored by default).
+- `crates/harness-cli/src/commands/media.rs` — `oxen-harness media list | pull | remove | path`.
+- `plans/local-media-generation.md` — the scoping study, benchmarks on a 36 GB M4 Max, and what is left.
+
