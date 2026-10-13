@@ -90,6 +90,7 @@ pub enum MemoryPressure {
 
 impl MemoryPressure {
     /// The macOS `kern.memorystatus_vm_pressure_level` value (1/2/4).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn from_level(level: u64) -> Self {
         match level {
             1 => Self::Normal,

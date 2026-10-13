@@ -815,8 +815,12 @@ mod macos {
     }
 }
 
+// The `vm_stat` / `sysctl` / `footprint` parsers below only run on macOS,
+// but stay compiled (and tested) everywhere: they're pure text parsing.
+
 /// The page counts [`snapshot`] needs from `vm_stat`.
 #[derive(Debug, Default, PartialEq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct VmStat {
     page_size: u64,
     anonymous: u64,
@@ -825,6 +829,7 @@ struct VmStat {
     compressor: u64,
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl VmStat {
     fn snapshot(
         &self,
@@ -847,6 +852,7 @@ impl VmStat {
     }
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn parse_vm_stat(text: &str) -> Option<VmStat> {
     let mut vm = VmStat::default();
     for line in text.lines() {
@@ -872,6 +878,7 @@ fn parse_vm_stat(text: &str) -> Option<VmStat> {
 }
 
 /// `total = 23552.00M  used = 22389.25M  free = …` → used bytes.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn parse_swap_used(text: &str) -> Option<u64> {
     let used = text.split("used =").nth(1)?.split_whitespace().next()?;
     let (num, unit) = used.split_at(used.len().checked_sub(1)?);
@@ -886,6 +893,7 @@ fn parse_swap_used(text: &str) -> Option<u64> {
 }
 
 /// `zsh [28785]: 64-bit    Footprint: 2192 KB (16384 bytes per page)` → bytes.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn parse_footprint(text: &str) -> Option<u64> {
     let mut words = text.split_whitespace();
     words.find(|w| *w == "Footprint:")?;
