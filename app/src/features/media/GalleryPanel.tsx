@@ -10,7 +10,9 @@
 // stepping swaps it in place, so the pane's Back is the grid rather than a
 // replay of every picture passed. Arrow keys step, Escape returns to the
 // grid, and the tile last looked at stays highlighted so the way back lands
-// where you left.
+// where you left. What is still rendering always leads the feed (an old job
+// would otherwise sit hundreds of tiles down), and the Rendering filter shows
+// only that, with a way to cancel it all.
 
 import { useCallback, useEffect, useMemo, useState, type PointerEvent } from "react";
 import { Button, IconButton } from "../../components/ui";
@@ -23,8 +25,14 @@ import { MediaTile } from "./MediaTile";
 import { GenerationDetail } from "./GenerationDetail";
 import "./media.css";
 
-type Filter = "all" | "image" | "video";
+type Filter = "all" | "image" | "video" | "rendering";
 const NONE: MediaItem[] = [];
+const FILTER_LABELS: Record<Filter, string> = {
+  all: "All",
+  image: "Images",
+  video: "Videos",
+  rendering: "Rendering",
+};
 
 export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent) => void }) {
   const sessionId = useStore((s) => s.session?.session_id);
@@ -33,6 +41,7 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
     useStore((s) => (s.session?.workspace ? s.media[s.session.workspace] : undefined)) ?? NONE;
   const refreshMedia = useStore((s) => s.refreshMedia);
   const mediaFocus = useStore((s) => s.mediaFocus);
+  const renderingFocus = useStore((s) => s.galleryRenderingFocus);
   const contextFocus = useStore((s) =>
     s.session ? s.workContexts[s.session.session_id]?.current.id : undefined,
   );
@@ -74,16 +83,24 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
     clearMediaFocus();
   }, [mediaFocus, clearMediaFocus]);
 
-  const shown = useMemo(
-    () =>
-      items.filter(
-        (i) =>
-          (filter === "all" || i.kind === filter) &&
-          (!thisChat || i.session === sessionId) &&
-          i.status !== "cancelled",
-      ),
-    [items, filter, thisChat, sessionId],
-  );
+  useEffect(() => {
+    if (!renderingFocus) return;
+    setViewing(false);
+    setFilter("rendering");
+    setThisChat(false);
+    clearMediaFocus();
+  }, [renderingFocus, clearMediaFocus]);
+
+  const shown = useMemo(() => {
+    const kept = items.filter(
+      (i) =>
+        (filter === "all" || (filter === "rendering" ? isInFlight(i) : i.kind === filter)) &&
+        (!thisChat || i.session === sessionId) &&
+        i.status !== "cancelled",
+    );
+    // Stable, so each half keeps its newest-first order.
+    return [...kept.filter(isInFlight), ...kept.filter((i) => !isInFlight(i))];
+  }, [items, filter, thisChat, sessionId]);
   const detail = viewing && selected ? (items.find((i) => i.id === selected) ?? null) : null;
   const position = detail ? shown.findIndex((i) => i.id === detail.id) : -1;
   const open = useCallback(
@@ -133,7 +150,8 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
     return () => window.removeEventListener("keydown", onKey);
   }, [detail, step, back]);
 
-  const inFlight = items.filter(isInFlight).length;
+  const rendering = items.filter(isInFlight);
+  const inFlight = rendering.length;
   const uploading =
     useStore((s) => (workspace ? s.mediaUploads[workspace] : undefined))?.filter(
       (u) => u.status === "uploading" || u.status === "presigning",
@@ -194,12 +212,19 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
           <Images size={14} aria-hidden="true" />
           <span>
             {shown.length} {shown.length === 1 ? "generation" : "generations"}
-            {inFlight > 0 && <span className="gallery-inflight"> · {inFlight} rendering</span>}
+            {inFlight > 0 && (
+              <span>
+                {" · "}
+                <button type="button" className="gallery-inflight" onClick={() => setFilter("rendering")}>
+                  {inFlight} rendering
+                </button>
+              </span>
+            )}
             {uploading > 0 && <span className="gallery-inflight"> · uploading {uploading}</span>}
           </span>
         </div>
         <div className="gallery-filters" role="group" aria-label="Filter">
-          {(["all", "image", "video"] as Filter[]).map((f) => (
+          {(["all", "image", "video", ...(inFlight > 0 || filter === "rendering" ? ["rendering"] : [])] as Filter[]).map((f) => (
             <button
               key={f}
               type="button"
@@ -207,7 +232,7 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
               onClick={() => setFilter(f)}
               aria-pressed={filter === f}
             >
-              {f === "all" ? "All" : f === "image" ? "Images" : "Videos"}
+              {FILTER_LABELS[f]}
             </button>
           ))}
           <button
@@ -221,7 +246,24 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
           </button>
         </div>
       </header>
-      {shown.length === 0 ? (
+      {filter === "rendering" && inFlight > 0 && (
+        <div className="gallery-rendering-bar">
+          <span>
+            {inFlight} still rendering — × on a tile cancels it.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => rendering.forEach((i) => cancelMedia(i.id))}
+          >
+            Cancel all
+          </Button>
+        </div>
+      )}
+      {shown.length === 0 && filter === "rendering" ? (
+        <p className="gallery-empty">Nothing is rendering.</p>
+      ) : shown.length === 0 ? (
         <p className="gallery-empty">
           Nothing here yet. Ask the agent for an image or a video and it lands in{" "}
           <code>{outputDir}</code>.

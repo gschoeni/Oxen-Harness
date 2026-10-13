@@ -29,7 +29,6 @@ import { setDragPaths } from "./dnd";
 import { diffTab, statusLetter } from "./diff";
 import { useGitStatus } from "./useGitStatus";
 import { DockToggle } from "../docks/DockToggle";
-import { GalleryLink } from "../media/GalleryLink";
 import { FileMenu, type FileAction } from "./FileMenu";
 import type { MenuAt } from "../../components/ui/Menu";
 import type { FileEntry, GitFileState } from "../../lib/types";
@@ -602,7 +601,6 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
         <DockToggle side="left" />
       </header>
       {error && <p className="ft-error">{error}</p>}
-      <GalleryLink workspace={workspace} />
       {git !== null && git.length > 0 && (
         <section className="ft-changes" aria-label="Git changes">
           <button

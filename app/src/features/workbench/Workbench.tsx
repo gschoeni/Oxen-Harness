@@ -7,6 +7,7 @@ import { views, viewById, useViewRegistry, availableTarget } from "./registry";
 import { useWorkbenchAPI } from "./api";
 import type { ViewTarget } from "../../workbench-sdk";
 import { WorkEmpty } from "./WorkEmpty";
+import { GalleryLink } from "../media/GalleryLink";
 import "../../modules";
 import "./workbench.css";
 
@@ -107,6 +108,7 @@ function WorkbenchContent({
         <span className="workbench-resource" title={target.path ?? target.url}>
           {target.path?.split("/").pop() ?? target.url ?? ""}
         </span>
+        <GalleryLink workspace={workspace} />
       </header>
       <div className="workbench-content">
         <ViewBoundary key={`${session}:${target.view}:${target.path ?? ""}`}>

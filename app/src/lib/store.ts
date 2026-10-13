@@ -582,6 +582,9 @@ interface AppState {
   /** The generation the Gallery should select and scroll to (a chat card was
    *  clicked); cleared once the panel has honored it. */
   mediaFocus: string | null;
+  /** Set when the Gallery should open on what is still rendering (the
+   *  header's "N rendering" pill); cleared with `mediaFocus`. */
+  galleryRenderingFocus: boolean;
   /** Files another surface (the Gallery's "Use as reference") staged for the
    *  composer; Chat drains them into its attachment list. Absolute paths. */
   pendingAttachments: string[];
@@ -819,6 +822,8 @@ interface AppState {
   cancelMedia: (id: string) => void;
   /** Show the Gallery dock for the current chat, selecting `itemId` if given. */
   openGallery: (itemId?: string) => void;
+  /** Show the Gallery filtered to what is still rendering. */
+  openRendering: () => void;
   /** Consume the Gallery's focus request. */
   clearMediaFocus: () => void;
   /** Stage a file for the composer's next message (absolute path). */
@@ -1373,6 +1378,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         .catch(() => {});
     },
     mediaFocus: null,
+    galleryRenderingFocus: false,
     pendingAttachments: [],
     inspectorLive: false,
     agentView: {},
@@ -2171,7 +2177,12 @@ export const useStore = create<AppState>((rawSet, get) => {
       if(session)get().openWorkView(session,{view:"gallery",id:itemId});
     },
 
-    clearMediaFocus: () => set({ mediaFocus: null }),
+    openRendering: () => {
+      get().openGallery();
+      set({ galleryRenderingFocus: true });
+    },
+
+    clearMediaFocus: () => set({ mediaFocus: null, galleryRenderingFocus: false }),
 
     revealInFiles: (path) => {
       get().setLeftTab("files");

@@ -310,6 +310,42 @@ describe("GalleryPanel", () => {
     expect(useStore.getState().rightTab.s1).toBe("editor");
   });
 
+  it("leads with what is rendering and filters to it, with a cancel-all", async () => {
+    const day = 24 * 60 * 60;
+    useStore.setState({
+      media: {
+        "/w": [
+          item({ id: "new", prompt: "newest" }),
+          item({ id: "old", status: "queued", path: null, created_at: item().created_at - 12 * day }),
+          item({ id: "older", status: "processing", path: null, created_at: item().created_at - 13 * day }),
+        ],
+      },
+    });
+    render(<GalleryPanel />);
+    // Days-old jobs still sit at the top of the feed, not under the newer work.
+    const tiles = screen.getAllByRole("status");
+    expect(tiles).toHaveLength(2);
+    expect((await screen.findByRole("img")).compareDocumentPosition(tiles[1])).toBe(Node.DOCUMENT_POSITION_PRECEDING);
+
+    // The header's count opens the Rendering filter.
+    await userEvent.click(screen.getByRole("button", { name: "2 rendering" }));
+    expect(screen.getByRole("button", { name: "Rendering" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel all" }));
+    expect(ipc.cancelMedia).toHaveBeenCalledWith("old");
+    expect(ipc.cancelMedia).toHaveBeenCalledWith("older");
+  });
+
+  it("opens on the Rendering filter when asked from the header pill", () => {
+    useStore.setState({ media: { "/w": [item(), item({ id: "q", status: "queued", path: null })] } });
+    render(<GalleryPanel />);
+    act(() => useStore.getState().openRendering());
+    expect(screen.getByRole("button", { name: "Rendering" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(useStore.getState().galleryRenderingFocus).toBe(false);
+  });
+
   it("honors a focus request from a chat card", async () => {
     useStore.setState({ media: { "/w": [item(), item({ id: "g2", prompt: "second" })] }, mediaFocus: "g2" });
     render(<GalleryPanel />);

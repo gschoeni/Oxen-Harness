@@ -39,12 +39,28 @@ describe("GalleryLink", () => {
     render(<GalleryLink workspace="/w" />);
     const link = screen.getByRole("button", { name: /Gallery/ });
     expect(link).toHaveTextContent("3");
-    expect(link).toHaveTextContent("1 rendering");
+    expect(screen.getByRole("button", { name: "1 rendering" })).toBeInTheDocument();
     expect(link).not.toHaveAttribute("aria-current");
 
     await userEvent.click(link);
     expect(useStore.getState().workContexts.s1.current).toEqual({ view: "gallery" });
     expect(useStore.getState().rightTab.s1).toBe("gallery");
     expect(link).toHaveAttribute("aria-current", "page");
+  });
+
+  it("opens the gallery on what is still rendering from its pill", async () => {
+    useStore.setState({
+      media: { "/w": [item({}), item({ id: "q", status: "queued", path: null })] },
+    });
+    render(<GalleryLink workspace="/w" />);
+    await userEvent.click(screen.getByRole("button", { name: "1 rendering" }));
+    expect(useStore.getState().workContexts.s1.current).toEqual({ view: "gallery" });
+    expect(useStore.getState().galleryRenderingFocus).toBe(true);
+  });
+
+  it("shows no pill when nothing is rendering", () => {
+    useStore.setState({ media: { "/w": [item({})] } });
+    render(<GalleryLink workspace="/w" />);
+    expect(screen.queryByRole("button", { name: /rendering/ })).not.toBeInTheDocument();
   });
 });
