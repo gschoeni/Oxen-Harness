@@ -95,22 +95,22 @@ pub(crate) fn segment(ui: &Ui) -> Option<(String, String)> {
     let r = reading();
     let system = r.system.as_ref()?;
     let local: u64 = r.processes.iter().map(|p| p.footprint_bytes).sum();
-    let mut plain = format!("🧠 {}/{} GB", gb(system.used_bytes), gb(system.total_bytes));
+    let mut plain = format!(
+        "🧠 {}/{} GB",
+        gb(system.used_bytes),
+        total_gb(system.total_bytes)
+    );
     if !r.processes.is_empty() {
         plain.push_str(&format!(" · local {} GB", gb(local)));
     }
     let mut styled = paint(ui, system.pressure, &plain);
-    if system.pressure != MemoryPressure::Normal && system.pressure != MemoryPressure::Unknown {
-        let label = format!(" · pressure {}", pressure_word(system.pressure));
-        plain.push_str(&label);
-        styled.push_str(&paint(ui, system.pressure, &label));
-    }
-    if let Some(n) = &r.notice {
-        let text = format!(" · ⚠ {}", notice_short(n));
+    if let Some((word, alarm)) = marker(system.pressure, r.notice.as_ref()) {
+        let text = format!(" · ⚠ {word}");
         plain.push_str(&text);
-        styled.push_str(&match n.level {
-            NoticeLevel::Warn => ui.brown(&text),
-            NoticeLevel::Refused | NoticeLevel::Stopped => ui.red(&text),
+        styled.push_str(&if alarm {
+            ui.red(&text)
+        } else {
+            ui.brown(&text)
         });
     }
     Some((plain, styled))
@@ -127,22 +127,41 @@ pub(crate) fn media_line(ui: &Ui) -> Option<String> {
         .filter(|p| p.kind == "image")
         .map(|p| p.footprint_bytes)
         .sum();
-    let text = format!(
-        "    🧠 image model {} GB · machine {}/{} GB · pressure {}",
+    let mut text = format!(
+        "    🧠 image {} GB · {}/{} GB",
         gb(image),
         gb(system.used_bytes),
-        gb(system.total_bytes),
-        pressure_word(system.pressure)
+        total_gb(system.total_bytes)
     );
+    if let Some((word, _)) = marker(system.pressure, None) {
+        text.push_str(&format!(" · ⚠ {word}"));
+    }
     Some(paint(ui, system.pressure, &text))
 }
 
-fn pressure_word(p: MemoryPressure) -> &'static str {
-    match p {
-        MemoryPressure::Normal => "normal",
-        MemoryPressure::Warn => "high",
-        MemoryPressure::Critical => "critical",
-        MemoryPressure::Unknown => "unknown",
+/// The one short warning the readout carries, and whether it is an alarm
+/// (red) rather than a caution: a fresh notice outranks the pressure level.
+/// The full reason lives in the notice itself; the meter only points at it.
+fn marker(pressure: MemoryPressure, notice: Option<&MemoryNotice>) -> Option<(&'static str, bool)> {
+    match notice.map(|n| n.level) {
+        Some(NoticeLevel::Stopped) => Some(("model stopped", true)),
+        Some(NoticeLevel::Refused) => Some(("load refused", true)),
+        Some(NoticeLevel::Warn) => Some(("tight", false)),
+        None => match pressure {
+            MemoryPressure::Critical => Some(("critical", true)),
+            MemoryPressure::Warn => Some(("high", false)),
+            MemoryPressure::Normal | MemoryPressure::Unknown => None,
+        },
+    }
+}
+
+/// The machine's size: `36`, not `36.0`.
+fn total_gb(bytes: u64) -> String {
+    let g = bytes as f64 / (1u64 << 30) as f64;
+    if (g - g.round()).abs() < 0.05 {
+        format!("{}", g.round())
+    } else {
+        format!("{g:.1}")
     }
 }
 
@@ -154,28 +173,34 @@ fn paint(ui: &Ui, p: MemoryPressure, text: &str) -> String {
     }
 }
 
-/// `stopped Iris-3B Turbo (memory)` / `memory tight for gemma`.
-fn notice_short(n: &MemoryNotice) -> String {
-    match n.level {
-        NoticeLevel::Stopped => format!("stopped {} to free memory", n.model),
-        NoticeLevel::Refused => format!("didn't load {}: not enough memory", n.model),
-        NoticeLevel::Warn => format!("memory tight for {}", n.model),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn notices_read_short() {
-        let n = MemoryNotice {
-            level: NoticeLevel::Stopped,
-            model: "Iris-3B Turbo".into(),
+    fn the_meter_carries_one_short_warning() {
+        let notice = |level| MemoryNotice {
+            level,
+            model: "gemma-4-26b-a4b-it-gguf-q3-k-m".into(),
             message: "long reason".into(),
             at: 0,
         };
-        assert_eq!(notice_short(&n), "stopped Iris-3B Turbo to free memory");
+        // A fresh notice outranks the pressure level, and never names the model.
+        assert_eq!(
+            marker(MemoryPressure::Warn, Some(&notice(NoticeLevel::Warn))),
+            Some(("tight", false))
+        );
+        assert_eq!(
+            marker(MemoryPressure::Normal, Some(&notice(NoticeLevel::Stopped))),
+            Some(("model stopped", true))
+        );
+        assert_eq!(
+            marker(MemoryPressure::Critical, None),
+            Some(("critical", true))
+        );
+        assert_eq!(marker(MemoryPressure::Normal, None), None);
+        assert_eq!(total_gb(36 * (1u64 << 30)), "36");
+        assert_eq!(total_gb(17 * (1u64 << 30) / 2), "8.5");
     }
 
     #[test]
