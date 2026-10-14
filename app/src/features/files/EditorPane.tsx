@@ -36,6 +36,7 @@ import { useGitStatus } from "./useGitStatus";
 import { rendererFor } from "./renderers";
 import { setDragPaths } from "./dnd";
 import { useFsChanged } from "./useFsChanged";
+import { VideoPlayer } from "../video/VideoPlayer";
 import "./files.css";
 
 /** One key per tab, stable across reorders: the path group it shows. */
@@ -379,9 +380,9 @@ function MediaView({
           <CloseButton onClose={onClose} />
         </div>
       </header>
-      <div className="media-view">
+      <div className={video ? "media-view video" : "media-view"}>
         {src === null ? null : video ? (
-          <video src={src} controls />
+          <VideoPlayer key={src} src={src} path={path} />
         ) : (
           <img
             src={src}

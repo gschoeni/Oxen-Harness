@@ -16,7 +16,7 @@ import { useEffect, useState } from "react";
 import { useStore } from "../../lib/store";
 
 /** CSS selectors that mean "a surface is covering the app". */
-const SCRIM_SELECTOR = ".modal-scrim, .settings-overlay, .menu";
+const SCRIM_SELECTOR = ".modal-scrim, .settings-overlay, .menu, .video-theater";
 
 export function useOverlayOpen(): boolean {
   const storeOverlay = useStore(

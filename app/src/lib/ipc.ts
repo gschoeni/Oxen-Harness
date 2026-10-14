@@ -308,6 +308,13 @@ export const fsCreateEntry = (root: string, path: string, isDir: boolean) =>
  *  one already there); resolves with where it landed. */
 export const fsDownload = (root: string, path: string) =>
   invoke<string>("fs_download", { root, path });
+/** Save bytes made in the webview (a grabbed video frame) into Downloads as
+ *  `name`, or `name-2.ext`, … when taken; resolves with where they landed.
+ *  The bytes go over the bridge raw, the name in a header. */
+export const fsSaveDownload = (name: string, bytes: Uint8Array) =>
+  invoke<string>("fs_save_download", bytes, {
+    headers: { "x-file-name": encodeURIComponent(name) },
+  });
 /** Rename a file or folder in place (`name` is the new last component);
  *  resolves with its new workspace-relative path. Never replaces an entry. */
 export const fsRename = (root: string, path: string, name: string) =>

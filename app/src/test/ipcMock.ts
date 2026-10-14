@@ -448,6 +448,9 @@ export const cancelMedia = vi.fn(async (_id: string) => {});
 export const fsDownload = vi.fn(
   async (_root: string, path: string) => `/Users/me/Downloads/${path.split("/").pop()}`,
 );
+export const fsSaveDownload = vi.fn(
+  async (name: string, _bytes: Uint8Array) => `/Users/me/Downloads/${name}`,
+);
 export const getMediaPrefs = vi.fn(async (): Promise<MediaPrefs> => ({ ...sampleMediaPrefs }));
 export const setMediaPrefs = vi.fn(async (_prefs: MediaPrefs) => {});
 export const listMediaModels = vi.fn(async (_kind?: string, _refresh?: boolean): Promise<MediaModelSummary[]> => []);
@@ -733,6 +736,9 @@ export function resetIpc() {
   fsDownload
     .mockReset()
     .mockImplementation(async (_root: string, path: string) => `/Users/me/Downloads/${path.split("/").pop()}`);
+  fsSaveDownload
+    .mockReset()
+    .mockImplementation(async (name: string, _bytes: Uint8Array) => `/Users/me/Downloads/${name}`);
   getMediaPrefs.mockReset().mockResolvedValue({ ...sampleMediaPrefs });
   setMediaPrefs.mockReset().mockResolvedValue(undefined);
   listMediaModels.mockReset().mockResolvedValue([]);

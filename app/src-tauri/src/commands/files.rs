@@ -519,13 +519,18 @@ fn copy_into(file: &Path, dir: &Path) -> Result<PathBuf, String> {
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("not a file: {}", file.display()))?;
+    let mut source =
+        fs::File::open(file).map_err(|e| format!("could not read {}: {e}", file.display()))?;
+    write_unique(dir, name, &mut source)
+}
+
+/// Write `content` into `dir` as `name`, or the first free `name-N.ext`.
+fn write_unique(dir: &Path, name: &str, content: &mut impl Read) -> Result<PathBuf, String> {
     let (stem, ext) = match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => (stem, format!(".{ext}")),
         _ => (name, String::new()),
     };
     fs::create_dir_all(dir).map_err(|e| format!("could not open {}: {e}", dir.display()))?;
-    let mut source =
-        fs::File::open(file).map_err(|e| format!("could not read {}: {e}", file.display()))?;
     for n in 1u32.. {
         let dest = dir.join(if n == 1 {
             name.to_string()
@@ -540,7 +545,7 @@ fn copy_into(file: &Path, dir: &Path) -> Result<PathBuf, String> {
             .open(&dest)
         {
             Ok(mut out) => {
-                if let Err(e) = std::io::copy(&mut source, &mut out) {
+                if let Err(e) = std::io::copy(content, &mut out) {
                     // Best-effort: don't leave a truncated file behind; the
                     // copy failure is the error the user needs.
                     let _ = fs::remove_file(&dest);
@@ -553,6 +558,50 @@ fn copy_into(file: &Path, dir: &Path) -> Result<PathBuf, String> {
         }
     }
     Err(format!("no free name for {name} in {}", dir.display()))
+}
+
+/// Header carrying [`fs_save_download`]'s file name, percent-encoded (header
+/// values are ASCII; file names need not be).
+const SAVE_NAME_HEADER: &str = "x-file-name";
+
+/// Save bytes the webview produced (a video frame grabbed as PNG) into the
+/// Downloads folder and return where they landed. The body is the raw bytes,
+/// so a 4K frame crosses the bridge without a JSON number array.
+#[tauri::command]
+pub(crate) async fn fs_save_download(
+    app: tauri::AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("save expected raw bytes".into());
+    };
+    let encoded = request
+        .headers()
+        .get(SAVE_NAME_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .ok_or("save is missing its file name")?;
+    let name = download_name(encoded)?;
+    let downloads = tauri::Manager::path(&app)
+        .download_dir()
+        .map_err(|e| format!("could not find the Downloads folder: {e}"))?;
+    let bytes = bytes.clone();
+    tauri::async_runtime::spawn_blocking(move || write_unique(&downloads, &name, &mut &bytes[..]))
+        .await
+        .map_err(|e| format!("save did not finish: {e}"))?
+        .map(|dest| dest.display().to_string())
+}
+
+/// Decode a percent-encoded file name and refuse anything that isn't a single
+/// path component — the name comes from the webview, the folder doesn't.
+fn download_name(encoded: &str) -> Result<String, String> {
+    let name = percent_encoding::percent_decode_str(encoded)
+        .decode_utf8()
+        .map_err(|_| format!("not a valid file name: {encoded}"))?;
+    let name = name.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+        return Err(format!("not a valid file name: {name:?}"));
+    }
+    Ok(name.to_string())
 }
 
 /// A workspace entry *itself*, for operations that move or remove it (rename,
@@ -1033,6 +1082,37 @@ mod tests {
             downloads.join("0425-an-ox-1-3.png")
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn saved_bytes_take_a_free_name_beside_earlier_saves() {
+        let dir = workspace("save-bytes");
+        let downloads = dir.join("Downloads");
+        let first = write_unique(&downloads, "clip_frame_12.png", &mut &b"one"[..]).unwrap();
+        let second = write_unique(&downloads, "clip_frame_12.png", &mut &b"two"[..]).unwrap();
+        assert_eq!(first, downloads.join("clip_frame_12.png"));
+        assert_eq!(second, downloads.join("clip_frame_12-2.png"));
+        assert_eq!(fs::read(&first).unwrap(), b"one");
+        assert_eq!(fs::read(&second).unwrap(), b"two");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_download_name_is_one_decoded_component() {
+        assert_eq!(
+            download_name("ox%20%C3%A9_frame_1.png").unwrap(),
+            "ox é_frame_1.png"
+        );
+        for bad in [
+            "",
+            "..",
+            "..%2Fescape.png",
+            "a%5Cb.png",
+            "%00.png",
+            "%FF.png",
+        ] {
+            assert!(download_name(bad).is_err(), "{bad:?} should be refused");
+        }
     }
 
     #[test]

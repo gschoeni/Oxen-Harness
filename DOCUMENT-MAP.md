@@ -162,6 +162,7 @@ When adding a new file to the project, update this document map.
 - `app/src/features/files/FileMenu.tsx` — the file tree's right-click menu (open, add to chat, download, reveal, copy path, rename, duplicate, move to Trash); built on the shared `ContextMenu` in `components/ui/Menu.tsx`, backed by `fs_*` commands in `app/src-tauri/src/commands/files.rs`.
 - `app/src/features/media/GenerationDetail.tsx` — one generation in full: prompt, request, output, the lineage trail (inputs above, outputs below, library items open in place), identity, and the raw manifest row.
 - `app/src/features/media/CompareView.tsx` — A/B comparison in the gallery detail: a draggable divider between two of a generation's inputs/output, pick-a-side-then-a-picture selection, clips kept in step.
+- `app/src/features/video/VideoPlayer.tsx` — the Files dock's video player: custom transport bar over a native `<video>`, frame-accurate stepping on the demuxed frame index (`useVideoFrameEngine.ts`, `videoFrames.ts` via mediabunny), scrubbing, save-frame-as-PNG to Downloads (`fs_save_download`), and a theater mode that re-parents the same element to fill the window below the title bar.
 - `app/src/features/media/useDownload.ts` — the Download gesture (gallery tiles + detail view): copy the file to ~/Downloads, report on the button.
 
 ## Prairie arcade — 2026-09-18

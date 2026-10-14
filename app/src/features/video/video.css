@@ -1,0 +1,279 @@
+/* The video player: a dock-sized stage, and the same element filling the app
+   window in theater mode. */
+
+.video-slot,
+.video-host {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Like every full-window takeover, theater opens below the title bar so the
+   window stays draggable. */
+.video-host.video-theater {
+  position: fixed;
+  inset: var(--titlebar-h) 0 0 0;
+  z-index: var(--z-modal);
+  width: auto;
+  height: auto;
+  background: #000;
+}
+
+.video-player {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  outline: none;
+}
+.video-player.idle {
+  cursor: none;
+}
+
+.video-theater-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  height: var(--pane-head-h);
+  padding: 0 var(--space-3) 0 var(--space-4);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: var(--text-sm);
+  transition: opacity var(--dur) var(--ease);
+}
+.video-player.idle .video-theater-head {
+  opacity: 0;
+}
+.video-theater-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.video-theater-head .icon-btn {
+  color: rgba(255, 255, 255, 0.72);
+}
+.video-theater-head .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+/* A size container, so the frame can fit the video's aspect inside it. */
+.video-stage {
+  flex: 1;
+  min-height: 0;
+  container-type: size;
+  display: grid;
+  place-items: center;
+  padding: var(--space-3);
+}
+.video-player.theater .video-stage {
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+/* Sized to the video itself, so the bar sits on the picture rather than at the
+   bottom of a tall, mostly empty dock. */
+.video-frame {
+  position: relative;
+  aspect-ratio: var(--video-aspect);
+  width: min(100cqw, 100cqh * var(--video-aspect));
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: #000;
+  container-type: inline-size;
+  cursor: pointer;
+}
+.video-player.theater .video-frame {
+  border-radius: 0;
+}
+.video-frame video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* ---- the transport bar ---------------------------------------------------- */
+
+.video-controls {
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  bottom: var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-half);
+  padding: var(--space-1);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-1);
+  cursor: default;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+/* Keyboard focus inside the bar holds it shown, whatever the pointer does. */
+.video-controls.shown,
+.video-controls:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+.video-player.theater .video-controls {
+  left: 50%;
+  right: auto;
+  bottom: var(--space-4);
+  width: min(880px, calc(100% - 2 * var(--space-4)));
+  translate: -50% 0;
+}
+.video-controls .icon-btn {
+  flex: none;
+}
+.video-controls .icon-btn:disabled {
+  opacity: 0.4;
+}
+
+.video-timeline {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 48px;
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  cursor: pointer;
+  touch-action: none;
+  border-radius: var(--radius-xs);
+}
+.video-timeline:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.video-rail {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--separator-strong);
+}
+.video-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.video-thumb {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg);
+  transform: translate(-50%, -50%);
+  transition: transform var(--dur-fast) var(--ease);
+  pointer-events: none;
+}
+.video-timeline:hover .video-thumb,
+.video-timeline.scrubbing .video-thumb {
+  transform: translate(-50%, -50%) scale(1.25);
+}
+
+.video-readout {
+  display: inline-flex;
+  gap: var(--space-2);
+  flex: none;
+  padding: 0 var(--space-2);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.video-frames {
+  color: var(--text-tertiary);
+}
+
+/* The slider slides open beside the speaker on hover or focus. */
+.video-volume {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.video-volume input {
+  width: 0;
+  margin: 0;
+  opacity: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  transition: width var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease),
+    margin var(--dur-fast) var(--ease);
+}
+.video-volume:hover input,
+.video-volume:focus-within input {
+  width: 72px;
+  margin: 0 var(--space-2) 0 var(--space-1);
+  opacity: 1;
+}
+
+/* A narrow dock drops the extras before it squeezes the timeline. */
+@container (max-width: 460px) {
+  .video-frames,
+  .video-loop {
+    display: none;
+  }
+}
+@container (max-width: 340px) {
+  .video-readout {
+    display: none;
+  }
+}
+
+/* ---- notes and errors ---------------------------------------------------- */
+
+.video-note {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  max-width: calc(100% - 2 * var(--space-2));
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--text);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+.video-note.failed {
+  color: var(--danger);
+}
+
+.video-error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: var(--text-sm);
+  text-align: center;
+  cursor: default;
+}
