@@ -421,8 +421,9 @@ fn price_usage_with_catalog(
             .and_then(|catalog| catalog.get(&u.model))
             .map(|pricing| {
                 priced_any = true;
-                pricing.cost_of(
+                pricing.cost_with_cache(
                     u.prompt_tokens.max(0) as usize,
+                    u.cached_prompt_tokens.max(0) as usize,
                     u.completion_tokens.max(0) as usize,
                 )
             });
@@ -462,6 +463,7 @@ mod usage_tests {
             harness_local::source::ModelPricing {
                 input_cost_per_token: 0.01,
                 output_cost_per_token: 0.02,
+                cached_input_cost_per_token: None,
             },
         );
         let report = price_usage_with_catalog(
@@ -471,12 +473,14 @@ mod usage_tests {
                     source: "unpriced".into(),
                     prompt_tokens: 10,
                     completion_tokens: 5,
+                    cached_prompt_tokens: 0,
                 },
                 ModelUsage {
                     model: "missing".into(),
                     source: "oxen_cloud".into(),
                     prompt_tokens: 20,
                     completion_tokens: 5,
+                    cached_prompt_tokens: 0,
                 },
             ],
             Some(&catalog),
@@ -507,6 +511,7 @@ mod usage_tests {
                 source: "oxen_cloud".into(),
                 prompt_tokens: 10,
                 completion_tokens: 5,
+                cached_prompt_tokens: 0,
             }],
             None,
         );

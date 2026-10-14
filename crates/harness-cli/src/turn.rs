@@ -765,6 +765,7 @@ mod tests {
             Some(ModelPricing {
                 input_cost_per_token: 0.000_003,
                 output_cost_per_token: 0.000_015,
+                cached_input_cost_per_token: None,
             }),
         );
         let ui = plain_ui();
@@ -951,6 +952,7 @@ mod tests {
             Some(harness_local::source::ModelPricing {
                 input_cost_per_token: 0.000_001,
                 output_cost_per_token: 0.000_002,
+                cached_input_cost_per_token: None,
             }),
         );
         let ui = plain_ui();
@@ -976,6 +978,7 @@ mod tests {
             Some(harness_local::source::ModelPricing {
                 input_cost_per_token: 0.000_003,
                 output_cost_per_token: 0.000_015,
+                cached_input_cost_per_token: None,
             }),
         );
         crate::pricing::seed_for_test(
@@ -983,6 +986,7 @@ mod tests {
             Some(harness_local::source::ModelPricing {
                 input_cost_per_token: 0.000_001,
                 output_cost_per_token: 0.000_002,
+                cached_input_cost_per_token: None,
             }),
         );
         let store = std::sync::Arc::new(HistoryStore::open_in_memory().unwrap());
@@ -1118,6 +1122,7 @@ mod tests {
             Some(ModelPricing {
                 input_cost_per_token: 0.000_003,
                 output_cost_per_token: 0.000_015,
+                cached_input_cost_per_token: None,
             }),
         );
         let ui = plain_ui();

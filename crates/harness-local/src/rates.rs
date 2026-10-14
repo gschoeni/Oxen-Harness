@@ -71,6 +71,7 @@ mod tests {
         let opus = ModelPricing {
             input_cost_per_token: 0.000_005,
             output_cost_per_token: 0.000_025,
+            cached_input_cost_per_token: None,
         };
         record(vec![("claude-opus-4-8".to_string(), opus)]);
         assert_eq!(load().get("claude-opus-4-8"), Some(&opus));
@@ -80,10 +81,12 @@ mod tests {
         let cheaper = ModelPricing {
             input_cost_per_token: 0.000_004,
             output_cost_per_token: 0.000_020,
+            cached_input_cost_per_token: None,
         };
         let local = ModelPricing {
             input_cost_per_token: 0.000_002_6,
             output_cost_per_token: 0.000_013,
+            cached_input_cost_per_token: None,
         };
         record(vec![
             ("claude-opus-4-8".to_string(), cheaper),

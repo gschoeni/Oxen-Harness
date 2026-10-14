@@ -396,6 +396,9 @@ pub struct ModelUsage {
     pub source: String,
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
+    /// The part of `prompt_tokens` the provider served from its prompt
+    /// cache, which bills at the model's cached-input rate when it has one.
+    pub cached_prompt_tokens: i64,
 }
 
 /// Per-call attribution recorded alongside one usage event. Everything is
@@ -1488,7 +1491,8 @@ impl HistoryStore {
                  UNION ALL
                  SELECT s.id FROM sessions s JOIN tree ON s.parent_session = tree.id
              )
-             SELECT model, source, SUM(prompt_tokens), SUM(completion_tokens)
+             SELECT model, source, SUM(prompt_tokens), SUM(completion_tokens),
+                    SUM(cached_prompt_tokens)
              FROM usage_events WHERE session_id IN (SELECT id FROM tree)
              GROUP BY model, source
              ORDER BY SUM(prompt_tokens + completion_tokens) DESC, model ASC",
@@ -1499,6 +1503,7 @@ impl HistoryStore {
                 source: row.get(1)?,
                 prompt_tokens: row.get(2)?,
                 completion_tokens: row.get(3)?,
+                cached_prompt_tokens: row.get(4)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>()
@@ -1510,7 +1515,8 @@ impl HistoryStore {
     pub fn model_usage_breakdown(&self) -> Result<Vec<ModelUsage>, HistoryError> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT model, source, SUM(prompt_tokens), SUM(completion_tokens)
+            "SELECT model, source, SUM(prompt_tokens), SUM(completion_tokens),
+                    SUM(cached_prompt_tokens)
              FROM usage_events
              GROUP BY model, source
              ORDER BY SUM(prompt_tokens + completion_tokens) DESC, model ASC",
@@ -1521,6 +1527,7 @@ impl HistoryStore {
                 source: row.get(1)?,
                 prompt_tokens: row.get(2)?,
                 completion_tokens: row.get(3)?,
+                cached_prompt_tokens: row.get(4)?,
             })
         })?;
         let mut out = Vec::new();
@@ -1534,7 +1541,8 @@ impl HistoryStore {
     pub fn model_usage_for_day(&self, date: &str) -> Result<Vec<ModelUsage>, HistoryError> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT model, source, SUM(prompt_tokens), SUM(completion_tokens)
+            "SELECT model, source, SUM(prompt_tokens), SUM(completion_tokens),
+                    SUM(cached_prompt_tokens)
              FROM usage_events
              WHERE date(created_at, 'unixepoch', 'localtime') = ?1
              GROUP BY model, source
@@ -1546,6 +1554,7 @@ impl HistoryStore {
                 source: row.get(1)?,
                 prompt_tokens: row.get(2)?,
                 completion_tokens: row.get(3)?,
+                cached_prompt_tokens: row.get(4)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>()
@@ -2756,6 +2765,7 @@ mod tests {
                 &UsageDetail {
                     session_id: &lane,
                     kind: "turn",
+                    cached_prompt_tokens: 30,
                     ..Default::default()
                 },
             )
@@ -2764,6 +2774,17 @@ mod tests {
         let find = |m: &str| by_model.iter().find(|u| u.model == m).unwrap();
         assert_eq!(find("m").prompt_tokens, 111);
         assert_eq!(find("tiny").prompt_tokens, 40);
+        // Cache hits ride along, so the hit share can bill at its own rate.
+        assert_eq!(find("tiny").cached_prompt_tokens, 30);
+        assert_eq!(find("m").cached_prompt_tokens, 0);
+        let all = store.model_usage_breakdown().unwrap();
+        assert_eq!(
+            all.iter()
+                .find(|u| u.model == "tiny")
+                .unwrap()
+                .cached_prompt_tokens,
+            30
+        );
         assert_eq!(by_model.len(), 2);
     }
 

@@ -779,6 +779,7 @@ mod tests {
             Some(harness_local::source::ModelPricing {
                 input_cost_per_token: 0.000_003,
                 output_cost_per_token: 0.000_015,
+                cached_input_cost_per_token: None,
             }),
         );
         let mut l = live(80, 24);

@@ -1100,6 +1100,7 @@ mod tests {
             Some(harness_local::source::ModelPricing {
                 input_cost_per_token: 0.000_001,
                 output_cost_per_token: 0.000_002,
+                cached_input_cost_per_token: None,
             }),
         );
         let store = std::sync::Arc::new(HistoryStore::open_in_memory().unwrap());

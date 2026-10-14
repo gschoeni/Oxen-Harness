@@ -33,8 +33,9 @@ async fn priced_rows(store: &HistoryStore) -> Vec<PricedUsage> {
             .as_ref()
             .and_then(|catalog| catalog.get(&usage.model))
             .map(|p| {
-                p.cost_of(
+                p.cost_with_cache(
                     usage.prompt_tokens.max(0) as usize,
+                    usage.cached_prompt_tokens.max(0) as usize,
                     usage.completion_tokens.max(0) as usize,
                 )
             });

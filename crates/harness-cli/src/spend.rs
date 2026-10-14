@@ -122,6 +122,7 @@ impl Tokens {
             source: String::new(),
             prompt_tokens: self.prompt as i64,
             completion_tokens: self.completion as i64,
+            cached_prompt_tokens: 0,
         }
     }
 }
@@ -239,7 +240,8 @@ fn price_rows_with(
         match rate(&row.model) {
             Some(rate) => {
                 priced_any = true;
-                usd += rate.cost_of(prompt, completion);
+                let cached = row.cached_prompt_tokens.max(0) as usize;
+                usd += rate.cost_with_cache(prompt, cached, completion);
             }
             None if unpriced.contains(&row.model) => {}
             None => unpriced.push(row.model.clone()),
@@ -272,6 +274,7 @@ mod tests {
             source: "oxen_cloud".to_string(),
             prompt_tokens: prompt,
             completion_tokens: completion,
+            cached_prompt_tokens: 0,
         }
     }
 
@@ -282,10 +285,12 @@ mod tests {
             "big" => Some(ModelPricing {
                 input_cost_per_token: 0.000_003,
                 output_cost_per_token: 0.000_015,
+                cached_input_cost_per_token: None,
             }),
             "small" => Some(ModelPricing {
                 input_cost_per_token: 0.000_001,
                 output_cost_per_token: 0.000_002,
+                cached_input_cost_per_token: None,
             }),
             _ => None,
         }
@@ -343,6 +348,30 @@ mod tests {
         assert!((usd - 0.11).abs() < 1e-9, "{usd}");
         assert_eq!(unpriced, &["mystery".to_string()]);
         assert_eq!(spend.price.label().as_deref(), Some("$0.11+"));
+    }
+
+    #[test]
+    fn cache_hits_bill_at_the_published_cached_rate_or_else_full_price() {
+        let mut hits = row("small", 100_000, 0);
+        hits.cached_prompt_tokens = 90_000;
+        // `small` publishes no discount: same as an uncached prompt ($0.10).
+        let Price::Priced(usd) = price_rows_with(std::slice::from_ref(&hits), true, rates).price
+        else {
+            panic!("priced");
+        };
+        assert!((usd - 0.1).abs() < 1e-9, "{usd}");
+
+        // With one: 10k × $1/M + 90k × $0.10/M = $0.019.
+        let discounted = |model: &str| {
+            rates(model).map(|r| ModelPricing {
+                cached_input_cost_per_token: Some(0.000_000_1),
+                ..r
+            })
+        };
+        let Price::Priced(usd) = price_rows_with(&[hits], true, discounted).price else {
+            panic!("priced");
+        };
+        assert!((usd - 0.019).abs() < 1e-9, "{usd}");
     }
 
     #[test]

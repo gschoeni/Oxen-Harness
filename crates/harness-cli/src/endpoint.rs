@@ -568,6 +568,7 @@ mod tests {
             pricing: Some(ModelPricing {
                 input_cost_per_token: 0.000_003,
                 output_cost_per_token: 0.000_015,
+                cached_input_cost_per_token: None,
             }),
             inputs: vec!["text".into()],
             outputs: outputs.iter().map(|o| o.to_string()).collect(),

@@ -176,6 +176,7 @@ mod tests {
             ModelPricing {
                 input_cost_per_token: 0.000_001,
                 output_cost_per_token: 0.000_002,
+                cached_input_cost_per_token: None,
             },
         )]);
         assert!(is_warm(), "yesterday's rates are enough to price with");
@@ -195,6 +196,7 @@ mod tests {
         let label = format_rate(&ModelPricing {
             input_cost_per_token: 0.000_003,
             output_cost_per_token: 0.000_015,
+            cached_input_cost_per_token: None,
         });
         assert_eq!(label.as_deref(), Some("$3/M in · $15/M out"));
     }
@@ -204,6 +206,7 @@ mod tests {
         let label = format_rate(&ModelPricing {
             input_cost_per_token: 0.000_000_5,
             output_cost_per_token: 0.000_001_5,
+            cached_input_cost_per_token: None,
         });
         assert_eq!(label.as_deref(), Some("$0.50/M in · $1.50/M out"));
     }
@@ -213,6 +216,7 @@ mod tests {
         let label = format_rate(&ModelPricing {
             input_cost_per_token: 0.0,
             output_cost_per_token: 0.0,
+            cached_input_cost_per_token: None,
         });
         assert_eq!(label, None);
     }
@@ -250,6 +254,7 @@ mod tests {
             Some(ModelPricing {
                 input_cost_per_token: 0.000_003,
                 output_cost_per_token: 0.000_015,
+                cached_input_cost_per_token: None,
             }),
         );
         let warm = facts.lines(&ui);
@@ -262,6 +267,7 @@ mod tests {
         let rate = ModelPricing {
             input_cost_per_token: 0.000_001,
             output_cost_per_token: 0.000_002,
+            cached_input_cost_per_token: None,
         };
         seed("rate-model-c", Some(rate));
         let got = session_rate("rate-model-c").expect("priced");

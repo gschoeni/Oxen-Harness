@@ -498,6 +498,10 @@ struct OxenModelEntry {
 struct OxenPricing {
     #[serde(flatten)]
     rates: OxenTokenRates,
+    /// The base rate's cache discount. Tiers carry none: the hub bills a
+    /// tier's cache hits at that tier's input rate.
+    #[serde(default)]
+    cached_input_cost_per_token: Option<f64>,
     /// Rates for each non-default service tier the model offers, keyed by the
     /// tier id the request's `service_tier` names (e.g. `ultrafast`).
     #[serde(default)]
@@ -506,7 +510,10 @@ struct OxenPricing {
 
 impl OxenPricing {
     fn rates(&self) -> Option<ModelPricing> {
-        self.rates.rates()
+        self.rates.rates().map(|rates| ModelPricing {
+            cached_input_cost_per_token: self.cached_input_cost_per_token,
+            ..rates
+        })
     }
 
     fn service_tiers(&self) -> Vec<ServiceTierHit> {
@@ -538,6 +545,7 @@ impl OxenTokenRates {
             (input, output) => Some(ModelPricing {
                 input_cost_per_token: input.unwrap_or(0.0),
                 output_cost_per_token: output.unwrap_or(0.0),
+                cached_input_cost_per_token: None,
             }),
         }
     }
@@ -679,13 +687,35 @@ pub async fn oxen_search_models(
 pub struct ModelPricing {
     pub input_cost_per_token: f64,
     pub output_cost_per_token: f64,
+    /// What a prompt token served from the provider's cache bills at, when
+    /// the catalog publishes a discount. Without one, cached tokens bill at
+    /// the full input rate — the hub's rule, so the meter matches the bill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_input_cost_per_token: Option<f64>,
 }
 
 impl ModelPricing {
     /// The dollar cost of `input_tokens` prompt tokens plus `output_tokens`
-    /// completion tokens at these rates.
+    /// completion tokens at these rates, with no cache hits.
     pub fn cost_of(&self, input_tokens: usize, output_tokens: usize) -> f64 {
-        input_tokens as f64 * self.input_cost_per_token
+        self.cost_with_cache(input_tokens, 0, output_tokens)
+    }
+
+    /// [`Self::cost_of`] where `cached_tokens` of the prompt were cache hits.
+    /// Clamped to the prompt, as the hub does, so an over-report can't make
+    /// the uncached share negative.
+    pub fn cost_with_cache(
+        &self,
+        input_tokens: usize,
+        cached_tokens: usize,
+        output_tokens: usize,
+    ) -> f64 {
+        let cached = cached_tokens.min(input_tokens);
+        let cached_rate = self
+            .cached_input_cost_per_token
+            .unwrap_or(self.input_cost_per_token);
+        (input_tokens - cached) as f64 * self.input_cost_per_token
+            + cached as f64 * cached_rate
             + output_tokens as f64 * self.output_cost_per_token
     }
 }
@@ -806,11 +836,12 @@ mod tests {
             .with_body(
                 r#"{"data":[{"id":"gpt-6-1-sol","endpoint":"/chat/completions",
                     "pricing":{"input_cost_per_token":0.0000026,"method":"token",
-                      "output_cost_per_token":0.000013,
+                      "cached_input_cost_per_token":null,"output_cost_per_token":0.000013,
                       "token_cost_by_service_tier":{"ultrafast":{
                         "input_cost_per_token":0.0000156,"output_cost_per_token":0.000078}}}},
                    {"id":"claude-sonnet-5-5","endpoint":"/chat/completions",
-                    "pricing":{"input_cost_per_token":0.0000022,"output_cost_per_token":0.000011}}
+                    "pricing":{"input_cost_per_token":0.0000022,"output_cost_per_token":0.000011,
+                      "cached_input_cost_per_token":0.00000022}}
                 ]}"#,
             )
             .expect(2)
@@ -841,6 +872,32 @@ mod tests {
         assert_eq!(key, "gpt-6-1-sol@ultrafast");
         assert_eq!(pricing[&key].output_cost_per_token, 0.000078);
         assert_eq!(pricing["gpt-6-1-sol"].output_cost_per_token, 0.000013);
+        // A published cache discount rides on the base rate only; a tier's
+        // cache hits bill at the tier's input rate, as the hub charges them.
+        assert_eq!(pricing["gpt-6-1-sol"].cached_input_cost_per_token, None);
+        assert_eq!(pricing[&key].cached_input_cost_per_token, None);
+        assert_eq!(
+            pricing["claude-sonnet-5-5"].cached_input_cost_per_token,
+            Some(0.00000022)
+        );
+    }
+
+    #[test]
+    fn cache_hits_bill_at_the_cached_rate_or_else_the_input_rate() {
+        let mut rate = ModelPricing {
+            input_cost_per_token: 0.001,
+            output_cost_per_token: 0.01,
+            cached_input_cost_per_token: None,
+        };
+        // No published discount: a cache hit costs what any prompt token does.
+        assert!((rate.cost_with_cache(1_000, 900, 10) - 1.1).abs() < 1e-9);
+        assert_eq!(rate.cost_with_cache(1_000, 0, 10), rate.cost_of(1_000, 10));
+
+        rate.cached_input_cost_per_token = Some(0.0001);
+        // 100 uncached × 0.001 + 900 cached × 0.0001 + 10 out × 0.01.
+        assert!((rate.cost_with_cache(1_000, 900, 10) - 0.29).abs() < 1e-9);
+        // An over-reported hit count is clamped to the prompt.
+        assert!((rate.cost_with_cache(1_000, 5_000, 0) - 0.1).abs() < 1e-9);
     }
 
     #[tokio::test]
