@@ -187,6 +187,9 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    // Tag every outbound request (model calls, media, downloads) as the CLI's.
+    harness_http::set_client_name("cli");
+
     // Load ~/.oxen-harness/.env into the environment (without overriding vars
     // already set) so saved API keys are available before anything reads them.
     harness_config::secrets::load();

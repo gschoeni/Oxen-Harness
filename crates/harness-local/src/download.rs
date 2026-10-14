@@ -3,7 +3,7 @@
 //!
 //! Both need the same thing: send a GET, sanity-check the status, and stream the
 //! body to a file while reporting byte progress. They differ only at the edges —
-//! auth, a User-Agent, whether a gated 401/403 gets a friendlier message, and
+//! auth, whether a gated 401/403 gets a friendlier message, and
 //! how they surface progress — so those are the [`FetchOpts`] and the progress
 //! callback; the request-and-stream core lives here once.
 
@@ -20,8 +20,6 @@ use crate::LocalError;
 pub struct FetchOpts<'a> {
     /// Bearer token to authorize the request (blank/whitespace is ignored).
     pub token: Option<&'a str>,
-    /// `User-Agent` header to send, if any.
-    pub user_agent: Option<&'a str>,
     /// When set, a `401`/`403` response returns this message instead of the
     /// generic HTTP error — used to hint that a model is gated/private.
     pub gated_message: Option<&'a str>,
@@ -47,9 +45,6 @@ where
     F: FnMut(u64, Option<u64>),
 {
     let mut req = client.get(url);
-    if let Some(ua) = opts.user_agent {
-        req = req.header("User-Agent", ua);
-    }
     if let Some(token) = opts.token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token.trim());
     }

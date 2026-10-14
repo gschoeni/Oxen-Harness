@@ -42,7 +42,7 @@ pub struct NewRepo<'a> {
 impl HubRepos {
     /// `api_root` is the hub's `/api` root (see
     /// [`crate::queue::api_root_from_base`]). The client must not send a
-    /// User-Agent containing "oxen" (see [`crate::USER_AGENT`]).
+    /// User-Agent containing "oxen" (see [`harness_http::user_agent`]).
     pub fn new(
         http: reqwest::Client,
         api_root: impl Into<String>,
@@ -59,10 +59,7 @@ impl HubRepos {
     /// `/api` root, with a client whose User-Agent the hub won't mistake for
     /// the Oxen CLI.
     pub fn connect(base_url: &str, api_key: impl Into<String>) -> Self {
-        let http = reqwest::Client::builder()
-            .user_agent(crate::USER_AGENT)
-            .build()
-            .unwrap_or_default();
+        let http = harness_http::client();
         Self::new(http, crate::queue::api_root_from_base(base_url), api_key)
     }
 

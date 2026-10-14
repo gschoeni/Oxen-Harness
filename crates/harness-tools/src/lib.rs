@@ -528,7 +528,7 @@ impl CustomTool {
     fn new(spec: CustomToolSpec) -> Self {
         Self {
             spec,
-            client: reqwest::Client::new(),
+            client: harness_http::client(),
         }
     }
 }

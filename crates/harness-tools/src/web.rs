@@ -52,7 +52,7 @@ impl WebSearchTool {
     /// Build the tool, resolving the API key from the environment.
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: harness_http::client(),
             endpoint: BRAVE_ENDPOINT.to_string(),
             api_key: brave_api_key(),
         }
@@ -64,7 +64,7 @@ impl WebSearchTool {
     /// after construction (env set at runtime) is picked up on the next call.
     pub fn with_key(api_key: Option<String>) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: harness_http::client(),
             endpoint: BRAVE_ENDPOINT.to_string(),
             api_key: api_key.filter(|k| !k.trim().is_empty()),
         }

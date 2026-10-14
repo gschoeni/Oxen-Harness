@@ -1,7 +1,12 @@
-//! Backoff for every HTTP call the harness makes: the model endpoint, the
-//! hub's media queue and repos, Brave search, Hugging Face, arbitrary
-//! `web_fetch` pages. Deliberately tiny — `reqwest` plus two parsers — so
-//! the tool crates can share it without linking the whole LLM client.
+//! Backoff and identity for every HTTP call the harness makes: the model
+//! endpoint, the hub's media queue and repos, Brave search, Hugging Face,
+//! arbitrary `web_fetch` pages. Deliberately tiny — `reqwest` plus two
+//! parsers — so the tool crates can share it without linking the whole LLM
+//! client.
+//!
+//! Build clients with [`client`] or [`client_builder`] so every request
+//! carries the harness [`user_agent`] (see the `identity` module for why it
+//! must never contain "oxen").
 //!
 //! Three things a "just double the wait" loop gets wrong, all handled here:
 //!
@@ -28,6 +33,9 @@
 use std::time::{Duration, SystemTime};
 
 use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+
+mod identity;
+pub use identity::{client, client_builder, set_client_name, user_agent};
 
 /// Why a failed attempt is worth another try.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

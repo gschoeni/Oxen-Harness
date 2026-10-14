@@ -182,7 +182,7 @@ async fn download_to_file<F>(url: &str, dest: &Path, on_event: &mut F) -> Result
 where
     F: FnMut(RuntimeInstallEvent),
 {
-    let client = reqwest::Client::new();
+    let client = harness_http::client();
     crate::download::fetch_to_file(
         &client,
         url,

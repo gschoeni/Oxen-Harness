@@ -207,7 +207,7 @@ impl ModelStore {
             self.write_meta(model)?;
             return Ok(final_path);
         }
-        let client = reqwest::Client::new();
+        let client = harness_http::client();
         stream_to_file(
             &client,
             &model.download_url(),
@@ -297,7 +297,6 @@ where
         &part_path,
         crate::download::FetchOpts {
             token,
-            user_agent: Some("oxen-harness"),
             gated_message: Some("access denied — this model may be gated or private; add a token"),
             cancel,
         },

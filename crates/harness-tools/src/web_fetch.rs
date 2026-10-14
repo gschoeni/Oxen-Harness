@@ -35,9 +35,6 @@ const MAX_FETCH_BYTES: u64 = 10 * 1024 * 1024;
 /// How long a single fetch may take before giving up.
 const TIMEOUT_SECS: u64 = 30;
 
-/// User-Agent sent with every fetch, so servers can identify the caller.
-const USER_AGENT: &str = concat!("OxenHarness-WebFetch/", env!("CARGO_PKG_VERSION"));
-
 /// Fetch a web page and return its readable content as Markdown.
 pub struct WebFetchTool {
     http: reqwest::Client,
@@ -47,8 +44,7 @@ impl WebFetchTool {
     /// Build the tool with a client configured for polite, bounded fetches
     /// (identifying User-Agent, request timeout, transparent redirects).
     pub fn new() -> Self {
-        let http = reqwest::Client::builder()
-            .user_agent(USER_AGENT)
+        let http = harness_http::client_builder()
             .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
             .build()
             // The builder only fails if the TLS backend can't initialize; fall

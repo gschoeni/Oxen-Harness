@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{MediaKind, USER_AGENT};
+use crate::MediaKind;
 
 /// What can go wrong talking to the queue.
 #[derive(Debug, thiserror::Error)]
@@ -132,14 +132,7 @@ impl QueueClient {
     /// Build from the `/api/ai` base URL the rest of the harness uses.
     pub fn new(base_url: &str, api_key: impl Into<String>) -> Self {
         Self {
-            // The hub reads a User-Agent containing "oxen" as the Oxen CLI
-            // and answers 426 when its version isn't current — so this
-            // client must not say "oxen" (a result download returned the
-            // CLI-out-of-date error under the obvious name).
-            http: reqwest::Client::builder()
-                .user_agent(USER_AGENT)
-                .build()
-                .unwrap_or_default(),
+            http: harness_http::client(),
             api_root: api_root_from_base(base_url),
             api_key: api_key.into(),
         }

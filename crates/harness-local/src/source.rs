@@ -246,10 +246,10 @@ pub async fn hf_list_quants(
     revision: &str,
     token: Option<&str>,
 ) -> Result<Vec<ModelRef>, LocalError> {
-    let client = reqwest::Client::new();
+    let client = harness_http::client();
     let url = format!("https://huggingface.co/api/models/{repo}/tree/{revision}?recursive=true");
     let resp = harness_http::send_with_retry(
-        hf_request(&client, &url, token).header("User-Agent", "oxen-harness"),
+        hf_request(&client, &url, token),
         &harness_http::Backoff::brief(),
         true,
     )
@@ -378,13 +378,13 @@ pub fn id_from_file(file: &str) -> String {
 
 /// Search the Hugging Face hub for GGUF repos matching `query`.
 pub async fn hf_search(query: &str, token: Option<&str>) -> Result<Vec<HfHit>, LocalError> {
-    let client = reqwest::Client::new();
+    let client = harness_http::client();
     let q = urlencode(query);
     let url = format!(
         "https://huggingface.co/api/models?search={q}&filter=gguf&sort=downloads&direction=-1&limit=25"
     );
     let resp = harness_http::send_with_retry(
-        hf_request(&client, &url, token).header("User-Agent", "oxen-harness"),
+        hf_request(&client, &url, token),
         &harness_http::Backoff::brief(),
         true,
     )
@@ -572,10 +572,8 @@ async fn fetch_oxen_models(
     base_url: &str,
     token: Option<&str>,
 ) -> Result<Vec<OxenModelEntry>, LocalError> {
-    let client = reqwest::Client::new();
-    let mut req = client
-        .get(format!("{}/models", base_url.trim_end_matches('/')))
-        .header("User-Agent", "oxen-harness");
+    let client = harness_http::client();
+    let mut req = client.get(format!("{}/models", base_url.trim_end_matches('/')));
     if let Some(t) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(t.trim());
     }

@@ -32,7 +32,7 @@ impl OxenClient {
         model: impl Into<String>,
     ) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: harness_http::client(),
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),
@@ -275,6 +275,8 @@ mod tests {
         let mock = server
             .mock("POST", "/chat/completions")
             .match_header("authorization", "Bearer sk-test")
+            // The hub tells harness traffic apart by this header.
+            .match_header("user-agent", harness_http::user_agent().as_str())
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(

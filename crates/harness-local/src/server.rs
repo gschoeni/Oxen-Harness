@@ -377,7 +377,7 @@ impl LocalServer {
         on_status: &mut impl FnMut(LoadPhase),
     ) -> Result<(), LocalError> {
         let health = format!("http://127.0.0.1:{}/health", self.port);
-        let client = reqwest::Client::new();
+        let client = harness_http::client();
         let deadline = tokio::time::Instant::now() + HEALTH_TIMEOUT;
         let mut announced_loading = false;
 

@@ -126,7 +126,7 @@ pub async fn install_runtime(
         cancel: Some(cancel),
         ..Default::default()
     };
-    harness_local::fetch_to_file(&reqwest::Client::new(), &url, &zip, opts, on_progress)
+    harness_local::fetch_to_file(&harness_http::client(), &url, &zip, opts, on_progress)
         .await
         .map_err(|e| LocalError::Runtime(format!("downloading {url}: {e}")))?;
     let dest = root.join(format!("sd-{PINNED_VERSION}"));
@@ -228,7 +228,7 @@ impl Default for SdCppEngine {
 impl SdCppEngine {
     pub fn new(idle: Duration) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: harness_http::client(),
             server: Arc::new(Mutex::new(None)),
             jobs: Arc::new(AtomicU64::new(0)),
             idle,

@@ -73,11 +73,6 @@ pub const GENERATE_VIDEO_TOOL: &str = "generate_video";
 pub const MEDIA_MODELS_TOOL: &str = "media_models";
 pub const MEDIA_STATUS_TOOL: &str = "media_status";
 
-/// The User-Agent every hub request sends. Deliberately free of the word
-/// "oxen": the hub treats such agents as the Oxen CLI and gates them on
-/// its version (HTTP 426), which broke result downloads.
-pub const USER_AGENT: &str = "harness-media/0.1";
-
 /// The stable leading sentence of a generation tool's result when no API key
 /// is configured, so both front ends can offer their "connect your account"
 /// prompt (the same pattern as `harness_tools::web::WEB_SEARCH_NO_KEY`).

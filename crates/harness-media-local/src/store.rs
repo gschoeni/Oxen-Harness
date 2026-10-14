@@ -77,7 +77,7 @@ impl WeightStore {
         cancel: &CancellationToken,
         mut on_progress: impl FnMut(PullProgress),
     ) -> Result<(), LocalError> {
-        let http = reqwest::Client::new();
+        let http = harness_http::client();
         for file in spec.files.values().filter(|f| !self.present(f)) {
             let dest = self.path(file);
             if let Some(dir) = dest.parent() {
@@ -94,7 +94,6 @@ impl WeightStore {
                 token: token.as_deref(),
                 gated_message: Some("Hugging Face refused the download (gated or private repo)"),
                 cancel: Some(cancel),
-                ..Default::default()
             };
             let fetched = harness_local::fetch_to_file(&http, &url, &part, opts, |done, _| {
                 on_progress(PullProgress {

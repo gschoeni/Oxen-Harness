@@ -31,7 +31,7 @@ use crate::queue::{deadline_for, QueueClient, QueueError};
 use crate::refs::{self, MediaRefs, RefKind, ResolvedRef};
 use crate::{
     MediaApi, MediaKind, MediaPrefs, MediaSink, GENERATE_IMAGE_TOOL, GENERATE_VIDEO_TOOL,
-    MEDIA_MODELS_TOOL, MEDIA_NO_KEY, MEDIA_STATUS_TOOL, USER_AGENT,
+    MEDIA_MODELS_TOOL, MEDIA_NO_KEY, MEDIA_STATUS_TOOL,
 };
 
 /// At most this many outputs per call (the hub's `num_generations` cap).
@@ -84,14 +84,7 @@ impl MediaContext {
             hub_catalog: tokio::sync::OnceCell::new(),
             feed: std::sync::OnceLock::new(),
             uploader: std::sync::OnceLock::new(),
-            // The hub reads a User-Agent containing "oxen" as the Oxen CLI
-            // and answers 426 when its version isn't current — so this
-            // client must not say "oxen" (a result download returned the
-            // CLI-out-of-date error under the obvious name).
-            http: reqwest::Client::builder()
-                .user_agent(USER_AGENT)
-                .build()
-                .unwrap_or_default(),
+            http: harness_http::client(),
         }
     }
 

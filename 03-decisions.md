@@ -1601,3 +1601,21 @@ get) unless the server already serves that model, and `ready_agent` loads it
 on the chat's first send. Picking a local model in the picker, and "Use model"
 in Settings, are dormant too. One-shot side tasks the user starts (theme
 generation, the study game) use `ready_default_client`, which does load.
+
+## Every request says it is the harness, never "oxen" (2026-10-14)
+
+So Oxen can track harness traffic, every outbound client comes from
+`harness_http::client()`/`client_builder()` and sends
+`User-Agent: ox-harness/<version> (<cli|desktop|server>; <os>; <arch>)`. Each
+front end names itself once at boot (`harness_http::set_client_name`). This
+replaces the ad-hoc agents (`harness-media/0.1`, `oxen-harness`,
+`OxenHarness-WebFetch/…`) and the many bare `reqwest::Client::new()` calls
+that sent none.
+
+**The agent must not contain "oxen", in any case.** The hub's
+`IsFromOxenCli` plug matches that substring on every `/api` route and then
+treats the request as the Oxen CLI: different auth handling and a version gate
+that answers 426 (this broke media result downloads once, and the old
+`oxen-harness` agent on `/models` was already being read as the CLI). A test in
+`harness-http` pins this. Rename the product token only to something that
+still avoids the word.

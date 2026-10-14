@@ -60,6 +60,7 @@ fn main_webview_keeps(url: &tauri::Url) -> bool {
 /// Entry point shared by the binary and mobile targets.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> Result<(), tauri::Error> {
+    harness_http::set_client_name("desktop");
     // Load ~/.oxen-harness/.env so saved API keys reach the environment before
     // any agent or tool reads them, then migrate any legacy plaintext keys out
     // of connection.json into the .env.

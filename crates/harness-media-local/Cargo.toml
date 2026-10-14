@@ -10,6 +10,7 @@ description = "On-device image generation for harness-media: a model catalog, a 
 
 [dependencies]
 harness-config = { workspace = true }
+harness-http = { workspace = true }
 harness-local = { workspace = true }
 harness-media = { workspace = true }
 serde = { workspace = true }

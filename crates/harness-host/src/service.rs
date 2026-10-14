@@ -1344,7 +1344,7 @@ impl SessionService {
             .as_ref()
             .map(|a| a.base_url.clone())
             .unwrap_or_else(|| harness_core::DEFAULT_BASE_URL.to_string());
-        let http = reqwest::Client::new();
+        let http = harness_http::client();
         let cache = harness_media::catalog_cache_path(&base);
         let key = api.as_ref().map(|a| a.api_key.as_str());
         let hub = if refresh {

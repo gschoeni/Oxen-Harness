@@ -46,6 +46,7 @@ harness-host = { path = "../../crates/harness-host" }
 harness-compress = { path = "../../crates/harness-compress" }
 harness-config = { path = "../../crates/harness-config" }
 harness-crash = { path = "../../crates/harness-crash" }
+harness-http = { path = "../../crates/harness-http" }
 harness-runtime = { path = "../../crates/harness-runtime" }
 harness-llm = { path = "../../crates/harness-llm" }
 harness-tools = { path = "../../crates/harness-tools" }

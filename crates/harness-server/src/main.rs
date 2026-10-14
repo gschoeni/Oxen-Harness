@@ -69,6 +69,7 @@ fn random_token() -> String {
 
 #[tokio::main]
 async fn main() {
+    harness_http::set_client_name("server");
     let args = match parse_args() {
         Ok(args) => args,
         Err(e) => {
