@@ -3038,6 +3038,7 @@ dependencies = [
  "harness-host",
  "harness-llm",
  "harness-local",
+ "harness-media",
  "harness-media-local",
  "harness-permissions",
  "harness-preview",

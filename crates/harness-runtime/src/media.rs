@@ -59,6 +59,43 @@ pub fn api_for(base_url: &str) -> Option<harness_media::MediaApi> {
     })
 }
 
+/// What a chat's session tree spent on media generation, per model, read
+/// from the manifest of every workspace the tree ran in. Each manifest is
+/// searched for every session in the tree, since a lane's generations may
+/// land in its parent's project rather than its own worktree.
+pub fn tree_spend<'a>(
+    members: impl IntoIterator<Item = (&'a str, &'a std::path::Path)>,
+) -> Vec<harness_media::MediaSpend> {
+    let mut sessions: Vec<&str> = Vec::new();
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    for (id, workspace) in members {
+        sessions.push(id);
+        if workspace.as_os_str().is_empty() {
+            continue;
+        }
+        let root = workspace
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.to_path_buf());
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    let dir = load().output_dir_rel();
+    let mut out: Vec<harness_media::MediaSpend> = Vec::new();
+    for root in roots {
+        for spend in harness_media::MediaLibrary::new(root, dir.clone()).spend(&sessions) {
+            match out.iter_mut().find(|s| s.model == spend.model) {
+                Some(row) => {
+                    row.outputs += spend.outputs;
+                    row.cost_usd += spend.cost_usd;
+                }
+                None => out.push(spend),
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,6 +140,47 @@ mod tests {
                 prefs_for(tmp.path()).hub_target(),
                 Some(("ox".into(), "my-app".into()))
             );
+        });
+    }
+
+    #[test]
+    fn tree_spend_reads_every_workspace_for_every_session_in_the_tree() {
+        with_temp_home(|| {
+            let project = tempfile::tempdir().unwrap();
+            let worktree = tempfile::tempdir().unwrap();
+            let row = |id: &str, session: &str, model: &str, cost: f64| {
+                format!(
+                    r#"{{"id":"{id}","session":"{session}","kind":"image","model":"{model}","prompt":"p","status":"succeeded","created_at":1,"cost_usd":{cost}}}"#
+                )
+            };
+            let write = |root: &std::path::Path, rows: &[String]| {
+                let dir = root.join(load().output_dir_rel());
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("manifest.jsonl"), rows.join("\n")).unwrap();
+            };
+            // The lane ran in a worktree but one of its generations landed in
+            // the parent's project; a stranger's row is not this chat's bill.
+            write(
+                project.path(),
+                &[
+                    row("a", "root", "img", 0.25),
+                    row("b", "lane", "img", 0.25),
+                    row("c", "stranger", "img", 9.0),
+                ],
+            );
+            write(worktree.path(), &[row("d", "lane", "vid", 1.0)]);
+
+            let spend = tree_spend([
+                ("root", project.path()),
+                ("lane", worktree.path()),
+                // A second spelling of the project is read once, not twice.
+                ("leaf", &project.path().join(".")),
+            ]);
+            let find = |m: &str| spend.iter().find(|s| s.model == m).unwrap();
+            assert_eq!(spend.len(), 2);
+            assert_eq!(find("img").outputs, 2);
+            assert!((find("img").cost_usd - 0.5).abs() < 1e-9);
+            assert!((find("vid").cost_usd - 1.0).abs() < 1e-9);
         });
     }
 }

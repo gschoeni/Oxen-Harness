@@ -1,5 +1,6 @@
 //! What a session has spent so far — its own model calls plus every subagent
-//! lane beneath it — priced per model from the rate cache.
+//! lane beneath it — priced per model from the rate cache, plus what the tree
+//! spent generating images and videos (each project's media manifest).
 //!
 //! The context trailer's second line reads from here. The figures come from
 //! the usage ledger (`usage_events`) rather than the root agent's in-memory
@@ -62,7 +63,12 @@ impl Ledger {
         if in_flight.total() > 0 {
             rows.push(in_flight.as_row(model));
         }
-        Ok(price_rows(&rows))
+        let tree = self.store.session_tree(&self.session)?;
+        let media = harness_runtime::media::tree_spend(
+            tree.iter()
+                .map(|m| (m.id.as_str(), std::path::Path::new(&m.workspace))),
+        );
+        Ok(price_rows(&rows).with_media(media.iter().map(|m| m.cost_usd).sum()))
     }
 
     /// Leave a read failure where a developer will find it — once.
@@ -137,6 +143,27 @@ impl Spend {
     /// to show when there is no ledger to read.
     pub(crate) fn live(model: &str, tokens: Tokens) -> Self {
         price_rows(&[tokens.as_row(model)])
+    }
+
+    /// Add what the tree spent generating images and videos. Those prices
+    /// come with each output, so they stand even where no token rate does.
+    fn with_media(mut self, usd: f64) -> Self {
+        if usd <= 0.0 {
+            return self;
+        }
+        self.price = match self.price {
+            Price::Pending => Price::Pending,
+            Price::Priced(cost) => Price::Priced(cost + usd),
+            Price::Partial {
+                usd: cost,
+                unpriced,
+            } => Price::Partial {
+                usd: cost + usd,
+                unpriced,
+            },
+            Price::Unpriced(unpriced) => Price::Partial { usd, unpriced },
+        };
+        self
     }
 }
 
@@ -316,6 +343,27 @@ mod tests {
         assert!((usd - 0.11).abs() < 1e-9, "{usd}");
         assert_eq!(unpriced, &["mystery".to_string()]);
         assert_eq!(spend.price.label().as_deref(), Some("$0.11+"));
+    }
+
+    #[test]
+    fn media_generations_add_to_the_tree_spend() {
+        let priced = price_rows_with(&[row("small", 100_000, 5_000)], true, rates);
+        assert_eq!(
+            priced.clone().with_media(3.0).price.label().as_deref(),
+            Some("$3.11")
+        );
+
+        // Generations carry their own price, so an otherwise unpriced tree
+        // shows them as its floor.
+        let unpriced = price_rows_with(&[row("mystery", 1_000, 100)], true, rates);
+        assert_eq!(
+            unpriced.with_media(0.5).price.label().as_deref(),
+            Some("$0.50+")
+        );
+
+        let pending = price_rows_with(&[row("small", 1, 1)], false, rates);
+        assert_eq!(pending.with_media(1.0).price, Price::Pending);
+        assert_eq!(priced.clone().with_media(0.0), priced);
     }
 
     #[test]

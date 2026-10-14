@@ -294,6 +294,16 @@ pub struct MediaTick {
     pub session: String,
 }
 
+/// One media model's share of a chat's bill (see [`MediaLibrary::spend`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaSpend {
+    pub model: String,
+    pub kind: MediaKind,
+    /// Succeeded outputs that carried a price.
+    pub outputs: u32,
+    pub cost_usd: f64,
+}
+
 /// The library for one project root.
 pub struct MediaLibrary {
     root: PathBuf,
@@ -474,6 +484,32 @@ impl MediaLibrary {
             .filter(|i| i.session == session)
             .take(limit)
             .collect()
+    }
+
+    /// What `sessions` spent generating media here, per model: the catalog
+    /// estimate of every output that succeeded. Failed and cancelled jobs
+    /// aren't billed, and an output with no estimate (a local engine) is free.
+    pub fn spend(&self, sessions: &[&str]) -> Vec<MediaSpend> {
+        let mut out: Vec<MediaSpend> = Vec::new();
+        for item in self.items() {
+            if item.status != MediaStatus::Succeeded || !sessions.contains(&item.session.as_str()) {
+                continue;
+            }
+            let Some(cost) = item.cost_usd else { continue };
+            match out.iter_mut().find(|s| s.model == item.model) {
+                Some(row) => {
+                    row.outputs += 1;
+                    row.cost_usd += cost;
+                }
+                None => out.push(MediaSpend {
+                    model: item.model,
+                    kind: item.kind,
+                    outputs: 1,
+                    cost_usd: cost,
+                }),
+            }
+        }
+        out
     }
 
     /// Copy a reference file into `refs/` (content-addressed, so reusing a
@@ -683,6 +719,39 @@ mod tests {
         let mine = lib.items();
         let ghost = mine.iter().find(|i| i.id == "ghost").unwrap();
         assert_eq!(ghost.status, MediaStatus::Queued);
+    }
+
+    #[test]
+    fn spend_sums_billed_outputs_of_the_given_sessions_per_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = MediaLibrary::new(dir.path(), "generations");
+        // Queued then succeeded: the folded row counts once.
+        lib.record(item("a", MediaStatus::Queued, 1)).unwrap();
+        lib.record(item("a", MediaStatus::Succeeded, 1)).unwrap();
+        lib.record(item("b", MediaStatus::Succeeded, 2)).unwrap();
+        let mut video = item("v", MediaStatus::Succeeded, 3);
+        video.session = "lane".into();
+        video.kind = MediaKind::Video;
+        video.model = "vid".into();
+        video.cost_usd = Some(0.5);
+        lib.record(video).unwrap();
+        // Not billed: failed, a local (unpriced) output, another chat.
+        lib.record(item("f", MediaStatus::Failed, 4)).unwrap();
+        let mut local = item("l", MediaStatus::Succeeded, 5);
+        local.cost_usd = None;
+        lib.record(local).unwrap();
+        let mut other = item("o", MediaStatus::Succeeded, 6);
+        other.session = "elsewhere".into();
+        lib.record(other).unwrap();
+
+        let spend = MediaLibrary::new(dir.path(), "generations").spend(&["s1", "lane"]);
+        let find = |m: &str| spend.iter().find(|s| s.model == m).unwrap();
+        assert_eq!(spend.len(), 2);
+        assert_eq!(find("m").outputs, 2);
+        assert!((find("m").cost_usd - 0.02).abs() < 1e-9);
+        assert_eq!(find("vid").kind, MediaKind::Video);
+        assert!((find("vid").cost_usd - 0.5).abs() < 1e-9);
+        assert!(lib.spend(&["nobody"]).is_empty());
     }
 
     #[test]

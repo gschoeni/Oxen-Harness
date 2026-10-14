@@ -1203,10 +1203,35 @@ export const useStore = create<AppState>((rawSet, get) => {
       };
     });
     get().refreshHistory();
+    loadTreeUsage(id);
     // Opening the chat is looking at it: its "finished while you were away"
     // flag comes off — durably, so it stays off across restarts — and the
     // verdicts repaint once the mark has landed.
     void markSeenThenRefresh(id);
+  }
+
+  // Read a chat's bill (tokens across its lanes plus media generations) from
+  // the ledger. Live usage events re-read it through `refreshTreeUsage`;
+  // opening a chat reads it straight away, so a chat reopened after a restart
+  // shows what it cost before it next speaks.
+  function loadTreeUsage(session: string) {
+    sessionTreeUsage(session)
+      .then((usage) => {
+        if (!usage) return;
+        set((s) => ({
+          treeUsage: {
+            ...s.treeUsage,
+            [session]: {
+              tokens: usage.prompt_tokens + usage.completion_tokens,
+              cost: usage.total_cost_usd,
+              unpriced: usage.has_unpriced_usage,
+            },
+          },
+        }));
+      })
+      .catch(() => {
+        /* keep the previous figure on a transient error */
+      });
   }
 
   // The round-trips a running turn is parked on, as the backend replays them:
@@ -2415,23 +2440,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         session,
         window.setTimeout(() => {
           treeUsageTimers.delete(session);
-          sessionTreeUsage(session)
-            .then((usage) => {
-              if (!usage) return;
-              set((s) => ({
-                treeUsage: {
-                  ...s.treeUsage,
-                  [session]: {
-                    tokens: usage.prompt_tokens + usage.completion_tokens,
-                    cost: usage.total_cost_usd,
-                    unpriced: usage.has_unpriced_usage,
-                  },
-                },
-              }));
-            })
-            .catch(() => {
-              /* keep the previous figure on a transient error */
-            });
+          loadTreeUsage(session);
         }, TREE_USAGE_DEBOUNCE_MS),
       );
     },

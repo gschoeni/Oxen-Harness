@@ -753,7 +753,9 @@ export interface PreviewPrefs {
  *  the model id, its prompt/completion token totals, and the dollars spent. */
 export interface ModelUsageRow {
   model: string;
-  source: "oxen_cloud" | "unpriced";
+  /** `media` rows are a chat's image/video generations: no tokens, their
+   *  catalog estimate as the cost. */
+  source: "oxen_cloud" | "unpriced" | "media";
   prompt_tokens: number;
   completion_tokens: number;
   cost_usd: number | null;

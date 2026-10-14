@@ -429,6 +429,13 @@ pub struct SessionUsage {
     pub completion_tokens: i64,
 }
 
+/// One session of a chat's tree (see `HistoryStore::session_tree`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeMember {
+    pub id: String,
+    pub workspace: String,
+}
+
 /// One subagent lane of a session (see `HistoryStore::lanes_of`): its own
 /// session id and, once it has finished, the record its parent read.
 #[derive(Debug, Clone, Serialize)]
@@ -1440,6 +1447,31 @@ impl HistoryStore {
             },
         )
         .map_err(HistoryError::from)
+    }
+
+    /// A session and every lane beneath it (at any depth), each with the
+    /// workspace it ran in — where to look for what the tree spent outside
+    /// the token ledger (media generations live in each project's manifest).
+    /// Empty when the session doesn't exist.
+    pub fn session_tree(&self, session_id: &str) -> Result<Vec<TreeMember>, HistoryError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "WITH RECURSIVE tree(id) AS (
+                 SELECT id FROM sessions WHERE id = ?1
+                 UNION ALL
+                 SELECT s.id FROM sessions s JOIN tree ON s.parent_session = tree.id
+             )
+             SELECT s.id, s.workspace FROM sessions s JOIN tree ON s.id = tree.id
+             ORDER BY s.created_at ASC, s.id ASC",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            Ok(TreeMember {
+                id: row.get(0)?,
+                workspace: row.get(1)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(HistoryError::from)
     }
 
     /// A session's tree spend by model — its own calls plus every lane's,
@@ -2733,6 +2765,42 @@ mod tests {
         assert_eq!(find("m").prompt_tokens, 111);
         assert_eq!(find("tiny").prompt_tokens, 40);
         assert_eq!(by_model.len(), 2);
+    }
+
+    #[test]
+    fn a_sessions_tree_lists_every_lane_with_its_workspace() {
+        let store = store();
+        let root = store
+            .create_session(&SessionMeta {
+                workspace: "/proj".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let lane = store
+            .create_session(&SessionMeta {
+                workspace: "/proj/worktree".into(),
+                parent_session: root.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+        let leaf = store
+            .create_session(&SessionMeta {
+                workspace: "/proj".into(),
+                parent_session: lane.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.create_session(&SessionMeta::default()).unwrap();
+
+        let tree = store.session_tree(&root).unwrap();
+        let ids: Vec<&str> = tree.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids.len(), 3);
+        for id in [&root, &lane, &leaf] {
+            assert!(ids.contains(&id.as_str()), "{id} missing from {ids:?}");
+        }
+        let lane_member = tree.iter().find(|m| m.id == lane).unwrap();
+        assert_eq!(lane_member.workspace, "/proj/worktree");
+        assert!(store.session_tree("no-such-session").unwrap().is_empty());
     }
 
     #[test]

@@ -302,7 +302,43 @@ pub(crate) async fn session_tree_usage(session: String) -> Result<UsageBreakdown
     let usage = store
         .usage_for_tree_by_model(&session)
         .map_err(|e| e.to_string())?;
-    Ok(price_usage(usage).await)
+    let tree = store.session_tree(&session).map_err(|e| e.to_string())?;
+    let media = harness_runtime::media::tree_spend(
+        tree.iter()
+            .map(|m| (m.id.as_str(), std::path::Path::new(&m.workspace))),
+    );
+    Ok(with_media_spend(price_usage(usage).await, media))
+}
+
+/// Add a chat's media generations to its token bill: one row per media
+/// model (no tokens, the catalog's estimate as its cost). Generation prices
+/// come with each output, so they count even when the token catalog is out
+/// of reach.
+fn with_media_spend(
+    mut breakdown: UsageBreakdown,
+    media: Vec<harness_media::MediaSpend>,
+) -> UsageBreakdown {
+    if media.is_empty() {
+        return breakdown;
+    }
+    let media_total: f64 = media.iter().map(|m| m.cost_usd).sum();
+    breakdown.total_cost_usd = Some(breakdown.total_cost_usd.unwrap_or(0.0) + media_total);
+    breakdown
+        .rows
+        .extend(media.into_iter().map(|m| ModelUsageRow {
+            model: m.model,
+            source: "media".into(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cost_usd: Some(m.cost_usd),
+        }));
+    breakdown.rows.sort_by(|a, b| {
+        b.cost_usd
+            .partial_cmp(&a.cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.model.cmp(&b.model))
+    });
+    breakdown
 }
 
 #[tauri::command]
@@ -453,6 +489,49 @@ mod usage_tests {
             .rows
             .iter()
             .any(|row| row.model == "missing" && row.cost_usd.is_none()));
+    }
+
+    fn media(model: &str, cost_usd: f64) -> harness_media::MediaSpend {
+        harness_media::MediaSpend {
+            model: model.into(),
+            kind: harness_media::MediaKind::Video,
+            outputs: 1,
+            cost_usd,
+        }
+    }
+
+    #[test]
+    fn media_generations_count_toward_a_chats_bill() {
+        let tokens = price_usage_with_catalog(
+            vec![ModelUsage {
+                model: "unlisted".into(),
+                source: "oxen_cloud".into(),
+                prompt_tokens: 10,
+                completion_tokens: 5,
+            }],
+            None,
+        );
+        assert_eq!(tokens.total_cost_usd, None);
+
+        // Even with no token rates, the generations' own prices show.
+        let report = with_media_spend(tokens, vec![media("vid", 3.0), media("img", 0.25)]);
+        assert_eq!(report.total_cost_usd, Some(3.25));
+        assert!(report.has_unpriced_usage);
+        assert_eq!(report.prompt_tokens, 10);
+        assert_eq!(report.rows[0].model, "vid");
+        assert_eq!(report.rows[0].source, "media");
+
+        let report = with_media_spend(
+            UsageBreakdown {
+                rows: vec![],
+                total_cost_usd: Some(1.0),
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                has_unpriced_usage: false,
+            },
+            vec![media("img", 0.5)],
+        );
+        assert_eq!(report.total_cost_usd, Some(1.5));
     }
 }
 

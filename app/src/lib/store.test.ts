@@ -153,6 +153,26 @@ describe("store: sessions", () => {
     expect(useStore.getState().threads["abc"]).toHaveLength(2);
   });
 
+  it("reopening a chat loads its bill from the ledger before it next speaks", async () => {
+    ipc.resumeSession.mockResolvedValueOnce({
+      info: { ...ipc.sampleSession, session_id: "old" },
+      messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }],
+      running: false,
+    });
+    ipc.sessionTreeUsage.mockResolvedValueOnce({
+      rows: [],
+      total_cost_usd: 4.2,
+      prompt_tokens: 1000,
+      completion_tokens: 50,
+      has_unpriced_usage: false,
+    });
+    await useStore.getState().resume("old");
+    expect(ipc.sessionTreeUsage).toHaveBeenCalledWith("old");
+    await vi.waitFor(() =>
+      expect(useStore.getState().treeUsage.old).toEqual({ tokens: 1050, cost: 4.2, unpriced: false }),
+    );
+  });
+
   it("switching to a chat the backend reports mid-turn keeps its live thread and marks it running", async () => {
     // A background chat that streamed a thread, whose turn this client no
     // longer holds a promise for (it finished a delivery turn out of sight,
