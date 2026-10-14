@@ -332,13 +332,17 @@ fn with_media_spend(
             completion_tokens: 0,
             cost_usd: Some(m.cost_usd),
         }));
-    breakdown.rows.sort_by(|a, b| {
+    sort_most_spent_first(&mut breakdown.rows);
+    breakdown
+}
+
+fn sort_most_spent_first(rows: &mut [ModelUsageRow]) {
+    rows.sort_by(|a, b| {
         b.cost_usd
             .partial_cmp(&a.cost_usd)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.model.cmp(&b.model))
     });
-    breakdown
 }
 
 #[tauri::command]
@@ -436,12 +440,7 @@ fn price_usage_with_catalog(
             cost_usd,
         });
     }
-    rows.sort_by(|a, b| {
-        b.cost_usd
-            .partial_cmp(&a.cost_usd)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.model.cmp(&b.model))
-    });
+    sort_most_spent_first(&mut rows);
     UsageBreakdown {
         rows,
         total_cost_usd: priced_any.then_some(total_cost),
