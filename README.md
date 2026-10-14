@@ -35,13 +35,11 @@ All you need is an [Oxen.ai](https://oxen.ai) API key. Save it once and both
 the CLI and the desktop app will pick it up:
 
 ```bash
-oxen-harness config                            # prompts for the key (masked)
-oxen-harness config --host localhost:3001      # a key for another Oxen server
+oxen-harness config      # prompts for the key (masked)
 ```
 
 That writes the key to `~/.config/oxen/auth_config.toml` (the file `oxen login`
-uses), per host, and points the harness at that host — `hub.oxen.ai` unless you
-say otherwise. A host that already has a key keeps it unless you pass `--force`.
+uses). An existing key is kept unless you pass `--force`.
 
 (`export OXEN_API_KEY=...`, or a line in `~/.oxen-harness/.env`, works too and
 overrides the saved keys for every host. If no key is set, the CLI and desktop
@@ -143,9 +141,8 @@ oxen-harness --base-url http://localhost:3001/api/ai
 ```
 
 Precedence: `--base-url` > `--host` > `OXEN_BASE_URL` > `OXEN_HOST` > default. The
-API key is looked up by the resolved host (e.g. `localhost:3001`), so `OXEN_API_KEY`,
-`oxen-harness config --host localhost:3001`, or an `oxen` CLI login for that host
-works automatically. The desktop app honors
+API key is looked up by the resolved host (e.g. `localhost:3001`), so `OXEN_API_KEY`
+or an `oxen` CLI login for that host works automatically. The desktop app honors
 the same env vars.
 
 ### Web search (Brave)
