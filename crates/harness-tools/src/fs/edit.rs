@@ -60,7 +60,7 @@ pub struct Replacement {
     pub replace_all: bool,
     /// Or anchor by line: first line (1-based, from `read_file`'s numbers) of
     /// the range `new_string` replaces; leave `old_string` empty. An empty
-    /// `new_string` deletes the range.
+    /// `new_string` deletes the range. Omit line fields when anchoring by text.
     pub line_start: Option<usize>,
     /// Last line of that range, inclusive (default: `line_start`).
     pub line_end: Option<usize>,
@@ -72,6 +72,45 @@ impl Replacement {
     /// Whether this hunk is addressed by line number rather than text.
     fn by_line(&self) -> bool {
         self.line_start.is_some() || self.insert_after_line.is_some()
+    }
+
+    /// Settle which anchor the hunk means. Models that fill every field send
+    /// the unused line fields as `0` (`line_start: 0, insert_after_line: 0`
+    /// beside a real `old_string`, or `insert_after_line: 0` beside a real
+    /// `line_start`), and an insertion with `line_start`/`line_end` echoing
+    /// its line. Those are filler, not a second anchor; only two anchors that
+    /// disagree are an error. Pinned by the model-dialects corpus test.
+    fn settle_anchor(mut self) -> Result<Self, String> {
+        let by_text = !self.old_string.is_empty();
+        if self.line_end == Some(0) {
+            self.line_end = None;
+        }
+        if self.insert_after_line == Some(0) && (by_text || self.line_start.is_some_and(|n| n > 0))
+        {
+            self.insert_after_line = None;
+        }
+        if self.line_start == Some(0) && (by_text || self.insert_after_line.is_some()) {
+            self.line_start = None;
+        }
+        if let (Some(after), Some(start)) = (self.insert_after_line, self.line_start) {
+            if start == after && self.line_end.is_none_or(|end| end == after) {
+                self.line_start = None;
+                self.line_end = None;
+            } else {
+                return Err(format!(
+                    "`line_start` {start} replaces lines and `insert_after_line` {after} \
+                     inserts after one; send only the one you mean"
+                ));
+            }
+        }
+        if by_text && self.by_line() {
+            return Err(
+                "anchor a hunk by `old_string` or by line number, not both; \
+                 leave the unused fields out"
+                    .into(),
+            );
+        }
+        Ok(self)
     }
 }
 
@@ -133,7 +172,22 @@ impl EditFileArgs {
             _ => None,
         };
         match (edits.is_empty(), pair) {
-            (false, None) => Ok(edits),
+            (false, None) => {
+                let many = edits.len() > 1;
+                edits
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, edit)| {
+                        edit.settle_anchor().map_err(|msg| {
+                            ToolError::InvalidArguments(if many {
+                                format!("edit {}: {msg}", i + 1)
+                            } else {
+                                msg
+                            })
+                        })
+                    })
+                    .collect()
+            }
             (true, Some(pair)) => Ok(vec![pair]),
             (false, Some(_)) => Err(ToolError::InvalidArguments(
                 "both `edits` and the `old_string`/`new_string` pair carry content — put every \
@@ -322,11 +376,6 @@ fn line_hunk(
     edit: &Replacement,
     label: &dyn Fn(String) -> ToolError,
 ) -> Result<LineHunk, ToolError> {
-    if !edit.old_string.is_empty() {
-        return Err(label(
-            "anchor a hunk by `old_string` or by line number, not both".into(),
-        ));
-    }
     let offsets = line_offsets(original);
     let line_count = offsets.len().saturating_sub(1);
     let ensure_newline = |text: &str| {
@@ -684,6 +733,33 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not both"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn zero_filled_line_fields_apply_as_the_anchor_they_sit_beside() {
+        // Models that fill every field send unused line fields as 0. Before,
+        // two such replacements became two insertions at the top of the file
+        // and were refused as overlapping.
+        let (_dir, ws) = workspace();
+        write(&ws, "f.txt", "a\nb\nc\nd\n").await;
+        let zeros = |extra: serde_json::Value| {
+            let mut edit = serde_json::json!(
+                {"line_start": 0, "line_end": 0, "insert_after_line": 0, "old_string": "", "replace_all": false}
+            );
+            for (k, v) in extra.as_object().unwrap() {
+                edit[k] = v.clone();
+            }
+            edit
+        };
+        EditFileTool::new(ws.clone())
+            .invoke(serde_json::json!({"path": "f.txt", "old_string": "", "new_string": "", "edits": [
+                zeros(serde_json::json!({"line_start": 2, "new_string": "B"})),
+                zeros(serde_json::json!({"old_string": "d", "new_string": "D"})),
+                zeros(serde_json::json!({"insert_after_line": 3, "line_start": 3, "line_end": 3, "new_string": "c2"})),
+            ]}))
+            .await
+            .unwrap();
+        assert_eq!(read_raw(&ws, "f.txt").await, "a\nB\nc\nc2\nD\n");
     }
 
     #[tokio::test]
