@@ -218,6 +218,10 @@ fn reprint_banner(agent: &Agent, ui: &Ui, ctx: &ReplContext<'_>) {
                 spend: crate::commands::usage::total_spend(ctx.store),
                 weather: Some(crate::almanac::weather()),
                 recent: &recent,
+                version: crate::commands::update::banner_value(
+                    ui,
+                    crate::commands::update::known()
+                ),
             },
         )
     );

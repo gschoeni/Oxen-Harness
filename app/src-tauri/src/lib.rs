@@ -264,6 +264,8 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::files::fs_download,
                 commands::files::fs_save_download,
                 commands::files::fs_import_file,
+                commands::update::check_for_update,
+                commands::update::install_update,
                 commands::files::fs_rename,
                 commands::files::fs_duplicate,
                 commands::files::fs_trash,

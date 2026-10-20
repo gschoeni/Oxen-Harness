@@ -2,6 +2,7 @@
 // store reset here touches the same store instance bound to the mocked IPC.
 import { initFeatureFlags, type FeatureFlags } from "../lib/features";
 import { useStore } from "../lib/store";
+import { useUpdate } from "../features/update/update";
 import { resetUiState } from "../lib/uiState";
 import { loadFeatureFlags, resetIpc } from "./ipcMock";
 
@@ -12,6 +13,7 @@ export function resetAll() {
   useStore.getState().flushTokens();
   resetIpc();
   resetUiState();
+  useUpdate.setState({ status: null, checking: false, installing: false, error: null });
   localStorage.clear();
   useStore.setState({
     theme: null,

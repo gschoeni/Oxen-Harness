@@ -7,6 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
+  UpdateStatus,
   ApprovalChoice,
   ApprovalEvent,
   ApprovalRequestEvent,
@@ -801,6 +802,13 @@ export const browserReload = () => invoke<void>("browser_reload");
 /** Open a URL in the system browser; omit it to pop out the page the
  *  link-browser pane is currently showing. */
 export const openExternal = (url?: string) => invoke<void>("open_external", { url });
+
+/** Compare this app with the newest desktop release on GitHub. `force`
+ *  skips the hour-long cache the launch check uses. */
+export const checkForUpdate = (force: boolean) => invoke<UpdateStatus>("check_for_update", { force });
+/** Download, verify, and install the newest release, then relaunch. Only
+ *  settles when it fails: success restarts the app out from under it. */
+export const installUpdate = () => invoke<void>("install_update");
 
 // ---- connection settings ---------------------------------------------------
 

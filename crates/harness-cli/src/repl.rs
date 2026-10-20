@@ -13,6 +13,8 @@ pub enum Command {
     Exit,
     /// Print help.
     Help,
+    /// Check GitHub for a newer CLI release, install it, and restart into it.
+    Update,
     /// Switch models: `/model` opens the interactive picker, `/model <id>`
     /// switches directly (an id not yet in the catalog is saved as a custom
     /// entry, so any model the endpoint serves can be typed in directly).
@@ -317,6 +319,13 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
         completer: ArgCompleter::None,
     },
     SlashSpec {
+        name: "/update",
+        aliases: &["/upgrade", "/version"],
+        description: "show the version; install a newer release and restart",
+        build: |_| Command::Update,
+        completer: ArgCompleter::None,
+    },
+    SlashSpec {
         name: "/help",
         aliases: &["/?"],
         description: "show help",
@@ -400,6 +409,12 @@ mod tests {
             parse_command("fix the failing test"),
             Command::Prompt("fix the failing test".into())
         );
+    }
+
+    #[test]
+    fn update_aliases() {
+        assert_eq!(parse_command("/update"), Command::Update);
+        assert_eq!(parse_command("/version"), Command::Update);
     }
 
     #[test]

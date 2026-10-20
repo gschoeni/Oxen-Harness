@@ -74,6 +74,11 @@ own:
   and has a model write and grade quiz questions from the real source. The
   model call sits behind one `Completer` trait, so the crate depends on no
   agent and tests hand it canned JSON.
+- **`harness-update`** — "is there a newer release, and install it": asks
+  GitHub for the newest `cli-v*`/`app-v*` release, verifies the download
+  against its `SHA256SUMS`, and swaps the CLI binary or the macOS `.app` in
+  place. The CLI's banner/`update`/`/update` and the app's title-bar pill +
+  Settings → Updates both sit on it.
 - **`harness-loop`** / **`harness-review`** / **`harness-runtime`** — the
   goal/verify iteration loop on top of the agent; the configurable code-review
   pipeline (ordered prompt steps — a parallel three-lens find, then verify →

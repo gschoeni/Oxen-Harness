@@ -890,6 +890,7 @@ dependencies = [
  "harness-study",
  "harness-theme",
  "harness-tools",
+ "harness-update",
  "image",
  "png 0.17.16",
  "rustyline",
@@ -898,6 +899,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "tracing",
  "tracing-subscriber",
  "two-face",
  "unicode-width",
@@ -1272,6 +1274,23 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+]
+
+[[package]]
+name = "harness-update"
+version = "0.0.8"
+dependencies = [
+ "flate2",
+ "harness-http",
+ "mockito",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

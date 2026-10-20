@@ -1,0 +1,28 @@
+[package]
+name = "harness-update"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Release checks and self-update for the oxen-harness CLI and desktop app"
+
+[dependencies]
+harness-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+sha2 = "0.10"
+# The release archives are .tar.gz; pure-Rust so it builds everywhere.
+flate2 = "1"
+tar = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+mockito = "1"
+
+[lints]
+workspace = true

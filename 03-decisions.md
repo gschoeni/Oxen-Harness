@@ -1619,3 +1619,29 @@ that answers 426 (this broke media result downloads once, and the old
 `oxen-harness` agent on `/models` was already being read as the CLI). A test in
 `harness-http` pins this. Rename the product token only to something that
 still avoids the word.
+
+## Self-update without the Tauri updater plugin (2026-10-20)
+
+Both front ends update themselves from GitHub releases through one crate,
+`harness-update`: newest published `cli-v*`/`app-v*` tag, compare with the
+running version, download this platform's archive, check it against the
+release's `SHA256SUMS`, swap it in place (CLI binary; macOS `.app` bundle),
+restart. The launch check is cached for an hour (`update-check-*.json` in the
+base dir) so GitHub's unauthenticated rate limit is never a concern.
+
+**Why not `tauri-plugin-updater`:** it requires a minisign keypair whose
+private half lives in CI secrets, and the repo has none (no Apple identity
+either). It also reads one `latest.json` endpoint, while this repo publishes
+CLI and app releases side by side, so "latest release" is ambiguous. HTTPS
+to github.com plus the published checksum is the same trust the README's
+install steps already ask for. Move to signed updates when signing secrets
+exist.
+
+**Scope:** in-place install on macOS (app) and macOS/Linux (CLI). Windows and
+the Linux app bundles (deb/rpm/msi, owned by package managers) get a
+"Download" link to the release page. A release without a checksum line for
+the archive is refused, never installed unverified, which is why
+`release-app.yml` now publishes `SHA256SUMS`. The updater first ships in
+v0.0.9, so the first in-place app update is v0.0.9 → v0.0.10 (the CLI's
+releases already carried checksums).
+

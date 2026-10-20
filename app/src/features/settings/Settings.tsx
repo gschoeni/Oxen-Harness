@@ -1,4 +1,5 @@
 import {
+  ArrowUpCircle,
   ArrowLeft,
   Check,
   Cloud,
@@ -40,6 +41,8 @@ import { MediaPage } from "./MediaPage";
 import { CompressionPage } from "./CompressionPage";
 import { UsagePage } from "./UsagePage";
 import { LogsPage } from "../logs/LogsPage";
+import { UpdatesPage } from "../update/UpdatesPage";
+import { useUpdate } from "../update/update";
 import "./settings.css";
 
 /** The settings sidebar entries, in display order. Each maps a page key to its
@@ -68,6 +71,7 @@ const NAV: {
   { page: "usage", icon: <DollarSign size={18} />, label: "Usage", blurb: "Tokens & dollars spent per model", group: "This machine" },
   { page: "appearance", icon: <Palette size={18} />, label: "Appearance", blurb: "Theme & light/dark" },
   { page: "logs", icon: <ScrollText size={18} />, label: "Training data", blurb: "Curate chats & export for fine-tuning" },
+  { page: "updates", icon: <ArrowUpCircle size={18} />, label: "Updates", blurb: "Version & new releases" },
 ];
 
 const TITLE: Record<SettingsPage, string> = {
@@ -85,6 +89,7 @@ const TITLE: Record<SettingsPage, string> = {
   usage: "Usage",
   appearance: "Appearance",
   logs: "Training data",
+  updates: "Updates",
 };
 
 /** Pages only shown with the `advanced_settings` release flag. The review
@@ -101,6 +106,7 @@ export function Settings() {
   // Anything that still asks for a held-back page lands on the first one.
   const page = nav.some((item) => item.page === requested) ? requested : "connection";
   const setPage = useStore((s) => s.setSettingsPage);
+  const updateStatus = useUpdate((s) => s.status);
   const close = useStore((s) => s.setSettingsOpen);
   const project = useActiveProject();
 
@@ -147,7 +153,13 @@ export function Settings() {
                   <span className="settings-rail-icon">{item.icon}</span>
                   <span className="settings-rail-text">
                     <span className="settings-rail-label">{item.label}</span>
-                    <span className="settings-rail-blurb">{item.blurb}</span>
+                    <span className="settings-rail-blurb">
+                      {item.page === "updates" && updateStatus
+                        ? updateStatus.available
+                          ? `v${updateStatus.latest} available`
+                          : `v${updateStatus.current} · up to date`
+                        : item.blurb}
+                    </span>
                   </span>
                 </button>
               </Fragment>
@@ -174,6 +186,7 @@ export function Settings() {
             {page === "usage" && <UsagePage />}
             {page === "appearance" && <AppearanceSettings />}
             {page === "logs" && <LogsPage />}
+            {page === "updates" && <UpdatesPage />}
           </div>
         </section>
       </div>

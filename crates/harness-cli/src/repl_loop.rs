@@ -298,6 +298,11 @@ async fn handle_line(
             return Ok(true);
         }
         Command::Help => print!("{}", theme::help(ui)),
+        Command::Update => {
+            if commands::update::handle_repl(ui, ctx).await? {
+                return Ok(true);
+            }
+        }
         Command::Theme(args) => commands::theme::handle_repl(args, agent, ui).await?,
         Command::Queue(rest) => {
             // `/queue run` may stream turns that the user can Ctrl-C to quit.

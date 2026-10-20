@@ -32,6 +32,8 @@ harness-preview = { workspace = true }
 harness-media = { workspace = true }
 harness-media-local = { workspace = true }
 harness-study = { workspace = true }
+harness-update = { workspace = true }
+tracing = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

@@ -37,6 +37,9 @@ pub struct BannerFacts<'a> {
     /// The last few sessions for this workspace, newest first. Empty hides the
     /// "Recent trails" block entirely.
     pub recent: &'a [RecentTrail],
+    /// The "Version" row's value, already painted: the running version and,
+    /// when the release check found one, the update and how to get it.
+    pub version: String,
 }
 
 /// One recent-session row: `2h ago · "fix the flaky watch test" · 41 entries`.
@@ -118,6 +121,11 @@ pub fn banner(
     out.push_str(&journal_row(ui, &v.label_workspace, workspace));
     out.push_str(&journal_row(ui, &v.label_session, session));
     out.push_str(&journal_row(ui, "Theme", &ui.theme().meta.name));
+    out.push_str(&format!(
+        "  {} {}\n",
+        ui.brown(&format!("{:>19} :", "Version")),
+        facts.version
+    ));
     let mut spend_rendered = false;
     for [label, value] in &v.flavor_bottom {
         // A few rows carry live state, substituted for the static flavor value.
@@ -595,6 +603,21 @@ mod tests {
             },
         );
         assert!(warm.contains("blizzard"), "{warm}");
+        let versioned = banner(
+            &ui,
+            "u",
+            "m",
+            "w",
+            "s",
+            &BannerFacts {
+                version: "v0.0.7 → v0.0.8 available".into(),
+                ..BannerFacts::default()
+            },
+        );
+        assert!(
+            versioned.contains("Version : v0.0.7 → v0.0.8 available"),
+            "{versioned}"
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@
 
 import { vi } from "vitest";
 import type {
+  UpdateStatus,
   CatalogModel,
   CloudModel,
   CodeReviewRunResult,
@@ -545,6 +546,18 @@ export const browserDetach = vi.fn(async () => {});
 export const browserClose = vi.fn(async () => {});
 export const browserReload = vi.fn(async () => {});
 export const openExternal = vi.fn(async () => {});
+export const sampleUpdate: UpdateStatus = {
+  current: "0.0.7",
+  latest: "0.0.7",
+  available: false,
+  release_url: "https://github.com/gschoeni/Oxen-Harness/releases/tag/app-v0.0.7",
+  notes: null,
+  published_at: "2026-10-14T17:42:58Z",
+  installable: true,
+  checked_at: 0,
+};
+export const checkForUpdate = vi.fn(async (_force: boolean): Promise<UpdateStatus> => ({ ...sampleUpdate }));
+export const installUpdate = vi.fn(async () => {});
 
 export const getConnection = vi.fn(async () => sampleConnection);
 export const setConnection = vi.fn(async () => ({ ...sampleSession, session_id: "reconnected" }));
@@ -769,6 +782,8 @@ export function resetIpc() {
   browserClose.mockReset().mockResolvedValue(undefined);
   browserReload.mockReset().mockResolvedValue(undefined);
   openExternal.mockReset().mockResolvedValue(undefined);
+  checkForUpdate.mockReset().mockImplementation(async () => ({ ...sampleUpdate }));
+  installUpdate.mockReset().mockResolvedValue(undefined);
   getConnection.mockReset().mockResolvedValue(sampleConnection);
   setConnection.mockReset().mockResolvedValue({ ...sampleSession, session_id: "reconnected" });
   configureBraveKey.mockReset().mockResolvedValue(undefined);

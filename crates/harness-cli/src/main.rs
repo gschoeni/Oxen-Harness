@@ -153,6 +153,9 @@ enum TopCommand {
         #[command(subcommand)]
         action: commands::project::ProjectAction,
     },
+    /// Show the installed and latest versions and install a newer release
+    /// from GitHub (`--check` only looks).
+    Update(commands::update::UpdateArgs),
     /// Open the desktop app on a project directory (defaults to the current one).
     Ui {
         /// The project directory to open.
@@ -240,6 +243,7 @@ async fn main() -> Result<()> {
         Some(TopCommand::Oxen { action }) => return commands::oxen::run_oxen(action, &ui),
         Some(TopCommand::Project { action }) => return commands::project::run_project(action, &ui),
         Some(TopCommand::Config(args)) => return commands::config::run_config(args, &ui),
+        Some(TopCommand::Update(args)) => return commands::update::run_cli(args, &ui).await,
         Some(TopCommand::Ui {
             path,
             gallery,
@@ -376,6 +380,10 @@ async fn main() -> Result<()> {
     // A headless `-p` run shows neither figure, so it doesn't even ask.
     // Yesterday's rates price the banner right away; the fetch refreshes
     // them for the trailer and tomorrow's banner.
+    let update_check = args
+        .print
+        .is_none()
+        .then(commands::update::spawn_startup_check);
     if args.print.is_none() {
         pricing::seed_from_disk();
     }
@@ -513,6 +521,11 @@ async fn main() -> Result<()> {
     // The opening banner shows the all-time grand total spend across every model
     // and project (priced from the warmed cache; unpriced reads as `None` → "—").
     // Per-turn usage is priced and recorded as the session runs (see `handle_line`).
+    // Same deal for the release check: a cached answer is instant, a cold
+    // one gets a moment, and a slow GitHub just leaves the hint off.
+    if let Some(check) = update_check {
+        let _ = tokio::time::timeout(commands::update::BANNER_WAIT, check).await;
+    }
     let recent = commands::resume::recent_trails(
         &store,
         workspace.root(),
@@ -532,6 +545,7 @@ async fn main() -> Result<()> {
                 spend: commands::usage::total_spend(&store),
                 weather: Some(almanac::weather()),
                 recent: &recent,
+                version: commands::update::banner_value(&ui, commands::update::known()),
             },
         )
     );
@@ -571,7 +585,9 @@ async fn main() -> Result<()> {
     // explicitly so an `npm run dev` never outlives the expedition.
     preview::shutdown().await;
     local::release();
-    result
+    result?;
+    // `/update` installed a new binary: become it, on the same session.
+    commands::update::relaunch_if_requested()
 }
 
 #[cfg(test)]

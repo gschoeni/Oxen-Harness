@@ -742,7 +742,24 @@ export type SettingsPage =
   | "usage"
   | "appearance"
   | "logs"
-  | "rules";
+  | "rules"
+  | "updates";
+
+/** The running app vs the newest desktop release (mirrors
+ *  `harness_update::UpdateStatus`). */
+export interface UpdateStatus {
+  current: string;
+  /** The newest published version; null when nothing is published yet. */
+  latest: string | null;
+  available: boolean;
+  release_url: string | null;
+  notes: string | null;
+  published_at: string | null;
+  /** Whether this platform installs in place (else: the release page). */
+  installable: boolean;
+  /** When GitHub was last asked, in Unix seconds. */
+  checked_at: number;
+}
 
 /** Persisted live-preview preferences (mirrors `harness_runtime::preview`). */
 export interface PreviewPrefs {

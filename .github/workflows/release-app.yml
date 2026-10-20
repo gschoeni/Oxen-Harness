@@ -150,3 +150,22 @@ jobs:
           releaseName: oxen-harness desktop v${{ needs.verify.outputs.version }}
           releaseDraft: true
           args: ${{ matrix.args }}
+
+  # The in-app updater installs only what it can verify: publish a checksum
+  # for every bundle once all platforms have uploaded to the draft.
+  checksums:
+    name: publish SHA256SUMS
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hash the release's bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ needs.verify.outputs.tag }}"
+          mkdir dist && cd dist
+          gh release download "$tag" --repo "${{ github.repository }}"
+          rm -f SHA256SUMS
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$tag" SHA256SUMS --clobber --repo "${{ github.repository }}"

@@ -4,7 +4,8 @@
 // ever has to fake its own. The active project names the window; the running
 // count (with machine memory beside it while a local model runs) and, inside
 // a project, the panel switch (Files | Agent | Work | </>) sit at its right
-// edge, clear of the macOS traffic lights. Settings is ⌘, (or Home); the
+// edge, clear of the macOS traffic lights. A newer release adds an "Update"
+// pill there too. Settings is ⌘, (or Home); the
 // study game is ⌘J (or the composer's button while a turn runs).
 
 import { Activity } from "lucide-react";
@@ -12,6 +13,7 @@ import { useMemoryPolling } from "./lib/memory";
 import { useActiveProject, useStore } from "./lib/store";
 import { MemoryMeter } from "./features/chat/MemoryMeter";
 import { PanelSwitch } from "./features/docks/PanelSwitch";
+import { UpdatePill } from "./features/update/UpdatePill";
 
 export function TitleBar() {
   // Polled here, not by the chat: the readout stays live on Home and in
@@ -60,6 +62,7 @@ export function TitleBar() {
       {/* pointer-events: none, so the name never blocks the drag region */}
       <span className="app-titlebar-name">{project?.name ?? "oxen-harness"}</span>
       <div className="app-titlebar-actions">
+        <UpdatePill />
         <MemoryMeter />
         <button
           className={`titlebar-running ${runningCount > 0 ? "active" : ""}`}
