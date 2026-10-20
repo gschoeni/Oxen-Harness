@@ -4,7 +4,7 @@ import { fsReadFile, pickAttachments, stageDroppedFile } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
 import { snippetLabel } from "../../lib/snippets";
-import { getDragPaths, hasDragPaths } from "../files/dnd";
+import { getDragPaths, hasDragPaths, readBytes } from "../files/dnd";
 import type { CodeSnippet } from "../../lib/types";
 import { ThreadItem } from "./ThreadItem";
 import { FleetPanel } from "./FleetPanel";
@@ -43,17 +43,6 @@ const NO_SNIPPETS: CodeSnippet[] = [];
 /** Cap on a whole file staged as context via drag-and-drop, so a dropped
  *  lockfile can't quietly eat the context window. */
 const SNIPPET_FILE_CAP = 30_000;
-
-/** A File's bytes; FileReader is the fallback where `arrayBuffer` is missing. */
-function readBytes(file: File): Promise<ArrayBuffer> {
-  if (typeof file.arrayBuffer === "function") return file.arrayBuffer();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as ArrayBuffer);
-    reader.onerror = () => reject(reader.error ?? new Error("could not read the file"));
-    reader.readAsArrayBuffer(file);
-  });
-}
 
 export function Chat() {
   const sessionId = useStore((s) => s.session?.session_id);

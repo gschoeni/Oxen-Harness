@@ -10,6 +10,7 @@ import {
   fsCreateEntry,
   fsDownload,
   fsDuplicate,
+  fsImportFile,
   fsListDir,
   fsRename,
   fsReveal,
@@ -92,6 +93,83 @@ describe("FilesPanel", () => {
     await waitFor(() => expect(fsCreateEntry).toHaveBeenCalledWith(ROOT, "src/lib.rs", false));
     const id = sampleSession.session_id;
     await waitFor(() => expect(useStore.getState().editorTabs[id]).toEqual({ tabs: [["src/lib.rs"]], active: 0 }));
+  });
+
+  it("flags a name that already exists before creating anything", async () => {
+    seedSession();
+    render(<FilesPanel />);
+    await screen.findByText("README.md");
+    await userEvent.click(screen.getByRole("button", { name: "New file" }));
+    const input = screen.getByLabelText("New file name");
+    expect(screen.getByText(/in the project root/)).toBeInTheDocument();
+    await userEvent.type(input, "readme.MD{Enter}");
+    expect(screen.getByRole("alert")).toHaveTextContent("“readme.MD” already exists here.");
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(fsCreateEntry).not.toHaveBeenCalled();
+
+    await userEvent.clear(input);
+    await userEvent.type(input, "a/b");
+    expect(screen.getByRole("alert")).toHaveTextContent("can't contain “/”");
+  });
+
+  it("commits a typed name when the field loses focus", async () => {
+    seedSession();
+    render(<FilesPanel />);
+    await screen.findByText("README.md");
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    await userEvent.type(screen.getByLabelText("New folder name"), "assets");
+    fireEvent.blur(screen.getByLabelText("New folder name"));
+    await waitFor(() => expect(fsCreateEntry).toHaveBeenCalledWith(ROOT, "assets", true));
+    expect(fsCreateEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it("copies files dropped from another app into the folder under the pointer", async () => {
+    seedSession();
+    render(<FilesPanel />);
+    await userEvent.click(await screen.findByText("src"));
+    const mainRs = await screen.findByText("main.rs");
+    const photo = new File(["png"], "photo.png", { type: "image/png" });
+    const dataTransfer = { types: ["Files"], files: [photo], items: [], dropEffect: "none" };
+
+    // Hovering a file row targets its folder, and says so.
+    fireEvent.dragEnter(mainRs, { dataTransfer });
+    fireEvent.dragOver(mainRs, { dataTransfer });
+    expect(screen.getByText("src/")).toBeInTheDocument();
+    expect(screen.getByText("src").closest(".ft-dropzone")).not.toBeNull();
+
+    fireEvent.drop(mainRs, { dataTransfer });
+    await waitFor(() => expect(fsImportFile).toHaveBeenCalledWith(ROOT, "src", "photo.png", expect.any(Uint8Array)));
+    expect(await screen.findByRole("status")).toHaveTextContent("Copied photo.png into src/");
+    expect(document.querySelector(".ft-dropzone")).toBeNull();
+  });
+
+  it("drops on the empty space copy into the root, and name skipped folders", async () => {
+    seedSession();
+    render(<FilesPanel />);
+    await screen.findByText("README.md");
+    const tree = screen.getByRole("tree");
+    const notes = new File(["hi"], "notes.txt");
+    const folder = new File([""], "Screenshots");
+    const dataTransfer = {
+      types: ["Files"],
+      files: [notes, folder],
+      items: [{ webkitGetAsEntry: () => ({ isDirectory: false }) }, { webkitGetAsEntry: () => ({ isDirectory: true }) }],
+    };
+    fireEvent.dragOver(tree, { dataTransfer });
+    expect(tree).toHaveClass("ft-dropzone-root");
+    fireEvent.drop(tree, { dataTransfer });
+    await waitFor(() => expect(fsImportFile).toHaveBeenCalledWith(ROOT, "", "notes.txt", expect.any(Uint8Array)));
+    expect(fsImportFile).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/Folders aren't copied yet \(Screenshots\)/)).toBeInTheDocument();
+  });
+
+  it("ignores drags of its own rows", async () => {
+    seedSession();
+    render(<FilesPanel />);
+    const readme = await screen.findByText("README.md");
+    const dataTransfer = { types: ["Files", "application/x-oxen-workspace-files"], files: [] };
+    fireEvent.dragOver(readme, { dataTransfer });
+    expect(screen.queryByText(/Copy into/)).not.toBeInTheDocument();
   });
 
   it("re-lists loaded directories when files change on disk", async () => {
@@ -292,14 +370,14 @@ describe("FilesPanel right-click menu", () => {
   });
 
   it("shows why a rename failed", async () => {
-    fsRename.mockRejectedValueOnce("hero.png already exists");
+    fsRename.mockRejectedValueOnce("could not rename logo.png: permission denied");
     render(<FilesPanel />);
     await rightClick(await screen.findByText("logo.png"));
     await pick("Rename…");
     const input = await screen.findByLabelText("Rename logo.png");
     await userEvent.clear(input);
-    await userEvent.type(input, "hero.png{Enter}");
-    expect(await screen.findByText("hero.png already exists")).toBeInTheDocument();
+    await userEvent.type(input, "banner.png{Enter}");
+    expect(await screen.findByText("could not rename logo.png: permission denied")).toBeInTheDocument();
   });
 
   it("duplicates a file and moves one to the Trash, closing its tab", async () => {

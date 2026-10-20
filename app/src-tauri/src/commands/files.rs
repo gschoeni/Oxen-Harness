@@ -604,6 +604,61 @@ fn download_name(encoded: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
+/// Headers carrying [`fs_import_file`]'s destination: the workspace root and
+/// the workspace-relative folder ("" = the root), percent-encoded.
+const IMPORT_ROOT_HEADER: &str = "x-root";
+const IMPORT_DIR_HEADER: &str = "x-dir";
+
+/// Copy a file dropped from another app into a workspace folder and return
+/// its workspace-relative path. The bytes arrive raw (an OS drop has no path
+/// in the webview — see [`stage_dropped_file`]); the name is taken as-is, or
+/// `name-2.ext`, … when taken, so a drop never replaces a project file.
+#[tauri::command]
+pub(crate) async fn fs_import_file(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("import expected raw bytes".into());
+    };
+    let header = |key: &str| -> Result<String, String> {
+        let raw = request
+            .headers()
+            .get(key)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| format!("import is missing its {key} header"))?;
+        percent_encoding::percent_decode_str(raw)
+            .decode_utf8()
+            .map(|v| v.into_owned())
+            .map_err(|_| format!("import header {key} is not valid UTF-8"))
+    };
+    let root = header(IMPORT_ROOT_HEADER)?;
+    let dir = header(IMPORT_DIR_HEADER)?;
+    let encoded_name = request
+        .headers()
+        .get(SAVE_NAME_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .ok_or("import is missing its file name")?;
+    let name = download_name(encoded_name)?;
+    let bytes = bytes.clone();
+    tauri::async_runtime::spawn_blocking(move || import_into(&root, &dir, &name, &bytes))
+        .await
+        .map_err(|e| format!("import did not finish: {e}"))?
+}
+
+/// Write `bytes` as `name` into the workspace folder `dir` (never replacing
+/// an entry) and return the new file's workspace-relative path.
+fn import_into(root: &str, dir: &str, name: &str, bytes: &[u8]) -> Result<String, String> {
+    let target = resolve(root, dir)?;
+    if !target.is_dir() {
+        let shown = if dir.is_empty() {
+            "the project root"
+        } else {
+            dir
+        };
+        return Err(format!("could not copy {name}: {shown} is not a folder"));
+    }
+    let dest = write_unique(&target, name, &mut &bytes[..])?;
+    relative_to(root, &dest)
+}
+
 /// A workspace entry *itself*, for operations that move or remove it (rename,
 /// trash): its parent is resolved for real — so nothing outside the project
 /// is reachable — but the last component is not followed. Renaming a symlink
@@ -1042,6 +1097,28 @@ mod tests {
             "viewing a diff executed a repository-configured helper"
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn imported_files_land_in_the_folder_without_replacing_anything() {
+        let dir = workspace("import");
+        let root = dir.display().to_string();
+        fs::create_dir(dir.join("assets")).unwrap();
+        assert_eq!(
+            import_into(&root, "assets", "photo.png", b"one").unwrap(),
+            "assets/photo.png"
+        );
+        // A second drop of the same name gets a fresh one; the first survives.
+        assert_eq!(
+            import_into(&root, "assets", "photo.png", b"two").unwrap(),
+            "assets/photo-2.png"
+        );
+        assert_eq!(fs::read(dir.join("assets/photo.png")).unwrap(), b"one");
+        assert_eq!(import_into(&root, "", "top.txt", b"x").unwrap(), "top.txt");
+        let err = import_into(&root, "top.txt", "a.txt", b"x").unwrap_err();
+        assert!(err.contains("top.txt is not a folder"), "{err}");
+        assert!(import_into(&root, "../outside", "a.txt", b"x").is_err());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

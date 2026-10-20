@@ -1,6 +1,6 @@
 // In-app drag-and-drop of workspace files (tree rows, gallery tiles → chat).
 // A custom mime type keeps our drags distinguishable from OS file drops (which
-// arrive through Tauri's drag-drop event, not the DOM).
+// arrive as DOM `File`s without a path: the webview's native drop hook is off).
 
 export const FILES_MIME = "application/x-oxen-workspace-files";
 
@@ -23,4 +23,15 @@ export function getDragPaths(dt: DataTransfer): string[] {
   } catch {
     return [];
   }
+}
+
+/** A File's bytes; FileReader is the fallback where `arrayBuffer` is missing. */
+export function readBytes(file: File): Promise<ArrayBuffer> {
+  if (typeof file.arrayBuffer === "function") return file.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = () => reject(reader.error ?? new Error("could not read the file"));
+    reader.readAsArrayBuffer(file);
+  });
 }

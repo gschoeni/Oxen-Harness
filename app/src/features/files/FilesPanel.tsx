@@ -5,10 +5,13 @@
 // directory is selected, and the tree refreshes itself when the agent
 // finishes a turn (it may well have written files). Right-click a row (or the
 // empty space below the tree) for the explorer's actions: see FileMenu.tsx.
+// Files dropped from another app (Finder, a browser) are copied into the
+// folder under the pointer — or the folder holding the file under it.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import {
   ChevronRight,
+  Download,
   FileCode2,
   FileDiff,
   FilePlus2,
@@ -21,11 +24,20 @@ import {
   Image as ImageIcon,
   RotateCw,
 } from "lucide-react";
-import { fsCreateEntry, fsDownload, fsDuplicate, fsListDir, fsRename, fsReveal, fsTrash } from "../../lib/ipc";
+import {
+  fsCreateEntry,
+  fsDownload,
+  fsDuplicate,
+  fsImportFile,
+  fsListDir,
+  fsRename,
+  fsReveal,
+  fsTrash,
+} from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import { basename } from "../../lib/format";
 import { isImagePath, isVideoPath } from "../../lib/attachments";
-import { setDragPaths } from "./dnd";
+import { hasDragPaths, readBytes, setDragPaths } from "./dnd";
 import { diffTab, statusLetter } from "./diff";
 import { useGitStatus } from "./useGitStatus";
 import { FileMenu, type FileAction } from "./FileMenu";
@@ -62,6 +74,131 @@ function isVisible(dir: string, expanded: Set<string>): boolean {
 /** `path` after `from` (itself or an ancestor of it) was renamed to `to`. */
 const rebase = (path: string, from: string, to: string) =>
   path === from || isUnder(path, from) ? to + path.slice(from.length) : path;
+
+/** How long a drag must rest on a closed folder before it opens, so a file
+ *  can be dropped deep in the tree without letting go first. */
+const DRAG_EXPAND_MS = 600;
+
+/** Whether a drag carries files from another app (not our own tree rows). */
+const isOsFileDrag = (dt: DataTransfer) => dt.types.includes("Files") && !hasDragPaths(dt);
+
+/** The folder a drop at `target` lands in: a folder row itself, a file row's
+ *  folder, or the root for the empty space below the rows. */
+function dropDirAt(target: EventTarget | null): string {
+  const row = target instanceof Element ? target.closest<HTMLElement>("[data-path]") : null;
+  if (!row) return "";
+  const path = row.dataset.path ?? "";
+  return row.dataset.dir === "true" ? path : parentOf(path);
+}
+
+/** The dropped files, minus folders (which arrive as unreadable `File`s): a
+ *  folder's contents are not copied, and it is named so the user knows. */
+function droppedFiles(dt: DataTransfer): { files: File[]; folders: string[] } {
+  const files: File[] = [];
+  const folders: string[] = [];
+  const items = Array.from(dt.items ?? []);
+  Array.from(dt.files).forEach((file, i) => {
+    const entry = items[i]?.webkitGetAsEntry?.();
+    if (entry?.isDirectory) folders.push(file.name);
+    else files.push(file);
+  });
+  return { files, folders };
+}
+
+const shownDir = (dir: string) => (dir ? `${dir}/` : "the project root");
+
+/** The problem with `name` as a new entry in a folder holding `taken`, or
+ *  null when it is fine. Case-insensitive: macOS volumes usually are. */
+function nameProblem(name: string, taken: string[]): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes("/")) return "A name can't contain “/”.";
+  if (trimmed === "." || trimmed === "..") return "That name is reserved.";
+  const lower = trimmed.toLowerCase();
+  if (taken.some((t) => t.toLowerCase() === lower)) return `“${trimmed}” already exists here.`;
+  return null;
+}
+
+/** The inline name field for creating or renaming an entry: sits in the row
+ *  it will become, says where it lands, and flags a clash before Enter. Enter
+ *  (or clicking away) commits a valid name; Escape or an empty one cancels. */
+function NameField({
+  depth,
+  icon,
+  label,
+  placeholder,
+  defaultValue = "",
+  where,
+  taken,
+  selectStem = false,
+  onSubmit,
+  onCancel,
+}: {
+  depth: number;
+  icon: ReactNode;
+  label: string;
+  placeholder?: string;
+  defaultValue?: string;
+  where: string;
+  taken: string[];
+  /** Select the name up to its extension: the part being retyped. */
+  selectStem?: boolean;
+  onSubmit: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(defaultValue);
+  // Enter unmounts the field, and a blur can still follow; settle once.
+  const settled = useRef(false);
+  const problem = nameProblem(value, taken);
+  function settle(commit: boolean) {
+    if (settled.current) return;
+    settled.current = true;
+    if (commit && value.trim() && !problem) onSubmit(value);
+    else onCancel();
+  }
+  return (
+    // The field keeps the text-editing menu (paste a name), not the tree's.
+    <div
+      className={`ft-newrow${problem ? " invalid" : ""}`}
+      style={{ paddingLeft: 10 + depth * 14 }}
+      onContextMenu={(e) => e.stopPropagation()}
+    >
+      <div className="ft-newrow-field">
+        <span className="ft-chev-slot" />
+        <span className="ft-icon">{icon}</span>
+        <input
+          autoFocus
+          aria-label={label}
+          aria-invalid={!!problem}
+          placeholder={placeholder}
+          value={value}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(e) => setValue(e.currentTarget.value)}
+          onFocus={(e) => {
+            const dot = selectStem ? defaultValue.lastIndexOf(".") : -1;
+            e.currentTarget.setSelectionRange(0, dot > 0 ? dot : defaultValue.length);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !problem) settle(true);
+            if (e.key === "Escape") settle(false);
+          }}
+          onBlur={() => settle(true)}
+        />
+      </div>
+      <p className="ft-newrow-hint" role={problem ? "alert" : undefined}>
+        {problem ?? (
+          <>
+            in {where}
+            <span className="ft-keys">
+              <kbd>↵</kbd> save <kbd>esc</kbd> cancel
+            </span>
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
 
 /** How long a "Saved to …" toast stays up at the foot of the panel. */
 const NOTE_MS = 4000;
@@ -149,6 +286,12 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
     return () => window.clearTimeout(timer);
   }, [note]);
   const [changesOpen, setChangesOpen] = useState(true);
+  /** The folder an OS file drag is over ("" = the root), null when none is. */
+  const [dropDir, setDropDir] = useState<string | null>(null);
+  // dragenter/dragleave fire for every row crossed; only the outermost leave
+  // ends the hover.
+  const dragDepth = useRef(0);
+  const expandTimer = useRef<{ dir: string; id: number } | null>(null);
 
   /** Changed files per git; null = not a repository (section hidden). The
    *  hook owns every refresh trigger except the manual Refresh button. */
@@ -183,6 +326,7 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
     setRenaming(null);
     setNote(null);
     setError(null);
+    setDropDir(null);
     if (workspace) void loadDir("");
   }, [workspace, loadDir]);
 
@@ -451,48 +595,115 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
     }
   }
 
+  /** The names already in `dir`, for the name field's clash check. */
+  const namesIn = (dir: string, except?: string) =>
+    (entries[dir] ?? []).filter((e) => e.path !== except).map((e) => e.name);
+
   function renderRenameRow(entry: FileEntry, depth: number, open: boolean): ReactNode {
+    const dir = parentOf(entry.path);
     return (
-      // The field keeps the text-editing menu (paste a name), not the tree's.
-      <div className="ft-newrow" style={{ paddingLeft: 10 + depth * 14 }} onContextMenu={(e) => e.stopPropagation()}>
-        <span className="ft-chev-slot" />
-        <span className="ft-icon">{iconFor(entry, open)}</span>
-        <input
-          autoFocus
-          aria-label={`Rename ${entry.name}`}
-          defaultValue={entry.name}
-          // Select the name, not the extension: that is the part being retyped.
-          onFocus={(e) => {
-            const dot = entry.is_dir ? -1 : entry.name.lastIndexOf(".");
-            e.currentTarget.setSelectionRange(0, dot > 0 ? dot : entry.name.length);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void submitRename(e.currentTarget.value);
-            if (e.key === "Escape") setRenaming(null);
-          }}
-          onBlur={() => setRenaming(null)}
-        />
-      </div>
+      <NameField
+        depth={depth}
+        icon={iconFor(entry, open)}
+        label={`Rename ${entry.name}`}
+        defaultValue={entry.name}
+        selectStem={!entry.is_dir}
+        where={shownDir(dir)}
+        taken={namesIn(dir, entry.path)}
+        onSubmit={(name) => void submitRename(name)}
+        onCancel={() => setRenaming(null)}
+      />
     );
   }
 
   function renderNewRow(dir: string, depth: number): ReactNode {
     if (!creating || creating.dir !== dir) return null;
     return (
-      <div className="ft-newrow" style={{ paddingLeft: 10 + depth * 14 }}>
-        <span className="ft-icon">{creating.isDir ? <FolderPlus size={14} /> : <FilePlus2 size={14} />}</span>
-        <input
-          autoFocus
-          aria-label={creating.isDir ? "New folder name" : "New file name"}
-          placeholder={creating.isDir ? "folder name" : "file name"}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void submitCreate(e.currentTarget.value);
-            if (e.key === "Escape") setCreating(null);
-          }}
-          onBlur={() => setCreating(null)}
-        />
-      </div>
+      <NameField
+        depth={depth}
+        icon={creating.isDir ? <Folder size={14} /> : <FileIcon size={14} />}
+        label={creating.isDir ? "New folder name" : "New file name"}
+        placeholder={creating.isDir ? "New folder" : "new-file.md"}
+        where={shownDir(dir)}
+        taken={namesIn(dir)}
+        onSubmit={(name) => void submitCreate(name)}
+        onCancel={() => setCreating(null)}
+      />
     );
+  }
+
+  // ---- files dropped from other apps ---------------------------------------
+
+  function clearExpandTimer() {
+    if (expandTimer.current) window.clearTimeout(expandTimer.current.id);
+    expandTimer.current = null;
+  }
+  useEffect(() => clearExpandTimer, []);
+
+  function endOsDrag() {
+    dragDepth.current = 0;
+    clearExpandTimer();
+    setDropDir(null);
+  }
+
+  function onTreeDragEnter(e: DragEvent) {
+    if (!isOsFileDrag(e.dataTransfer)) return;
+    dragDepth.current += 1;
+  }
+
+  function onTreeDragLeave(e: DragEvent) {
+    if (!isOsFileDrag(e.dataTransfer)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) endOsDrag();
+  }
+
+  function onTreeDragOver(e: DragEvent) {
+    if (!isOsFileDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+    const dir = dropDirAt(e.target);
+    if (dir !== dropDir) setDropDir(dir);
+    // Resting on a closed folder opens it, so the drop can go deeper.
+    if (expandTimer.current?.dir === dir) return;
+    clearExpandTimer();
+    if (dir && !expanded.has(dir)) {
+      const id = window.setTimeout(() => {
+        expandTimer.current = null;
+        setExpanded((prev) => (prev.has(dir) ? prev : expandDir(dir, prev)));
+      }, DRAG_EXPAND_MS);
+      expandTimer.current = { dir, id };
+    }
+  }
+
+  async function onTreeDrop(e: DragEvent) {
+    if (!isOsFileDrag(e.dataTransfer) || !workspace) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const dir = dropDirAt(e.target);
+    endOsDrag();
+    const { files, folders } = droppedFiles(e.dataTransfer);
+    const copied: string[] = [];
+    const problems: string[] = [];
+    for (const file of files) {
+      try {
+        const bytes = new Uint8Array(await readBytes(file));
+        copied.push(await fsImportFile(workspace, dir, file.name, bytes));
+      } catch (err) {
+        problems.push(`Couldn't copy ${file.name}: ${String(err)}`);
+      }
+    }
+    if (folders.length) problems.push(`Folders aren't copied yet (${folders.join(", ")}): drop the files inside.`);
+    if (copied.length) {
+      if (dir) setExpanded((prev) => (prev.has(dir) ? prev : expandDir(dir, prev)));
+      await loadDir(dir);
+      setSelected(new Set(copied));
+      setTargetDir(dir);
+      setNote(`Copied ${copied.length === 1 ? basename(copied[0]) : `${copied.length} files`} into ${shownDir(dir)}`);
+      loadGit();
+    }
+    // After the re-list, which clears the error line when it succeeds.
+    setError(problems.length ? problems.join(" · ") : null);
   }
 
   function renderDir(dir: string, depth: number): ReactNode {
@@ -505,13 +716,14 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
           const open = entry.is_dir && expanded.has(entry.path);
           const state = entry.is_dir ? undefined : gitByPath.get(entry.path);
           return (
-            <div key={entry.path}>
+            <div key={entry.path} className={entry.is_dir && dropDir === entry.path ? "ft-dropzone" : undefined}>
               {renaming === entry.path ? (
                 renderRenameRow(entry, depth, open)
               ) : (
               <button
                 className={`ft-row${selected.has(entry.path) ? " selected" : ""}${state ? ` git-${state.status}` : ""}`}
                 data-path={entry.path}
+                data-dir={entry.is_dir || undefined}
                 style={{ paddingLeft: 10 + depth * 14 }}
                 title={state ? `${entry.path} — ${state.status}` : entry.path}
                 draggable={!entry.is_dir}
@@ -643,9 +855,23 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
           )}
         </section>
       )}
-      <div className="ft-tree" role="tree" onContextMenu={(e) => openMenu(e, null)}>
+      <div
+        className={`ft-tree${dropDir === "" ? " ft-dropzone-root" : ""}`}
+        role="tree"
+        onContextMenu={(e) => openMenu(e, null)}
+        onDragEnter={onTreeDragEnter}
+        onDragLeave={onTreeDragLeave}
+        onDragOver={onTreeDragOver}
+        onDrop={(e) => void onTreeDrop(e)}
+      >
         {renderDir("", 0)}
       </div>
+      {dropDir !== null && (
+        <p className="ft-drop-hint" aria-live="polite">
+          <Download size={13} aria-hidden="true" />
+          Copy into <strong>{shownDir(dropDir)}</strong>
+        </p>
+      )}
       {menu && (
         <FileMenu
           at={menu.at}
@@ -655,7 +881,7 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
           onPick={(action) => void pickAction(action)}
         />
       )}
-      <p className="ft-hint">⌘-click to select a group · drag files into the chat · right-click for more</p>
+      <p className="ft-hint">⌘-click to select a group · drag files into the chat · drop files here to copy them in</p>
       {note && (
         <p className="ft-note" role="status">
           {note}

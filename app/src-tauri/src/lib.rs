@@ -263,6 +263,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::media::cancel_media,
                 commands::files::fs_download,
                 commands::files::fs_save_download,
+                commands::files::fs_import_file,
                 commands::files::fs_rename,
                 commands::files::fs_duplicate,
                 commands::files::fs_trash,

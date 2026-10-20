@@ -315,6 +315,17 @@ export const fsSaveDownload = (name: string, bytes: Uint8Array) =>
   invoke<string>("fs_save_download", bytes, {
     headers: { "x-file-name": encodeURIComponent(name) },
   });
+/** Copy a file dropped from another app into the workspace folder `dir`
+ *  ("" = the root) as `name`, or `name-2.ext`, … when taken; resolves with
+ *  its workspace-relative path. Bytes go raw, the destination in headers. */
+export const fsImportFile = (root: string, dir: string, name: string, bytes: Uint8Array) =>
+  invoke<string>("fs_import_file", bytes, {
+    headers: {
+      "x-root": encodeURIComponent(root),
+      "x-dir": encodeURIComponent(dir),
+      "x-file-name": encodeURIComponent(name),
+    },
+  });
 /** Rename a file or folder in place (`name` is the new last component);
  *  resolves with its new workspace-relative path. Never replaces an entry. */
 export const fsRename = (root: string, path: string, name: string) =>

@@ -132,22 +132,130 @@
   white-space: nowrap;
 }
 
+/* The inline name field (new file/folder, rename): it sits exactly where the
+   row will appear — same indent, chevron slot and icon — so typing a name
+   reads as editing the tree, with a quiet line below saying where it lands. */
 .ft-newrow {
+  padding: var(--space-half) var(--space-2) var(--space-1);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.ft-newrow-field {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 8px 2px;
+  min-height: 24px;
+}
+.ft-newrow .ft-icon {
+  color: var(--accent);
 }
 .ft-newrow input {
   flex: 1;
   min-width: 0;
-  padding: 2px 6px;
+  height: 22px;
+  padding: 0 var(--space-2);
   background: var(--bg);
-  border: 1px solid var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
   border-radius: var(--radius-sm);
   color: var(--text);
+  font: inherit;
   font-size: var(--text-sm);
   outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.ft-newrow input::placeholder {
+  color: var(--text-tertiary);
+}
+.ft-newrow-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-half) 0 0;
+  /* Under the input, past the chevron slot and icon. */
+  padding-left: 37px;
+  color: var(--text-tertiary);
+  font-size: var(--text-3xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ft-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+.ft-keys kbd {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  font: inherit;
+  font-size: var(--text-3xs);
+  line-height: 1.2;
+  color: var(--text-secondary);
+}
+.ft-keys kbd + kbd {
+  margin-left: var(--space-1);
+}
+.ft-newrow.invalid {
+  background: color-mix(in srgb, var(--danger, #ff5d57) 8%, transparent);
+}
+.ft-newrow.invalid input {
+  border-color: var(--danger, #ff5d57);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger, #ff5d57) 18%, transparent);
+}
+.ft-newrow.invalid .ft-newrow-hint {
+  color: var(--danger, #ff5d57);
+}
+
+/* Files dragged in from another app: the folder they'd land in — its row and
+   everything shown under it — lights up, like a drop zone in Finder. */
+.ft-dropzone,
+.ft-tree.ft-dropzone-root {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: var(--radius-sm);
+}
+.ft-dropzone > .ft-row,
+.ft-dropzone > .ft-row .ft-icon {
+  color: var(--accent);
+}
+.ft-dropzone .ft-row:hover {
+  background: transparent;
+}
+.ft-drop-hint {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--space-2) + 28px);
+  transform: translateX(-50%);
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: calc(100% - 2 * var(--space-3));
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface-2);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-2);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.ft-drop-hint svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.ft-drop-hint strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-weight: 600;
 }
 
 .ft-error {
