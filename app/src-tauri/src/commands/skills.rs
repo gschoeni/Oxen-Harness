@@ -18,6 +18,31 @@ pub(crate) async fn list_skills(
     Ok(harness_runtime::skills::list(&root, &prefs))
 }
 
+/// Start a new (draft) skill. Fails rather than overwrite an existing one.
+#[tauri::command]
+pub(crate) async fn create_skill(
+    state: State<'_, AppState>,
+    scope: harness_tools::SkillScope,
+    name: String,
+) -> Result<(), String> {
+    let root = state.active_root().await;
+    harness_runtime::skills::create_skill(&root, scope, &name).map_err(|e| e.to_string())
+}
+
+/// Rename a skill and/or move it between scopes, supporting files included.
+#[tauri::command]
+pub(crate) async fn rename_skill(
+    state: State<'_, AppState>,
+    from_scope: harness_tools::SkillScope,
+    from_name: String,
+    to_scope: harness_tools::SkillScope,
+    to_name: String,
+) -> Result<(), String> {
+    let root = state.active_root().await;
+    harness_runtime::skills::rename_skill(&root, (from_scope, &from_name), (to_scope, &to_name))
+        .map_err(|e| e.to_string())
+}
+
 /// Create or update a skill's SKILL.md. Takes effect for new/resumed chats.
 #[tauri::command]
 pub(crate) async fn save_skill(

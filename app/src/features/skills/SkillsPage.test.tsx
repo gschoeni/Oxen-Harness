@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -17,6 +17,7 @@ const releaseNotes: SkillInfo = {
   scope: "global",
   dir: "/home/ox/.oxen-harness/skills/release-notes",
   enabled: true,
+  draft: false,
 };
 
 /** A minimal ToolInfo for the autocomplete vocabulary and palette. */
@@ -37,6 +38,18 @@ const reviewChecklist: SkillInfo = {
   scope: "project",
   dir: "/repo/.oxen-harness/skills/review-checklist",
   enabled: false,
+  draft: false,
+};
+
+/** A freshly created skill, as the backend lists it: an empty draft. */
+const deployDraft: SkillInfo = {
+  name: "deploy-steps",
+  description: "",
+  instructions: "",
+  scope: "project",
+  dir: "/repo/.oxen-harness/skills/deploy-steps",
+  enabled: true,
+  draft: true,
 };
 
 beforeEach(() => {
@@ -57,6 +70,12 @@ beforeEach(() => {
 /** Open a skill's reading view from the list. */
 async function openSkill(name: string) {
   await userEvent.click(await screen.findByRole("button", { name: `Open skill ${name}` }));
+}
+
+/** Open a skill's editor from the list. */
+async function editSkill(name: string) {
+  await openSkill(name);
+  await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
 }
 
 describe("SkillsPage", () => {
@@ -115,49 +134,58 @@ describe("SkillsPage", () => {
     expect(ipc.setSkillEnabled).toHaveBeenCalledWith("review-checklist", true);
   });
 
-  it("creates a skill through the editor and lands on its reading view", async () => {
+  it("creates a skill from just a name and scope, then opens it in the editor", async () => {
     render(<SkillsPage />);
     await userEvent.click(await screen.findByRole("button", { name: /new skill/i }));
 
+    // The intro screen asks only for identity; the instructions come next.
+    expect(screen.queryByLabelText("Instructions markdown")).toBeNull();
+    expect(screen.getByRole("button", { name: "Create skill" })).toBeDisabled();
     await userEvent.type(screen.getByPlaceholderText("release-notes"), "deploy-steps");
     await userEvent.click(screen.getByRole("combobox", { name: "Skill scope" }));
     await userEvent.click(screen.getByRole("option", { name: /^This project only/ }));
-    await userEvent.type(
-      screen.getByPlaceholderText(/writes release notes from the git log/i),
-      "Walks through our deploy procedure.",
+
+    ipc.listSkills.mockResolvedValue([deployDraft, releaseNotes, reviewChecklist]);
+    await userEvent.click(screen.getByRole("button", { name: "Create skill" }));
+
+    expect(ipc.createSkill).toHaveBeenCalledWith("project", "deploy-steps");
+    expect(await screen.findByLabelText("Instructions markdown")).toBeInTheDocument();
+    expect(screen.getByText(/model won't see this skill/i)).toBeInTheDocument();
+  });
+
+  it("shows the backend's message when creating is rejected", async () => {
+    ipc.createSkill.mockRejectedValueOnce(
+      "A skill named `release-notes` already exists in every project.",
     );
-    await userEvent.type(screen.getByLabelText("Instructions markdown"), "1. Run the deploy script.");
+    render(<SkillsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /new skill/i }));
+    await userEvent.type(screen.getByPlaceholderText("release-notes"), "release-notes");
+    await userEvent.click(screen.getByRole("button", { name: "Create skill" }));
 
-    // The new skill will be in the reloaded list, so the show view can render it.
-    const deploySteps: SkillInfo = {
-      name: "deploy-steps",
-      description: "Walks through our deploy procedure.",
-      instructions: "1. Run the deploy script.",
-      scope: "project",
-      dir: "/repo/.oxen-harness/skills/deploy-steps",
-      enabled: true,
-    };
-    ipc.listSkills.mockResolvedValue([deploySteps, releaseNotes, reviewChecklist]);
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Instructions markdown")).toBeNull();
+  });
 
-    await userEvent.click(screen.getByRole("button", { name: "Add skill" }));
+  it("marks drafts in the list", async () => {
+    ipc.listSkills.mockResolvedValue([deployDraft, releaseNotes]);
+    render(<SkillsPage />);
+    expect(await screen.findByText("draft")).toBeInTheDocument();
+  });
 
-    await waitFor(() =>
-      expect(ipc.saveSkill).toHaveBeenCalledWith(
-        "project",
-        "deploy-steps",
-        "Walks through our deploy procedure.",
-        "1. Run the deploy script.",
-      ),
-    );
-    // Landed on the reading view of the new skill.
-    expect(await screen.findByText("Walks through our deploy procedure.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /all skills/i })).toBeInTheDocument();
+  it("names the active project in the scope choice", async () => {
+    render(<SkillsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /new skill/i }));
+    await userEvent.click(screen.getByRole("combobox", { name: "Skill scope" }));
+    const choice = screen.getByRole("option", { name: "This project only — OxenHarness" });
+
+    // Choosing it makes the hint say exactly where the skill will land.
+    await userEvent.click(choice);
+    expect(screen.getByText(/saved into OxenHarness's repo/i)).toBeInTheDocument();
   });
 
   it("previews the instructions as markdown while editing", async () => {
     render(<SkillsPage />);
-    await openSkill("release-notes");
-    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    await editSkill("release-notes");
 
     // Write mode shows the raw markdown in a textarea.
     const editor = screen.getByLabelText<HTMLTextAreaElement>("Instructions markdown");
@@ -182,8 +210,7 @@ describe("SkillsPage", () => {
 
   it("autocompletes tool names after a backtick in the editor", async () => {
     render(<SkillsPage />);
-    await openSkill("release-notes");
-    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    await editSkill("release-notes");
 
     const editor = screen.getByLabelText<HTMLTextAreaElement>("Instructions markdown");
     await userEvent.type(editor, "\nThen run `run");
@@ -199,8 +226,7 @@ describe("SkillsPage", () => {
 
   it("browses the tool palette and inserts a reference from it", async () => {
     render(<SkillsPage />);
-    await openSkill("release-notes");
-    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    await editSkill("release-notes");
 
     await userEvent.click(screen.getByRole("button", { name: /available tools/i }));
     // The palette lists every tool with its description; disabled ones are marked.
@@ -216,8 +242,7 @@ describe("SkillsPage", () => {
 
   it("warns about backticked names that don't match any tool", async () => {
     render(<SkillsPage />);
-    await openSkill("release-notes");
-    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    await editSkill("release-notes");
 
     const editor = screen.getByLabelText<HTMLTextAreaElement>("Instructions markdown");
     await userEvent.type(editor, "\nUse `run_shel` here.");
@@ -226,88 +251,122 @@ describe("SkillsPage", () => {
     expect(warning?.textContent).toContain("run_shel");
   });
 
-  it("won't save until name, description, and instructions are filled", async () => {
+  it("saves the instructions as soon as focus leaves the field", async () => {
     render(<SkillsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /new skill/i }));
-    expect(screen.getByRole("button", { name: "Add skill" })).toBeDisabled();
-  });
+    await editSkill("release-notes");
 
-  it("names the active project in the scope choice", async () => {
-    render(<SkillsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /new skill/i }));
-    await userEvent.click(screen.getByRole("combobox", { name: "Skill scope" }));
-    const choice = screen.getByRole("option", { name: "This project only — OxenHarness" });
-
-    // Choosing it makes the hint say exactly where the skill will land.
-    await userEvent.click(choice);
-    expect(screen.getByText(/saved into OxenHarness's repo/i)).toBeInTheDocument();
-  });
-
-  it("edits a skill in place without deleting it", async () => {
-    render(<SkillsPage />);
-    await openSkill("release-notes");
-    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
-
-    const description = screen.getByDisplayValue("Writes release notes in our house style.");
-    await userEvent.clear(description);
-    await userEvent.type(description, "Better description.");
-    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await userEvent.type(screen.getByLabelText("Instructions markdown"), "\n3. Ship it.");
+    expect(ipc.saveSkill).not.toHaveBeenCalled();
+    await userEvent.tab();
 
     await waitFor(() =>
       expect(ipc.saveSkill).toHaveBeenCalledWith(
         "global",
         "release-notes",
-        "Better description.",
-        releaseNotes.instructions,
+        releaseNotes.description,
+        releaseNotes.instructions + "\n3. Ship it.",
       ),
     );
+    expect(await screen.findByText("All changes saved")).toBeInTheDocument();
     expect(ipc.deleteSkill).not.toHaveBeenCalled();
   });
 
-  it("re-homes a skill when its scope changes (save first, then delete)", async () => {
+  it("saves pending typing when leaving the editor, landing on the reading view", async () => {
     render(<SkillsPage />);
-    await openSkill("release-notes");
-    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
-    await userEvent.click(screen.getByRole("combobox", { name: "Skill scope" }));
-    await userEvent.click(screen.getByRole("option", { name: /^This project only/ }));
-    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await editSkill("release-notes");
 
-    await waitFor(() => expect(ipc.deleteSkill).toHaveBeenCalledWith("global", "release-notes"));
-    expect(ipc.saveSkill).toHaveBeenCalledWith(
-      "project",
-      "release-notes",
-      releaseNotes.description,
-      releaseNotes.instructions,
+    const description = screen.getByDisplayValue("Writes release notes in our house style.");
+    await userEvent.clear(description);
+    await userEvent.type(description, "Better.");
+    ipc.listSkills.mockResolvedValue([{ ...releaseNotes, description: "Better." }, reviewChecklist]);
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    await waitFor(() =>
+      expect(ipc.saveSkill).toHaveBeenLastCalledWith(
+        "global",
+        "release-notes",
+        "Better.",
+        releaseNotes.instructions,
+      ),
     );
+    // The reading view shows the saved text, not the stale list entry.
+    expect(await screen.findByRole("heading", { name: "Steps" })).toBeInTheDocument();
+    expect(screen.getByText("Better.")).toBeInTheDocument();
   });
 
-  it("cancel in the editor returns to the reading view unchanged", async () => {
+  it("leaving the editor untouched writes nothing", async () => {
     render(<SkillsPage />);
-    await openSkill("release-notes");
-    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
-    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    await editSkill("release-notes");
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
 
-    expect(screen.getByRole("heading", { name: "Steps" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Steps" })).toBeInTheDocument();
     expect(ipc.saveSkill).not.toHaveBeenCalled();
   });
 
-  it("shows the backend's message when a save is rejected", async () => {
-    ipc.saveSkill.mockRejectedValueOnce(
-      "Use a name like `release-notes` — lowercase letters, digits, and hyphens.",
-    );
+  it("keeps the user in the editor with the error when a save fails", async () => {
+    ipc.saveSkill.mockRejectedValue("disk full");
     render(<SkillsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /new skill/i }));
-    await userEvent.type(screen.getByPlaceholderText("release-notes"), "bad");
-    await userEvent.type(screen.getByPlaceholderText(/writes release notes from the git log/i), "d");
-    await userEvent.type(screen.getByLabelText("Instructions markdown"), "i");
-    await userEvent.click(screen.getByRole("button", { name: "Add skill" }));
-    expect(await screen.findByText(/use a name like/i)).toBeInTheDocument();
+    await editSkill("release-notes");
+
+    await userEvent.type(screen.getByLabelText("Instructions markdown"), "!");
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(await screen.findByText("Couldn't save: disk full")).toBeInTheDocument();
+    expect(screen.getByLabelText("Instructions markdown")).toBeInTheDocument();
+  });
+
+  it("renames and moves a skill, and later saves go to its new home", async () => {
+    render(<SkillsPage />);
+    await editSkill("release-notes");
+
+    await userEvent.click(screen.getByRole("button", { name: /rename or move/i }));
+    const form = screen.getByRole("form", { name: "Rename or move skill" });
+    const name = within(form).getByDisplayValue("release-notes");
+    await userEvent.clear(name);
+    await userEvent.type(name, "changelog");
+    await userEvent.click(within(form).getByRole("combobox", { name: "Skill scope" }));
+    await userEvent.click(screen.getByRole("option", { name: /^This project only/ }));
+
+    const moved: SkillInfo = {
+      ...releaseNotes,
+      name: "changelog",
+      scope: "project",
+      dir: "/repo/.oxen-harness/skills/changelog",
+    };
+    ipc.listSkills.mockResolvedValue([moved, reviewChecklist]);
+    await userEvent.click(within(form).getByRole("button", { name: "Apply" }));
+
+    await waitFor(() =>
+      expect(ipc.renameSkill).toHaveBeenCalledWith(
+        "global",
+        "release-notes",
+        "project",
+        "changelog",
+      ),
+    );
+    expect(await screen.findByRole("heading", { name: /changelog/ })).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Instructions markdown"), "!");
+    await userEvent.tab();
+    await waitFor(() =>
+      expect(ipc.saveSkill).toHaveBeenCalledWith(
+        "project",
+        "changelog",
+        releaseNotes.description,
+        releaseNotes.instructions + "!",
+      ),
+    );
+    expect(ipc.saveSkill).not.toHaveBeenCalledWith(
+      "global",
+      "release-notes",
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it("deletes a skill from the editor after a second confirming click, landing on the list", async () => {
     render(<SkillsPage />);
-    await openSkill("review-checklist");
-    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    await editSkill("review-checklist");
 
     await userEvent.click(screen.getByRole("button", { name: /delete skill/i }));
     expect(ipc.deleteSkill).not.toHaveBeenCalled();
@@ -318,5 +377,7 @@ describe("SkillsPage", () => {
       expect(ipc.deleteSkill).toHaveBeenCalledWith("project", "review-checklist"),
     );
     expect(await screen.findByRole("button", { name: /new skill/i })).toBeInTheDocument();
+    // Nothing writes the deleted skill back on the way out.
+    expect(ipc.saveSkill).not.toHaveBeenCalled();
   });
 });

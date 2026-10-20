@@ -410,7 +410,11 @@ fn print_skills(ui: &Ui, workspace_root: &Path) {
             harness_tools::SkillScope::Global => "global",
             harness_tools::SkillScope::Project => "project",
         };
-        let status = if s.enabled { "" } else { "  (off)" };
+        let status = match (s.draft, s.enabled) {
+            (true, _) => "  (draft)",
+            (false, true) => "",
+            (false, false) => "  (off)",
+        };
         println!(
             "    {} {}{}",
             ui.accent(&format!("{:<20}", s.name)),

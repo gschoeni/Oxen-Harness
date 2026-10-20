@@ -1191,6 +1191,9 @@ export interface SkillInfo {
   dir: string;
   /** Whether the skill is offered to the model. */
   enabled: boolean;
+  /** Still being written (no description or instructions yet), so the model
+   *  doesn't see it regardless of `enabled`. */
+  draft: boolean;
 }
 
 /** A user-defined tool backed by a simple external action. Mirrors

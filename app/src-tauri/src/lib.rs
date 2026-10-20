@@ -225,6 +225,8 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::connection::set_compression_mode,
                 commands::session::total_tokens_saved,
                 commands::skills::list_skills,
+                commands::skills::create_skill,
+                commands::skills::rename_skill,
                 commands::skills::save_skill,
                 commands::skills::delete_skill,
                 commands::skills::set_skill_enabled,

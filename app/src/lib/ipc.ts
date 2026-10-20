@@ -155,7 +155,18 @@ export const removeCustomTool = (name: string) => invoke<void>("remove_custom_to
 
 /** Every skill visible from the active project, for the Skills page. */
 export const listSkills = () => invoke<SkillInfo[]>("list_skills");
-/** Create a skill, or update the one with the same name + scope. */
+/** Start a new, empty draft skill; fails if one by that name already exists. */
+export const createSkill = (scope: SkillScope, name: string) =>
+  invoke<void>("create_skill", { scope, name });
+/** Rename a skill and/or move it between scopes (supporting files included). */
+export const renameSkill = (
+  fromScope: SkillScope,
+  fromName: string,
+  toScope: SkillScope,
+  toName: string,
+) => invoke<void>("rename_skill", { fromScope, fromName, toScope, toName });
+/** Create a skill, or update the one with the same name + scope. Empty
+ *  description/instructions save a draft. */
 export const saveSkill = (scope: SkillScope, name: string, description: string, instructions: string) =>
   invoke<void>("save_skill", { scope, name, description, instructions });
 /** Delete a skill's directory (SKILL.md plus supporting files). */

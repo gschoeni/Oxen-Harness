@@ -317,6 +317,8 @@ export const checkRulePattern = vi.fn(
     return { error: null, matches: at >= 0 ? [[at, at + pattern.length]] : [] };
   },
 );
+export const createSkill = vi.fn(async () => {});
+export const renameSkill = vi.fn(async () => {});
 export const saveSkill = vi.fn(async () => {});
 export const deleteSkill = vi.fn(async () => {});
 export const setSkillEnabled = vi.fn(async () => {});
@@ -838,6 +840,8 @@ export function resetIpc() {
     .mockResolvedValue({ user: [], project: [], project_path: ".oxen-harness/rules.json" });
   saveRules.mockReset().mockResolvedValue(undefined);
   listRuleSuggestions.mockClear();
+  createSkill.mockReset().mockResolvedValue(undefined);
+  renameSkill.mockReset().mockResolvedValue(undefined);
   saveSkill.mockReset().mockResolvedValue(undefined);
   deleteSkill.mockReset().mockResolvedValue(undefined);
   setSkillEnabled.mockReset().mockResolvedValue(undefined);

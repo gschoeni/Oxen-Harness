@@ -62,6 +62,15 @@ pub struct Skill {
     pub scope: SkillScope,
 }
 
+impl Skill {
+    /// A draft is a skill still being written: it has no description or no
+    /// instructions yet. Drafts are listed for editing but never offered to
+    /// the model, so a half-written skill can't misfire.
+    pub fn is_draft(&self) -> bool {
+        self.description.is_empty() || self.instructions.is_empty()
+    }
+}
+
 /// A valid skill name: lowercase letters, digits, and hyphens (Claude Code's
 /// convention), e.g. `release-notes`.
 pub fn is_valid_skill_name(name: &str) -> bool {
@@ -74,7 +83,8 @@ pub fn is_valid_skill_name(name: &str) -> bool {
 }
 
 /// Parse a `SKILL.md` file: YAML-style `---` frontmatter with `name:` and
-/// `description:`, followed by the markdown instructions. Returns a
+/// `description:`, followed by the markdown instructions. A missing
+/// description or body parses as a draft ([`Skill::is_draft`]). Returns a
 /// human-readable error for malformed files so UIs can surface it.
 pub fn parse_skill_md(contents: &str, dir: &Path, scope: SkillScope) -> Result<Skill, String> {
     let dir_name = dir
@@ -112,13 +122,8 @@ pub fn parse_skill_md(contents: &str, dir: &Path, scope: SkillScope) -> Result<S
             "invalid skill name {name:?}: use lowercase letters, digits, and hyphens"
         ));
     }
-    let description = description.filter(|d| !d.is_empty()).ok_or(
-        "frontmatter needs a `description:` — it's how the model decides when to use the skill",
-    )?;
+    let description = description.unwrap_or_default();
     let instructions = body.trim_start_matches('-').trim().to_string();
-    if instructions.is_empty() {
-        return Err("SKILL.md has no instructions after the frontmatter".into());
-    }
 
     Ok(Skill {
         name,
@@ -165,7 +170,9 @@ pub struct SkillTool {
 }
 
 impl SkillTool {
+    /// Build the tool from `skills`, dropping drafts.
     pub fn new(skills: Vec<Skill>) -> Self {
+        let skills: Vec<Skill> = skills.into_iter().filter(|s| !s.is_draft()).collect();
         let mut description = String::from(
             "Load a skill — reusable instructions for a specific kind of task. \
              When a request matches a skill's description, call this FIRST with \
@@ -247,12 +254,35 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_description_frontmatter_or_body() {
-        assert!(parse_skill_md("---\nname: x\n---\nBody.", &dir(), SkillScope::Global).is_err());
+    fn rejects_missing_frontmatter() {
         assert!(parse_skill_md("no frontmatter", &dir(), SkillScope::Global).is_err());
-        assert!(
-            parse_skill_md("---\ndescription: d\n---\n   ", &dir(), SkillScope::Global).is_err()
-        );
+        assert!(parse_skill_md("---\nname: x\nBody.", &dir(), SkillScope::Global).is_err());
+    }
+
+    #[test]
+    fn a_missing_description_or_body_parses_as_a_draft() {
+        let no_desc = parse_skill_md("---\nname: x\n---\nBody.", &dir(), SkillScope::Global);
+        assert!(no_desc.unwrap().is_draft());
+        let blank = "---\nname: x\ndescription: \n---\n";
+        assert!(parse_skill_md(blank, &dir(), SkillScope::Global)
+            .unwrap()
+            .is_draft());
+        let no_body = parse_skill_md("---\ndescription: d\n---\n   ", &dir(), SkillScope::Global);
+        assert!(no_body.unwrap().is_draft());
+        assert!(!parse_skill_md(GOOD, &dir(), SkillScope::Global)
+            .unwrap()
+            .is_draft());
+    }
+
+    #[test]
+    fn drafts_are_never_advertised_to_the_model() {
+        let draft = parse_skill_md("---\nname: wip\n---\n", &dir(), SkillScope::Global).unwrap();
+        assert!(SkillTool::new(vec![draft.clone()]).is_empty());
+
+        let ready = parse_skill_md(GOOD, &dir(), SkillScope::Global).unwrap();
+        let tool = SkillTool::new(vec![draft, ready]);
+        assert!(!tool.description().contains("wip"));
+        assert!(tool.description().contains("release-notes"));
     }
 
     #[test]

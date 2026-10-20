@@ -5,25 +5,36 @@
 // project (.oxen-harness/skills/, shareable via git); only the name +
 // description cost prompt tokens until the model actually loads one.
 //
-// The page is a tiny three-view flow: the LIST of skills, a SHOW view that
-// renders a skill's instructions as markdown, and an EDIT view with a
-// write/preview markdown editor. Show and edit take over the whole subpage.
+// The page is a small flow: the LIST of skills, a SHOW view that renders a
+// skill's instructions as markdown, a NEW view that names the skill and picks
+// where it lives (creating it on disk as a draft), and an EDIT view with a
+// write/preview markdown editor that saves as you type. Everything but the
+// list takes over the whole subpage.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, ChevronRight, GraduationCap, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/ui";
 import { Select } from "../../components/ui/Select";
-import { deleteSkill, listSkills, listTools, saveSkill, setSkillEnabled } from "../../lib/ipc";
+import {
+  createSkill,
+  deleteSkill,
+  listSkills,
+  listTools,
+  renameSkill,
+  saveSkill,
+  setSkillEnabled,
+} from "../../lib/ipc";
 import { useActiveProject } from "../../lib/store";
 import type { SkillInfo, SkillScope, ToolInfo } from "../../lib/types";
 import { InstructionsEditor, SkillMarkdown } from "./InstructionsEditor";
 import { ToolSwitch } from "../tools/ToolSwitch";
 import { TeachingNav } from "../settings/TeachingNav";
+import { useAutosave } from "./useAutosave";
 import "../tools/tools.css";
 import "./skills.css";
 
-/** Which of the three views is on screen. Show/edit reference a skill by name
- *  (scope disambiguates shadowed names). */
+/** Which view is on screen. Show/edit reference a skill by name (scope
+ *  disambiguates shadowed names). */
 type View =
   | { kind: "list" }
   | { kind: "show"; name: string; scope: SkillScope }
@@ -62,16 +73,23 @@ export function SkillsPage() {
     }
   }
 
-  // Create or update a skill. A rename (or scope move) is save-then-delete —
-  // save first, so a rejected edit can't lose the existing skill. Throws so
-  // the editor can show the backend's message inline.
-  async function save(draft: SkillDraft, prev?: SkillInfo) {
-    await saveSkill(draft.scope, draft.name, draft.description, draft.instructions);
-    if (prev && (prev.name !== draft.name || prev.scope !== draft.scope)) {
-      await deleteSkill(prev.scope, prev.name);
-    }
-    await load();
-    setView({ kind: "show", name: draft.name, scope: draft.scope });
+  // Reload the list and switch views in one render, so a view never points
+  // at a skill the list doesn't have yet (which would bounce to the list).
+  async function reloadThen(next: View) {
+    const fresh = await listSkills();
+    setSkills(fresh);
+    setView(next);
+  }
+
+  // The functions below throw so the view can show the backend's message.
+  async function create(id: SkillIdentity) {
+    await createSkill(id.scope, id.name);
+    await reloadThen({ kind: "edit", ...id });
+  }
+
+  async function rename(skill: SkillInfo, to: SkillIdentity) {
+    await renameSkill(skill.scope, skill.name, to.scope, to.name);
+    await reloadThen({ kind: "edit", ...to });
   }
 
   async function remove(skill: SkillInfo) {
@@ -102,10 +120,10 @@ export function SkillsPage() {
     } else if (skill && view.kind === "edit") {
       return (
         <SkillEditor
-          initial={skill}
+          skill={skill}
           tools={tools}
-          onSave={(draft) => save(draft, skill)}
-          onCancel={() => setView({ kind: "show", name: skill.name, scope: skill.scope })}
+          onRename={(to) => rename(skill, to)}
+          onDone={() => reloadThen({ kind: "show", name: skill.name, scope: skill.scope })}
           onDelete={() => remove(skill)}
         />
       );
@@ -113,13 +131,7 @@ export function SkillsPage() {
   }
 
   if (view.kind === "new") {
-    return (
-      <SkillEditor
-        tools={tools}
-        onSave={(draft) => save(draft)}
-        onCancel={() => setView({ kind: "list" })}
-      />
-    );
+    return <SkillCreate onCreate={create} onCancel={() => setView({ kind: "list" })} />;
   }
 
   return (
@@ -230,6 +242,7 @@ function SkillRow({
       <button className="tool-row-head" onClick={onOpen} aria-label={`Open skill ${skill.name}`}>
         <GraduationCap size={15} className="tool-row-icon" />
         <span className="tool-row-name">{skill.name}</span>
+        {skill.draft && <span className="skill-scope draft">draft</span>}
         <span className="tool-row-desc">{skill.description}</span>
         <ChevronRight size={15} className="skill-row-go" />
       </button>
@@ -275,6 +288,7 @@ function SkillShow({
             </span>
           </h3>
           <p className="skill-detail-desc">{skill.description}</p>
+          {skill.draft && <DraftNotice />}
         </div>
         <div className="skill-detail-actions">
           <ToolSwitch name={skill.name} enabled={skill.enabled} onToggle={onToggle} />
@@ -285,7 +299,11 @@ function SkillShow({
       </header>
 
       <article className="skill-md" aria-label="Skill instructions">
-        <SkillMarkdown text={skill.instructions} toolNames={toolNames} />
+        {skill.instructions ? (
+          <SkillMarkdown text={skill.instructions} toolNames={toolNames} />
+        ) : (
+          <p className="muted">No instructions yet.</p>
+        )}
       </article>
 
       <footer className="skill-detail-foot">
@@ -296,71 +314,92 @@ function SkillShow({
   );
 }
 
-// ---- edit view ------------------------------------------------------------------
+// ---- new + edit views --------------------------------------------------------
 
-/** What the editor produces — mirrors `saveSkill`'s arguments. */
-interface SkillDraft {
-  scope: SkillScope;
+/** Where a skill lives on disk: its name and scope. */
+interface SkillIdentity {
   name: string;
-  description: string;
-  instructions: string;
+  scope: SkillScope;
 }
 
-/** A full-subpage create/edit form. The instructions get a write/preview
- *  markdown editor; `initial` present = editing (a rename or scope move
- *  re-homes the SKILL.md; a delete action appears). */
-function SkillEditor({
-  initial,
-  tools,
-  onSave,
-  onCancel,
-  onDelete,
+function DraftNotice() {
+  return (
+    <p className="skill-draft-notice">
+      Draft — the model won't see this skill until it has a description and instructions.
+    </p>
+  );
+}
+
+/** The name + "available in" pair, shared by the new-skill screen and the
+ *  editor's rename/move form. */
+function IdentityFields({
+  value,
+  onChange,
 }: {
-  initial?: SkillInfo;
-  tools: ToolInfo[];
-  onSave: (draft: SkillDraft) => Promise<void>;
-  onCancel: () => void;
-  onDelete?: () => Promise<void>;
+  value: SkillIdentity;
+  onChange: (value: SkillIdentity) => void;
 }) {
-  const toolNames = tools.map((t) => t.name);
   const project = useActiveProject();
-  const [name, setName] = useState(initial?.name ?? "");
-  const [scope, setScope] = useState<SkillScope>(initial?.scope ?? "global");
-  const [description, setDescription] = useState(initial?.description ?? "");
-  const [instructions, setInstructions] = useState(initial?.instructions ?? "");
-  const [previewing, setPreviewing] = useState(false);
+  return (
+    <div className="tool-editor-grid">
+      <label className="tool-field">
+        <span className="field-name">Name</span>
+        <input
+          className="tool-input mono"
+          value={value.name}
+          onChange={(e) => onChange({ ...value, name: e.target.value })}
+          placeholder="release-notes"
+          spellCheck={false}
+          autoFocus
+        />
+        <span className="tool-field-hint">Lowercase, hyphens — how the model refers to it.</span>
+      </label>
+      <label className="tool-field">
+        <span className="field-name">Available in</span>
+        <Select
+          label="Skill scope"
+          value={value.scope}
+          options={[
+            { value: "global", label: "Every project (global)" },
+            {
+              value: "project",
+              label: project ? `This project only — ${project.name}` : "This project only",
+            },
+          ]}
+          onValueChange={(scope) => onChange({ ...value, scope: scope as SkillScope })}
+        />
+        <span className="tool-field-hint" title={project?.path}>
+          {value.scope === "project" && project
+            ? `Saved into ${project.name}'s repo (.oxen-harness/skills/), so your team gets it too.`
+            : "Project skills live in the repo, so your team gets them too."}
+        </span>
+      </label>
+    </div>
+  );
+}
 
+/** Name the skill and choose where it lives. Creating it writes an empty
+ *  draft to disk, so everything typed afterward has a home to save into. */
+function SkillCreate({
+  onCreate,
+  onCancel,
+}: {
+  onCreate: (id: SkillIdentity) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [id, setId] = useState<SkillIdentity>({ name: "", scope: "global" });
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const canSave = name.trim() !== "" && description.trim() !== "" && instructions.trim() !== "";
-
-  async function save() {
+  async function submit(e: FormEvent) {
+    e.preventDefault();
     setError(null);
-    setSaving(true);
+    setBusy(true);
     try {
-      await onSave({
-        scope,
-        name: name.trim(),
-        description: description.trim(),
-        instructions: instructions.trim(),
-      });
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function reallyDelete() {
-    if (!onDelete) return;
-    setSaving(true);
-    try {
-      await onDelete();
-    } catch (e) {
-      setError(String(e));
-      setSaving(false);
+      await onCreate({ ...id, name: id.name.trim() });
+    } catch (err) {
+      setError(String(err));
+      setBusy(false);
     }
   }
 
@@ -368,130 +407,266 @@ function SkillEditor({
     <div className="settings-page skill-detail">
       <Button size="sm" variant="ghost" className="skill-back" onClick={onCancel}>
         <ArrowLeft size={15} />
-        {initial ? initial.name : "All skills"}
+        All skills
       </Button>
 
-      <div className="settings-label">{initial ? `Edit ${initial.name}` : "New skill"}</div>
+      <div className="settings-label">New skill</div>
+      <p className="hint">
+        Name it and choose where it's available. Next you'll write what it does — everything
+        saves as you type, and you can rename or move it later.
+      </p>
+
+      <form className="tool-editor" onSubmit={submit}>
+        <IdentityFields value={id} onChange={setId} />
+        {error && <span className="save-status err">{error}</span>}
+        <div className="tool-row-actions tool-editor-actions">
+          <Button type="submit" variant="primary" size="sm" disabled={!id.name.trim() || busy}>
+            {busy ? "Creating…" : "Create skill"}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/** A full-subpage editor for an existing skill. The description and
+ *  instructions save as you type (and when focus leaves them); the name and
+ *  scope change through an explicit rename/move, which re-homes the folder. */
+function SkillEditor({
+  skill,
+  tools,
+  onRename,
+  onDone,
+  onDelete,
+}: {
+  skill: SkillInfo;
+  tools: ToolInfo[];
+  onRename: (to: SkillIdentity) => Promise<void>;
+  onDone: () => Promise<void>;
+  onDelete: () => Promise<void>;
+}) {
+  const toolNames = tools.map((t) => t.name);
+  const project = useActiveProject();
+  const [description, setDescription] = useState(skill.description);
+  const [instructions, setInstructions] = useState(skill.instructions);
+  const [previewing, setPreviewing] = useState(false);
+  const [renaming, setRenaming] = useState<SkillIdentity | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Where saves go. Updated the moment a rename lands — inside the save
+  // queue, before any later save runs — so no save can recreate the old folder.
+  const target = useRef<SkillIdentity>({ name: skill.name, scope: skill.scope });
+  const autosave = useAutosave((d: { description: string; instructions: string }) =>
+    saveSkill(target.current.scope, target.current.name, d.description, d.instructions),
+  );
+
+  function edit(next: { description: string; instructions: string }) {
+    setDescription(next.description);
+    setInstructions(next.instructions);
+    autosave.schedule(next);
+  }
+
+  // Each action below first writes pending typing; a failed save (already
+  // shown in the status line) keeps the user here rather than leaving with
+  // work unsaved.
+  async function act(job: () => Promise<void>) {
+    setError(null);
+    setBusy(true);
+    try {
+      await autosave.flush();
+    } catch {
+      setBusy(false);
+      return;
+    }
+    try {
+      await job();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const done = () => act(onDone);
+
+  const applyRename = (to: SkillIdentity) =>
+    act(() =>
+      autosave.run(async () => {
+        const next = { ...to, name: to.name.trim() };
+        await onRename(next);
+        target.current = next;
+        setRenaming(null);
+      }),
+    );
+
+  const reallyDelete = () =>
+    act(() =>
+      autosave.run(async () => {
+        await onDelete();
+        autosave.discard();
+      }),
+    );
+
+  const scopeLabel =
+    skill.scope === "project" && project ? `project · ${project.name}` : skill.scope;
+  const status = {
+    saved: "All changes saved",
+    pending: "Saving…",
+    saving: "Saving…",
+    error: `Couldn't save: ${autosave.error}`,
+  }[autosave.status];
+
+  return (
+    <div className="settings-page skill-detail">
+      <Button size="sm" variant="ghost" className="skill-back" onClick={done} disabled={busy}>
+        <ArrowLeft size={15} />
+        {skill.name}
+      </Button>
+
+      <header className="skill-detail-head">
+        <GraduationCap size={20} className="skill-detail-icon" />
+        <div className="skill-detail-titles">
+          <h3 className="skill-detail-name">
+            {skill.name}
+            <span className={`skill-scope ${skill.scope}`} title={skill.dir}>
+              {scopeLabel}
+            </span>
+          </h3>
+          {skill.draft && !(description.trim() && instructions.trim()) && <DraftNotice />}
+        </div>
+        <div className="skill-detail-actions">
+          {!renaming && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRenaming({ name: skill.name, scope: skill.scope })}
+            >
+              <Pencil size={15} /> Rename or move
+            </Button>
+          )}
+        </div>
+      </header>
 
       <div className="tool-editor">
-        <div className="tool-editor-grid">
+        {renaming && (
+          <form
+            className="skill-rename"
+            aria-label="Rename or move skill"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void applyRename(renaming);
+            }}
+          >
+            <IdentityFields value={renaming} onChange={setRenaming} />
+            <div className="tool-row-actions">
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                disabled={!renaming.name.trim() || busy}
+              >
+                Apply
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setRenaming(null)}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        )}
+
+        {/* Focus leaving either field saves right away (focusout bubbles). */}
+        <div className="skill-fields" onBlur={() => void autosave.flush().catch(() => {})}>
           <label className="tool-field">
-            <span className="field-name">Name</span>
+            <span className="field-name">When should the model use it?</span>
             <input
-              className="tool-input mono"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="release-notes"
-              spellCheck={false}
+              className="tool-input"
+              value={description}
+              onChange={(e) => edit({ description: e.target.value, instructions })}
+              placeholder="Writes release notes from the git log in our house style."
             />
-            <span className="tool-field-hint">Lowercase, hyphens — how the model refers to it.</span>
-          </label>
-          <label className="tool-field">
-            <span className="field-name">Available in</span>
-            <Select
-              label="Skill scope"
-              value={scope}
-              options={[
-                { value: "global", label: "Every project (global)" },
-                {
-                  value: "project",
-                  label: project ? `This project only — ${project.name}` : "This project only",
-                },
-              ]}
-              onValueChange={(value) => setScope(value as SkillScope)}
-            />
-            <span className="tool-field-hint" title={project?.path}>
-              {scope === "project" && project
-                ? `Saved into ${project.name}'s repo (.oxen-harness/skills/), so your team gets it too.`
-                : "Project skills live in the repo, so your team gets them too."}
+            <span className="tool-field-hint">
+              One line. The model reads this to decide when the skill applies.
             </span>
           </label>
-        </div>
 
-        <label className="tool-field">
-          <span className="field-name">When should the model use it?</span>
-          <input
-            className="tool-input"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Writes release notes from the git log in our house style."
-          />
-          <span className="tool-field-hint">
-            One line. The model reads this to decide when the skill applies.
-          </span>
-        </label>
-
-        <div className="tool-field">
-          <div className="tool-params-head">
-            <span className="field-name">Instructions</span>
-            <div className="tool-mode-toggle" role="group" aria-label="Instructions editor mode">
-              <button className={previewing ? "" : "active"} onClick={() => setPreviewing(false)}>
-                Write
-              </button>
-              <button className={previewing ? "active" : ""} onClick={() => setPreviewing(true)}>
-                Preview
-              </button>
+          <div className="tool-field">
+            <div className="tool-params-head">
+              <span className="field-name">Instructions</span>
+              <div className="tool-mode-toggle" role="group" aria-label="Instructions editor mode">
+                <button className={previewing ? "" : "active"} onClick={() => setPreviewing(false)}>
+                  Write
+                </button>
+                <button className={previewing ? "active" : ""} onClick={() => setPreviewing(true)}>
+                  Preview
+                </button>
+              </div>
             </div>
+
+            {previewing ? (
+              <div className="skill-md skill-md-preview" aria-label="Instructions preview">
+                {instructions.trim() ? (
+                  <SkillMarkdown text={instructions} toolNames={toolNames} />
+                ) : (
+                  <p className="muted">Nothing to preview yet.</p>
+                )}
+              </div>
+            ) : (
+              <InstructionsEditor
+                value={instructions}
+                onChange={(next) => edit({ description, instructions: next })}
+                tools={tools}
+                placeholder={
+                  "Markdown the agent follows once the skill loads, e.g.\n\n" +
+                  "1. Run `git log --oneline` since the last tag.\n" +
+                  "2. Group changes into Added / Fixed / Changed.\n" +
+                  "3. Write one crisp line per change — no commit hashes."
+                }
+              />
+            )}
+            <span className="tool-field-hint">
+              Point the agent at specific tools by naming them in backticks — type{" "}
+              <code>`</code> to autocomplete. Known tools highlight in the preview.
+            </span>
           </div>
-
-          {previewing ? (
-            <div className="skill-md skill-md-preview" aria-label="Instructions preview">
-              {instructions.trim() ? (
-                <SkillMarkdown text={instructions} toolNames={toolNames} />
-              ) : (
-                <p className="muted">Nothing to preview yet.</p>
-              )}
-            </div>
-          ) : (
-            <InstructionsEditor
-              value={instructions}
-              onChange={setInstructions}
-              tools={tools}
-              placeholder={
-                "Markdown the agent follows once the skill loads, e.g.\n\n" +
-                "1. Run `git log --oneline` since the last tag.\n" +
-                "2. Group changes into Added / Fixed / Changed.\n" +
-                "3. Write one crisp line per change — no commit hashes."
-              }
-            />
-          )}
-          <span className="tool-field-hint">
-            Point the agent at specific tools by naming them in backticks — type{" "}
-            <code>`</code> to autocomplete. Known tools highlight in the preview.
-          </span>
         </div>
 
-        {initial && (
-          <span className="tool-field-hint">
-            Stored at <code>{initial.dir}/SKILL.md</code> — supporting files placed beside it are
-            available to the agent.
-          </span>
-        )}
+        <span className="tool-field-hint">
+          Stored at <code>{skill.dir}/SKILL.md</code> — supporting files placed beside it are
+          available to the agent.
+        </span>
 
         {error && <span className="save-status err">{error}</span>}
 
         <div className="tool-row-actions tool-editor-actions">
-          <Button variant="primary" size="sm" disabled={!canSave || saving} onClick={save}>
-            {saving ? "Saving…" : initial ? "Save changes" : "Add skill"}
+          <Button variant="primary" size="sm" onClick={done} disabled={busy}>
+            Done
           </Button>
-          <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
-            Cancel
-          </Button>
-          {onDelete &&
-            (confirmDelete ? (
-              <Button variant="danger" size="sm" onClick={reallyDelete} disabled={saving}>
-                Really delete?
-              </Button>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConfirmDelete(true)}
-                title="Remove this skill and its files"
-              >
-                <Trash2 size={15} /> Delete skill
-              </Button>
-            ))}
+          <span
+            className={`save-status ${autosave.status === "error" ? "err" : ""}`}
+            role="status"
+            aria-live="polite"
+          >
+            {status}
+          </span>
+          {confirmDelete ? (
+            <Button variant="danger" size="sm" onClick={reallyDelete} disabled={busy}>
+              Really delete?
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirmDelete(true)}
+              title="Remove this skill and its files"
+            >
+              <Trash2 size={15} /> Delete skill
+            </Button>
+          )}
         </div>
       </div>
     </div>

@@ -1645,3 +1645,23 @@ the archive is refused, never installed unverified, which is why
 v0.0.9, so the first in-place app update is v0.0.9 → v0.0.10 (the CLI's
 releases already carried checksums).
 
+
+## Skills save as you type, as drafts until complete (2026-10-20)
+
+**Decision:** creating a skill asks only for its name and where it's
+available, and writes an empty `SKILL.md` straight away. From then on the
+editor saves the description and instructions on every pause in typing
+(600 ms), whenever focus leaves the fields, and when the editor closes.
+Renaming or moving a skill is a separate action that moves the whole folder.
+
+**Why:** the old editor wrote nothing until "Add skill", so leaving the page
+lost the work. Autosave needs a file to save into from the first keystroke,
+which is why naming comes first.
+
+**Consequence:** a `SKILL.md` with no description or no instructions now
+parses as a **draft** instead of being skipped. Drafts are listed (marked
+"draft" in the desktop and CLI) but `SkillTool` never advertises them, so a
+half-written skill can't misfire. `create_skill` and `rename_skill` refuse to
+overwrite an existing skill. Saves run one at a time, in order, and rename
+and delete wait in the same queue, so no save can land in a folder after it
+has moved or been deleted.

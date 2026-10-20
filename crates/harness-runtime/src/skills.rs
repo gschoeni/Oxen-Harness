@@ -89,13 +89,13 @@ pub fn discover(workspace_root: &Path) -> Vec<Skill> {
 }
 
 /// Build the `skill` tool for a workspace: discovered skills minus disabled
-/// ones. Returns `None` when nothing is enabled, so hosts don't advertise an
+/// ones and drafts. Returns `None` when nothing is enabled, so hosts don't advertise an
 /// empty tool.
 pub fn enabled_tool(workspace_root: &Path) -> Option<SkillTool> {
     let prefs = load();
     let skills: Vec<Skill> = discover(workspace_root)
         .into_iter()
-        .filter(|s| prefs.is_enabled(&s.name))
+        .filter(|s| prefs.is_enabled(&s.name) && !s.is_draft())
         .collect();
     if skills.is_empty() {
         None
@@ -114,6 +114,9 @@ pub struct SkillInfo {
     /// The skill's directory (so UIs can point users at supporting files).
     pub dir: String,
     pub enabled: bool,
+    /// Still being written (no description or instructions yet), so it is
+    /// not offered to the model.
+    pub draft: bool,
 }
 
 /// Enumerate every discovered skill with its enabled state, for the settings
@@ -123,6 +126,7 @@ pub fn list(workspace_root: &Path, prefs: &SkillPrefs) -> Vec<SkillInfo> {
         .into_iter()
         .map(|s| SkillInfo {
             enabled: prefs.is_enabled(&s.name),
+            draft: s.is_draft(),
             name: s.name,
             description: s.description,
             instructions: s.instructions,
@@ -141,9 +145,56 @@ fn scope_dir(workspace_root: &Path, scope: SkillScope) -> Result<PathBuf, Runtim
     }
 }
 
+fn check_name(name: &str) -> Result<(), RuntimeError> {
+    if is_valid_skill_name(name) {
+        Ok(())
+    } else {
+        Err(RuntimeError::Invalid(
+            "Use a name like `release-notes` — lowercase letters, digits, and hyphens.".into(),
+        ))
+    }
+}
+
+fn scope_label(scope: SkillScope) -> &'static str {
+    match scope {
+        SkillScope::Global => "every project",
+        SkillScope::Project => "this project",
+    }
+}
+
+/// Where a new skill named `name` would go, refusing to clobber one already
+/// there.
+fn vacant_skill_dir(
+    workspace_root: &Path,
+    scope: SkillScope,
+    name: &str,
+) -> Result<PathBuf, RuntimeError> {
+    check_name(name)?;
+    let dir = scope_dir(workspace_root, scope)?.join(name);
+    if dir.exists() {
+        return Err(RuntimeError::Invalid(format!(
+            "A skill named `{name}` already exists in {}.",
+            scope_label(scope)
+        )));
+    }
+    Ok(dir)
+}
+
+/// Start a new skill: an empty draft `SKILL.md` that later saves fill in.
+/// Unlike [`save_skill`], refuses to overwrite an existing skill.
+pub fn create_skill(
+    workspace_root: &Path,
+    scope: SkillScope,
+    name: &str,
+) -> Result<(), RuntimeError> {
+    let name = name.trim();
+    vacant_skill_dir(workspace_root, scope, name)?;
+    save_skill(workspace_root, scope, name, "", "")
+}
+
 /// Create or update a skill: writes `<dir>/<name>/SKILL.md` with the standard
-/// frontmatter. Validates the pieces and returns model-friendly messages UIs
-/// can show inline.
+/// frontmatter. An empty description or instructions saves a draft, so an
+/// editor can persist every keystroke. Returns messages UIs can show inline.
 pub fn save_skill(
     workspace_root: &Path,
     scope: SkillScope,
@@ -152,29 +203,97 @@ pub fn save_skill(
     instructions: &str,
 ) -> Result<(), RuntimeError> {
     let name = name.trim();
-    if !is_valid_skill_name(name) {
-        return Err(RuntimeError::Invalid(
-            "Use a name like `release-notes` — lowercase letters, digits, and hyphens.".into(),
-        ));
-    }
-    let description = description.trim();
-    if description.is_empty() {
-        return Err(RuntimeError::Invalid(
-            "Add a one-line description — it's how the model decides when to use the skill.".into(),
-        ));
-    }
+    check_name(name)?;
+    // The description is one frontmatter line; a stray newline would end it.
+    let description = description.split_whitespace().collect::<Vec<_>>().join(" ");
     let instructions = instructions.trim();
-    if instructions.is_empty() {
-        return Err(RuntimeError::Invalid(
-            "Write the instructions — the steps the agent should follow when the skill loads."
-                .into(),
-        ));
-    }
 
     let dir = scope_dir(workspace_root, scope)?.join(name);
     std::fs::create_dir_all(&dir).map_err(RuntimeError::Io)?;
     let md = format!("---\nname: {name}\ndescription: {description}\n---\n\n{instructions}\n");
     std::fs::write(dir.join("SKILL.md"), md).map_err(RuntimeError::Io)?;
+    Ok(())
+}
+
+/// Rename a skill and/or move it between scopes. The whole directory moves,
+/// so supporting files beside `SKILL.md` come along, and a disabled skill
+/// stays disabled under its new name. Refuses to overwrite an existing skill.
+pub fn rename_skill(
+    workspace_root: &Path,
+    from: (SkillScope, &str),
+    to: (SkillScope, &str),
+) -> Result<(), RuntimeError> {
+    let (from_scope, from_name) = from;
+    let (to_scope, to_name) = (to.0, to.1.trim());
+    if (from_scope, from_name) == (to_scope, to_name) {
+        return Ok(());
+    }
+    check_name(from_name)?;
+    let src = scope_dir(workspace_root, from_scope)?.join(from_name);
+    let contents = std::fs::read_to_string(src.join("SKILL.md")).map_err(|e| {
+        RuntimeError::Io(std::io::Error::new(
+            e.kind(),
+            format!("reading skill `{from_name}` at {}: {e}", src.display()),
+        ))
+    })?;
+    let skill = harness_tools::skill::parse_skill_md(&contents, &src, from_scope)
+        .map_err(|e| RuntimeError::Invalid(format!("skill `{from_name}`: {e}")))?;
+    let dest = vacant_skill_dir(workspace_root, to_scope, to_name)?;
+
+    move_dir(&src, &dest)?;
+    // The frontmatter carries the name too; keep it in step with the folder.
+    save_skill(
+        workspace_root,
+        to_scope,
+        to_name,
+        &skill.description,
+        &skill.instructions,
+    )?;
+
+    if from_name != to_name {
+        let mut prefs = load();
+        if !prefs.is_enabled(from_name) {
+            prefs.set_enabled(from_name, true);
+            prefs.set_enabled(to_name, false);
+            save(&prefs)?;
+        }
+    }
+    Ok(())
+}
+
+/// Move a directory, falling back to copy-then-delete when `rename` can't
+/// cross filesystems (a global skill moving into a repo on another volume).
+fn move_dir(src: &Path, dest: &Path) -> Result<(), RuntimeError> {
+    let context = |e: std::io::Error| {
+        RuntimeError::Io(std::io::Error::new(
+            e.kind(),
+            format!("moving {} to {}: {e}", src.display(), dest.display()),
+        ))
+    };
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(context)?;
+    }
+    match std::fs::rename(src, dest) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
+            copy_dir(src, dest).map_err(context)?;
+            std::fs::remove_dir_all(src).map_err(context)
+        }
+        Err(e) => Err(context(e)),
+    }
+}
+
+fn copy_dir(src: &Path, dest: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
     Ok(())
 }
 
@@ -273,16 +392,95 @@ mod tests {
     }
 
     #[test]
-    fn save_skill_validates_inputs() {
+    fn save_skill_validates_the_name_and_keeps_drafts() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         assert!(save_skill(root, SkillScope::Project, "Bad Name", "d", "i").is_err());
-        assert!(save_skill(root, SkillScope::Project, "ok", " ", "i").is_err());
-        assert!(save_skill(root, SkillScope::Project, "ok", "d", "  ").is_err());
+
+        // Half-written skills save (autosave persists every keystroke) and
+        // come back as drafts.
+        save_skill(root, SkillScope::Project, "wip", " ", "Step one.").unwrap();
+        let skills = load_skills_dir(&project_skills_dir(root), SkillScope::Project);
+        assert_eq!(skills[0].instructions, "Step one.");
+        assert!(skills[0].is_draft());
     }
 
     #[test]
-    fn disabled_skills_are_kept_out_of_the_tool_but_listed_for_the_ui() {
+    fn save_skill_keeps_the_description_on_one_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        save_skill(root, SkillScope::Project, "s", "Two\nlines.", "Body.").unwrap();
+        let skills = load_skills_dir(&project_skills_dir(root), SkillScope::Project);
+        assert_eq!(skills[0].description, "Two lines.");
+        assert_eq!(skills[0].instructions, "Body.");
+    }
+
+    #[test]
+    fn create_skill_starts_a_draft_and_never_clobbers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        create_skill(root, SkillScope::Project, "deploy").unwrap();
+        let skills = load_skills_dir(&project_skills_dir(root), SkillScope::Project);
+        assert_eq!(skills[0].name, "deploy");
+        assert!(skills[0].is_draft());
+
+        save_skill(root, SkillScope::Project, "deploy", "Deploys.", "Run it.").unwrap();
+        let err = create_skill(root, SkillScope::Project, "deploy").unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
+        let skills = load_skills_dir(&project_skills_dir(root), SkillScope::Project);
+        assert_eq!(skills[0].instructions, "Run it.");
+
+        assert!(create_skill(root, SkillScope::Project, "Bad Name").is_err());
+    }
+
+    #[test]
+    fn rename_skill_moves_the_folder_with_its_files_and_toggle() {
+        crate::with_temp_home(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            save_skill(root, SkillScope::Global, "old", "Does it.", "Steps.").unwrap();
+            let old_dir = paths::skills_dir().unwrap().join("old");
+            std::fs::write(old_dir.join("template.md"), "t").unwrap();
+            let mut prefs = load();
+            prefs.set_enabled("old", false);
+            save(&prefs).unwrap();
+
+            rename_skill(
+                root,
+                (SkillScope::Global, "old"),
+                (SkillScope::Project, "new"),
+            )
+            .unwrap();
+
+            assert!(!old_dir.exists());
+            let new_dir = project_skills_dir(root).join("new");
+            assert!(new_dir.join("template.md").is_file());
+            let skills = load_skills_dir(&project_skills_dir(root), SkillScope::Project);
+            assert_eq!(skills[0].name, "new");
+            assert_eq!(skills[0].description, "Does it.");
+            assert_eq!(skills[0].instructions, "Steps.");
+            let prefs = load();
+            assert!(!prefs.is_enabled("new"));
+            assert!(prefs.is_enabled("old"));
+        });
+    }
+
+    #[test]
+    fn rename_skill_refuses_to_overwrite_another_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        save_skill(root, SkillScope::Project, "a", "A.", "a").unwrap();
+        save_skill(root, SkillScope::Project, "b", "B.", "b").unwrap();
+        let err =
+            rename_skill(root, (SkillScope::Project, "a"), (SkillScope::Project, "b")).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
+        assert!(project_skills_dir(root).join("a").is_dir());
+        // Renaming to itself is a no-op.
+        rename_skill(root, (SkillScope::Project, "a"), (SkillScope::Project, "a")).unwrap();
+    }
+
+    #[test]
+    fn disabled_and_draft_skills_are_kept_out_of_the_tool_but_listed_for_the_ui() {
         crate::with_temp_home(|| {
             let tmp = tempfile::tempdir().unwrap();
             let root = tmp.path();
@@ -296,9 +494,12 @@ mod tests {
             assert!(tool.description().contains("on:"));
             assert!(!tool.description().contains("off:"));
 
+            save_skill(root, SkillScope::Project, "wip", "", "").unwrap();
             let infos = list(root, &load());
-            assert_eq!(infos.len(), 2);
+            assert_eq!(infos.len(), 3);
             assert!(infos.iter().any(|s| s.name == "off" && !s.enabled));
+            assert!(infos.iter().any(|s| s.name == "wip" && s.draft));
+            assert!(!tool.description().contains("wip"));
         });
     }
 

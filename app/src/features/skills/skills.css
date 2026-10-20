@@ -308,3 +308,29 @@
   color: var(--danger);
   background: var(--danger-soft);
 }
+
+/* A skill still being written: listed and editable, hidden from the model. */
+.skill-scope.draft {
+  color: var(--warning);
+}
+.skill-draft-notice {
+  margin: var(--space-1) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+/* The autosaved fields, grouped so focus leaving them flushes one save. */
+.skill-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.skill-rename {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
